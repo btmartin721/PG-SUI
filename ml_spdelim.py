@@ -24,6 +24,10 @@ from sklearn.svm import SVC
 from sklearn.pipeline import Pipeline
 from sklearn.model_selection import GridSearchCV
 from sklearn.model_selection import train_test_split
+from sklearn import datasets
+
+from scipy.cluster import hierarchy
+from scipy.spatial.distance import pdist
 
 
 def main():
@@ -51,7 +55,6 @@ def main():
 
     # Setup the genotype data
     genotypes = allel.GenotypeChunkedArray(callset["calldata/GT"])
-
     n_variants = len(callset["calldata/GT"])
     pc_missing = genotypes.count_missing(axis=0)[:] * 100 / n_variants
     pc_het = genotypes.count_het(axis=0)[:] * 100 / n_variants
@@ -120,51 +123,63 @@ def main():
     fig_pca(coords1, model1, "Conventional PCA", df_samples, populations, pop_colours)
 
     ############################################################################
-    # Support Vector Machine (SVM)
+    # Agglomerative Clustering
     ############################################################################
 
-    #xcoords = list()
-    #ycoords = list()
-    #for ind in coords1:
-        #xcoords.append(ind[0])
-        #ycoords.append(ind[1])
+    g2 = allel.GenotypeArray(callset["calldata/GT"])
 
-    # Make list of pops
-    pop_int_list = list(range(1, len(pops)+1))
-
+    # Get lists of popmap keys and values
     sample_ids = list()
     pop_list = list()
     for k, v in popmap.items():
         sample_ids.append(k)
         pop_list.append(v)
 
-    # Assign integer population IDs to sample IDs in dict
+    # Assign integer population ID values to sample ID keys
     unique_ids = dict()
-    popnum = 1
+    popnum = 0
     pop_int_dict = dict()
     for i in range(len(pop_list)):
-        print(pop_list[i])
         popnum = get_unique_identifiers(pop_list[i], unique_ids, popnum)
         popid = unique_ids[pop_list[i]]
         pop_int_dict[sample_ids[i]] = popid
 
-    sys.exit()
-    # Split the data into train and test sets
-    X_train, X_test, Y_train, Y_test = train_test_split(xcoords, ycoords, )
+    # Calculate Pairwise genetic distance
+    dist = plot_pwd(g2.to_n_alt(), "euclidean")
+    Z = hierarchy.linkage(dist, "single")
+    plt.figure(figsize=(10, 5))
+    dn = hierarchy.dendrogram(Z, color_threshold=None, labels=callset["samples"])
+    plt.savefig("dendrogram.pdf", bbox_inches="tight")
 
-    pipe_steps = [("scaler", StandardScaler()), ("pca", PCA()), ("SupVM", SVC(kernal="rbf"))]
+    #xcoords = list()
+    #ycoords = list()
+    #for ind in coords1:
+        #xcoords.append(ind[0])
+        #ycoords.append(ind[1])
+    #gnu_npa = gnu[:]
+    #gnu_npa[1]
 
-    check_params = {
-        "pca__n_components": [2],
-        "SupVM__C": [0.1, 0.5, 1, 10, 30, 40, 50, 75, 100, 500, 1000],
-        "SupVM__gamma": [0.001, 0.005, 0.01, 0.05, 0.07, 0.1, 0.5, 1, 5, 10, 50]
-    }
 
-    pipeline = Pipeline(pipe_steps)
 
+    #for v in pop_int_dict.values():
+        #pass
+
+def plot_pwd(gn, metric):
+    """
+    Creates and plots pairwise distance matrix
+    Input: scikit-allel genotype array with non-reference alleles, distance metric
+    Returns: Distance matrix and writes plot to PDF file.
+    """
+    dist = allel.pairwise_distance(gn, metric=metric)
+    allel.plot_pairwise_distance(dist)
+    plt.savefig("pairwise_distance_matrix.pdf", bbox_inches="tight")
+    return dist
 
 def get_unique_identifiers(pattern, hit, number):
-
+    """
+    Adds unique number to each group
+    Returns: integer
+    """
     if not hit:
         hit[pattern] = number
 
