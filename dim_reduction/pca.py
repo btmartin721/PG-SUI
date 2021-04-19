@@ -1,4 +1,3 @@
-import scikit
 
 class DimReduction:
 

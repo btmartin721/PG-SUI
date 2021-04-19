@@ -3,7 +3,7 @@ import sys
 import numpy as np
 import pandas as pd
 
-from popmap_file import ReadPopmap
+from read_input.popmap_file import ReadPopmap
 
 class PhylipFile:
 	"""[Class to read phylip file and convert to onehot encoding]

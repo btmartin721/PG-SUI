@@ -2,7 +2,7 @@ import sys
 
 import numpy as np
 
-from popmap_file import ReadPopmap
+from read_input.popmap_file import ReadPopmap
 
 class StrFile:
 
