@@ -34,17 +34,14 @@ def main():
 
 	if args.phylip:
 		if (args.pop_ids or 
-			args.na_character or 
-			args.first_snp_column or 
-			args.column_labels or 
 			args.onerow_perind):
 
 			print("\nPhylip file was used with structure arguments; ignoring structure file arguments\n")
 		
 		if args.popmap is None:
-			sys.exit("\nErro: No popmap file supplied with Phylip-formatted input data\n")
+			sys.exit("\nError: No popmap file supplied with Phylip-formatted input data\n")
 		
-		data = GenotypeData(filename=args.phylip, filetype="phylip", popmap=args.popmap)
+		data = GenotypeData(filename=args.phylip, filetype="phylip", popmapfile=args.popmap)
 		
 	#data.convert_onehot()
 	#data.convert_df()
