@@ -33,7 +33,7 @@ class ReadPopmap:
 				self.popdict[ind] = pop
 
 	def validate_popmap(self, samples):
-		print(self.popdict)
+		#print(self.popdict)
 		for samp in samples:
 			if samp not in self.popdict:
 				return(False)
