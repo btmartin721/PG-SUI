@@ -1,8 +1,7 @@
 import argparse
 import sys
 
-from read_input.structure_file import StrFile
-from read_input.phylip_file import PhylipFile
+from read_input.read_input import GenotypeData
 
 def main():
 	"""[Class instantiations and main package body]
@@ -52,11 +51,9 @@ def main():
 
 			print("\nPhylip file was used with structure arguments; ignoring structure file arguments\n")
 
-		p = PhylipFile(str(args.phylip))
-		data_dict = p.read_phylip(args.popmap)
-		data_dict = p.phylip2onehot(data_dict)
-
-		p.phylip2df(data_dict["snps"])
+		data = GenotypeData(args.phylip, "phylip", args.popmap)
+		data.convert_onehot()
+		#data.convert_df()
 
 
 def get_arguments():
