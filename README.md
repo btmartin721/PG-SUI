@@ -12,7 +12,11 @@ There are a number of options for the structure file format. See the help menu:
 ```
 To-Do's:
 
-Get data in a format so that dimensionality reduction can be done.
+- Get data in a format so that dimensionality reduction can be done.
+- read_vcf
+- aligning across K algorithms 
+- genotype imputation (i.e. by a priori population and globally) -- as method to GenotypeData 
+- DelimitationModel Class with each UML method class inheriting? Or something like that.
 
 Notes:
 - Can calculate AIC for k-means, or other clustering methods? See https://stackoverflow.com/questions/15839774/how-to-calculate-bic-for-k-means-clustering-in-r#:~:text=The%20AIC%20can%20be%20calculated,2*m*k)%20%7D 
