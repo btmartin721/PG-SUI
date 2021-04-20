@@ -50,47 +50,61 @@ def expand012(geno):
 		return([-9,-9])
 		
 
-#Input: List of IUPAC genotypes
+def remove_items(all_list, bad_list):
+	# using list comprehension to perform the task
+	res = [i for i in all_list if i not in bad_list]
+	return res
+
+#Input: List of IUPAC genotypes or VCF-style (e.g., 0/1) if vcf=True 
 #output: Count of how many total alleles there are
-def count_alleles(l):
+def count_alleles(l, vcf=False):
 	all=list()
 	for i in l:
-		all.extend(get_iupac_caseless(i))
+		if vcf:
+			all.extend(i.split("/"))
+			#print(i.split("/"))
+		else:
+			all.extend(get_iupac_caseless(i))
+	all = remove_items(all, ["-9", "-", "N", -9])
 	return(len(set(all)))
 
 #Input: List of IUPAC genotypes
 #Output: Most common allele
-def get_major_allele(l, num=1):
+def get_major_allele(l, num=1, vcf=False):
 	all=list()
 	for i in l:
-		all.extend(get_iupac_caseless(i))
+		if vcf:
+			all.extend(i.split("/"))
+		else:
+			all.extend(get_iupac_caseless(i))
 	c = Counter(all)
 	rets = c.most_common(num)
 	return([x[0] for x in rets])
 	
 #Function to split character to IUPAC codes, assuing diploidy
+#this version gives all non-valid ambiguities as N
 def get_iupac_caseless(char):
 	lower = False
 	if char.islower():
 		lower = True
 		char = char.upper()
 	iupac = {
-		"A"	: ["A"],
-		"G"	: ["G"],
-		"C"	: ["C"],
-		"T"	: ["T"],
-		"N"	: ["A", "C", "G", "T"],
-		"-"	: ["A", "C", "G", "T", "-"],
+		"A"	: ["A","A"],
+		"G"	: ["G","G"],
+		"C"	: ["C","C"],
+		"T"	: ["T","T"],
+		"N"	: ["N","N"],
+		"-"	: ["N","N"],
 		"R"	: ["A","G"],
 		"Y"	: ["C","T"],
 		"S"	: ["G","C"],
 		"W"	: ["A","T"],
 		"K"	: ["G","T"],
 		"M"	: ["A","C"],
-		"B"	: ["C","G","T"],
-		"D"	: ["A","G","T"],
-		"H"	: ["A","C","T"],
-		"V"	: ["A","C","G"]
+		"B"	: ["N","N"],
+		"D"	: ["N","N"],
+		"H"	: ["N","N"],
+		"V"	: ["N","N"]
 	}
 	ret = iupac[char]
 	if lower:
