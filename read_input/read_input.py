@@ -8,8 +8,15 @@ from utils import sequence_tools
 
 class GenotypeData:
 	"""[Class to read genotype data and convert to onehot encoding]
+	
+	Possible filetype values:
+		- phylip
+		- structure1row
+		- structure2row 
+	
+	Note: If popmapfile is supplied, read_structure assumes NO popID column
 	"""
-	def __init__(self, filename, filetype=None, popmapfile=None):
+	def __init__(self, filename=None, filetype=None, popmapfile=None):
 		self.filename = filename
 		self.filetype = filetype
 		self.popmapfile = popmapfile
@@ -20,12 +27,12 @@ class GenotypeData:
 		self.df = None
 		
 		if self.filetype is not None:
-			self.parse_filetype(filetype)
+			self.parse_filetype(filetype, popmapfile)
 		
 		if self.popmapfile is not None:
 			self.read_popmap(popmapfile)
 	
-	def parse_filetype(self, filetype=None):
+	def parse_filetype(self, filetype=None, popmapfile=None):
 		if filetype is None:
 			sys.exit("\nError: No filetype specified.\n")
 		else:
@@ -33,11 +40,19 @@ class GenotypeData:
 				self.filetype = filetype
 				self.read_phylip()
 			elif filetype == "structure1row":
-				self.filetype = "structure"
-				self.read_structure(onerow=True, popids=True)
+				if popmapfile is not None:
+					self.filetype = "structure1row"
+					self.read_structure(onerow=True, popids=False)
+				else:
+					self.filetype = "structure1rowPopID"
+					self.read_structure(onerow=True, popids=True)
 			elif filetype == "structure2row":
-				self.filetype = "structure"
-				self.read_structure(onerow=False, popids=True)
+				if popmapfile is not None:
+					self.filetype = "structure2row"
+					self.read_structure(onerow=False, popids=False)
+				else:
+					self.filetype = "structure2rowPopID"
+					self.read_structure(onerow=False, popids=True)
 			else:
 				sys.exit("\nError: Filetype",filetype,"not implemented!\n")
 
@@ -49,44 +64,73 @@ class GenotypeData:
 		else:
 			sys.exit("\nError: GenotypeData read_XX() call does not match filetype!\n")
 
-	def read_structure(self, rowtype=1, popids=True):
+	def read_structure(self, onerow=False, popids=True):
 		"""[Read a structure file with two row per individual]
 
 		"""
 		print("\nReading structure file {}...".format(self.filename))
-		self.check_filetype("structure")
 
 		with open(self.filename, "r") as fin:
-			if col_labels:
-				first_line = fin.readline()
-			for line in fin:
-				line = line.strip()
-				if not line:
-					continue
-				cols = line.split()
-				samples = cols[0]
-				self.samples.append(samples)
-				if pop_ids: # If popid column is present.
-					pop_ids = int(pop_ids)
-					popids = cols[pop_ids-1]
-					self.pops.append(popids)
-
-				# Put snps into 2d list.
-				first = first_snp_col - 1
-				snps = cols[first:]
-				self.snps.append(snps)
-
-		if onerow:
-			num_inds = len(self.snps)
-			num_snps = int(len(self.snps[0]) / 2)
-		else:
-			num_inds = int(len(self.snps) / 2)
-			num_snps = int(len(self.snps[0]))
-
-		print("\nFound {} SNPs and {} individuals...\n".format(num_snps, num_inds))
+			snp_data=list()
+			if not onerow:
+				firstline=None
+				for line in fin:
+					line.strip()
+					if not line:
+						continue
+					if not firstline:
+						firstline=line.split()
+						continue
+					else:
+						secondline=line.split()
+						if firstline[0] != secondline[0]:
+							sys.exit("\nError: Sample names do not match:",str(firstline[0]),str(secondline[0]),"\n")
+						ind=firstline[0]
+						pop=None
+						if popids:
+							if firstline[1] != secondline[1]:
+								sys.exit("\nError: Population IDs do not match:",str(firstline[1]),str(secondline[1]),"\n")
+							pop=firstline[1]
+							self.pops.append(pop)
+							firstline=firstline[2:]
+							secondline=secondline[2:]
+						else:
+							firstline=firstline[1:]
+							secondline=secondline[1:]
+						self.samples.append(ind)
+						genotypes = merge_alleles(firstline, secondline)
+						snp_data.append(genotypes)
+						firstline=None
+			else:
+				for line in fin:
+					line.strip()
+					if not line:
+						continue
+					if not firstline:
+						firstline=line.split()
+						continue
+					else:
+						ind=firstline[0]
+						pop=None
+						if popids:
+							pop=firstline[1]
+							self.pops.append(pop)
+							firstline=firstline[2:]
+						else:
+							firstline=firstline[1:]
+						self.samples.append(ind)
+						genotypes = merge_alleles(firstline, second=None)
+						snp_data.append(genotypes)
+						firstline=None
+			#convert snp_data to 012 format
+			self.convert_012(snp_data, vcf=True)
+		fin.close()
+		
+		num_snps = len(self.snps[0])
+		print("\nFound {} SNPs and {} individuals...\n".format(num_snps, len(self.samples)))
 
 		# Make sure all sequences are the same length.
-		for item in mydict["snps"]:
+		for item in self.snps:
 			try:
 				assert len(item) == num_snps
 			except AssertionError:
@@ -124,8 +168,8 @@ class GenotypeData:
 
 				# Error handling if incorrect sequence length
 				if len(snps) != num_snps:
-					print(len(snps))
-					print(num_snps)
+					#print(len(snps))
+					#print(num_snps)
 					sys.exit("\nError: All sequences must be the same length; at least one sequence differes from the header line\n")
 
 				snp_data.append(snps)
@@ -144,32 +188,52 @@ class GenotypeData:
 	def convert_df(self):
 		self.df = self.df2allelecounts(pd.DataFrame.from_records(self.snps))
 	
-	def convert_012(self, snps):
+	def convert_012(self, snps, vcf=False):
 		skip=0
+		new_snps=list()
+		for i in range(0, len(self.samples)):
+			new_snps.append([])
 		for j in range(0, len(snps[0])):
 			#print(i)
 			loc=list()
 			for i in range(0, len(self.samples)):
-				#print(len(snps[j]))
-				#print(snps[j])
-				loc.append(snps[i][j].upper())
-			#print(sequence_tools.count_alleles(loc))
-			if sequence_tools.count_alleles(loc) > 2:
+				if vcf:
+					loc.append(snps[i][j])
+				else:
+					loc.append(snps[i][j].upper())
+			#**NOTE**: Here we could switch to !=2 to also remove monomorphic sites?
+			if sequence_tools.count_alleles(loc, vcf=vcf) > 2:
 				skip+=1
+				continue
 			else:
-				ref, alt = sequence_tools.get_major_allele(loc, 2)
-				for i in range(0, len(loc)):
-					if loc[i] == ref:
-						loc[i] = 0
-					elif loc[i] == alt:
-						loc[i] = 2
-					elif loc[i] in ["-", "-9", "N"]:
-						loc[i] = -9
-					else:
-						loc[i] = 1	
-				self.snps.append(loc)
-		if skip > 0: 
-			print("\nWarning: Skipping non-biallelic sites\n")
+				ref, alt = sequence_tools.get_major_allele(loc, 2, vcf=vcf)
+				ref=str(ref)
+				alt=str(alt)
+				if vcf:
+					for i in range(0, len(self.samples)):
+						gen=snps[i][j].split("/")
+						if gen[0] in ["-", "-9", "N"] or gen[1] in ["-", "-9", "N"]:
+							new_snps[i].append(-9)
+						elif gen[0] == gen[1] and gen[0] == ref:
+							new_snps[i].append(0)
+						elif gen[0] == gen[1] and gen[0] == alt:
+							new_snps[i].append(2)
+						else:
+							new_snps[i].append(1)
+				else:
+					for s in snps[i]:
+						if loc[i] == ref:
+							new_snps[i].append(0)
+						elif loc[i] == alt:
+							new_snps[i].append(2)
+						elif loc[i] in ["-", "-9", "N"]:
+							new_snps[i].append(-9)
+						else:
+							new_snps[i].append(1)
+		if skip > 0:
+			print("\nWarning: Skipping",str(skip),"non-biallelic sites\n")
+		for s in new_snps:
+			self.snps.append(s)
 	
 	def df2allelecounts(self, df):
 
@@ -268,6 +332,23 @@ class GenotypeData:
 		"""
 		if self.filetype == "phylip":
 			self.onehot = phylip2onehot(self.samples, self.snps)
+
+#outputs VCF-style genotypes (i.e. split with "/")
+def merge_alleles(first, second=None):
+	ret=list()
+	if second is not None:
+		if len(first) != len(second):
+			sys.exit("\nError: First and second lines have different number of alleles\n")
+		else:
+			for i in range(0, len(first)):
+				ret.append(str(first[i])+"/"+str(second[i]))
+	else:
+		if len(first) % 2 != 0:
+			sys.exit("\nError: Line has non-even number of alleles!\n")
+		else:
+			for i, j in zip(first[::2], first[1::2]):
+				ret.append(str(i)+"/"+str(j))
+	return(ret)
 
 def count2onehot(samples, snps):
 	onehot_dict = {

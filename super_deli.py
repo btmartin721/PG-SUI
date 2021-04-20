@@ -8,41 +8,31 @@ def main():
 	"""
 
 	args = get_arguments()
-
+	
 	if args.str and args.phylip:
 		sys.exit("Error: Only one file type can be specified")
 
 	# If VCF file is specified.
 	if args.str:
-
-		print("\nUsing {} to as the missing data character\n".format(str(args.na_character)))
-
-		print("\nUsing column {} as the first genotype column\n".format(args.first_snp_column))
-
-		if not args.pop_ids and not args.popmap:
+		if not args.pop_ids and args.popmap is None:
 			sys.exit("\nError: Either --pop_ids or --popmap must be specified\n")
 
 		if args.pop_ids:
-			print("\n--pop_ids was specified as column {}\n".format(args.pop_ids))
+			print("\n--pop_ids was specified as column 2\n".format(args.pop_ids))
 		else:
 			print("\n--pop_ids was not specified; using the popmap file to get population IDs\n")
-
+		
 		if args.onerow_perind:
 			print("\nUsing one row per individual...\n")
 		else:
 			print("\nUsing two rows per individual...\n")
-
-		s = StrFile(str(args.str), str(args.na_character))
-
-		str_dict, number_of_snps, number_of_inds = s.read_structure_file(args.column_labels, args.pop_ids, args.first_snp_column, args.onerow_perind, args.popmap)
-
-		data_dict = s.separate_structure_alleles(str_dict, number_of_inds, number_of_snps, args.onerow_perind, args.popmap)
-
-		data_dict = s.structure2onehot(data_dict)
-		# print(data_dict["onehot"])
+			
+		if args.onerow_perind:
+			data = GenotypeData(filename=args.str, filetype="structure1row", popmapfile=args.popmap)
+		else:
+			data = GenotypeData(filename=args.str, filetype="structure2row", popmapfile=args.popmap)
 
 	if args.phylip:
-
 		if (args.pop_ids or 
 			args.na_character or 
 			args.first_snp_column or 
@@ -50,10 +40,14 @@ def main():
 			args.onerow_perind):
 
 			print("\nPhylip file was used with structure arguments; ignoring structure file arguments\n")
-
-		data = GenotypeData(args.phylip, "phylip", args.popmap)
-		data.convert_onehot()
-		#data.convert_df()
+		
+		if args.popmap is None:
+			sys.exit("\nErro: No popmap file supplied with Phylip-formatted input data\n")
+		
+		data = GenotypeData(filename=args.phylip, filetype="phylip", popmap=args.popmap)
+		
+	#data.convert_onehot()
+	#data.convert_df()
 
 
 def get_arguments():
@@ -85,28 +79,17 @@ def get_arguments():
 								default=False,
 								action="store_true",
 								help="Toggles on one row per individual option in structure file")
-	structure_args.add_argument("--column_labels",
-								default=False,
-								action="store_true",
-								help="Specifies that structure file has column labels")
 	structure_args.add_argument("--pop_ids",
-								type=int,
+								default=False,
 								required=False,
-								help="Column number for population ids (if present); integer with 1-based indexing")
-	structure_args.add_argument("--na_character",
-								type=str,
-								required=False,
-								default="-9",
-								help="Specifies value for missing data in structure file; default = -9")
-	structure_args.add_argument("--first_snp_column",
-								type=int,
-								required=False,
-								help="Number of column with first SNP site; integer starting at 1")
+								action="store_true",
+								help="Toggles on population ID column (2nd col) in structure file")
 
 	## Optional Arguments
 	optional_args.add_argument("-m", "--popmap",
 								type=str,
-								required=True,
+								required=False,
+								default=None,
 								help="Two-column tab-separated population map file: inds\tpops. No header line")
 	optional_args.add_argument("--prefix",
 								type=str,
