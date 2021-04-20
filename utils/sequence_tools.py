@@ -3,7 +3,26 @@
 import re
 import sys
 from itertools import product
+from collections import Counter
 
+#Input: List of IUPAC genotypes
+#output: Count of how many total alleles there are
+def count_alleles(l):
+	all=list()
+	for i in l:
+		all.extend(get_iupac_caseless(i))
+	return(len(set(all)))
+
+#Input: List of IUPAC genotypes
+#Output: Most common allele
+def get_major_allele(l, num=1):
+	all=list()
+	for i in l:
+		all.extend(get_iupac_caseless(i))
+	c = Counter(all)
+	rets = c.most_common(num)
+	return([x[0] for x in rets])
+	
 #Function to split character to IUPAC codes, assuing diploidy
 def get_iupac_caseless(char):
 	lower = False
@@ -76,7 +95,6 @@ def reverseComplement(seq):
 	for i in (get_revComp_caseless(j) for j in seq):
 		comp.append(i)
 	return("".join(comp[::-1]))
-
 
 
 #Function to simplify a sequence
