@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 
 from read_input.popmap_file import ReadPopmap
+from utils import sequence_tools
 
 class GenotypeData:
 	"""[Class to read genotype data and convert to onehot encoding]
@@ -31,6 +32,12 @@ class GenotypeData:
 			if filetype == "phylip":
 				self.filetype = filetype
 				self.read_phylip()
+			elif filetype == "structure1row":
+				self.filetype = "structure"
+				self.read_structure(onerow=True, popids=True)
+			elif filetype == "structure2row":
+				self.filetype = "structure"
+				self.read_structure(onerow=False, popids=True)
 			else:
 				sys.exit("\nError: Filetype",filetype,"not implemented!\n")
 
@@ -42,6 +49,50 @@ class GenotypeData:
 		else:
 			sys.exit("\nError: GenotypeData read_XX() call does not match filetype!\n")
 
+	def read_structure(self, rowtype=1, popids=True):
+		"""[Read a structure file with two row per individual]
+
+		"""
+		print("\nReading structure file {}...".format(self.filename))
+		self.check_filetype("structure")
+
+		with open(self.filename, "r") as fin:
+			if col_labels:
+				first_line = fin.readline()
+			for line in fin:
+				line = line.strip()
+				if not line:
+					continue
+				cols = line.split()
+				samples = cols[0]
+				self.samples.append(samples)
+				if pop_ids: # If popid column is present.
+					pop_ids = int(pop_ids)
+					popids = cols[pop_ids-1]
+					self.pops.append(popids)
+
+				# Put snps into 2d list.
+				first = first_snp_col - 1
+				snps = cols[first:]
+				self.snps.append(snps)
+
+		if onerow:
+			num_inds = len(self.snps)
+			num_snps = int(len(self.snps[0]) / 2)
+		else:
+			num_inds = int(len(self.snps) / 2)
+			num_snps = int(len(self.snps[0]))
+
+		print("\nFound {} SNPs and {} individuals...\n".format(num_snps, num_inds))
+
+		# Make sure all sequences are the same length.
+		for item in mydict["snps"]:
+			try:
+				assert len(item) == num_snps
+			except AssertionError:
+				sys.exit("\nError: There are sequences of different lengths in the structure file\n")
+
+
 	def read_phylip(self):
 		"""[Read phylip file from disk]
 
@@ -51,16 +102,20 @@ class GenotypeData:
 		Populates ReadInput object by parsing Phylip
 		"""
 		self.check_filetype("phylip")
-		
+		snp_data=list()
 		with open(self.filename, "r") as fin:
-			header = fin.readline()
-			header_cols = header.split()
-			num_inds = int(header_cols[0])
-			num_snps = int(header_cols[1])
-			
+			num_inds = 0
+			num_snps = 0
+			first=True
 			for line in fin:
 				line = line.strip()
 				if not line: # If blank line.
+					continue
+				if first:
+					first=False
+					header=line.split()
+					num_inds=int(header[0])
+					num_snps=int(header[1])
 					continue
 				cols = line.split()
 				inds = cols[0]
@@ -70,11 +125,17 @@ class GenotypeData:
 				# Error handling if incorrect sequence length
 				if len(snps) != num_snps:
 					print(len(snps))
+					print(num_snps)
 					sys.exit("\nError: All sequences must be the same length; at least one sequence differes from the header line\n")
 
-				self.snps.append(snps)
-
+				snp_data.append(snps)
+				
 				self.samples.append(inds)
+			
+			#convert snp_data to 012 format
+			self.convert_012(snp_data)
+			
+		fin.close()
 
 		# Error hanlding if incorrect number of individuals in header.
 		if len(self.samples) != num_inds:
@@ -82,6 +143,33 @@ class GenotypeData:
 	
 	def convert_df(self):
 		self.df = self.df2allelecounts(pd.DataFrame.from_records(self.snps))
+	
+	def convert_012(self, snps):
+		skip=0
+		for j in range(0, len(snps[0])):
+			#print(i)
+			loc=list()
+			for i in range(0, len(self.samples)):
+				#print(len(snps[j]))
+				#print(snps[j])
+				loc.append(snps[i][j].upper())
+			#print(sequence_tools.count_alleles(loc))
+			if sequence_tools.count_alleles(loc) > 2:
+				skip+=1
+			else:
+				ref, alt = sequence_tools.get_major_allele(loc, 2)
+				for i in range(0, len(loc)):
+					if loc[i] == ref:
+						loc[i] = 0
+					elif loc[i] == alt:
+						loc[i] = 2
+					elif loc[i] in ["-", "-9", "N"]:
+						loc[i] = -9
+					else:
+						loc[i] = 1	
+				self.snps.append(loc)
+		if skip > 0: 
+			print("\nWarning: Skipping non-biallelic sites\n")
 	
 	def df2allelecounts(self, df):
 
@@ -181,7 +269,23 @@ class GenotypeData:
 		if self.filetype == "phylip":
 			self.onehot = phylip2onehot(self.samples, self.snps)
 
-def phylip2onehot(samples, snps):
+def count2onehot(samples, snps):
+	onehot_dict = {
+		"0": [1.0, 0.0], 
+		"1": [0.5, 0.5],
+		"2": [0.0, 1.0],
+		"-": [0.0, 0.0]
+	}
+	onehot_outer_list = list()
+	for i in range(len(samples)):
+		onehot_list = list()
+		for j in range(len(snps[0])):
+			onehot_list.append(onehot_dict[snps[i][j]])
+		onehot_outer_list.append(onehot_list)
+	onehot = np.array(onehot_outer_list)
+	return(onehot)
+
+def seq2onehot(samples, snps):
 	onehot_dict = {
 		"A": [1.0, 0.0, 0.0, 0.0], 
 		"T": [0.0, 1.0, 0.0, 0.0],
@@ -196,15 +300,11 @@ def phylip2onehot(samples, snps):
 		"S": [0.0, 0.0, 0.5, 0.5],
 		"-": [0.0, 0.0, 0.0, 0.0]
 	}
-
 	onehot_outer_list = list()
 	for i in range(len(samples)):
 		onehot_list = list()
-
 		for j in range(len(snps[0])):
 			onehot_list.append(onehot_dict[snps[i][j]])
 		onehot_outer_list.append(onehot_list)
-
 	onehot = np.array(onehot_outer_list)
-	
 	return(onehot)
