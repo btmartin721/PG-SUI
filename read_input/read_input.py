@@ -56,7 +56,7 @@ class GenotypeData:
 					self.filetype = "structure2rowPopID"
 					self.read_structure(onerow=False, popids=True)
 			else:
-				sys.exit("\nError: Filetype",filetype,"not implemented!\n")
+				sys.exit("\nError: Filetype {} is not supported!\n".format(filetype))
 
 	def check_filetype(self, filetype):
 		if self.filetype is None:
@@ -67,17 +67,17 @@ class GenotypeData:
 			sys.exit("\nError: GenotypeData read_XX() call does not match filetype!\n")
 
 	def read_structure(self, onerow=False, popids=True):
-		"""[Read a structure file with two row per individual]
+		"""[Read a structure file with two rows per individual]
 
 		"""
 		print("\nReading structure file {}...".format(self.filename))
 
+		snp_data=list()
 		with open(self.filename, "r") as fin:
-			snp_data=list()
 			if not onerow:
 				firstline=None
 				for line in fin:
-					line.strip()
+					line=line.strip()
 					if not line:
 						continue
 					if not firstline:
@@ -86,12 +86,12 @@ class GenotypeData:
 					else:
 						secondline=line.split()
 						if firstline[0] != secondline[0]:
-							sys.exit("\nError: Sample names do not match:",str(firstline[0]),str(secondline[0]),"\n")
+							sys.exit("\nError: Two rows per individual was specified but sample names do not match: {} and {}\n".format(str(firstline[0]), str(secondline[0])))
 						ind=firstline[0]
 						pop=None
 						if popids:
 							if firstline[1] != secondline[1]:
-								sys.exit("\nError: Population IDs do not match:",str(firstline[1]),str(secondline[1]),"\n")
+								sys.exit("\nError: Two rows per individual was specified but population IDs do not match: {} {}\n".format(str(firstline[1]), str(secondline[1])))
 							pop=firstline[1]
 							self.pops.append(pop)
 							firstline=firstline[2:]
@@ -103,9 +103,9 @@ class GenotypeData:
 						genotypes = merge_alleles(firstline, secondline)
 						snp_data.append(genotypes)
 						firstline=None
-			else:
+			else: # If onerow:
 				for line in fin:
-					line.strip()
+					line=line.strip()
 					if not line:
 						continue
 					if not firstline:
@@ -124,9 +124,8 @@ class GenotypeData:
 						genotypes = merge_alleles(firstline, second=None)
 						snp_data.append(genotypes)
 						firstline=None
-			#convert snp_data to 012 format
-			self.convert_012(snp_data, vcf=True)
-		fin.close()
+		# Convert snp_data to 012 format
+		self.convert_012(snp_data, vcf=True)
 		
 		num_snps = len(self.snps[0])
 		print("\nFound {} SNPs and {} individuals...\n".format(num_snps, len(self.samples)))
@@ -138,14 +137,11 @@ class GenotypeData:
 			except AssertionError:
 				sys.exit("\nError: There are sequences of different lengths in the structure file\n")
 
-
 	def read_phylip(self):
-		"""[Read phylip file from disk]
+		"""[Populates ReadInput object by parsing Phylip]
 
 		Args:
 			popmap_filename [str]: [Filename for population map file]
-
-		Populates ReadInput object by parsing Phylip
 		"""
 		self.check_filetype("phylip")
 		snp_data=list()
@@ -154,7 +150,7 @@ class GenotypeData:
 			num_snps = 0
 			first=True
 			for line in fin:
-				line = line.strip()
+				line=line.strip()
 				if not line: # If blank line.
 					continue
 				if first:
@@ -170,25 +166,18 @@ class GenotypeData:
 
 				# Error handling if incorrect sequence length
 				if len(snps) != num_snps:
-					#print(len(snps))
-					#print(num_snps)
-					sys.exit("\nError: All sequences must be the same length; at least one sequence differes from the header line\n")
+					sys.exit("\nError: All sequences must be the same length; at least one sequence differs from the header line\n")
 
 				snp_data.append(snps)
 				
 				self.samples.append(inds)
 			
-			#convert snp_data to 012 format
-			self.convert_012(snp_data)
+		# Convert snp_data to 012 format
+		self.convert_012(snp_data)
 			
-		fin.close()
-
 		# Error hanlding if incorrect number of individuals in header.
 		if len(self.samples) != num_inds:
 			sys.exit("\nError: Incorrect number of individuals are listed in the header\n")
-	
-	def convert_df(self):
-		self.df = self.df2allelecounts(pd.DataFrame.from_records(self.snps))
 	
 	def convert_012(self, snps, vcf=False):
 		skip=0
@@ -196,15 +185,16 @@ class GenotypeData:
 		for i in range(0, len(self.samples)):
 			new_snps.append([])
 		for j in range(0, len(snps[0])):
-			#print(i)
 			loc=list()
 			for i in range(0, len(self.samples)):
 				if vcf:
 					loc.append(snps[i][j])
 				else:
 					loc.append(snps[i][j].upper())
-			#**NOTE**: Here we could switch to !=2 to also remove monomorphic sites?
-			if sequence_tools.count_alleles(loc, vcf=vcf) > 2:
+			#**NOTE**: Here we could switch to !=2 to also remove monomorphic sites? 
+			# 
+			# **NOTE**I agree. Monomorphic sites might violate assumptions.
+			if sequence_tools.count_alleles(loc, vcf=vcf) != 2:
 				skip+=1
 				continue
 			else:
@@ -223,7 +213,7 @@ class GenotypeData:
 						else:
 							new_snps[i].append(1)
 				else:
-					for s in snps[i]:
+					for i in range(0, len(self.samples)):
 						if loc[i] == ref:
 							new_snps[i].append(0)
 						elif loc[i] == alt:
@@ -236,79 +226,14 @@ class GenotypeData:
 			print("\nWarning: Skipping",str(skip),"non-biallelic sites\n")
 		for s in new_snps:
 			self.snps.append(s)
-	
-	def df2allelecounts(self, df):
-
-		df2 = pd.DataFrame()
-		homozygotes = ["A", "T", "G", "C"]
-		missing_vals = ["N", "-"]
-		heterozygotes = ["W", "R", "M", "K", "Y", "S"]
-
-		for i, col in enumerate(df):
-			all_counts = self.get_value_counts(df[col])
-			uniq_bases = all_counts["index"].to_list()
-
-			if len(uniq_bases) <= 2:
-				if uniq_bases[0] in homozygotes:
-					ref = uniq_bases[0]
-				elif uniq_bases[0] in heterozygotes:
-					df.drop(col, axis=1, inplace=True)
-					print("\nWarning: Removing site {} from the PCA input because its only reference allele is heterozygous".format(i+1))
-					continue
-				elif uniq_bases[0] in missing_vals:
-					df.drop(col, axis=1, inplace=True)
-					print("\nWarning: Removing site {} from the PCA input because it only contains one allele that isn't missing data".format(i+1))
-					continue
-
-				if uniq_bases[1] in heterozygotes:
-					df.drop(col, axis=1, inplace=True)
-					print("\nWarning: Removing site {} from the PCA input because its only alternate allele is heterozygous".format(i+1))
-					continue
-				
-				alt = uniq_bases[1]
-
-				df[col].replace([ref], "0", inplace=True)
-				df[col].replace([alt], "2", inplace=True)
-
-			if len(uniq_bases) > 2:
-				
-				homoz_matches = [key for key, val in enumerate(uniq_bases) if val in set(homozygotes)]
-				
-				if len(homoz_matches) > 2:
-					df.drop(col, axis=1, inplace=True)
-					print("Warning: Site {} was not bi-allelic so it was removed.".format(i+1))
-					continue
-
-				elif len(homoz_matches) < 2:
-					df.drop(col, axis=1, inplace=True)
-					print("Warning: Site {} did not have two non-ambiguous alleles so it was removed.".format(i+1))
-					continue
-
-				ref = uniq_bases[homoz_matches[0]]
-				alt = uniq_bases[homoz_matches[1]]
-
-				df[col].replace([ref], "0", inplace=True)
-				df[col].replace([alt], "2", inplace=True)
-				
-				heteroz_matches = [uniq_bases.index(x) for x in heterozygotes]
-				miss_matches = [uniq_bases.index(x) for x in missing_vals]
-
-				if heteroz_matches:
-					df[col].replace([heteroz_matches], "1", inplace=True)
-
-				if miss_matches:
-					df[col].replace([miss_matches], np.nan, inplace=True)
-
-	def get_value_counts(self, df):
-		return df.value_counts().reset_index()
-	
+		
 	def read_popmap(self, popmapfile):
 		self.popmapfile = popmapfile
 		# Join popmap file with main object.
 		if len(self.samples) < 1:
 			sys.exit("\nError: No samples in GenotypeData\n")
 		
-		#instantiate popmap object
+		# Instantiate popmap object
 		my_popmap = ReadPopmap(popmapfile)
 		
 		popmapOK = my_popmap.validate_popmap(self.samples)
@@ -335,8 +260,16 @@ class GenotypeData:
 		if self.filetype == "phylip":
 			self.onehot = phylip2onehot(self.samples, self.snps)
 
-#outputs VCF-style genotypes (i.e. split with "/")
 def merge_alleles(first, second=None):
+	"""[Merges first and second alleles in structure file]
+
+	Args:
+		first ([list]): [Alleles on one line]
+		second ([list], optional): [Second row of alleles]. Defaults to None.
+
+	Returns:
+		[list(str)]: [VCF-style genotypes (i.e. split by "/")]
+	"""
 	ret=list()
 	if second is not None:
 		if len(first) != len(second):
@@ -350,7 +283,7 @@ def merge_alleles(first, second=None):
 		else:
 			for i, j in zip(first[::2], first[1::2]):
 				ret.append(str(i)+"/"+str(j))
-	return(ret)
+	return ret
 
 def count2onehot(samples, snps):
 	onehot_dict = {

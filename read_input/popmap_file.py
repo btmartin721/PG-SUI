@@ -17,7 +17,7 @@ class ReadPopmap:
 		"""[Read a population map file from disk into a dictionary]
 
 		Args:
-			popmap_filename ([string]): [Name of popmap file]
+			popmap_filename ([str]): [Name of popmap file]
 
 		Returns:
 			[dict]: [Dictionary with indID: popID]

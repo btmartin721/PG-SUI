@@ -72,14 +72,24 @@ def count_alleles(l, vcf=False):
 #Output: Most common allele
 def get_major_allele(l, num=1, vcf=False):
 	all=list()
+	primary_bases = ["A", "T", "G", "C"]
+	structure_missing = "-9"
 	for i in l:
 		if vcf:
 			all.extend(i.split("/"))
 		else:
 			all.extend(get_iupac_caseless(i))
+
 	c = Counter(all)
-	rets = c.most_common(num)
-	return([x[0] for x in rets])
+
+	# Returns two most common non-ambiguous bases
+	# Makes sure the least common base isn't N or -9
+	if vcf:
+		rets = c.most_common()
+		return [x[0] for x in rets if x[0] != structure_missing]
+	else:
+		rets = c.most_common()
+		return([x[0] for x in rets if x[0] in primary_bases])
 	
 #Function to split character to IUPAC codes, assuing diploidy
 #this version gives all non-valid ambiguities as N
