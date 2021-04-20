@@ -5,6 +5,51 @@ import sys
 from itertools import product
 from collections import Counter
 
+def blacklist_missing(loci, threshold, iupac=False):
+	blacklist=list()
+	for i in range(0, len(loci)):
+		alleles = expandLoci(loci[i], iupac=False)
+		c = Counter(alleles)
+		if float(c[-9]/sum(c.values())) > threshold:
+			blacklist.append(i)
+	return(blacklist)
+
+def blacklist_maf(loci, threshold, iupac=False):
+	blacklist=list()
+	for i in range(0, len(loci)):
+		alleles = expandLoci(loci[i], iupac=False)
+		c = Counter(alleles)
+		if len(c.keys()) <= 1:
+			blacklist.append(i)
+			continue
+		else:
+			minor_count = c.most_common(2)[1][1]
+			if float(minor_count/sum(c.values())) < threshold:
+				blacklist.append(i)
+	return(blacklist)
+
+#list of genotypes in 0-1-2 format
+def expandLoci(loc, iupac=False):
+	ret=list()
+	for i in loc:
+		if not iupac: 
+			ret.extend(expand012(i))
+		else:
+			ret.extent(get_iupac_caseless(i))
+	return(ret)
+
+def expand012(geno):
+	g=str(geno)
+	if g == "0":
+		return([0,0])
+	elif g == "1":
+		return([0,1])
+	elif g == "2":
+		return([1,1])
+	else:
+		return([-9,-9])
+		
+
 #Input: List of IUPAC genotypes
 #output: Count of how many total alleles there are
 def count_alleles(l):
