@@ -13,6 +13,8 @@ class GenotypeData:
 		- phylip
 		- structure1row
 		- structure2row 
+		- vcf (TBD)
+		- Any others?
 	
 	Note: If popmapfile is supplied, read_structure assumes NO popID column
 	"""
