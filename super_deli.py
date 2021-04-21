@@ -2,6 +2,8 @@
 import argparse
 import sys
 
+import numpy as np
+
 # Make sure python version is >= 3.6
 if sys.version_info < (3, 6):
 	raise ImportError("Python < 3.6 is not supported!")
@@ -49,12 +51,14 @@ def main():
 			sys.exit("\nError: No popmap file supplied with Phylip-formatted input data\n")
 		
 		data = GenotypeData(filename=args.phylip, filetype="phylip", popmapfile=args.popmap)
+	with np.printoptions(threshold=np.inf):
+		print(data.genotypes_onehot[0])
+		
+	#pca_settings = {"n_components": data.individuals(), "copy": True, "scaler": "patterson", "ploidy": 2}
 
-	pca_settings = {"n_components": data.individuals(), "copy": True, "scaler": "patterson", "ploidy": 2}
+	#pca = DimReduction(data=data.genotypes(), algorithms="standard-pca", settings=pca_settings)
 
-	pca = DimReduction(data=data.genotypes(), algorithms="standard-pca", settings=pca_settings)
-
-	print(data.genotypes)
+	#print(data.genotypes_list)
 	#data.convert_onehot()
 	#data.convert_df()
 
