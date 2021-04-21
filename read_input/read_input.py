@@ -127,6 +127,9 @@ class GenotypeData:
 						snp_data.append(genotypes)
 						firstline=None
 
+		# Convert snp_data to onehot encoding format
+		self.convert_onehot(snp_data)
+
 		# Convert snp_data to 012 format
 		self.convert_012(snp_data, vcf=True)
 		
@@ -177,7 +180,10 @@ class GenotypeData:
 				snp_data.append(snps)
 				
 				self.samples.append(inds)
-			
+
+		# Convert snp_data to onehot format
+		self.convert_onehot(snp_data)
+
 		# Convert snp_data to 012 format
 		self.convert_012(snp_data)
 
@@ -235,6 +241,53 @@ class GenotypeData:
 			print("\nWarning: Skipping",str(skip),"non-biallelic sites\n")
 		for s in new_snps:
 			self.snps.append(s)
+
+	def convert_onehot(self, snp_data):
+
+		if self.filetype == "phylip":
+			onehot_dict = {
+				"A": [1.0, 0.0, 0.0, 0.0], 
+				"T": [0.0, 1.0, 0.0, 0.0],
+				"G": [0.0, 0.0, 1.0, 0.0], 
+				"C": [0.0, 0.0, 0.0, 1.0],
+				"N": [0.0, 0.0, 0.0, 0.0],
+				"W": [0.5, 0.5, 0.0, 0.0],
+				"R": [0.5, 0.0, 0.5, 0.0],
+				"M": [0.5, 0.0, 0.0, 0.5],
+				"K": [0.0, 0.5, 0.5, 0.0],
+				"Y": [0.0, 0.5, 0.0, 0.5],
+				"S": [0.0, 0.0, 0.5, 0.5],
+				"-": [0.0, 0.0, 0.0, 0.0]
+			}
+
+		elif self.filetype == "structure1row" or self.filetype == "structure2row":
+			onehot_dict = {
+				"1/1": [1.0, 0.0, 0.0, 0.0], 
+				"2/2": [0.0, 1.0, 0.0, 0.0],
+				"3/3": [0.0, 0.0, 1.0, 0.0], 
+				"4/4": [0.0, 0.0, 0.0, 1.0],
+				"-9/-9": [0.0, 0.0, 0.0, 0.0],
+				"1/2": [0.5, 0.5, 0.0, 0.0],
+				"2/1": [0.5, 0.5, 0.0, 0.0],
+				"1/3": [0.5, 0.0, 0.5, 0.0],
+				"3/1": [0.5, 0.0, 0.5, 0.0],
+				"1/4": [0.5, 0.0, 0.0, 0.5],
+				"4/1": [0.5, 0.0, 0.0, 0.5],
+				"2/3": [0.0, 0.5, 0.5, 0.0],
+				"3/2": [0.0, 0.5, 0.5, 0.0],
+				"2/4": [0.0, 0.5, 0.0, 0.5],
+				"4/2": [0.0, 0.5, 0.0, 0.5],
+				"3/4": [0.0, 0.0, 0.5, 0.5],
+				"4/3": [0.0, 0.0, 0.5, 0.5]
+			}
+
+		onehot_outer_list = list()
+		for i in range(len(self.samples)):
+			onehot_list = list()
+			for j in range(len(snp_data[0])):
+				onehot_list.append(onehot_dict[snp_data[i][j]])
+			onehot_outer_list.append(onehot_list)
+		self.onehot = np.array(onehot_outer_list)
 		
 	def read_popmap(self, popmapfile):
 		self.popmapfile = popmapfile
@@ -257,6 +310,7 @@ class GenotypeData:
 			if sample in my_popmap:
 				self.pops.append(my_popmap[sample])
 
+	@property
 	def snpcount(self):
 		"""[Getter for number of snps in the dataset]
 
@@ -265,6 +319,7 @@ class GenotypeData:
 		"""
 		return self.num_snps
 	
+	@property
 	def individuals(self):
 		"""[Getter for number of individuals in dataset]
 
@@ -273,7 +328,8 @@ class GenotypeData:
 		"""
 		return self.num_inds
 
-	def genotypes(self):
+	@property
+	def genotypes_list(self):
 		"""[Getter for the 012 genotypes]
 
 		Returns:
@@ -281,17 +337,32 @@ class GenotypeData:
 		"""
 		return self.snps
 
-	def convert_onehot(self):
-		"""[Adds onehot encoded dict(list)]
-
-		Args:
-			mydict ([dict(list)]): [Object storing the phylip data]
+	@property
+	def genotypes_nparray(self):
+		"""[Returns 012 genotypes as a numpy array]
 
 		Returns:
-			[dict(list)]: [Adds onehot encoding dict(list) to mydict object]
+			[2D numpy.array]: [012 genotypes as shape (n_samples, n_variants)]
 		"""
-		if self.filetype == "phylip":
-			self.onehot = phylip2onehot(self.samples, self.snps)
+		return np.array(self.snps)
+
+	@property
+	def gentotypes_nparray(self):
+		"""[Returns 012 genotypes as a numpy array]
+
+		Returns:
+			[2D numpy.array]: [012 genotypes as shape (n_samples, n_variants)]
+		"""
+		return np.array(self.snps)
+
+	@property
+	def genotypes_onehot(self):
+		"""[Returns one-hot encoded snps]
+
+		Returns:
+			[2D numpy.array]: [One-hot encoded numpy array (n_samples, n_variants)]
+		"""
+		return self.onehot
 
 def merge_alleles(first, second=None):
 	"""[Merges first and second alleles in structure file]
@@ -324,30 +395,6 @@ def count2onehot(samples, snps):
 		"1": [0.5, 0.5],
 		"2": [0.0, 1.0],
 		"-": [0.0, 0.0]
-	}
-	onehot_outer_list = list()
-	for i in range(len(samples)):
-		onehot_list = list()
-		for j in range(len(snps[0])):
-			onehot_list.append(onehot_dict[snps[i][j]])
-		onehot_outer_list.append(onehot_list)
-	onehot = np.array(onehot_outer_list)
-	return(onehot)
-
-def seq2onehot(samples, snps):
-	onehot_dict = {
-		"A": [1.0, 0.0, 0.0, 0.0], 
-		"T": [0.0, 1.0, 0.0, 0.0],
-		"G": [0.0, 0.0, 1.0, 0.0], 
-		"C": [0.0, 0.0, 0.0, 1.0],
-		"N": [0.0, 0.0, 0.0, 0.0],
-		"W": [0.5, 0.5, 0.0, 0.0],
-		"R": [0.5, 0.0, 0.5, 0.0],
-		"M": [0.5, 0.0, 0.0, 0.5],
-		"K": [0.0, 0.5, 0.5, 0.0],
-		"Y": [0.0, 0.5, 0.0, 0.5],
-		"S": [0.0, 0.0, 0.5, 0.5],
-		"-": [0.0, 0.0, 0.0, 0.0]
 	}
 	onehot_outer_list = list()
 	for i in range(len(samples)):
