@@ -198,7 +198,7 @@ class GenotypeData:
 				skip+=1
 				continue
 			else:
-				ref, alt = sequence_tools.get_major_allele(loc, 2, vcf=vcf)
+				ref, alt = sequence_tools.get_major_allele(loc, vcf=vcf)
 				ref=str(ref)
 				alt=str(alt)
 				if vcf:
