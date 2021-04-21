@@ -329,6 +329,24 @@ class GenotypeData:
 		return self.num_inds
 
 	@property
+	def populations(self):
+		"""[Getter for population IDs]
+
+		Returns:
+			[list]: [Poulation IDs as a list]
+		"""
+		return self.pops
+
+	@property
+	def individuals(self):
+		"""[Getter for sample IDs in input order]
+
+		Returns:
+			[list]: [sample IDs as a list in input order]
+		"""
+		return self.samples
+
+	@property
 	def genotypes_list(self):
 		"""[Getter for the 012 genotypes]
 
