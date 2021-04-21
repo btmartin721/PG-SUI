@@ -54,7 +54,7 @@ def main():
 
 	#pca_settings = {"n_components": data.indcount, "copy": True, "scaler": "patterson", "ploidy": 2}
 
-	#pca = DimReduction(data=data.genotypes(), algorithms="standard-pca", settings=pca_settings)
+	#pca = DimReduction(data=data.genotypes, algorithms="standard-pca", settings=pca_settings)
 
 	#print(data.genotypes_list)
 	#data.convert_onehot()
