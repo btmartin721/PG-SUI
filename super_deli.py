@@ -60,6 +60,9 @@ def main():
 	#data.convert_onehot()
 	#data.convert_df()
 
+	print(data.individuals)
+	print(data.populations)
+
 
 def get_arguments():
 	"""[Parse command-line arguments. Imported with argparse]
