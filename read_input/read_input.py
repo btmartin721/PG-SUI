@@ -27,6 +27,8 @@ class GenotypeData:
 		self.pops = list()
 		self.onehot = list()
 		self.df = None
+		self.num_snps = 0
+		self.num_inds = 0
 		
 		if self.filetype is not None:
 			self.parse_filetype(filetype, popmapfile)
@@ -124,16 +126,20 @@ class GenotypeData:
 						genotypes = merge_alleles(firstline, second=None)
 						snp_data.append(genotypes)
 						firstline=None
+
 		# Convert snp_data to 012 format
 		self.convert_012(snp_data, vcf=True)
 		
-		num_snps = len(self.snps[0])
-		print("\nFound {} SNPs and {} individuals...\n".format(num_snps, len(self.samples)))
+		# Get number of samples and snps
+		self.num_snps = len(self.snps[0])
+		self.num_inds = len(self.samples)
+
+		print("\nFound {} SNPs and {} individuals...\n".format(self.num_snps, self.num_inds))
 
 		# Make sure all sequences are the same length.
 		for item in self.snps:
 			try:
-				assert len(item) == num_snps
+				assert len(item) == self.num_snps
 			except AssertionError:
 				sys.exit("\nError: There are sequences of different lengths in the structure file\n")
 
@@ -174,6 +180,9 @@ class GenotypeData:
 			
 		# Convert snp_data to 012 format
 		self.convert_012(snp_data)
+
+		self.num_snps = num_snps
+		self.num_inds = num_inds
 			
 		# Error hanlding if incorrect number of individuals in header.
 		if len(self.samples) != num_inds:
@@ -247,6 +256,30 @@ class GenotypeData:
 		for sample in self.samples:
 			if sample in my_popmap:
 				self.pops.append(my_popmap[sample])
+
+	def snpcount(self):
+		"""[Getter for number of snps in the dataset]
+
+		Returns:
+			[int]: [Number of SNPs per individual]
+		"""
+		return self.num_snps
+	
+	def individuals(self):
+		"""[Getter for number of individuals in dataset]
+
+		Returns:
+			[int]: [Number of individuals in input sequence data]
+		"""
+		return self.num_inds
+
+	def genotypes(self):
+		"""[Getter for the 012 genotypes]
+
+		Returns:
+			[list(list)]: [012 genotypes as a 2d list]
+		"""
+		return self.snps
 
 	def convert_onehot(self):
 		"""[Adds onehot encoded dict(list)]
