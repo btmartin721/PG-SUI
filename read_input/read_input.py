@@ -320,7 +320,7 @@ class GenotypeData:
 		return self.num_snps
 	
 	@property
-	def individuals(self):
+	def indcount(self):
 		"""[Getter for number of individuals in dataset]
 
 		Returns:
