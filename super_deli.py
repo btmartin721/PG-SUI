@@ -52,7 +52,7 @@ def main():
 		
 		data = GenotypeData(filename=args.phylip, filetype="phylip", popmapfile=args.popmap)
 
-	#pca_settings = {"n_components": data.individuals(), "copy": True, "scaler": "patterson", "ploidy": 2}
+	#pca_settings = {"n_components": data.indcount, "copy": True, "scaler": "patterson", "ploidy": 2}
 
 	#pca = DimReduction(data=data.genotypes(), algorithms="standard-pca", settings=pca_settings)
 
