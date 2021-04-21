@@ -1,6 +1,9 @@
 import argparse
 import sys
 
+if sys.version_info < (3, 6):
+	raise ImportError("Python < 3.6 is not supported!")
+
 from read_input.read_input import GenotypeData
 
 def main():
