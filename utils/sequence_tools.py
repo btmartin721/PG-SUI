@@ -55,9 +55,16 @@ def remove_items(all_list, bad_list):
 	res = [i for i in all_list if i not in bad_list]
 	return res
 
-#Input: List of IUPAC genotypes or VCF-style (e.g., 0/1) if vcf=True 
-#output: Count of how many total alleles there are
 def count_alleles(l, vcf=False):
+	"""[Count how many total alleles there are]
+
+	Args:
+		l ([list]): [List of IUPAC or VCF-style (e.g. 0/1) genotypes]
+		vcf (bool, optional): [Are genotypes VCF-style?]. Defaults to False.
+
+	Returns:
+		[int]: [Total number of alleles in l]
+	"""
 	all=list()
 	for i in l:
 		if vcf:
@@ -66,34 +73,45 @@ def count_alleles(l, vcf=False):
 		else:
 			all.extend(get_iupac_caseless(i))
 	all = remove_items(all, ["-9", "-", "N", -9])
-	return(len(set(all)))
+	return len(set(all))
 
-#Input: List of IUPAC genotypes
-#Output: Most common allele
-def get_major_allele(l, num=1, vcf=False):
+def get_major_allele(l, num=None, vcf=False):
+	"""[Get most common alleles in list]
+
+	Args:
+		l ([list]): [List of genotypes for one sample]
+		num (int, optional): [Number of elements to return]. Defaults to None.
+		vcf (bool, optional): [Alleles in VCF-style format?]. Defaults to False.
+
+	Returns:
+		[list]: [[num] most common alleles in descending order]
+	"""
 	all=list()
-	primary_bases = ["A", "T", "G", "C"]
-	structure_missing = "-9"
 	for i in l:
 		if vcf:
 			all.extend(i.split("/"))
 		else:
 			all.extend(get_iupac_caseless(i))
 
-	c = Counter(all)
+	c = Counter(all) # requires collections import
+	rets = c.most_common(num)
 
 	# Returns two most common non-ambiguous bases
 	# Makes sure the least common base isn't N or -9
 	if vcf:
-		rets = c.most_common()
-		return [x[0] for x in rets if x[0] != structure_missing]
+		return [x[0] for x in rets if x[0] != "-9"]
 	else:
-		rets = c.most_common()
-		return([x[0] for x in rets if x[0] in primary_bases])
+		return [x[0] for x in rets if x[0] in ["A", "T", "G", "C"]]
 	
-#Function to split character to IUPAC codes, assuing diploidy
-#this version gives all non-valid ambiguities as N
 def get_iupac_caseless(char):
+	"""[Split IUPAC code to two primary characters, assuming diploidy; gives all non-valid ambiguities as N]
+
+	Args:
+		char ([str]): [Base to expand into diploid list]
+
+	Returns:
+		[list]: [List of the two expanded alleles]
+	"""
 	lower = False
 	if char.islower():
 		lower = True
@@ -120,7 +138,6 @@ def get_iupac_caseless(char):
 	if lower:
 		ret = [c.lower() for c in ret]
 	return ret
-
 
 #Function to expand ambiguous sequences
 #Generator function
