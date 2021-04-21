@@ -39,6 +39,6 @@ class DimReduction:
 		pca_arguments = {key: all_settings[key] for key in pca_arguments}
 
 		gn = np.array(self.data).transpose()
-		print(gn)
+		#print(gn)
 
 		#res = allel.pca(gn, n_components=pca_arguments["n_components"], copy=pca_arguments["copy"], scaler=pca_arguments["scaler"], ploidy=pca_arguments["ploidy"])
