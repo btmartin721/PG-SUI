@@ -1,10 +1,14 @@
+# Standard library imports
 import argparse
 import sys
 
+# Make sure python version is >= 3.6
 if sys.version_info < (3, 6):
 	raise ImportError("Python < 3.6 is not supported!")
 
+# Custom module imports
 from read_input.read_input import GenotypeData
+from dim_reduction.pca import DimReduction
 
 def main():
 	"""[Class instantiations and main package body]
@@ -45,7 +49,12 @@ def main():
 			sys.exit("\nError: No popmap file supplied with Phylip-formatted input data\n")
 		
 		data = GenotypeData(filename=args.phylip, filetype="phylip", popmapfile=args.popmap)
-		
+
+	pca_settings = {"n_components": data.individuals(), "copy": True, "scaler": "patterson", "ploidy": 2}
+
+	pca = DimReduction(data=data.genotypes(), algorithms="standard-pca", settings=pca_settings)
+
+	print(data.genotypes)
 	#data.convert_onehot()
 	#data.convert_df()
 
