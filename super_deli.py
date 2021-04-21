@@ -51,9 +51,7 @@ def main():
 			sys.exit("\nError: No popmap file supplied with Phylip-formatted input data\n")
 		
 		data = GenotypeData(filename=args.phylip, filetype="phylip", popmapfile=args.popmap)
-	with np.printoptions(threshold=np.inf):
-		print(data.genotypes_onehot[0])
-		
+
 	#pca_settings = {"n_components": data.individuals(), "copy": True, "scaler": "patterson", "ploidy": 2}
 
 	#pca = DimReduction(data=data.genotypes(), algorithms="standard-pca", settings=pca_settings)
