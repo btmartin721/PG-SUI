@@ -229,12 +229,12 @@ class GenotypeData:
 							new_snps[i].append(1)
 				else:
 					for i in range(0, len(self.samples)):
-						if loc[i] == ref:
+						if loc[i] in ["-", "-9", "N"]:
+							new_snps[i].append(-9)
+						elif loc[i] == ref:
 							new_snps[i].append(0)
 						elif loc[i] == alt:
 							new_snps[i].append(2)
-						elif loc[i] in ["-", "-9", "N"]:
-							new_snps[i].append(-9)
 						else:
 							new_snps[i].append(1)
 		if skip > 0:
