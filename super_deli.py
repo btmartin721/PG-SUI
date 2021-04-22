@@ -11,6 +11,7 @@ if sys.version_info < (3, 6):
 # Custom module imports
 from dim_reduction.pca import DimReduction
 from read_input.read_input import GenotypeData
+import read_input.impute as impute
 
 def main():
 	"""[Class instantiations and main package body]
@@ -51,6 +52,11 @@ def main():
 			sys.exit("\nError: No popmap file supplied with Phylip-formatted input data\n")
 		
 		data = GenotypeData(filename=args.phylip, filetype="phylip", popmapfile=args.popmap)
+		
+		#**TEMP**
+		#test impute_freq
+		#imp = impute.impute_freq(data.genotypes_list, diploid=True, pops=data.populations)
+
 
 	#pca_settings = {"n_components": data.indcount, "copy": True, "scaler": "patterson", "ploidy": 2}
 
@@ -62,7 +68,6 @@ def main():
 
 	#print(data.individuals)
 	#print(data.populations)
-
 	data.impute_missing(method="knn")
 
 
