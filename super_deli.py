@@ -21,6 +21,8 @@ def main():
 	if args.str and args.phylip:
 		sys.exit("Error: Only one file type can be specified")
 
+	imputation_settings = {"n_neighbors": 5}
+
 	# If VCF file is specified.
 	if args.str:
 		if not args.pop_ids and args.popmap is None:
@@ -37,9 +39,9 @@ def main():
 			print("\nUsing two rows per individual...\n")
 			
 		if args.onerow_perind:
-			data = GenotypeData(filename=args.str, filetype="structure1row", popmapfile=args.popmap)
+			data = GenotypeData(filename=args.str, filetype="structure1row", popmapfile=args.popmap, impute_methods="knn", impute_settings=imputation_settings)
 		else:
-			data = GenotypeData(filename=args.str, filetype="structure2row", popmapfile=args.popmap)
+			data = GenotypeData(filename=args.str, filetype="structure2row", popmapfile=args.popmap, impute_methods="knn", impute_settings=imputation_settings)
 
 	if args.phylip:
 		if (args.pop_ids or 
@@ -50,7 +52,7 @@ def main():
 		if args.popmap is None:
 			sys.exit("\nError: No popmap file supplied with Phylip-formatted input data\n")
 		
-		data = GenotypeData(filename=args.phylip, filetype="phylip", popmapfile=args.popmap)
+		data = GenotypeData(filename=args.phylip, filetype="phylip", popmapfile=args.popmap, impute_methods="knn", impute_settings=imputation_settings)
 
 	#pca_settings = {"n_components": data.indcount, "copy": True, "scaler": "patterson", "ploidy": 2}
 
@@ -62,8 +64,6 @@ def main():
 
 	#print(data.individuals)
 	#print(data.populations)
-
-	data.impute_missing(method="knn")
 
 
 def get_arguments():
