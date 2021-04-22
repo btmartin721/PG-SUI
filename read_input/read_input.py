@@ -27,6 +27,8 @@ class GenotypeData:
 		self.pops = list()
 		self.onehot = list()
 		self.df = None
+		self.num_snps = 0
+		self.num_inds = 0
 		
 		if self.filetype is not None:
 			self.parse_filetype(filetype, popmapfile)
@@ -124,16 +126,23 @@ class GenotypeData:
 						genotypes = merge_alleles(firstline, second=None)
 						snp_data.append(genotypes)
 						firstline=None
+
+		# Convert snp_data to onehot encoding format
+		self.convert_onehot(snp_data)
+
 		# Convert snp_data to 012 format
 		self.convert_012(snp_data, vcf=True)
 		
-		num_snps = len(self.snps[0])
-		print("\nFound {} SNPs and {} individuals...\n".format(num_snps, len(self.samples)))
+		# Get number of samples and snps
+		self.num_snps = len(self.snps[0])
+		self.num_inds = len(self.samples)
+
+		print("\nFound {} SNPs and {} individuals...\n".format(self.num_snps, self.num_inds))
 
 		# Make sure all sequences are the same length.
 		for item in self.snps:
 			try:
-				assert len(item) == num_snps
+				assert len(item) == self.num_snps
 			except AssertionError:
 				sys.exit("\nError: There are sequences of different lengths in the structure file\n")
 
@@ -171,9 +180,15 @@ class GenotypeData:
 				snp_data.append(snps)
 				
 				self.samples.append(inds)
-			
+
+		# Convert snp_data to onehot format
+		self.convert_onehot(snp_data)
+
 		# Convert snp_data to 012 format
 		self.convert_012(snp_data)
+
+		self.num_snps = num_snps
+		self.num_inds = num_inds
 			
 		# Error hanlding if incorrect number of individuals in header.
 		if len(self.samples) != num_inds:
@@ -198,7 +213,7 @@ class GenotypeData:
 				skip+=1
 				continue
 			else:
-				ref, alt = sequence_tools.get_major_allele(loc, 2, vcf=vcf)
+				ref, alt = sequence_tools.get_major_allele(loc, vcf=vcf)
 				ref=str(ref)
 				alt=str(alt)
 				if vcf:
@@ -226,6 +241,53 @@ class GenotypeData:
 			print("\nWarning: Skipping",str(skip),"non-biallelic sites\n")
 		for s in new_snps:
 			self.snps.append(s)
+
+	def convert_onehot(self, snp_data):
+
+		if self.filetype == "phylip":
+			onehot_dict = {
+				"A": [1.0, 0.0, 0.0, 0.0], 
+				"T": [0.0, 1.0, 0.0, 0.0],
+				"G": [0.0, 0.0, 1.0, 0.0], 
+				"C": [0.0, 0.0, 0.0, 1.0],
+				"N": [0.0, 0.0, 0.0, 0.0],
+				"W": [0.5, 0.5, 0.0, 0.0],
+				"R": [0.5, 0.0, 0.5, 0.0],
+				"M": [0.5, 0.0, 0.0, 0.5],
+				"K": [0.0, 0.5, 0.5, 0.0],
+				"Y": [0.0, 0.5, 0.0, 0.5],
+				"S": [0.0, 0.0, 0.5, 0.5],
+				"-": [0.0, 0.0, 0.0, 0.0]
+			}
+
+		elif self.filetype == "structure1row" or self.filetype == "structure2row":
+			onehot_dict = {
+				"1/1": [1.0, 0.0, 0.0, 0.0], 
+				"2/2": [0.0, 1.0, 0.0, 0.0],
+				"3/3": [0.0, 0.0, 1.0, 0.0], 
+				"4/4": [0.0, 0.0, 0.0, 1.0],
+				"-9/-9": [0.0, 0.0, 0.0, 0.0],
+				"1/2": [0.5, 0.5, 0.0, 0.0],
+				"2/1": [0.5, 0.5, 0.0, 0.0],
+				"1/3": [0.5, 0.0, 0.5, 0.0],
+				"3/1": [0.5, 0.0, 0.5, 0.0],
+				"1/4": [0.5, 0.0, 0.0, 0.5],
+				"4/1": [0.5, 0.0, 0.0, 0.5],
+				"2/3": [0.0, 0.5, 0.5, 0.0],
+				"3/2": [0.0, 0.5, 0.5, 0.0],
+				"2/4": [0.0, 0.5, 0.0, 0.5],
+				"4/2": [0.0, 0.5, 0.0, 0.5],
+				"3/4": [0.0, 0.0, 0.5, 0.5],
+				"4/3": [0.0, 0.0, 0.5, 0.5]
+			}
+
+		onehot_outer_list = list()
+		for i in range(len(self.samples)):
+			onehot_list = list()
+			for j in range(len(snp_data[0])):
+				onehot_list.append(onehot_dict[snp_data[i][j]])
+			onehot_outer_list.append(onehot_list)
+		self.onehot = np.array(onehot_outer_list)
 		
 	def read_popmap(self, popmapfile):
 		self.popmapfile = popmapfile
@@ -248,17 +310,77 @@ class GenotypeData:
 			if sample in my_popmap:
 				self.pops.append(my_popmap[sample])
 
-	def convert_onehot(self):
-		"""[Adds onehot encoded dict(list)]
-
-		Args:
-			mydict ([dict(list)]): [Object storing the phylip data]
+	@property
+	def snpcount(self):
+		"""[Getter for number of snps in the dataset]
 
 		Returns:
-			[dict(list)]: [Adds onehot encoding dict(list) to mydict object]
+			[int]: [Number of SNPs per individual]
 		"""
-		if self.filetype == "phylip":
-			self.onehot = phylip2onehot(self.samples, self.snps)
+		return self.num_snps
+	
+	@property
+	def indcount(self):
+		"""[Getter for number of individuals in dataset]
+
+		Returns:
+			[int]: [Number of individuals in input sequence data]
+		"""
+		return self.num_inds
+
+	@property
+	def populations(self):
+		"""[Getter for population IDs]
+
+		Returns:
+			[list]: [Poulation IDs as a list]
+		"""
+		return self.pops
+
+	@property
+	def individuals(self):
+		"""[Getter for sample IDs in input order]
+
+		Returns:
+			[list]: [sample IDs as a list in input order]
+		"""
+		return self.samples
+
+	@property
+	def genotypes_list(self):
+		"""[Getter for the 012 genotypes]
+
+		Returns:
+			[list(list)]: [012 genotypes as a 2d list]
+		"""
+		return self.snps
+
+	@property
+	def genotypes_nparray(self):
+		"""[Returns 012 genotypes as a numpy array]
+
+		Returns:
+			[2D numpy.array]: [012 genotypes as shape (n_samples, n_variants)]
+		"""
+		return np.array(self.snps)
+
+	@property
+	def gentotypes_nparray(self):
+		"""[Returns 012 genotypes as a numpy array]
+
+		Returns:
+			[2D numpy.array]: [012 genotypes as shape (n_samples, n_variants)]
+		"""
+		return np.array(self.snps)
+
+	@property
+	def genotypes_onehot(self):
+		"""[Returns one-hot encoded snps]
+
+		Returns:
+			[2D numpy.array]: [One-hot encoded numpy array (n_samples, n_variants)]
+		"""
+		return self.onehot
 
 def merge_alleles(first, second=None):
 	"""[Merges first and second alleles in structure file]
@@ -291,30 +413,6 @@ def count2onehot(samples, snps):
 		"1": [0.5, 0.5],
 		"2": [0.0, 1.0],
 		"-": [0.0, 0.0]
-	}
-	onehot_outer_list = list()
-	for i in range(len(samples)):
-		onehot_list = list()
-		for j in range(len(snps[0])):
-			onehot_list.append(onehot_dict[snps[i][j]])
-		onehot_outer_list.append(onehot_list)
-	onehot = np.array(onehot_outer_list)
-	return(onehot)
-
-def seq2onehot(samples, snps):
-	onehot_dict = {
-		"A": [1.0, 0.0, 0.0, 0.0], 
-		"T": [0.0, 1.0, 0.0, 0.0],
-		"G": [0.0, 0.0, 1.0, 0.0], 
-		"C": [0.0, 0.0, 0.0, 1.0],
-		"N": [0.0, 0.0, 0.0, 0.0],
-		"W": [0.5, 0.5, 0.0, 0.0],
-		"R": [0.5, 0.0, 0.5, 0.0],
-		"M": [0.5, 0.0, 0.0, 0.5],
-		"K": [0.0, 0.5, 0.5, 0.0],
-		"Y": [0.0, 0.5, 0.0, 0.5],
-		"S": [0.0, 0.0, 0.5, 0.5],
-		"-": [0.0, 0.0, 0.0, 0.0]
 	}
 	onehot_outer_list = list()
 	for i in range(len(samples)):
