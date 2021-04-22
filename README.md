@@ -1,5 +1,7 @@
 # Super Deli  
 
+![Super Deli Logo](logos/full_logo_1280x640.png.png?raw=true "Logo")
+
 A comprehensive machine learning species delimitation package
 
 ## Input files
