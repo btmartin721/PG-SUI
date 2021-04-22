@@ -3,8 +3,12 @@ import sys
 import numpy as np
 import pandas as pd
 
+from sklearn.impute import KNNImputer
+from sklearn.preprocessing import MinMaxScaler
+
 from read_input.popmap_file import ReadPopmap
 from utils import sequence_tools
+
 
 class GenotypeData:
 	"""[Class to read genotype data and convert to onehot encoding]
@@ -18,24 +22,30 @@ class GenotypeData:
 	
 	Note: If popmapfile is supplied, read_structure assumes NO popID column
 	"""
-	def __init__(self, filename=None, filetype=None, popmapfile=None):
+	def __init__(self, filename=None, filetype=None, popmapfile=None, impute_methods=None, impute_settings=None):
 		self.filename = filename
 		self.filetype = filetype
+		self.impute_methods = impute_methods
+		self.impute_settings = impute_settings
 		self.popmapfile = popmapfile
 		self.samples = list()
 		self.snps = list()
 		self.pops = list()
 		self.onehot = list()
+		self.imputed = list()
 		self.df = None
 		self.num_snps = 0
 		self.num_inds = 0
+		self.knn_settings = {"n_neighbors": 5, 
+							"weights": "distance", 
+							"metric": "nan_euclidean"}
 		
 		if self.filetype is not None:
 			self.parse_filetype(filetype, popmapfile)
 		
 		if self.popmapfile is not None:
 			self.read_popmap(popmapfile)
-	
+
 	def parse_filetype(self, filetype=None, popmapfile=None):
 		if filetype is None:
 			sys.exit("\nError: No filetype specified.\n")
@@ -126,12 +136,19 @@ class GenotypeData:
 						genotypes = merge_alleles(firstline, second=None)
 						snp_data.append(genotypes)
 						firstline=None
+		print("Done!")
 
+		print("\nConverting genotypes to one-hot encoding...")
 		# Convert snp_data to onehot encoding format
 		self.convert_onehot(snp_data)
 
+		print("Done!")
+
+		print("\nConverting genotypes to 012 format...")
 		# Convert snp_data to 012 format
 		self.convert_012(snp_data, vcf=True)
+
+		print("Done!")
 		
 		# Get number of samples and snps
 		self.num_snps = len(self.snps[0])
@@ -146,12 +163,17 @@ class GenotypeData:
 			except AssertionError:
 				sys.exit("\nError: There are sequences of different lengths in the structure file\n")
 
+		if self.impute_methods:
+			self.impute_missing()
+
 	def read_phylip(self):
 		"""[Populates ReadInput object by parsing Phylip]
 
 		Args:
 			popmap_filename [str]: [Filename for population map file]
 		"""
+		print("\nReading phylip file {}...".format(self.filename))
+
 		self.check_filetype("phylip")
 		snp_data=list()
 		with open(self.filename, "r") as fin:
@@ -181,18 +203,27 @@ class GenotypeData:
 				
 				self.samples.append(inds)
 
+		print("Done!")
+
+		print("\nConverting genotypes to one-hot encoding...")
 		# Convert snp_data to onehot format
 		self.convert_onehot(snp_data)
+		print("Done!")
 
+		print("\nConverting genotypes to 012 encoding...")
 		# Convert snp_data to 012 format
 		self.convert_012(snp_data)
-
+		print("Done!")
+		
 		self.num_snps = num_snps
 		self.num_inds = num_inds
 			
 		# Error hanlding if incorrect number of individuals in header.
 		if len(self.samples) != num_inds:
 			sys.exit("\nError: Incorrect number of individuals are listed in the header\n")
+
+		if self.impute_methods:
+			self.impute_missing()
 	
 	def convert_012(self, snps, vcf=False):
 		skip=0
@@ -309,6 +340,58 @@ class GenotypeData:
 		for sample in self.samples:
 			if sample in my_popmap:
 				self.pops.append(my_popmap[sample])
+
+	def impute_missing(self):
+
+		if isinstance(self.impute_methods, str):
+			if len(self.impute_methods.split(",")) > 1:
+				raise TypeError("\nThe method argument must be a list if more than one arguments are specified!")
+			if self.impute_methods not in ["knn"]:
+				raise ValueError("\nThe value supplied to the method argument is not supported!")
+			if self.impute_methods == "knn":
+				self.df = self.impute_knn()
+
+		elif isinstance(self.impute_methods, list):
+				if self.impute_methods not in ["knn"]:
+					raise ValueError("\nThe value supplied to the method argument is not supported!")
+				for arg in self.impute_methods:
+					if arg == "knn":
+						self.df = self.impute_knn()
+		else:
+			raise ValueError("The methods argument must be either a string or a list!")
+
+		print(self.df)
+
+	def impute_knn(self):
+
+		print("\nDoing K-NN imputation...")
+
+		if self.impute_settings:
+			self.knn_settings.update(self.impute_settings)
+
+		# Make sure knn_settings are supported by KNNImputer
+		for arg in self.knn_settings.keys():
+			if arg not in ["n_neighbors", "weights", "metric"]:
+				raise ValueError("The impute_settings argument {} is not supported".format(arg))
+		
+		df = pd.DataFrame.from_records(self.snps)
+		df.replace(-9, np.nan, inplace=True)
+
+		scaler = MinMaxScaler()
+		df = pd.DataFrame(scaler.fit_transform(df), columns = df.columns)
+
+		imputer = KNNImputer(n_neighbors=self.knn_settings["n_neighbors"], weights=self.knn_settings["weights"], metric=self.knn_settings["metric"])
+
+		df = pd.DataFrame(imputer.fit_transform(df), columns = df.columns)
+
+		# If there are any remaining missing data raise error.
+		if any(df.isna().any().to_list()) == True:
+			raise AssertionError("\nThere was a problem with the K-NN imputation. Please inspect your data and try again.")
+		
+		print("Done!\n")
+
+		return df
+		
 
 	@property
 	def snpcount(self):
