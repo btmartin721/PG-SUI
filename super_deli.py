@@ -9,8 +9,8 @@ if sys.version_info < (3, 6):
 	raise ImportError("Python < 3.6 is not supported!")
 
 # Custom module imports
-from read_input.read_input import GenotypeData
 from dim_reduction.pca import DimReduction
+from read_input.read_input import GenotypeData
 import read_input.impute as impute
 
 def main():
@@ -68,6 +68,7 @@ def main():
 
 	#print(data.individuals)
 	#print(data.populations)
+	data.impute_missing(method="knn")
 
 
 def get_arguments():
