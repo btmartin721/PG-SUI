@@ -352,8 +352,8 @@ class GenotypeData:
 				self.df = self.impute_knn()
 
 		elif isinstance(self.impute_methods, list):
-				if self.impute_methods not in ["knn"]:
-					raise ValueError("\nThe value supplied to the method argument is not supported!")
+			if self.impute_methods not in ["knn"]:
+				raise ValueError("\nThe value supplied to the method argument is not supported!")
 				for arg in self.impute_methods:
 					if arg == "knn":
 						self.df = self.impute_knn()
