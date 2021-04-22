@@ -1,6 +1,6 @@
 # Super Deli  
 
-![Super Deli Logo](./logos/full_logo_1280x640.png.png?raw=true "Logo")
+![Super Deli Logo](https://github.com/btmartin721/super_deli/blob/master/logos/full_logo_1280x640.png)
 
 A comprehensive machine learning species delimitation package
 
