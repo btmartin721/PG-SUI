@@ -11,18 +11,17 @@ if sys.version_info < (3, 6):
 # Custom module imports
 from dim_reduction.pca import DimReduction
 from read_input.read_input import GenotypeData
+import read.impute as impute
 
 def main():
 	"""[Class instantiations and main package body]
 	"""
 
 	args = get_arguments()
-	
+
 	if args.str and args.phylip:
 		sys.exit("Error: Only one file type can be specified")
-
-	imputation_settings = {"n_neighbors": 5}
-
+	
 	# If VCF file is specified.
 	if args.str:
 		if not args.pop_ids and args.popmap is None:
@@ -53,6 +52,11 @@ def main():
 			sys.exit("\nError: No popmap file supplied with Phylip-formatted input data\n")
 		
 		data = GenotypeData(filename=args.phylip, filetype="phylip", popmapfile=args.popmap, impute_methods="knn", impute_settings=imputation_settings)
+		
+		#**TEMP**
+		#test impute_freq
+		#imp = impute.impute_freq(data.genotypes_list, diploid=True, pops=data.populations)
+
 
 	#pca_settings = {"n_components": data.indcount, "copy": True, "scaler": "patterson", "ploidy": 2}
 
@@ -64,6 +68,7 @@ def main():
 
 	#print(data.individuals)
 	#print(data.populations)
+	data.impute_missing(method="knn")
 
 
 def get_arguments():
