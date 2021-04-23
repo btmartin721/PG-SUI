@@ -3,6 +3,7 @@ import argparse
 import sys
 
 import numpy as np
+import pandas as pd
 
 # Make sure python version is >= 3.6
 if sys.version_info < (3, 6):
@@ -22,7 +23,7 @@ def main():
 	if args.str and args.phylip:
 		sys.exit("Error: Only one file type can be specified")
 
-	imputation_settings = {"n_neighbors": 5}
+	imputation_settings = {"weights": "distance"}
 	
 	# If VCF file is specified.
 	if args.str:
@@ -40,9 +41,9 @@ def main():
 			print("\nUsing two rows per individual...\n")
 			
 		if args.onerow_perind:
-			data = GenotypeData(filename=args.str, filetype="structure1row", popmapfile=args.popmap, impute_methods="knn", impute_settings=imputation_settings)
+			data = GenotypeData(filename=args.str, filetype="structure1row", popmapfile=args.popmap)
 		else:
-			data = GenotypeData(filename=args.str, filetype="structure2row", popmapfile=args.popmap, impute_methods="knn", impute_settings=imputation_settings)
+			data = GenotypeData(filename=args.str, filetype="structure2row", popmapfile=args.popmap)
 
 	if args.phylip:
 		if (args.pop_ids or 
@@ -53,11 +54,12 @@ def main():
 		if args.popmap is None:
 			sys.exit("\nError: No popmap file supplied with Phylip-formatted input data\n")
 		
-		data = GenotypeData(filename=args.phylip, filetype="phylip", popmapfile=args.popmap, impute_methods="knn", impute_settings=imputation_settings)
+		data = GenotypeData(filename=args.phylip, filetype="phylip", popmapfile=args.popmap)
 		
 	# **TEMP**
 	# test impute_freq
 	# imp = impute.impute_freq(data.genotypes_list, diploid=True, pops=data.populations)
+	imp = data.impute_missing(impute_methods="knn", impute_settings=imputation_settings, maxk=10)
 
 
 	#pca_settings = {"n_components": data.indcount, "copy": True, "scaler": "patterson", "ploidy": 2}
