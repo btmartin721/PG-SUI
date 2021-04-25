@@ -27,8 +27,11 @@ class GenotypeData:
 		self.snps = list()
 		self.pops = list()
 		self.onehot = list()
-		self.imputed = list()
+		self.freq_imputed_global = list()
+		self.freq_imputed_pop = list()
+		self.knn_imputed = list()
 		self.df = None
+		self.knn_imputed_df = None
 		self.num_snps = 0
 		self.num_inds = 0
 		
@@ -327,84 +330,150 @@ class GenotypeData:
 			if sample in my_popmap:
 				self.pops.append(my_popmap[sample])
 
-	def impute_missing(self, impute_methods=None, impute_settings=None, maxk=None):
+	def impute_missing(self, impute_methods=None, impute_settings=None, pops=None, maxk=None, np=1):
+
+		supported_methods = ["knn", "freq_global", "freq_pop"]
+		supported_settings = ["n_neighbors", "weights", "metric"]
+		supported_settings_opt = ["weights", "metric", "reps"]
+
 
 		if maxk:
 			knn_settings = {"weights": "uniform", 
 							"metric": "nan_euclidean", 
-							"reps": 5}
+							"reps": 1}
 		else:
-			knn_settings = {"n_neighbors": 5, "weights": "uniform", 
+			knn_settings = {"n_neighbors": 5,
+							"weights": "uniform", 
 							"metric": "nan_euclidean"}
 
 		if impute_settings:
 			knn_settings.update(impute_settings)
 
-		# Make sure knn_settings are supported by KNNImputer
-		for arg in knn_settings.keys():
-			if not maxk and arg not in ["n_neighbors", "weights", "metric"]:
-				raise ValueError("The impute_settings argument {} is not supported".format(arg))
-			elif maxk and arg == "n_neighbors":
-				raise ValueError("maxk and n_neighbors cannot both be specified!")
-			elif maxk and arg not in ["weights", "metric", "reps"]:
-				raise ValueError("The impute_settings argument {} is not supported".format(arg))
+		if "knn" in impute_methods:
+			# Make sure knn_settings are supported by KNNImputer
+			for arg in knn_settings.keys():
+				if not maxk and arg not in supported_settings:
+					raise ValueError("The impute_settings argument {} is not supported".format(arg))
 
+				elif maxk and arg == "n_neighbors":
+					raise ValueError("maxk and n_neighbors cannot both be specified!")
 
+				elif maxk and arg not in supported_settings_opt:
+					raise ValueError("The impute_settings argument {} is not supported".format(arg))
+
+		# If one string value is supplied to impute_methods
 		if isinstance(impute_methods, str):
-			if len(impute_methods.split(",")) > 1:
+
+			# There can be only one
+			if len(impute_methods.split(",")) > 1: 
 				raise TypeError("\nThe method argument must be a list if more than one arguments are specified!")
-			if impute_methods not in ["knn"]:
+
+			# Must be a supported method
+			if impute_methods not in supported_methods:
 				raise ValueError("\nThe value supplied to the method argument is not supported!")
+			
+			# K-NN imputation with K optimization
 			if impute_methods == "knn" and maxk:
 				optimalk_list = list()
 				acc_list = list()
 				print("\nDoing K-NN imputation with K optimization")
 				for i in range(knn_settings["reps"]):
+
+					# For printing progress updates to screen
 					rep = i+1
 					if rep % 5 == 0:
 						print(rep, end="", flush=True)
 					else:
 						print(".", end="", flush=True)
-					optk, acc = impute.impute_knn_optk(self.snps, self.pops, knn_settings, maxk)
+
+					# Run imputations
+					optk, acc = impute.impute_knn_optk(self.snps, self.pops, knn_settings, maxk, np=np)
+
+					# Save the output into lists
 					optimalk_list.append(optk)
 					acc_perc = 100 * acc
 					acc_list.append(acc_perc)
+				
+				# Get most frequent optimal K from replicates
 				optimalk, idx = impute.most_common(optimalk_list)
-				print("\nDone! The best accuracy had n_neighbors = {} with a prediction accuracy of {}%\n".format(optimalk, acc_list[idx]))
+
+				print("\nDone! The best accuracy had n_neighbors = {} with a prediction accuracy of {:.2f}%\n".format(optimalk, acc_list[idx]))
+
+				# Now run final knn with optimal K
 				knn_settings["n_neighbors"] = int(optimalk)
-				self.df = impute.impute_knn(self.snps, knn_settings)
+				self.knn_imputed_df = impute.impute_knn(self.snps, knn_settings)
+
+			# Run with no k-optmimization
 			elif impute_methods == "knn" and not maxk:
-				self.df = impute.impute_knn(self.snps, knn_settings)
+				self.knn_imputed_df = impute.impute_knn(self.snps, knn_settings)
 
+			# Run imputation my global mode
+			if impute_methods == "freq_global":
+				self.freq_imputed_global = impute.impute_freq(self.snps)
+
+			# Run imputation for by-population mode
+			if impute_methods == "freq_pop":
+				self.freq_imputed_pop = impute.impute_freq(self.snps, pops=self.pops)
+
+		# If value supplied to impute_methods is a list
 		elif isinstance(impute_methods, list):
-			if impute_methods not in ["knn"]:
-				raise ValueError("\nThe value supplied to the method argument is not supported!")
-				for arg in impute_methods:
-					if arg == "knn" and maxk:
-						optimalk_list = list()
-						print("\nDoing K-NN imputation with K optimization")
-						for i in range(knn_settings["reps"]):
-							rep = i+1
-							if rep % 5 == 0:
-								print(rep, end="", flush=True)
-							else:
-								print(".", end="", flush=True)
-							optk, acc = impute.impute_knn_optk(self.snps, self.pops, knn_settings, maxk)
-							optimalk_list.append(optk)
-							acc_perc = 100 * acc
-							acc_list.append(acc_perc)
-						optimalk, idx = impute.most_common(optimalk_list)
-						print("\nDone! The best accuracy had n_neighbors = {} with a prediction accuracy of {}%\n".format(optimalk, acc_list[idx]))
-						knn_settings["n_neighbors"] = int(optimalk)
-						self.df = impute.impute_knn(self.snps, knn_settings)
+			
+			for arg in impute_methods:
+				# Make sure impute_methods are supported
+				if arg not in supported_methods:
+					raise ValueError("\nThe value supplied to the method argument is not supported!")
 
-					elif arg == "knn" and not maxk:
-						self.df = impute.impute_knn(self.snps, knn_settings)
+			# For each imputation method
+			for arg in impute_methods:
+				if arg == "knn" and maxk:
+
+					optimalk_list = list()
+					acc_list = list()
+					print("\nDoing K-NN imputation with K optimization")
+
+					# Run replicates of KNN optimization
+					for i in range(knn_settings["reps"]):
+
+						# For printing progress updates
+						rep = i+1
+						if rep % 5 == 0:
+							print(rep, end="", flush=True)
+						else:
+							print(".", end="", flush=True)
+
+						# Run KNN imputation with K-optimization
+						optk, acc = impute.impute_knn_optk(self.snps, self.pops, knn_settings, maxk, np=np)
+
+						# Save output to list
+						optimalk_list.append(optk)
+						acc_perc = 100 * acc
+						acc_list.append(acc_perc)
+
+					# Get most commonly found K among all replicates
+					optimalk, idx = impute.most_common(optimalk_list)
+
+					print("\nDone! The best accuracy had n_neighbors = {} with a prediction accuracy of {:.2f}%\n".format(optimalk, acc_list[idx]))
+
+					# Run final knn imputation with optimal k
+					knn_settings["n_neighbors"] = int(optimalk)
+					self.knn_imputed_df = impute.impute_knn(self.snps, knn_settings)
+
+				# If not doing k optimization
+				elif arg == "knn" and not maxk:
+					impupted_df = impute.impute_knn(self.snps, knn_settings)
+					self.knn_imputed_df = impute.impute_knn(self.snps, knn_settings)
+
+				# Run imputation my global mode
+				elif arg == "freq_global":
+					self.freq_imputed_global = impute.impute_freq(self.snps)
+
+				# Run imputation for by-population mode
+				elif arg == "freq_pop":
+					self.freq_imputed_pop = impute.impute_freq(self.snps, pops=self.pops)
+
+		# impute_methods must be either string or list			
 		else:
-			raise ValueError("The methods argument must be either a string or a list!")
-
-		#print(self.df)
-		return self.df
+			raise ValueError("The impute_methods argument must be either a string or a list!")
 
 	@property
 	def snpcount(self):
@@ -477,6 +546,60 @@ class GenotypeData:
 			[2D numpy.array]: [One-hot encoded numpy array (n_samples, n_variants)]
 		"""
 		return self.onehot
+	
+	@property
+	def imputed_knn_df(self):
+		"""[Returns 012 genotypes with K-NN missing data imputation]
+
+		Returns:
+			[pandas.DataFrame()]: [pandas DataFrame with the imputed 012 genotypes]
+		"""
+		return self.knn_imputed_df
+
+	@property
+	def imputed_knn(self):
+		"""[Returns 012 genotypes with K-NN missing data imputation]
+
+		Returns:
+			[pandas.DataFrame()]: [pandas DataFrame with the imputed 012 genotypes]
+		"""
+		return self.knn_imputed_df.values.tolist()
+
+	@property
+	def imputed_freq_global(self):
+		"""[Get genotypes imputed by global allele frequency]
+
+		Returns:
+			[list(list)]: [Imputed genotype data]
+		"""
+		return self.freq_imputed_global
+	
+	@property
+	def imputed_freq_pop(self):
+		"""[Get genotypes imputed by population allele frequency]
+
+		Returns:
+			[list(list)]: [Imputed genotype data]
+		"""
+		return self.freq_imputed_pop
+
+	@property
+	def imputed_freq_global_df(self):
+		"""[Get genotypes imputed by global allele frequency]
+
+		Returns:
+			[pandas.DataFrame]: [Imputed genotype data]
+		"""
+		return pd.DataFrame.from_records(self.freq_imputed_global)
+	
+	@property
+	def imputed_freq_pop_df(self):
+		"""[Get genotypes imputed by population allele frequency]
+
+		Returns:
+			[pandas.DataFrame]: [Imputed genotype data]
+		"""
+		return pd.DataFrame.from_records(self.freq_imputed_pop)
 
 def merge_alleles(first, second=None):
 	"""[Merges first and second alleles in structure file]
