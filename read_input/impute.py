@@ -1,25 +1,22 @@
+# Standard library imports
 import sys
 import os
-import numpy as np
-import pandas as pd
 import math
-from sklearn.impute import KNNImputer
-from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.ensemble import RandomForestClassifier
-
-from sklearn.preprocessing import LabelEncoder
-from sklearn.metrics import mean_squared_error as rmse
-from sklearn.metrics import f1_score
-from sklearn.metrics import accuracy_score
-
-
-import matplotlib.pyplot as plt
-
 from collections import OrderedDict
 
-from utils import misc
+# Third party imports
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.impute import KNNImputer
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.preprocessing import LabelEncoder
+from sklearn.metrics import mean_squared_error as rmse
+from sklearn.metrics import accuracy_score
 
+# Custom module imports
+from utils import misc
 
 def impute_knn(data, knn_settings):
 	"""[Impute missing data using the K-nearest neighbors algorithm]
@@ -32,7 +29,11 @@ def impute_knn(data, knn_settings):
 		[pandas.DataFrame]: [imputed dataframe]
 	"""
 	df = pd.DataFrame.from_records(data)
-	df.replace(-9, np.nan, inplace=True)
+
+	df.replace(-9, pd.NA, inplace=True)
+
+	for col in df:
+		df[col] = df[col].astype("Int32")
 
 	imputer = KNNImputer(n_neighbors=knn_settings["n_neighbors"], weights=knn_settings["weights"], metric=knn_settings["metric"])
 
@@ -41,10 +42,13 @@ def impute_knn(data, knn_settings):
 	# If there are any remaining missing data raise error.
 	if any(df.isna().any().to_list()) == True:
 		raise AssertionError("\nThere was a problem with the K-NN imputation. Please inspect your data and try again.")
-	
+
+	for col in df:
+		df[col] = df[col].astype(int)
+
 	return df
 
-def impute_knn_optk(snpslist, popslist, knn_settings, maxk):
+def impute_knn_optk(snpslist, popslist, knn_settings, maxk, np):
 	"""[Run K-nearest neighbors with n_neighbors ranging from 1 to maxk]
 
 	Args:
@@ -52,13 +56,18 @@ def impute_knn_optk(snpslist, popslist, knn_settings, maxk):
 		popslist ([list]): [Population IDs from GenotypeData object]
 		knn_settings ([dict]): [Settings for KNNImputer]
 		maxk ([int]): [Maximum n_neighbors value to test K-NN with]
+		np ([int]): [Number of processors to use for optimization]
 
 	Returns:
 		[int]: [optimal n_neighbors value with lowest RMSE score]
 	"""
 	df_X = pd.DataFrame.from_records(snpslist)
-	df_X.replace(-9, np.nan, inplace=True)
-	
+	df_X.replace(-9, pd.NA, inplace=True)
+
+	for col in df_X:
+		df_X[col] = df_X[col].astype("Int32")
+
+
 	le = LabelEncoder()
 	pops_encoded = le.fit_transform(popslist)
 	pops_y = pd.Series(pops_encoded)
@@ -71,7 +80,7 @@ def impute_knn_optk(snpslist, popslist, knn_settings, maxk):
 		imputed = imputer.fit_transform(df_X)
 		df_imputed = pd.DataFrame(imputed, columns=df_X.columns)
 
-		X_train, X_test, y_train, y_test = train_test_split(df_imputed, pops_y, test_size=0.15)
+		X_train, X_test, y_train, y_test = train_test_split(df_imputed, pops_y, test_size=0.2)
 		
 		# NOTE: The below code is for evaluating the random forest model to 
 		# obtain the best parameters.
@@ -124,18 +133,24 @@ def impute_knn_optk(snpslist, popslist, knn_settings, maxk):
 		# plt.show()
 		# sys.exit()
 
-		model = RandomForestClassifier(n_estimators=500, max_features="log2")
+		# Classifier to evaluate the best n_neighbors (K)
+		model = RandomForestClassifier(n_estimators=500, 
+										max_features="log2", 
+										n_jobs = np)
+
 		model.fit(X_train, y_train)
 		preds = model.predict(X_test)
-		error = rmse(y_test, preds)
+
+		# import sklearn.metrics.mean_squared_error()
+		error = rmse(y_test, preds) 
 		acc = accuracy_score(y_test, preds)
 
 		errors.append({'K': k, 'RMSE': error, "ACC": acc})
 
+	# Get the best RMSE score
 	optimalk, test_acc = get_lowest_rmse(errors)
 
 	return optimalk, test_acc
-
 
 def get_lowest_rmse(rmseerrors):
 	"""[Gets the "K" value with the lowest "RMSE" value]
@@ -173,7 +188,7 @@ def most_common(mylist):
 		mylist ([list]): [list of values]
 
 	Returns:
-		[int]: [Most frequent value in the list]
+		[int]: [Most frequent integer in the list]
 	"""
 	counter = 0
 	num = mylist[0]
@@ -189,15 +204,23 @@ def impute_freq(data, pops=None, diploid=True, default=0, missing=-9):
 	"""[Impute missing genotypes using allele frequencies, with missing alleles coded as negative; usually -9]
 	
 	Args:
-	data ([List of lists]): List containing list of genotypes in integer format
-	pop ([list] optional): List of population assignments. Default is None
-		When pop=None, allele frequencies are computed globally
-	diploid ([Boolean] optional): When TRUE, function assumes 0=homozygous ref; 1=heterozygous; 2=homozygous alt
-		When diploid=FALSE, 0,1, and 2 are sampled according to their observed frequency
-		When dipoid=TRUE, 0-1-2 genotypes are decomposed to compute p (=frequency of ref) and q (=frequency of alt)
-			In this case, p and q alleles are sampled to generate either 0 (hom-p), 1 (het), or 2 (hom-q) genotypes
-	Returns lists of lists of same dimensions as data
+		data ([list(list)]): [List containing list of genotypes in integer format]
+		pop ([list], optional): [List of population assignments. Default is None
+			When pop=None, allele frequencies are computed globally]
+		diploid ([Boolean] optional): [When TRUE, function assumes 0=homozygous ref; 1=heterozygous; 2=homozygous alt
+			When diploid=FALSE, 0,1, and 2 are sampled according to their observed frequency
+			When dipoid=TRUE, 0-1-2 genotypes are decomposed to compute p (=frequency of ref) and q (=frequency of alt)
+				In this case, p and q alleles are sampled to generate either 0 (hom-p), 1 (het), or 2 (hom-q) genotypes]
+		default ([int, optional]): [Value to set if no alleles sampled at locus]. Default = 0
+		missing ([int, optional]): [missing data value]. Default = -9
+	Returns:
+		[list(list)]: [Imputed genotypes of same dimensions as data]
 	"""
+	if pops:
+		print("\nImputing by population allele frequencies...")
+	else:
+		print("\nImputing by global allele frequency...")
+
 	bak=data
 	data=[x[:] for x in bak]
 	if pops is not None:
@@ -238,6 +261,8 @@ def impute_freq(data, pops=None, diploid=True, default=0, missing=-9):
 						gen_index+=1
 				
 		loc_index+=1
+
+	print("Done!")
 	return(data)
 
 def sample_allele(allele_probs, diploid=True):
