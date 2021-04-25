@@ -23,7 +23,7 @@ def main():
 	if args.str and args.phylip:
 		sys.exit("Error: Only one file type can be specified")
 
-	imputation_settings = {"weights": "distance"}
+	imputation_settings = {"weights": "uniform"}
 	
 	# If VCF file is specified.
 	if args.str:
@@ -59,8 +59,13 @@ def main():
 	# **TEMP**
 	# test impute_freq
 	# imp = impute.impute_freq(data.genotypes_list, diploid=True, pops=data.populations)
-	imp = data.impute_missing(impute_methods="knn", impute_settings=imputation_settings, maxk=10)
 
+	data.impute_missing(impute_methods=["knn", "freq_global", "freq_pop"], impute_settings=imputation_settings, maxk=10, np=-1)
+
+	#print(data.imputed_knn_df)
+	#print(data.imputed_freq_global_df)
+	#print(data.imputed_freq_pop_df)
+	
 
 	#pca_settings = {"n_components": data.indcount, "copy": True, "scaler": "patterson", "ploidy": 2}
 
