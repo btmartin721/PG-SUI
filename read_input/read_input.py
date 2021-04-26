@@ -32,6 +32,7 @@ class GenotypeData:
 		self.knn_imputed = list()
 		self.df = None
 		self.knn_imputed_df = None
+		self.rf_imputed_arr = None
 		self.num_snps = 0
 		self.num_inds = 0
 		
@@ -332,8 +333,24 @@ class GenotypeData:
 
 	def impute_missing(self, impute_methods=None, impute_settings=None, pops=None, maxk=None, np=1):
 
-		supported_methods = ["knn", "freq_global", "freq_pop"]
-		supported_settings = ["n_neighbors", "weights", "metric"]
+		supported_methods = ["knn", "freq_global", "freq_pop", "rf"]
+		supported_settings = ["n_neighbors", 
+								"weights", 
+								"metric", 
+								"n_estimators", 
+								"min_samples_leaf", 
+								"max_features", 
+								"n_jobs", 
+								"criterion", 
+								"max_iter", 
+								"tol", 
+								"n_nearest_features", 
+								"initial_strategy", 
+								"imputation_order", 
+								"skip_complete", 
+								"random_state"
+							]
+							
 		supported_settings_opt = ["weights", "metric", "reps"]
 
 
@@ -346,20 +363,36 @@ class GenotypeData:
 							"weights": "uniform", 
 							"metric": "nan_euclidean"}
 
+		if "rf" in impute_methods:
+			rf_settings = {"n_estimators": 100,
+							"min_samples_leaf": 1,
+							"max_features": "auto",
+							"n_jobs": 1,
+							"criterion": "gini",
+							"max_iter": 10,
+							"tol": 1e-3,
+							"n_nearest_features": None,
+							"initial_strategy": "most_frequent",
+							"imputation_order": "ascending",
+							"skip_complete": False,
+							"random_state": None
+							}
+
+		# Update settings if non-default ones were specified
 		if impute_settings:
 			knn_settings.update(impute_settings)
+			rf_settings.update(impute_settings)
+		
+		# Validate impute settings
+		for method in impute_methods:
+			if maxk and method == "knn":
+				self._check_impute_settings(method, knn_settings, supported_settings_opt, opt=True)
 
-		if "knn" in impute_methods:
-			# Make sure knn_settings are supported by KNNImputer
-			for arg in knn_settings.keys():
-				if not maxk and arg not in supported_settings:
-					raise ValueError("The impute_settings argument {} is not supported".format(arg))
+			elif not maxk and method == "knn":
+				self._check_impute_settings(method, knn_settings, supported_settings)
 
-				elif maxk and arg == "n_neighbors":
-					raise ValueError("maxk and n_neighbors cannot both be specified!")
-
-				elif maxk and arg not in supported_settings_opt:
-					raise ValueError("The impute_settings argument {} is not supported".format(arg))
+			elif method == "rf":
+				self._check_impute_settings(method, rf_settings, supported_settings)
 
 		# If one string value is supplied to impute_methods
 		if isinstance(impute_methods, str):
@@ -414,6 +447,9 @@ class GenotypeData:
 			# Run imputation for by-population mode
 			if impute_methods == "freq_pop":
 				self.freq_imputed_pop = impute.impute_freq(self.snps, pops=self.pops)
+
+			if impute_methods == "rf":
+				self.rf_imputed_arr = impute.rf_imputer(self.snps, rf_settings)
 
 		# If value supplied to impute_methods is a list
 		elif isinstance(impute_methods, list):
@@ -471,9 +507,37 @@ class GenotypeData:
 				elif arg == "freq_pop":
 					self.freq_imputed_pop = impute.impute_freq(self.snps, pops=self.pops)
 
+				elif arg == "rf":
+					self.rf_imputed_arr = impute.rf_imputer(self.snps, rf_settings)
+
 		# impute_methods must be either string or list			
 		else:
 			raise ValueError("The impute_methods argument must be either a string or a list!")
+		
+	def _check_impute_settings(self, method, settings, supported_settings, opt=False):
+
+		# Make sure settings are supported by imputer
+		for arg in settings.keys():
+			if arg not in supported_settings:
+				raise ValueError("The impute_settings argument {} is not supported".format(arg))
+
+			if opt and arg == "n_neighbors":
+				raise ValueError("maxk and n_neighbors cannot both be specified!")
+	
+	def write_imputed(self, data, prefix):
+
+		outfile = "{}_imputed_012.csv".format(prefix)
+		if isinstance(data, pd.DataFrame):
+			data.to_csv(outfile, header = False, index = False)
+
+		elif isinstance(data, np.ndarray):
+			np.savetxt(outfile, data, delimiter=",")
+
+		elif isinstance(data, list):
+			with open(outfile, "w") as fout:
+				fout.writelines(",".join(str(j) for j in i) + "\n" for i in data)
+		else:
+			raise TypeError("write_imputed takes either a pandas.DataFrame, numpy.ndarray, or 2-dimensional list")
 
 	@property
 	def snpcount(self):
@@ -601,6 +665,27 @@ class GenotypeData:
 		"""
 		return pd.DataFrame.from_records(self.freq_imputed_pop)
 
+	@property
+	def imputed_rf_np(self):
+		"""[Get genotypes imputed by random forest iterative imputation]
+
+		Returns:
+			[numpy array]: [Imputed 012-encoded genotype data]
+		"""
+		return self.rf_imputed_arr
+
+	@property
+	def imputed_rf_df(self):
+		"""[Get genotypes imputed by random forest iterative imputation]
+
+		Returns:
+			[pandas.DataFrame]: [Imputed 012-encoded genotype data]
+		"""
+		df = pd.DataFrame(self.rf_imputed_arr)
+		for col in df:
+			df[col] = df[col].astype(int)
+		return df
+		
 def merge_alleles(first, second=None):
 	"""[Merges first and second alleles in structure file]
 
