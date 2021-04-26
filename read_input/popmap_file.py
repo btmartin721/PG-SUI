@@ -1,6 +1,8 @@
 import sys
 
 class ReadPopmap:
+	"""[Class to read and parse a population map file]
+	"""
 
 	def __init__(self, filename):
 		"""[Class constructor]
