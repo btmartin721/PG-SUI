@@ -3,6 +3,7 @@ import argparse
 import sys
 
 import numpy as np
+import pandas as pd
 
 # Make sure python version is >= 3.6
 if sys.version_info < (3, 6):
@@ -18,10 +19,15 @@ def main():
 	"""
 
 	args = get_arguments()
-	
+
 	if args.str and args.phylip:
 		sys.exit("Error: Only one file type can be specified")
 
+	imputation_settings = {"n_jobs": -1,
+							"n_nearest_features": 5,
+							"n_estimators": 100,
+							"max_iter": 25}
+	
 	# If VCF file is specified.
 	if args.str:
 		if not args.pop_ids and args.popmap is None:
@@ -53,10 +59,20 @@ def main():
 		
 		data = GenotypeData(filename=args.phylip, filetype="phylip", popmapfile=args.popmap)
 		
-		#**TEMP**
-		#test impute_freq
-		#imp = impute.impute_freq(data.genotypes_list, diploid=True, pops=data.populations)
+	# **TEMP**
+	# test impute_freq
+	# imp = impute.impute_freq(data.genotypes_list, diploid=True, pops=data.populations)
 
+	data.impute_missing(impute_methods="rf", impute_settings=imputation_settings)
+
+	data.write_imputed(data.imputed_rf_df, args.prefix)
+
+	#print(data.imputed_rf_df)
+
+	#print(data.imputed_knn_df)
+	#print(data.imputed_freq_global_df)
+	#print(data.imputed_freq_pop_df)
+	
 
 	#pca_settings = {"n_components": data.indcount, "copy": True, "scaler": "patterson", "ploidy": 2}
 
@@ -68,7 +84,7 @@ def main():
 
 	#print(data.individuals)
 	#print(data.populations)
-	data.impute_missing(method="knn")
+	#data.impute_missing()
 
 
 def get_arguments():
