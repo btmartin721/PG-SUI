@@ -9,8 +9,11 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.impute import KNNImputer
+from sklearn.experimental import enable_iterative_imputer
+from sklearn.impute import IterativeImputer
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import ExtraTreesClassifier
 from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import mean_squared_error as rmse
 from sklearn.metrics import accuracy_score
@@ -33,7 +36,7 @@ def impute_knn(data, knn_settings):
 	df.replace(-9, pd.NA, inplace=True)
 
 	for col in df:
-		df[col] = df[col].astype("Int32")
+		df[col] = df[col].astype("Int8")
 
 	imputer = KNNImputer(n_neighbors=knn_settings["n_neighbors"], weights=knn_settings["weights"], metric=knn_settings["metric"])
 
@@ -65,7 +68,7 @@ def impute_knn_optk(snpslist, popslist, knn_settings, maxk, np):
 	df_X.replace(-9, pd.NA, inplace=True)
 
 	for col in df_X:
-		df_X[col] = df_X[col].astype("Int32")
+		df_X[col] = df_X[col].astype("Int8")
 
 
 	le = LabelEncoder()
@@ -199,6 +202,48 @@ def most_common(mylist):
 			counter = curr_frequency
 			num = k
 	return num, i
+
+@misc.timer
+def rf_imputer(snpslist, settings):
+	"""[Do random forest imputation using Iterative Imputer.
+	    Iterative imputer iterates over all the other features (columns)
+		and uses each one as a target variable, thereby informing missingness
+		in the input column]
+
+	Args:
+		snpslist ([list(list)]): [012-encoded genotypes from GenotypeData]
+		settings ([dict]): [Keys as setting arguments, values as setting values]
+
+	Returns:
+		[numpy array]: [2-D numpy array with imputed genotypes]
+	"""
+
+	print("\nDoing random forest imputation with {} processors and {} nearest features...".format(settings["n_jobs"], settings["n_nearest_features"]))
+
+	df = pd.DataFrame.from_records(snpslist)
+	
+	# Cast all the integers as strings for
+	# categorical RandomForestClassifier
+	for col in df:
+		df[col] = df[col].astype(str)
+
+	df.replace("-9", np.nan, inplace=True)
+	
+	imputed = IterativeImputer(
+		estimator=ExtraTreesClassifier(n_estimators=settings["n_estimators"], 
+								min_samples_leaf=settings["min_samples_leaf"], 
+								n_jobs=settings["n_jobs"]),
+		initial_strategy=settings["initial_strategy"],
+		max_iter=settings["max_iter"], 
+		random_state = settings["random_state"], 
+		tol=settings["tol"], 
+		n_nearest_features=settings["n_nearest_features"], 
+		imputation_order=settings["imputation_order"]
+		)
+
+	arr = imputed.fit_transform(df)
+
+	return arr
 
 def impute_freq(data, pops=None, diploid=True, default=0, missing=-9):
 	"""[Impute missing genotypes using allele frequencies, with missing alleles coded as negative; usually -9]
