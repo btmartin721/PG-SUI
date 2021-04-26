@@ -594,13 +594,13 @@ class GenotypeData:
 		return np.array(self.snps)
 
 	@property
-	def gentotypes_nparray(self):
-		"""[Returns 012 genotypes as a numpy array]
+	def genotypes_df(self):
+		"""[Returns 012 genotypes as a pandas DataFrame object]
 
 		Returns:
-			[2D numpy.array]: [012 genotypes as shape (n_samples, n_variants)]
+			[pandas.DataFrame]: [012-encoded genotypes as pandas DataFrame]
 		"""
-		return np.array(self.snps)
+		return pd.DataFrame.from_records(self.snps)
 
 	@property
 	def genotypes_onehot(self):
