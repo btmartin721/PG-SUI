@@ -1,5 +1,8 @@
 import sys
 import os
+import functools
+import time
+import datetime
 
 from numpy.random import choice
 
@@ -37,3 +40,16 @@ def weighted_draw(d, num_samples=1):
 	choices = list(d.keys())
 	weights = list(d.values())
 	return(choice(choices, num_samples, p=weights))
+
+def timer(func):
+	"""print the runtime of the decorated function"""
+	@functools.wraps(func)
+	def wrapper_timer(*args, **kwargs):
+		start_time = time.perf_counter()
+		value = func(*args, **kwargs)
+		end_time = time.perf_counter()
+		run_time = end_time - start_time
+		final_runtime = str(datetime.timedelta(seconds=run_time))
+		print(f"Finshed {func.__name__!r} in {final_runtime}\n")
+		return value
+	return wrapper_timer
