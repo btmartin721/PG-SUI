@@ -23,11 +23,8 @@ def main():
 	if args.str and args.phylip:
 		sys.exit("Error: Only one file type can be specified")
 
-	imputation_settings = {"n_jobs": 16,
-							"n_nearest_features": 20,
-							"max_iter": 50,
-							"verbose": 2,
-							"random_state": 7605}
+	imputation_settings = {"n_nearest_features": 25,
+							"max_iter": 100}
 	
 	# If VCF file is specified.
 	if args.str:
@@ -64,10 +61,9 @@ def main():
 	# test impute_freq
 	# imp = impute.impute_freq(data.genotypes_list, diploid=True, pops=data.populations)
 
-	data.impute_missing(impute_methods="rf", impute_settings=imputation_settings)
+	data.impute_missing(impute_methods="gb", impute_settings=imputation_settings)
 
-	data.write_imputed(data.imputed_rf_np, "np_{}".format(args.prefix))
-	data.write_imputed(data.imputed_rf_df, "pd_{}".format(args.prefix))
+	data.write_imputed(data.imputed_gb_df, args.prefix)
 
 	#print(data.imputed_rf_df)
 
