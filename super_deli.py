@@ -23,7 +23,7 @@ def main():
 	if args.str and args.phylip:
 		sys.exit("Error: Only one file type can be specified")
 
-	imputation_settings = {"n_jobs": -1,
+	imputation_settings = {"n_jobs": 16,
 							"n_nearest_features": 20,
 							"max_iter": 50,
 							"verbose": 2,
