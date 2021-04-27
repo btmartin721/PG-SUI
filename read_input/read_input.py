@@ -363,8 +363,7 @@ class GenotypeData:
 							"weights": "uniform", 
 							"metric": "nan_euclidean"}
 
-		if "rf" in impute_methods:
-			rf_settings = {"n_estimators": 100,
+		rf_settings = {"n_estimators": 100,
 							"min_samples_leaf": 1,
 							"max_features": "auto",
 							"n_jobs": 1,
@@ -375,7 +374,8 @@ class GenotypeData:
 							"initial_strategy": "most_frequent",
 							"imputation_order": "ascending",
 							"skip_complete": False,
-							"random_state": None
+							"random_state": None,
+							"verbose": 0
 							}
 
 		# Update settings if non-default ones were specified
@@ -428,9 +428,10 @@ class GenotypeData:
 					acc_list.append(acc_perc)
 				
 				# Get most frequent optimal K from replicates
-				optimalk, idx = impute.most_common(optimalk_list)
+				optimalk, idx, kcount, nreps = impute.most_common(optimalk_list)
+				perc_k = (kcount / nreps) * 100
 
-				print("\nDone! The best accuracy had n_neighbors = {} with a prediction accuracy of {:.2f}%\n".format(optimalk, acc_list[idx]))
+				print("\nDone!\nThe best accuracy had n_neighbors = {} with a prediction accuracy of {:.2f}%!\nOptimal n_neighbors was found {:.2f}% of the time\n".format(optimalk, acc_list[idx], perc_k))
 
 				# Now run final knn with optimal K
 				knn_settings["n_neighbors"] = int(optimalk)
@@ -486,9 +487,11 @@ class GenotypeData:
 						acc_list.append(acc_perc)
 
 					# Get most commonly found K among all replicates
-					optimalk, idx = impute.most_common(optimalk_list)
+					optimalk, idx, kcount, nreps = impute.most_common(optimalk_list)
 
-					print("\nDone! The best accuracy had n_neighbors = {} with a prediction accuracy of {:.2f}%\n".format(optimalk, acc_list[idx]))
+					perc_k = (kcount / nreps) * 100
+
+					print("\nDone!\nThe best accuracy had n_neighbors = {} with a prediction accuracy of {:.2f}%!\nOptimal n_neighbors was found {:.2f}% of the time\n".format(optimalk, acc_list[idx], perc_k))
 
 					# Run final knn imputation with optimal k
 					knn_settings["n_neighbors"] = int(optimalk)
@@ -681,10 +684,7 @@ class GenotypeData:
 		Returns:
 			[pandas.DataFrame]: [Imputed 012-encoded genotype data]
 		"""
-		df = pd.DataFrame(self.rf_imputed_arr)
-		for col in df:
-			df[col] = df[col].astype(int)
-		return df
+		return pd.DataFrame(self.rf_imputed_arr)
 		
 def merge_alleles(first, second=None):
 	"""[Merges first and second alleles in structure file]
