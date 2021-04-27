@@ -61,9 +61,15 @@ def main():
 	# test impute_freq
 	# imp = impute.impute_freq(data.genotypes_list, diploid=True, pops=data.populations)
 
-	data.impute_missing(impute_methods="gb", impute_settings=imputation_settings)
+	if args.resume_imputed:
+		data.read_imputed(args.resume_imputed)
 
-	data.write_imputed(data.imputed_gb_df, args.prefix)
+	else:	
+		data.impute_missing(impute_methods="gb", impute_settings=imputation_settings)
+
+		data.write_imputed(data.imputed_gb_df, args.prefix)
+
+	print(data.rf_imputed_df)
 
 	#print(data.imputed_rf_df)
 
@@ -131,6 +137,11 @@ def get_arguments():
 								required=False,
 								default="output",
 								help="Prefix for output files")
+
+	optional_args.add_argument("--resume_imputed",
+								type=str,
+								required=False,
+								help="Read in imputed data from a file instead of doing the imputation")						
 	# Add help menu							
 	optional_args.add_argument("-h", "--help",
 								action="help",
