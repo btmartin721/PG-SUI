@@ -257,9 +257,9 @@ def rf_imputer(snpslist, settings):
 
 	arr = imputed.fit_transform(df)
 
-	arr = arr.astype(dtype=np.int8)
+	new_arr = arr.astype(dtype=np.int)
 
-	return arr
+	return new_arr
 
 @misc.timer
 def gb_imputer(snpslist, settings):
@@ -320,9 +320,9 @@ def gb_imputer(snpslist, settings):
 
 	arr = imputed.fit_transform(df)
 
-	arr = arr.astype(dtype=np.int8)
+	new_arr = arr.astype(dtype=np.int)
 
-	return arr
+	return new_arr
 
 def impute_freq(data, pops=None, diploid=True, default=0, missing=-9):
 	"""[Impute missing genotypes using allele frequencies, with missing alleles coded as negative; usually -9]
