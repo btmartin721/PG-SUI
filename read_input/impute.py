@@ -201,7 +201,9 @@ def most_common(mylist):
 		if curr_frequency > counter:
 			counter = curr_frequency
 			num = k
-	return num, i
+	final_count = mylist.count(num)
+	reps = len(mylist)
+	return num, i, final_count, reps
 
 @misc.timer
 def rf_imputer(snpslist, settings):
@@ -221,14 +223,19 @@ def rf_imputer(snpslist, settings):
 	print("\nDoing random forest imputation with {} processors and {} nearest features...".format(settings["n_jobs"], settings["n_nearest_features"]))
 
 	df = pd.DataFrame.from_records(snpslist)
-	
+
 	# Cast all the integers as strings for
 	# categorical RandomForestClassifier
-	for col in df:
-		df[col] = df[col].astype(str)
+	# for col in df:
+	# 	df[col] = df[col].astype(str)
 
-	df.replace("-9", np.nan, inplace=True)
-	
+	# Replace missing data with NaN
+	df.replace(-9, np.nan, inplace=True)
+
+	for col in df:
+		df[col] = df[col].astype("Int8")
+
+	# Create iterative imputer
 	imputed = IterativeImputer(
 		estimator=ExtraTreesClassifier(n_estimators=settings["n_estimators"], 
 								min_samples_leaf=settings["min_samples_leaf"], 
@@ -238,10 +245,13 @@ def rf_imputer(snpslist, settings):
 		random_state = settings["random_state"], 
 		tol=settings["tol"], 
 		n_nearest_features=settings["n_nearest_features"], 
-		imputation_order=settings["imputation_order"]
+		imputation_order=settings["imputation_order"],
+		verbose=settings["verbose"]
 		)
 
 	arr = imputed.fit_transform(df)
+
+	arr = arr.astype(dtype=np.int8)
 
 	return arr
 
