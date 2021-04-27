@@ -24,9 +24,10 @@ def main():
 		sys.exit("Error: Only one file type can be specified")
 
 	imputation_settings = {"n_jobs": -1,
-							"n_nearest_features": 5,
-							"n_estimators": 100,
-							"max_iter": 25}
+							"n_nearest_features": 20,
+							"max_iter": 50,
+							"verbose": 2,
+							"random_state": 7605}
 	
 	# If VCF file is specified.
 	if args.str:
@@ -65,7 +66,8 @@ def main():
 
 	data.impute_missing(impute_methods="rf", impute_settings=imputation_settings)
 
-	data.write_imputed(data.imputed_rf_df, args.prefix)
+	data.write_imputed(data.imputed_rf_np, "np_{}".format(args.prefix))
+	data.write_imputed(data.imputed_rf_df, "pd_{}".format(args.prefix))
 
 	#print(data.imputed_rf_df)
 
