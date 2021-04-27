@@ -30,12 +30,15 @@ class GenotypeData:
 		self.freq_imputed_global = list()
 		self.freq_imputed_pop = list()
 		self.knn_imputed = list()
+		self.impute_methods = None
 		self.df = None
 		self.knn_imputed_df = None
 		self.rf_imputed_arr = None
 		self.gb_imputed_arr = None
 		self.num_snps = 0
 		self.num_inds = 0
+		self.supported_methods = ["knn", "freq_global", "freq_pop", "rf", "gb"]
+
 		
 		if self.filetype is not None:
 			self.parse_filetype(filetype, popmapfile)
@@ -334,7 +337,8 @@ class GenotypeData:
 
 	def impute_missing(self, impute_methods=None, impute_settings=None, pops=None, maxk=None, np=1):
 
-		supported_methods = ["knn", "freq_global", "freq_pop", "rf", "gb"]
+		self.impute_methods = impute_methods
+
 		supported_settings = ["n_neighbors", 
 								"weights", 
 								"metric", 
@@ -429,7 +433,7 @@ class GenotypeData:
 			gb_settings.update(impute_settings)
 		
 		# Validate impute settings
-		for method in impute_methods:
+		for method in self.impute_methods:
 			if maxk and method == "knn":
 				self._check_impute_settings(method, knn_settings, supported_settings_opt, opt=True)
 
@@ -443,18 +447,18 @@ class GenotypeData:
 				self._check_impute_settings(method, gb_settings, supported_settings)
 
 		# If one string value is supplied to impute_methods
-		if isinstance(impute_methods, str):
+		if isinstance(self.impute_methods, str):
 
 			# There can be only one
-			if len(impute_methods.split(",")) > 1: 
+			if len(self.impute_methods.split(",")) > 1: 
 				raise TypeError("\nThe method argument must be a list if more than one arguments are specified!")
 
 			# Must be a supported method
-			if impute_methods not in supported_methods:
+			if self.impute_methods not in self.supported_methods:
 				raise ValueError("\nThe value supplied to the method argument is not supported!")
 			
 			# K-NN imputation with K optimization
-			if impute_methods == "knn" and maxk:
+			if self.impute_methods == "knn" and maxk:
 				optimalk_list = list()
 				acc_list = list()
 				print("\nDoing K-NN imputation with K optimization")
@@ -486,34 +490,34 @@ class GenotypeData:
 				self.knn_imputed_df = impute.impute_knn(self.snps, knn_settings)
 
 			# Run with no k-optmimization
-			elif impute_methods == "knn" and not maxk:
+			elif self.impute_methods == "knn" and not maxk:
 				self.knn_imputed_df = impute.impute_knn(self.snps, knn_settings)
 
 			# Run imputation my global mode
-			if impute_methods == "freq_global":
+			if self.impute_methods == "freq_global":
 				self.freq_imputed_global = impute.impute_freq(self.snps)
 
 			# Run imputation for by-population mode
-			if impute_methods == "freq_pop":
+			if self.impute_methods == "freq_pop":
 				self.freq_imputed_pop = impute.impute_freq(self.snps, pops=self.pops)
 
-			if impute_methods == "rf":
+			if self.impute_methods == "rf":
 				self.rf_imputed_arr = impute.rf_imputer(self.snps, rf_settings)
 
-			if impute_methods == "gb":
+			if self.impute_methods == "gb":
 				self.gb_imputed_arr = impute.gb_imputer(self.snps, gb_settings)
 
 
 		# If value supplied to impute_methods is a list
-		elif isinstance(impute_methods, list):
+		elif isinstance(self.impute_methods, list):
 			
-			for arg in impute_methods:
+			for arg in self.impute_methods:
 				# Make sure impute_methods are supported
-				if arg not in supported_methods:
+				if arg not in self.supported_methods:
 					raise ValueError("\nThe value supplied to the impute_methods argument is not supported!")
 
 			# For each imputation method
-			for arg in impute_methods:
+			for arg in self.impute_methods:
 				if arg == "knn" and maxk:
 
 					optimalk_list = list()
@@ -573,6 +577,18 @@ class GenotypeData:
 			raise ValueError("The impute_methods argument must be either a string or a list!")
 		
 	def _check_impute_settings(self, method, settings, supported_settings, opt=False):
+		"""[Validate that impute_settings are supported arguments]
+
+		Args:
+			method ([str]): [Imputation method]
+			settings ([dict]): [Settings for imputation method]
+			supported_settings ([dict]): [Settings supported by any of the imputation methods]
+			opt (bool, optional): [True if doing K-NN with K optimization]. Defaults to False.
+
+		Raises:
+			ValueError: [One or more impute_settings arguments was not found in supported_settings]
+			ValueError: [Only one of maxk or n_neigbors settings can be used at a time]
+		"""
 
 		# Make sure settings are supported by imputer
 		for arg in settings.keys():
@@ -583,7 +599,15 @@ class GenotypeData:
 				raise ValueError("maxk and n_neighbors cannot both be specified!")
 	
 	def write_imputed(self, data, prefix):
+		"""[Save imputed data to a CSV file]
 
+		Args:
+			data ([pandas.DataFrame, numpy.array, or list(list)]): [Object returned from impute_missing()]
+			prefix ([str]): [Prefix for output CSV file]
+
+		Raises:
+			TypeError: [Must be or type pandas.DataFrame, numpy.array, or list]
+		"""
 		outfile = "{}_imputed_012.csv".format(prefix)
 		if isinstance(data, pd.DataFrame):
 			data.to_csv(outfile, header = False, index = False)
@@ -596,6 +620,38 @@ class GenotypeData:
 				fout.writelines(",".join(str(j) for j in i) + "\n" for i in data)
 		else:
 			raise TypeError("write_imputed takes either a pandas.DataFrame, numpy.ndarray, or 2-dimensional list")
+
+	def read_imputed(self, filename):
+		"""[Read in imputed CSV file as formatted by write_imputed]
+
+		Args:
+			filename ([str]): [Name of imputed CSV file to be read]
+
+		Returns:
+			[pandas.DataFrame]: [Imputed data as DataFrame of 8-bit integers]
+
+		Raises:
+			ValueError: [Must be supported impute_method option]
+		"""
+		if self.impute_methods:
+			for method in self.impute_methods:
+				if method == "knn":
+					self.knn_imputed_df = pd.read_csv(filename, dtype="Int8")
+					self.knn_imputed = self.knn_imputed_df.values.tolist()
+				elif method == "freq_global":
+					self.freq_imputed_global_df = pd.read_csv(filename, dtype="Int8")
+					self.freq_imputed_global = self.freq_imputed_global_df.values.tolist()
+				elif method == "freq_pop":
+					self.freq_imputed_pop_df = pd.read_csv(filename, dtype="Int8")
+					self.freq_imputed_pop = self.freq_imputed_global_df.values.tolist()
+				elif method == "rf"
+					rf_df = pd.read_csv(filename, dtype="Int8")
+					self.rf_imputed_arr = rf_df.to_numpy(dtype=np.int)
+				elif method == "gb":
+					gb_df = pd.read_csv(filename, dtype="Int8")
+					self.gb_imputed_arr = gb_df.to_numpy(dtype=np.int)
+				else:
+					raise ValueError("\n{} is not a supported option in impute_methods!".format(method))
 
 	@property
 	def snpcount(self):
@@ -644,7 +700,7 @@ class GenotypeData:
 
 	@property
 	def genotypes_nparray(self):
-		"""[Returns 012 genotypes as a numpy array]
+		"""[Getter for 012 genotypes as a numpy array]
 
 		Returns:
 			[2D numpy.array]: [012 genotypes as shape (n_samples, n_variants)]
@@ -653,7 +709,7 @@ class GenotypeData:
 
 	@property
 	def genotypes_df(self):
-		"""[Returns 012 genotypes as a pandas DataFrame object]
+		"""[Getter for 012 genotypes as a pandas DataFrame object]
 
 		Returns:
 			[pandas.DataFrame]: [012-encoded genotypes as pandas DataFrame]
@@ -662,7 +718,7 @@ class GenotypeData:
 
 	@property
 	def genotypes_onehot(self):
-		"""[Returns one-hot encoded snps]
+		"""[Getter for one-hot encoded snps format]
 
 		Returns:
 			[2D numpy.array]: [One-hot encoded numpy array (n_samples, n_variants)]
@@ -671,7 +727,7 @@ class GenotypeData:
 	
 	@property
 	def imputed_knn_df(self):
-		"""[Returns 012 genotypes with K-NN missing data imputation]
+		"""[Getter for 012 genotypes with K-NN missing data imputation]
 
 		Returns:
 			[pandas.DataFrame()]: [pandas DataFrame with the imputed 012 genotypes]
@@ -680,7 +736,7 @@ class GenotypeData:
 
 	@property
 	def imputed_knn(self):
-		"""[Returns 012 genotypes with K-NN missing data imputation]
+		"""[Getter for 012 genotypes with K-NN missing data imputation]
 
 		Returns:
 			[pandas.DataFrame()]: [pandas DataFrame with the imputed 012 genotypes]
@@ -689,7 +745,7 @@ class GenotypeData:
 
 	@property
 	def imputed_freq_global(self):
-		"""[Get genotypes imputed by global allele frequency]
+		"""[Getter for 012 genotypes imputed by global allele frequency]
 
 		Returns:
 			[list(list)]: [Imputed genotype data]
@@ -698,7 +754,7 @@ class GenotypeData:
 	
 	@property
 	def imputed_freq_pop(self):
-		"""[Get genotypes imputed by population allele frequency]
+		"""[Getter for 012 genotypes imputed by population allele frequency]
 
 		Returns:
 			[list(list)]: [Imputed genotype data]
@@ -707,7 +763,7 @@ class GenotypeData:
 
 	@property
 	def imputed_freq_global_df(self):
-		"""[Get genotypes imputed by global allele frequency]
+		"""[Getter for 012 genotypes imputed by global allele frequency]
 
 		Returns:
 			[pandas.DataFrame]: [Imputed genotype data]
@@ -716,7 +772,7 @@ class GenotypeData:
 	
 	@property
 	def imputed_freq_pop_df(self):
-		"""[Get genotypes imputed by population allele frequency]
+		"""[Getter for 012 genotypes imputed by population allele frequency]
 
 		Returns:
 			[pandas.DataFrame]: [Imputed genotype data]
@@ -725,7 +781,7 @@ class GenotypeData:
 
 	@property
 	def imputed_rf_np(self):
-		"""[Get genotypes imputed by random forest iterative imputation]
+		"""[Getter for 012 genotypes imputed by random forest iterative imputation]
 
 		Returns:
 			[numpy array]: [Imputed 012-encoded genotype data]
@@ -734,7 +790,7 @@ class GenotypeData:
 
 	@property
 	def imputed_rf_df(self):
-		"""[Get genotypes imputed by random forest iterative imputation]
+		"""[Getter for 012 genotypes imputed by random forest iterative imputation]
 
 		Returns:
 			[pandas.DataFrame]: [Imputed 012-encoded genotype data]
@@ -743,7 +799,7 @@ class GenotypeData:
 
 	@property
 	def imputed_gb_np(self):
-		"""[Get genotypes imputed by gradient boosting iterative imputation]
+		"""[Getter for 012 genotypes imputed by gradient boosting iterative imputation]
 
 		Returns:
 			[numpy array]: [Imputed 012-encoded genotype data]
@@ -752,7 +808,7 @@ class GenotypeData:
 
 	@property
 	def imputed_gb_df(self):
-		"""[Get genotypes imputed by gradient boosting iterative imputation]
+		"""[Getter for 012 genotypes imputed by gradient boosting iterative imputation]
 
 		Returns:
 			[pandas.DataFrame]: [Imputed 012-encoded genotype data]
