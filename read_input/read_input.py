@@ -33,6 +33,7 @@ class GenotypeData:
 		self.df = None
 		self.knn_imputed_df = None
 		self.rf_imputed_arr = None
+		self.gb_imputed_arr = None
 		self.num_snps = 0
 		self.num_inds = 0
 		
@@ -333,22 +334,38 @@ class GenotypeData:
 
 	def impute_missing(self, impute_methods=None, impute_settings=None, pops=None, maxk=None, np=1):
 
-		supported_methods = ["knn", "freq_global", "freq_pop", "rf"]
+		supported_methods = ["knn", "freq_global", "freq_pop", "rf", "gb"]
 		supported_settings = ["n_neighbors", 
 								"weights", 
 								"metric", 
-								"n_estimators", 
-								"min_samples_leaf", 
-								"max_features", 
-								"n_jobs", 
-								"criterion", 
+								"rf_n_estimators",
+								"rf_min_samples_leaf",
+								"rf_max_features",
+								"rf_n_jobs",
+								"rf_criterion",
+								"rf_random_state", 
 								"max_iter", 
 								"tol", 
 								"n_nearest_features", 
 								"initial_strategy", 
 								"imputation_order", 
 								"skip_complete", 
-								"random_state"
+								"random_state",
+								"verbose",
+								"gb_n_estimators",
+								"gb_min_samples_leaf",
+								"gb_max_features",
+								"gb_criterion",
+								"gb_learning_rate",
+								"gb_subsample",
+								"gb_loss",
+								"gb_min_samples_split",
+								"gb_max_depth",
+								"gb_random_state",
+								"gb_verbose",
+								"gb_validation_fraction",
+								"gb_n_iter_no_change",
+								"gb_tol"
 							]
 							
 		supported_settings_opt = ["weights", "metric", "reps"]
@@ -363,11 +380,13 @@ class GenotypeData:
 							"weights": "uniform", 
 							"metric": "nan_euclidean"}
 
-		rf_settings = {"n_estimators": 100,
-							"min_samples_leaf": 1,
-							"max_features": "auto",
-							"n_jobs": 1,
-							"criterion": "gini",
+		rf_settings = {
+							"rf_n_estimators": 100,
+							"rf_min_samples_leaf": 1,
+							"rf_max_features": "auto",
+							"rf_n_jobs": 1,
+							"rf_criterion": "gini",
+							"rf_random_state": None,
 							"max_iter": 10,
 							"tol": 1e-3,
 							"n_nearest_features": None,
@@ -376,12 +395,38 @@ class GenotypeData:
 							"skip_complete": False,
 							"random_state": None,
 							"verbose": 0
-							}
+					}
+
+		gb_settings = {
+							"gb_n_estimators": 100,
+							"gb_min_samples_leaf": 1,
+							"gb_max_features": "auto",
+							"gb_criterion": "friedman_mse",
+							"gb_learning_rate": 0.1,
+							"gb_subsample": 1.0,
+							"gb_loss": "deviance",
+							"gb_min_samples_split": 2,
+							"gb_max_depth": 3,
+							"gb_random_state": None,
+							"gb_verbose": 0,
+							"gb_validation_fraction": 0.1,
+							"gb_n_iter_no_change": None,
+							"gb_tol": 1e-4,
+							"max_iter": 10,
+							"tol": 1e-3,
+							"n_nearest_features": None,
+							"initial_strategy": "most_frequent",
+							"imputation_order": "ascending",
+							"skip_complete": False,
+							"verbose": 0,
+							"random_state": None
+					}
 
 		# Update settings if non-default ones were specified
 		if impute_settings:
 			knn_settings.update(impute_settings)
 			rf_settings.update(impute_settings)
+			gb_settings.update(impute_settings)
 		
 		# Validate impute settings
 		for method in impute_methods:
@@ -393,6 +438,9 @@ class GenotypeData:
 
 			elif method == "rf":
 				self._check_impute_settings(method, rf_settings, supported_settings)
+
+			elif method == "gb":
+				self._check_impute_settings(method, gb_settings, supported_settings)
 
 		# If one string value is supplied to impute_methods
 		if isinstance(impute_methods, str):
@@ -452,13 +500,17 @@ class GenotypeData:
 			if impute_methods == "rf":
 				self.rf_imputed_arr = impute.rf_imputer(self.snps, rf_settings)
 
+			if impute_methods == "gb":
+				self.gb_imputed_arr = impute.gb_imputer(self.snps, gb_settings)
+
+
 		# If value supplied to impute_methods is a list
 		elif isinstance(impute_methods, list):
 			
 			for arg in impute_methods:
 				# Make sure impute_methods are supported
 				if arg not in supported_methods:
-					raise ValueError("\nThe value supplied to the method argument is not supported!")
+					raise ValueError("\nThe value supplied to the impute_methods argument is not supported!")
 
 			# For each imputation method
 			for arg in impute_methods:
@@ -512,6 +564,9 @@ class GenotypeData:
 
 				elif arg == "rf":
 					self.rf_imputed_arr = impute.rf_imputer(self.snps, rf_settings)
+
+				elif arg == "gb":
+					self.gb_imputed_arr = impute.gb_imputer(self.snps, gb_settings)
 
 		# impute_methods must be either string or list			
 		else:
@@ -685,6 +740,24 @@ class GenotypeData:
 			[pandas.DataFrame]: [Imputed 012-encoded genotype data]
 		"""
 		return pd.DataFrame(self.rf_imputed_arr)
+
+	@property
+	def imputed_gb_np(self):
+		"""[Get genotypes imputed by gradient boosting iterative imputation]
+
+		Returns:
+			[numpy array]: [Imputed 012-encoded genotype data]
+		"""
+		return self.gb_imputed_arr
+
+	@property
+	def imputed_gb_df(self):
+		"""[Get genotypes imputed by gradient boosting iterative imputation]
+
+		Returns:
+			[pandas.DataFrame]: [Imputed 012-encoded genotype data]
+		"""
+		return pd.DataFrame(self.gb_imputed_arr)
 		
 def merge_alleles(first, second=None):
 	"""[Merges first and second alleles in structure file]
