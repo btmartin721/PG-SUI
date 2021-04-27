@@ -14,6 +14,7 @@ from sklearn.impute import IterativeImputer
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.ensemble import ExtraTreesClassifier
+from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import mean_squared_error as rmse
 from sklearn.metrics import accuracy_score
@@ -237,9 +238,14 @@ def rf_imputer(snpslist, settings):
 
 	# Create iterative imputer
 	imputed = IterativeImputer(
-		estimator=ExtraTreesClassifier(n_estimators=settings["n_estimators"], 
-								min_samples_leaf=settings["min_samples_leaf"], 
-								n_jobs=settings["n_jobs"]),
+		estimator=ExtraTreesClassifier(
+							n_estimators=settings["rf_n_estimators"],
+							min_samples_leaf=settings["rf_min_samples_leaf"], 
+							n_jobs=settings["rf_n_jobs"],
+							max_features=settings["rf_max_features"],
+							criterion=settings["rf_criterion"],
+							random_state=settings["rf_random_state"],
+							verbose=settings["rf_verbose"]),
 		initial_strategy=settings["initial_strategy"],
 		max_iter=settings["max_iter"], 
 		random_state = settings["random_state"], 
@@ -248,6 +254,69 @@ def rf_imputer(snpslist, settings):
 		imputation_order=settings["imputation_order"],
 		verbose=settings["verbose"]
 		)
+
+	arr = imputed.fit_transform(df)
+
+	arr = arr.astype(dtype=np.int8)
+
+	return arr
+
+@misc.timer
+def gb_imputer(snpslist, settings):
+	"""[Do gradient boosting imputation using Iterative Imputer.
+	Iterative imputer iterates over all the other features (columns)
+	and uses each one as a target variable, thereby informing missingness
+	in the input column]
+
+	Args:
+		snpslist ([list(list)]): [012-encoded genotypes from GenotypeData]
+		settings ([dict]): [Keys as setting arguments, values as setting values]
+
+	Returns:
+		[numpy array]: [2-D numpy array with imputed genotypes]
+	"""
+
+	print("\nDoing gradient boosting imputation with {} estimators and {} nearest features...".format(settings["gb_n_estimators"], settings["n_nearest_features"]))
+
+	df = pd.DataFrame.from_records(snpslist)
+
+	# Cast all the integers as strings for
+	# categorical RandomForestClassifier
+	# for col in df:
+	# 	df[col] = df[col].astype(str)
+
+	# Replace missing data with NaN
+	df.replace(-9, np.nan, inplace=True)
+
+	for col in df:
+		df[col] = df[col].astype("Int8")
+
+	# Create iterative imputer
+	imputed = IterativeImputer(
+		estimator=GradientBoostingClassifier(
+						n_estimators=settings["gb_n_estimators"], 
+						min_samples_leaf=settings["gb_min_samples_leaf"],
+						max_features=settings["gb_max_features"],
+						learning_rate=settings["gb_learning_rate"],
+						criterion=settings["gb_criterion"],
+						subsample=settings["gb_subsample"],
+						loss=settings["gb_loss"],
+						min_samples_split=settings["gb_min_samples_split"],
+						max_depth=settings["gb_max_depth"],
+						random_state=settings["gb_random_state"],
+						verbose=settings["gb_verbose"],
+						validation_fraction=settings["gb_validation_fraction"],
+						n_iter_no_change=settings["gb_n_iter_no_change"],
+						tol=settings["gb_tol"]
+					),
+		initial_strategy=settings["initial_strategy"],
+		max_iter=settings["max_iter"], 
+		random_state = settings["random_state"], 
+		tol=settings["tol"], 
+		n_nearest_features=settings["n_nearest_features"], 
+		imputation_order=settings["imputation_order"],
+		verbose=settings["verbose"]
+	)
 
 	arr = imputed.fit_transform(df)
 
