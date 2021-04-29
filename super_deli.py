@@ -75,7 +75,7 @@ def main():
 	
 	clusters = DimReduction(data.imputed_rf_df, data.populations, algorithms="standard-pca")
 
-	clusters.plot_pca(args.prefix, 1, 2, alpha=0.5)
+	clusters.plot_pca(args.prefix, 1, 2, alpha=0.5, legend_loc = "upper right")
 	#print(clusters.pca_coords)
 	#print(clusters.pca_model)
 
