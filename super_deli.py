@@ -4,6 +4,8 @@ import sys
 
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns; sns.set()
 
 # Make sure python version is >= 3.6
 if sys.version_info < (3, 6):
@@ -62,14 +64,24 @@ def main():
 	# imp = impute.impute_freq(data.genotypes_list, diploid=True, pops=data.populations)
 
 	if args.resume_imputed:
-		data.read_imputed(args.resume_imputed)
+		data.read_imputed(args.resume_imputed, impute_methods="rf")
+		#data.write_imputed(data.imputed_rf_df, args.prefix)
+
 
 	else:	
 		data.impute_missing(impute_methods="gb", impute_settings=imputation_settings)
 
 		data.write_imputed(data.imputed_gb_df, args.prefix)
+	
+	clusters = DimReduction(data.imputed_rf_df, data.populations, algorithms="standard-pca")
 
-	print(data.rf_imputed_df)
+	clusters.plot_pca(args.prefix, 1, 2, alpha=0.5)
+	#print(clusters.pca_coords)
+	#print(clusters.pca_model)
+
+	#print(data.imputed_rf_df.dtypes)
+	#print(data.imputed_rf_df)
+	#data.write_imputed(data.imputed_rf_df, args.prefix)
 
 	#print(data.imputed_rf_df)
 
