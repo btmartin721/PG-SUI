@@ -15,13 +15,14 @@ from sklearn.decomposition import PCA
 
 class DimReduction:
 
-	def __init__(self, gn, pops, algorithms=None, settings=None):
-		self.gn = gn
+	def __init__(self, data, pops, algorithms=None, settings=None):
+		self.data = data
 		self.pops = pops
 		self.settings = settings
 		self.algorithms = algorithms
 		self.pca_coords = None
 		self.pca_model = None
+		self.target = None
 
 		self.all_settings = {"n_components": 10, 
 									"copy": True, 
@@ -53,98 +54,92 @@ class DimReduction:
 
 		# Standardize the features (mean = 0, variance = 1)
 		# Important for doing PCA
-		X = StandardScaler().fit_transform(self.gn.values)
-		y = np.asarray(self.pops)
-		y_df = pd.DataFrame(y, columns=["target"])
+		# X = StandardScaler().fit_transform(self.gn.values)
+		# self.target = pd.DataFrame(self.pops, columns=["target"])
 
-		# Do the PCA using scikit-learn
-		pca = PCA(n_components = pca_arguments["n_components"])
-		principal_components = pca.fit_transform(X)
+		# # Do the PCA using scikit-learn
+		# pca = PCA(n_components = pca_arguments["n_components"])
+		# principal_components = pca.fit_transform(X)
 
-		# Get list of all the PC numbers
-		pc_max = pca_arguments["n_components"] + 1
-				
-		pc_list = list()
-		pcs = list(range(1, pc_max))
-		for pc in pcs:
-			pc_list.append("Principal Component {}".format(str(pc)))
+		# # Get list of all the PC numbers
+		# pc_max = pca_arguments["n_components"] + 1
+		
+		# # Make the list into PC names and numbers
+		# pc_list = list()
+		# pcs = list(range(1, pc_max))
+		# for pc in pcs:
+		# 	pc_list.append("Principal Component {}".format(str(pc)))
 
-		# Make a pandas DataFrame object
-		principal_df = pd.DataFrame(principal_components, columns=pc_list)
+		# # Make a pandas DataFrame object
+		# self.pca_coords = pd.DataFrame(principal_components, columns=pc_list)
 
-		self.pca_coords = pd.concat([principal_df, y_df[["target"]]], axis=1)
+		gn = np.array(self.data).transpose()
 
-		# gn = np.array(self.data).transpose()
-		# print(gn.shape)
-
-		# self.pca_coords, self.pca_model = allel.pca(gn, n_components=pca_arguments["n_components"], copy=pca_arguments["copy"], scaler=pca_arguments["scaler"], ploidy=pca_arguments["ploidy"])
+		self.pca_coords, self.pca_model = allel.pca(gn, n_components=pca_arguments["n_components"], copy=pca_arguments["copy"], scaler=pca_arguments["scaler"], ploidy=pca_arguments["ploidy"])
 
 
-	def plot_pca(self, prefix, pc1=1, pc2=2, figwidth=8, figheight=8, alpha=1.0, colors=None):
+	def plot_pca(self, prefix, pc1=1, pc2=2, figwidth=6, figheight=6, alpha=1.0, colors=None, palette="Set1", legend_loc="upper left"):
 
-		fig = plt.figure(figsize = (8, 8))
-		ax = fig.add_subplot(1, 1, 1)
-		ax.set_xlabel("Principal Component {}".format(str(pc1)), fontsize = 15)
-		ax.set_ylabel("Principal Component {}".format(str(pc2)), fontsize = 15)
-		ax.set_title("PCA", fontsize = 20)
+		pc1_idx = pc1 - 1
+		pc2_idx = pc2 - 1
+
+		x = self.pca_coords[:, pc1_idx]
+		y = self.pca_coords[:, pc2_idx]
 
 		targets = list(set(self.pops))
 
-		if not colors: # Make a list of hex-coded colors
-			colors = list()
-			cmap = plt.get_cmap("Set1", len(targets))
+		pca_df = pd.DataFrame({
+			"pc1": x,
+			"pc2": y,
+			"pop": self.pops
+		})
+		pop_df = pd.DataFrame(self.pops, columns=["population"])
+		
+		fig = plt.figure(figsize=(figwidth, figheight))
+		ax = fig.add_subplot(1,1,1)
 
-			for i in range(cmap.N):
-				rgba = cmap(i)
-				colors.append(mcolors.rgb2hex(rgba))
+		colors = self._get_pop_colors(targets, palette, colors)
 
-		else:
-			if len(colors) != len(targets):
-				raise ValueError("\nThe colors argument's list length must equal the number of unique populations!")
+		self._plot_pca_coords(self.pca_coords, self.pca_model, pc1, pc2, ax, pop_df, targets, colors)
 
-		for target, color in zip(targets, colors):
-			indices_to_keep = self.pca_coords["target"] == target
-			ax.scatter(self.pca_coords.loc[indices_to_keep, "Principal Component {}".format(pc1)],
-			self.pca_coords.loc[indices_to_keep, "Principal Component {}".format(pc2)],
-			c = color,
-			s = 50)
-
-			
-
-		ax.legend(targets)
+		ax.legend(loc=legend_loc)
 		plot_fn = "{}_pca.pdf".format(prefix)
 		fig.savefig(plot_fn, bbox_inches="tight")
 		
+	def _plot_pca_coords(self, coords, model, pc1, pc2, ax, populations, unique_populations, pop_colors):
 
+		sns.despine(ax=ax, offset=5)
 
-			
+		pc1_idx = pc1 - 1
+		pc2_idx = pc2 - 1
 
-		# fig, ax = plt.subplots(figsize=(figwidth, figheight))
-		# sns.despine(ax=ax, offset=10)
-		# x = self.pca_coords[:, pc1]
-		# y = self.pca_coords[:, pc2]
+		x = coords[:, pc1_idx]
+		y = coords[:, pc2_idx]
 
-		# pca_df = pd.DataFrame({
-		# 	"pc1": x,
-		# 	"pc2": y,
-		# 	"pop": self.pops
-		# })
-		#pop_df = pd.DataFrame(self.pops, columns=["population"])
+		for pop in unique_populations:
+			flt = (populations.population == pop)
+			ax.plot(x[flt], y[flt], marker='o', linestyle=' ', color=pop_colors[pop], 
+                label=pop, markersize=6, mec='k', mew=.5)
+
+		ax.set_xlabel('PC%s (%.1f%%)' % (pc1, model.explained_variance_ratio_[pc1_idx]*100))
 		
-		#for pop in list(set(self.pops)):
-		# if colors:
-		# 	grouped = pca_df.groupby("population")
-		# 	for key, group in grouped:
-		# 		#group. 
-		# 		#flt = (pop_df.population == pop).values
-		# 	ax.plot(x[flt], y[flt], marker='o', linestyle=' ', label=pop, markersize=6, alpha=alpha)
-		# ax.set_xlabel('PC%s (%.1f%%)' % (pc1+1, self.pca_model.explained_variance_ratio_[pc1]*100))
-		# ax.set_ylabel('PC%s (%.1f%%)' % (pc2+1, self.pca_model.explained_variance_ratio_[pc2]*100))
-		# ax.legend();
-		# plot_fn = "{}_pca.pdf".format(prefix)
-		# plt.savefig(plot_fn, bbox_inches="tight")
+		ax.set_ylabel('PC%s (%.1f%%)' % (pc2, model.explained_variance_ratio_[pc2_idx]*100))
 
+	def _get_pop_colors(self, uniq_pops, palette, colors):
 
+		if not colors: # Make a list of hex-coded colors
+			colors = dict()
+			cmap = plt.get_cmap(palette, len(uniq_pops))
+
+			for i in range(cmap.N):
+				rgba = cmap(i)
+				colors[uniq_pops[i]] = mcolors.rgb2hex(rgba)
+
+		else:
+			if len(colors.keys()) != len(uniq_pops):
+				raise ValueError("\nThe colors argument's list length must equal the number of unique populations!")
+
+		return colors
 
 	@property
 	def get_pca_coords(self):
