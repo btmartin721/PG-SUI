@@ -621,7 +621,7 @@ class GenotypeData:
 		else:
 			raise TypeError("write_imputed takes either a pandas.DataFrame, numpy.ndarray, or 2-dimensional list")
 
-	def read_imputed(self, filename):
+	def read_imputed(self, filename, impute_methods):
 		"""[Read in imputed CSV file as formatted by write_imputed]
 
 		Args:
@@ -633,25 +633,44 @@ class GenotypeData:
 		Raises:
 			ValueError: [Must be supported impute_method option]
 		"""
-		if self.impute_methods:
+		self.impute_methods = impute_methods
+		if isinstance(self.impute_methods, list):
 			for method in self.impute_methods:
 				if method == "knn":
-					self.knn_imputed_df = pd.read_csv(filename, dtype="Int8")
+					self.knn_imputed_df = pd.read_csv(filename, dtype="Int8", header=None)
 					self.knn_imputed = self.knn_imputed_df.values.tolist()
 				elif method == "freq_global":
-					self.freq_imputed_global_df = pd.read_csv(filename, dtype="Int8")
+					self.freq_imputed_global_df = pd.read_csv(filename, dtype="Int8", header=None)
 					self.freq_imputed_global = self.freq_imputed_global_df.values.tolist()
 				elif method == "freq_pop":
-					self.freq_imputed_pop_df = pd.read_csv(filename, dtype="Int8")
+					self.freq_imputed_pop_df = pd.read_csv(filename, dtype="Int8", header=None)
 					self.freq_imputed_pop = self.freq_imputed_global_df.values.tolist()
-				elif method == "rf"
-					rf_df = pd.read_csv(filename, dtype="Int8")
+				elif method == "rf":
+					rf_df = pd.read_csv(filename, dtype="Int8", header=None)
 					self.rf_imputed_arr = rf_df.to_numpy(dtype=np.int)
 				elif method == "gb":
-					gb_df = pd.read_csv(filename, dtype="Int8")
+					gb_df = pd.read_csv(filename, dtype="Int8", header=None)
 					self.gb_imputed_arr = gb_df.to_numpy(dtype=np.int)
 				else:
 					raise ValueError("\n{} is not a supported option in impute_methods!".format(method))
+		elif isinstance(self.impute_methods, str):
+			if self.impute_methods == "knn":
+				self.knn_imputed_df = pd.read_csv(filename, dtype="Int8", header=None)
+				self.knn_imputed = self.knn_imputed_df.values.tolist()
+			elif self.impute_methods == "freq_global":
+				self.freq_imputed_global_df = pd.read_csv(filename, dtype="Int8", header=None)
+				self.freq_imputed_global = self.freq_imputed_global_df.values.tolist()
+			elif self.impute_methods == "freq_pop":
+				self.freq_imputed_pop_df = pd.read_csv(filename, dtype="Int8", header=None)
+				self.freq_imputed_pop = self.freq_imputed_global_df.values.tolist()
+			elif self.impute_methods == "rf":
+				rf_df = pd.read_csv(filename, dtype="Int8", header=None)
+				self.rf_imputed_arr = rf_df.to_numpy(dtype=np.int)
+			elif self.impute_methods == "gb":
+				gb_df = pd.read_csv(filename, dtype="Int8", header=None)
+				self.gb_imputed_arr = gb_df.to_numpy(dtype=np.int)
+			else:
+				raise ValueError("\n{} is not a supported option in impute_methods!".format(self.impute_methods))
 
 	@property
 	def snpcount(self):
