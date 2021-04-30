@@ -303,7 +303,7 @@ def gb_imputer(snpslist, settings):
 
 @misc.timer
 def bayesianridge_imputer(snpslist, settings):
-		print("\nDoing bayesian ridge imputation with {} iterations and {} nearest features...".format(settings["br_n_iter"], settings["n_nearest_features"]))
+	print("\nDoing bayesian ridge imputation with {} iterations and {} nearest features...".format(settings["br_n_iter"], settings["n_nearest_features"]))
 
 	df = format_features(snpslist)
 
@@ -338,7 +338,7 @@ def bayesianridge_imputer(snpslist, settings):
 
 @misc.timer
 def knn_iterative_imputer(snpslist, settings):
-		print("\nDoing K-nearest neigbor iterative imputation with {} nearest neighbors and {} nearest features...".format(settings["knn_it_n_neighbors"], settings["n_nearest_features"]))
+	print("\nDoing K-nearest neigbor iterative imputation with {} nearest neighbors and {} nearest features...".format(settings["knn_it_n_neighbors"], settings["n_nearest_features"]))
 
 	df = format_features(snpslist)
 
@@ -510,7 +510,7 @@ def format_features(featurelist, missing_val=-9):
 	df = pd.DataFrame.from_records(featurelist)
 
 	# Replace missing data with NaN
-	df.replace(missingval, np.nan, inplace=True)
+	df.replace(missing_val, np.nan, inplace=True)
 
 	# Cast features as 8-bit integers
 	for col in df:
