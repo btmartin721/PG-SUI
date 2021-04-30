@@ -15,6 +15,8 @@ from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.ensemble import ExtraTreesClassifier
 from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.linear_model import BayesianRidge
+from sklearn.neighbors import KNeighborsClassifier
 from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import mean_squared_error as rmse
 from sklearn.metrics import accuracy_score
@@ -208,10 +210,7 @@ def most_common(mylist):
 
 @misc.timer
 def rf_imputer(snpslist, settings):
-	"""[Do random forest imputation using Iterative Imputer.
-	    Iterative imputer iterates over all the other features (columns)
-		and uses each one as a target variable, thereby informing missingness
-		in the input column]
+	"""[Do random forest imputation using Iterative Imputer. Iterative imputer iterates over all the other features (columns) and uses each one as a target variable, thereby informing missingness in the input column]
 
 	Args:
 		snpslist ([list(list)]): [012-encoded genotypes from GenotypeData]
@@ -221,15 +220,9 @@ def rf_imputer(snpslist, settings):
 		[numpy array]: [2-D numpy array with imputed genotypes]
 	"""
 
-	print("\nDoing random forest imputation with {} processors and {} nearest features...".format(settings["n_jobs"], settings["n_nearest_features"]))
+	print("\nDoing random forest imputation with {} processors, {} estimators, and {} nearest features...".format(settings["n_jobs"], settings["rf_n_estimators"], settings["n_nearest_features"]))
 
-	df = pd.DataFrame.from_records(snpslist)
-
-	# Replace missing data with NaN
-	df.replace(-9, np.nan, inplace=True)
-
-	for col in df:
-		df[col] = df[col].astype("Int8")
+	df = format_features(snpslist)
 
 	# Create iterative imputer
 	imputed = IterativeImputer(
@@ -273,13 +266,7 @@ def gb_imputer(snpslist, settings):
 
 	print("\nDoing gradient boosting imputation with {} estimators and {} nearest features...".format(settings["gb_n_estimators"], settings["n_nearest_features"]))
 
-	df = pd.DataFrame.from_records(snpslist)
-
-	# Replace missing data with NaN
-	df.replace(-9, np.nan, inplace=True)
-
-	for col in df:
-		df[col] = df[col].astype("Int8")
+	df = format_features(snpslist)
 
 	# Create iterative imputer
 	imputed = IterativeImputer(
@@ -298,6 +285,74 @@ def gb_imputer(snpslist, settings):
 						validation_fraction=settings["gb_validation_fraction"],
 						n_iter_no_change=settings["gb_n_iter_no_change"],
 						tol=settings["gb_tol"]
+					),
+		initial_strategy=settings["initial_strategy"],
+		max_iter=settings["max_iter"], 
+		random_state = settings["random_state"], 
+		tol=settings["tol"], 
+		n_nearest_features=settings["n_nearest_features"], 
+		imputation_order=settings["imputation_order"],
+		verbose=settings["verbose"]
+	)
+
+	arr = imputed.fit_transform(df)
+
+	new_arr = arr.astype(dtype=np.int)
+
+	return new_arr
+
+@misc.timer
+def bayesianridge_imputer(snpslist, settings):
+		print("\nDoing bayesian ridge imputation with {} iterations and {} nearest features...".format(settings["br_n_iter"], settings["n_nearest_features"]))
+
+	df = format_features(snpslist)
+
+	# Create iterative imputer
+	imputed = IterativeImputer(
+		estimator=BayesianRidge(
+							n_iter=settings["br_n_iter"],
+							tol=settings["br_tol"],
+							alpha_1=settings["br_alpha_1"],
+							alpha_2=settings["br_alpha_2"],
+							lambda_1=settings["br_lambda_1"],
+							lambda_2=settings["br_lambda_2"],
+							alpha_init=settings["br_alpha_init"],
+							lambda_init=settings["br_lambda_init"],
+							verbose=settings["br_verbose"]
+					),
+		initial_strategy=settings["initial_strategy"],
+		max_iter=settings["max_iter"], 
+		random_state = settings["random_state"], 
+		tol=settings["tol"], 
+		n_nearest_features=settings["n_nearest_features"], 
+		imputation_order=settings["imputation_order"],
+		verbose=settings["verbose"],
+		sample_posterior=settings["br_sample_posterior"]
+	)
+
+	arr = imputed.fit_transform(df)
+
+	new_arr = arr.astype(dtype=np.int)
+
+	return new_arr
+
+@misc.timer
+def knn_iterative_imputer(snpslist, settings):
+		print("\nDoing K-nearest neigbor iterative imputation with {} nearest neighbors and {} nearest features...".format(settings["knn_it_n_neighbors"], settings["n_nearest_features"]))
+
+	df = format_features(snpslist)
+
+	# Create iterative imputer
+	imputed = IterativeImputer(
+		estimator=KNeighborsClassifier(
+							n_neighbors=settings["knn_it_n_neighbors"],
+							weights=settings["knn_it_weights"],
+							algorithm=settings["knn_it_algorithm"],
+							leaf_size=settings["knn_it_leaf_size"],
+							p=settings["knn_it_power"],
+							metric=settings["knn_it_metric"],
+							metric_params=settings["knn_it_metric_params"],
+							n_jobs=settings["knn_it_n_jobs"],
 					),
 		initial_strategy=settings["initial_strategy"],
 		max_iter=settings["max_iter"], 
@@ -440,3 +495,26 @@ def get_allele_probs(genotypes, diploid=True, missing=-9, indices=None):
 
 def impute_common(data, pops=None):
 	pass
+
+def format_features(featurelist, missing_val=-9):
+	"""[Format a 2D list for input into iterative imputer]
+
+	Args:
+		featurelist ([list(list)]): [2D list of features with shape(n_samples, n_features)]
+		missing_val (int, optional): [Missing value to replace with numpy.nan]. Defaults to -9.
+
+	Returns:
+		[pandas.DataFrame]: [Formatted pandas.DataFrame for input into IterativeImputer]
+	"""
+	# Make pandas.DataFrame from 2D list
+	df = pd.DataFrame.from_records(featurelist)
+
+	# Replace missing data with NaN
+	df.replace(missingval, np.nan, inplace=True)
+
+	# Cast features as 8-bit integers
+	for col in df:
+		df[col] = df[col].astype("Int8")
+
+	return df
+
