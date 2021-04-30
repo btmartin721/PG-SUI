@@ -12,7 +12,7 @@ if sys.version_info < (3, 6):
 	raise ImportError("Python < 3.6 is not supported!")
 
 # Custom module imports
-from dim_reduction.pca import DimReduction
+from delimitation_methods.delimitation_model import DelimModel
 from read_input.read_input import GenotypeData
 import read_input.impute as impute
 
@@ -73,34 +73,20 @@ def main():
 
 		data.write_imputed(data.imputed_gb_df, args.prefix)
 	
-	clusters = DimReduction(data.imputed_rf_df, data.populations, algorithms="standard-pca")
+	n_components_frac = 0.8 * data.indcount
+	n_components_frac = int(n_components_frac)
 
-	clusters.plot_pca(args.prefix, 1, 2, alpha=0.5, legend_loc = "upper right")
-	#print(clusters.pca_coords)
-	#print(clusters.pca_model)
+	dimred_settings = {
+		"n_components": n_components_frac
+	}
 
-	#print(data.imputed_rf_df.dtypes)
-	#print(data.imputed_rf_df)
+	clusters = DelimModel(data.imputed_rf_df, data.populations, args.prefix)
+
+	clusters.dim_reduction(dim_red_algorithms="standard-pca", pca_settings=dimred_settings, plot_pca_scatter=True)
+
+	#clusters.plot_pca(args.prefix, 1, 2, alpha=0.5, legend_loc = "upper right")
+
 	#data.write_imputed(data.imputed_rf_df, args.prefix)
-
-	#print(data.imputed_rf_df)
-
-	#print(data.imputed_knn_df)
-	#print(data.imputed_freq_global_df)
-	#print(data.imputed_freq_pop_df)
-	
-
-	#pca_settings = {"n_components": data.indcount, "copy": True, "scaler": "patterson", "ploidy": 2}
-
-	#pca = DimReduction(data=data.genotypes, algorithms="standard-pca", settings=pca_settings)
-
-	#print(data.genotypes_list)
-	#data.convert_onehot()
-	#data.convert_df()
-
-	#print(data.individuals)
-	#print(data.populations)
-	#data.impute_missing()
 
 
 def get_arguments():
