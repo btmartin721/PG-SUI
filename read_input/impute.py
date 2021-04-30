@@ -225,11 +225,6 @@ def rf_imputer(snpslist, settings):
 
 	df = pd.DataFrame.from_records(snpslist)
 
-	# Cast all the integers as strings for
-	# categorical RandomForestClassifier
-	# for col in df:
-	# 	df[col] = df[col].astype(str)
-
 	# Replace missing data with NaN
 	df.replace(-9, np.nan, inplace=True)
 
@@ -279,11 +274,6 @@ def gb_imputer(snpslist, settings):
 	print("\nDoing gradient boosting imputation with {} estimators and {} nearest features...".format(settings["gb_n_estimators"], settings["n_nearest_features"]))
 
 	df = pd.DataFrame.from_records(snpslist)
-
-	# Cast all the integers as strings for
-	# categorical RandomForestClassifier
-	# for col in df:
-	# 	df[col] = df[col].astype(str)
 
 	# Replace missing data with NaN
 	df.replace(-9, np.nan, inplace=True)
