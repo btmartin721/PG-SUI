@@ -217,10 +217,30 @@ def rf_imputer(snpslist, settings):
 		settings ([dict]): [Keys as setting arguments, values as setting values]
 
 	Returns:
-		[numpy array]: [2-D numpy array with imputed genotypes]
+		[numpy.ndarray]: [2-D numpy array with imputed genotypes]
 	"""
-
-	print("\nDoing random forest imputation with {} processors, {} estimators, and {} nearest features...".format(settings["n_jobs"], settings["rf_n_estimators"], settings["n_nearest_features"]))
+	print("\nDoing random forest imputation...\n")
+	print(
+			"""
+			Random Forest Classifier Settings:
+				rf_n_estimators: """+str(settings["rf_n_estimators"])+"""
+				rf_min_samples_leaf: """+str(settings["rf_min_samples_leaf"])+"""
+				rf_n_jobs: """+str(settings["rf_n_jobs"])+"""
+				rf_max_features: """+str(settings["rf_max_features"])+"""
+				rf_criterion: """+str(settings["rf_criterion"])+"""
+				rf_random_state: """+str(settings["rf_random_state"])+"""
+				rf_verbose: """+str(settings["rf_verbose"])+"""
+			
+			Iterative Imputer Settings:
+				initial strategy: """+str(settings["initial_strategy"])+"""
+				max_iter: """+str(settings["max_iter"])+""" 
+				random_state: """+str(settings["random_state"])+""" 
+				tol: """+str(settings["tol"])+"""
+				n_nearest_features: """+str(settings["n_nearest_features"])+"""
+				imputation_order: """+str(settings["imputation_order"])+"""
+				verbose: """+str(settings["verbose"])+"""
+			"""
+	)
 
 	df = format_features(snpslist)
 
@@ -247,6 +267,8 @@ def rf_imputer(snpslist, settings):
 
 	new_arr = arr.astype(dtype=np.int)
 
+	print("\nDone!")
+
 	return new_arr
 
 @misc.timer
@@ -261,10 +283,37 @@ def gb_imputer(snpslist, settings):
 		settings ([dict]): [Keys as setting arguments, values as setting values]
 
 	Returns:
-		[numpy array]: [2-D numpy array with imputed genotypes]
+		[numpy.ndarray]: [2-D numpy array with imputed genotypes]
 	"""
-
-	print("\nDoing gradient boosting imputation with {} estimators and {} nearest features...".format(settings["gb_n_estimators"], settings["n_nearest_features"]))
+	print("\nDoing gradient boosting iterative imputation...\n")
+	print(
+			"""
+			Gradient Boosting Classifier Settings:
+				gb_n_estimators: """+str(settings["gb_n_estimators"])+"""
+				gb_min_samples_leaf: """+str(settings["gb_min_samples_leaf"])+"""
+				gb_learning_rate: """+str(settings["gb_learning_rate"])+"""
+				gb_max_features: """+str(settings["gb_max_features"])+"""
+				gb_criterion: """+str(settings["gb_criterion"])+"""
+				gb_subsample: """+str(settings["gb_subsample"])+"""
+				gb_loss: """+str(settings["gb_loss"])+"""
+				gb_min_samples_split: """+str(settings["gb_min_samples_split"])+"""
+				gb_max_depth: """+str(settings["gb_max_depth"])+"""
+				gb_validation_fraction: """+str(settings["gb_validation_fraction"])+"""
+				gb_n_iter_no_change: """+str(settings["gb_n_iter_no_change"])+"""
+				gb_tol: """+str(settings["gb_tol"])+"""
+				gb_random_state: """+str(settings["gb_random_state"])+"""
+				gb_verbose: """+str(settings["gb_verbose"])+"""
+			
+			Iterative Imputer Settings:
+				initial strategy: """+str(settings["initial_strategy"])+"""
+				max_iter: """+str(settings["max_iter"])+""" 
+				random_state: """+str(settings["random_state"])+""" 
+				tol: """+str(settings["tol"])+"""
+				n_nearest_features: """+str(settings["n_nearest_features"])+"""
+				imputation_order: """+str(settings["imputation_order"])+"""
+				verbose: """+str(settings["verbose"])+"""
+			"""
+	)
 
 	df = format_features(snpslist)
 
@@ -299,11 +348,48 @@ def gb_imputer(snpslist, settings):
 
 	new_arr = arr.astype(dtype=np.int)
 
+	print("\nDone!")
+
 	return new_arr
 
 @misc.timer
 def bayesianridge_imputer(snpslist, settings):
-	print("\nDoing bayesian ridge imputation with {} iterations and {} nearest features...".format(settings["br_n_iter"], settings["n_nearest_features"]))
+	"""[Do bayesian ridge imputation using Iterative Imputer.
+	Iterative imputer iterates over all the other features (columns)
+	and uses each one as a target variable, thereby informing missingness
+	in the input column]
+
+	Args:
+		snpslist ([list(list)]): [012-encoded genotypes from GenotypeData]
+		settings ([dict]): [Keys as setting arguments, values as setting values]
+
+	Returns:
+		[numpy.ndarray]: [2-D numpy array with imputed genotypes]
+	"""
+	print("\nDoing bayesian ridge iterative imputation...\n")
+	print(
+			"""
+			Bayesian Ridge Regression Settings:
+				br_n_iter: """+str(settings["br_n_iter"])+"""
+				br_tol: """+str(settings["br_tol"])+"""
+				br_alpha_1: """+str(settings["br_alpha_1"])+"""
+				br_alpha_2: """+str(settings["br_alpha_2"])+"""
+				br_lambda_1: """+str(settings["br_lambda_1"])+"""
+				br_lambda_2: """+str(settings["br_lambda_2"])+"""
+				br_alpha_init: """+str(settings["br_alpha_init"])+"""
+				br_lambda_init: """+str(settings["br_lambda_init"])+"""
+				br_verbose: """+str(settings["br_verbose"])+"""
+
+			Iterative Imputer Settings:
+				initial strategy: """+str(settings["initial_strategy"])+"""
+				max_iter: """+str(settings["max_iter"])+""" 
+				random_state: """+str(settings["random_state"])+""" 
+				tol: """+str(settings["tol"])+"""
+				n_nearest_features: """+str(settings["n_nearest_features"])+"""
+				imputation_order: """+str(settings["imputation_order"])+"""
+				verbose: """+str(settings["verbose"])+"""
+			"""
+	)
 
 	df = format_features(snpslist)
 
@@ -334,11 +420,47 @@ def bayesianridge_imputer(snpslist, settings):
 
 	new_arr = arr.astype(dtype=np.int)
 
+	print("\nDone!")
+
 	return new_arr
 
 @misc.timer
 def knn_iterative_imputer(snpslist, settings):
-	print("\nDoing K-nearest neigbor iterative imputation with {} nearest neighbors and {} nearest features...".format(settings["knn_it_n_neighbors"], settings["n_nearest_features"]))
+	"""[Do K-nearest neighbors imputation using Iterative Imputer.
+	Iterative imputer iterates over all the other features (columns)
+	and uses each one as a target variable, thereby informing missingness
+	in the input column]
+
+	Args:
+		snpslist ([list(list)]): [012-encoded genotypes from GenotypeData]
+		settings ([dict]): [Keys as setting arguments, values as setting values]
+
+	Returns:
+		[numpy.ndarray]: [2-D numpy array with imputed genotypes]
+	"""
+	print("\nDoing K-nearest neighbor iterative imputation...\n")
+	print(
+			"""
+			K Neighbors Classifier Settings:
+				knn_it_n_neighbors: """+str(settings["knn_it_n_neighbors"])+"""
+				knn_it_weights: """+str(settings["knn_it_weights"])+"""
+				knn_it_algorithm: """+str(settings["knn_it_algorithm"])+"""
+				knn_it_leaf_size: """+str(settings["knn_it_leaf_size"])+"""
+				knn_it_power: """+str(settings["knn_it_power"])+"""
+				knn_it_metric: """+str(settings["knn_it_metric"])+"""
+				knn_it_metric_params: """+str(settings["knn_it_metric_params"])+"""
+				n_jobs: """+str(settings["knn_it_n_jobs"])+"""
+
+			Iterative Imputer Settings:
+				initial strategy: """+str(settings["initial_strategy"])+"""
+				max_iter: """+str(settings["max_iter"])+""" 
+				random_state: """+str(settings["random_state"])+""" 
+				tol: """+str(settings["tol"])+"""
+				n_nearest_features: """+str(settings["n_nearest_features"])+"""
+				imputation_order: """+str(settings["imputation_order"])+"""
+				verbose: """+str(settings["verbose"])+"""
+				"""
+	)
 
 	df = format_features(snpslist)
 
@@ -367,6 +489,8 @@ def knn_iterative_imputer(snpslist, settings):
 
 	new_arr = arr.astype(dtype=np.int)
 
+	print("\nDone!")
+
 	return new_arr
 
 def impute_freq(data, pops=None, diploid=True, default=0, missing=-9):
@@ -374,14 +498,18 @@ def impute_freq(data, pops=None, diploid=True, default=0, missing=-9):
 	
 	Args:
 		data ([list(list)]): [List containing list of genotypes in integer format]
+
 		pop ([list], optional): [List of population assignments. Default is None
 			When pop=None, allele frequencies are computed globally]
+
 		diploid ([Boolean] optional): [When TRUE, function assumes 0=homozygous ref; 1=heterozygous; 2=homozygous alt
 			When diploid=FALSE, 0,1, and 2 are sampled according to their observed frequency
 			When dipoid=TRUE, 0-1-2 genotypes are decomposed to compute p (=frequency of ref) and q (=frequency of alt)
 				In this case, p and q alleles are sampled to generate either 0 (hom-p), 1 (het), or 2 (hom-q) genotypes]
+
 		default ([int, optional]): [Value to set if no alleles sampled at locus]. Default = 0
 		missing ([int, optional]): [missing data value]. Default = -9
+
 	Returns:
 		[list(list)]: [Imputed genotypes of same dimensions as data]
 	"""
