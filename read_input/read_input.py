@@ -346,7 +346,25 @@ class GenotypeData:
 				self.pops.append(my_popmap[sample])
 
 	def impute_missing(self, impute_methods=None, impute_settings=None, pops=None, maxk=None, np=1):
+		"""[Imputes missing data for 012-encoded genotypes. Multiple imputation methods are supported. Some or all of them can be run by setting the impute_methods argument. Settings can be altered with the impute_settings argument]
 
+		Args:
+			impute_methods ([list or str], optional): [Imputation methods to run. If multiple, argument should be a list]. Defaults to None.
+
+			impute_settings ([dict], optional): [Dictionary with imputation settings as keys and the corresponding values. If impute_settings=None the default settings are used]. Defaults to None.
+
+			pops ([list], optional): [List of population IDs retrieved from this GenotypeData object]. Defaults to None.
+
+			maxk ([int], optional): [Maximum K (n_neighbors) to use for the K-nearest neighbors algorithm with K-optimization. If this is set, K-NN with optimization is toggled on. If maxk=None K-NN will run without K optimization]. Defaults to None.
+
+			np (int, optional): [Number of processors to use for K-NN optimization]. Defaults to 1.
+
+		Raises:
+			TypeError: [description]
+			ValueError: [description]
+			ValueError: [description]
+			ValueError: [description]
+		"""
 		self.impute_methods = impute_methods
 
 		supported_settings = ["n_neighbors", 

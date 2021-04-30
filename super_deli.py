@@ -73,18 +73,25 @@ def main():
 	else:	
 		data.impute_missing(impute_methods="br", impute_settings=br_imputation_settings)
 
-		data.write_imputed(data.imputed_gb_df, args.prefix)
+		data.write_imputed(data.imputed_br_df, args.prefix)
 	
 	n_components_frac = 0.8 * data.indcount
 	n_components_frac = int(n_components_frac)
 
-	dimred_settings = {
+	pca_settings = {
 		"n_components": n_components_frac
+	}
+
+	mds_settings = {
+		"n_init": 1000,
+		"max_iter": 10000,
+		"n_jobs": 4,
+		"eps": 1e-6
 	}
 
 	clusters = DelimModel(data.imputed_rf_df, data.populations, args.prefix)
 
-	clusters.dim_reduction(dim_red_algorithms=["standard-pca", "cmds", "isomds"], pca_settings=dimred_settings, plot_pca_scatter=True, plot_cmds_scatter=True, plot_isomds_scatter=True)
+	clusters.dim_reduction(dim_red_algorithms=["standard-pca", "cmds", "isomds"], pca_settings=pca_settings, mds_settings=mds_settings, plot_pca_scatter=True, plot_cmds_scatter=True, plot_isomds_scatter=True)
 
 def get_arguments():
 	"""[Parse command-line arguments. Imported with argparse]

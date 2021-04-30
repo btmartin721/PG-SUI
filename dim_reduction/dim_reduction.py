@@ -48,17 +48,43 @@ class DimReduction:
 		Args:
 			all_settings ([dict]): [Dictionary with option names as keys and the settings as values]
 		"""
-		print("\nDoing PCA with {} principal components...".format(pca_arguments["n_components"]))
-
+		print("\nDoing PCA...\n")
+		print(
+				"""
+				PCA Settings:
+				n_components: """+str(pca_arguments["n_components"])+"""
+				scaler: """+str(pca_arguments["scaler"])+"""
+				ploidy: """+str(pca_arguments["ploidy"])+"""
+				"""
+		)
 
 		gn = np.array(self.data).transpose()
 
-		self.pca_coords, self.pca_model = allel.pca(gn, n_components=pca_arguments["n_components"], copy=pca_arguments["copy"], scaler=pca_arguments["scaler"], ploidy=pca_arguments["ploidy"])
+		self.pca_coords, self.pca_model = allel.pca(gn, n_components=pca_arguments["n_components"], scaler=pca_arguments["scaler"], ploidy=pca_arguments["ploidy"])
 
-		print("Done!")
+		print("\nDone!")
 
 	def do_mds(self, mds_arguments, metric=True):
 		
+		if metric:
+			print("\nDoing cMDS dimensionality reduction...\n")
+		else:
+			print("\nDoing isoMDS dimensionality reduction...\n")
+			
+		print(
+				"""
+				MDS Settings:
+				n_dims: """+str(mds_arguments["n_dims"])+"""
+				n_init: """+str(mds_arguments["n_init"])+"""
+				max_iter: """+str(mds_arguments["max_iter"])+"""
+				eps: """+str(mds_arguments["eps"])+"""
+				n_jobs: """+str(mds_arguments["n_jobs"])+"""
+				dissimilarity: """+str(mds_arguments["dissimilarity"])+"""
+				random_state: """+str(mds_arguments["random_state"])+"""
+				verbose: """+str(mds_arguments["verbose"])+"""
+				"""
+		)
+
 		scaler = MinMaxScaler()
 		df_X_scaled = scaler.fit_transform(self.data)
 
@@ -79,6 +105,8 @@ class DimReduction:
 
 		else:
 			self.isomds_model = mds.fit_transform(df_X_scaled)
+
+		print("\nDone!")
 
 	def plot_dimred(self, prefix, pca=False, cmds=False, isomds=False, axis1=1, axis2=2, figwidth=6, figheight=6, alpha=1.0, colors=None, palette="Set1", legend=True, legend_inside=False, legend_loc="upper left", marker='o', markersize=6, markeredgecolor='k', markeredgewidth=0.5, labelspacing=0.5, columnspacing=2.0, title=None, title_fontsize=None, markerfirst=True, markerscale=1.0, ncol=1, bbox_to_anchor=(1.0, 1.0), borderaxespad=0.5, legend_edgecolor="black", facecolor="white", framealpha=0.8, shadow=False):
 		"""[Plot PCA results as a scatterplot and save it as a PDF file]
@@ -213,6 +241,8 @@ class DimReduction:
 			plot_fn = "{}_isomds.pdf".format(prefix)
 
 		fig.savefig(plot_fn, bbox_inches="tight")
+
+		print("Done!")
 
 		if pca:
 			print("\nSaved PCA scatterplot to {}".format(plot_fn))
@@ -372,9 +402,19 @@ class DimReduction:
 
 	@property
 	def cmds_dissimilarity_matrix(self):
+		"""[Getter for cMDS dissimilarity matrix]
+
+		Returns:
+			[numpy.ndarray]: [cMDS dissimilarity matrix]
+		"""
 		return self.cmds_model.dissimilarity_matrix_
 
 	@property
 	def isomds_dissimilarity_matrix(self):
+		"""[Getter for isoMDS dissimilarity matrix]
+
+		Returns:
+			[numpy.ndarray]: [isoMDS dissimilarity matrix]
+		"""
 		return self.isomds_model.dissimilarity_matrix_
 
