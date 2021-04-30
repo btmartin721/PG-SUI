@@ -35,9 +35,19 @@ class GenotypeData:
 		self.knn_imputed_df = None
 		self.rf_imputed_arr = None
 		self.gb_imputed_arr = None
+		self.br_imputed_arr = None
+		self.knn_iter_imputed_arr = None
 		self.num_snps = 0
 		self.num_inds = 0
-		self.supported_methods = ["knn", "freq_global", "freq_pop", "rf", "gb"]
+		self.supported_methods = [
+									"knn", 
+									"freq_global", 
+									"freq_pop", 
+									"rf", 
+									"gb", 
+									"br",
+									"knn_iter"
+								]
 
 		
 		if self.filetype is not None:
@@ -369,7 +379,25 @@ class GenotypeData:
 								"gb_verbose",
 								"gb_validation_fraction",
 								"gb_n_iter_no_change",
-								"gb_tol"
+								"gb_tol",
+								"br_n_iter",
+								"br_tol",
+								"br_alpha_1",
+								"br_alpha_2",
+								"br_lambda_1",
+								"br_lambda_2",
+								"br_verbose",
+								"br_alpha_init",
+								"br_lambda_init",
+								"br_sample_posterior",
+								"knn_it_n_neighbors",
+								"knn_it_weights",
+								"knn_it_algorithm",
+								"knn_it_leaf_size",
+								"knn_it_power",
+								"knn_it_metric",
+								"knn_it_metric_params",
+								"knn_it_n_jobs"
 							]
 							
 		supported_settings_opt = ["weights", "metric", "reps"]
@@ -383,6 +411,17 @@ class GenotypeData:
 			knn_settings = {"n_neighbors": 5,
 							"weights": "uniform", 
 							"metric": "nan_euclidean"}
+
+		knn_iterative_settings = {
+							"knn_it_n_neighbors": 5,
+							"knn_it_weights": "uniform"
+							"knn_it_algorithm": "auto",
+							"knn_it_leaf_size": 30,
+							"knn_it_power": 2
+							"knn_it_metric": "minkowski",
+							"knn_it_metric_params": None,
+							"knn_it_n_jobs": 1
+		}
 
 		rf_settings = {
 							"rf_n_estimators": 100,
@@ -426,11 +465,35 @@ class GenotypeData:
 							"random_state": None
 					}
 
+		br_settings = {
+							"br_n_iter": 300,
+							"br_tol": 1e-3,
+							"br_alpha_1": 1e-6,
+							"br_alpha_2": 1e-6,
+							"br_lambda_1": 1e-6,
+							"br_lambda_2": 1e-6,
+							"br_verbose": False,
+							"br_alpha_init": None,
+							"br_lambda_init": None,
+							"br_sample_posterior": True
+					}
+
+		# bayesian ridge has a different verbose setting.
+		# Make sure user didn't specify the wrong type
+		if "br_verbose" in impute_settings.keys()
+			if impute_settings["br_verbose"] == 0:
+				impute_settings["br_verbose"] = False
+
+			elif impute_settings["br_verbose"] == 1 or impute_settings["br_verbose"] == 2:
+				impute_settings["br_verbose"] = True
+
 		# Update settings if non-default ones were specified
 		if impute_settings:
 			knn_settings.update(impute_settings)
 			rf_settings.update(impute_settings)
 			gb_settings.update(impute_settings)
+			br_settings.update(impute_settings)
+			knn_iterative_settings(impute_settings)
 		
 		# Validate impute settings
 		for method in self.impute_methods:
@@ -445,6 +508,12 @@ class GenotypeData:
 
 			elif method == "gb":
 				self._check_impute_settings(method, gb_settings, supported_settings)
+
+			elif method == "br":
+				self._check_impute_settings(method, br_settings, supported_settings)
+
+			elif method == "knn_iter":
+				self._check_impute_settings(method, knn_iterative_settings, supported_settings)
 
 		# If one string value is supplied to impute_methods
 		if isinstance(self.impute_methods, str):
@@ -507,6 +576,12 @@ class GenotypeData:
 			if self.impute_methods == "gb":
 				self.gb_imputed_arr = impute.gb_imputer(self.snps, gb_settings)
 
+			if self.impute_methods == "br":
+				self.br_imputed_arr = impute.bayesianridge_imputer(self.snps, br_settings)
+
+			if self.impute_methods == "knn_iter":
+				self.knn_iter_imputed_arr = impute.knn_iterative_imputer(self.snps, knn_iterative_settings)
+			
 
 		# If value supplied to impute_methods is a list
 		elif isinstance(self.impute_methods, list):
@@ -571,6 +646,12 @@ class GenotypeData:
 
 				elif arg == "gb":
 					self.gb_imputed_arr = impute.gb_imputer(self.snps, gb_settings)
+
+				elif arg == "br":
+					self.br_imputed_arr = impute.br_imputer(self.snps, br_settings)
+
+				elif arg == "knn_iter":
+					self.knn_iter_imputed_arr = impute.knn_iterative_imputer(self.snps, knn_iterative_settings)
 
 		# impute_methods must be either string or list			
 		else:
@@ -639,36 +720,47 @@ class GenotypeData:
 				if method == "knn":
 					self.knn_imputed_df = pd.read_csv(filename, dtype="Int8", header=None)
 					self.knn_imputed = self.knn_imputed_df.values.tolist()
+
 				elif method == "freq_global":
 					self.freq_imputed_global_df = pd.read_csv(filename, dtype="Int8", header=None)
 					self.freq_imputed_global = self.freq_imputed_global_df.values.tolist()
+
 				elif method == "freq_pop":
 					self.freq_imputed_pop_df = pd.read_csv(filename, dtype="Int8", header=None)
 					self.freq_imputed_pop = self.freq_imputed_global_df.values.tolist()
+
 				elif method == "rf":
 					rf_df = pd.read_csv(filename, dtype="Int8", header=None)
 					self.rf_imputed_arr = rf_df.to_numpy(dtype=np.int)
+
 				elif method == "gb":
 					gb_df = pd.read_csv(filename, dtype="Int8", header=None)
 					self.gb_imputed_arr = gb_df.to_numpy(dtype=np.int)
+
 				else:
 					raise ValueError("\n{} is not a supported option in impute_methods!".format(method))
+
 		elif isinstance(self.impute_methods, str):
 			if self.impute_methods == "knn":
 				self.knn_imputed_df = pd.read_csv(filename, dtype="Int8", header=None)
 				self.knn_imputed = self.knn_imputed_df.values.tolist()
+
 			elif self.impute_methods == "freq_global":
 				self.freq_imputed_global_df = pd.read_csv(filename, dtype="Int8", header=None)
 				self.freq_imputed_global = self.freq_imputed_global_df.values.tolist()
+
 			elif self.impute_methods == "freq_pop":
 				self.freq_imputed_pop_df = pd.read_csv(filename, dtype="Int8", header=None)
 				self.freq_imputed_pop = self.freq_imputed_global_df.values.tolist()
+
 			elif self.impute_methods == "rf":
 				rf_df = pd.read_csv(filename, dtype="Int8", header=None)
 				self.rf_imputed_arr = rf_df.to_numpy(dtype=np.int)
+
 			elif self.impute_methods == "gb":
 				gb_df = pd.read_csv(filename, dtype="Int8", header=None)
 				self.gb_imputed_arr = gb_df.to_numpy(dtype=np.int)
+				
 			else:
 				raise ValueError("\n{} is not a supported option in impute_methods!".format(self.impute_methods))
 
@@ -833,6 +925,22 @@ class GenotypeData:
 			[pandas.DataFrame]: [Imputed 012-encoded genotype data]
 		"""
 		return pd.DataFrame(self.gb_imputed_arr)
+
+	@property
+	def imputed_br_df(self):
+		return pd.DataFrame(self.br_imputed_arr)
+
+	@property
+	def imputed_br_np(self):
+		return self.br_imputed_arr
+
+	@property
+	def imputed_knn_iter_df(self):
+		return pd.DataFrame(self.knn_iter_imputed_arr)
+
+	@property
+	def imputed_knn_iter_np(self):
+		return self.knn_iter_imputed_arr
 		
 def merge_alleles(first, second=None):
 	"""[Merges first and second alleles in structure file]
