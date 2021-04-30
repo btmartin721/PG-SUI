@@ -10,8 +10,9 @@ import seaborn as sns
 sns.set_style("white")
 sns.set_style("ticks")
 
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import MinMaxScaler
 from sklearn.decomposition import PCA
+from sklearn.manifold import MDS
 
 class DimReduction:
 	"""[Class to perform dimensionality reduction on genotype features]
@@ -37,6 +38,8 @@ class DimReduction:
 		self.algorithms = algorithms
 		self.pca_coords = None
 		self.pca_model = None
+		self.cmds_model = None
+		self.isomds_model = None
 		self.target = None
 
 	def standard_pca(self, pca_arguments):
@@ -54,15 +57,44 @@ class DimReduction:
 
 		print("Done!")
 
-	def plot_pca(self, prefix, pc1=1, pc2=2, figwidth=6, figheight=6, alpha=1.0, colors=None, palette="Set1", legend=True, legend_inside=False, legend_loc="upper left", marker='o', markersize=6, markeredgecolor='k', markeredgewidth=0.5, labelspacing=0.5, columnspacing=2.0, title=None, title_fontsize=None, markerfirst=True, markerscale=1.0, ncol=1, bbox_to_anchor=(1.0, 1.0), borderaxespad=0.5, legend_edgecolor="black", facecolor="white", framealpha=0.8, shadow=False):
+	def do_mds(self, mds_arguments, metric=True):
+		
+		scaler = MinMaxScaler()
+		df_X_scaled = scaler.fit_transform(self.data)
+
+		mds = MDS(
+					n_components=mds_arguments["n_dims"], 
+					random_state=mds_arguments["random_state"], 
+					metric=metric,
+					n_init=mds_arguments["n_init"],
+					max_iter=mds_arguments["max_iter"],
+					verbose=mds_arguments["verbose"],
+					eps=mds_arguments["eps"],
+					n_jobs=mds_arguments["n_jobs"],
+					dissimilarity=mds_arguments["dissimilarity"]
+				)
+
+		if metric:
+			self.cmds_model = mds.fit_transform(df_X_scaled)
+
+		else:
+			self.isomds_model = mds.fit_transform(df_X_scaled)
+
+	def plot_dimred(self, prefix, pca=False, cmds=False, isomds=False, axis1=1, axis2=2, figwidth=6, figheight=6, alpha=1.0, colors=None, palette="Set1", legend=True, legend_inside=False, legend_loc="upper left", marker='o', markersize=6, markeredgecolor='k', markeredgewidth=0.5, labelspacing=0.5, columnspacing=2.0, title=None, title_fontsize=None, markerfirst=True, markerscale=1.0, ncol=1, bbox_to_anchor=(1.0, 1.0), borderaxespad=0.5, legend_edgecolor="black", facecolor="white", framealpha=0.8, shadow=False):
 		"""[Plot PCA results as a scatterplot and save it as a PDF file]
 
 		Args:
 			prefix ([str]): [Prefix for output PDF filename]
 
-			pc1 (int, optional): [First principal component axis to plot; starts at 1]. Defaults to 1.
+			pca (bool, optional): [True if plotting PCA results. Cannot be set at same time as cmds and isomds]
 
-			pc2 (int, optional): [Second principal component axis to plot; starts at 1]. Defaults to 2.
+			cmds (bool, optional): [True if plotting cmds results. Cannot be set at same time as pca and isomds]
+
+			isomds (bool, optional): [True if plotting isomds results. Cannot be set at same time as pca and cmds]
+
+			axis1 (int, optional): [First principal component axis to plot; starts at 1]. Defaults to 1.
+
+			axis2 (int, optional): [Second principal component axis to plot; starts at 1]. Defaults to 2.
 
 			figwidth (int, optional): [Set width of the plot]. Defaults to 6.
 
@@ -113,21 +145,37 @@ class DimReduction:
 			framealpha (float, optional): [The alpha transparency of the legend's background. If shadow is activated and framealpha is None, the default value is ignored]. Defaults to 0.8.
 
 			shadow (boolean, optional): [Whether to draw a shadow behind the legend]. Defaults to False.
-		"""
-		print("\nPlotting PCA results...")
-		pc1_idx = pc1 - 1
-		pc2_idx = pc2 - 1
 
-		x = self.pca_coords[:, pc1_idx]
-		y = self.pca_coords[:, pc2_idx]
+		Raises:
+			ValueError: [Only one of pca, cmds, and isomds can be set to True]
+
+		"""
+		if not pca and not cmds and not isomds:
+			raise ValueError("One of the pca, cmds, or isomds arguments must be set to True")
+
+		if (pca and cmds) or (pca and isomds) or (cmds and isomds):
+			raise ValueError("Only one of the pca, cmds, or isomds arguments can be set to True at a time")
+
+		axis1_idx = axis1 - 1
+		axis2_idx = axis2 - 1
+
+		if pca:
+			print("\nPlotting PCA results...")
+			x = self.pca_coords[:, axis1_idx]
+			y = self.pca_coords[:, axis2_idx]
+
+		if cmds:
+			print("\nPlotting cMDS results...")
+			x = self.cmds_model[:, axis1_idx]
+			y = self.cmds_model[:, axis2_idx]
+
+		if isomds:
+			print("\nPlotting isoMDS results...")
+			x = self.isomds_model[:, axis1_idx]
+			y = self.isomds_model[:, axis2_idx]
 
 		targets = list(set(self.pops))
 
-		pca_df = pd.DataFrame({
-			"pc1": x,
-			"pc2": y,
-			"pop": self.pops
-		})
 		pop_df = pd.DataFrame(self.pops, columns=["population"])
 		
 		fig = plt.figure(figsize=(figwidth, figheight))
@@ -135,34 +183,53 @@ class DimReduction:
 
 		colors = self._get_pop_colors(targets, palette, colors)
 
-		self._plot_pca_coords(self.pca_coords, self.pca_model, pc1, pc2, ax, pop_df, targets, colors, alpha, marker, markersize, markeredgecolor, markeredgewidth)
+		if pca:
+			self._plot_coords(self.pca_coords, axis1, axis2, ax, pop_df, targets, colors, alpha, marker, markersize, markeredgecolor, markeredgewidth, pca, cmds, isomds, model=self.pca_model)
+
+		elif cmds:
+			self._plot_coords(self.cmds_model, axis1, axis2, ax, pop_df, targets, colors, alpha, marker, markersize, markeredgecolor, markeredgewidth, pca, cmds, isomds)
+
+		elif isomds:
+			self._plot_coords(self.isomds_model, axis1, axis2, ax, pop_df, targets, colors, alpha, marker, markersize, markeredgecolor, markeredgewidth, pca, cmds, isomds)
 
 		if legend:
 			if legend_inside:
 				if bbox_to_anchor[0] > 1 or bbox_to_anchor > 1:
 					print("Warning: bbox_to_anchor was set grater than 1.0 (outside plot margins) but legend_inside was set to True. Setting bbox_to_anchor to (1.0, 1.0)")
+
 				ax.legend(loc=legend_loc, labelspacing=labelspacing, columnspacing=columnspacing, title=title, title_fontsize=title_fontsize, markerfirst=markerfirst, markerscale=markerscale, labelcolor=labelcolor, ncol=ncol, bbox_to_anchor=bbox_to_anchor, borderaxespad=borderaxespad, edgecolor=legend_edgecolor, facecolor=facecolor, framealpha=framealpha, shadow=shadow)
+
 			else:
 				if bbox_to_anchor[0] < 1 and bbox_to_anchor[1] < 1:
 					print("Warning: bbox_to_anchor was set less than 1.0 (inside the plot margins) but legend_inside was set to False. Setting bbox_to_anchor to (1.05, 1.0)")
+
 				ax.legend(loc=legend_loc, labelspacing=labelspacing, columnspacing=columnspacing, title=title, title_fontsize=title_fontsize, markerfirst=markerfirst, markerscale=markerscale, ncol=ncol, bbox_to_anchor=bbox_to_anchor, borderaxespad=borderaxespad, edgecolor=legend_edgecolor, facecolor=facecolor, framealpha=framealpha, shadow=shadow)
 
-		plot_fn = "{}_pca.pdf".format(prefix)
+		if pca:
+			plot_fn = "{}_pca.pdf".format(prefix)
+		elif cmds:
+			plot_fn = "{}_cmds.pdf".format(prefix)
+		elif isomds:
+			plot_fn = "{}_isomds.pdf".format(prefix)
+
 		fig.savefig(plot_fn, bbox_inches="tight")
 
-		print("Done!\nSaved PCA scatterplot to {}".format(plot_fn))
+		if pca:
+			print("\nSaved PCA scatterplot to {}".format(plot_fn))
+		elif cmds:
+			print("\nSaved cMDS scatterplot to {}".format(plot_fn))
+		elif isomds:
+			print("\nSaved isoMDS scatterplot to {}".format(plot_fn))
 		
-	def _plot_pca_coords(self, coords, model, pc1, pc2, ax, populations, unique_populations, pop_colors, alpha, marker, markersize, markeredgecolor, markeredgewidth):
+	def _plot_coords(self, coords, axis1, axis2, ax, populations, unique_populations, pop_colors, alpha, marker, markersize, markeredgecolor, markeredgewidth, pca, cmds, isomds, model=None):
 		"""[Map colors to populations and make the scatterplot]
 
 		Args:
-			coords ([numpy.array]): [pca_coords object returned from scikit-allel PCA]
+			coords ([numpy.array]): [pca_coords object returned from scikit-allel PCA or cmds_model or isomds_model objects stored in do_mds()]
 
-			model ([scikit-allel object]): [Second object returned from scikit-allel PCA]
+			axis1 ([int]): [First axis to plot. Starts at 1]
 
-			pc1 ([int]): [First principal component axis to plot. Starts at 1]
-
-			pc2 ([int]): [Second principal component axis to plot. Starts at 1]
+			axis2 ([int]): [Second axis to plot. Starts at 1]
 
 			ax ([matplotlib object]): [ax object from matplotlib]
 
@@ -181,15 +248,29 @@ class DimReduction:
 			markeredgecolor ([str]): [Set the color of the marker edge]. See matplotlib.pyplot.plot documentation.
 
 			markeredgewidth ([float]): [Set the width of the marker edge].
+
+			pca ([bool]): [True if doing PCA. False if doing cmds or isomds]
+
+			cmds ([bool]): [True if doing cmds. False if doing pca or isomds]
+
+			isomds ([bool]): [True if doing isomds. False if doing pca or cmds]
+
+			model (scikit-allel object, optional): [Second object returned from scikit-allel PCA. Set model=None if doing cmds or isomds]
+
+		Raises:
+			ValueError: [Make sure model argument is set if pca is True]
+			ValueError: [Make sure one of pca, cmds, or isomds is True]
 		"""
+		if pca and not model:
+			raise ValueError("The model argument must be set if pca is True")
 
 		sns.despine(ax=ax, offset=5)
 
-		pc1_idx = pc1 - 1
-		pc2_idx = pc2 - 1
+		axis1_idx = axis1 - 1
+		axis2_idx = axis2 - 1
 
-		x = coords[:, pc1_idx]
-		y = coords[:, pc2_idx]
+		x = coords[:, axis1_idx]
+		y = coords[:, axis2_idx]
 
 		for pop in unique_populations:
 			flt = (populations.population == pop)
@@ -206,9 +287,21 @@ class DimReduction:
 						alpha=alpha
 					)
 
-		ax.set_xlabel('PC%s (%.1f%%)' % (pc1, model.explained_variance_ratio_[pc1_idx]*100))
+		if pca:
+			ax.set_xlabel('PC%s (%.1f%%)' % (axis1, model.explained_variance_ratio_[axis1_idx]*100))
 
-		ax.set_ylabel('PC%s (%.1f%%)' % (pc2, model.explained_variance_ratio_[pc2_idx]*100))
+			ax.set_ylabel('PC%s (%.1f%%)' % (axis2, model.explained_variance_ratio_[axis2_idx]*100))
+
+		elif cmds:
+			ax.set_xlabel("cMDS Axis {}".format(axis1))
+			ax.set_ylabel("cMDS Axis {}".format(axis2))
+
+		elif isomds:
+			ax.set_xlabel("isoMDS Axis {}".format(axis1))
+			ax.set_ylabel("isoMDS Axis {}".format(axis2))
+
+		else:
+			raise ValueError("Either pca, cmds, or isomds must be set to True")
 
 	def _get_pop_colors(self, uniq_pops, palette, colors):
 		"""[Get population color codes if colors=None]
@@ -276,4 +369,12 @@ class DimReduction:
 			[numpy.ndarray]: [Explained variance ratio, shape(n_components,)]
 		"""
 		return self.pca_model.explained_variance_ratio_
+
+	@property
+	def cmds_dissimilarity_matrix(self):
+		return self.cmds_model.dissimilarity_matrix_
+
+	@property
+	def isomds_dissimilarity_matrix(self):
+		return self.isomds_model.dissimilarity_matrix_
 

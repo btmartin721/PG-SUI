@@ -31,22 +31,31 @@ class DelimModel:
 		self.prefix = prefix
 		self.gt_df = None
 		self.pca_settings = None
+		self.mds_settings = None
 		self.dim_red_algorithms = None
 		self.colors = None
 		self.palette = None
 
 		# Model results
 		self.pca = None
+		self.cmds = None
+		self.isomds = None
 
-	def dim_reduction(self, dim_red_algorithms, pca_settings=None, plot_pca_scatter=False, colors=None, palette="Set1"):
+	def dim_reduction(self, dim_red_algorithms, pca_settings=None, mds_settings=None, plot_pca_scatter=False, plot_cmds_scatter=False, plot_isomds_scatter=False, colors=None, palette="Set1"):
 		"""[Perform dimensionality reduction using the algorithms in the dim_red_algorithms list]
 
 		Args:
 			dim_red_algorithms ([list]): [Dimensionality reduction algorithms to perform]
 
-			pca_settings ([dict], optional): [Dictionary with PCA settings at keys and the corresponding values. If pca_settings=None it will use all default arguments]. Defaults to None.
+			pca_settings ([dict], optional): [Dictionary with PCA settings as keys and the corresponding values. If pca_settings=None it will use all default arguments (scikit-allel and matplotlib documentation)]. Defaults to None.
+
+			mds_settings ([dict], optional): [Dictionary with MDS settings as keys and the correpsonding values. If mds_settings=None it will use all default arguments (see sklearn.manifold and matplotlib documentation)]
 
 			plot_pca_scatter (bool, optional): [If True, PCA results will be plotted as a scatterplot]. Defaults to False.
+
+			plot_cmds_scatter (bool, optional): [If True, cMDS results will be plotted as a scatterplot]. Defaults to False.
+
+			plot_isomds_scatter (bool, optional): [If True, isoMDS results will be plotted as a scatterplot]. Defaults to False.
 
 			colors ([dict], optional): [Dictionary with population IDs as keys and hex-code colors as the values. If colors=None, dim_reduction will use a default color palette that can be changed with the palette argument]. Defaults to None.
 
@@ -56,11 +65,12 @@ class DelimModel:
 			ValueError: [Must be a supported argument in dim_red_algoithms]
 		"""
 		self.pca_settings = pca_settings
+		self.mds_settings = mds_settings
 		self.dim_red_algorithms = dim_red_algorithms
 		self.palette = palette
 		self.colors = colors
 
-		supported_algs = ["standard-pca"]
+		supported_algs = ["standard-pca", "cmds", "isomds"]
 
 		supported_settings = [
 								"n_components", 
@@ -92,7 +102,19 @@ class DelimModel:
 								"legend_edgecolor", 
 								"facecolor", 
 								"framealpha", 
-								"shadow"
+								"shadow",
+								"n_dims",
+								"random_state",
+								"n_init",
+								"max_iter",
+								"verbose",
+								"eps",
+								"n_jobs",
+								"dissimilarity",
+								"cmds_axis1",
+								"cmds_axis2",
+								"isomds_axis1",
+								"isomds_axis2"
 							]
 
 		pca_settings_default = 		{
@@ -128,13 +150,60 @@ class DelimModel:
 								"shadow": False
 							}
 
+		mds_settings_default = {
+								"n_dims": 2, 
+								"random_state": None, 
+								"n_init": 4,
+								"max_iter": 300,
+								"verbose": 0,
+								"eps": 1e-3,
+								"n_jobs": 1,
+								"dissimilarity": "euclidean",
+								"mds_axis1": 1,
+								"mds_axis2": 2,
+								"figwidth": 6, 
+								"figheight": 6, 
+								"alpha": 1.0, 
+								"legend": True, 
+								"legend_inside": False, 
+								"legend_loc": "upper left", 
+								"marker": 'o', 
+								"markersize": 6, 
+								"markeredgecolor": 'k', 
+								"markeredgewidth": 0.5, 
+								"labelspacing": 0.5, 
+								"columnspacing": 2.0, 
+								"title": None, 
+								"title_fontsize": None,
+								"markerfirst": True, 
+								"markerscale": 1.0, 
+								"labelcolor": "black", 
+								"ncol": 1, 
+								"bbox_to_anchor": (1.0, 1.0), 
+								"borderaxespad": 0.5, 
+								"legend_edgecolor": "black", 
+								"facecolor": "white", 
+								"framealpha": 0.8, 
+								"shadow": False,
+								"cmds_axis1": 1,
+								"cmds_axis2": 2,
+								"isomds_axis1": 1,
+								"isomds_axis2": 2
+								}
+
 		self.gt_df = self._validate_gt_type(self.gt)
 
 		# Validate that the settings keys are supported and update the default
 		# settings with user-defined settings
 		if self.pca_settings:
 			self._validate_dimred_settings(self.pca_settings, supported_settings)
+
 			pca_settings_default.update(self.pca_settings)
+
+		if self.mds_settings:
+			self._validate_dimred_settings(self.mds_settings, supported_settings)
+
+			mds_settings_default.update(self.mds_settings)
 
 		# Convert to list if user supplied a string
 		if isinstance(self.dim_red_algorithms, str):
@@ -150,11 +219,14 @@ class DelimModel:
 				dimred.standard_pca(pca_settings_default)
 				
 				if plot_pca_scatter:
-					dimred.plot_pca(
-					self.prefix, 
-					int(pca_settings_default["pc_axis1"]),
-					int(pca_settings_default["pc_axis2"]), 
-					pca_settings_default["figwidth"], 
+					dimred.plot_dimred(
+					self.prefix,
+					pca=True,
+					cmds=False,
+					isomds=False,
+					axis1=int(pca_settings_default["pc_axis1"]),
+					axis2=int(pca_settings_default["pc_axis2"]), 
+					figwidth=pca_settings_default["figwidth"], 
 					figheight=pca_settings_default["figheight"],
 					alpha=pca_settings_default["alpha"],
 					legend=pca_settings_default["legend"], 
@@ -181,8 +253,81 @@ class DelimModel:
 					palette=self.palette
 					)
 
-		print(dimred.get_pca_coords)
+			elif arg == "cmds":
+				dimred.do_mds(mds_settings_default, metric=True)
 
+				if plot_cmds_scatter:
+					dimred.plot_dimred(
+					self.prefix,
+					pca=False,
+					cmds=True,
+					isomds=False,
+					axis1=int(mds_settings_default["cmds_axis1"]),
+					axis2=int(mds_settings_default["cmds_axis2"]), 
+					figwidth=mds_settings_default["figwidth"], 
+					figheight=mds_settings_default["figheight"],
+					alpha=mds_settings_default["alpha"],
+					legend=mds_settings_default["legend"], 
+					legend_inside=mds_settings_default["legend_inside"], 
+					legend_loc=mds_settings_default["legend_loc"], 
+					marker=mds_settings_default["marker"], 
+					markersize=mds_settings_default["markersize"], 
+					markeredgecolor=mds_settings_default["markeredgecolor"], 
+					markeredgewidth=mds_settings_default["markeredgewidth"], 
+					labelspacing=mds_settings_default["labelspacing"], 
+					columnspacing=mds_settings_default["columnspacing"], 
+					title=mds_settings_default["title"], 
+					title_fontsize=mds_settings_default["title_fontsize"], 
+					markerfirst=mds_settings_default["markerfirst"], 
+					markerscale=mds_settings_default["markerscale"], 
+					ncol=mds_settings_default["ncol"], 
+					bbox_to_anchor=mds_settings_default["bbox_to_anchor"], 
+					borderaxespad=mds_settings_default["borderaxespad"], 
+					legend_edgecolor=mds_settings_default["legend_edgecolor"], 
+					facecolor=mds_settings_default["facecolor"], 
+					framealpha=mds_settings_default["framealpha"], 
+					shadow=mds_settings_default["shadow"],
+					colors=self.colors,
+					palette=self.palette
+					)
+
+			elif arg == "isomds":
+				dimred.do_mds(mds_settings_default, metric=False)
+
+				if plot_isomds_scatter:
+					dimred.plot_dimred(
+					self.prefix,
+					pca=False,
+					cmds=False,
+					isomds=True,
+					axis1=int(mds_settings_default["isomds_axis1"]),
+					axis2=int(mds_settings_default["isomds_axis2"]), 
+					figwidth=mds_settings_default["figwidth"], 
+					figheight=mds_settings_default["figheight"],
+					alpha=mds_settings_default["alpha"],
+					legend=mds_settings_default["legend"], 
+					legend_inside=mds_settings_default["legend_inside"], 
+					legend_loc=mds_settings_default["legend_loc"], 
+					marker=mds_settings_default["marker"], 
+					markersize=mds_settings_default["markersize"], 
+					markeredgecolor=mds_settings_default["markeredgecolor"], 
+					markeredgewidth=mds_settings_default["markeredgewidth"], 
+					labelspacing=mds_settings_default["labelspacing"], 
+					columnspacing=mds_settings_default["columnspacing"], 
+					title=mds_settings_default["title"], 
+					title_fontsize=mds_settings_default["title_fontsize"], 
+					markerfirst=mds_settings_default["markerfirst"], 
+					markerscale=mds_settings_default["markerscale"], 
+					ncol=mds_settings_default["ncol"], 
+					bbox_to_anchor=mds_settings_default["bbox_to_anchor"], 
+					borderaxespad=mds_settings_default["borderaxespad"], 
+					legend_edgecolor=mds_settings_default["legend_edgecolor"], 
+					facecolor=mds_settings_default["facecolor"], 
+					framealpha=mds_settings_default["framealpha"], 
+					shadow=mds_settings_default["shadow"],
+					colors=self.colors,
+					palette=self.palette
+					)
 
 	def _validate_gt_type(self, geno):
 		"""[Validate that the genotypes are of the correct type. Also converts numpy.ndarrays and list(list) into pandas.DataFrame for use with DelimModel]
