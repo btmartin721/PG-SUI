@@ -25,9 +25,12 @@ def main():
 	if args.str and args.phylip:
 		sys.exit("Error: Only one file type can be specified")
 
-	br_imputation_settings = {"br_n_iter": 500}
-	
-	# If VCF file is specified.
+	br_imputation_settings = {
+								"br_n_iter": 1000,
+								"n_nearest_features": 25
+							}
+		
+		# If VCF file is specified.
 	if args.str:
 		if not args.pop_ids and args.popmap is None:
 			sys.exit("\nError: Either --pop_ids or --popmap must be specified\n")
