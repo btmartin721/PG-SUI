@@ -75,16 +75,16 @@ def main():
 
 		data.write_imputed(data.imputed_gb_df, args.prefix)
 	
-	#n_components_frac = 0.8 * data.indcount
-	#n_components_frac = int(n_components_frac)
+	n_components_frac = 0.8 * data.indcount
+	n_components_frac = int(n_components_frac)
 
-	#dimred_settings = {
-	#	"n_components": n_components_frac
-	#}
+	dimred_settings = {
+		"n_components": n_components_frac
+	}
 
-	#clusters = DelimModel(data.imputed_rf_df, data.populations, args.prefix)
+	clusters = DelimModel(data.imputed_rf_df, data.populations, args.prefix)
 
-	#clusters.dim_reduction(dim_red_algorithms="standard-pca", pca_settings=dimred_settings, plot_pca_scatter=True)
+	clusters.dim_reduction(dim_red_algorithms=["standard-pca", "cmds", "isomds"], pca_settings=dimred_settings, plot_pca_scatter=True, plot_cmds_scatter=True, plot_isomds_scatter=True)
 
 def get_arguments():
 	"""[Parse command-line arguments. Imported with argparse]
