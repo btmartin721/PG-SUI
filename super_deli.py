@@ -25,8 +25,7 @@ def main():
 	if args.str and args.phylip:
 		sys.exit("Error: Only one file type can be specified")
 
-	imputation_settings = {"n_nearest_features": 25,
-							"max_iter": 100}
+	br_imputation_settings = {"br_n_iter": 500}
 	
 	# If VCF file is specified.
 	if args.str:
@@ -69,25 +68,20 @@ def main():
 
 
 	else:	
-		data.impute_missing(impute_methods="gb", impute_settings=imputation_settings)
+		data.impute_missing(impute_methods="br", impute_settings=br_imputation_settings)
 
 		data.write_imputed(data.imputed_gb_df, args.prefix)
 	
-	n_components_frac = 0.8 * data.indcount
-	n_components_frac = int(n_components_frac)
+	#n_components_frac = 0.8 * data.indcount
+	#n_components_frac = int(n_components_frac)
 
-	dimred_settings = {
-		"n_components": n_components_frac
-	}
+	#dimred_settings = {
+	#	"n_components": n_components_frac
+	#}
 
-	clusters = DelimModel(data.imputed_rf_df, data.populations, args.prefix)
+	#clusters = DelimModel(data.imputed_rf_df, data.populations, args.prefix)
 
-	clusters.dim_reduction(dim_red_algorithms="standard-pca", pca_settings=dimred_settings, plot_pca_scatter=True)
-
-	#clusters.plot_pca(args.prefix, 1, 2, alpha=0.5, legend_loc = "upper right")
-
-	#data.write_imputed(data.imputed_rf_df, args.prefix)
-
+	#clusters.dim_reduction(dim_red_algorithms="standard-pca", pca_settings=dimred_settings, plot_pca_scatter=True)
 
 def get_arguments():
 	"""[Parse command-line arguments. Imported with argparse]
