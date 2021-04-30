@@ -414,13 +414,21 @@ class GenotypeData:
 
 		knn_iterative_settings = {
 							"knn_it_n_neighbors": 5,
-							"knn_it_weights": "uniform"
+							"knn_it_weights": "uniform",
 							"knn_it_algorithm": "auto",
 							"knn_it_leaf_size": 30,
-							"knn_it_power": 2
+							"knn_it_power": 2,
 							"knn_it_metric": "minkowski",
 							"knn_it_metric_params": None,
-							"knn_it_n_jobs": 1
+							"knn_it_n_jobs": 1,
+							"max_iter": 10,
+							"tol": 1e-3,
+							"n_nearest_features": None,
+							"initial_strategy": "most_frequent",
+							"imputation_order": "ascending",
+							"skip_complete": False,
+							"random_state": None,
+							"verbose": 0
 		}
 
 		rf_settings = {
@@ -475,12 +483,20 @@ class GenotypeData:
 							"br_verbose": False,
 							"br_alpha_init": None,
 							"br_lambda_init": None,
-							"br_sample_posterior": True
+							"br_sample_posterior": True,
+							"max_iter": 10,
+							"tol": 1e-3,
+							"n_nearest_features": None,
+							"initial_strategy": "most_frequent",
+							"imputation_order": "ascending",
+							"skip_complete": False,
+							"random_state": None,
+							"verbose": 0
 					}
 
 		# bayesian ridge has a different verbose setting.
 		# Make sure user didn't specify the wrong type
-		if "br_verbose" in impute_settings.keys()
+		if "br_verbose" in impute_settings.keys():
 			if impute_settings["br_verbose"] == 0:
 				impute_settings["br_verbose"] = False
 
@@ -493,7 +509,7 @@ class GenotypeData:
 			rf_settings.update(impute_settings)
 			gb_settings.update(impute_settings)
 			br_settings.update(impute_settings)
-			knn_iterative_settings(impute_settings)
+			knn_iterative_settings.update(impute_settings)
 		
 		# Validate impute settings
 		for method in self.impute_methods:
