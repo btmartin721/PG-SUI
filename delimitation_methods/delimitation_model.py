@@ -10,6 +10,7 @@ from sklearn.ensemble import RandomTreesEmbedding
 # Custom module imports
 from read_input.read_input import GenotypeData
 from dim_reduction.dim_reduction import DimReduction
+from utils import settings
 
 class DelimModel:
 	"""[Parent class for delimitation models]
@@ -39,7 +40,7 @@ class DelimModel:
 		self.palette = None
 
 		# Model results
-		self.rf
+		self.rf = None
 		self.pca = None
 		self.cmds = None
 		self.isomds = None
@@ -48,39 +49,11 @@ class DelimModel:
 
 		self.rf_settings = rf_settings
 
-		supported_settings = [
-			"rf_n_estimators"
-			"rf_max_depth",
-			"rf_min_samples_split",
-			"rf_min_samples_leaf",
-			"rf_min_weight_fraction_leaf",
-			"rf_max_leaf_nodes",
-			"rf_min_impurity_decrease",
-			"rf_min_impurity_split",
-			"rf_sparse_output",
-			"rf_n_jobs",
-			"rf_random_state",
-			"rf_verbose",
-			"rf_warm_start"
-		]
+		supported_settings = settings.random_forest_embed_supported()
+		rf_settings_default = settings.random_forest_embed_defaults()
 
-		rf_settings_default = {
-			"rf_n_estimators": 100,
-			"rf_max_depth": 5,
-			"rf_min_samples_split": 2,
-			"rf_min_samples_leaf": 1,
-			"rf_min_weight_fraction_leaf": 0.0,
-			"rf_max_leaf_nodes": None,
-			"rf_min_impurity_decrease": 0.0,
-			"rf_min_impurity_split": None,
-			"rf_sparse_output": True,
-			"rf_n_jobs": None,
-			"rf_random_state": None,
-			"rf_verbose": 0,
-			"rf_warm_start": False
-		}
-
-		rf_settings
+		if rf_settings:
+			rf_settings_default.update(rf_settings)
 
 	def dim_reduction(self, dim_red_algorithms, pca_settings=None, mds_settings=None, plot_pca_scatter=False, plot_cmds_scatter=False, plot_isomds_scatter=False, colors=None, palette="Set1"):
 		"""[Perform dimensionality reduction using the algorithms in the dim_red_algorithms list]
@@ -111,127 +84,13 @@ class DelimModel:
 		self.palette = palette
 		self.colors = colors
 
-		supported_algs = ["standard-pca", "cmds", "isomds"]
+		# Get default and supported settings for each method
+		supported_algs = settings.dim_reduction_supported_algorithms()
+		supported_settings = settings.dim_reduction_supported_arguments()
+		pca_settings_default = settings.pca_default_settings()
+		mds_settings_default = settings.mds_default_settings()
 
-		supported_settings = [
-								"n_components", 
-								"copy", 
-								"scaler", 
-								"ploidy",
-								"pc_axis1",
-								"pc_axis2",
-								"figwidth", 
-								"figheight", 
-								"alpha", 
-								"legend", 
-								"legend_inside", 
-								"legend_loc", 
-								"marker", 
-								"markersize", 
-								"markeredgecolor", 
-								"markeredgewidth", 
-								"labelspacing", 
-								"columnspacing", 
-								"title", 
-								"title_fontsize",
-								"markerfirst", 
-								"markerscale", 
-								"labelcolor", 
-								"ncol", 
-								"bbox_to_anchor", 
-								"borderaxespad", 
-								"legend_edgecolor", 
-								"facecolor", 
-								"framealpha", 
-								"shadow",
-								"n_dims",
-								"random_state",
-								"n_init",
-								"max_iter",
-								"verbose",
-								"eps",
-								"n_jobs",
-								"dissimilarity",
-								"cmds_axis1",
-								"cmds_axis2",
-								"isomds_axis1",
-								"isomds_axis2"
-							]
-
-		pca_settings_default = 		{
-								"n_components": 10, 
-								"copy": True, 
-								"scaler": "patterson", 
-								"ploidy": 2,
-								"pc_axis1": 1,
-								"pc_axis2": 2,
-								"figwidth": 6, 
-								"figheight": 6, 
-								"alpha": 1.0, 
-								"legend": True, 
-								"legend_inside": False, 
-								"legend_loc": "upper left", 
-								"marker": 'o', 
-								"markersize": 6, 
-								"markeredgecolor": 'k', 
-								"markeredgewidth": 0.5, 
-								"labelspacing": 0.5, 
-								"columnspacing": 2.0, 
-								"title": None, 
-								"title_fontsize": None,
-								"markerfirst": True, 
-								"markerscale": 1.0, 
-								"labelcolor": "black", 
-								"ncol": 1, 
-								"bbox_to_anchor": (1.0, 1.0), 
-								"borderaxespad": 0.5, 
-								"legend_edgecolor": "black", 
-								"facecolor": "white", 
-								"framealpha": 0.8, 
-								"shadow": False
-							}
-
-		mds_settings_default = {
-								"n_dims": 2, 
-								"random_state": None, 
-								"n_init": 4,
-								"max_iter": 300,
-								"verbose": 0,
-								"eps": 1e-3,
-								"n_jobs": 1,
-								"dissimilarity": "euclidean",
-								"mds_axis1": 1,
-								"mds_axis2": 2,
-								"figwidth": 6, 
-								"figheight": 6, 
-								"alpha": 1.0, 
-								"legend": True, 
-								"legend_inside": False, 
-								"legend_loc": "upper left", 
-								"marker": 'o', 
-								"markersize": 6, 
-								"markeredgecolor": 'k', 
-								"markeredgewidth": 0.5, 
-								"labelspacing": 0.5, 
-								"columnspacing": 2.0, 
-								"title": None, 
-								"title_fontsize": None,
-								"markerfirst": True, 
-								"markerscale": 1.0, 
-								"labelcolor": "black", 
-								"ncol": 1, 
-								"bbox_to_anchor": (1.0, 1.0), 
-								"borderaxespad": 0.5, 
-								"legend_edgecolor": "black", 
-								"facecolor": "white", 
-								"framealpha": 0.8, 
-								"shadow": False,
-								"cmds_axis1": 1,
-								"cmds_axis2": 2,
-								"isomds_axis1": 1,
-								"isomds_axis2": 2
-								}
-
+		# Make sure the genotypes are of the correct type
 		self.gt_df = self._validate_gt_type(self.gt)
 
 		# Validate that the settings keys are supported and update the default
@@ -250,6 +109,7 @@ class DelimModel:
 		if isinstance(self.dim_red_algorithms, str):
 			self.dim_red_algorithms = [self.dim_red_algorithms]
 
+		# Do dimensionality reduction
 		dimred = DimReduction(self.gt_df, self.pops, algorithms=self.dim_red_algorithms)
 
 		for arg in self.dim_red_algorithms:
@@ -259,6 +119,7 @@ class DelimModel:
 			if arg == "standard-pca":
 				dimred.standard_pca(pca_settings_default)
 				
+				# Plot PCA scatterplot
 				if plot_pca_scatter:
 					dimred.plot_dimred(
 					self.prefix,
