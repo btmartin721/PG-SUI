@@ -284,7 +284,6 @@ def dim_reduction_supported_arguments():
 		"title_fontsize",
 		"markerfirst", 
 		"markerscale", 
-		"labelcolor", 
 		"ncol", 
 		"bbox_to_anchor", 
 		"borderaxespad", 
@@ -345,7 +344,6 @@ def pca_default_settings():
 		"title_fontsize": None,
 		"markerfirst": True, 
 		"markerscale": 1.0, 
-		"labelcolor": "black", 
 		"ncol": 1, 
 		"bbox_to_anchor": (1.0, 1.0), 
 		"borderaxespad": 0.5, 
@@ -390,7 +388,6 @@ def mds_default_settings():
 	"title_fontsize": None,
 	"markerfirst": True, 
 	"markerscale": 1.0, 
-	"labelcolor": "black", 
 	"ncol": 1, 
 	"bbox_to_anchor": (1.0, 1.0), 
 	"borderaxespad": 0.5, 
@@ -405,6 +402,119 @@ def mds_default_settings():
 	}
 	
 	return mds_settings_default
+
+def dimreduction_plot_settings():
+	"""[Default settings for dimensionality reduction plots]
+
+	Returns:
+		[dict]: [Argment names as keys with their corresponding values. See matplotlib documentation]
+
+	Options:
+		axis1 (int, optional): [First principal component axis to plot; starts at 1]. Defaults to 1.
+
+		axis2 (int, optional): [Second principal component axis to plot; starts at 1]. Defaults to 2.
+
+		figwidth (int, optional): [Set width of the plot]. Defaults to 6.
+
+		figheight (int, optional): [Set height of the plot]. Defaults to 6.
+
+		alpha (float, optional): [Set transparency of sample points. Should be between 0 and 1. 0 = fully transparent, 1 = no transparency. Allows for better visualization if many points overlay one another]. Defaults to 1.0.
+
+		colors ([dict], optional): [Dictionary with unique population IDs as keys and hex color codes as values. If colors=None, a diverging color palette automatically gets applied.]. Defaults to None.
+
+		palette (str, optional): [Set the automatically generated color palette if colors=None. See matplotlib.colors documentation]. Defaults to "Set1".
+
+		legend (boolean, optional): [If True, a legend is included]. Defaults to True.
+
+		legend_inside (boolean, optional): [If True, the legend is located inside the plot]. Defaults to False.
+
+		legend_loc (str, optional): [Set the location of the legend. If some of your points get covered with the legend you can change its location]. Defaults to "upper left".
+
+		marker (str, optional): [Set the marker shape. See matplotlib.markers documentation]. Defaults to 'o' (a circle).
+
+		markersize (int, optional): [Set size of the markers]. Defaults to 6.
+
+		markeredgecolor (str, optional): [Set the color of the marker edge]. Defaults to 'k' (black). See matplotlib.pyplot.plot documentation.
+
+		markeredgewidth (float, optional): [Set the width of the marker edge]. Defaults to 0.5.
+
+		labelspacing (float, optional): [The vertical space between the legend entries, in font-size units]. Defaults to 0.5.
+
+		columnspacing (float, optional): [The spacing between columns, in font-size units]. Defaults to 2.0.
+
+		title (str or None, optional): [The legend's title]. Defaults to None.
+
+		title_fontsize (int or {'xx-small', 'x-small', 'small', 'medium', 'large', 'x-large', 'xx-large'}, optional): [The font size of the legend's title]. Defaults to None.
+
+		markerfirst (boolean, optional): [If True, legend marker is placed to the left of the legend label. If False, legend marker is placed to the right of the legend label]. Defaults to True.
+
+		markerscale (float, optional): [The relative size of legend markers compared with the originally drawn ones]. Defaults to 1.0.
+
+		ncol (int, optional): [The number of columns that the legend has]. Defaults to 1.
+
+		bbox_to_anchor (tuple(float, float) or tuple(float, float, float, float), optional): [Box that is used to position the legend in conjuction with legend_loc. If a 4-tuple bbox is given, then it specifies the bbox(x, y, width, height) that the legend is placed in]. Defaults to (1.0, 1.0).
+
+		borderaxespad (float, optional): [The pad between the axes and legend border, in font-size units]. Defaults to 0.5.
+
+		legend_edgecolor (float, optional): [The legend's background patch edge color. If "inherit", use take rcParams["axes.edgecolor"]]. Defaults to "black".
+
+		facecolor (str, optional): [The legend's background color. If "inherit", use rcParams["axes.facecolor"]]. Defaults to "white".
+
+		framealpha (float, optional): [The alpha transparency of the legend's background. If shadow is activated and framealpha is None, the default value is ignored]. Defaults to 0.8.
+
+		shadow (boolean, optional): [Whether to draw a shadow behind the legend]. Defaults to False.
+	"""
+	dimreduction_settings = {
+		"axis1": 1, 
+		"axis2": 2, 
+		"figwidth": 6, 
+		"figheight": 6, 
+		"alpha": 1.0, 
+		"colors": None, 
+		"palette": "Set1", 
+		"legend": True, 
+		"legend_inside": False, 
+		"legend_loc": "upper left", 
+		"marker": 'o', 
+		"markersize": 6, 
+		"markeredgecolor": 'k', 
+		"markeredgewidth": 0.5, 
+		"labelspacing": 0.5, 
+		"columnspacing": 2.0, 
+		"title": None, 
+		"title_fontsize": None, 
+		"markerfirst": True, 
+		"markerscale": 1.0, 
+		"ncol": 1, 
+		"bbox_to_anchor": (1.0, 1.0), 
+		"borderaxespad": 0.5, 
+		"legend_edgecolor": "black", 
+		"facecolor": "white", 
+		"framealpha": 0.8, 
+		"shadow": False
+	}
+
+	return dimreduction_settings
+
+def pca_cumvar_default_settings():
+	"""[Default settings for plotting cumulative variance of PCA]
+
+	Returns:
+		[dict]: [matplotlib.pyplot arguments as keys with the corresponding values]
+	"""
+	pca_cumvar_settings = {
+		"text_size": 14, 
+		"style": "white", 
+		"figwidth": 6, 
+		"figheight": 6, 
+		"linecolor": "blue",
+		"linewidth": 3,
+		"xintercept_width": 3, 
+		"xintercept_color": "r", 
+		"xintercept_style": "--"
+	}
+
+	return pca_cumvar_settings
 
 
 

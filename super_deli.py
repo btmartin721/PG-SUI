@@ -89,9 +89,12 @@ def main():
 		"eps": 1e-6
 	}
 
+	# See matplotlib axvline settings for options
+	pca_cumvar_settings={"text_size": 14, "style": "white", "figwidth": 6, "figheight": 6, "intercept_width": 3, "intercept_color": "r", "intercept_style": "--"}
+
 	clusters = DelimModel(data.imputed_rf_df, data.populations, args.prefix)
 
-	clusters.dim_reduction(dim_red_algorithms=["standard-pca"], pca_settings=pca_settings, mds_settings=None, plot_pca_cumvar=True, plot_cmds_scatter=True, plot_isomds_scatter=True, cumvar_text_size=14)
+	clusters.dim_reduction(dim_red_algorithms=["standard-pca"], pca_settings=pca_settings, mds_settings=None, plot_pca_scatter=True, plot_pca_cumvar=True, pca_cumvar_settings=pca_cumvar_settings, plot_cmds_scatter=True, plot_isomds_scatter=True)
 
 def get_arguments():
 	"""[Parse command-line arguments. Imported with argparse]

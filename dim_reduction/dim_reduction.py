@@ -15,6 +15,9 @@ from sklearn.preprocessing import MinMaxScaler
 from sklearn.decomposition import PCA
 from sklearn.manifold import MDS
 
+# Custom module imports
+from utils import settings
+
 class DimReduction:
 	"""[Class to perform dimensionality reduction on genotype features]
 	"""
@@ -53,9 +56,9 @@ class DimReduction:
 		print(
 				"""
 				PCA Settings:
-				n_components: """+str(pca_arguments["n_components"])+"""
-				scaler: """+str(pca_arguments["scaler"])+"""
-				ploidy: """+str(pca_arguments["ploidy"])+"""
+					n_components: """+str(pca_arguments["n_components"])+"""
+					scaler: """+str(pca_arguments["scaler"])+"""
+					ploidy: """+str(pca_arguments["ploidy"])+"""
 				"""
 		)
 
@@ -75,14 +78,14 @@ class DimReduction:
 		print(
 				"""
 				MDS Settings:
-				n_dims: """+str(mds_arguments["n_dims"])+"""
-				n_init: """+str(mds_arguments["n_init"])+"""
-				max_iter: """+str(mds_arguments["max_iter"])+"""
-				eps: """+str(mds_arguments["eps"])+"""
-				n_jobs: """+str(mds_arguments["n_jobs"])+"""
-				dissimilarity: """+str(mds_arguments["dissimilarity"])+"""
-				random_state: """+str(mds_arguments["random_state"])+"""
-				verbose: """+str(mds_arguments["verbose"])+"""
+					n_dims: """+str(mds_arguments["n_dims"])+"""
+					n_init: """+str(mds_arguments["n_init"])+"""
+					max_iter: """+str(mds_arguments["max_iter"])+"""
+					eps: """+str(mds_arguments["eps"])+"""
+					n_jobs: """+str(mds_arguments["n_jobs"])+"""
+					dissimilarity: """+str(mds_arguments["dissimilarity"])+"""
+					random_state: """+str(mds_arguments["random_state"])+"""
+					verbose: """+str(mds_arguments["verbose"])+"""
 				"""
 		)
 
@@ -109,71 +112,23 @@ class DimReduction:
 
 		print("\nDone!")
 
-	def plot_dimred(self, prefix, pca=False, cmds=False, isomds=False, axis1=1, axis2=2, figwidth=6, figheight=6, alpha=1.0, colors=None, palette="Set1", legend=True, legend_inside=False, legend_loc="upper left", marker='o', markersize=6, markeredgecolor='k', markeredgewidth=0.5, labelspacing=0.5, columnspacing=2.0, title=None, title_fontsize=None, markerfirst=True, markerscale=1.0, ncol=1, bbox_to_anchor=(1.0, 1.0), borderaxespad=0.5, legend_edgecolor="black", facecolor="white", framealpha=0.8, shadow=False):
+	def plot_dimreduction(self, prefix, pca=False, cmds=False, isomds=False, user_settings=None, colors=None, palette="Set1"):
 		"""[Plot PCA results as a scatterplot and save it as a PDF file]
 
 		Args:
 			prefix ([str]): [Prefix for output PDF filename]
 
-			pca (bool, optional): [True if plotting PCA results. Cannot be set at same time as cmds and isomds]
+			pca (bool, optional): [True if plotting PCA results. Cannot be set at same time as cmds and isomds]. Defaults to False.
 
-			cmds (bool, optional): [True if plotting cmds results. Cannot be set at same time as pca and isomds]
+			cmds (bool, optional): [True if plotting cmds results. Cannot be set at same time as pca and isomds]. Defaults to False.
 
-			isomds (bool, optional): [True if plotting isomds results. Cannot be set at same time as pca and cmds]
+			isomds (bool, optional): [True if plotting isomds results. Cannot be set at same time as pca and cmds]. Defaults to False.
 
-			axis1 (int, optional): [First principal component axis to plot; starts at 1]. Defaults to 1.
+			settings (dict, optional): [Dictionary with plot setting arguments as keys and their corresponding values. Some or all of the arguments can be set]. Defaults to None.
 
-			axis2 (int, optional): [Second principal component axis to plot; starts at 1]. Defaults to 2.
+			colors (dict, optional): [Dictionary with unique population IDs as keys and hex-code colors as values]. Defaults to None.
 
-			figwidth (int, optional): [Set width of the plot]. Defaults to 6.
-
-			figheight (int, optional): [Set height of the plot]. Defaults to 6.
-
-			alpha (float, optional): [Set transparency of sample points. Should be between 0 and 1. 0 = fully transparent, 1 = no transparency. Allows for better visualization if many points overlay one another]. Defaults to 1.0.
-
-			colors ([dict], optional): [Dictionary with unique population IDs as keys and hex color codes as values. If colors=None, a diverging color palette automatically gets applied.]. Defaults to None.
-
-			palette (str, optional): [Set the automatically generated color palette if colors=None. See matplotlib.colors documentation]. Defaults to "Set1".
-
-			legend (boolean, optional): [If True, a legend is included]. Defaults to True.
-
-			legend_inside (boolean, optional): [If True, the legend is located inside the plot]. Defaults to False.
-
-			legend_loc (str, optional): [Set the location of the legend. If some of your points get covered with the legend you can change its location]. Defaults to "upper left".
-
-			marker (str, optional): [Set the marker shape. See matplotlib.markers documentation]. Defaults to 'o' (a circle).
-
-			markersize (int, optional): [Set size of the markers]. Defaults to 6.
-
-			markeredgecolor (str, optional): [Set the color of the marker edge]. Defaults to 'k' (black). See matplotlib.pyplot.plot documentation.
-
-			markeredgewidth (float, optional): [Set the width of the marker edge]. Defaults to 0.5.
-
-			labelspacing (float, optional): [The vertical space between the legend entries, in font-size units]. Defaults to 0.5.
-
-			columnspacing (float, optional): [The spacing between columns, in font-size units]. Defaults to 2.0.
-
-			title (str or None, optional): [The legend's title]. Defaults to None.
-
-			title_fontsize (int or {'xx-small', 'x-small', 'small', 'medium', 'large', 'x-large', 'xx-large'}, optional): [The font size of the legend's title]. Defaults to None.
-
-			markerfirst (boolean, optional): [If True, legend marker is placed to the left of the legend label. If False, legend marker is placed to the right of the legend label]. Defaults to True.
-
-			markerscale (float, optional): [The relative size of legend markers compared with the originally drawn ones]. Defaults to 1.0.
-
-			ncol (int, optional): [The number of columns that the legend has]. Defaults to 1.
-
-			bbox_to_anchor (tuple(float, float) or tuple(float, float, float, float), optional): [Box that is used to position the legend in conjuction with legend_loc. If a 4-tuple bbox is given, then it specifies the bbox(x, y, width, height) that the legend is placed in]. Defaults to (1.0, 1.0).
-
-			borderaxespad (float, optional): [The pad between the axes and legend border, in font-size units]. Defaults to 0.5.
-
-			legend_edgecolor (float, optional): [The legend's background patch edge color. If "inherit", use take rcParams["axes.edgecolor"]]. Defaults to "black".
-
-			facecolor (str, optional): [The legend's background color. If "inherit", use rcParams["axes.facecolor"]]. Defaults to "white".
-
-			framealpha (float, optional): [The alpha transparency of the legend's background. If shadow is activated and framealpha is None, the default value is ignored]. Defaults to 0.8.
-
-			shadow (boolean, optional): [Whether to draw a shadow behind the legend]. Defaults to False.
+			palette (str, optional): [matplotlib.colors palette to be used if colors=None]. Defaults to 'Set1'.
 
 		Raises:
 			ValueError: [Only one of pca, cmds, and isomds can be set to True]
@@ -182,11 +137,16 @@ class DimReduction:
 		if not pca and not cmds and not isomds:
 			raise ValueError("One of the pca, cmds, or isomds arguments must be set to True")
 
-		if (pca and cmds) or (pca and isomds) or (cmds and isomds):
-			raise ValueError("Only one of the pca, cmds, or isomds arguments can be set to True at a time")
+		if (pca and cmds) or (pca and isomds) or (cmds and isomds) or (cmds and pca and isomds):
+			raise ValueError("Only one of the pca, cmds, or isomds arguments can be set to True")
 
-		axis1_idx = axis1 - 1
-		axis2_idx = axis2 - 1
+		settings_default = settings.dimreduction_plot_settings()
+
+		if user_settings:
+			settings_default.update(user_settings)
+
+		axis1_idx = settings_default["axis1"] - 1
+		axis2_idx = settings_default["axis2"] - 1
 
 		if pca:
 			print("\nPlotting PCA results...")
@@ -207,32 +167,34 @@ class DimReduction:
 
 		pop_df = pd.DataFrame(self.pops, columns=["population"])
 		
-		fig = plt.figure(figsize=(figwidth, figheight))
+		fig = plt.figure(figsize=(settings_default["figwidth"], settings_default["figheight"]))
 		ax = fig.add_subplot(1,1,1)
 
 		colors = self._get_pop_colors(targets, palette, colors)
 
 		if pca:
-			self._plot_coords(self.pca_coords, axis1, axis2, ax, pop_df, targets, colors, alpha, marker, markersize, markeredgecolor, markeredgewidth, pca, cmds, isomds, model=self.pca_model)
+			self._plot_coords(self.pca_coords, settings_default["axis1"], settings_default["axis2"], ax, pop_df, targets, colors, settings_default["alpha"], settings_default["marker"], settings_default["markersize"], settings_default["markeredgecolor"], settings_default["markeredgewidth"], pca, cmds, isomds, model=self.pca_model)
 
 		elif cmds:
-			self._plot_coords(self.cmds_model, axis1, axis2, ax, pop_df, targets, colors, alpha, marker, markersize, markeredgecolor, markeredgewidth, pca, cmds, isomds)
+			self._plot_coords(self.cmds_model, settings_default["axis1"], settings_default["axis2"], ax, pop_df, targets, colors, settings_default["alpha"], settings_default["marker"], settings_default["markersize"], settings_default["markeredgecolor"], settings_default["markeredgewidth"], pca, cmds, isomds)
 
 		elif isomds:
-			self._plot_coords(self.isomds_model, axis1, axis2, ax, pop_df, targets, colors, alpha, marker, markersize, markeredgecolor, markeredgewidth, pca, cmds, isomds)
+			self._plot_coords(self.isomds_model, settings_default["axis1"], settings_default["axis2"], ax, pop_df, targets, colors, settings_default["alpha"], settings_default["marker"], settings_default["markersize"], settings_default["markeredgecolor"], settings_default["markeredgewidth"], pca, cmds, isomds)
 
-		if legend:
-			if legend_inside:
-				if bbox_to_anchor[0] > 1 or bbox_to_anchor > 1:
+		if settings_default["legend"]:
+			if settings_default["legend_inside"]:
+				if settings_default["bbox_to_anchor"][0] > 1 or \
+					settings_default["bbox_to_anchor"] > 1:
 					print("Warning: bbox_to_anchor was set grater than 1.0 (outside plot margins) but legend_inside was set to True. Setting bbox_to_anchor to (1.0, 1.0)")
 
-				ax.legend(loc=legend_loc, labelspacing=labelspacing, columnspacing=columnspacing, title=title, title_fontsize=title_fontsize, markerfirst=markerfirst, markerscale=markerscale, labelcolor=labelcolor, ncol=ncol, bbox_to_anchor=bbox_to_anchor, borderaxespad=borderaxespad, edgecolor=legend_edgecolor, facecolor=facecolor, framealpha=framealpha, shadow=shadow)
+				ax.legend(loc=settings_default["legend_loc"], labelspacing=settings_default["labelspacing"], columnspacing=settings_default["columnspacing"], title=settings_default["title"], title_fontsize=settings_default["title_fontsize"], markerfirst=settings_default["markerfirst"], markerscale=settings_default["markerscale"], ncol=settings_default["ncol"], bbox_to_anchor=settings_default["bbox_to_anchor"], borderaxespad=settings_default["borderaxespad"], edgecolor=settings_default["legend_edgecolor"], facecolor=settings_default["facecolor"], framealpha=settings_default["framealpha"], shadow=settings_default["shadow"])
 
 			else:
-				if bbox_to_anchor[0] < 1 and bbox_to_anchor[1] < 1:
+				if settings_default["bbox_to_anchor"][0] < 1 and \
+					settings_default["bbox_to_anchor"][1] < 1:
 					print("Warning: bbox_to_anchor was set less than 1.0 (inside the plot margins) but legend_inside was set to False. Setting bbox_to_anchor to (1.05, 1.0)")
 
-				ax.legend(loc=legend_loc, labelspacing=labelspacing, columnspacing=columnspacing, title=title, title_fontsize=title_fontsize, markerfirst=markerfirst, markerscale=markerscale, ncol=ncol, bbox_to_anchor=bbox_to_anchor, borderaxespad=borderaxespad, edgecolor=legend_edgecolor, facecolor=facecolor, framealpha=framealpha, shadow=shadow)
+				ax.legend(loc=settings_default["legend_loc"], labelspacing=settings_default["labelspacing"], columnspacing=settings_default["columnspacing"], title=settings_default["title"], title_fontsize=settings_default["title_fontsize"], markerfirst=settings_default["markerfirst"], markerscale=settings_default["markerscale"], ncol=settings_default["ncol"], bbox_to_anchor=settings_default["bbox_to_anchor"], borderaxespad=settings_default["borderaxespad"], edgecolor=settings_default["legend_edgecolor"], facecolor=settings_default["facecolor"], framealpha=settings_default["framealpha"], shadow=settings_default["shadow"])
 
 		if pca:
 			plot_fn = "{}_pca.pdf".format(prefix)
@@ -252,15 +214,34 @@ class DimReduction:
 		elif isomds:
 			print("\nSaved isoMDS scatterplot to {}".format(plot_fn))
 
-	def plot_pca_cumvar(self, prefix, text_size, style="whitegrid", figwidth=6, figheight=6, xline_width=3, xline_color="r", xline_style="--"):
+	def plot_pca_cumvar(self, prefix, user_settings):
+		"""[Plot cumulative variance for principal components with xintercept line at the inflection point]
 
+		Args:
+			prefix ([str]): [Prefix for output PDF filename]
+
+			user_settings ([dict]): [Dictionary with matplotlib arguments as keys and their corresponding values. Only some or all of the settings can be changed]
+
+		Raises:
+			AttributeError: [pca_model must be defined prior to running this function]
+		"""
+		# Raise error if PCA hasn't been run yet
 		if not self.pca_model:
 			raise AttributeError("\nA PCA object has not yet been created! Please do so with DelimModel([arguments]).dim_reduction(dim_red_algorithms['standard-pca'], [other_arguments])")
 
+		# Retrieve default plot settings
+		settings_default = settings.pca_cumvar_default_settings()
+
+		# Update plot settings with user-specified settings
+		if user_settings:
+			settings_default.update(user_settings)
+
+		# Get the cumulative sum of the explained variance ratio
 		cumsum = np.cumsum(self.pca_model.explained_variance_ratio_)
 
 		# Compute first derivative with gaussian filter
 		# to get smoothed histogram
+		# Uses scipy
 		smooth = gaussian_filter1d(cumsum, 100)
 
 		# Compute second derivative
@@ -269,23 +250,31 @@ class DimReduction:
 		# Get the inflection point
 		inflection = np.where(np.diff(np.sign(smooth_d2)))[0]
 
+		# Sets plot background style
+		# Uses seaborn
+		sns.set(style=settings_default["style"])
+
 		# Plot the results
-		fig = plt.figure(figsize=(figwidth, figheight))
+		# Uses matplotlib.pyplot
+		fig = plt.figure(figsize=(settings_default["figwidth"], settings_default["figheight"]))
 		ax = fig.add_subplot(1,1,1)
 
-		sns.set(style="whitegrid")
-		ax.plot(np.cumsum(self.pca_model.explained_variance_ratio_))
+		# Plot the explained variance ratio
+		ax.plot(np.cumsum(self.pca_model.explained_variance_ratio_), color=settings_default["linecolor"], linewidth=settings_default["linewidth"])
+		
 		ax.set_xlabel("Number of Components")
 		ax.set_ylabel("Cumulative Explained Variance")
 
 		# Add text to show inflection point
-		ax.text(0.95, 0.01, "Inflection Point={}".format(inflection[0]), verticalalignment="bottom", horizontalalignment="right", transform=ax.transAxes, color="k", fontsize=text_size)
+		ax.text(0.95, 0.01, "Inflection Point={}".format(inflection[0]), verticalalignment="bottom", horizontalalignment="right", transform=ax.transAxes, color="k", fontsize=settings_default["text_size"])
 
 		# Add inflection point
-		ax.axvline(linewidth=xline_width, color=xline_color, linestyle=xline_style, x=inflection[0], ymin=0, ymax=1)
+		ax.axvline(linewidth=settings_default["xintercept_width"], color=settings_default["xintercept_color"], linestyle=settings_default["xintercept_style"], x=inflection[0], ymin=0, ymax=1)
 
+		# Add prefix to filename
 		plot_fn = "{}_pca_cumvar.pdf".format(prefix)
 
+		# Save as PDF file
 		fig.savefig(plot_fn, bbox_inches="tight")
 		
 	def _plot_coords(self, coords, axis1, axis2, ax, populations, unique_populations, pop_colors, alpha, marker, markersize, markeredgecolor, markeredgewidth, pca, cmds, isomds, model=None):

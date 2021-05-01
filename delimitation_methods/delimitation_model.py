@@ -75,7 +75,21 @@ class DelimModel:
 			warm_start=rf_settings["rf_warm_start"]
 		)
 
-	def dim_reduction(self, dim_red_algorithms, pca_settings=None, mds_settings=None, plot_pca_scatter=False, plot_pca_cumvar=False, plot_cmds_scatter=False, plot_isomds_scatter=False, colors=None, palette="Set1", cumvar_text_size=14):
+	def dim_reduction(
+		self, 
+		dim_red_algorithms, 
+		pca_settings=None, 
+		mds_settings=None, 
+		plot_pca_scatter=False, 
+		pca_scatter_settings=None, 
+		plot_pca_cumvar=False, 
+		pca_cumvar_settings=None, 
+		plot_cmds_scatter=False, 
+		cmds_scatter_settings=None, 
+		plot_isomds_scatter=False, 
+		isomds_scatter_settings=None, 
+		colors=None, 
+		palette="Set1"):
 		"""[Perform dimensionality reduction using the algorithms in the dim_red_algorithms list]
 
 		Args:
@@ -87,15 +101,21 @@ class DelimModel:
 
 			plot_pca_scatter (bool, optional): [If True, PCA results will be plotted as a scatterplot]. Defaults to False.
 
+			pca_scatter_settings (dict, optional): [Change some or all settings for the PCA scatterplot]
+
+			plot_pca_cumvar (bool, optional): [If True, creates a cumulative variance plot of the pca results and assesses the inflection point]
+
 			plot_cmds_scatter (bool, optional): [If True, cMDS results will be plotted as a scatterplot]. Defaults to False.
+
+			cmds_scatter_settings (dict, optional): [Change some or all settings for the cMDS plot]
 
 			plot_isomds_scatter (bool, optional): [If True, isoMDS results will be plotted as a scatterplot]. Defaults to False.
 
-			colors ([dict], optional): [Dictionary with population IDs as keys and hex-code colors as the values. If colors=None, dim_reduction will use a default color palette that can be changed with the palette argument]. Defaults to None.
+			isomds_scatter_settings (dict, optional): [Change some or all settings for the isoMDS scatterplot]
+
+			colors (dict, optional): [Dictionary with population IDs as keys and hex-code colors as the values. If colors=None, dim_reduction will use a default color palette that can be changed with the palette argument]. Defaults to None.
 
 			palette (str, optional): [Color palette to use with the scatterplots. See matplotlib.colors documentation]. Defaults to "Set1".
-
-			cumvar_text_size (int, optional): [Font size of text to show inflection point on cumvar plot]. Defaults to 14
 
 		Raises:
 			ValueError: [Must be a supported argument in dim_red_algoithms]
@@ -132,128 +152,56 @@ class DelimModel:
 			self.dim_red_algorithms = [self.dim_red_algorithms]
 
 		# Do dimensionality reduction
-		dimred = DimReduction(self.gt_df, self.pops, algorithms=self.dim_red_algorithms)
+		dr = DimReduction(self.gt_df, self.pops, algorithms=self.dim_red_algorithms)
 
 		for arg in self.dim_red_algorithms:
 			if arg not in supported_algs:
 				raise ValueError("\nThe dimensionality reduction algorithm {} is not supported. Supported options include: {})".format(arg, supported_algs))
 
 			if arg == "standard-pca":
-				dimred.standard_pca(pca_settings_default)
+				dr.standard_pca(pca_settings_default)
 				
 				# Plot PCA scatterplot
 				if plot_pca_scatter:
-					dimred.plot_dimred(
-					self.prefix,
-					pca=True,
-					cmds=False,
-					isomds=False,
-					axis1=int(pca_settings_default["pc_axis1"]),
-					axis2=int(pca_settings_default["pc_axis2"]), 
-					figwidth=pca_settings_default["figwidth"], 
-					figheight=pca_settings_default["figheight"],
-					alpha=pca_settings_default["alpha"],
-					legend=pca_settings_default["legend"], 
-					legend_inside=pca_settings_default["legend_inside"], 
-					legend_loc=pca_settings_default["legend_loc"], 
-					marker=pca_settings_default["marker"], 
-					markersize=pca_settings_default["markersize"], 
-					markeredgecolor=pca_settings_default["markeredgecolor"], 
-					markeredgewidth=pca_settings_default["markeredgewidth"], 
-					labelspacing=pca_settings_default["labelspacing"], 
-					columnspacing=pca_settings_default["columnspacing"], 
-					title=pca_settings_default["title"], 
-					title_fontsize=pca_settings_default["title_fontsize"], 
-					markerfirst=pca_settings_default["markerfirst"], 
-					markerscale=pca_settings_default["markerscale"], 
-					ncol=pca_settings_default["ncol"], 
-					bbox_to_anchor=pca_settings_default["bbox_to_anchor"], 
-					borderaxespad=pca_settings_default["borderaxespad"], 
-					legend_edgecolor=pca_settings_default["legend_edgecolor"], 
-					facecolor=pca_settings_default["facecolor"], 
-					framealpha=pca_settings_default["framealpha"], 
-					shadow=pca_settings_default["shadow"],
-					colors=self.colors,
-					palette=self.palette
+					dr.plot_dimreduction(
+						self.prefix,
+						pca=True,
+						cmds=False,
+						isomds=False,
+						user_settings=pca_scatter_settings,
+						colors=self.colors,
+						palette=self.palette
 					)
 
 				if plot_pca_cumvar:
-					dimred.plot_pca_cumvar(self.prefix, cumvar_text_size)
+					dr.plot_pca_cumvar(self.prefix, pca_cumvar_settings)
 
 			elif arg == "cmds":
-				dimred.do_mds(mds_settings_default, metric=True)
+				dr.do_mds(mds_settings_default, metric=True)
 
 				if plot_cmds_scatter:
-					dimred.plot_dimred(
-					self.prefix,
-					pca=False,
-					cmds=True,
-					isomds=False,
-					axis1=int(mds_settings_default["cmds_axis1"]),
-					axis2=int(mds_settings_default["cmds_axis2"]), 
-					figwidth=mds_settings_default["figwidth"], 
-					figheight=mds_settings_default["figheight"],
-					alpha=mds_settings_default["alpha"],
-					legend=mds_settings_default["legend"], 
-					legend_inside=mds_settings_default["legend_inside"], 
-					legend_loc=mds_settings_default["legend_loc"], 
-					marker=mds_settings_default["marker"], 
-					markersize=mds_settings_default["markersize"], 
-					markeredgecolor=mds_settings_default["markeredgecolor"], 
-					markeredgewidth=mds_settings_default["markeredgewidth"], 
-					labelspacing=mds_settings_default["labelspacing"], 
-					columnspacing=mds_settings_default["columnspacing"], 
-					title=mds_settings_default["title"], 
-					title_fontsize=mds_settings_default["title_fontsize"], 
-					markerfirst=mds_settings_default["markerfirst"], 
-					markerscale=mds_settings_default["markerscale"], 
-					ncol=mds_settings_default["ncol"], 
-					bbox_to_anchor=mds_settings_default["bbox_to_anchor"], 
-					borderaxespad=mds_settings_default["borderaxespad"], 
-					legend_edgecolor=mds_settings_default["legend_edgecolor"], 
-					facecolor=mds_settings_default["facecolor"], 
-					framealpha=mds_settings_default["framealpha"], 
-					shadow=mds_settings_default["shadow"],
-					colors=self.colors,
-					palette=self.palette
+					dr.plot_dimreduction(
+						self.prefix,
+						pca=False,
+						cmds=True,
+						isomds=False,
+						user_settings=cmds_scatter_settings,
+						colors=self.colors,
+						palette=self.palette
 					)
 
 			elif arg == "isomds":
-				dimred.do_mds(mds_settings_default, metric=False)
+				dr.do_mds(mds_settings_default, metric=False)
 
 				if plot_isomds_scatter:
-					dimred.plot_dimred(
-					self.prefix,
-					pca=False,
-					cmds=False,
-					isomds=True,
-					axis1=int(mds_settings_default["isomds_axis1"]),
-					axis2=int(mds_settings_default["isomds_axis2"]), 
-					figwidth=mds_settings_default["figwidth"], 
-					figheight=mds_settings_default["figheight"],
-					alpha=mds_settings_default["alpha"],
-					legend=mds_settings_default["legend"], 
-					legend_inside=mds_settings_default["legend_inside"], 
-					legend_loc=mds_settings_default["legend_loc"], 
-					marker=mds_settings_default["marker"], 
-					markersize=mds_settings_default["markersize"], 
-					markeredgecolor=mds_settings_default["markeredgecolor"], 
-					markeredgewidth=mds_settings_default["markeredgewidth"], 
-					labelspacing=mds_settings_default["labelspacing"], 
-					columnspacing=mds_settings_default["columnspacing"], 
-					title=mds_settings_default["title"], 
-					title_fontsize=mds_settings_default["title_fontsize"], 
-					markerfirst=mds_settings_default["markerfirst"], 
-					markerscale=mds_settings_default["markerscale"], 
-					ncol=mds_settings_default["ncol"], 
-					bbox_to_anchor=mds_settings_default["bbox_to_anchor"], 
-					borderaxespad=mds_settings_default["borderaxespad"], 
-					legend_edgecolor=mds_settings_default["legend_edgecolor"], 
-					facecolor=mds_settings_default["facecolor"], 
-					framealpha=mds_settings_default["framealpha"], 
-					shadow=mds_settings_default["shadow"],
-					colors=self.colors,
-					palette=self.palette
+					dr.plot_dimreduction(
+						self.prefix,
+						pca=False,
+						cmds=False,
+						isomds=True,
+						user_settings=isomds_scatter_settings,
+						colors=self.colors,
+						palette=self.palette
 					)
 
 	def _validate_gt_type(self, geno):
