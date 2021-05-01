@@ -43,7 +43,7 @@ def weighted_draw(d, num_samples=1):
 	return(choice(choices, num_samples, p=weights))
 
 def timer(func):
-	"""[print the runtime of the decorated function]"""
+	"""[print the runtime of the decorated function in the format HH:MM:SS]"""
 	@functools.wraps(func)
 	def wrapper_timer(*args, **kwargs):
 		start_time = time.perf_counter()

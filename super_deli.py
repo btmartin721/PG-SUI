@@ -1,16 +1,19 @@
 # Standard library imports
 import argparse
 import sys
+import math
 
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns; sns.set()
 
 # Make sure python version is >= 3.6
 if sys.version_info < (3, 6):
 	raise ImportError("Python < 3.6 is not supported!")
 
 # Custom module imports
-from dim_reduction.pca import DimReduction
+from delimitation_methods.delimitation_model import DelimModel
 from read_input.read_input import GenotypeData
 import read_input.impute as impute
 
@@ -23,12 +26,12 @@ def main():
 	if args.str and args.phylip:
 		sys.exit("Error: Only one file type can be specified")
 
-	imputation_settings = {"n_jobs": -1,
-							"n_nearest_features": 5,
-							"n_estimators": 100,
-							"max_iter": 25}
-	
-	# If VCF file is specified.
+	br_imputation_settings = {
+								"br_n_iter": 1000,
+								"n_nearest_features": 25
+							}
+		
+		# If VCF file is specified.
 	if args.str:
 		if not args.pop_ids and args.popmap is None:
 			sys.exit("\nError: Either --pop_ids or --popmap must be specified\n")
@@ -63,29 +66,40 @@ def main():
 	# test impute_freq
 	# imp = impute.impute_freq(data.genotypes_list, diploid=True, pops=data.populations)
 
-	data.impute_missing(impute_methods="rf", impute_settings=imputation_settings)
+	if args.resume_imputed:
+		data.read_imputed(args.resume_imputed, impute_methods="rf")
+		#data.write_imputed(data.imputed_rf_df, args.prefix)
 
-	data.write_imputed(data.imputed_rf_df, args.prefix)
 
-	#print(data.imputed_rf_df)
+	else:	
+		data.impute_missing(impute_methods="br", impute_settings=br_imputation_settings)
 
-	#print(data.imputed_knn_df)
-	#print(data.imputed_freq_global_df)
-	#print(data.imputed_freq_pop_df)
+		data.write_imputed(data.imputed_br_df, args.prefix)
 	
+	pca_settings = {
+		"n_components": data.indcount-1
+	}
 
-	#pca_settings = {"n_components": data.indcount, "copy": True, "scaler": "patterson", "ploidy": 2}
+	mds_settings = {
+		"n_init": 100,
+		"max_iter": 1000,
+		"n_jobs": 4,
+		"eps": 1e-4,
+		"dissimilarity": "euclidean"
+	}
 
-	#pca = DimReduction(data=data.genotypes, algorithms="standard-pca", settings=pca_settings)
+	# See matplotlib axvline settings for options
+	pca_cumvar_settings={"text_size": 14, "style": "white", "figwidth": 6, "figheight": 6, "intercept_width": 3, "intercept_color": "r", "intercept_style": "--"}
 
-	#print(data.genotypes_list)
-	#data.convert_onehot()
-	#data.convert_df()
+	clusters = DelimModel(data.imputed_rf_df, data.populations, args.prefix)
 
-	#print(data.individuals)
-	#print(data.populations)
-	#data.impute_missing()
+	#clusters.dim_reduction(data.imputed_rf_df, dim_red_algorithms=["standard-pca"], pca_settings=pca_settings, mds_settings=None, plot_pca_scatter=True, plot_pca_cumvar=True, pca_cumvar_settings=pca_cumvar_settings, plot_cmds_scatter=True, plot_isomds_scatter=True)
 
+	rf_embed_settings = {"rf_n_estimators": 10000, "rf_n_jobs": 4, "rf_min_samples_split": 25}
+
+	clusters.random_forest_unsupervised(pca_settings={"n_components": data.indcount-1}, pca_init=False, rf_settings=rf_embed_settings)
+
+	clusters.dim_reduction(clusters.rf_matrix, dim_red_algorithms=["cmds", "isomds"], plot_cmds_scatter=True, plot_isomds_scatter=True, mds_settings=mds_settings)
 
 def get_arguments():
 	"""[Parse command-line arguments. Imported with argparse]
@@ -133,6 +147,11 @@ def get_arguments():
 								required=False,
 								default="output",
 								help="Prefix for output files")
+
+	optional_args.add_argument("--resume_imputed",
+								type=str,
+								required=False,
+								help="Read in imputed data from a file instead of doing the imputation")						
 	# Add help menu							
 	optional_args.add_argument("-h", "--help",
 								action="help",
