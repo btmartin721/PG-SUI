@@ -214,7 +214,7 @@ def random_forest_unsupervised_supported():
 		[list]: [Supported argument names for sklearn.ensemble.RandomTreesEmbedding]
 	"""
 	supported_settings = [
-		"rf_n_estimators"
+		"rf_n_estimators",
 		"rf_max_depth",
 		"rf_min_samples_split",
 		"rf_min_samples_leaf",
@@ -515,6 +515,7 @@ def pca_cumvar_default_settings():
 	}
 
 	return pca_cumvar_settings
+	
 
 
 

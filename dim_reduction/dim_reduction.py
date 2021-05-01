@@ -22,7 +22,7 @@ class DimReduction:
 	"""[Class to perform dimensionality reduction on genotype features]
 	"""
 
-	def __init__(self, data, pops, algorithms=None):
+	def __init__(self, data, pops):
 		"""[Class constructor]
 
 		Args:
@@ -39,12 +39,12 @@ class DimReduction:
 		"""
 		self.data = data
 		self.pops = pops
-		self.algorithms = algorithms
 		self.pca_coords = None
 		self.pca_model = None
 		self.cmds_model = None
 		self.isomds_model = None
 		self.target = None
+		self.inflection = None
 
 	def standard_pca(self, pca_arguments):
 		"""[Does standard PCA using scikit-allel. By default uses a Patterson scaler]
@@ -68,7 +68,7 @@ class DimReduction:
 
 		print("\nDone!")
 
-	def do_mds(self, mds_arguments, metric=True):
+	def do_mds(self, data, mds_arguments, metric=True):
 		
 		if metric:
 			print("\nDoing cMDS dimensionality reduction...\n")
@@ -261,7 +261,7 @@ class DimReduction:
 
 		# Plot the explained variance ratio
 		ax.plot(np.cumsum(self.pca_model.explained_variance_ratio_), color=settings_default["linecolor"], linewidth=settings_default["linewidth"])
-		
+
 		ax.set_xlabel("Number of Components")
 		ax.set_ylabel("Cumulative Explained Variance")
 
@@ -276,6 +276,8 @@ class DimReduction:
 
 		# Save as PDF file
 		fig.savefig(plot_fn, bbox_inches="tight")
+
+		self.inflection = inflection[0]
 		
 	def _plot_coords(self, coords, axis1, axis2, ax, populations, unique_populations, pop_colors, alpha, marker, markersize, markeredgecolor, markeredgewidth, pca, cmds, isomds, model=None):
 		"""[Map colors to populations and make the scatterplot]
@@ -443,4 +445,13 @@ class DimReduction:
 			[numpy.ndarray]: [isoMDS dissimilarity matrix]
 		"""
 		return self.isomds_model.dissimilarity_matrix_
+	
+	@property
+	def pca_components_elbow(self):
+		"""[Getter for the inflection point of PC cumulative variance]
+
+		Returns:
+			[int]: [Number of principal component axes at inflection point]
+		"""
+		return self.inflection
 

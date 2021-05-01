@@ -5,7 +5,10 @@ import os
 # Third-party imports
 import numpy as np
 import pandas as pd
+from scipy.sparse import issparse
 from sklearn.ensemble import RandomTreesEmbedding
+from sklearn.metrics import pairwise_distances
+from sklearn.utils.validation import check_symmetric
 
 # Custom module imports
 from read_input.read_input import GenotypeData
@@ -38,14 +41,18 @@ class DelimModel:
 		self.dim_red_algorithms = None
 		self.colors = None
 		self.palette = None
+		self.dr = None
 
 		# Model results
 		self.rf = None
 		self.pca = None
-		self.cmds = None
-		self.isomds = None
+		self.rf_cmds = None
+		self.rf_isomds = None
 
-	def random_forest_unsupervised(self, rf_settings=None, pca_init=True):
+	def random_forest_unsupervised(self, rf_settings=None, pca_init=True, pca_settings=None, perc=None, elbow=True, cmds_settings=None, isomds_settings=None):
+
+		if perc and elbow:
+			raise ValueError("\nperc and elbow arguments cannot both be set")
 
 		self.rf_settings = rf_settings
 
@@ -57,26 +64,126 @@ class DelimModel:
 			self._validate_settings(rf_settings, supported_settings)
 
 		# Make sure genotypes are a supported type and return a pandas.DataFrame
-		self.gt_df = _validate_gt_type(self.gt)
+		self.gt_df = self._validate_gt_type(self.gt)
 
-		rf = RandomTreesEmbedding(
-			n_estimators=rf_settings["rf_n_estimators"],
-			max_depth=rf_settings["rf_max_depth"],
-			min_samples_split=rf_settings["rf_min_samples_split"],
-			min_samples_leaf=rf_settings["rf_min_samples_leaf"],
-			min_weight_fraction_leaf=rf_settings["rf_min_weight_fraction_leaf"],
-			max_leaf_nodes=rf_settings["rf_max_leaf_nodes"],
-			min_impurity_decrease=rf_settings["rf_min_impurity_decrease"],
-			min_impurity_split=rf_settings["rf_min_impurity_split"],
-			sparse_output=rf_settings["rf_sparse_output"],
-			n_jobs=rf_settings["rf_n_jobs"],
-			random_state=rf_settings["rf_random_state"],
-			verbose=rf_settings["rf_verbose"],
-			warm_start=rf_settings["rf_warm_start"]
-		)
+		# Embed the genotypes with PCA first
+		if pca_init:
+			pca_settings_default = settings.pca_default_settings()
+			
+			if pca_settings:
+				pca_settings_default.update(pca_settings)
+
+			if elbow:
+				self.dim_reduction(self.gt_df, ["standard-pca"], pca_settings=pca_settings, plot_pca_cumvar=True)
+
+				inflection = self.dr.pca_components_elbow
+				print("\nRe-doing PCA with n_components set to the inflection point")
+				
+				self.dim_reduction(self.gt_df, ["standard-pca"], pca_settings={"n_components": int(inflection)}, plot_pca_cumvar=False)
+
+			elif perc:
+				try:
+					perc = float(perc)
+				except:
+					raise TypeError("\nThe perc argument could not be coerced to type(float)")
+
+				indcount = self.gt_df.shape[0]
+				n_components_frac = perc * indcount
+				n_components_frac = int(n_components_frac)
+				pca_settings_default.update({"n_components": n_components_frac})
+
+				pca_model = self.dim_reduction(self.gt_df, ["standard-pca"], pca_settings=pca_settings, plot_pca_cumvar=False)
+
+			self.pca = self.dr.get_pca_coords
+
+			print("\nDoing unsupervised random forest...")
+
+			rf_model = RandomTreesEmbedding(
+				n_estimators=rf_settings_default["rf_n_estimators"],
+				max_depth=rf_settings_default["rf_max_depth"],
+				min_samples_split=rf_settings_default["rf_min_samples_split"],
+				min_samples_leaf=rf_settings_default["rf_min_samples_leaf"],
+				min_weight_fraction_leaf=rf_settings_default["rf_min_weight_fraction_leaf"],
+				max_leaf_nodes=rf_settings_default["rf_max_leaf_nodes"],
+				min_impurity_decrease=rf_settings_default["rf_min_impurity_decrease"],
+				min_impurity_split=rf_settings_default["rf_min_impurity_split"],
+				sparse_output=rf_settings_default["rf_sparse_output"],
+				n_jobs=rf_settings_default["rf_n_jobs"],
+				random_state=rf_settings_default["rf_random_state"],
+				verbose=rf_settings_default["rf_verbose"],
+				warm_start=rf_settings_default["rf_warm_start"]).fit(self.pca)
+				
+			rf_sparse_model = rf_model.transform(self.pca)
+			self.rf = rf_sparse_model.toarray()
+
+			#prox = self._proximity_matrix(rf_model, self.pca, normalize=True)
+			#diss = 1.0 - prox
+			#prox_repaired = check_symmetric(diss, tol=1e-15)
+			#print(np.abs(diss - diss.T).max())
+			#diss2 = diss.astype(np.float64)
+			#self.rf = prox_repaired
+
+		
+			#diss = 1 - prox
+
+			#is_sparse = issparse(diss)
+			#if is_sparse:
+				#test = pairwise_distances(diss, metric="hamming")
+
+			#rf_sparse_model = rf_model.transform(self.pca)
+			#self.rf = pairwise_distances(rf_sparse_arr, metric="hamming")
+			#self.rf = rf_sparse_model.toarray()
+
+			print("Done!")
+
+
+		# Don't embed genotypes with PCA first
+		# Might take a long time
+		else:
+
+			print("\nDoing unsupervised random forest...")
+
+			rf_model = RandomTreesEmbedding(
+				n_estimators=rf_settings_default["rf_n_estimators"],
+				max_depth=rf_settings_default["rf_max_depth"],
+				min_samples_split=rf_settings_default["rf_min_samples_split"],
+				min_samples_leaf=rf_settings_default["rf_min_samples_leaf"],
+				min_weight_fraction_leaf=rf_settings_default["rf_min_weight_fraction_leaf"],
+				max_leaf_nodes=rf_settings_default["rf_max_leaf_nodes"],
+				min_impurity_decrease=rf_settings_default["rf_min_impurity_decrease"],
+				min_impurity_split=rf_settings_default["rf_min_impurity_split"],
+				sparse_output=rf_settings_default["rf_sparse_output"],
+				n_jobs=rf_settings_default["rf_n_jobs"],
+				random_state=rf_settings_default["rf_random_state"],
+				verbose=rf_settings_default["rf_verbose"],
+				warm_start=rf_settings_default["rf_warm_start"]).fit(self.gt_df)
+
+			rf_sparse_model = rf_model.transform(self.gt_df)
+
+			self.rf = rf_sparse_model.toarray()
+
+			print("Done!")
+
+	def _proximity_matrix(self, model, X, normalize=False):
+
+		terminals = model.apply(X)
+		n_trees = terminals.shape[1]
+
+		a = terminals[:,0]
+		prox_mat = 1 * np.equal.outer(a, a)
+
+		for i in range(1, n_trees):
+			a = terminals[:,i]
+			prox_mat += 1 * np.equal.outer(a, a)
+
+		if normalize:
+			prox_mat = prox_mat / n_trees
+
+		return prox_mat
 
 	def dim_reduction(
-		self, 
+		self,
+		data,
 		dim_red_algorithms, 
 		pca_settings=None, 
 		mds_settings=None, 
@@ -93,6 +200,8 @@ class DelimModel:
 		"""[Perform dimensionality reduction using the algorithms in the dim_red_algorithms list]
 
 		Args:
+			data ([numpy.ndarray]): [Data to embed. Can be raw genotypes or fit models]
+
 			dim_red_algorithms ([list]): [Dimensionality reduction algorithms to perform]
 
 			pca_settings ([dict], optional): [Dictionary with PCA settings as keys and the corresponding values. If pca_settings=None it will use all default arguments (scikit-allel and matplotlib documentation)]. Defaults to None.
@@ -132,8 +241,9 @@ class DelimModel:
 		pca_settings_default = settings.pca_default_settings()
 		mds_settings_default = settings.mds_default_settings()
 
-		# Make sure the genotypes are of the correct type
+		# Make sure the data are of the correct type
 		self.gt_df = self._validate_gt_type(self.gt)
+		data_df = self._validate_gt_type(data)
 
 		# Validate that the settings keys are supported and update the default
 		# settings with user-defined settings
@@ -152,18 +262,18 @@ class DelimModel:
 			self.dim_red_algorithms = [self.dim_red_algorithms]
 
 		# Do dimensionality reduction
-		dr = DimReduction(self.gt_df, self.pops, algorithms=self.dim_red_algorithms)
+		self.dr = DimReduction(data_df, self.pops)
 
 		for arg in self.dim_red_algorithms:
 			if arg not in supported_algs:
 				raise ValueError("\nThe dimensionality reduction algorithm {} is not supported. Supported options include: {})".format(arg, supported_algs))
 
 			if arg == "standard-pca":
-				dr.standard_pca(pca_settings_default)
+				self.dr.standard_pca(pca_settings_default)
 				
 				# Plot PCA scatterplot
 				if plot_pca_scatter:
-					dr.plot_dimreduction(
+					self.dr.plot_dimreduction(
 						self.prefix,
 						pca=True,
 						cmds=False,
@@ -174,13 +284,13 @@ class DelimModel:
 					)
 
 				if plot_pca_cumvar:
-					dr.plot_pca_cumvar(self.prefix, pca_cumvar_settings)
+					self.dr.plot_pca_cumvar(self.prefix, pca_cumvar_settings)
 
 			elif arg == "cmds":
-				dr.do_mds(mds_settings_default, metric=True)
+				self.dr.do_mds(data, mds_settings_default, metric=True)
 
 				if plot_cmds_scatter:
-					dr.plot_dimreduction(
+					self.dr.plot_dimreduction(
 						self.prefix,
 						pca=False,
 						cmds=True,
@@ -191,10 +301,10 @@ class DelimModel:
 					)
 
 			elif arg == "isomds":
-				dr.do_mds(mds_settings_default, metric=False)
+				self.dr.do_mds(data, mds_settings_default, metric=False)
 
 				if plot_isomds_scatter:
-					dr.plot_dimreduction(
+					self.dr.plot_dimreduction(
 						self.prefix,
 						pca=False,
 						cmds=False,
@@ -254,8 +364,16 @@ class DelimModel:
 			ret=list()
 			for res in self.results:
 				ret.append(res.clusterAcrossK(method, inplace=False))
+
+	@property
+	def rf_matrix(self):
+		"""[Getter for the embedded random forest matrix]
+
+		Returns:
+			[numpy.ndarray]: [2-dimensional embedded random forest matrix]
+		"""
+		return self.rf
 			
-	
 class ModelResult:
 	"""[Object to hold results from replicates of a single delim model]
 	

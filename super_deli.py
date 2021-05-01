@@ -1,6 +1,7 @@
 # Standard library imports
 import argparse
 import sys
+import math
 
 import numpy as np
 import pandas as pd
@@ -75,18 +76,16 @@ def main():
 
 		data.write_imputed(data.imputed_br_df, args.prefix)
 	
-	n_components_frac = 0.8 * data.indcount
-	n_components_frac = int(n_components_frac)
-
 	pca_settings = {
-		"n_components": n_components_frac
+		"n_components": data.indcount-1
 	}
 
 	mds_settings = {
-		"n_init": 1000,
-		"max_iter": 10000,
+		"n_init": 100,
+		"max_iter": 1000,
 		"n_jobs": 4,
-		"eps": 1e-6
+		"eps": 1e-4,
+		"dissimilarity": "euclidean"
 	}
 
 	# See matplotlib axvline settings for options
@@ -94,7 +93,13 @@ def main():
 
 	clusters = DelimModel(data.imputed_rf_df, data.populations, args.prefix)
 
-	clusters.dim_reduction(dim_red_algorithms=["standard-pca"], pca_settings=pca_settings, mds_settings=None, plot_pca_scatter=True, plot_pca_cumvar=True, pca_cumvar_settings=pca_cumvar_settings, plot_cmds_scatter=True, plot_isomds_scatter=True)
+	#clusters.dim_reduction(data.imputed_rf_df, dim_red_algorithms=["standard-pca"], pca_settings=pca_settings, mds_settings=None, plot_pca_scatter=True, plot_pca_cumvar=True, pca_cumvar_settings=pca_cumvar_settings, plot_cmds_scatter=True, plot_isomds_scatter=True)
+
+	rf_embed_settings = {"rf_n_estimators": 10000, "rf_n_jobs": 4, "rf_min_samples_split": 25}
+
+	clusters.random_forest_unsupervised(pca_settings={"n_components": data.indcount-1}, pca_init=False, rf_settings=rf_embed_settings)
+
+	clusters.dim_reduction(clusters.rf_matrix, dim_red_algorithms=["cmds", "isomds"], plot_cmds_scatter=True, plot_isomds_scatter=True, mds_settings=mds_settings)
 
 def get_arguments():
 	"""[Parse command-line arguments. Imported with argparse]
