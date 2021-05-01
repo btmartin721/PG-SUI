@@ -5,6 +5,7 @@ import os
 # Third-party imports
 import numpy as np
 import pandas as pd
+from sklearn.ensemble import RandomTreesEmbedding
 
 # Custom module imports
 from read_input.read_input import GenotypeData
@@ -32,14 +33,54 @@ class DelimModel:
 		self.gt_df = None
 		self.pca_settings = None
 		self.mds_settings = None
+		self.rf_settings = None
 		self.dim_red_algorithms = None
 		self.colors = None
 		self.palette = None
 
 		# Model results
+		self.rf
 		self.pca = None
 		self.cmds = None
 		self.isomds = None
+
+	def random_forest_embed(self, rf_settings=None):
+
+		self.rf_settings = rf_settings
+
+		supported_settings = [
+			"rf_n_estimators"
+			"rf_max_depth",
+			"rf_min_samples_split",
+			"rf_min_samples_leaf",
+			"rf_min_weight_fraction_leaf",
+			"rf_max_leaf_nodes",
+			"rf_min_impurity_decrease",
+			"rf_min_impurity_split",
+			"rf_sparse_output",
+			"rf_n_jobs",
+			"rf_random_state",
+			"rf_verbose",
+			"rf_warm_start"
+		]
+
+		rf_settings_default = {
+			"rf_n_estimators": 100,
+			"rf_max_depth": 5,
+			"rf_min_samples_split": 2,
+			"rf_min_samples_leaf": 1,
+			"rf_min_weight_fraction_leaf": 0.0,
+			"rf_max_leaf_nodes": None,
+			"rf_min_impurity_decrease": 0.0,
+			"rf_min_impurity_split": None,
+			"rf_sparse_output": True,
+			"rf_n_jobs": None,
+			"rf_random_state": None,
+			"rf_verbose": 0,
+			"rf_warm_start": False
+		}
+
+		rf_settings
 
 	def dim_reduction(self, dim_red_algorithms, pca_settings=None, mds_settings=None, plot_pca_scatter=False, plot_cmds_scatter=False, plot_isomds_scatter=False, colors=None, palette="Set1"):
 		"""[Perform dimensionality reduction using the algorithms in the dim_red_algorithms list]

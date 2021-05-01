@@ -962,18 +962,38 @@ class GenotypeData:
 
 	@property
 	def imputed_br_df(self):
+		"""[Getter for 012 genotypes imputed by bayesian ridge iterative imputation]
+
+		Returns:
+			[pandas.DataFrame]: [Imputed 012-encoded genotype data]
+		"""
 		return pd.DataFrame(self.br_imputed_arr)
 
 	@property
 	def imputed_br_np(self):
+		"""[Getter for 012 genotypes imputed by bayesian ridge iterative imputation]
+
+		Returns:
+			[numpy.ndarray]: [Imputed 012-encoded genotype data]
+		"""
 		return self.br_imputed_arr
 
 	@property
 	def imputed_knn_iter_df(self):
+		"""[Getter for 012 genotypes imputed by K-NN iterative imputation]
+
+		Returns:
+			[pandas.DataFrame]: [Imputed 012-encoded genotype data]
+		"""
 		return pd.DataFrame(self.knn_iter_imputed_arr)
 
 	@property
 	def imputed_knn_iter_np(self):
+		"""[Getter for 012 genotypes imputed by K-NN iterative imputation]
+
+		Returns:
+			[numpy.ndarray]: [Imputed 012-encoded genotype data]
+		"""
 		return self.knn_iter_imputed_arr
 		
 def merge_alleles(first, second=None):
