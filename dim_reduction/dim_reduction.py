@@ -3,6 +3,7 @@ import allel
 
 import numpy as np
 import pandas as pd
+from scipy.ndimage import gaussian_filter1d
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 import matplotlib.colors as mcolors
@@ -250,6 +251,42 @@ class DimReduction:
 			print("\nSaved cMDS scatterplot to {}".format(plot_fn))
 		elif isomds:
 			print("\nSaved isoMDS scatterplot to {}".format(plot_fn))
+
+	def plot_pca_cumvar(self, prefix, text_size, style="whitegrid", figwidth=6, figheight=6, xline_width=3, xline_color="r", xline_style="--"):
+
+		if not self.pca_model:
+			raise AttributeError("\nA PCA object has not yet been created! Please do so with DelimModel([arguments]).dim_reduction(dim_red_algorithms['standard-pca'], [other_arguments])")
+
+		cumsum = np.cumsum(self.pca_model.explained_variance_ratio_)
+
+		# Compute first derivative with gaussian filter
+		# to get smoothed histogram
+		smooth = gaussian_filter1d(cumsum, 100)
+
+		# Compute second derivative
+		smooth_d2 = np.gradient(np.gradient(smooth))
+
+		# Get the inflection point
+		inflection = np.where(np.diff(np.sign(smooth_d2)))[0]
+
+		# Plot the results
+		fig = plt.figure(figsize=(figwidth, figheight))
+		ax = fig.add_subplot(1,1,1)
+
+		sns.set(style="whitegrid")
+		ax.plot(np.cumsum(self.pca_model.explained_variance_ratio_))
+		ax.set_xlabel("Number of Components")
+		ax.set_ylabel("Cumulative Explained Variance")
+
+		# Add text to show inflection point
+		ax.text(0.95, 0.01, "Inflection Point={}".format(inflection[0]), verticalalignment="bottom", horizontalalignment="right", transform=ax.transAxes, color="k", fontsize=text_size)
+
+		# Add inflection point
+		ax.axvline(linewidth=xline_width, color=xline_color, linestyle=xline_style, x=inflection[0], ymin=0, ymax=1)
+
+		plot_fn = "{}_pca_cumvar.pdf".format(prefix)
+
+		fig.savefig(plot_fn, bbox_inches="tight")
 		
 	def _plot_coords(self, coords, axis1, axis2, ax, populations, unique_populations, pop_colors, alpha, marker, markersize, markeredgecolor, markeredgewidth, pca, cmds, isomds, model=None):
 		"""[Map colors to populations and make the scatterplot]

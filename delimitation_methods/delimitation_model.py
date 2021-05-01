@@ -45,17 +45,37 @@ class DelimModel:
 		self.cmds = None
 		self.isomds = None
 
-	def random_forest_embed(self, rf_settings=None):
+	def random_forest_unsupervised(self, rf_settings=None, pca_init=True):
 
 		self.rf_settings = rf_settings
 
-		supported_settings = settings.random_forest_embed_supported()
-		rf_settings_default = settings.random_forest_embed_defaults()
+		supported_settings = settings.random_forest_unsupervised_supported()
+		rf_settings_default = settings.random_forest_unsupervised_defaults()
 
 		if rf_settings:
 			rf_settings_default.update(rf_settings)
+			self._validate_settings(rf_settings, supported_settings)
 
-	def dim_reduction(self, dim_red_algorithms, pca_settings=None, mds_settings=None, plot_pca_scatter=False, plot_cmds_scatter=False, plot_isomds_scatter=False, colors=None, palette="Set1"):
+		# Make sure genotypes are a supported type and return a pandas.DataFrame
+		self.gt_df = _validate_gt_type(self.gt)
+
+		rf = RandomTreesEmbedding(
+			n_estimators=rf_settings["rf_n_estimators"],
+			max_depth=rf_settings["rf_max_depth"],
+			min_samples_split=rf_settings["rf_min_samples_split"],
+			min_samples_leaf=rf_settings["rf_min_samples_leaf"],
+			min_weight_fraction_leaf=rf_settings["rf_min_weight_fraction_leaf"],
+			max_leaf_nodes=rf_settings["rf_max_leaf_nodes"],
+			min_impurity_decrease=rf_settings["rf_min_impurity_decrease"],
+			min_impurity_split=rf_settings["rf_min_impurity_split"],
+			sparse_output=rf_settings["rf_sparse_output"],
+			n_jobs=rf_settings["rf_n_jobs"],
+			random_state=rf_settings["rf_random_state"],
+			verbose=rf_settings["rf_verbose"],
+			warm_start=rf_settings["rf_warm_start"]
+		)
+
+	def dim_reduction(self, dim_red_algorithms, pca_settings=None, mds_settings=None, plot_pca_scatter=False, plot_pca_cumvar=False, plot_cmds_scatter=False, plot_isomds_scatter=False, colors=None, palette="Set1", cumvar_text_size=14):
 		"""[Perform dimensionality reduction using the algorithms in the dim_red_algorithms list]
 
 		Args:
@@ -74,6 +94,8 @@ class DelimModel:
 			colors ([dict], optional): [Dictionary with population IDs as keys and hex-code colors as the values. If colors=None, dim_reduction will use a default color palette that can be changed with the palette argument]. Defaults to None.
 
 			palette (str, optional): [Color palette to use with the scatterplots. See matplotlib.colors documentation]. Defaults to "Set1".
+
+			cumvar_text_size (int, optional): [Font size of text to show inflection point on cumvar plot]. Defaults to 14
 
 		Raises:
 			ValueError: [Must be a supported argument in dim_red_algoithms]
@@ -96,12 +118,12 @@ class DelimModel:
 		# Validate that the settings keys are supported and update the default
 		# settings with user-defined settings
 		if self.pca_settings:
-			self._validate_dimred_settings(self.pca_settings, supported_settings)
+			self._validate_settings(self.pca_settings, supported_settings)
 
 			pca_settings_default.update(self.pca_settings)
 
 		if self.mds_settings:
-			self._validate_dimred_settings(self.mds_settings, supported_settings)
+			self._validate_settings(self.mds_settings, supported_settings)
 
 			mds_settings_default.update(self.mds_settings)
 
@@ -154,6 +176,9 @@ class DelimModel:
 					colors=self.colors,
 					palette=self.palette
 					)
+
+				if plot_pca_cumvar:
+					dimred.plot_pca_cumvar(self.prefix, cumvar_text_size)
 
 			elif arg == "cmds":
 				dimred.do_mds(mds_settings_default, metric=True)
@@ -257,7 +282,7 @@ class DelimModel:
 
 		return gt_df
 
-	def _validate_dimred_settings(self, settings, supported_settings):
+	def _validate_settings(self, settings, supported_settings):
 		"""[Validate that settings are supported arguments]
 
 		Args:

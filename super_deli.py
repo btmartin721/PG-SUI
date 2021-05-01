@@ -91,7 +91,7 @@ def main():
 
 	clusters = DelimModel(data.imputed_rf_df, data.populations, args.prefix)
 
-	clusters.dim_reduction(dim_red_algorithms=["standard-pca", "cmds", "isomds"], pca_settings=pca_settings, mds_settings=None, plot_pca_scatter=True, plot_cmds_scatter=True, plot_isomds_scatter=True)
+	clusters.dim_reduction(dim_red_algorithms=["standard-pca"], pca_settings=pca_settings, mds_settings=None, plot_pca_cumvar=True, plot_cmds_scatter=True, plot_isomds_scatter=True, cumvar_text_size=14)
 
 def get_arguments():
 	"""[Parse command-line arguments. Imported with argparse]

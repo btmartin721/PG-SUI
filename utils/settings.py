@@ -207,7 +207,7 @@ def bayesian_ridge_imp_defaults():
 
 	return br_settings
 
-def random_forest_embed_supported():
+def random_forest_unsupervised_supported():
 	"""[Supported argument settings for random forest embedding]
 
 	Returns:
@@ -231,7 +231,7 @@ def random_forest_embed_supported():
 
 	return supported_settings
 
-def random_forest_embed_defaults():
+def random_forest_unsupervised_defaults():
 	"""[Default settings for random forest embedding]
 
 	Returns:
