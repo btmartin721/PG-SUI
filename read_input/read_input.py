@@ -6,6 +6,7 @@ import pandas as pd
 from read_input.popmap_file import ReadPopmap
 from read_input import impute
 from utils import sequence_tools
+from utils import settings
 
 class GenotypeData:
 	"""[Class to read genotype data and convert to onehot encoding]
@@ -366,151 +367,15 @@ class GenotypeData:
 			ValueError: [description]
 		"""
 		self.impute_methods = impute_methods
-
-		supported_settings = ["n_neighbors", 
-								"weights", 
-								"metric", 
-								"rf_n_estimators",
-								"rf_min_samples_leaf",
-								"rf_max_features",
-								"rf_n_jobs",
-								"rf_criterion",
-								"rf_random_state", 
-								"max_iter", 
-								"tol", 
-								"n_nearest_features", 
-								"initial_strategy", 
-								"imputation_order", 
-								"skip_complete", 
-								"random_state",
-								"verbose",
-								"gb_n_estimators",
-								"gb_min_samples_leaf",
-								"gb_max_features",
-								"gb_criterion",
-								"gb_learning_rate",
-								"gb_subsample",
-								"gb_loss",
-								"gb_min_samples_split",
-								"gb_max_depth",
-								"gb_random_state",
-								"gb_verbose",
-								"gb_validation_fraction",
-								"gb_n_iter_no_change",
-								"gb_tol",
-								"br_n_iter",
-								"br_tol",
-								"br_alpha_1",
-								"br_alpha_2",
-								"br_lambda_1",
-								"br_lambda_2",
-								"br_verbose",
-								"br_alpha_init",
-								"br_lambda_init",
-								"br_sample_posterior",
-								"knn_it_n_neighbors",
-								"knn_it_weights",
-								"knn_it_algorithm",
-								"knn_it_leaf_size",
-								"knn_it_power",
-								"knn_it_metric",
-								"knn_it_metric_params",
-								"knn_it_n_jobs"
-							]
 							
-		supported_settings_opt = ["weights", "metric", "reps"]
+		supported_settings, supported_settings_opt = settings.supported_imputation_settings()
 
-
-		if maxk:
-			knn_settings = {"weights": "uniform", 
-							"metric": "nan_euclidean", 
-							"reps": 1}
-		else:
-			knn_settings = {"n_neighbors": 5,
-							"weights": "uniform", 
-							"metric": "nan_euclidean"}
-
-		knn_iterative_settings = {
-							"knn_it_n_neighbors": 5,
-							"knn_it_weights": "uniform",
-							"knn_it_algorithm": "auto",
-							"knn_it_leaf_size": 30,
-							"knn_it_power": 2,
-							"knn_it_metric": "minkowski",
-							"knn_it_metric_params": None,
-							"knn_it_n_jobs": 1,
-							"max_iter": 10,
-							"tol": 1e-3,
-							"n_nearest_features": None,
-							"initial_strategy": "most_frequent",
-							"imputation_order": "ascending",
-							"skip_complete": False,
-							"random_state": None,
-							"verbose": 0
-		}
-
-		rf_settings = {
-							"rf_n_estimators": 100,
-							"rf_min_samples_leaf": 1,
-							"rf_max_features": "auto",
-							"rf_n_jobs": 1,
-							"rf_criterion": "gini",
-							"rf_random_state": None,
-							"max_iter": 10,
-							"tol": 1e-3,
-							"n_nearest_features": None,
-							"initial_strategy": "most_frequent",
-							"imputation_order": "ascending",
-							"skip_complete": False,
-							"random_state": None,
-							"verbose": 0
-					}
-
-		gb_settings = {
-							"gb_n_estimators": 100,
-							"gb_min_samples_leaf": 1,
-							"gb_max_features": "auto",
-							"gb_criterion": "friedman_mse",
-							"gb_learning_rate": 0.1,
-							"gb_subsample": 1.0,
-							"gb_loss": "deviance",
-							"gb_min_samples_split": 2,
-							"gb_max_depth": 3,
-							"gb_random_state": None,
-							"gb_verbose": 0,
-							"gb_validation_fraction": 0.1,
-							"gb_n_iter_no_change": None,
-							"gb_tol": 1e-4,
-							"max_iter": 10,
-							"tol": 1e-3,
-							"n_nearest_features": None,
-							"initial_strategy": "most_frequent",
-							"imputation_order": "ascending",
-							"skip_complete": False,
-							"verbose": 0,
-							"random_state": None
-					}
-
-		br_settings = {
-							"br_n_iter": 300,
-							"br_tol": 1e-3,
-							"br_alpha_1": 1e-6,
-							"br_alpha_2": 1e-6,
-							"br_lambda_1": 1e-6,
-							"br_lambda_2": 1e-6,
-							"br_verbose": False,
-							"br_alpha_init": None,
-							"br_lambda_init": None,
-							"br_sample_posterior": True,
-							"max_iter": 10,
-							"tol": 1e-3,
-							"n_nearest_features": None,
-							"initial_strategy": "most_frequent",
-							"imputation_order": "ascending",
-							"skip_complete": False,
-							"random_state": None,
-							"verbose": 0
-					}
+		# Fetch default settings for each imputation classifier
+		knn_settings = settings.knn_imp_defaults_noniterative(maxk)
+		knn_iterative_settings = settings.knn_imp_defaults_iterative()
+		rf_settings = settings.random_forest_imp_defaults()
+		gb_settings = settings.gradient_boosting_imp_defaults()
+		br_settings = settings.bayesian_ridge_imp_defaults()
 
 		# bayesian ridge has a different verbose setting.
 		# Make sure user didn't specify the wrong type
@@ -524,10 +389,10 @@ class GenotypeData:
 		# Update settings if non-default ones were specified
 		if impute_settings:
 			knn_settings.update(impute_settings)
+			knn_iterative_settings.update(impute_settings)
 			rf_settings.update(impute_settings)
 			gb_settings.update(impute_settings)
 			br_settings.update(impute_settings)
-			knn_iterative_settings.update(impute_settings)
 		
 		# Validate impute settings
 		for method in self.impute_methods:
@@ -721,7 +586,7 @@ class GenotypeData:
 			prefix ([str]): [Prefix for output CSV file]
 
 		Raises:
-			TypeError: [Must be or type pandas.DataFrame, numpy.array, or list]
+			TypeError: [Must be of type pandas.DataFrame, numpy.array, or list]
 		"""
 		outfile = "{}_imputed_012.csv".format(prefix)
 		if isinstance(data, pd.DataFrame):
