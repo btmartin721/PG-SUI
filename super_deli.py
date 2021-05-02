@@ -99,7 +99,7 @@ def main():
 
 	clusters.random_forest_unsupervised(pca_settings={"n_components": 10}, pca_init=True, rf_settings=rf_embed_settings, elbow=False)
 
-	clusters.dim_reduction(clusters.rf_dissimilarity, dim_red_algorithms=["cmds", "isomds"], plot_cmds_scatter=True, plot_isomds_scatter=True, mds_settings=mds_settings)
+	clusters.dim_reduction(clusters.rf_dissimilarity, algorithms=["cmds", "isomds"], plot_cmds_scatter=True, plot_isomds_scatter=True, mds_settings=mds_settings)
 
 def get_arguments():
 	"""[Parse command-line arguments. Imported with argparse]

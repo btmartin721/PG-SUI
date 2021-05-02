@@ -26,7 +26,7 @@ class DelimModel:
 
 			pops ([list]): [List of populations IDs. Can be strings or integers]
 
-			dim_red_algorithms ([list or str], optional): [List of dimensionality reduction algorithms to run. If dim_red_algorithms=None, all of them will be performed]. Defaults to None.
+			algorithms ([list or str], optional): [List of dimensionality reduction algorithms to run. If algorithms=None, all of them will be performed]. Defaults to None.
 
 			settings ([dict], optional): [Dictionary of settings for each algorithm with setting names as keys and the settings as values. If settings=None, defaults for each algorithm will be used]. Defaults to None.
 		"""
@@ -37,7 +37,7 @@ class DelimModel:
 		self.pca_settings = None
 		self.mds_settings = None
 		self.rf_settings = None
-		self.dim_red_algorithms = None
+		self.algorithms = None
 		self.colors = None
 		self.palette = None
 		self.dr = None
@@ -80,29 +80,34 @@ class DelimModel:
 			TypeError: [The perc argument must be of type(float)]
 		"""
 
+		# Can't be both
 		if perc and elbow:
 			raise ValueError("\nperc and elbow arguments cannot both be set")
 
 		self.rf_settings = rf_settings
 
+		# Fetch supported settings and defaults
 		supported_settings = settings.random_forest_unsupervised_supported()
 		rf_settings_default = settings.random_forest_unsupervised_defaults()
 
+		# Update manually specified settings
 		if rf_settings:
 			rf_settings_default.update(rf_settings)
 			self._validate_settings(rf_settings, supported_settings)
 
 		# Make sure genotypes are a supported type and return a pandas.DataFrame
-		self.gt_df = self._validate_gt_type(self.gt)
+		self.gt_df = self._validate_type(self.gt)
 
 		# Embed the genotypes with PCA first
 		if pca_init:
+
+			# Update settings if manually specified
 			pca_settings_default = settings.pca_default_settings()
 			
 			if pca_settings:
 				pca_settings_default.update(pca_settings)
 				
-
+			# If inferring n_components with inflection point
 			if elbow:
 				self.dim_reduction(self.gt_df, ["standard-pca"], pca_settings=pca_settings, plot_pca_cumvar=True)
 
@@ -111,12 +116,14 @@ class DelimModel:
 				
 				self.dim_reduction(self.gt_df, ["standard-pca"], pca_settings={"n_components": int(inflection)}, plot_pca_cumvar=False)
 
+			# Make sure perc is of type(float)
 			elif perc:
 				try:
 					perc = float(perc)
 				except:
 					raise TypeError("\nThe perc argument could not be coerced to type(float)")
 
+				# Calculate the percentage of principal components to retain
 				indcount = self.gt_df.shape[0]
 				n_components_frac = perc * indcount
 				n_components_frac = int(n_components_frac)
@@ -124,6 +131,7 @@ class DelimModel:
 
 				pca_model = self.dim_reduction(self.gt_df, ["standard-pca"], pca_settings=pca_settings, plot_pca_cumvar=False)
 
+			# If n_components is manually specified
 			else:
 				pca_model = self.dim_reduction(self.gt_df, ["standard-pca"], pca_settings=pca_settings, plot_pca_cumvar=False)
 
@@ -131,22 +139,22 @@ class DelimModel:
 
 			print("\nDoing unsupervised random forest...")
 
-			self._rf_prox_matrix(self.pca, rf_settings_default)
+			self.rf_prox_matrix(self.pca, rf_settings_default)
 
 			print("Done!")
 
 
 		# Don't embed genotypes with PCA first
-		# Might take a long time
+		# Just use raw 012-encoded genotypes
 		else:
 
 			print("\nDoing unsupervised random forest...")
 
-			self._rf_prox_matrix(self.gt_df, rf_settings_default)
+			self.rf_prox_matrix(self.gt_df, rf_settings_default)
 
 			print("Done!")
 
-	def _rf_prox_matrix(self, X, rf_settings_default):
+	def rf_prox_matrix(self, X, rf_settings_default):
 		"""[Do unsupervised random forest embedding and calculate proximity scores. Saves an rf model and a proximity score matrix]
 
 		Args:
@@ -194,38 +202,60 @@ class DelimModel:
 		# Fit the model
 		clf.fit(X)
 
-		# Apply trees in the forest to X, return leaf indices
-		# This allows calculation of the proximity scores
-		leaves = clf.apply(X)
-
 		# transform and return the model
 		rf_model = clf.transform(X)
 
 		# Cast it to a numpy.ndarray
 		self.rf = rf_model.toarray()
 
+		self.prox_matrix, self.diss_matrix = self.calculate_rf_proximity_dissimilarity_mat(X, clf, rf_settings_default["rf_n_estimators"])
+
+	def calculate_rf_proximity_dissimilarity_mat(self, X, clf, n_trees):
+		"""[Calculate random forest proximity scores and a dissimilarity matrix from a fit sklearn.ensemble.RandomTreesEmbeddings model. Should be applied after model fitting but not on the transformed data. X is the modeled data]
+
+		Args:
+			X ([numpy.ndarray or pandas.DataFrame]): [The features to modeled with RandomTreesEmbeddings]
+
+			clf ([RandomTreesEmbeddings object]): [The classifier returned from initializing RandomForestEmbeddings()]
+
+			n_trees ([int]): [Number of estimator trees used in the RandomTreesEmbedding]
+
+		Returns:
+			[numpy.ndarray]: [Proximity score matrix and dissimilarity score matrix]
+		"""
+		# Apply trees in the forest to X, return leaf indices
+		# This allows calculation of the proximity scores
+		leaves = clf.apply(X)
+
 		# Initialize proximity matrix
-		self.prox_matrix = np.zeros((len(X), len(X)))
-		
+		prox = np.zeros((len(X), len(X)))
+			
 		# adapted implementation found here: 
 		# https://stackoverflow.com/questions/18703136/proximity-matrix-in-sklearn-ensemble-randomforestclassifier
 
 		# Generates proximity scores
-		for tree_idx in range(rf_settings_default["rf_n_estimators"]):
-			self.prox_matrix += np.equal.outer(leaves[:,tree_idx],
+		for tree_idx in range(n_trees):
+			prox += np.equal.outer(leaves[:,tree_idx],
 												leaves[:,tree_idx]).astype(float)
-		
+			
 		# Divide by the number of estimators to normalize
-		self.prox_matrix /= rf_settings_default["rf_n_estimators"]
+		prox /= n_trees
 
 		# Calculate dissimilarity matrix
-		self.diss_matrix = 1 - self.prox_matrix
-		self.diss_matrix = pd.DataFrame(self.diss_matrix)
+		# Subtracts 1 from each element in numpy.ndarray
+		diss = 1 - prox
+
+		# Convert them to pandas.DataFrame objects
+		diss = pd.DataFrame(diss)
+		prox = pd.DataFrame(prox)
+
+		return prox, diss
+
 
 	def dim_reduction(
 		self,
 		data,
-		dim_red_algorithms, 
+		algorithms, 
 		pca_settings=None, 
 		mds_settings=None, 
 		plot_pca_scatter=False, 
@@ -238,12 +268,24 @@ class DelimModel:
 		isomds_scatter_settings=None, 
 		colors=None, 
 		palette="Set1"):
-		"""[Perform dimensionality reduction using the algorithms in the dim_red_algorithms list]
+		"""[Perform dimensionality reduction using the specified algorithms. Data can be of type numpy.ndarray or pandas.DataFrame. It can also be raw 012-encoded genotypes or the output from unsupervised random forest embedding. 
+		
+			For the random forest output, it can either be the dissimilarity matrix generated after running random_forest_unsupervised() or the rf_model object also generated with random_forest_unsupervised().
+			
+			data can be embedded using several currently supported algorithms, including 'standard-pca', 'cmds', and 'isomds'
+			
+			The settings for each algorithm can be changed by specifying a dictionary with the sklearn.manifold.MDS and sklearn.decomposition.PCA parameters as the keys and their corresponding values. See the documentation for scikit-learn for more information. For each of the settings dictionaries, default arguments are used if left unspecified and you can set one, some, or all. Arguments not manually included in the settings dictionary will use default settings for those arguments.
+
+			Plots of each algorithm can also be made here by setting plot_pca_scatter=True, plot_cmds_scatter=True, and/ or plot_isomds_scatter=True. The plots can be customized by specifying a dictionary object for pca_scatter_settings, cmds_scatter_settings, and/ or isomds_scatter_settings. If the scatter settings are left unspecified, default arguments are used. Also, only the arguments you want to change need to be in the settings. A list of the supported settings will be included in our documentation.
+
+			The colors argument allows you to map colors to specific population IDs. It is a dictionary object with unique population IDs as keys and hex-code colors as the values
+
+			If colors=None, a default palette will be used, which can be changed by setting the palette argument. Supported options are include: (coming soon)]
 
 		Args:
-			data ([numpy.ndarray]): [Data to embed. Can be raw genotypes or fit models]
+			data ([numpy.ndarray or pandas.DataFrame]): [Data to embed. Can be raw genotypes or fit models]
 
-			dim_red_algorithms ([list]): [Dimensionality reduction algorithms to perform]
+			algorithms ([list]): [Dimensionality reduction algorithms to perform]
 
 			pca_settings ([dict], optional): [Dictionary with PCA settings as keys and the corresponding values. If pca_settings=None it will use all default arguments (scikit-allel and matplotlib documentation)]. Defaults to None.
 
@@ -268,11 +310,11 @@ class DelimModel:
 			palette (str, optional): [Color palette to use with the scatterplots. See matplotlib.colors documentation]. Defaults to "Set1".
 
 		Raises:
-			ValueError: [Must be a supported argument in dim_red_algoithms]
+			ValueError: [Must be a supported argument in algorithms]
 		"""
 		self.pca_settings = pca_settings
 		self.mds_settings = mds_settings
-		self.dim_red_algorithms = dim_red_algorithms
+		self.algorithms = algorithms
 		self.palette = palette
 		self.colors = colors
 
@@ -283,8 +325,8 @@ class DelimModel:
 		mds_settings_default = settings.mds_default_settings()
 
 		# Make sure the data are of the correct type
-		self.gt_df = self._validate_gt_type(self.gt)
-		data_df = self._validate_gt_type(data)
+		self.gt_df = self._validate_type(self.gt)
+		data_df = self._validate_type(data)
 
 		# Validate that the settings keys are supported and update the default
 		# settings with user-defined settings
@@ -293,19 +335,20 @@ class DelimModel:
 
 			pca_settings_default.update(self.pca_settings)
 
+		# Make sure all manually specified settings are supported
 		if self.mds_settings:
 			self._validate_settings(self.mds_settings, supported_settings)
 
 			mds_settings_default.update(self.mds_settings)
 
 		# Convert to list if user supplied a string
-		if isinstance(self.dim_red_algorithms, str):
-			self.dim_red_algorithms = [self.dim_red_algorithms]
+		if isinstance(self.algorithms, str):
+			self.algorithms = [self.algorithms]
 
 		# Do dimensionality reduction
 		self.dr = DimReduction(data_df, self.pops)
 
-		for arg in self.dim_red_algorithms:
+		for arg in self.algorithms:
 			if arg not in supported_algs:
 				raise ValueError("\nThe dimensionality reduction algorithm {} is not supported. Supported options include: {})".format(arg, supported_algs))
 
@@ -324,12 +367,14 @@ class DelimModel:
 						palette=self.palette
 					)
 
+				# Plot cumulative PCA variance
 				if plot_pca_cumvar:
 					self.dr.plot_pca_cumvar(self.prefix, pca_cumvar_settings)
 
 			elif arg == "cmds":
 				self.dr.do_mds(data_df, mds_settings_default, metric=True)
 
+				# cMDS scatterplot
 				if plot_cmds_scatter:
 					self.dr.plot_dimreduction(
 						self.prefix,
@@ -341,6 +386,7 @@ class DelimModel:
 						palette=self.palette
 					)
 
+			# isoMDS scatterplot
 			elif arg == "isomds":
 				self.dr.do_mds(data_df, mds_settings_default, metric=False)
 
@@ -355,7 +401,7 @@ class DelimModel:
 						palette=self.palette
 					)
 
-	def _validate_gt_type(self, geno):
+	def _validate_type(self, geno):
 		"""[Validate that the genotypes are of the correct type. Also converts numpy.ndarrays and list(list) into pandas.DataFrame for use with DelimModel]
 
 		Args:
