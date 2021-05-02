@@ -5,9 +5,6 @@ import os
 # Third-party imports
 import numpy as np
 import pandas as pd
-from scipy.sparse import issparse
-from scipy.spatial.distance import pdist
-from scipy.spatial.distance import squareform
 from sklearn.ensemble import RandomTreesEmbedding
 from sklearn.metrics import pairwise_distances
 from sklearn.utils.validation import check_symmetric
@@ -53,7 +50,35 @@ class DelimModel:
 		self.rf_cmds = None
 		self.rf_isomds = None
 
-	def random_forest_unsupervised(self, rf_settings=None, pca_init=True, pca_settings=None, perc=None, elbow=True, cmds_settings=None, isomds_settings=None):
+	def random_forest_unsupervised(self, rf_settings=None, pca_init=True, pca_settings=None, perc=None, elbow=True):
+		"""[Do unsupervised random forest embedding. The results can subsequently be subjected to dimensionality reduction using multidimensional scaling (cMDS and isoMDS). Random forest can also be performed on principal components or raw 012-encoded genotypes by setting pca_init=True or pca_init=False, respectively. 
+		
+			If pca_init=True, there are several options for setting the number of principal components to retain. 
+
+			First, the process can be automated by specifying either a percentage to retain using, for example, perc=.5. 
+			
+			Second, the inflection point of the cumulative explained variance can be inferred to choose the number of components by setting elbow=True. 
+			
+			Third, the number of PCs can be set manually by setting elbow=False and perc=None]
+
+			The random forest and PCA settings can be changed by specifying a dictionary with some or all of the sklearn.ensemble.RandomTreesEmbedding or sklearn.decomposition.PCA arguments specified as the dictionary keys along with their corresponding values. If you only specify some of the arguments, that is fine; it just updates the ones you changed. Otherwise it uses the default arguments for those that weren't manually specified]
+
+		Args:
+			rf_settings ([dict], optional): [sklearn.ensemble.RandomTreesEmbeddings arguments as keys with their corresponding values. If not specified, uses the default settings. Some or all of the settings can be changed, and it will only update the ones that were set manaully.]. Defaults to None.
+
+			pca_init (bool, optional): [True if principal component analysis (PCA) should be used to boil down the input into N principal components before running random forest embedding. False if using the raw genotypes]. Defaults to True.
+
+			pca_settings ([dict], optional): [sklearn.decomposition.PCA arguments as keys with their corresponding values. If not specified, uses the default settings. Some or all of the settings can be changed, and it will only update the ones that were set manually]. Defaults to None.
+
+			perc ([float], optional): [Percentage of principal components to retain. Ignored if pca_init=False. Cannot be used in conjuction with elbow=True]. Defaults to None.
+
+			elbow (bool, optional): [True if inflection point should be used to infer the number of principal components to retain. Cannot be used in conjuction with perc]. Defaults to True.
+
+		Raises:
+			ValueError: [Only one of the perc or elbow arguments can be set at a time]
+
+			TypeError: [The perc argument must be of type(float)]
+		"""
 
 		if perc and elbow:
 			raise ValueError("\nperc and elbow arguments cannot both be set")
@@ -108,27 +133,6 @@ class DelimModel:
 
 			self._rf_prox_matrix(self.pca, rf_settings_default)
 
-			#rf_sparse_model = rf_model.transform(self.pca)
-			#self.rf = rf_sparse_model.toarray()
-
-			#prox = self._proximity_matrix(rf_model, self.pca, normalize=True)
-			#diss = 1.0 - prox
-			#prox_repaired = check_symmetric(diss, tol=1e-15)
-			#print(np.abs(diss - diss.T).max())
-			#diss2 = diss.astype(np.float64)
-			#self.rf = prox_repaired
-
-		
-			#diss = 1 - prox
-
-			#is_sparse = issparse(diss)
-			#if is_sparse:
-				#test = pairwise_distances(diss, metric="hamming")
-
-			#rf_sparse_model = rf_model.transform(self.pca)
-			#self.rf = pairwise_distances(rf_sparse_arr, metric="hamming")
-			#self.rf = rf_sparse_model.toarray()
-
 			print("Done!")
 
 
@@ -140,20 +144,17 @@ class DelimModel:
 
 			self._rf_prox_matrix(self.gt_df, rf_settings_default)
 
-			#rf_sparse_model = rf_model.transform(self.gt_df)
-			#self.rf = rf_sparse_model.toarray()
-
 			print("Done!")
 
 	def _rf_prox_matrix(self, X, rf_settings_default):
 		"""[Do unsupervised random forest embedding and calculate proximity scores. Saves an rf model and a proximity score matrix]
 
 		Args:
-			X ([numpy.ndarray or pandas.DataFrame]): [Data to model]
+			X ([numpy.ndarray or pandas.DataFrame]): [Data to model. Can be principal components or 012-encoded genotypes]
 
-			rf_settings_default ([dict]): []
+			rf_settings_default ([dict]): [RandomTreesEmbedding settings with argument names as keys and their corresponding values]
 		"""
-
+		# Print settings to command-line
 		print(
 		"""
 		Random Forest Embedding Settings:
@@ -173,7 +174,7 @@ class DelimModel:
 			"""
 		)
 
-		# Grow a random forest from points
+		# Initialize a random forest
 		clf = RandomTreesEmbedding(
 			n_estimators=rf_settings_default["rf_n_estimators"],
 			max_depth=rf_settings_default["rf_max_depth"],
@@ -190,17 +191,22 @@ class DelimModel:
 			warm_start=rf_settings_default["rf_warm_start"]
 		)
 
-		#self.rf = clf.fit_transform(X)
+		# Fit the model
 		clf.fit(X)
 
 		# Apply trees in the forest to X, return leaf indices
+		# This allows calculation of the proximity scores
 		leaves = clf.apply(X)
 
+		# transform and return the model
 		rf_model = clf.transform(X)
+
+		# Cast it to a numpy.ndarray
 		self.rf = rf_model.toarray()
 
 		# Initialize proximity matrix
 		self.prox_matrix = np.zeros((len(X), len(X)))
+		
 		# adapted implementation found here: 
 		# https://stackoverflow.com/questions/18703136/proximity-matrix-in-sklearn-ensemble-randomforestclassifier
 
@@ -212,35 +218,9 @@ class DelimModel:
 		# Divide by the number of estimators to normalize
 		self.prox_matrix /= rf_settings_default["rf_n_estimators"]
 
+		# Calculate dissimilarity matrix
 		self.diss_matrix = 1 - self.prox_matrix
 		self.diss_matrix = pd.DataFrame(self.diss_matrix)
-
-		# def _treeprox(u, v):
-		# 	"""[Define an affinity measure function to use with scipy's pdist]
-
-		# 	Args:
-		# 		u ([numpy.ndarray]): [First dimension of numpy.ndarray returned from scipy.spatial.distance.pdist]
-		# 		v ([numpy.ndarray]): [Second dimension of numpy.ndarray returned from scipy.spatial.distance.pdist]
-
-		# 	Returns:
-		# 		[numpy.ndarray]: [distance matrix of proximity scores]
-		# 	"""
-		# 	leafcount = 0
-
-		# 	# Needs reshaping for single samples
-		# 	u = u.reshape(1,-1)
-		# 	v = v.reshape(1,-1)
-		# 	a = clf.apply(u)
-		# 	b = clf.apply(v)
-
-		# 	# Count number of times they fall in the same leaf 
-		# 	# (use of np forces element-wise)
-		# 	c = np.count_nonzero(np.array(a)==np.array(b))
-		# 	return c
-
-		# # Compute distance matrix using scipy.spatial.distance.pdist()
-		# distm = pdist(X, _treeprox)
-		# self.prox_matrix = squareform(distm)
 
 	def dim_reduction(
 		self,
