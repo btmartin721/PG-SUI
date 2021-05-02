@@ -6,6 +6,8 @@ import os
 import numpy as np
 import pandas as pd
 from scipy.sparse import issparse
+from scipy.spatial.distance import pdist
+from scipy.spatial.distance import squareform
 from sklearn.ensemble import RandomTreesEmbedding
 from sklearn.metrics import pairwise_distances
 from sklearn.utils.validation import check_symmetric
@@ -45,6 +47,8 @@ class DelimModel:
 
 		# Model results
 		self.rf = None
+		self.prox_matrix = None
+		self.diss_matrix = None
 		self.pca = None
 		self.rf_cmds = None
 		self.rf_isomds = None
@@ -72,6 +76,7 @@ class DelimModel:
 			
 			if pca_settings:
 				pca_settings_default.update(pca_settings)
+				
 
 			if elbow:
 				self.dim_reduction(self.gt_df, ["standard-pca"], pca_settings=pca_settings, plot_pca_cumvar=True)
@@ -94,27 +99,17 @@ class DelimModel:
 
 				pca_model = self.dim_reduction(self.gt_df, ["standard-pca"], pca_settings=pca_settings, plot_pca_cumvar=False)
 
+			else:
+				pca_model = self.dim_reduction(self.gt_df, ["standard-pca"], pca_settings=pca_settings, plot_pca_cumvar=False)
+
 			self.pca = self.dr.get_pca_coords
 
 			print("\nDoing unsupervised random forest...")
 
-			rf_model = RandomTreesEmbedding(
-				n_estimators=rf_settings_default["rf_n_estimators"],
-				max_depth=rf_settings_default["rf_max_depth"],
-				min_samples_split=rf_settings_default["rf_min_samples_split"],
-				min_samples_leaf=rf_settings_default["rf_min_samples_leaf"],
-				min_weight_fraction_leaf=rf_settings_default["rf_min_weight_fraction_leaf"],
-				max_leaf_nodes=rf_settings_default["rf_max_leaf_nodes"],
-				min_impurity_decrease=rf_settings_default["rf_min_impurity_decrease"],
-				min_impurity_split=rf_settings_default["rf_min_impurity_split"],
-				sparse_output=rf_settings_default["rf_sparse_output"],
-				n_jobs=rf_settings_default["rf_n_jobs"],
-				random_state=rf_settings_default["rf_random_state"],
-				verbose=rf_settings_default["rf_verbose"],
-				warm_start=rf_settings_default["rf_warm_start"]).fit(self.pca)
-				
-			rf_sparse_model = rf_model.transform(self.pca)
-			self.rf = rf_sparse_model.toarray()
+			self._rf_prox_matrix(self.pca, rf_settings_default)
+
+			#rf_sparse_model = rf_model.transform(self.pca)
+			#self.rf = rf_sparse_model.toarray()
 
 			#prox = self._proximity_matrix(rf_model, self.pca, normalize=True)
 			#diss = 1.0 - prox
@@ -143,43 +138,109 @@ class DelimModel:
 
 			print("\nDoing unsupervised random forest...")
 
-			rf_model = RandomTreesEmbedding(
-				n_estimators=rf_settings_default["rf_n_estimators"],
-				max_depth=rf_settings_default["rf_max_depth"],
-				min_samples_split=rf_settings_default["rf_min_samples_split"],
-				min_samples_leaf=rf_settings_default["rf_min_samples_leaf"],
-				min_weight_fraction_leaf=rf_settings_default["rf_min_weight_fraction_leaf"],
-				max_leaf_nodes=rf_settings_default["rf_max_leaf_nodes"],
-				min_impurity_decrease=rf_settings_default["rf_min_impurity_decrease"],
-				min_impurity_split=rf_settings_default["rf_min_impurity_split"],
-				sparse_output=rf_settings_default["rf_sparse_output"],
-				n_jobs=rf_settings_default["rf_n_jobs"],
-				random_state=rf_settings_default["rf_random_state"],
-				verbose=rf_settings_default["rf_verbose"],
-				warm_start=rf_settings_default["rf_warm_start"]).fit(self.gt_df)
+			self._rf_prox_matrix(self.gt_df, rf_settings_default)
 
-			rf_sparse_model = rf_model.transform(self.gt_df)
-
-			self.rf = rf_sparse_model.toarray()
+			#rf_sparse_model = rf_model.transform(self.gt_df)
+			#self.rf = rf_sparse_model.toarray()
 
 			print("Done!")
 
-	def _proximity_matrix(self, model, X, normalize=False):
+	def _rf_prox_matrix(self, X, rf_settings_default):
+		"""[Do unsupervised random forest embedding and calculate proximity scores. Saves an rf model and a proximity score matrix]
 
-		terminals = model.apply(X)
-		n_trees = terminals.shape[1]
+		Args:
+			X ([numpy.ndarray or pandas.DataFrame]): [Data to model]
 
-		a = terminals[:,0]
-		prox_mat = 1 * np.equal.outer(a, a)
+			rf_settings_default ([dict]): []
+		"""
 
-		for i in range(1, n_trees):
-			a = terminals[:,i]
-			prox_mat += 1 * np.equal.outer(a, a)
+		print(
+		"""
+		Random Forest Embedding Settings:
+			n_estimators: """+str(rf_settings_default["rf_n_estimators"])+"""
+			max_depth: """+str(rf_settings_default["rf_max_depth"])+"""
+			min_samples_split: """+str(rf_settings_default["rf_min_samples_split"])+"""
+			min_samples_leaf: """+str(rf_settings_default["rf_min_samples_leaf"])+"""
+			rf_min_weight_fraction_leaf: """+str(rf_settings_default["rf_min_weight_fraction_leaf"])+"""
+			max_leaf_nodes: """+str(rf_settings_default["rf_max_leaf_nodes"])+"""
+			min_impurity_decrease: """+str(rf_settings_default["rf_min_impurity_decrease"])+"""
+			min_impurity_split: """+str(rf_settings_default["rf_min_impurity_split"])+"""
+			sparse_output: """+str(rf_settings_default["rf_sparse_output"])+"""
+			n_jobs: """+str(rf_settings_default["rf_n_jobs"])+"""
+			rf_random_state: """+str(rf_settings_default["rf_random_state"])+"""
+			rf_verbose: """+str(rf_settings_default["rf_verbose"])+"""
+			warm_start: """+str(rf_settings_default["rf_warm_start"])+"""
+			"""
+		)
 
-		if normalize:
-			prox_mat = prox_mat / n_trees
+		# Grow a random forest from points
+		clf = RandomTreesEmbedding(
+			n_estimators=rf_settings_default["rf_n_estimators"],
+			max_depth=rf_settings_default["rf_max_depth"],
+			min_samples_split=rf_settings_default["rf_min_samples_split"],
+			min_samples_leaf=rf_settings_default["rf_min_samples_leaf"],
+			min_weight_fraction_leaf=rf_settings_default["rf_min_weight_fraction_leaf"],
+			max_leaf_nodes=rf_settings_default["rf_max_leaf_nodes"],
+			min_impurity_decrease=rf_settings_default["rf_min_impurity_decrease"],
+			min_impurity_split=rf_settings_default["rf_min_impurity_split"],
+			sparse_output=rf_settings_default["rf_sparse_output"],
+			n_jobs=rf_settings_default["rf_n_jobs"],
+			random_state=rf_settings_default["rf_random_state"],
+			verbose=rf_settings_default["rf_verbose"],
+			warm_start=rf_settings_default["rf_warm_start"]
+		)
 
-		return prox_mat
+		#self.rf = clf.fit_transform(X)
+		clf.fit(X)
+
+		# Apply trees in the forest to X, return leaf indices
+		leaves = clf.apply(X)
+
+		rf_model = clf.transform(X)
+		self.rf = rf_model.toarray()
+
+		# Initialize proximity matrix
+		self.prox_matrix = np.zeros((len(X), len(X)))
+		# adapted implementation found here: 
+		# https://stackoverflow.com/questions/18703136/proximity-matrix-in-sklearn-ensemble-randomforestclassifier
+
+		# Generates proximity scores
+		for tree_idx in range(rf_settings_default["rf_n_estimators"]):
+			self.prox_matrix += np.equal.outer(leaves[:,tree_idx],
+												leaves[:,tree_idx]).astype(float)
+		
+		# Divide by the number of estimators to normalize
+		self.prox_matrix /= rf_settings_default["rf_n_estimators"]
+
+		self.diss_matrix = 1 - self.prox_matrix
+		self.diss_matrix = pd.DataFrame(self.diss_matrix)
+
+		# def _treeprox(u, v):
+		# 	"""[Define an affinity measure function to use with scipy's pdist]
+
+		# 	Args:
+		# 		u ([numpy.ndarray]): [First dimension of numpy.ndarray returned from scipy.spatial.distance.pdist]
+		# 		v ([numpy.ndarray]): [Second dimension of numpy.ndarray returned from scipy.spatial.distance.pdist]
+
+		# 	Returns:
+		# 		[numpy.ndarray]: [distance matrix of proximity scores]
+		# 	"""
+		# 	leafcount = 0
+
+		# 	# Needs reshaping for single samples
+		# 	u = u.reshape(1,-1)
+		# 	v = v.reshape(1,-1)
+		# 	a = clf.apply(u)
+		# 	b = clf.apply(v)
+
+		# 	# Count number of times they fall in the same leaf 
+		# 	# (use of np forces element-wise)
+		# 	c = np.count_nonzero(np.array(a)==np.array(b))
+		# 	return c
+
+		# # Compute distance matrix using scipy.spatial.distance.pdist()
+		# distm = pdist(X, _treeprox)
+		# self.prox_matrix = squareform(distm)
 
 	def dim_reduction(
 		self,
@@ -287,7 +348,7 @@ class DelimModel:
 					self.dr.plot_pca_cumvar(self.prefix, pca_cumvar_settings)
 
 			elif arg == "cmds":
-				self.dr.do_mds(data, mds_settings_default, metric=True)
+				self.dr.do_mds(data_df, mds_settings_default, metric=True)
 
 				if plot_cmds_scatter:
 					self.dr.plot_dimreduction(
@@ -301,7 +362,7 @@ class DelimModel:
 					)
 
 			elif arg == "isomds":
-				self.dr.do_mds(data, mds_settings_default, metric=False)
+				self.dr.do_mds(data_df, mds_settings_default, metric=False)
 
 				if plot_isomds_scatter:
 					self.dr.plot_dimreduction(
@@ -366,13 +427,31 @@ class DelimModel:
 				ret.append(res.clusterAcrossK(method, inplace=False))
 
 	@property
-	def rf_matrix(self):
+	def rf_model(self):
 		"""[Getter for the embedded random forest matrix]
 
 		Returns:
 			[numpy.ndarray]: [2-dimensional embedded random forest matrix]
 		"""
 		return self.rf
+
+	@property
+	def rf_dissimilarity(self):
+		"""[Getter for the embedded random forest dissimilarity matrix]
+
+		Returns:
+			[pd.DataFrame]: [Square distance matrix with random forest dissimilarity scores]
+		"""
+		return self.diss_matrix
+
+	@property
+	def rf_proximity_scores(self):
+		"""[Getter for the random forest proximity scores matrix]
+
+		Returns:
+			[numpy.ndarray]: [Square matrix with proximity scores from the random forest embedding]
+		"""
+		return self.prox_matrix
 			
 class ModelResult:
 	"""[Object to hold results from replicates of a single delim model]

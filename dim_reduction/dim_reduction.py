@@ -68,7 +68,7 @@ class DimReduction:
 
 		print("\nDone!")
 
-	def do_mds(self, data, mds_arguments, metric=True):
+	def do_mds(self, X, mds_arguments, metric=True):
 		
 		if metric:
 			print("\nDoing cMDS dimensionality reduction...\n")
@@ -89,8 +89,8 @@ class DimReduction:
 				"""
 		)
 
-		scaler = MinMaxScaler()
-		df_X_scaled = scaler.fit_transform(self.data)
+		#scaler = MinMaxScaler()
+		#df_X_scaled = scaler.fit_transform(self.data)
 
 		mds = MDS(
 					n_components=mds_arguments["n_dims"], 
@@ -105,10 +105,10 @@ class DimReduction:
 				)
 
 		if metric:
-			self.cmds_model = mds.fit_transform(df_X_scaled)
+			self.cmds_model = mds.fit_transform(X)
 
 		else:
-			self.isomds_model = mds.fit_transform(df_X_scaled)
+			self.isomds_model = mds.fit_transform(X)
 
 		print("\nDone!")
 
