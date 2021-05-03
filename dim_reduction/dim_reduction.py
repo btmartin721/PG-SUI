@@ -2,19 +2,15 @@
 import sys
 
 # Third-party imports
-import allel
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 import matplotlib.colors as mcolors
-import matplotlib.patheffects as PathEffects
 import seaborn as sns
 sns.set_style("white")
 sns.set_style("ticks")
 
-from mpl_toolkits.mplot3d import Axes3D
-from sklearn.preprocessing import MinMaxScaler
 from sklearn.decomposition import PCA
 from sklearn.manifold import MDS
 from sklearn.manifold import TSNE

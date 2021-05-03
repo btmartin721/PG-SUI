@@ -6,8 +6,6 @@ import os
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomTreesEmbedding
-from sklearn.metrics import pairwise_distances
-from sklearn.utils.validation import check_symmetric
 
 # Custom module imports
 from read_input.read_input import GenotypeData
