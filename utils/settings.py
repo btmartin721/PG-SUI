@@ -370,8 +370,6 @@ def mds_default_settings():
 	"eps": 1e-3,
 	"n_jobs": 1,
 	"dissimilarity": "euclidean",
-	"mds_axis1": 1,
-	"mds_axis2": 2,
 	"figwidth": 6, 
 	"figheight": 6, 
 	"alpha": 1.0, 
@@ -397,8 +395,13 @@ def mds_default_settings():
 	"shadow": False,
 	"cmds_axis1": 1,
 	"cmds_axis2": 2,
+	"cmds_axis3": 3,
 	"isomds_axis1": 1,
-	"isomds_axis2": 2
+	"isomds_axis2": 2,
+	"isomds_axis3": 3,
+	"mds_axis1": 1,
+	"mds_axis2": 2,
+	"mds_axis3": 3
 	}
 	
 	return mds_settings_default
@@ -410,9 +413,11 @@ def dimreduction_plot_settings():
 		[dict]: [Argment names as keys with their corresponding values. See matplotlib documentation]
 
 	Options:
-		axis1 (int, optional): [First principal component axis to plot; starts at 1]. Defaults to 1.
+		axis1 (int, optional): [First axis to plot; starts at 1]. Defaults to 1.
 
-		axis2 (int, optional): [Second principal component axis to plot; starts at 1]. Defaults to 2.
+		axis2 (int, optional): [Second axis to plot; starts at 1]. Defaults to 2.
+
+		axis3 (int, optional): [Third axis to plot; starts at 1]. Defaults to 3.
 
 		figwidth (int, optional): [Set width of the plot]. Defaults to 6.
 
@@ -466,7 +471,8 @@ def dimreduction_plot_settings():
 	"""
 	dimreduction_settings = {
 		"axis1": 1, 
-		"axis2": 2, 
+		"axis2": 2,
+		"axis3": 3, 
 		"figwidth": 6, 
 		"figheight": 6, 
 		"alpha": 1.0, 

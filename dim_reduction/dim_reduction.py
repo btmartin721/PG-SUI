@@ -69,12 +69,15 @@ class DimReduction:
 
 		print("\nDone!")
 
-	def do_mds(self, X, mds_arguments, metric=True):
+	def do_mds(self, X, mds_arguments, metric=True, do_3d=False):
 		
 		if metric:
 			print("\nDoing cMDS dimensionality reduction...\n")
 		else:
 			print("\nDoing isoMDS dimensionality reduction...\n")
+
+		if do_3d and mds_arguments["n_dims"] < 3:
+			raise ValueError("plot_3d was set to True but mds_settings has n_dims set < 3")
 			
 		print(
 				"""
@@ -113,7 +116,7 @@ class DimReduction:
 
 		print("\nDone!")
 
-	def plot_dimreduction(self, prefix, pca=False, cmds=False, isomds=False, user_settings=None, colors=None, palette="Set1"):
+	def plot_dimreduction(self, prefix, pca=False, cmds=False, isomds=False, plot_3d=False, user_settings=None, colors=None, palette="Set1"):
 		"""[Plot PCA results as a scatterplot and save it as a PDF file]
 
 		Args:
@@ -149,38 +152,55 @@ class DimReduction:
 		axis1_idx = settings_default["axis1"] - 1
 		axis2_idx = settings_default["axis2"] - 1
 
+		if plot_3d:
+			axis3_idx = settings_default["axis3"] - 1
+
 		if pca:
 			print("\nPlotting PCA results...")
 			x = self.pca_coords[:, axis1_idx]
 			y = self.pca_coords[:, axis2_idx]
+
+			if plot_3d:
+				z = self.pca_coords[:, axis3_idx]
+
 
 		if cmds:
 			print("\nPlotting cMDS results...")
 			x = self.cmds_model[:, axis1_idx]
 			y = self.cmds_model[:, axis2_idx]
 
+			if plot_3d:
+				z = self.pca_coords[:, axis3_idx]
+
 		if isomds:
 			print("\nPlotting isoMDS results...")
 			x = self.isomds_model[:, axis1_idx]
 			y = self.isomds_model[:, axis2_idx]
+
+			if plot_3d:
+				z = self.pca_coords[:, axis3_idx]
 
 		targets = list(set(self.pops))
 
 		pop_df = pd.DataFrame(self.pops, columns=["population"])
 		
 		fig = plt.figure(figsize=(settings_default["figwidth"], settings_default["figheight"]))
-		ax = fig.add_subplot(1,1,1)
+
+		if plot_3d:
+			ax = fig.add_subplot(111, projection="3d")
+		else:
+			ax = fig.add_subplot(1,1,1)
 
 		colors = self._get_pop_colors(targets, palette, colors)
 
 		if pca:
-			self._plot_coords(self.pca_coords, settings_default["axis1"], settings_default["axis2"], ax, pop_df, targets, colors, settings_default["alpha"], settings_default["marker"], settings_default["markersize"], settings_default["markeredgecolor"], settings_default["markeredgewidth"], pca, cmds, isomds, model=self.pca_model)
+			self._plot_coords(self.pca_coords, settings_default["axis1"], settings_default["axis2"], settings_default["axis3"], plot_3d, ax, pop_df, targets, colors, settings_default["alpha"], settings_default["marker"], settings_default["markersize"], settings_default["markeredgecolor"], settings_default["markeredgewidth"], pca, cmds, isomds, model=self.pca_model)
 
 		elif cmds:
-			self._plot_coords(self.cmds_model, settings_default["axis1"], settings_default["axis2"], ax, pop_df, targets, colors, settings_default["alpha"], settings_default["marker"], settings_default["markersize"], settings_default["markeredgecolor"], settings_default["markeredgewidth"], pca, cmds, isomds)
+			self._plot_coords(self.cmds_model, settings_default["axis1"], settings_default["axis2"], settings_default["axis3"], plot_3d, ax, pop_df, targets, colors, settings_default["alpha"], settings_default["marker"], settings_default["markersize"], settings_default["markeredgecolor"], settings_default["markeredgewidth"], pca, cmds, isomds)
 
 		elif isomds:
-			self._plot_coords(self.isomds_model, settings_default["axis1"], settings_default["axis2"], ax, pop_df, targets, colors, settings_default["alpha"], settings_default["marker"], settings_default["markersize"], settings_default["markeredgecolor"], settings_default["markeredgewidth"], pca, cmds, isomds)
+			self._plot_coords(self.isomds_model, settings_default["axis1"], settings_default["axis2"], settings_default["axis3"], plot_3d, ax, pop_df, targets, colors, settings_default["alpha"], settings_default["marker"], settings_default["markersize"], settings_default["markeredgecolor"], settings_default["markeredgewidth"], pca, cmds, isomds)
 
 		if settings_default["legend"]:
 			if settings_default["legend_inside"]:
@@ -275,7 +295,7 @@ class DimReduction:
 
 		self.inflection = kneedle.knee
 		
-	def _plot_coords(self, coords, axis1, axis2, ax, populations, unique_populations, pop_colors, alpha, marker, markersize, markeredgecolor, markeredgewidth, pca, cmds, isomds, model=None):
+	def _plot_coords(self, coords, axis1, axis2, axis3, plot_3d, ax, populations, unique_populations, pop_colors, alpha, marker, markersize, markeredgecolor, markeredgewidth, pca, cmds, isomds, model=None):
 		"""[Map colors to populations and make the scatterplot]
 
 		Args:
@@ -284,6 +304,10 @@ class DimReduction:
 			axis1 ([int]): [First axis to plot. Starts at 1]
 
 			axis2 ([int]): [Second axis to plot. Starts at 1]
+
+			axis3 ([int]): [Third axis to plot. Starts at 1]
+
+			plot_3d ([bool]): [True if making 3D plot. False if 2D plot]
 
 			ax ([matplotlib object]): [ax object from matplotlib]
 
@@ -323,12 +347,34 @@ class DimReduction:
 		axis1_idx = axis1 - 1
 		axis2_idx = axis2 - 1
 
+		if plot_3d:
+			axis3_idx = axis3 - 1
+
 		x = coords[:, axis1_idx]
 		y = coords[:, axis2_idx]
 
+		if plot_3d:
+			z = coords[:, axis3_idx]
+
 		for pop in unique_populations:
 			flt = (populations.population == pop)
-			ax.plot(
+
+			if plot_3d:
+				ax.plot3D(
+							x[flt], 
+							y[flt], 
+							z[flt],
+							marker=marker, 
+							linestyle=' ', 
+							color=pop_colors[pop], 
+							label=pop, 
+							markersize=markersize, 
+							mec=markeredgecolor, 
+							mew=markeredgewidth, 
+							alpha=alpha
+					)
+			else:
+				ax.plot(
 						x[flt], 
 						y[flt], 
 						marker=marker, 
@@ -339,20 +385,29 @@ class DimReduction:
 						mec=markeredgecolor, 
 						mew=markeredgewidth, 
 						alpha=alpha
-					)
+				)
 
 		if pca:
 			ax.set_xlabel('PC%s (%.1f%%)' % (axis1, model.explained_variance_ratio_[axis1_idx]*100))
 
 			ax.set_ylabel('PC%s (%.1f%%)' % (axis2, model.explained_variance_ratio_[axis2_idx]*100))
 
+			if plot_3d:
+				ax.set_zlabel('PC%s (%.1f%%)' % (axis3, model.explained_variance_ratio_[axis3_idx]*100))
+
 		elif cmds:
 			ax.set_xlabel("cMDS Axis {}".format(axis1))
 			ax.set_ylabel("cMDS Axis {}".format(axis2))
 
+			if plot_3d:
+				ax.set_zlabel("cMDS Axis {}".format(axis3))
+
 		elif isomds:
 			ax.set_xlabel("isoMDS Axis {}".format(axis1))
 			ax.set_ylabel("isoMDS Axis {}".format(axis2))
+
+			if plot_3d:
+				ax.set_zlabel("isoMDS Axis {}".format(axis3))
 
 		else:
 			raise ValueError("Either pca, cmds, or isomds must be set to True")

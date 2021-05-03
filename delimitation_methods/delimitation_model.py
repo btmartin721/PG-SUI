@@ -267,7 +267,8 @@ class DelimModel:
 		plot_isomds_scatter=False, 
 		isomds_scatter_settings=None, 
 		colors=None, 
-		palette="Set1"):
+		palette="Set1",
+		plot_3d=False):
 		"""[Perform dimensionality reduction using the specified algorithms. Data can be of type numpy.ndarray or pandas.DataFrame. It can also be raw 012-encoded genotypes or the output from unsupervised random forest embedding. 
 		
 			For the random forest output, it can either be the dissimilarity matrix generated after running random_forest_unsupervised() or the rf_model object also generated with random_forest_unsupervised().
@@ -308,6 +309,8 @@ class DelimModel:
 			colors (dict, optional): [Dictionary with population IDs as keys and hex-code colors as the values. If colors=None, dim_reduction will use a default color palette that can be changed with the palette argument]. Defaults to None.
 
 			palette (str, optional): [Color palette to use with the scatterplots. See matplotlib.colors documentation]. Defaults to "Set1".
+
+			plot_3d (bool, optional): [True if making 3D plot with 3 axes. False if 2D plot with 2 axes]
 
 		Raises:
 			ValueError: [Must be a supported argument in algorithms]
@@ -362,6 +365,7 @@ class DelimModel:
 						pca=True,
 						cmds=False,
 						isomds=False,
+						plot_3d=plot_3d,
 						user_settings=pca_scatter_settings,
 						colors=self.colors,
 						palette=self.palette
@@ -372,7 +376,7 @@ class DelimModel:
 					self.dr.plot_pca_cumvar(self.prefix, pca_cumvar_settings)
 
 			elif arg == "cmds":
-				self.dr.do_mds(data_df, mds_settings_default, metric=True)
+				self.dr.do_mds(data_df, mds_settings_default, metric=True, do_3d=plot_3d)
 
 				# cMDS scatterplot
 				if plot_cmds_scatter:
@@ -381,6 +385,7 @@ class DelimModel:
 						pca=False,
 						cmds=True,
 						isomds=False,
+						plot_3d=plot_3d,
 						user_settings=cmds_scatter_settings,
 						colors=self.colors,
 						palette=self.palette
@@ -388,7 +393,7 @@ class DelimModel:
 
 			# isoMDS scatterplot
 			elif arg == "isomds":
-				self.dr.do_mds(data_df, mds_settings_default, metric=False)
+				self.dr.do_mds(data_df, mds_settings_default, metric=False, do_3d=plot_3d)
 
 				if plot_isomds_scatter:
 					self.dr.plot_dimreduction(
@@ -396,6 +401,7 @@ class DelimModel:
 						pca=False,
 						cmds=False,
 						isomds=True,
+						plot_3d=plot_3d,
 						user_settings=isomds_scatter_settings,
 						colors=self.colors,
 						palette=self.palette
