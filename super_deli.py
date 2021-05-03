@@ -71,8 +71,11 @@ def main():
 
 		data.write_imputed(data.imputed_br_df, args.prefix)
 	
+	pcs = data.indcount - 1
+
 	pca_settings = {
-		"n_components": data.indcount-1
+		"scaler": "patterson",
+		"n_components": pcs
 	}
 
 	mds_settings = {
@@ -106,13 +109,13 @@ def main():
 
 	clusters = DelimModel(data.imputed_rf_df, data.populations, args.prefix)
 
-	#clusters.dim_reduction(data.imputed_rf_df, algorithms=["standard-pca", "cmds", "isomds"], pca_settings=pca_settings, mds_settings=mds_settings, plot_pca_scatter=True, plot_pca_cumvar=True, pca_cumvar_settings=pca_cumvar_settings, plot_cmds_scatter=True, plot_isomds_scatter=True, plot_3d=True)
+	clusters.dim_reduction(data.imputed_rf_df, algorithms=["pca"], pca_settings=pca_settings, mds_settings=mds_settings, plot_pca_scatter=True, plot_pca_cumvar=True, pca_cumvar_settings=pca_cumvar_settings, plot_cmds_scatter=True, plot_isomds_scatter=True, plot_3d=True)
 
 	rf_embed_settings = {"rf_n_estimators": 1000, "rf_n_jobs": 4}
 
-	clusters.random_forest_unsupervised(pca_settings={"n_components": 10}, pca_init=True, rf_settings=rf_embed_settings, elbow=False)
+	#clusters.random_forest_unsupervised(pca_settings={"n_components": 10}, pca_init=True, rf_settings=rf_embed_settings, elbow=False)
 
-	clusters.dim_reduction(clusters.rf_dissimilarity, algorithms=["tsne"], plot_cmds_scatter=True, plot_isomds_scatter=True, mds_settings=mds_settings, tsne_settings=tsne_settings, plot_3d=True, cmds_scatter_settings=cmds_scatter_settings, isomds_scatter_settings=isomds_scatter_settings, plot_tsne_scatter=True, tsne_scatter_settings=tsne_scatter_settings)
+	#clusters.dim_reduction(clusters.rf_dissimilarity, algorithms=["cmds", "tsne"], plot_cmds_scatter=True, plot_isomds_scatter=True, mds_settings=mds_settings, tsne_settings=tsne_settings, plot_3d=True, cmds_scatter_settings=cmds_scatter_settings, isomds_scatter_settings=isomds_scatter_settings, plot_tsne_scatter=True, tsne_scatter_settings=tsne_scatter_settings, plot_pca_cumvar=True)
 
 def get_arguments():
 	"""[Parse command-line arguments. Imported with argparse]

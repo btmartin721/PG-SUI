@@ -371,7 +371,7 @@ class DelimModel:
 				raise ValueError("\nThe dimensionality reduction algorithm {} is not supported. Supported options include: {})".format(arg, supported_algs))
 
 			if arg == "standard-pca":
-				pca_coords, pca_model = dr.standard_pca(data_df, pca_settings_default)
+				pca_coords, pca_model = dr.do_pca(data_df, pca_settings_default)
 				
 				# Plot PCA scatterplot
 				if plot_pca_scatter:

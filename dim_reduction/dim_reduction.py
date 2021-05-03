@@ -24,8 +24,8 @@ from kneed import KneeLocator # conda install -c conda-forge kneed
 from utils import settings
 
 
-def standard_pca(data, pca_arguments):
-	"""[Does standard PCA using scikit-allel. By default uses a Patterson scaler]
+def do_pca(data, pca_settings):
+	"""[Does principal component analysis on 012-encoded genotypes. By default uses a Patterson scaler to standardize, but you can use two other scalers: 'standard' and 'center'. 'standard' centers and standardizes the data, whereas 'center' just centers it and doesn't standardize it]
 
 	Args:
 		data ([numpy.ndarray]): [012-encoded genotypes of shape (n_samples, n_features)]
@@ -36,21 +36,115 @@ def standard_pca(data, pca_arguments):
 	print(
 			"""
 			PCA Settings:
-				n_components: """+str(pca_arguments["n_components"])+"""
-				scaler: """+str(pca_arguments["scaler"])+"""
-				ploidy: """+str(pca_arguments["ploidy"])+"""
+				n_components: """+str(pca_settings["n_components"])+"""
+				scaler: """+str(pca_settings["scaler"])+"""
 			"""
 	)
 
-	gn = np.array(data).transpose()
+	# Scale and center the data
+	if pca_settings["scaler"] == "patterson":
+		gt = _scaler_patterson(data)
+	
+	elif pca_settings["scaler"] == "standard":
+		gt = _scaler_standard(data)
 
-	pca_coords, pca_model = allel.pca(gn, n_components=pca_arguments["n_components"], scaler=pca_arguments["scaler"], ploidy=pca_arguments["ploidy"])
+	elif pca_settings["scaler"] == "center":
+		gt = _scaler_center(data)
+
+	else:
+		raise ValueError("Unsupported scaler argument provided: {}".format(pca_settings["scaler"]))
+
+	pca = PCA(n_components=pca_settings["n_components"])
+
+	model = pca.fit(gt)
+	coords = model.transform(gt)
 
 	print("\nDone!")
 
-	return pca_coords, pca_model
+	return coords, model
 
 
+def _scaler_patterson(data):
+	"""[Patterson scaler for PCA. Basically the formula for calculating the unit variance per SNP site is: std = np.sqrt((mean / ploidy) * (1 - (mean / ploidy))). Then center the data by subtracting the mean and scale it by dividing by the unit variance per SNP site.]
+
+	Args:
+		data ([numpy.ndarray]): [012-encoded genotypes to transform of shape (n_samples, n_features)]
+
+	Returns:
+		[numpy.ndarray]: [Transformed data, centered and scaled with Patterson scaler]
+	"""
+	# Make sure type is np.ndarray
+	if not isinstance(data, np.ndarray):
+		data = np.asarray(data)
+	
+	# Find mean of each site
+	mean = np.mean(data, axis=0, keepdims=True)
+
+	# Super Deli only supports ploidy of 2 currently
+	ploidy = 2
+
+	# Do Patterson scaling
+	# Ploidy is 2
+	p = mean / ploidy
+	std = np.sqrt(p * (1 - p))
+
+	# Make sure dtype is np.float64
+	data = data.astype(np.float64)
+
+	# Center the data
+	data -= mean
+
+	# Scale the data using the Patterson scaler
+	data /= std
+
+	return data
+
+def _scaler_standard(data):
+	"""[Center and standardize data]
+
+	Args:
+		data ([numpy.ndarray]): [012-encoded genotypes to transform of shape (n_samples, n_features)]
+
+	Returns:
+		[numpy.ndarray]: [Transformed data, centered and standardized]
+	"""
+	# Make sure data is a numpy.ndarray
+	if not isinstance(data, np.ndarray):
+		data = np.asarray(data)
+	
+	# Make sure dtype is np.float64
+	data = data.astype(np.float64)
+
+	# Center and standardize the data
+	mean = np.mean(data, axis=0, keepdims=True)
+	std = np.std(data, axis=0, keepdims=True)
+	data -= mean
+	data /= std
+
+	return data
+
+def _scaler_center(data):
+	"""[Just center the data; don't standardize]
+
+	Args:
+		data ([numpy.ndarray]): [012-encoded genoytpes to transform of shape (n_samples, n_features)]
+
+	Returns:
+		[numpy.ndarray]: [Centered 012-encoded genotypes; not standardized]
+	"""
+	if not isinstance(data, np.ndarray):
+		data = np.asarray(data)
+
+	# Make sure type is np.float64
+	data = data.astype(np.float64)
+
+	# Center the data
+	mean = np.mean(data, axis=0, keepdims=True)
+	data -= mean
+	return data
+
+
+	
 def do_mds(X, mds_arguments, metric=True, do_3d=False):
 	
 	if metric:

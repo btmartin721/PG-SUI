@@ -265,7 +265,6 @@ def dim_reduction_supported_arguments():
 		"n_components", 
 		"copy", 
 		"scaler", 
-		"ploidy",
 		"pc_axis1",
 		"pc_axis2",
 		"figwidth", 
@@ -325,7 +324,7 @@ def dim_reduction_supported_algorithms():
 	Returns:
 		[list]: [List of supported algorithms]
 	"""
-	return ["standard-pca", "cmds", "isomds", "tsne"]
+	return ["pca", "cmds", "isomds", "tsne"]
 
 def pca_default_settings():
 	"""[Default settings for standard PCA]
