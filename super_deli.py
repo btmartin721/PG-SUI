@@ -62,14 +62,9 @@ def main():
 		
 		data = GenotypeData(filename=args.phylip, filetype="phylip", popmapfile=args.popmap)
 		
-	# **TEMP**
-	# test impute_freq
-	# imp = impute.impute_freq(data.genotypes_list, diploid=True, pops=data.populations)
-
 	if args.resume_imputed:
 		data.read_imputed(args.resume_imputed, impute_methods="rf")
 		#data.write_imputed(data.imputed_rf_df, args.prefix)
-
 
 	else:	
 		data.impute_missing(impute_methods="br", impute_settings=br_imputation_settings)
@@ -86,6 +81,24 @@ def main():
 		"n_jobs": 4,
 		"eps": 1e-4,
 		"dissimilarity": "precomputed",
+		"n_dims": 3
+	}
+
+	tsne_settings = {
+		"n_components": 3,
+		"perplexity": 15
+	}
+
+	cmds_scatter_settings = {
+		"bbox_to_anchor": (1.1, 1.0)
+	}
+
+	isomds_scatter_settings = {
+		"bbox_to_anchor": (1.1, 1.0)
+	}
+
+	tsne_scatter_settings = {
+		"bbox_to_anchor": (1.1, 1.0)
 	}
 
 	# See matplotlib axvline settings for options
@@ -99,7 +112,7 @@ def main():
 
 	clusters.random_forest_unsupervised(pca_settings={"n_components": 10}, pca_init=True, rf_settings=rf_embed_settings, elbow=False)
 
-	clusters.dim_reduction(clusters.rf_dissimilarity, algorithms=["cmds", "isomds"], plot_cmds_scatter=True, plot_isomds_scatter=True, mds_settings=mds_settings)
+	clusters.dim_reduction(clusters.rf_dissimilarity, algorithms=["tsne"], plot_cmds_scatter=True, plot_isomds_scatter=True, mds_settings=mds_settings, tsne_settings=tsne_settings, plot_3d=True, cmds_scatter_settings=cmds_scatter_settings, isomds_scatter_settings=isomds_scatter_settings, plot_tsne_scatter=True, tsne_scatter_settings=tsne_scatter_settings)
 
 def get_arguments():
 	"""[Parse command-line arguments. Imported with argparse]

@@ -11,8 +11,9 @@ from sklearn.utils.validation import check_symmetric
 
 # Custom module imports
 from read_input.read_input import GenotypeData
-from dim_reduction.dim_reduction import DimReduction
+import dim_reduction.dim_reduction as dr
 from utils import settings
+from utils.misc import timer
 
 class DelimModel:
 	"""[Parent class for delimitation models]
@@ -33,23 +34,22 @@ class DelimModel:
 		self.gt = gt 
 		self.pops = pops
 		self.prefix = prefix
-		self.gt_df = None
 		self.pca_settings = None
 		self.mds_settings = None
+		self.tsne_settings = None
 		self.rf_settings = None
 		self.algorithms = None
 		self.colors = None
 		self.palette = None
-		self.dr = None
 
 		# Model results
 		self.rf = None
-		self.prox_matrix = None
-		self.diss_matrix = None
+		self.rf_prox_matrix = None
+		self.rf_diss_matrix = None
 		self.pca = None
-		self.rf_cmds = None
-		self.rf_isomds = None
+		self.tsne = None
 
+	@timer
 	def random_forest_unsupervised(self, rf_settings=None, pca_init=True, pca_settings=None, perc=None, elbow=True):
 		"""[Do unsupervised random forest embedding. The results can subsequently be subjected to dimensionality reduction using multidimensional scaling (cMDS and isoMDS). Random forest can also be performed on principal components or raw 012-encoded genotypes by setting pca_init=True or pca_init=False, respectively. 
 		
@@ -96,7 +96,7 @@ class DelimModel:
 			self._validate_settings(rf_settings, supported_settings)
 
 		# Make sure genotypes are a supported type and return a pandas.DataFrame
-		self.gt_df = self._validate_type(self.gt)
+		gt_df = self._validate_type(self.gt)
 
 		# Embed the genotypes with PCA first
 		if pca_init:
@@ -109,12 +109,11 @@ class DelimModel:
 				
 			# If inferring n_components with inflection point
 			if elbow:
-				self.dim_reduction(self.gt_df, ["standard-pca"], pca_settings=pca_settings, plot_pca_cumvar=True)
+				pca_coords, pca_model, inflection = self.dim_reduction(gt_df, ["standard-pca"], pca_settings=pca_settings, plot_pca_cumvar=True, return_pca=True)
 
-				inflection = self.dr.pca_components_elbow
 				print("\nRe-doing PCA with n_components set to the inflection point")
 				
-				self.dim_reduction(self.gt_df, ["standard-pca"], pca_settings={"n_components": int(inflection)}, plot_pca_cumvar=False)
+				pca_coords, pca_model = self.dim_reduction(gt_df, ["standard-pca"], pca_settings={"n_components": int(inflection)}, plot_pca_cumvar=False, return_pca=True)
 
 			# Make sure perc is of type(float)
 			elif perc:
@@ -124,22 +123,20 @@ class DelimModel:
 					raise TypeError("\nThe perc argument could not be coerced to type(float)")
 
 				# Calculate the percentage of principal components to retain
-				indcount = self.gt_df.shape[0]
+				indcount = gt_df.shape[0]
 				n_components_frac = perc * indcount
 				n_components_frac = int(n_components_frac)
 				pca_settings_default.update({"n_components": n_components_frac})
 
-				pca_model = self.dim_reduction(self.gt_df, ["standard-pca"], pca_settings=pca_settings, plot_pca_cumvar=False)
+				pca_coords, pca_model = self.dim_reduction(gt_df, ["standard-pca"], pca_settings=pca_settings, plot_pca_cumvar=False, return_pca=True)
 
 			# If n_components is manually specified
 			else:
-				pca_model = self.dim_reduction(self.gt_df, ["standard-pca"], pca_settings=pca_settings, plot_pca_cumvar=False)
-
-			self.pca = self.dr.get_pca_coords
+				pca_coords, pca_model = self.dim_reduction(gt_df, ["standard-pca"], pca_settings=pca_settings, plot_pca_cumvar=False, return_pca=True)
 
 			print("\nDoing unsupervised random forest...")
 
-			self.rf_prox_matrix(self.pca, rf_settings_default)
+			self.rf_embedding(pca_coords, rf_settings_default)
 
 			print("Done!")
 
@@ -150,12 +147,12 @@ class DelimModel:
 
 			print("\nDoing unsupervised random forest...")
 
-			self.rf_prox_matrix(self.gt_df, rf_settings_default)
+			self.rf_embedding(gt_df, rf_settings_default)
 
 			print("Done!")
 
-	def rf_prox_matrix(self, X, rf_settings_default):
-		"""[Do unsupervised random forest embedding and calculate proximity scores. Saves an rf model and a proximity score matrix]
+	def rf_embedding(self, X, rf_settings_default):
+		"""[Do unsupervised random forest embedding. Saves an rf model and a proximity score matrix]
 
 		Args:
 			X ([numpy.ndarray or pandas.DataFrame]): [Data to model. Can be principal components or 012-encoded genotypes]
@@ -251,13 +248,13 @@ class DelimModel:
 
 		return prox, diss
 
-
 	def dim_reduction(
 		self,
 		data,
 		algorithms, 
 		pca_settings=None, 
 		mds_settings=None, 
+		tsne_settings=None,
 		plot_pca_scatter=False, 
 		pca_scatter_settings=None, 
 		plot_pca_cumvar=False, 
@@ -266,9 +263,13 @@ class DelimModel:
 		cmds_scatter_settings=None, 
 		plot_isomds_scatter=False, 
 		isomds_scatter_settings=None, 
+		plot_tsne_scatter=False,
+		tsne_scatter_settings=None,
 		colors=None, 
 		palette="Set1",
-		plot_3d=False):
+		plot_3d=False,
+		return_pca=False
+	):
 		"""[Perform dimensionality reduction using the specified algorithms. Data can be of type numpy.ndarray or pandas.DataFrame. It can also be raw 012-encoded genotypes or the output from unsupervised random forest embedding. 
 		
 			For the random forest output, it can either be the dissimilarity matrix generated after running random_forest_unsupervised() or the rf_model object also generated with random_forest_unsupervised().
@@ -306,17 +307,31 @@ class DelimModel:
 
 			isomds_scatter_settings (dict, optional): [Change some or all settings for the isoMDS scatterplot]
 
+			plot_tsne_scatter (bool, optional): [If True, T-SNE results will be plotted as a scatterplot]. Defaults to False.
+
+			tsne_scatter_settings (dict, optional): [Chnage some or all settings for the T-SNE scatterplot. Setting names should be the dictionary keys with their corresponding values]
+
 			colors (dict, optional): [Dictionary with population IDs as keys and hex-code colors as the values. If colors=None, dim_reduction will use a default color palette that can be changed with the palette argument]. Defaults to None.
 
 			palette (str, optional): [Color palette to use with the scatterplots. See matplotlib.colors documentation]. Defaults to "Set1".
 
-			plot_3d (bool, optional): [True if making 3D plot with 3 axes. False if 2D plot with 2 axes]
+			plot_3d (bool, optional): [True if making 3D plot with 3 axes. False if 2D plot with 2 axes]. Defaults to False.
+
+			return_pca (bool, optional): [True if you want to just return the PCA results. Ignores the MDS and T-SNE arguments]. Defaults to False.
+
+		Returns:
+			pca_coords (numpy.ndarray, optional): [If return_pca=True, the PCA coordinates get returned as a 2D numpy.ndarray with shape (n_samples, n_features)]
+
+			pca_model (sklearn.decomposition.PCA, optional): [If return_pca=True, the PCA model gets returned]
+
+			elbow (int, optional): [If return_pca=True and plot_pca_cumvar=True, elbow gets returned along with pca_coords and pca_model. Contains the number of principal components at the elbow of the curve]
 
 		Raises:
 			ValueError: [Must be a supported argument in algorithms]
 		"""
 		self.pca_settings = pca_settings
 		self.mds_settings = mds_settings
+		self.tsne_settings = tsne_settings
 		self.algorithms = algorithms
 		self.palette = palette
 		self.colors = colors
@@ -326,65 +341,74 @@ class DelimModel:
 		supported_settings = settings.dim_reduction_supported_arguments()
 		pca_settings_default = settings.pca_default_settings()
 		mds_settings_default = settings.mds_default_settings()
+		tsne_settings_default = settings.tsne_default_settings()
 
 		# Make sure the data are of the correct type
-		self.gt_df = self._validate_type(self.gt)
+		gt_df = self._validate_type(self.gt)
 		data_df = self._validate_type(data)
 
 		# Validate that the settings keys are supported and update the default
 		# settings with user-defined settings
 		if self.pca_settings:
 			self._validate_settings(self.pca_settings, supported_settings)
-
 			pca_settings_default.update(self.pca_settings)
 
 		# Make sure all manually specified settings are supported
 		if self.mds_settings:
 			self._validate_settings(self.mds_settings, supported_settings)
-
 			mds_settings_default.update(self.mds_settings)
+		
+		if self.tsne_settings:
+			self._validate_settings(self.tsne_settings, supported_settings)
+			tsne_settings_default.update(self.tsne_settings)
 
 		# Convert to list if user supplied a string
 		if isinstance(self.algorithms, str):
 			self.algorithms = [self.algorithms]
-
-		# Do dimensionality reduction
-		self.dr = DimReduction(data_df, self.pops)
 
 		for arg in self.algorithms:
 			if arg not in supported_algs:
 				raise ValueError("\nThe dimensionality reduction algorithm {} is not supported. Supported options include: {})".format(arg, supported_algs))
 
 			if arg == "standard-pca":
-				self.dr.standard_pca(pca_settings_default)
+				pca_coords, pca_model = dr.standard_pca(data_df, pca_settings_default)
 				
 				# Plot PCA scatterplot
 				if plot_pca_scatter:
-					self.dr.plot_dimreduction(
+					dr.plot_dimreduction(
+						pca_coords,
+						self.pops,
 						self.prefix,
+						arg,
 						pca=True,
-						cmds=False,
-						isomds=False,
+						pca_model=pca_model,
 						plot_3d=plot_3d,
 						user_settings=pca_scatter_settings,
 						colors=self.colors,
 						palette=self.palette
 					)
 
+				if return_pca and not plot_pca_cumvar:
+					return pca_coords, pca_model
+
 				# Plot cumulative PCA variance
 				if plot_pca_cumvar:
-					self.dr.plot_pca_cumvar(self.prefix, pca_cumvar_settings)
+					elbow = dr.plot_pca_cumvar(pca_coords, pca_model, self.prefix, pca_cumvar_settings)
+
+					if return_pca:
+						return pca_coords, pca_model, elbow
 
 			elif arg == "cmds":
-				self.dr.do_mds(data_df, mds_settings_default, metric=True, do_3d=plot_3d)
+				cmds_model = dr.do_mds(data_df, mds_settings_default, metric=True, do_3d=plot_3d)
 
 				# cMDS scatterplot
 				if plot_cmds_scatter:
-					self.dr.plot_dimreduction(
+					dr.plot_dimreduction(
+						cmds_model,
+						self.pops,
 						self.prefix,
+						arg,
 						pca=False,
-						cmds=True,
-						isomds=False,
 						plot_3d=plot_3d,
 						user_settings=cmds_scatter_settings,
 						colors=self.colors,
@@ -393,16 +417,33 @@ class DelimModel:
 
 			# isoMDS scatterplot
 			elif arg == "isomds":
-				self.dr.do_mds(data_df, mds_settings_default, metric=False, do_3d=plot_3d)
+				isomds_model = dr.do_mds(data_df, mds_settings_default, metric=False, do_3d=plot_3d)
 
 				if plot_isomds_scatter:
-					self.dr.plot_dimreduction(
+					dr.plot_dimreduction(
+						isomds_model,
+						self.pops,
 						self.prefix,
+						arg,
 						pca=False,
-						cmds=False,
-						isomds=True,
 						plot_3d=plot_3d,
 						user_settings=isomds_scatter_settings,
+						colors=self.colors,
+						palette=self.palette
+					)
+
+			elif arg == "tsne":
+				tsne_model = dr.tsne(data_df, tsne_settings_default)
+
+				if plot_tsne_scatter:
+					dr.plot_dimreduction(
+						tsne_model,
+						self.pops,
+						self.prefix,
+						arg,
+						pca=False,
+						plot_3d=plot_3d,
+						user_settings=tsne_scatter_settings,
 						colors=self.colors,
 						palette=self.palette
 					)
@@ -484,34 +525,3 @@ class DelimModel:
 			[numpy.ndarray]: [Square matrix with proximity scores from the random forest embedding]
 		"""
 		return self.prox_matrix
-			
-class ModelResult:
-	"""[Object to hold results from replicates of a single delim model]
-	
-	"""
-	def __init__(self):
-		self.model = None
-		self.reps = list()
-		self.num_reps = 0
-	
-	def clusterAcrossK(self, method, inplace=True):
-		ret=list()
-		for i in range(0, len(self.reps)):
-			if method == "exhaustive":
-				#ret.append()
-				pass
-			elif method == "heuristic":
-				#ret.append()
-				pass
-			elif method == "graph":
-				#ret.append()
-				pass
-			else:
-				sys.exit("\nError: Method",method,"invalid for ModelResult.clusterAcrossK\n")
-		
-		if inplace:
-			for i in range(0, len(ret)):
-				self.reps[i] = reps[i]
-		else:
-			return(ret)
-	
