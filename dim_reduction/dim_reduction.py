@@ -14,7 +14,7 @@ sns.set_style("ticks")
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.decomposition import PCA
 from sklearn.manifold import MDS
-from kneed import KneeLocator
+from kneed import KneeLocator # conda install -c conda-forge kneed
 
 # Custom module imports
 from utils import settings
