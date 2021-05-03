@@ -1,6 +1,6 @@
 import sys
-import allel
 
+import allel
 import numpy as np
 import pandas as pd
 from scipy.ndimage import gaussian_filter1d
@@ -14,6 +14,7 @@ sns.set_style("ticks")
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.decomposition import PCA
 from sklearn.manifold import MDS
+from kneed import KneeLocator
 
 # Custom module imports
 from utils import settings
@@ -236,19 +237,14 @@ class DimReduction:
 		if user_settings:
 			settings_default.update(user_settings)
 
-		# Get the cumulative sum of the explained variance ratio
+		# Get the cumulative variance of the principal components
 		cumsum = np.cumsum(self.pca_model.explained_variance_ratio_)
 
-		# Compute first derivative with gaussian filter
-		# to get smoothed histogram
-		# Uses scipy
-		smooth = gaussian_filter1d(cumsum, 100)
+		# From the kneedle package
+		# Gets the knee/ elbow of the curve
+		kneedle = KneeLocator(range(1, len(self.pca_coords)), cumsum, curve="concave", direction="increasing")
 
-		# Compute second derivative
-		smooth_d2 = np.gradient(np.gradient(smooth))
-
-		# Get the inflection point
-		inflection = np.where(np.diff(np.sign(smooth_d2)))[0]
+		#kneedle.plot_knee_normalized()
 
 		# Sets plot background style
 		# Uses seaborn
@@ -260,16 +256,16 @@ class DimReduction:
 		ax = fig.add_subplot(1,1,1)
 
 		# Plot the explained variance ratio
-		ax.plot(np.cumsum(self.pca_model.explained_variance_ratio_), color=settings_default["linecolor"], linewidth=settings_default["linewidth"])
+		ax.plot(kneedle.y, color=settings_default["linecolor"], linewidth=settings_default["linewidth"])
 
 		ax.set_xlabel("Number of Components")
 		ax.set_ylabel("Cumulative Explained Variance")
 
 		# Add text to show inflection point
-		ax.text(0.95, 0.01, "Inflection Point={}".format(inflection[0]), verticalalignment="bottom", horizontalalignment="right", transform=ax.transAxes, color="k", fontsize=settings_default["text_size"])
+		ax.text(0.95, 0.01, "Elbow={}".format(kneedle.knee), verticalalignment="bottom", horizontalalignment="right", transform=ax.transAxes, color="k", fontsize=settings_default["text_size"])
 
 		# Add inflection point
-		ax.axvline(linewidth=settings_default["xintercept_width"], color=settings_default["xintercept_color"], linestyle=settings_default["xintercept_style"], x=inflection[0], ymin=0, ymax=1)
+		ax.axvline(linewidth=settings_default["xintercept_width"], color=settings_default["xintercept_color"], linestyle=settings_default["xintercept_style"], x=kneedle.knee, ymin=0, ymax=1)
 
 		# Add prefix to filename
 		plot_fn = "{}_pca_cumvar.pdf".format(prefix)
@@ -277,7 +273,7 @@ class DimReduction:
 		# Save as PDF file
 		fig.savefig(plot_fn, bbox_inches="tight")
 
-		self.inflection = inflection[0]
+		self.inflection = kneedle.knee
 		
 	def _plot_coords(self, coords, axis1, axis2, ax, populations, unique_populations, pop_colors, alpha, marker, markersize, markeredgecolor, markeredgewidth, pca, cmds, isomds, model=None):
 		"""[Map colors to populations and make the scatterplot]

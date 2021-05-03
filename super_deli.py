@@ -93,13 +93,13 @@ def main():
 
 	clusters = DelimModel(data.imputed_rf_df, data.populations, args.prefix)
 
-	#clusters.dim_reduction(data.imputed_rf_df, dim_red_algorithms=["standard-pca"], pca_settings=pca_settings, mds_settings=None, plot_pca_scatter=True, plot_pca_cumvar=True, pca_cumvar_settings=pca_cumvar_settings, plot_cmds_scatter=True, plot_isomds_scatter=True)
+	clusters.dim_reduction(data.imputed_rf_df, algorithms=["standard-pca"], pca_settings=pca_settings, mds_settings=None, plot_pca_scatter=True, plot_pca_cumvar=True, pca_cumvar_settings=pca_cumvar_settings, plot_cmds_scatter=True, plot_isomds_scatter=True)
 
 	rf_embed_settings = {"rf_n_estimators": 1000, "rf_n_jobs": 4}
 
-	clusters.random_forest_unsupervised(pca_settings={"n_components": 10}, pca_init=True, rf_settings=rf_embed_settings, elbow=False)
+	#clusters.random_forest_unsupervised(pca_settings={"n_components": 10}, pca_init=True, rf_settings=rf_embed_settings, elbow=False)
 
-	clusters.dim_reduction(clusters.rf_dissimilarity, algorithms=["cmds", "isomds"], plot_cmds_scatter=True, plot_isomds_scatter=True, mds_settings=mds_settings)
+	#clusters.dim_reduction(clusters.rf_dissimilarity, algorithms=["cmds", "isomds"], plot_cmds_scatter=True, plot_isomds_scatter=True, mds_settings=mds_settings)
 
 def get_arguments():
 	"""[Parse command-line arguments. Imported with argparse]
