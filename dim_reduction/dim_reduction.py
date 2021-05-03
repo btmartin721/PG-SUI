@@ -271,7 +271,7 @@ def plot_dimreduction(coords, pops, prefix, method, pca=False, pca_model=None, p
 	elif method == "tsne":
 		method = "T-SNE"
 
-	elif method == "standard-pca":
+	elif method == "pca":
 		method = "PCA"
 	
 	else:
@@ -348,7 +348,7 @@ def plot_pca_cumvar(coords, model, prefix, user_settings):
 	"""
 	# Raise error if PCA hasn't been run yet
 	if not model:
-		raise AttributeError("\nA PCA object has not yet been created! Please do so with DelimModel([arguments]).dim_reduction(dim_red_algorithms['standard-pca'], [other_arguments])")
+		raise AttributeError("\nA PCA object has not yet been created! Please do so with DelimModel([arguments]).dim_reduction(algorithms=['pca'], [other_arguments])")
 
 	# Retrieve default plot settings
 	settings_default = settings.pca_cumvar_default_settings()

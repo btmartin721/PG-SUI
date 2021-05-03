@@ -107,11 +107,11 @@ class DelimModel:
 				
 			# If inferring n_components with inflection point
 			if elbow:
-				pca_coords, pca_model, inflection = self.dim_reduction(gt_df, ["standard-pca"], pca_settings=pca_settings, plot_pca_cumvar=True, return_pca=True)
+				pca_coords, pca_model, inflection = self.dim_reduction(gt_df, ["pca"], pca_settings=pca_settings, plot_pca_cumvar=True, return_pca=True)
 
 				print("\nRe-doing PCA with n_components set to the inflection point")
 				
-				pca_coords, pca_model = self.dim_reduction(gt_df, ["standard-pca"], pca_settings={"n_components": int(inflection)}, plot_pca_cumvar=False, return_pca=True)
+				pca_coords, pca_model = self.dim_reduction(gt_df, ["pca"], pca_settings={"n_components": int(inflection)}, plot_pca_cumvar=False, return_pca=True)
 
 			# Make sure perc is of type(float)
 			elif perc:
@@ -126,11 +126,11 @@ class DelimModel:
 				n_components_frac = int(n_components_frac)
 				pca_settings_default.update({"n_components": n_components_frac})
 
-				pca_coords, pca_model = self.dim_reduction(gt_df, ["standard-pca"], pca_settings=pca_settings, plot_pca_cumvar=False, return_pca=True)
+				pca_coords, pca_model = self.dim_reduction(gt_df, ["pca"], pca_settings=pca_settings, plot_pca_cumvar=False, return_pca=True)
 
 			# If n_components is manually specified
 			else:
-				pca_coords, pca_model = self.dim_reduction(gt_df, ["standard-pca"], pca_settings=pca_settings, plot_pca_cumvar=False, return_pca=True)
+				pca_coords, pca_model = self.dim_reduction(gt_df, ["pca"], pca_settings=pca_settings, plot_pca_cumvar=False, return_pca=True)
 
 			print("\nDoing unsupervised random forest...")
 
@@ -272,7 +272,7 @@ class DelimModel:
 		
 			For the random forest output, it can either be the dissimilarity matrix generated after running random_forest_unsupervised() or the rf_model object also generated with random_forest_unsupervised().
 			
-			data can be embedded using several currently supported algorithms, including 'standard-pca', 'cmds', and 'isomds'
+			data can be embedded using several currently supported algorithms, including 'pca', 'cmds', and 'isomds'
 			
 			The settings for each algorithm can be changed by specifying a dictionary with the sklearn.manifold.MDS and sklearn.decomposition.PCA parameters as the keys and their corresponding values. See the documentation for scikit-learn for more information. For each of the settings dictionaries, default arguments are used if left unspecified and you can set one, some, or all. Arguments not manually included in the settings dictionary will use default settings for those arguments.
 
@@ -368,7 +368,7 @@ class DelimModel:
 			if arg not in supported_algs:
 				raise ValueError("\nThe dimensionality reduction algorithm {} is not supported. Supported options include: {})".format(arg, supported_algs))
 
-			if arg == "standard-pca":
+			if arg == "pca":
 				pca_coords, pca_model = dr.do_pca(data_df, pca_settings_default)
 				
 				# Plot PCA scatterplot

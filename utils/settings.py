@@ -327,7 +327,7 @@ def dim_reduction_supported_algorithms():
 	return ["pca", "cmds", "isomds", "tsne"]
 
 def pca_default_settings():
-	"""[Default settings for standard PCA]
+	"""[Default settings for PCA]
 
 	Returns:
 		[dict]: [Dictionary with sklearn.decomposition.PCA argument names as keys with their corresponding values]
