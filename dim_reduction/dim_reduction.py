@@ -330,70 +330,6 @@ def plot_dimreduction(coords, pops, prefix, method, pca=False, pca_model=None, p
 	fig.savefig(plot_fn, bbox_inches="tight")
 
 	print("\nSaved {} scatterplot to {}".format(method, plot_fn))
-
-def plot_pca_cumvar(coords, model, prefix, user_settings):
-	"""[Plot cumulative variance for principal components with xintercept line at the inflection point]
-
-	Args:
-		coords ([numpy.ndarray]): [PCA coordinates as 2D array of shape (n_samples, n_components)]
-
-		model ([sklearn.decomposision.PCA model object]): [PCA model returned from scikit-allel. See scikit-allel documentation]
-
-		prefix ([str]): [Prefix for output PDF filename]
-
-		user_settings ([dict]): [Dictionary with matplotlib arguments as keys and their corresponding values. Only some or all of the settings can be changed]
-
-	Raises:
-		AttributeError: [pca_model must be defined prior to running this function]
-	"""
-	# Raise error if PCA hasn't been run yet
-	if not model:
-		raise AttributeError("\nA PCA object has not yet been created! Please do so with DelimModel([arguments]).dim_reduction(algorithms=['pca'], [other_arguments])")
-
-	# Retrieve default plot settings
-	settings_default = settings.pca_cumvar_default_settings()
-
-	# Update plot settings with user-specified settings
-	if user_settings:
-		settings_default.update(user_settings)
-
-	# Get the cumulative variance of the principal components
-	cumsum = np.cumsum(model.explained_variance_ratio_)
-
-	# From the kneed package
-	# Gets the knee/ elbow of the curve
-	kneedle = KneeLocator(range(1, len(coords)), cumsum, curve="concave", direction="increasing")
-
-	# Sets plot background style
-	# Uses seaborn
-	sns.set(style=settings_default["style"])
-
-	# Plot the results
-	# Uses matplotlib.pyplot
-	fig = plt.figure(figsize=(settings_default["figwidth"], settings_default["figheight"]))
-	ax = fig.add_subplot(1,1,1)
-
-	# Plot the explained variance ratio
-	ax.plot(kneedle.y, color=settings_default["linecolor"], linewidth=settings_default["linewidth"])
-
-	# Set axis labels
-	ax.set_xlabel("Number of Components")
-	ax.set_ylabel("Cumulative Explained Variance")
-
-	# Add text to show inflection point
-	ax.text(0.95, 0.01, "Elbow={}".format(kneedle.knee), verticalalignment="bottom", horizontalalignment="right", transform=ax.transAxes, color="k", fontsize=settings_default["text_size"])
-
-	# Add inflection point
-	ax.axvline(linewidth=settings_default["xintercept_width"], color=settings_default["xintercept_color"], linestyle=settings_default["xintercept_style"], x=kneedle.knee, ymin=0, ymax=1)
-
-	# Add prefix to filename
-	plot_fn = "{}_pca_cumvar.pdf".format(prefix)
-
-	# Save as PDF file
-	fig.savefig(plot_fn, bbox_inches="tight")
-
-	# Returns number of principal components at elbow
-	return kneedle.knee
 	
 def _plot_coords(coords, axis1, axis2, axis3, plot_3d, ax, populations, unique_populations, pop_colors, alpha, marker, markersize, markeredgecolor, markeredgewidth, method, model=None):
 	"""[Map colors to populations and make the scatterplot]
@@ -522,3 +458,67 @@ def _get_pop_colors(uniq_pops, palette, colors):
 			raise ValueError("\nThe colors argument's list length must equal the number of unique populations!")
 
 	return colors
+
+def plot_pca_cumvar(coords, model, prefix, user_settings):
+"""[Plot cumulative variance for principal components with xintercept line at the inflection point]
+
+Args:
+	coords ([numpy.ndarray]): [PCA coordinates as 2D array of shape (n_samples, n_components)]
+
+	model ([sklearn.decomposision.PCA model object]): [PCA model returned from scikit-allel. See scikit-allel documentation]
+
+	prefix ([str]): [Prefix for output PDF filename]
+
+	user_settings ([dict]): [Dictionary with matplotlib arguments as keys and their corresponding values. Only some or all of the settings can be changed]
+
+Raises:
+	AttributeError: [pca_model must be defined prior to running this function]
+"""
+# Raise error if PCA hasn't been run yet
+if not model:
+	raise AttributeError("\nA PCA object has not yet been created! Please do so with DelimModel([arguments]).dim_reduction(algorithms=['pca'], [other_arguments])")
+
+# Retrieve default plot settings
+settings_default = settings.pca_cumvar_default_settings()
+
+# Update plot settings with user-specified settings
+if user_settings:
+	settings_default.update(user_settings)
+
+# Get the cumulative variance of the principal components
+cumsum = np.cumsum(model.explained_variance_ratio_)
+
+# From the kneed package
+# Gets the knee/ elbow of the curve
+kneedle = KneeLocator(range(1, len(coords)), cumsum, curve="concave", direction="increasing")
+
+# Sets plot background style
+# Uses seaborn
+sns.set(style=settings_default["style"])
+
+# Plot the results
+# Uses matplotlib.pyplot
+fig = plt.figure(figsize=(settings_default["figwidth"], settings_default["figheight"]))
+ax = fig.add_subplot(1,1,1)
+
+# Plot the explained variance ratio
+ax.plot(kneedle.y, color=settings_default["linecolor"], linewidth=settings_default["linewidth"])
+
+# Set axis labels
+ax.set_xlabel("Number of Components")
+ax.set_ylabel("Cumulative Explained Variance")
+
+# Add text to show inflection point
+ax.text(0.95, 0.01, "Elbow={}".format(kneedle.knee), verticalalignment="bottom", horizontalalignment="right", transform=ax.transAxes, color="k", fontsize=settings_default["text_size"])
+
+# Add inflection point
+ax.axvline(linewidth=settings_default["xintercept_width"], color=settings_default["xintercept_color"], linestyle=settings_default["xintercept_style"], x=kneedle.knee, ymin=0, ymax=1)
+
+# Add prefix to filename
+plot_fn = "{}_pca_cumvar.pdf".format(prefix)
+
+# Save as PDF file
+fig.savefig(plot_fn, bbox_inches="tight")
+
+# Returns number of principal components at elbow
+return kneedle.knee

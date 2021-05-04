@@ -413,6 +413,8 @@ class DelimModel:
 						palette=self.palette
 					)
 
+				for method in clustering_algorithms
+
 			# isoMDS scatterplot
 			elif arg == "isomds":
 				isomds_model = dr.do_mds(data_df, mds_settings_default, metric=False, do_3d=plot_3d)
