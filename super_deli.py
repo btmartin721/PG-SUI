@@ -70,11 +70,10 @@ def main():
 		data.read_imputed(args.resume_imputed, impute_methods="rf")
 		#data.write_imputed(data.imputed_rf_df, args.prefix)
 
-
 	else:	
-		data.impute_missing(impute_methods="br", impute_settings=br_imputation_settings)
+		data.impute_missing(impute_methods="freq_pop", impute_settings=br_imputation_settings)
 
-		data.write_imputed(data.imputed_br_df, args.prefix)
+		#data.write_imputed(data.imputed_br_df, args.prefix)
 	
 	pca_settings = {
 		"n_components": data.indcount-1
@@ -124,6 +123,12 @@ def get_arguments():
 								type=str,
 								required=False,
 								help="Input phylip file")
+	
+	filetype_args.add_argument("-t", "--treefile",
+								type=str,
+								required=False,
+								default=None,
+								help="Newick-formatted treefile")
 
 	# Structure Arguments
 	structure_args.add_argument("--onerow_perind",
@@ -135,7 +140,8 @@ def get_arguments():
 								required=False,
 								action="store_true",
 								help="Toggles on population ID column (2nd col) in structure file")
-
+	
+	
 	## Optional Arguments
 	optional_args.add_argument("-m", "--popmap",
 								type=str,
