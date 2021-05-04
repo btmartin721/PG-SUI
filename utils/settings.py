@@ -265,7 +265,6 @@ def dim_reduction_supported_arguments():
 		"n_components", 
 		"copy", 
 		"scaler", 
-		"ploidy",
 		"pc_axis1",
 		"pc_axis2",
 		"figwidth", 
@@ -302,7 +301,19 @@ def dim_reduction_supported_arguments():
 		"cmds_axis1",
 		"cmds_axis2",
 		"isomds_axis1",
-		"isomds_axis2"
+		"isomds_axis2",
+		"perplexity",
+		"early_exaggeration",
+		"learning_rate",
+		"n_iter",
+		"n_iter_without_progress",
+		"min_grad_norm",
+		"metric",
+		"init",
+		"verbose",
+		"method",
+		"angle",
+		"square_distances"
 	]
 
 	return supported_settings
@@ -313,10 +324,10 @@ def dim_reduction_supported_algorithms():
 	Returns:
 		[list]: [List of supported algorithms]
 	"""
-	return ["standard-pca", "cmds", "isomds"]
+	return ["pca", "cmds", "isomds", "tsne"]
 
 def pca_default_settings():
-	"""[Default settings for standard PCA]
+	"""[Default settings for PCA]
 
 	Returns:
 		[dict]: [Dictionary with sklearn.decomposition.PCA argument names as keys with their corresponding values]
@@ -370,8 +381,6 @@ def mds_default_settings():
 	"eps": 1e-3,
 	"n_jobs": 1,
 	"dissimilarity": "euclidean",
-	"mds_axis1": 1,
-	"mds_axis2": 2,
 	"figwidth": 6, 
 	"figheight": 6, 
 	"alpha": 1.0, 
@@ -397,8 +406,13 @@ def mds_default_settings():
 	"shadow": False,
 	"cmds_axis1": 1,
 	"cmds_axis2": 2,
+	"cmds_axis3": 3,
 	"isomds_axis1": 1,
-	"isomds_axis2": 2
+	"isomds_axis2": 2,
+	"isomds_axis3": 3,
+	"mds_axis1": 1,
+	"mds_axis2": 2,
+	"mds_axis3": 3
 	}
 	
 	return mds_settings_default
@@ -410,9 +424,11 @@ def dimreduction_plot_settings():
 		[dict]: [Argment names as keys with their corresponding values. See matplotlib documentation]
 
 	Options:
-		axis1 (int, optional): [First principal component axis to plot; starts at 1]. Defaults to 1.
+		axis1 (int, optional): [First axis to plot; starts at 1]. Defaults to 1.
 
-		axis2 (int, optional): [Second principal component axis to plot; starts at 1]. Defaults to 2.
+		axis2 (int, optional): [Second axis to plot; starts at 1]. Defaults to 2.
+
+		axis3 (int, optional): [Third axis to plot; starts at 1]. Defaults to 3.
 
 		figwidth (int, optional): [Set width of the plot]. Defaults to 6.
 
@@ -466,7 +482,8 @@ def dimreduction_plot_settings():
 	"""
 	dimreduction_settings = {
 		"axis1": 1, 
-		"axis2": 2, 
+		"axis2": 2,
+		"axis3": 3, 
 		"figwidth": 6, 
 		"figheight": 6, 
 		"alpha": 1.0, 
@@ -516,6 +533,26 @@ def pca_cumvar_default_settings():
 
 	return pca_cumvar_settings
 	
+def tsne_default_settings():
 
+	tsne_settings = {
+		"n_components": 2,
+		"perplexity": 30.0,
+		"early_exaggeration": 12.0,
+		"learning_rate": 200.0,
+		"n_iter": 1000,
+		"n_iter_without_progress": 300,
+		"min_grad_norm": 1e-7,
+		"metric": "euclidean",
+		"init": "random",
+		"verbose": 0,
+		"random_state": None,
+		"method": "barnes_hut",
+		"angle": 0.5,
+		"n_jobs": 1,
+		"square_distances": "legacy"
+	}
+
+	return tsne_settings
 
 
