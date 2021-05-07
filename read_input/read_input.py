@@ -91,7 +91,7 @@ class GenotypeData:
 			sys.exit("\nError: GenotypeData read_XX() call does not match filetype!\n")
 
 	def read_tree(self, treefile):
-		self.guidetree = dp.Tree.get(path=treefile, scheme="newick")
+		self.guidetree = dp.Tree.get(path=treefile, schema="newick")
 
 	def read_structure(self, onerow=False, popids=True):
 		"""[Read a structure file with two rows per individual]
