@@ -139,6 +139,29 @@ def get_iupac_caseless(char):
 		ret = [c.lower() for c in ret]
 	return ret
 
+def get_iupac_full(char):
+	char = char.upper()
+	iupac = {
+		"A"	: ["A"],
+		"G"	: ["G"],
+		"C"	: ["C"],
+		"T"	: ["T"],
+		"N"	: ["A", "C", "T", "G"],
+		"-"	: ["A", "C", "T", "G"],
+		"R"	: ["A","G"],
+		"Y"	: ["C","T"],
+		"S"	: ["G","C"],
+		"W"	: ["A","T"],
+		"K"	: ["G","T"],
+		"M"	: ["A","C"],
+		"B"	: ["C","G", "T"],
+		"D"	: ["A","G", "T"],
+		"H"	: ["A","C", "T"],
+		"V"	: ["A","C", "G"]
+	}
+	ret = iupac[char]
+	return(ret)
+
 #Function to expand ambiguous sequences
 #Generator function
 def expandAmbiquousDNA(sequence):
