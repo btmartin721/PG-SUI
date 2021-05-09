@@ -2,7 +2,7 @@ import sys
 
 import numpy as np
 import pandas as pd
-import dendropy as dp
+import toytree as tt
 
 from read_input.popmap_file import ReadPopmap
 from read_input import impute
@@ -91,7 +91,7 @@ class GenotypeData:
 			sys.exit("\nError: GenotypeData read_XX() call does not match filetype!\n")
 
 	def read_tree(self, treefile):
-		self.guidetree = dp.Tree.get(path=treefile, schema="newick")
+		self.guidetree = tt.tree(treefile, tree_format=0)
 
 	def read_structure(self, onerow=False, popids=True):
 		"""[Read a structure file with two rows per individual]
