@@ -4,6 +4,8 @@ import numpy as np
 import scipy.linalg
 import pandas as pd
 import toytree as tt
+import toyplot as tp
+import toyplot.pdf
 
 
 def main():
@@ -133,54 +135,163 @@ def impute_phylo(tree, genotypes, Q, site_rates=None, exclude_N=False):
 				
 			3) Preorder traversal of tree to populate missing genotypes
 			with the maximum likelihood state (root -> tips)
-	"""
-	node_lik = dict()
-	snp_index = 0
-	
+	"""	
 	#for each SNP: 
-	
-	#LATER: Need to get site rates 
-	rate = 1.0
-	
-	site_Q = Q.copy(deep=True)*rate
-
-	for node in tree.treenode.traverse("postorder"):
-		if node.is_leaf():
-			continue
-		if node.idx not in node_lik:
-			node_lik[node.idx] = None
-		for child in node.get_leaves():
-			#get branch length to child
-			#bl = child.edge.length
-			#get transition probs 
-			pt = transition_probs(site_Q, child.dist)
-			if child.is_leaf():
-				if child.name in genotypes:
-					#get genotype 
-					sum = None
-					for allele in get_iupac_full(genotypes[child.name][snp_index]):
-						if sum is None:
-							sum = list(pt[allele])
+	for snp_index in range(1,50):
+		node_lik = dict()
+		
+		#LATER: Need to get site rates 
+		rate = 1.0
+		
+		site_Q = Q.copy(deep=True)*rate
+		
+		#calculate state likelihoods for internal nodes
+		for node in tree.treenode.traverse("postorder"):
+			if node.is_leaf():
+				continue
+			if node.idx not in node_lik:
+				node_lik[node.idx] = None
+			for child in node.get_leaves():
+				#get branch length to child
+				#bl = child.edge.length
+				#get transition probs 
+				pt = transition_probs(site_Q, child.dist)
+				if child.is_leaf():
+					if child.name in genotypes:
+						#get genotype 
+						sum = None
+						for allele in get_iupac_full(genotypes[child.name][snp_index]):
+							if sum is None:
+								sum = list(pt[allele])
+							else:
+								sum = [sum[i] + val for i, val in enumerate(list(pt[allele]))]
+						if node_lik[node.idx] is None:
+							node_lik[node.idx] = sum
 						else:
-							sum = [sum[i] + val for i, val in enumerate(list(pt[allele]))]
-					if node_lik[node.idx] is None:
-						node_lik[node.idx] = sum
+							node_lik[node.idx] = [sum[i] * val for i, val in enumerate(node_lik[node.idx])]
 					else:
-						node_lik[node.idx] = [sum[i] * val for i, val in enumerate(node_lik[node.idx])]
+						#raise error 
+						sys.exit("Error: Taxon",child.name,"not found in genotypes")
 				else:
-					#raise error 
-					sys.exit("Error: Taxon",child.name,"not found in genotypes")
-			else:
-				l = get_internal_lik(pt, node_lik[child.idx])
-				if node_lik[node.idx] is None:
-					node_lik[node.idx] = l 
-				else:
-					node_lik[node.idx] = [l[i] * val for i, val in enumerate(node_lik[node.idx])]
+					l = get_internal_lik(pt, node_lik[child.idx])
+					if node_lik[node.idx] is None:
+						node_lik[node.idx] = l 
+					else:
+						node_lik[node.idx] = [l[i] * val for i, val in enumerate(node_lik[node.idx])]
+		
+		#infer most likely states for tips with missing data 
+		#for each child node:
+		bads = list()
+		for samp in genotypes.keys():
+			if genotypes[samp][snp_index].upper() == "N":
+				bads.append(samp)
+				#go backwards into tree until a node informed by actual data is found 
+				#node = tree.search_nodes(name=samp)[0]
+				node = tree.idx_dict[tree.get_mrca_idx_from_tip_labels(names=samp)]
+				dist = node.dist
+				node = node.up
+				imputed = None
+				while node and imputed is None:
+					if allMissing(tree, node.idx, snp_index, genotypes):
+						dist += node.dist
+						node = node.up
+					else:
+						pt = transition_probs(site_Q, dist)
+						lik = get_internal_lik(pt, node_lik[node.idx])
+						maxpos = lik.index(max(lik))
+						if maxpos == 0:
+							imputed = "A"
+						elif maxpos == 1:
+							imputed = "C"
+						elif maxpos == 2:
+							imputed = "G"
+						else:
+							imputed = "T"
+				genotypes[samp][snp_index] = imputed
+		draw_imputed_position(tree, bads, genotypes, snp_index, str("pos_"+str(snp_index)+".pdf"))
+
+def get_nuc_colors(nucs):
+	ret = list()
+	for nuc in nucs:
+		nuc = nuc.upper()
+		if nuc == "A":
+			ret.append("#0000FF") #blue
+		elif nuc == "C":
+			ret.append("#FF0000") #red
+		elif nuc == "G":
+			ret.append("#00FF00") #green
+		elif nuc == "T":
+			ret.append("#FFFF00") #yellow
+		elif nuc == "R":
+			ret.append("#0dbaa9") #blue-green
+		elif nuc == "Y":
+			ret.append("#FFA500") #orange
+		elif nuc == "K":
+			ret.append("#9acd32") #yellow-green
+		elif nuc == "M":
+			ret.append("#800080") #purple 
+		elif nuc == "S":
+			ret.append("#964B00")
+		elif nuc == "W":
+			ret.append("#C0C0C0")
+		else:
+			ret.append("#000000")
+	return(ret)
+
+def label_bads(tips, labels, bads):
+	for i, t in enumerate(tips):
+		if t in bads:
+			labels[i] = "*"+str(labels[i])+"*"
+	return(labels)
+
+def draw_imputed_position(tree, bads, genotypes, pos, out="tree.pdf"):
+	#print(tree.get_tip_labels())
+	sizes = [8 if i in bads else 0 for i in tree.get_tip_labels()]
+	colors = [genotypes[i][pos] for i in tree.get_tip_labels()]
+	labels = colors
+	
+	labels = label_bads(tree.get_tip_labels(), labels, bads)
+	
+	colors = get_nuc_colors(colors)
+	
+	mystyle = {
+	"edge_type": 'p',
+	"edge_style": {
+		"stroke": tt.colors[0],
+		"stroke-width": 1,
+	},
+	"tip_labels_align": True,
+	"tip_labels_style": {
+		"font-size": "5px"
+	},
+	"node_labels": False
+	}
+	
+	canvas, axes, mark = tree.draw(
+		tip_labels_colors=colors,
+		#node_sizes = sizes,
+		tip_labels = labels,
+		width=400, height=600, 
+		**mystyle
+	)
+	
+	toyplot.pdf.render(canvas, out)
+
+def allMissing(tree, node_index, snp_index, genotypes):
+	for des in tree.get_tip_labels(idx=node_index):
+		if genotypes[des][snp_index].upper() not in ["N", "-"]:
+			return(False)
+	return(True)
 
 def get_internal_lik(pt, lik_arr):
 	ret = list()
 	for i, val in enumerate(lik_arr):
-		ret.append(val*pt.iloc[:,i])
+		
+		col = list(pt.iloc[:,i])
+		sum = 0.0
+		for v in col:
+			sum += v*val
+		ret.append(sum)
 	return(ret)
 
 def transition_probs(Q, t):
