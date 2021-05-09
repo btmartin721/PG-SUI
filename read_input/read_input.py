@@ -2,6 +2,7 @@ import sys
 
 import numpy as np
 import pandas as pd
+import toytree as tt
 
 from read_input.popmap_file import ReadPopmap
 from read_input import impute
@@ -28,6 +29,7 @@ class GenotypeData:
 		self.snps = list()
 		self.pops = list()
 		self.onehot = list()
+		self.guidetree = None
 		self.freq_imputed_global = list()
 		self.freq_imputed_pop = list()
 		self.knn_imputed = list()
@@ -37,7 +39,6 @@ class GenotypeData:
 		self.rf_imputed_arr = None
 		self.gb_imputed_arr = None
 		self.br_imputed_arr = None
-		self.knn_iter_imputed_arr = None
 		self.num_snps = 0
 		self.num_inds = 0
 		self.supported_methods = [
@@ -88,6 +89,9 @@ class GenotypeData:
 			pass
 		else:
 			sys.exit("\nError: GenotypeData read_XX() call does not match filetype!\n")
+
+	def read_tree(self, treefile):
+		self.guidetree = tt.tree(treefile, tree_format=0)
 
 	def read_structure(self, onerow=False, popids=True):
 		"""[Read a structure file with two rows per individual]
