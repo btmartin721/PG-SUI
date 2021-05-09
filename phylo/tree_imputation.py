@@ -12,7 +12,7 @@ def main():
 	tree = tt.tree("example_data/trees/test.tre", tree_format=0)
 	data = readPhylip("example_data/phylip_files/test.phy")
 	
-	imputed = impute_phylo_2(tree, data, q)
+	imputed = impute_phylo(tree, data, q)
 	
 
 def q_from_file(fname, label=True):
@@ -119,7 +119,7 @@ def readPhylip(phy):
 	else:
 		raise FileNotFoundError("File %s not found!"%phy)
 
-def impute_phylo_2(tree, genotypes, Q, site_rates=None, exclude_N=False):
+def impute_phylo(tree, genotypes, Q, site_rates=None, exclude_N=False):
 	"""[Imputes genotype values on a provided guide 
 		tree, assumping maximum parsimony]
 	
@@ -147,7 +147,6 @@ def impute_phylo_2(tree, genotypes, Q, site_rates=None, exclude_N=False):
 	for node in tree.treenode.traverse("postorder"):
 		if node.is_leaf():
 			continue
-		print(node.dist)
 		if node.idx not in node_lik:
 			node_lik[node.idx] = None
 		for child in node.get_leaves():
@@ -155,11 +154,6 @@ def impute_phylo_2(tree, genotypes, Q, site_rates=None, exclude_N=False):
 			#bl = child.edge.length
 			#get transition probs 
 			pt = transition_probs(site_Q, child.dist)
-			print(child.dist)
-			print(child.name)
-			print(site_Q)
-			print(pt)
-			print()
 			if child.is_leaf():
 				if child.name in genotypes:
 					#get genotype 
@@ -182,71 +176,6 @@ def impute_phylo_2(tree, genotypes, Q, site_rates=None, exclude_N=False):
 					node_lik[node.idx] = l 
 				else:
 					node_lik[node.idx] = [l[i] * val for i, val in enumerate(node_lik[node.idx])]
-
-# def impute_phylo(tree, genotypes, Q, site_rates=None, exclude_N=False):
-# 	"""[Imputes genotype values on a provided guide 
-# 		tree, assumping maximum parsimony]
-# 
-# 	Sketch:
-# 		For each SNP:
-# 			1) if site_rates, get site-transformated Q matrix
-# 
-# 			2) Postorder traversal of tree to compute ancestral 
-# 			state likelihoods for internal nodes (tips -> root)
-# 				If exclude_N==True, then ignore N tips for this step
-# 
-# 			3) Preorder traversal of tree to populate missing genotypes
-# 			with the maximum likelihood state (root -> tips)
-# 	"""
-# 	node_lik = dict()
-# 	snp_index = 0
-# 
-# 	#define filter function to skip tips 
-# 	internal = lambda x: True if len(x.child_nodes()) > 0 else False
-# 
-# 
-# 	#for each SNP: 
-# 
-# 	#LATER: Need to get site rates 
-# 	rate = 1.0
-# 
-# 	site_Q = Q.copy(deep=True)*rate
-# 
-# 	for node in tree.postorder_node_iter(internal):
-# 		label=node.taxon.__str__()
-# 		if node not in node_lik:
-# 			node_lik[node] = None
-# 		for child in node.child_nodes():
-# 			#get branch length to child
-# 			#bl = child.edge.length
-# 			#get transition probs 
-# 			pt = transition_probs(site_Q, child.edge.length)
-# 			print(child.edge.length)
-# 			print(site_Q)
-# 			print(pt)
-# 			print()
-# 			if child.taxon is not None:
-# 				if child.taxon.__str__().replace("'", "") in genotypes:
-# 					#get genotype 
-# 					sum = None
-# 					for allele in get_iupac_full(genotypes[child.taxon.__str__().replace("'", "")][snp_index]):
-# 						if sum is None:
-# 							sum = list(pt[allele])
-# 						else:
-# 							sum = [sum[i] + val for i, val in enumerate(list(pt[allele]))]
-# 					if node_lik[node] is None:
-# 						node_lik[node] = sum
-# 					else:
-# 						node_lik[node] = [sum[i] * val for i, val in enumerate(node_lik[node])]
-# 				else:
-# 					#raise error 
-# 					sys.exit("Error: Taxon",child.taxon.__str__().replace("'", ""),"not found in genotypes")
-# 			else:
-# 				l = get_internal_lik(pt, node_lik[child])
-# 				if node_lik[node] is None:
-# 					node_lik[node] = l 
-# 				else:
-# 					node_lik[node] = [l[i] * val for i, val in enumerate(node_lik[node])]
 
 def get_internal_lik(pt, lik_arr):
 	ret = list()
