@@ -1,15 +1,14 @@
 # Standard library imports
 import sys
 import os
-import math
 from collections import OrderedDict
 
 # Third party imports
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from sklearn.impute import KNNImputer
 from sklearn.experimental import enable_iterative_imputer
+from sklearn.impute import KNNImputer
 from sklearn.impute import IterativeImputer
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
@@ -24,6 +23,7 @@ from sklearn.metrics import accuracy_score
 # Custom module imports
 from utils import misc
 
+@misc.timer
 def impute_knn(data, knn_settings):
 	"""[Impute missing data using the K-nearest neighbors algorithm]
 
@@ -54,6 +54,7 @@ def impute_knn(data, knn_settings):
 
 	return df
 
+@misc.timer
 def impute_knn_optk(snpslist, popslist, knn_settings, maxk, np):
 	"""[Run K-nearest neighbors with n_neighbors ranging from 1 to maxk]
 
@@ -493,6 +494,7 @@ def knn_iterative_imputer(snpslist, settings):
 
 	return new_arr
 
+@misc.timer
 def impute_freq(data, pops=None, diploid=True, default=0, missing=-9):
 	"""[Impute missing genotypes using allele frequencies, with missing alleles coded as negative; usually -9]
 	

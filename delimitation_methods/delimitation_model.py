@@ -413,7 +413,7 @@ class DelimModel:
 						palette=self.palette
 					)
 
-				for method in clustering_algorithms
+				#for method in clustering_algorithms
 
 			# isoMDS scatterplot
 			elif arg == "isomds":

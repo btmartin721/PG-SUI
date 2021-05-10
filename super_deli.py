@@ -17,6 +17,8 @@ from delimitation_methods.delimitation_model import DelimModel
 from read_input.read_input import GenotypeData
 import read_input.impute as impute
 
+from dim_reduction.dim_reduction2 import *
+
 def main():
 	"""[Class instantiations and main package body]
 	"""
@@ -69,49 +71,56 @@ def main():
 	else:	
 		data.impute_missing(impute_methods="freq_pop", impute_settings=br_imputation_settings)
 
+
+	pca = runPCA(data.imputed_rf_df, data.populations, args.prefix, plot_cumvar=True, keep_pcs=int(data.indcount)-1, pc_var=0.8)
+
+	pca.plot(plot_3d=True, )
+
 		#data.write_imputed(data.imputed_br_df, args.prefix)
 	
-	pcs = data.indcount - 1
+	# pcs = data.indcount - 1
 
-	pca_settings = {
-		"scaler": "patterson",
-		"n_components": pcs
-	}
+	# pca_settings = {
+	# 	"scaler": "patterson",
+	# 	"n_components": pcs
+	# }
 
-	mds_settings = {
-		"n_init": 100,
-		"max_iter": 1000,
-		"n_jobs": 4,
-		"eps": 1e-4,
-		"dissimilarity": "precomputed",
-		"n_dims": 3
-	}
+	# mds_settings = {
+	# 	"n_init": 100,
+	# 	"max_iter": 1000,
+	# 	"n_jobs": 4,
+	# 	"eps": 1e-4,
+	# 	"dissimilarity": "precomputed",
+	# 	"n_dims": 3
+	# }
 
-	tsne_settings = {
-		"n_components": 3,
-		"perplexity": 15
-	}
+	# tsne_settings = {
+	# 	"n_components": 3,
+	# 	"perplexity": 15
+	# }
 
-	cmds_scatter_settings = {
-		"bbox_to_anchor": (1.1, 1.0)
-	}
+	# cmds_scatter_settings = {
+	# 	"bbox_to_anchor": (1.1, 1.0)
+	# }
 
-	isomds_scatter_settings = {
-		"bbox_to_anchor": (1.1, 1.0)
-	}
+	# isomds_scatter_settings = {
+	# 	"bbox_to_anchor": (1.1, 1.0)
+	# }
 
-	tsne_scatter_settings = {
-		"bbox_to_anchor": (1.1, 1.0)
-	}
+	# tsne_scatter_settings = {
+	# 	"bbox_to_anchor": (1.1, 1.0)
+	# }
 
-	# See matplotlib axvline settings for options
-	pca_cumvar_settings={"text_size": 14, "style": "white", "figwidth": 6, "figheight": 6, "intercept_width": 3, "intercept_color": "r", "intercept_style": "--"}
+	
 
-	clusters = DelimModel(data.imputed_rf_df, data.populations, args.prefix)
+	# # See matplotlib axvline settings for options
+	# pca_cumvar_settings={"text_size": 14, "style": "white", "figwidth": 6, "figheight": 6, "intercept_width": 3, "intercept_color": "r", "intercept_style": "--"}
 
-	clusters.dim_reduction(data.imputed_rf_df, algorithms=["pca"], pca_settings=pca_settings, mds_settings=mds_settings, plot_pca_scatter=True, plot_pca_cumvar=True, pca_cumvar_settings=pca_cumvar_settings, plot_cmds_scatter=True, plot_isomds_scatter=True, plot_3d=True)
+	# clusters = DelimModel(data.imputed_rf_df, data.populations, args.prefix)
 
-	rf_embed_settings = {"rf_n_estimators": 1000, "rf_n_jobs": 4}
+	# clusters.dim_reduction(data.imputed_rf_df, algorithms=["pca"], pca_settings=pca_settings, mds_settings=mds_settings, plot_pca_scatter=True, plot_pca_cumvar=True, pca_cumvar_settings=pca_cumvar_settings, plot_cmds_scatter=True, plot_isomds_scatter=True, plot_3d=True)
+
+	# rf_embed_settings = {"rf_n_estimators": 1000, "rf_n_jobs": 4}
 
 	#clusters.random_forest_unsupervised(pca_settings={"n_components": 10}, pca_init=True, rf_settings=rf_embed_settings, elbow=False)
 
