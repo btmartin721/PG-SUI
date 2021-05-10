@@ -15,7 +15,7 @@ from sklearn.manifold import MDS
 from sklearn.manifold import TSNE
 
 # Custom imports
-from dim_reduction.dim_reduction2 import DimReduction
+from dim_reduction.dim_reduction import DimReduction
 from utils.misc import timer
 
 class runPCA(DimReduction):
