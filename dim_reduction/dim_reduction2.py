@@ -1,14 +1,12 @@
 
+# Third-party imports
 import numpy as np
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 
-from kneed import KneeLocator
-from sklearn.decomposition import PCA
-
-
+# Custom imports
 from utils.misc import timer
 
 class DimReduction:
@@ -20,6 +18,64 @@ class DimReduction:
 		self.prefix = prefix
 		self.colors = colors
 		self.palette = palette
+
+	def _validate_args(self, _dimreduction, _gt, _pops, _prefix):
+
+		if _dimreduction is None:
+			if _gt is None:
+				raise TypeError("The 'gt' keyword argument must be defined if dimreduction=None")
+			if _pops is None:
+				raise TypeError("The 'pops' keyword argument must be defined if dimreduction=None")
+			if _prefix is None:
+				raise TypeError("The 'prefix' argument must be defined if dimreduction=None")
+
+			gt_df = self._validate_type(_gt)
+			self.set_gt(gt_df)
+
+		else: # _dimreduction is not None
+			if _gt is not None:
+				raise TypeError("The 'dimreduction' and 'gt' arguments cannot both be defined")
+			if _pops is not None:
+				raise TypeError("The 'dimreduction' and 'pops' arguments cannot both be defined")
+			if _prefix is not None:
+				raise TypeError("The 'dimreduction and 'prefix' arguments cannot both be defined")
+
+			gt_df = self._validate_type(_dimreduction.gt)
+			self.set_gt(gt_df)
+			self.set_pops(_dimreduction.pops)
+			self.set_prefix(_dimreduction.prefix)
+			self.set_colors(_dimreduction.colors)
+			self.set_palette(_dimreduction.palette)
+
+	def _validate_type(self, X):
+		if isinstance(X, np.ndarray):
+			df = pd.DataFrame(X)
+
+		elif isinstance(X, list):
+			df = pd.DataFrame.from_records(X)
+		
+		elif isinstance(X, pd.DataFrame):
+			df = X.copy()
+
+		else:
+			raise TypeError("\nThe genotype data must be a numpy.ndarray, a pandas.DataFrame, or a 2-dimensional list of shape (n_samples, n_sites)! Any of these can be retrieved from the GenotypeData object")
+
+		return df
+
+	def set_gt(self, _gt):
+		self.gt = _gt
+
+	def set_pops(self, _pops):
+		self.pops = _pops
+
+	def set_prefix(self, _prefix):
+		self.prefix = _prefix
+
+	def set_colors(self, _colors):
+		self.colors = _colors
+
+	def set_palette(self, _palette):
+		self.palette = _palette
 
 	def plot(self, plot_3d=False, axis1=1, axis2=2, axis3=3, figwidth=6, figheight=6, alpha=1.0, legend=True, legend_inside=False, legend_loc="upper left", marker="o", markersize=6, markeredgecolor="k", markeredgewidth=0.5, labelspacing=0.5, columnspacing=2.0, title=None, title_fontsize=None, markerfirst=True, markerscale=1.0, ncol=1, bbox_to_anchor=(1.0, 1.0), borderaxespad=0.5, legend_edgecolor="black", facecolor="white", framealpha=0.8, shadow=False):
 		"""[Plot PCA results as a scatterplot and save it as a PDF file]
@@ -128,6 +184,10 @@ class DimReduction:
 		y = coords[:, axis2_idx]
 
 		if plot_3d:
+			if int(coords.shape[1]) < 3:
+				raise ValueError("plot_3d was specified"
+								"but there are fewer than 3 coordinate axes!"
+				)
 			axis3_idx = axis3 - 1
 			z = coords[:, axis3_idx]
 
@@ -208,256 +268,4 @@ class DimReduction:
 				raise ValueError("\nThe colors argument's list length must equal the number of unique populations!")
 
 		return colors
-
-class runPCA(DimReduction):
-
-	def __init__(self, gt, pops, prefix, colors=None, palette="Set1", keep_pcs=10, scaler="patterson", plot_cumvar=False, elbow=False, pc_var=None, **kwargs):
-		
-		super().__init__(gt, pops, prefix, colors, palette)
-		self.keep_pcs = keep_pcs
-		self.scaler = scaler
-		self.coords = None
-		self.pca_model = None
-		self.method = "PCA"
-
-		# PCA scatterplot settings
-		text_size = kwargs.pop("text_size", 14)
-		style = kwargs.pop("style", "white")
-		figwidth = kwargs.pop("figwidth", 6)
-		figheight = kwargs.pop("figheight", 6)
-
-		# PCA Cumulative Variance plot settings
-		cumvar_figwidth = kwargs.pop("cumvar_figwidth", 6)
-		cumvar_figheight = kwargs.pop("cumvar_figheight", 6)
-		cumvar_linecolor = kwargs.pop("cumvar_linecolor", "blue")
-		cumvar_linewidth = kwargs.pop("cumvar_linewidth", 3)
-		cumvar_xintercept_width = kwargs.pop("cumvar_xintercept_width", 3)
-		cumvar_xintercept_color = kwargs.pop("cumvar_xintercept_color", "red")
-		cumvar_xintercept_style = kwargs.pop("cumvar_xintercept_style", "--")
-		cumvar_style = kwargs.pop("cumvar_style", "white")
-		cumvar_text_size = kwargs.pop("cumvar_text_size", 14)
-
-		# If still items left in kwargs, then unrecognized keyword argument
-		if kwargs:
-			raise TypeError("Unexpected keyword arguments provided: {}".format(list(kwargs.keys())))
-
-
-		self.coords, self.pca_model = self.fit_transform()
-
-		if plot_cumvar:
-			self.keep_pcs = self._plot_pca_cumvar(self.coords, self.pca_model, prefix, elbow, pc_var, cumvar_figwidth, cumvar_figheight, cumvar_linecolor, cumvar_linewidth, cumvar_xintercept_width, cumvar_xintercept_color, cumvar_xintercept_style, cumvar_style, cumvar_text_size)
-
-			self.coords, self.pca_model = self.fit_transform()
-
-	def fit_transform(self):
-		"""[Does principal component analysis on 012-encoded genotypes. By default uses a Patterson scaler to standardize, but you can use two other scalers: 'standard' and 'center'. 'standard' centers and standardizes the data, whereas 'center' just centers it and doesn't standardize it]
-
-		Args:
-			data ([numpy.ndarray]): [012-encoded genotypes of shape (n_samples, n_features)]
-
-			pca_arguments ([dict]): [Dictionary with option names as keys and the settings as values]
-		"""
-		print("\nDoing PCA...\n")
-		print(
-				"PCA Settings:\n"
-				"\tn_components: """+str(self.keep_pcs)+"\n"
-				"\tscaler: """+str(self.scaler)+"\n"
-		)
-
-		# Scale and center the data
-		if self.scaler == "patterson":
-			X = self._scaler_patterson(self.gt)
-		
-		elif self.scaler == "standard":
-			X = self._scaler_standard(self.gt)
-
-		elif self.scaler == "center":
-			X = self._scaler_center(self.gt)
-
-		else:
-			raise ValueError("Unsupported scaler argument provided: {}".format(self.scaler))
-
-		pca = PCA(n_components=self.keep_pcs)
-
-		model = pca.fit(X)
-		coords = model.transform(X)
-
-		print("\nDone!")
-
-		return coords, model
-
-	def _scaler_patterson(self, data):
-		"""[Patterson scaler for PCA. Basically the formula for calculating the unit variance per SNP site is: std = np.sqrt((mean / ploidy) * (1 - (mean / ploidy))). Then center the data by subtracting the mean and scale it by dividing by the unit variance per SNP site.]
-
-		Args:
-			data ([numpy.ndarray]): [012-encoded genotypes to transform of shape (n_samples, n_features)]
-
-		Returns:
-			[numpy.ndarray]: [Transformed data, centered and scaled with Patterson scaler]
-		"""
-		# Make sure type is np.ndarray
-		if not isinstance(data, np.ndarray):
-			data = np.asarray(data)
-		
-		# Find mean of each site
-		mean = np.mean(data, axis=0, keepdims=True)
-
-		# Super Deli only supports ploidy of 2 currently
-		ploidy = 2
-
-		# Do Patterson scaling
-		# Ploidy is 2
-		p = mean / ploidy
-		std = np.sqrt(p * (1 - p))
-
-		# Make sure dtype is np.float64
-		data = data.astype(np.float64)
-
-		# Center the data
-		data -= mean
-
-		# Scale the data using the Patterson scaler
-		data /= std
-
-		return data
-
-	def _scaler_standard(self, data):
-		"""[Center and standardize data]
-
-		Args:
-			data ([numpy.ndarray]): [012-encoded genotypes to transform of shape (n_samples, n_features)]
-
-		Returns:
-			[numpy.ndarray]: [Transformed data, centered and standardized]
-		"""
-		# Make sure data is a numpy.ndarray
-		if not isinstance(data, np.ndarray):
-			data = np.asarray(data)
-		
-		# Make sure dtype is np.float64
-		data = data.astype(np.float64)
-
-		# Center and standardize the data
-		mean = np.mean(data, axis=0, keepdims=True)
-		std = np.std(data, axis=0, keepdims=True)
-		data -= mean
-		data /= std
-
-		return data
-
-	def _scaler_center(self, data):
-		"""[Just center the data; don't standardize]
-
-		Args:
-			data ([numpy.ndarray]): [012-encoded genoytpes to transform of shape (n_samples, n_features)]
-
-		Returns:
-			[numpy.ndarray]: [Centered 012-encoded genotypes; not standardized]
-		"""
-		if not isinstance(data, np.ndarray):
-			data = np.asarray(data)
-
-		# Make sure type is np.float64
-		data = data.astype(np.float64)
-
-		# Center the data
-		mean = np.mean(data, axis=0, keepdims=True)
-		data -= mean
-		return data
-
-	def _plot_pca_cumvar(self, coords, model, prefix, elbow, pc_var, figwidth, figheight, linecolor, linewidth, xintercept_width, xintercept_color, xintercept_style, style, text_size):
-		"""[Plot cumulative variance for principal components with xintercept line at the inflection point]
-
-		Args:
-			coords ([numpy.ndarray]): [PCA coordinates as 2D array of shape (n_samples, n_components)]
-
-			model ([sklearn.decomposision.PCA model object]): [PCA model returned from scikit-allel. See scikit-allel documentation]
-
-			prefix ([str]): [Prefix for output PDF filename]
-
-			user_settings ([dict]): [Dictionary with matplotlib arguments as keys and their corresponding values. Only some or all of the settings can be changed]
-
-		Raises:
-			AttributeError: [pca_model must be defined prior to running this function]
-		"""
-		# Raise error if PCA hasn't been run yet
-		if coords is None:
-			raise AttributeError("\nA PCA coordinates are not defined!")
-
-		if elbow is True and pc_var is not None:
-			raise ValueError("elbow and pc_var cannot both be specified!")
-
-		if pc_var is not None:
-			assert isinstance(pc_var, float), "pc_var must be of type float"
-			assert pc_var <= 1.0, "pc_var must be a value between 0.0 and 1.0"
-			assert pc_var > 0.0, "pc_var must be a value greater than 0.0"
-
-		# Get the cumulative variance of the principal components
-		cumsum = np.cumsum(model.explained_variance_ratio_)
-
-		# From the kneed package
-		# Gets the knee/ elbow of the curve
-		kneedle = KneeLocator(range(1, coords.shape[1]+1), cumsum, curve="concave", direction="increasing")
-
-		# Sets plot background style
-		# Uses seaborn
-		sns.set(style=style)
-
-		# Plot the results
-		# Uses matplotlib.pyplot
-		fig = plt.figure(figsize=(figwidth, figheight))
-		ax = fig.add_subplot(1,1,1)
-
-		if elbow:
-			# Plot the explained variance ratio
-			ax.plot(kneedle.y, color=linecolor, linewidth=linewidth)
-
-			# Add text to show inflection point
-			ax.text(0.95, 0.01, "Knee={}".format(kneedle.knee), verticalalignment="bottom", horizontalalignment="right", transform=ax.transAxes, color="k", fontsize=text_size)
-
-			knee = kneedle.knee
-
-		if pc_var is not None:
-			for idx, item in enumerate(cumsum):
-				if cumsum[idx] < pc_var:
-					knee = idx + 1
-				else:
-					break
-
-			ax.plot(cumsum, color=linecolor, linewidth=linewidth)
-
-			ax.text(0.95, 0.01, "# PCs: {}".format(knee), verticalalignment="bottom", horizontalalignment="right", transform=ax.transAxes, color="k", fontsize=text_size)
-
-		ax.axvline(linewidth=xintercept_width, color=xintercept_color, linestyle=xintercept_style, x=knee, ymin=0, ymax=1)
-		
-		# Set axis labels
-		ax.set_xlabel("Number of Components")
-		ax.set_ylabel("Cumulative Explained Variance")
-
-		# Add prefix to filename
-		plot_fn = "{}_pca_cumvar.pdf".format(prefix)
-
-		# Save as PDF file
-		fig.savefig(plot_fn, bbox_inches="tight")
-
-		# Returns number of principal components at elbow
-		return knee
-
-	@property
-	def	pca_coords(self):
-		if self.coords is not None:
-			return self.coords
-		else:
-			raise AttributeError("pca_coodinates attribute is not yet defined")
-
-	@property
-	def pca_model_object(self):
-		if self.pca_model is not None:
-			return self.pca_model
-		else:
-			raise AttributeError("pca_model_object is not yet defined")
-					
-
-
-
 

@@ -17,7 +17,11 @@ from delimitation_methods.delimitation_model import DelimModel
 from read_input.read_input import GenotypeData
 import read_input.impute as impute
 
-from dim_reduction.dim_reduction2 import *
+from dim_reduction.dim_reduction2 import DimReduction
+from dim_reduction.embed import runPCA
+from dim_reduction.embed import runRandomForestUML
+from dim_reduction.embed import runMDS
+from dim_reduction.embed import runTSNE
 
 def main():
 	"""[Class instantiations and main package body]
@@ -71,12 +75,38 @@ def main():
 	else:	
 		data.impute_missing(impute_methods="freq_pop", impute_settings=br_imputation_settings)
 
+	colors = {
+		"GU": "#FF00FF",
+		"EA": "#FF8C00",
+		"TT": "#228B22",
+		"TC": "#6495ED",
+		"DS": "#00FFFF",
+		"ON": "#800080",
+		"CH": "#696969",
+		"FL": "#FFFF00",
+		"MX": "#FF0000"
+	}
 
-	pca = runPCA(data.imputed_rf_df, data.populations, args.prefix, plot_cumvar=True, keep_pcs=int(data.indcount)-1, pc_var=0.8)
+	dr = DimReduction(data.imputed_rf_df, data.populations, args.prefix, colors=colors)
 
-	pca.plot(plot_3d=True, )
+	pca = runPCA(dimreduction=dr, plot_cumvar=False, keep_pcs=10)
 
-		#data.write_imputed(data.imputed_br_df, args.prefix)
+	pca.plot(plot_3d=True)
+
+	rf = runRandomForestUML(dr, n_estimators=1000, n_jobs=4, min_samples_leaf=4)
+
+	rf_cmds = runMDS(dr, dissimilarity_matrix = rf.dissimilarity_matrix, keep_dims=3, n_jobs=4, max_iter=1000, n_init=25)
+
+	rf_isomds = runMDS(dr, dissimilarity_matrix = rf.dissimilarity_matrix, metric = False, keep_dims=3, n_jobs=4, max_iter=1000, n_init=25)
+
+	rf_cmds.plot(plot_3d=True)
+	rf_isomds.plot(plot_3d=True)
+
+	tsne = runTSNE(dr, keep_dims=3, n_iter=20000, perplexity=15.0)
+	tsne.plot(plot_3d=True)
+
+
+	#data.write_imputed(data.imputed_br_df, args.prefix)
 	
 	# pcs = data.indcount - 1
 
