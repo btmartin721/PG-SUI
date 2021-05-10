@@ -17,7 +17,7 @@ from delimitation_methods.delimitation_model import DelimModel
 from read_input.read_input import GenotypeData
 import read_input.impute as impute
 
-from dim_reduction.dim_reduction2 import DimReduction
+from dim_reduction.dim_reduction import DimReduction
 from dim_reduction.embed import runPCA
 from dim_reduction.embed import runRandomForestUML
 from dim_reduction.embed import runMDS
