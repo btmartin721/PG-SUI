@@ -23,6 +23,8 @@ from dim_reduction.embed import runRandomForestUML
 from dim_reduction.embed import runMDS
 from dim_reduction.embed import runTSNE
 
+from clustering.clustering import PamClustering
+
 def main():
 	"""[Class instantiations and main package body]
 	"""
@@ -95,15 +97,23 @@ def main():
 
 	rf = runRandomForestUML(dr, n_estimators=1000, n_jobs=4, min_samples_leaf=4)
 
-	rf_cmds = runMDS(dr, dissimilarity_matrix = rf.dissimilarity_matrix, keep_dims=3, n_jobs=4, max_iter=1000, n_init=25)
+	rf_cmds = runMDS(dr, dissimilarity_matrix = rf.dissimilarity_matrix, keep_dims=2, n_jobs=4, max_iter=1000, n_init=25)
 
 	rf_isomds = runMDS(dr, dissimilarity_matrix = rf.dissimilarity_matrix, metric = False, keep_dims=3, n_jobs=4, max_iter=1000, n_init=25)
 
-	rf_cmds.plot(plot_3d=True)
-	rf_isomds.plot(plot_3d=True)
+	rf_cmds.plot(plot_3d=False)
+	rf_isomds.plot(plot_3d=False)
 
 	tsne = runTSNE(dr, keep_dims=3, n_iter=20000, perplexity=15.0)
 	tsne.plot(plot_3d=True)
+
+	# rf_cmds.pam(sampleids=data.individuals, silhouettes=True, plot_silhouettes=True)
+
+	maxk = 9
+
+	pam = PamClustering(rf_cmds, dimreduction=dr)
+
+	pam.msw(plot_msw=True)
 
 
 	#data.write_imputed(data.imputed_br_df, args.prefix)
