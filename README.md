@@ -9,6 +9,8 @@ A comprehensive machine learning species delimitation package
 Takes a structure or phylip file and a popmap file as input.  
 There are a number of options for the structure file format. See the help menu:
 
+```python super_deli.py -h```  
+
 ## API Pipeline (so far)
 
 ```
@@ -66,7 +68,7 @@ tsne_pam = PamClustering(tsne, dr, ...)
 tsne_pam.msw(...)
 ```
 
-```python super_deli.py -h```  
+## To-Dos
 
 ```
 To-Do's:
