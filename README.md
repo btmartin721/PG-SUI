@@ -82,7 +82,7 @@ To-Do's:
 Notes:
 - Can calculate AIC for k-means, or other clustering methods? See https://stackoverflow.com/questions/15839774/how-to-calculate-bic-for-k-means-clustering-in-r#:~:text=The%20AIC%20can%20be%20calculated,2*m*k)%20%7D 
 
-Dimension reduction
+Dimension reduction  
 ~~1. Using scikit-allel to do PCA~~  
 ~~2. cMDS~~  
 ~~3. isoMDS~~  
