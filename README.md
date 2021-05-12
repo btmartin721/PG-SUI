@@ -9,6 +9,63 @@ A comprehensive machine learning species delimitation package
 Takes a structure or phylip file and a popmap file as input.  
 There are a number of options for the structure file format. See the help menu:
 
+## API Pipeline (so far)
+
+```
+# Read in PHYLIP or STRUCTURE-formatted file
+# and impute missing data
+# Various imputation options are supported thus far
+data = GenotypeData(...)
+data.impute_missing(...)
+
+# Initialize DimReduction object
+# Instance used for most functions downstream
+dr = DimReduction(data.imputed_df, ...)
+
+# Run Principal Component Analysis
+# Can be used as input for runRandomForestUML()
+pca = runPCA(dr, ...)
+pca.plot() # makes a scatterplot
+
+# Random Forest unsupervised
+rf = runRandomForestUML(dr, ...)
+
+# runMDS can be used with random forest dissimilarity matrix (recommended),
+# which is accessible as a runRandomForest class property like below.
+rf_cmds = runMDS(dr, metric=True, dissimilarity_matrix=rf.dissimilarity_matrix, ...)
+
+# Or it can be run on the raw RF output like this:
+rf_cmds = runMDS(dr, metric=True, rf=rf.rf_model, ...)
+
+# Then it can be plotted by calling plot:
+rf_cmds.plot()
+
+PAM clustering can then be run on the MDS output:
+cmds_pam = PamClustering(rf_cmds, dr, ...)
+
+# And mean silhouette widths can be used to determine PAM optimal K
+cmds_pam.msw(plot_msw=True)
+
+# If you don't want to plot it, set plot_msw=False.
+# In that case it will just get the average silhouette scores for each K.
+# If plot_msw=True, it will also get average silhouette scores plus make
+# some neat plots.
+
+# isoMDS can be run by setting metric=False in runMDS()
+rf_isomds = runMDS(dr, metric=False, ...)
+rf_isomds.plot()
+
+isomds_pam = PamClustering(rf_cmds, dr, ...)
+isomds_pam.msw(...)
+
+# t-SNE can be run in the same way
+tsne = runTSNE(dr, ...)
+tsne.plot()
+
+tsne_pam = PamClustering(tsne, dr, ...)
+tsne_pam.msw(...)
+```
+
 ```python super_deli.py -h```  
 
 ```
