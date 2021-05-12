@@ -92,7 +92,7 @@ Dimension reduction
 Clustering algorithms
 1. K-Means
 2. Hierarchical clustering
-3. DBSCAN
+3. DBSCAN  
 ~~4. PAM~~  
 5. Others?
 
@@ -124,8 +124,7 @@ Use unsupervised learning to predict labels for supervised algorithms
 7. LightGBM
 8. Naive Bayes
 9. AdaBoost
-10. Random Forests
-11. 
+10. Random Forests 
 
 Semi-supervised learning  
 
