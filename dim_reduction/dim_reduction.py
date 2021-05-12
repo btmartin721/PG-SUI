@@ -1,3 +1,4 @@
+from math import floor
 
 # Third-party imports
 import numpy as np
@@ -5,6 +6,18 @@ import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
+import matplotlib.cm as cm
+from matplotlib.backends.backend_pdf import PdfPages
+
+
+from sklearn.metrics import silhouette_score
+from sklearn.metrics import silhouette_samples
+# from pyclustering.cluster.kmedoids import kmedoids
+# from pyclustering.cluster.silhouette import silhouette
+# from pyclustering.cluster import cluster_visualizer_multidim
+# from pyclustering.cluster import cluster_visualizer
+# from pyclustering.cluster.center_initializer import kmeans_plusplus_initializer
+
 
 # Custom imports
 from utils.misc import timer
@@ -268,4 +281,183 @@ class DimReduction:
 				raise ValueError("\nThe colors argument's list length must equal the number of unique populations!")
 
 		return colors
+
+	def _round_down(self, n, decimals=0):
+		multiplier = 10 ** decimals
+		return floor(n * multiplier) / multiplier
+
+
+	def msw(self, plot_msw=False):
+		
+		plot_fn = "{}_{}_pam.pdf".format(self.prefix, self.method)
+		pp = PdfPages(plot_fn)
+
+		silhouettes = dict()
+		for k in range(2, self.maxk+1):
+
+			silhouette_avg = silhouette_score(self.coords, self.labels[k])
+			
+			silhouettes[k] = silhouette_avg
+
+			if plot_msw:
+
+				sns.set_style("white")
+
+				# Compute the silhouette scores for each sample
+				sample_silhouette_values = silhouette_samples(self.coords, self.labels[k])
+
+				mymin = None
+				minx = None
+				lowest_sil = min(sample_silhouette_values)
+				mymin = self._round_down(lowest_sil, decimals=1)
+				minx = mymin - 0.1
+
+				# Create a subplot with 1 row and 2 columns
+				fig, (ax1, ax2) = plt.subplots(1, 2)
+				fig.set_size_inches(18, 7)
+
+				# Remove the top and right spines from plots
+				sns.despine(ax=ax1, offset=5)
+				sns.despine(ax=ax2, offset=5)
+
+				# The 1st subplot is the silhouette plot
+				# Silhouettes can range between -1 and 1
+				ax1.set_xlim([minx, 1])
+				ax1.set_xbound(lower=minx, upper=1)
+
+				# The (k+1)*10 is for inserting blank space between silhouette
+				# plots of individual clusters, to demarcate them clearly.
+				ax1.set_ylim([0, len(self.coords) + (k + 1) * 10])
+
+				y_lower = 10
+				yticks = list()
+				for i in range(k):
+
+					label_i = i+1
+
+					# Aggregate the silhouette scores for samples belonging to
+					# cluster i, and sort them
+					ith_cluster_silhouette_values = \
+					sample_silhouette_values[self.labels[k] == i]
+
+					ith_cluster_silhouette_values.sort()
+
+					size_cluster_i = ith_cluster_silhouette_values.shape[0]
+
+					y_upper = y_lower + size_cluster_i
+
+					color = cm.nipy_spectral(float(i) / k)
+
+					# Make the silhouette blobs
+					ax1.fill_betweenx(np.arange(y_lower, y_upper),
+										0, ith_cluster_silhouette_values,
+										facecolor=color, edgecolor=color, alpha=0.7)
+
+					# For labeling each silhouette blob with their cluster 
+					# numbers as the axis labels
+					yticks.append(y_lower + 0.5 * size_cluster_i)
+
+					# Compute the new y_lower for next plot
+					y_lower = y_upper + 10  # 10 for the 0 samples
+
+				############### Silhouette plot settings ##############
+
+				ax1.set_yticks(yticks)
+				ax1.set_yticklabels(range(1, k+1), fontsize="xx-large")
+
+				# Get default position of x and y axis labels
+				ylab = ax1.yaxis.get_label()
+				x_lab_pos, y_lab_pos = ylab.get_position()
+
+				# The vertical line for average silhouette score of all
+				# the values
+				ax1.set_title("Silhouettes")
+				ax1.set_xlabel("Silhouette Coefficients", fontsize="xx-large")
+
+				# Move ylabel further left
+				ax1.set_ylabel("Cluster Labels", fontsize="xx-large", position=(-0.05, y_lab_pos))
+
+				# Put vertical line as average silhouette score among samples
+				ax1.axvline(x=silhouette_avg, color="red", linestyle="--")
+
+				# Get array of xticks
+				xticks = np.arange(minx, 1.2, 0.2)
+
+				# Set the xaxis labels / ticks
+				ax1.set_xticks(xticks)
+				ax1.tick_params(axis="x", which="major", labelsize="large", colors="black")
+
+				################ Cluster plot settings ######################
+
+				ax2.tick_params(axis="both", which="major", labelsize="large", colors="black")
+
+				# 2nd Plot showing the actual clusters formed
+				colors = cm.nipy_spectral(self.labels[k].astype(float) / k)
+				ax2.scatter(self.coords[:, 0], self.coords[:, 1], marker='o', s=60, lw=0, alpha=0.7,
+							c=colors, edgecolor='k')
+
+				# Labeling the clusters
+				centers = self.models[k].cluster_centers_
+
+				# Draw white circles at cluster centers
+				ax2.scatter(centers[:, 0], centers[:, 1], marker='o',
+							c="white", alpha=1, s=400, edgecolor='k')
+
+				for i, c in enumerate(centers, start=1):
+					ax2.scatter(c[0], c[1], marker='$%d$' % i, alpha=1,
+								s=100, edgecolor='k')
+
+				ax2.set_title("Clustered Data")
+				ax2.set_xlabel("{} 1".format(self.method), fontsize="xx-large")
+				ax2.set_ylabel("{} 2".format(self.method), fontsize="xx-large")
+
+				plt.suptitle(("Silhouette Analysis for K-Medoids Clustering"
+								"with K = %d" % k),
+								fontsize=14, fontweight='bold')
+
+			pp.savefig()
+		pp.close()
+
+		bestk = min(silhouettes.items(), key=lambda x: x[1])
+
+
+		# #plt.ioff()
+		# samples = self.coords.tolist()
+
+		# # Initialize initial medoids using K-Means++ algorithm
+		# initial_medoids = kmeans_plusplus_initializer(samples, 2).initialize(return_index=True)
+
+		# # Create instance of K-Medoids (PAM) algorithm
+		# kmedoids_instance = kmedoids(samples, initial_medoids, data_type="points")
+
+		# # Run cluster analysis and obtain results
+		# kmedoids_instance.process()
+		# clusters = kmedoids_instance.get_clusters()
+		# medoids = kmedoids_instance.get_medoids()
+
+		# #print(clusters)
+
+		# # convert cluster output
+		# cluster_array = pd.DataFrame([(x,e) for e,i in enumerate(clusters) for x in i if len(i)>1]).sort_values(by=0)
+
+		# print(sampleids)
+		# cluster_array["sampleID"] = sampleids
+
+		# visualizer = cluster_visualizer()
+
+		# # Display clustering results
+		# visualizer.append_clusters(clusters, samples)
+		# visualizer.append_cluster(initial_medoids, samples, markersize=12, marker="+", color="gray")
+
+		# visualizer.append_cluster(medoids, samples, markersize=14, marker="*", color="black")
+
+		# plot_fn = "{}_pam.pdf".format(self.prefix)
+
+		# visualizer.show(display=False)
+
+		# visualizer.save(plot_fn, visible_grid=True, invisible_axes=False)
+
+
+
+
 
