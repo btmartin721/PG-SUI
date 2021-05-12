@@ -96,7 +96,7 @@ Clustering algorithms
 ~~4. PAM~~  
 5. Others?
 
-Decision Trees
+Decision Trees  
 ~~1. Random Forest~~  
 
 Deep Learning
@@ -127,7 +127,7 @@ Use unsupervised learning to predict labels for supervised algorithms
 10. Random Forests
 11. 
 
-Semi-supervised learning
+Semi-supervised learning  
 
 ~~Phylogenetic trees to impute missing data~~  
 
