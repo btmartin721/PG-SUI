@@ -373,11 +373,11 @@ class runRandomForestUML(DimReduction):
 		# Cast it to a numpy.ndarray
 		_rf = rf_model.toarray()
 
-		_prox_matrix, _diss_matrix = self.calculate_rf_proximity_dissimilarity_mat(X, clf, self.n_estimators)
+		_prox_matrix, _diss_matrix = self._calculate_rf_proximity_dissimilarity_mat(X, clf, self.n_estimators)
 
 		return _rf, _prox_matrix, _diss_matrix
 
-	def calculate_rf_proximity_dissimilarity_mat(self, X, clf, n_trees):
+	def _calculate_rf_proximity_dissimilarity_mat(self, X, clf, n_trees):
 		"""[Calculate random forest proximity scores and a dissimilarity matrix from a fit sklearn.ensemble.RandomTreesEmbeddings model. Should be applied after model fitting but not on the transformed data. X is the modeled data]
 
 		Args:
