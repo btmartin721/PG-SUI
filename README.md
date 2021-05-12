@@ -83,9 +83,9 @@ Notes:
 - Can calculate AIC for k-means, or other clustering methods? See https://stackoverflow.com/questions/15839774/how-to-calculate-bic-for-k-means-clustering-in-r#:~:text=The%20AIC%20can%20be%20calculated,2*m*k)%20%7D 
 
 Dimension reduction  
-~~1. Using scikit-allel to do PCA~~  
-~~2. cMDS~~  
-~~3. isoMDS~~  
+1. ~~Using scikit-allel to do PCA~~  
+2. ~~cMDS~~  
+3. ~~isoMDS~~  
 4. DAPC -- with a priori groups, or groups from other algorithms, or an analog of find.clusters (=kmeans)
 5. Others?
 
@@ -93,11 +93,11 @@ Clustering algorithms
 1. K-Means
 2. Hierarchical clustering
 3. DBSCAN  
-~~4. PAM~~  
+4. ~~PAM~~  
 5. Others?
 
 Decision Trees  
-~~1. Random Forest~~  
+1. ~~Random Forest~~  
 
 Deep Learning
 1. Variational autoencoders
