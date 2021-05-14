@@ -17,6 +17,7 @@ from sklearn.manifold import TSNE
 # Custom imports
 from dim_reduction.dim_reduction import DimReduction
 from utils.misc import timer
+from utils.misc import progressbar
 
 class runPCA(DimReduction):
 
@@ -31,8 +32,8 @@ class runPCA(DimReduction):
 		# Child class attributes
 		self.keep_pcs = keep_pcs
 		self.scaler = scaler
-		self.coords = None
-		self._pca_model = None
+		self.coords = list()
+		self._pca_model = list()
 		self.method = "PCA"
 
 		# PCA scatterplot settings
@@ -96,14 +97,16 @@ class runPCA(DimReduction):
 		else:
 			raise ValueError("Unsupported scaler argument provided: {}".format(self.scaler))
 
-		pca = PCA(n_components=self.keep_pcs)
+		model_list = list()
+		coords_list = list()
+		for rep in progressbar(range(self.reps), "PCA: "):
+			pca = PCA(n_components=self.keep_pcs)
 
-		model = pca.fit(X)
-		coords = model.transform(X)
+			model = pca.fit(X)
+			model_list.append(model)
+			coords_list.append(model.transform(X))
 
-		print("\nDone!")
-
-		return coords, model
+		return coords_list, model_list
 
 	def patterson_scaler(self, data):
 		"""[Patterson scaler for PCA. Basically the formula for calculating the unit variance per SNP site is: std = np.sqrt((mean / ploidy) * (1 - (mean / ploidy))). Then center the data by subtracting the mean and scale it by dividing by the unit variance per SNP site.]
@@ -309,18 +312,18 @@ class runRandomForestUML(DimReduction):
 		self.verbose = verbose
 		self.warm_start = warm_start
 
-		self.rf = None
-		self._prox_matrix = None
-		self._diss_matrix = None
+		self.rf = list()
+		self._prox_matrix = list()
+		self._diss_matrix = list()
 
-		if pca is None:
-			self.rf, self._prox_matrix, self._diss_matrix = self.fit_transform(self.gt)
+		if self.pca is None:
+			self.rf, self._prox_matrix, self._diss_matrix = self.fit_transform(self.gt, self.pca)
 		else:
-			self.rf, self._prox_matrix, self._diss_matrix = self.fit_transform(self.pca)
+			self.rf, self._prox_matrix, self._diss_matrix = self.fit_transform(self.pca.coords, self.pca)
 
 
 	@timer
-	def fit_transform(self, X):
+	def fit_transform(self, X, pca):
 		"""[Do unsupervised random forest embedding. Saves an rf model and a proximity score matrix]
 
 		Args:
@@ -347,35 +350,49 @@ class runRandomForestUML(DimReduction):
 			"\twarm_start: "+str(self.warm_start)+"\n"
 		)
 
-		# Initialize a random forest
-		clf = RandomTreesEmbedding(
-			n_estimators=self.n_estimators,
-			max_depth=self.max_depth,
-			min_samples_split=self.min_samples_split,
-			min_samples_leaf=self.min_samples_leaf,
-			min_weight_fraction_leaf=self.min_weight_fraction_leaf,
-			max_leaf_nodes=self.max_leaf_nodes,
-			min_impurity_decrease=self.min_impurity_decrease,
-			min_impurity_split=self.min_impurity_split,
-			sparse_output=self.sparse_output,
-			n_jobs=self.n_jobs,
-			random_state=self.random_state,
-			verbose=self.verbose,
-			warm_start=self.warm_start
-		)
+		prox_mat_list = list()
+		diss_mat_list = list()
+		rf_list = list()
+		for rep in progressbar(range(self.reps), "RF UML: "):
+			# Initialize a random forest
+			clf = RandomTreesEmbedding(
+				n_estimators=self.n_estimators,
+				max_depth=self.max_depth,
+				min_samples_split=self.min_samples_split,
+				min_samples_leaf=self.min_samples_leaf,
+				min_weight_fraction_leaf=self.min_weight_fraction_leaf,
+				max_leaf_nodes=self.max_leaf_nodes,
+				min_impurity_decrease=self.min_impurity_decrease,
+				min_impurity_split=self.min_impurity_split,
+				sparse_output=self.sparse_output,
+				n_jobs=self.n_jobs,
+				random_state=self.random_state,
+				verbose=self.verbose,
+				warm_start=self.warm_start
+			)
 
-		# Fit the model
-		clf.fit(X)
+			if pca:
+				_X = X[rep]
+			else:
+				_X = X.copy()
 
-		# transform and return the model
-		rf_model = clf.transform(X)
+			# Fit the model
+			clf.fit(_X)
 
-		# Cast it to a numpy.ndarray
-		_rf = rf_model.toarray()
+			# transform and return the model
+			rf_model = clf.transform(_X)
 
-		_prox_matrix, _diss_matrix = self._calculate_rf_proximity_dissimilarity_mat(X, clf, self.n_estimators)
+			# Cast it to a numpy.ndarray
+			_rf = rf_model.toarray()
+			rf_list.append(_rf)
 
-		return _rf, _prox_matrix, _diss_matrix
+			_prox_matrix, _diss_matrix = self._calculate_rf_proximity_dissimilarity_mat(_X, clf, self.n_estimators)
+
+			prox_mat_list.append(_prox_matrix)
+			diss_mat_list.append(_diss_matrix)
+
+
+		return rf_list, prox_mat_list, diss_mat_list
 
 	def _calculate_rf_proximity_dissimilarity_mat(self, X, clf, n_trees):
 		"""[Calculate random forest proximity scores and a dissimilarity matrix from a fit sklearn.ensemble.RandomTreesEmbeddings model. Should be applied after model fitting but not on the transformed data. X is the modeled data]
@@ -502,22 +519,24 @@ class runMDS(DimReduction):
 					"\tverbose: "+str(self.verbose)+"\n"
 		)
 
-		mds = MDS(
-					n_components=self.n_dims, 
-					random_state=self.random_state, 
-					metric=self.metric,
-					n_init=self.n_init,
-					max_iter=self.max_iter,
-					verbose=self.verbose,
-					eps=self.eps,
-					n_jobs=self.n_jobs,
-					dissimilarity=self.dissimilarity
-				)
+		coords_list = list()
+		for rep in progressbar(range(self.reps), "{}".format(self.method)):
+			mds = MDS(
+						n_components=self.n_dims, 
+						random_state=self.random_state, 
+						metric=self.metric,
+						n_init=self.n_init,
+						max_iter=self.max_iter,
+						verbose=self.verbose,
+						eps=self.eps,
+						n_jobs=self.n_jobs,
+						dissimilarity=self.dissimilarity
+					)
 
-		_coords = mds.fit_transform(X)
-		print("\nDone!")
+			_coords = mds.fit_transform(X[rep])
+			coords_list.append(_coords)
 
-		return _coords
+		return coords_list
 
 class runTSNE(DimReduction):
 
@@ -571,26 +590,27 @@ class runTSNE(DimReduction):
 				"\tsquare_distances: "+str(self.square_distances)+"\n"
 		)
 
-		t = TSNE(
-			n_components=self.n_components,
-			perplexity=self.perplexity,
-			early_exaggeration=self.early_exaggeration,
-			learning_rate=self.learning_rate,
-			n_iter=self.n_iter,
-			n_iter_without_progress=self.n_iter_without_progress,
-			min_grad_norm=self.min_grad_norm,
-			metric=self.metric,
-			init=self.init,
-			verbose=self.verbose,
-			random_state=self.random_state,
-			method=self.tsne_method,
-			angle=self.angle,
-			n_jobs=self.n_jobs,
-			square_distances=self.square_distances
-		)
+		coords_list = list()
+		for rep in progressbar(range(self.reps), "t-SNE: "):
+			t = TSNE(
+				n_components=self.n_components,
+				perplexity=self.perplexity,
+				early_exaggeration=self.early_exaggeration,
+				learning_rate=self.learning_rate,
+				n_iter=self.n_iter,
+				n_iter_without_progress=self.n_iter_without_progress,
+				min_grad_norm=self.min_grad_norm,
+				metric=self.metric,
+				init=self.init,
+				verbose=self.verbose,
+				random_state=self.random_state,
+				method=self.tsne_method,
+				angle=self.angle,
+				n_jobs=self.n_jobs,
+				square_distances=self.square_distances
+			)
 
-		_coords = t.fit_transform(X.values)
+			_coords = t.fit_transform(X.values)
+			coords_list.append(_coords)
 
-		print("Done!")
-
-		return _coords
+		return coords_list
