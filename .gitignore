@@ -8,3 +8,6 @@ __pycache__/*
 */*.pyc
 .vscode
 .vscode/
+*.pdf
+*.csv
+*_output/
