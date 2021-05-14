@@ -16,6 +16,7 @@ from sklearn.metrics import silhouette_samples
 
 # Custom imports
 from utils.misc import timer
+from utils.misc import progressbar
 
 class DimReduction:
 
@@ -114,58 +115,57 @@ class DimReduction:
 			ValueError: [Must be a supported dimensionality reduction method]
 			TypeError: [If pca=True, pca_model argument must also be set]
 		"""
-		if self.method == "PCA":
-			if self.pca_model is None:
-				raise TypeError("pca_model argument must be provided if pca=True")
-
-			print("\nPlotting PCA results...")
-
-		uniq_pops = list(set(self.pops))
-
-		pop_df = pd.DataFrame(self.pops, columns=["population"])
-		
-		fig = plt.figure(figsize=(figwidth, figheight))
-
-		if plot_3d:
-			ax = fig.add_subplot(111, projection="3d")
-
-		else:
-			ax = fig.add_subplot(1,1,1)
-
-		colors = self._get_pop_colors(uniq_pops, self.palette, self.colors)
-
-		if self.method == "PCA":
-			self._plot_coords(self.coords, axis1, axis2, axis3, plot_3d, ax, pop_df, uniq_pops, colors, alpha, marker, markersize, markeredgecolor, markeredgewidth, self.method, model=self.pca_model)
-
-		else:
-			self._plot_coords(self.coords, axis1, axis2, axis3, plot_3d, ax, pop_df, uniq_pops, colors, alpha, marker, markersize, markeredgecolor, markeredgewidth, self.method)
-
-		if legend:
-			if legend_inside:
-				if bbox_to_anchor[0] > 1 or \
-					bbox_to_anchor > 1:
-					print("Warning: bbox_to_anchor was set grater than 1.0 (outside plot margins) but legend_inside was set to True. Setting bbox_to_anchor to (1.0, 1.0)")
-
-			else:
-				if bbox_to_anchor[0] < 1 and \
-					bbox_to_anchor[1] < 1:
-					print("Warning: bbox_to_anchor was set less than 1.0 (inside the plot margins) but legend_inside was set to False. Setting bbox_to_anchor to (1.05, 1.0)")
-
-			ax.legend(loc=legend_loc, labelspacing=labelspacing, columnspacing=columnspacing, title=title, title_fontsize=title_fontsize, markerfirst=markerfirst, markerscale=markerscale, ncol=ncol, bbox_to_anchor=bbox_to_anchor, borderaxespad=borderaxespad, edgecolor=legend_edgecolor, facecolor=facecolor, framealpha=framealpha, shadow=shadow)
-
-
 		# Path().mkdir() creates all directories in path if any don't exist
 		plot_dir = "{}_output/{}/plots".format(self.prefix, self.method)
 		Path(plot_dir).mkdir(parents=True, exist_ok=True)
-		plot_fn = "{}/scatterplot.pdf".format(plot_dir)
 
-		fig.savefig(plot_fn, bbox_inches="tight")
+		uniq_pops = list(set(self.pops))
+		pop_df = pd.DataFrame(self.pops, columns=["population"])
+		colors = self._get_pop_colors(uniq_pops, self.palette, self.colors)
 
-		print("\nSaved {} scatterplot to {}".format(self.method, plot_fn))
+		for rep in progressbar(range(self.reps), "{} scatterplot: ".format(self.method)):
+			if self.method == "PCA":
+				if self.pca_model is None:
+					raise TypeError("pca_model argument must be provided if pca=True")
 
-		if show_plot:
-			plt.show()
-		
+			fig = plt.figure(figsize=(figwidth, figheight))
+
+			if plot_3d:
+				ax = fig.add_subplot(111, projection="3d")
+
+			else:
+				ax = fig.add_subplot(1,1,1)
+
+			if self.method == "PCA":
+				self._plot_coords(self.coords[rep], axis1, axis2, axis3, plot_3d, ax, pop_df, uniq_pops, colors, alpha, marker, markersize, markeredgecolor, markeredgewidth, self.method, model=self.pca_model[rep])
+
+			else:
+				self._plot_coords(self.coords[rep], axis1, axis2, axis3, plot_3d, ax, pop_df, uniq_pops, colors, alpha, marker, markersize, markeredgecolor, markeredgewidth, self.method)
+
+			if legend:
+				if legend_inside:
+					if bbox_to_anchor[0] > 1 or \
+						bbox_to_anchor > 1:
+						print("Warning: bbox_to_anchor was set grater than 1.0 (outside plot margins) but legend_inside was set to True. Setting bbox_to_anchor to (1.0, 1.0)")
+
+				else:
+					if bbox_to_anchor[0] < 1 and \
+						bbox_to_anchor[1] < 1:
+						print("Warning: bbox_to_anchor was set less than 1.0 (inside the plot margins) but legend_inside was set to False. Setting bbox_to_anchor to (1.05, 1.0)")
+
+				ax.legend(loc=legend_loc, labelspacing=labelspacing, columnspacing=columnspacing, title=title, title_fontsize=title_fontsize, markerfirst=markerfirst, markerscale=markerscale, ncol=ncol, bbox_to_anchor=bbox_to_anchor, borderaxespad=borderaxespad, edgecolor=legend_edgecolor, facecolor=facecolor, framealpha=framealpha, shadow=shadow)
+
+			plot_fn = "{}/scatterplot_{}.pdf".format(plot_dir, rep+1)
+
+			fig.savefig(plot_fn, bbox_inches="tight")
+
+			if show_plot:
+				plt.show()
+			
+			plt.close(fig)
+
+		print("\nSaved {} scatterplot(s) to {}".format(self.method, plot_dir))
+
 	def _plot_coords(self, coords, axis1, axis2, axis3, plot_3d, ax, populations, unique_populations, pop_colors, alpha, marker, markersize, markeredgecolor, markeredgewidth, method, model=None):
 		"""[Map colors to populations and make the scatterplot]
 
@@ -298,20 +298,13 @@ class DimReduction:
 
 		return colors
 
-	def _write_labels(self, _k):
+	def _write_labels(self, _k, _rep, _label_dir):
 
-		print("Writing predicted MSW cluster labels...")
-		label_dir = \
-			"{}_output/{}/pam/msw/labels".format(self.prefix, self.method)
-
-		# Makes all directories in path if any don't exist
-		Path(label_dir).mkdir(parents=True, exist_ok=True)
-
-		label_fn = "{}/labels.csv".format(label_dir)
+		label_fn = "{}/labels_{}.csv".format(_label_dir, _rep+1)
 
 		try:
 			with open(label_fn, "w") as fout:
-				for i, lab in enumerate(self.labels[_k]):
+				for i, lab in enumerate(self.labels[_rep][_k]):
 					if self.sampleids is None:
 						fout.write("{},{}\n".format(i+1, lab))
 					else:
@@ -319,9 +312,7 @@ class DimReduction:
 		except OSError:
 			print("Could not open or write to file: {}".format(label_fn))
 
-		print("Done!\n")
-
-	def _plot_msw_line(self, _silhouettes, _bestk, show_plot):
+	def _plot_msw_line(self, _silhouettes, _bestk, show_plot, _plot_dir, _rep):
 
 		_fig = plt.figure(figsize=(6, 6))
 		_ax = plt.subplot(1, 1, 1)
@@ -342,22 +333,20 @@ class DimReduction:
 
 		_ax.legend()
 
-		_plot_dir = \
-			"{}_output/{}/pam/msw/plots".format(self.prefix, self.method)
-
 		# Makes all directories in path if any don't exist
-		Path(_plot_dir).mkdir(parents=True, exist_ok=True)
-		plot_fn_msw = "{}/msw_lineplot.pdf".format(_plot_dir)
+		plot_fn_msw = "{}/msw_lineplot_{}.pdf".format(_plot_dir, _rep+1)
 
 		_fig.savefig(plot_fn_msw, bbox_inches="tight")
 
 		if show_plot:
 			plt.show()
 
-	def _plot_msw_clusters(self, _silhouette_avg, _k, _pp, **kwargs):
+		plt.close(_fig)
+
+	def _plot_msw_clusters(self, _silhouette_avg, _k, _pp, _rep, **kwargs):
 
 		# Compute the silhouette scores for each sample
-		sample_silhouette_values = silhouette_samples(self.coords, self.labels[_k])
+		sample_silhouette_values = silhouette_samples(self.coords[_rep], self.labels[_rep][_k])
 
 		# Check if 3d axes
 		if kwargs["axes"] == 3:
@@ -394,7 +383,7 @@ class DimReduction:
 
 		# The (k+1)*10 is for inserting blank space between silhouette
 		# plots of individual clusters, to demarcate them clearly.
-		ax1.set_ylim([0, len(self.coords) + (_k + 1) * 10])
+		ax1.set_ylim([0, len(self.coords[_rep]) + (_k + 1) * 10])
 
 		y_lower = 10
 		yticks = list()
@@ -405,7 +394,7 @@ class DimReduction:
 			# Aggregate the silhouette scores for samples belonging to
 			# cluster i, and sort them
 			ith_cluster_silhouette_values = \
-			sample_silhouette_values[self.labels[_k] == i]
+			sample_silhouette_values[self.labels[_rep][_k] == i]
 
 			ith_cluster_silhouette_values.sort()
 
@@ -452,13 +441,13 @@ class DimReduction:
 		################ Cluster plot settings ######################
 
 		# 2nd Plot showing the actual clusters formed
-		colors = cm.nipy_spectral(self.labels[_k].astype(float) / _k)
+		colors = cm.nipy_spectral(self.labels[_rep][_k].astype(float) / _k)
 
 		if kwargs["axes"] == 3:
-			ax2.scatter(self.coords[:, 0], self.coords[:, 1], self.coords[:, 2], marker=kwargs["marker"], s=kwargs["point_size"], lw=0, alpha=kwargs["point_alpha"], c=colors, edgecolor="k")
+			ax2.scatter(self.coords[_rep][:, 0], self.coords[_rep][:, 1], self.coords[_rep][:, 2], marker=kwargs["marker"], s=kwargs["point_size"], lw=0, alpha=kwargs["point_alpha"], c=colors, edgecolor="k")
 
 			# Labeling the clusters
-			centers = self.models[_k].cluster_centers_
+			centers = self.models[_rep][_k].cluster_centers_
 
 			for i, c in enumerate(centers, start=1):
 
@@ -477,11 +466,11 @@ class DimReduction:
 				)
 
 		else:
-			ax2.scatter(self.coords[:, 0], self.coords[:, 1], marker=kwargs["marker"], s=kwargs["point_size"], lw=0, alpha=kwargs["point_alpha"],
+			ax2.scatter(self.coords[_rep][:, 0], self.coords[_rep][:, 1], marker=kwargs["marker"], s=kwargs["point_size"], lw=0, alpha=kwargs["point_alpha"],
 					c=colors, edgecolor='k')
 
 			# Labeling the clusters
-			centers = self.models[_k].cluster_centers_
+			centers = self.models[_rep][_k].cluster_centers_
 
 			# Draw white circles at cluster centers
 			ax2.scatter(centers[:, 0], centers[:, 1], marker="o",
@@ -511,8 +500,15 @@ class DimReduction:
 		
 	def msw(self, plot_msw_clusters=False, plot_msw_line=False, show_all_plots=False, show_clusters_plot=False, show_msw_lineplot=False, axes=2, figwidth=9, figheight=3.5, xmin=0, background_style="white", bottom_margin=None, top_margin=None, left_margin=None, right_margin=None, avg_sil_color="red", avg_sil_linestyle="--", sup_title_y=1.01, plot_title_pad=2, silplot_xlab_fontsize="large", silplot_ylab_fontsize="large", silplot_ticklab_fontsize="large", sil_alpha=0.7, marker="o", cluster_lab_color="#A4D4FF", cluster_lab_shape="circle", cluster_lab_2d_shapesize=400, cluster_lab_2d_textsize=100, cluster_lab_3d_shape_pad=0.3, cluster_xlab_fontsize="large", cluster_ylab_fontsize="large", cluster_zlab_fontsize="large", cluster_ticklab_fontsize="large", cluster_lab_alpha=1.0, point_size=30, point_alpha=0.7, plot_title_fontsize="large"):
 		
+
+		label_dir = \
+			"{}_output/{}/pam/msw/labels".format(self.prefix, self.method)
+
+		# Makes all directories in path if any don't exist
+		Path(label_dir).mkdir(parents=True, exist_ok=True)
+
 		if plot_msw_clusters:
-			print("Making MSW cluster plots...")
+			print("\nUsing MSW to get optimal K...")
 
 			if show_all_plots:
 				show_clusters_plot = True
@@ -524,65 +520,68 @@ class DimReduction:
 			# Makes all directories in path if any don't exist
 			Path(plot_dir).mkdir(parents=True, exist_ok=True)
 
-			plot_fn = "{}/silhouettes_clusters.pdf".format(plot_dir)
+		for rep in progressbar(range(self.reps), "Calculating MSW: "):
+
+			plot_fn = "{}/silhouettes_clusters_{}.pdf".format(plot_dir, rep+1)
 
 			# For multipage PDF plot
 			pp = PdfPages(plot_fn)
 
-		silhouettes = dict()
-		for k in range(2, self.maxk+1):
+			silhouettes = dict()
+			for k in range(2, self.maxk+1):
 
-			# Compute mean silhouette scores for each K value
-			silhouette_avg = silhouette_score(self.coords, self.labels[k])
-			silhouettes[k] = silhouette_avg
+				# Compute mean silhouette scores for each K value
+				silhouette_avg = silhouette_score(self.coords[rep], self.labels[rep][k])
+				silhouettes[k] = silhouette_avg
 
-			if plot_msw_clusters:
-				sns.set_style(background_style)
+				if plot_msw_clusters:
+					sns.set_style(background_style)
 
-				self._plot_msw_clusters(
-					silhouette_avg,
-					k, 
-					pp,
-					axes=axes, 
-					show_clusters_plot=show_clusters_plot,
-					figwidth=figwidth, 
-					figheight=figheight, 
-					xmin=xmin, 
-					bottom_margin=bottom_margin, 
-					top_margin=top_margin, 
-					left_margin=left_margin, 
-					right_margin=left_margin, 
-					avg_sil_color=avg_sil_color, 
-					avg_sil_linestyle=avg_sil_linestyle, 
-					sup_title_y=sup_title_y, 
-					plot_title_pad=plot_title_pad, 
-					silplot_xlab_fontsize=silplot_xlab_fontsize, 
-					silplot_ylab_fontsize=silplot_ylab_fontsize, 
-					silplot_ticklab_fontsize=silplot_ticklab_fontsize, 
-					sil_alpha=sil_alpha, 
-					marker=marker, 
-					cluster_lab_color=cluster_lab_color, 
-					cluster_lab_shape=cluster_lab_shape, 
-					cluster_lab_2d_shapesize=cluster_lab_2d_shapesize,
-					cluster_lab_2d_textsize=cluster_lab_2d_textsize, 
-					cluster_lab_3d_shape_pad=cluster_lab_3d_shape_pad, 
-					cluster_xlab_fontsize=cluster_xlab_fontsize, 
-					cluster_ylab_fontsize=cluster_ylab_fontsize, 
-					cluster_zlab_fontsize=cluster_zlab_fontsize, 
-					cluster_ticklab_fontsize=cluster_ticklab_fontsize, 
-					cluster_lab_alpha=cluster_lab_alpha, 
-					point_size=point_size, 
-					point_alpha=point_alpha, 
-					plot_title_fontsize=plot_title_fontsize
-				)
+					self._plot_msw_clusters(
+						silhouette_avg,
+						k, 
+						pp,
+						rep,
+						axes=axes, 
+						show_clusters_plot=show_clusters_plot,
+						figwidth=figwidth, 
+						figheight=figheight, 
+						xmin=xmin, 
+						bottom_margin=bottom_margin, 
+						top_margin=top_margin, 
+						left_margin=left_margin, 
+						right_margin=left_margin, 
+						avg_sil_color=avg_sil_color, 
+						avg_sil_linestyle=avg_sil_linestyle, 
+						sup_title_y=sup_title_y, 
+						plot_title_pad=plot_title_pad, 
+						silplot_xlab_fontsize=silplot_xlab_fontsize, 
+						silplot_ylab_fontsize=silplot_ylab_fontsize, 
+						silplot_ticklab_fontsize=silplot_ticklab_fontsize, 
+						sil_alpha=sil_alpha, 
+						marker=marker, 
+						cluster_lab_color=cluster_lab_color, 
+						cluster_lab_shape=cluster_lab_shape, 
+						cluster_lab_2d_shapesize=cluster_lab_2d_shapesize,
+						cluster_lab_2d_textsize=cluster_lab_2d_textsize, 
+						cluster_lab_3d_shape_pad=cluster_lab_3d_shape_pad, 
+						cluster_xlab_fontsize=cluster_xlab_fontsize, 
+						cluster_ylab_fontsize=cluster_ylab_fontsize, 
+						cluster_zlab_fontsize=cluster_zlab_fontsize, 
+						cluster_ticklab_fontsize=cluster_ticklab_fontsize, 
+						cluster_lab_alpha=cluster_lab_alpha, 
+						point_size=point_size, 
+						point_alpha=point_alpha, 
+						plot_title_fontsize=plot_title_fontsize
+					)
 
-		pp.close()
+			pp.close()
 
-		print("Done!\n")
+			bestk = max(silhouettes.items(), key=lambda x: x[1])[0]
 
-		bestk = max(silhouettes.items(), key=lambda x: x[1])[0]
+			if plot_msw_line:
+				self._plot_msw_line(silhouettes, bestk, show_msw_lineplot, plot_dir, rep)
 
-		if plot_msw_line:
-			self._plot_msw_line(silhouettes, bestk, show_msw_lineplot)
+			self._write_labels(bestk, rep, label_dir)
 
-		self._write_labels(bestk)
+			self.pred_labels.append(self.labels[rep][bestk])
