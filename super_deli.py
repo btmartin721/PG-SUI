@@ -97,24 +97,23 @@ def main():
 
 	rf = runRandomForestUML(dr, n_estimators=1000, n_jobs=4, min_samples_leaf=4)
 
-	rf_cmds = runMDS(dr, dissimilarity_matrix = rf.dissimilarity_matrix, keep_dims=2, n_jobs=4, max_iter=1000, n_init=25)
+	rf_cmds = runMDS(dr, dissimilarity_matrix = rf.dissimilarity_matrix, keep_dims=3, n_jobs=4, max_iter=1000, n_init=25)
 
-	rf_isomds = runMDS(dr, dissimilarity_matrix = rf.dissimilarity_matrix, metric = False, keep_dims=3, n_jobs=4, max_iter=1000, n_init=25)
+	#rf_isomds = runMDS(dr, dissimilarity_matrix = rf.dissimilarity_matrix, metric=False, keep_dims=3, n_jobs=4, max_iter=1000, n_init=25)
 
-	rf_cmds.plot(plot_3d=False)
-	rf_isomds.plot(plot_3d=False)
+	rf_cmds.plot(plot_3d=True)
+	#rf_isomds.plot(plot_3d=True)
 
-	tsne = runTSNE(dr, keep_dims=3, n_iter=20000, perplexity=15.0)
-	tsne.plot(plot_3d=True)
+	#tsne = runTSNE(dr, keep_dims=3, n_iter=20000, perplexity=15.0)
+	#tsne.plot(plot_3d=True)
 
 	# rf_cmds.pam(sampleids=data.individuals, silhouettes=True, plot_silhouettes=True)
 
 	maxk = 9
 
-	pam = PamClustering(rf_cmds, dimreduction=dr)
+	pam = PamClustering(rf_cmds, dimreduction=dr, sampleids=data.individuals)
 
-	pam.msw(plot_msw=True)
-
+	pamk = pam.msw(plot_msw_clusters=True, plot_msw_line=True, axes=3)
 
 	#data.write_imputed(data.imputed_br_df, args.prefix)
 	
