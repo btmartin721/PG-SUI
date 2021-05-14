@@ -1,12 +1,9 @@
 # Standard library imports
-import sys
 
 # Third-party imports
 import numpy as np
 import pandas as pd
-from mpl_toolkits.mplot3d import Axes3D
 from sklearn_extra.cluster import KMedoids
-from sklearn.metrics import silhouette_score
 
 # Custom imports
 from dim_reduction.dim_reduction import DimReduction
@@ -15,13 +12,13 @@ class PamClustering(DimReduction):
 	"""[Class to perform unsupervised clustering on embedded data]
 	"""
 
-	def __init__(self, embedding, dimreduction=None, gt=None, pops=None, prefix=None, colors=None, palette="Set1", maxk=8, sampleids=None, plot=False, metric="euclidean", clust_method="pam", init="heuristic", max_iter=300, random_state=None):
+	def __init__(self, embedding, dimreduction=None, gt=None, pops=None, prefix=None, reps=None, colors=None, palette="Set1", maxk=8, sampleids=None, plot=False, metric="euclidean", clust_method="pam", init="heuristic", max_iter=300, random_state=None):
 
 		# Initialize parent class
-		super().__init__(gt, pops, prefix, colors, palette)
+		super().__init__(gt, pops, prefix, reps, colors, palette)
 
 		# Validates passed arguments and sets parent class attributes
-		self._validate_args(dimreduction, gt, pops, prefix)
+		self._validate_args(dimreduction, gt, pops, prefix, reps)
 
 		# Set child class attributes
 		self.maxk = maxk
