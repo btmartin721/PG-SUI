@@ -20,13 +20,13 @@ from utils.misc import timer
 
 class runPCA(DimReduction):
 
-	def __init__(self, dimreduction=None, gt=None, pops=None, prefix=None, colors=None, palette="Set1", keep_pcs=10, scaler="patterson", plot_cumvar=False, elbow=False, pc_var=None, **kwargs):
+	def __init__(self, dimreduction=None, gt=None, pops=None, prefix=None, reps=None, colors=None, palette="Set1", keep_pcs=10, scaler="patterson", plot_cumvar=False, elbow=False, pc_var=None, **kwargs):
 
 		# Initialize parent class
-		super().__init__(gt, pops, prefix, colors, palette)
+		super().__init__(gt, pops, prefix, reps, colors, palette)
 
 		# Validates passed arguments and sets parent class attributes
-		self._validate_args(dimreduction, gt, pops, prefix)
+		self._validate_args(dimreduction, gt, pops, prefix, reps)
 
 		# Child class attributes
 		self.keep_pcs = keep_pcs
@@ -285,13 +285,13 @@ class runPCA(DimReduction):
 
 class runRandomForestUML(DimReduction):
 
-	def __init__(self, dimreduction=None, gt=None, pops=None, prefix=None, colors=None, palette="Set1", pca=None, n_estimators=100, max_depth=5, min_samples_split=2, min_samples_leaf=1, min_weight_fraction_leaf=0.0, max_leaf_nodes=None, min_impurity_decrease=0.0, min_impurity_split=None, sparse_output=True, n_jobs=None, random_state=None, verbose=0, warm_start=False):
+	def __init__(self, dimreduction=None, gt=None, pops=None, prefix=None, reps=None, colors=None, palette="Set1", pca=None, n_estimators=100, max_depth=5, min_samples_split=2, min_samples_leaf=1, min_weight_fraction_leaf=0.0, max_leaf_nodes=None, min_impurity_decrease=0.0, min_impurity_split=None, sparse_output=True, n_jobs=None, random_state=None, verbose=0, warm_start=False):
 
 		# Initialize parent class
-		super().__init__(gt, pops, prefix, colors, palette)
+		super().__init__(gt, pops, prefix, reps, colors, palette)
 
 		# Validates passed arguments and sets parent class attributes
-		self._validate_args(dimreduction, gt, pops, prefix)
+		self._validate_args(dimreduction, gt, pops, prefix, reps)
 
 		# Set class attributes
 		self.pca = pca
@@ -441,13 +441,13 @@ class runRandomForestUML(DimReduction):
 
 class runMDS(DimReduction):
 
-	def __init__(self, dimreduction=None, gt=None, pops=None, prefix=None, colors=None, palette="Set1", rf=None, dissimilarity_matrix=None, metric=True, keep_dims=2, n_init=4, max_iter=300, eps=1e-3, n_jobs=None, verbose=0, random_state=None):
+	def __init__(self, dimreduction=None, gt=None, pops=None, prefix=None, reps=None, colors=None, palette="Set1", rf=None, dissimilarity_matrix=None, metric=True, keep_dims=2, n_init=4, max_iter=300, eps=1e-3, n_jobs=None, verbose=0, random_state=None):
 
 		# Initialize parent class
-		super().__init__(gt, pops, prefix, colors, palette)
+		super().__init__(gt, pops, prefix, reps, colors, palette)
 
 		# Validates passed arguments and sets parent class attributes
-		self._validate_args(dimreduction, gt, pops, prefix)
+		self._validate_args(dimreduction, gt, pops, prefix, reps)
 
 		self.metric = metric
 		self.rf = rf
@@ -521,13 +521,13 @@ class runMDS(DimReduction):
 
 class runTSNE(DimReduction):
 
-	def __init__(self, dimreduction=None, gt=None, pops=None, prefix=None, colors=None, palette="Set1", keep_dims=2, perplexity=30.0, early_exaggeration=12.0, learning_rate=200.0, n_iter=1000, n_iter_without_progress=300, min_grad_norm=1e-7, metric="euclidean", init="random", verbose=0, random_state=None, method="barnes_hut", angle=0.5, n_jobs=None, square_distances="legacy"):
+	def __init__(self, dimreduction=None, gt=None, pops=None, prefix=None, reps=None, colors=None, palette="Set1", keep_dims=2, perplexity=30.0, early_exaggeration=12.0, learning_rate=200.0, n_iter=1000, n_iter_without_progress=300, min_grad_norm=1e-7, metric="euclidean", init="random", verbose=0, random_state=None, method="barnes_hut", angle=0.5, n_jobs=None, square_distances="legacy"):
 
 		# Initialize parent class
-		super().__init__(gt, pops, prefix, colors, palette)
+		super().__init__(gt, pops, prefix, reps, colors, palette)
 
 		# Validates passed arguments and sets parent class attributes
-		self._validate_args(dimreduction, gt, pops, prefix)
+		self._validate_args(dimreduction, gt, pops, prefix, reps)
 
 		self.n_components = keep_dims
 		self.perplexity = perplexity
