@@ -89,7 +89,7 @@ def main():
 		"MX": "#FF0000"
 	}
 
-	dr = DimReduction(data.imputed_rf_df, data.populations, args.prefix, colors=colors)
+	dr = DimReduction(data.imputed_rf_df, data.populations, args.prefix, colors=colors, reps=5)
 
 	pca = runPCA(dimreduction=dr, plot_cumvar=False, keep_pcs=10)
 
@@ -104,17 +104,19 @@ def main():
 	rf_cmds.plot(plot_3d=True)
 	#rf_isomds.plot(plot_3d=True)
 
-	#tsne = runTSNE(dr, keep_dims=3, n_iter=20000, perplexity=15.0)
-	#tsne.plot(plot_3d=True)
+	tsne = runTSNE(dr, keep_dims=3, n_iter=20000, perplexity=15.0)
+	tsne.plot(plot_3d=True)
 
 	# rf_cmds.pam(sampleids=data.individuals, silhouettes=True, plot_silhouettes=True)
 
 	maxk = 9
 
 	pam = PamClustering(rf_cmds, dimreduction=dr, sampleids=data.individuals)
+	pam.msw(plot_msw_clusters=True, plot_msw_line=True, axes=3)
 
-	pamk = pam.msw(plot_msw_clusters=True, plot_msw_line=True, axes=3)
-
+	tsne_pam = PamClustering(tsne, dimreduction=dr, sampleids=data.individuals)
+	tsne_pam.msw(plot_msw_clusters=True, plot_msw_line=True, axes=3)
+	
 	#data.write_imputed(data.imputed_br_df, args.prefix)
 	
 	# pcs = data.indcount - 1
