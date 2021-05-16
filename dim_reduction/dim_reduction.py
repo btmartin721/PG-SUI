@@ -1,5 +1,6 @@
 # Standard library imports
 from pathlib import Path
+import sys
 
 # Third-party imports
 import numpy as np
@@ -10,6 +11,7 @@ import matplotlib.colors as mcolors
 import matplotlib.cm as cm
 from matplotlib.backends.backend_pdf import PdfPages
 from mpl_toolkits.mplot3d import proj3d
+from mpl_toolkits.mplot3d import Axes3D
 
 from sklearn.metrics import silhouette_score
 from sklearn.metrics import silhouette_samples
@@ -116,14 +118,40 @@ class DimReduction:
 			TypeError: [If pca=True, pca_model argument must also be set]
 		"""
 		# Path().mkdir() creates all directories in path if any don't exist
-		plot_dir = "{}_output/{}/plots".format(self.prefix, self.method)
+		if hasattr(self, "clust_method"):
+			plot_dir = "{}_output/{}/{}/plots".format(
+				self.prefix, self.method, self.clust_method
+			)
+
+		else:
+			plot_dir = "{}_output/{}/plots".format(
+				self.prefix, 
+				self.method
+			)
+
 		Path(plot_dir).mkdir(parents=True, exist_ok=True)
 
-		uniq_pops = list(set(self.pops))
-		pop_df = pd.DataFrame(self.pops, columns=["population"])
-		colors = self._get_pop_colors(uniq_pops, self.palette, self.colors)
+		if not hasattr(self, "clust_method"):
+			uniq_pops = list(set(self.pops))
+			colors = self._get_pop_colors(uniq_pops, self.palette, self.colors)
+			pop_df = pd.DataFrame(self.pops, columns=["population"])
+
 
 		for rep in progressbar(range(self.reps), "{} scatterplot: ".format(self.method)):
+
+			if hasattr(self, "clust_method"):
+				uniq_pops = list(set(self.labels[rep]))
+				uniq_pops = [x+1 if x >= 0 else x+0 for x in uniq_pops]
+
+				colors = self._get_pop_colors(
+					uniq_pops, self.palette, None
+				)
+
+				labs = self.labels[rep]
+				labs = [x+1 if x >= 0 else x+0 for x in labs]
+
+				pop_df = pd.DataFrame(labs, columns=["population"])
+
 			if self.method == "PCA":
 				if self.pca_model is None:
 					raise TypeError("pca_model argument must be provided if pca=True")
@@ -162,6 +190,7 @@ class DimReduction:
 			if show_plot:
 				plt.show()
 			
+			fig.clf()
 			plt.close(fig)
 
 		print("\nSaved {} scatterplot(s) to {}".format(self.method, plot_dir))
@@ -220,8 +249,23 @@ class DimReduction:
 			axis3_idx = axis3 - 1
 			z = coords[:, axis3_idx]
 
-		for pop in unique_populations:
+		for i, pop in enumerate(unique_populations, start=1):
+
 			flt = (populations.population == pop)
+
+			if pop == -1:
+				pop_colors[pop] = "k"
+				alpha = 1.0
+				lab = "Noisy Samples"
+				if markersize > 2:
+					ms = markersize - 2
+
+				elif markersize > 1:
+					ms = markersize - 1
+
+			else:
+				lab = pop
+				ms = markersize
 
 			if plot_3d:
 				ax.plot3D(
@@ -231,8 +275,8 @@ class DimReduction:
 							marker=marker, 
 							linestyle=' ', 
 							color=pop_colors[pop], 
-							label=pop, 
-							markersize=markersize, 
+							label=lab, 
+							markersize=ms, 
 							mec=markeredgecolor, 
 							mew=markeredgewidth, 
 							alpha=alpha
@@ -283,8 +327,10 @@ class DimReduction:
 		Returns:
 			[dict]: [Dictionary with unique population IDs as the keys and hex-code colors as the values]
 		"""
+		if hasattr(self, "clust_method"):
+			colors = None
 
-		if not colors: # Make a list of hex-coded colors
+		if colors is None: # Make a list of hex-coded colors
 			colors = dict()
 			cmap = plt.get_cmap(palette, len(uniq_pops))
 
@@ -298,13 +344,36 @@ class DimReduction:
 
 		return colors
 
-	def _write_labels(self, _k, _rep, _label_dir):
+	def save_labels(self, rep, k=None):
+
+		if k is None:
+			labs = self.labels[rep]
+		else:
+			labs = self.labels[rep][k]
+
+		label_dir = \
+			"{}_output/{}/{}/labels".format(
+				self.prefix, self.method, self.clust_method
+		)
+
+		# Makes all directories in path if any don't exist
+		Path(label_dir).mkdir(parents=True, exist_ok=True)
+
+		self._write_labels(rep, label_dir, k=k)
+		self.pred_labels.append(labs)
+
+	def _write_labels(self, _rep, _label_dir, k=None):
 
 		label_fn = "{}/labels_{}.csv".format(_label_dir, _rep+1)
 
+		if k is None:
+			labs = self.labels[_rep]
+		else:
+			labs = self.labels[_rep][_k]
+
 		try:
 			with open(label_fn, "w") as fout:
-				for i, lab in enumerate(self.labels[_rep][_k]):
+				for i, lab in enumerate(labs):
 					if self.sampleids is None:
 						fout.write("{},{}\n".format(i+1, lab))
 					else:
@@ -341,40 +410,34 @@ class DimReduction:
 		if show_plot:
 			plt.show()
 
+		_fig.clf()
 		plt.close(_fig)
 
-	def _plot_msw_clusters(self, _silhouette_avg, _k, _pp, _rep, **kwargs):
+	def _plot_msw(self, _silhouette_avg, _k, _pp, _rep, **kwargs):
 
-		# Compute the silhouette scores for each sample
-		sample_silhouette_values = silhouette_samples(self.coords[_rep], self.labels[_rep][_k])
+		self._plot_sil_blobs(_silhouette_avg, _k, _rep, kwargs)
+		self._plot_clusters(_k, _rep, kwargs)
 
-		# Check if 3d axes
-		if kwargs["axes"] == 3:
-			projection = "3d"
-		elif kwargs["axes"] == 2:
-			projection = None
-		else:
-			projection = "3d"
-			print("Warning: plot_msw=True but axes > 3. Plotting in " 
-				"3D\n")
+		plt.suptitle(("PAM Clustering "
+						"with MSW Optimal K = {}".format(_k)),
+						fontsize=kwargs["plot_title_fontsize"], y=kwargs["sup_title_y"])
 
-		# Create a subplot with 1 row and 2 columns
-		fig = plt.figure(figsize=(int(kwargs["figwidth"]), int(kwargs["figheight"])))
+		_pp.savefig(bbox_inches="tight")
+
+		if kwargs["show_clusters_plot"]:
+			plt.show()
+
+		plt.clf()
+
+	def _plot_sil_blobs(self, _silhouette_avg, _k, _rep, kwargs):
 
 		ax1 = plt.subplot(1, 2, 1)
-		ax2 = plt.subplot(1, 2, 2, projection=projection)
-
-		# Lower the bottom margin so the x-axis label shows
-		fig.subplots_adjust(
-			bottom=kwargs["bottom_margin"], 
-			top=kwargs["top_margin"], 
-			left=kwargs["left_margin"], 
-			right=kwargs["right_margin"]
-		)
 
 		# Remove the top and right spines from plots
 		sns.despine(ax=ax1, offset=5)
-		sns.despine(ax=ax2, offset=5)
+
+		# Compute the silhouette scores for each sample
+		sample_silhouette_values = silhouette_samples(self.coords[_rep], self.labels[_rep][_k])
 
 		# The 1st subplot is the silhouette plot
 		# Silhouettes can range between -1 and 1
@@ -431,14 +494,25 @@ class DimReduction:
 
 		ax1.tick_params(axis="both", which="major", labelsize=kwargs["silplot_ticklab_fontsize"], colors="black", left=True, bottom=True)
 
-
 		ax1.set_title("Silhouettes", pad=kwargs["plot_title_pad"])
 		ax1.set_xlabel("Silhouette Coefficients", fontsize=kwargs["silplot_xlab_fontsize"])
 
 		ax1.set_ylabel("Cluster Labels", fontsize=kwargs["silplot_ylab_fontsize"])
 
+	def _plot_clusters(self, _k, _rep, kwargs):
 
-		################ Cluster plot settings ######################
+		# Check if 3d axes
+		if kwargs["axes"] == 3:
+			projection = "3d"
+		elif kwargs["axes"] == 2:
+			projection = None
+		else:
+			projection = "3d"
+			print("Warning: plot_msw=True but axes > 3."
+				" Plotting in 3D\n")
+
+		ax2 = plt.subplot(1, 2, 2, projection=projection)
+		sns.despine(ax=ax2, offset=5)
 
 		# 2nd Plot showing the actual clusters formed
 		colors = cm.nipy_spectral(self.labels[_rep][_k].astype(float) / _k)
@@ -451,7 +525,8 @@ class DimReduction:
 
 			for i, c in enumerate(centers, start=1):
 
-				x2, y2, _ = proj3d.proj_transform(c[0], c[1], c[2], ax2.get_proj())
+				x2, y2, _ = proj3d.proj_transform(c[0], c[1], c[2], 
+					ax2.get_proj())
 
 				ax2.annotate(
 				"{}".format(i), 
@@ -489,20 +564,14 @@ class DimReduction:
 
 		ax2.tick_params(axis="both", which="major", labelsize=kwargs["cluster_ticklab_fontsize"], colors="black")
 
-		plt.suptitle(("PAM Clustering "
-						"with MSW Optimal K = {}".format(_k)),
-						fontsize=kwargs["plot_title_fontsize"], y=kwargs["sup_title_y"])
-
-		_pp.savefig(bbox_inches="tight")
-
-		if kwargs["show_clusters_plot"]:
-			plt.show()
+	def msw(self, plot_msw_clusters=False, plot_msw_line=False, plot_all=False, show_all_plots=False, show_clusters_plot=False, show_msw_lineplot=False, axes=2, figwidth=9, figheight=3.5, xmin=0, background_style="white", bottom_margin=None, top_margin=None, left_margin=None, right_margin=None, avg_sil_color="red", avg_sil_linestyle="--", sup_title_y=1.01, plot_title_pad=2, silplot_xlab_fontsize="large", silplot_ylab_fontsize="large", silplot_ticklab_fontsize="large", sil_alpha=0.7, marker="o", cluster_lab_color="#A4D4FF", cluster_lab_shape="circle", cluster_lab_2d_shapesize=400, cluster_lab_2d_textsize=100, cluster_lab_3d_shape_pad=0.3, cluster_xlab_fontsize="large", cluster_ylab_fontsize="large", cluster_zlab_fontsize="large", cluster_ticklab_fontsize="large", cluster_lab_alpha=1.0, point_size=30, point_alpha=0.7, plot_title_fontsize="large"):
 		
-	def msw(self, plot_msw_clusters=False, plot_msw_line=False, show_all_plots=False, show_clusters_plot=False, show_msw_lineplot=False, axes=2, figwidth=9, figheight=3.5, xmin=0, background_style="white", bottom_margin=None, top_margin=None, left_margin=None, right_margin=None, avg_sil_color="red", avg_sil_linestyle="--", sup_title_y=1.01, plot_title_pad=2, silplot_xlab_fontsize="large", silplot_ylab_fontsize="large", silplot_ticklab_fontsize="large", sil_alpha=0.7, marker="o", cluster_lab_color="#A4D4FF", cluster_lab_shape="circle", cluster_lab_2d_shapesize=400, cluster_lab_2d_textsize=100, cluster_lab_3d_shape_pad=0.3, cluster_xlab_fontsize="large", cluster_ylab_fontsize="large", cluster_zlab_fontsize="large", cluster_ticklab_fontsize="large", cluster_lab_alpha=1.0, point_size=30, point_alpha=0.7, plot_title_fontsize="large"):
-		
+		if plot_all:
+			plot_msw_clusters = True
+			plot_msw_line = True
 
 		label_dir = \
-			"{}_output/{}/pam/msw/labels".format(self.prefix, self.method)
+			"{}_output/{}/{}/msw/labels".format(self.prefix, self.method, self.clust_method)
 
 		# Makes all directories in path if any don't exist
 		Path(label_dir).mkdir(parents=True, exist_ok=True)
@@ -515,29 +584,44 @@ class DimReduction:
 				show_msw_lineplot = True
 
 			plot_dir = \
-				"{}_output/{}/pam/msw/plots".format(self.prefix, self.method)
+				"{}_output/{}/{}/msw/plots".format(self.prefix, self.method, self.clust_method)
 
 			# Makes all directories in path if any don't exist
 			Path(plot_dir).mkdir(parents=True, exist_ok=True)
 
 		for rep in progressbar(range(self.reps), "Calculating MSW: "):
 
-			plot_fn = "{}/silhouettes_clusters_{}.pdf".format(plot_dir, rep+1)
+			if plot_msw_clusters:
 
-			# For multipage PDF plot
-			pp = PdfPages(plot_fn)
+				plot_fn = "{}/silhouettes_clusters_{}.pdf".format(plot_dir, rep+1)
+
+				# For multipage PDF plot
+				pp = PdfPages(plot_fn)
+
+				# Create a subplot with 1 row and 2 columns
+				fig = plt.figure(figsize=(int(figwidth), int(figheight)))
+
+				# Lower the bottom margin so the x-axis label shows
+				fig.subplots_adjust(
+					bottom=bottom_margin, 
+					top=top_margin, 
+					left=left_margin, 
+					right=right_margin
+				)
 
 			silhouettes = dict()
 			for k in range(2, self.maxk+1):
 
 				# Compute mean silhouette scores for each K value
-				silhouette_avg = silhouette_score(self.coords[rep], self.labels[rep][k])
+				silhouette_avg = \
+					silhouette_score(self.coords[rep], self.labels[rep][k])
+
 				silhouettes[k] = silhouette_avg
 
 				if plot_msw_clusters:
 					sns.set_style(background_style)
 
-					self._plot_msw_clusters(
+					self._plot_msw(
 						silhouette_avg,
 						k, 
 						pp,
@@ -575,13 +659,16 @@ class DimReduction:
 						plot_title_fontsize=plot_title_fontsize
 					)
 
-			pp.close()
+			if plot_msw_clusters:
+				pp.close()
+				plt.clf()
+				plt.close(fig)
 
 			bestk = max(silhouettes.items(), key=lambda x: x[1])[0]
 
 			if plot_msw_line:
 				self._plot_msw_line(silhouettes, bestk, show_msw_lineplot, plot_dir, rep)
 
-			self._write_labels(bestk, rep, label_dir)
-
+			self._write_labels(rep, label_dir, k=bestk)
 			self.pred_labels.append(self.labels[rep][bestk])
+
