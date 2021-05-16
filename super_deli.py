@@ -24,6 +24,8 @@ from dim_reduction.embed import runMDS
 from dim_reduction.embed import runTSNE
 
 from clustering.clustering import PamClustering
+from clustering.clustering import KMeansClustering
+from clustering.clustering import DBSCANClustering
 
 def main():
 	"""[Class instantiations and main package body]
@@ -89,11 +91,11 @@ def main():
 		"MX": "#FF0000"
 	}
 
-	dr = DimReduction(data.imputed_rf_df, data.populations, args.prefix, colors=colors, reps=5)
+	dr = DimReduction(data.imputed_rf_df, data.populations, args.prefix, colors=colors, reps=2)
 
-	pca = runPCA(dimreduction=dr, plot_cumvar=False, keep_pcs=10)
+	#pca = runPCA(dimreduction=dr, plot_cumvar=False, keep_pcs=10)
 
-	pca.plot(plot_3d=True)
+	#pca.plot(plot_3d=True)
 
 	rf = runRandomForestUML(dr, n_estimators=1000, n_jobs=4, min_samples_leaf=4)
 
@@ -104,19 +106,25 @@ def main():
 	rf_cmds.plot(plot_3d=True)
 	#rf_isomds.plot(plot_3d=True)
 
-	tsne = runTSNE(dr, keep_dims=3, n_iter=20000, perplexity=15.0)
-	tsne.plot(plot_3d=True)
+	#tsne = runTSNE(dr, keep_dims=3, n_iter=20000, perplexity=15.0)
+	#tsne.plot(plot_3d=True)
 
 	# rf_cmds.pam(sampleids=data.individuals, silhouettes=True, plot_silhouettes=True)
 
-	maxk = 9
+	#maxk = 9
 
-	pam = PamClustering(rf_cmds, dimreduction=dr, sampleids=data.individuals)
-	pam.msw(plot_msw_clusters=True, plot_msw_line=True, axes=3)
+	#pam = PamClustering(rf_cmds, dimreduction=dr, sampleids=data.individuals)
+	#pam.msw(plot_msw_clusters=True, plot_msw_line=True, axes=3)
 
-	tsne_pam = PamClustering(tsne, dimreduction=dr, sampleids=data.individuals)
-	tsne_pam.msw(plot_msw_clusters=True, plot_msw_line=True, axes=3)
-	
+	#kmeans = KMeansClustering(rf_cmds, dimreduction=dr, sampleids=data.individuals, maxk=9)
+	#kmeans.msw(plot_msw_clusters=True, plot_msw_line=True, axes=3)
+
+	#tsne_pam = PamClustering(tsne, dimreduction=dr, sampleids=data.individuals)
+	#tsne_pam.msw(plot_msw_clusters=True, plot_msw_line=True, axes=3)
+
+	cmds_dbscan = DBSCANClustering(rf_cmds, dimreduction=dr, sampleids=data.individuals, plot_eps=True)
+	cmds_dbscan.plot(plot_3d=True)
+
 	#data.write_imputed(data.imputed_br_df, args.prefix)
 	
 	# pcs = data.indcount - 1
