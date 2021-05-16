@@ -354,6 +354,11 @@ class runRandomForestUML(DimReduction):
 		diss_mat_list = list()
 		rf_list = list()
 		for rep in progressbar(range(self.reps), "RF UML: "):
+
+			clf = None
+			rf_model = None
+			_rf = None
+
 			# Initialize a random forest
 			clf = RandomTreesEmbedding(
 				n_estimators=self.n_estimators,
@@ -386,7 +391,11 @@ class runRandomForestUML(DimReduction):
 			_rf = rf_model.toarray()
 			rf_list.append(_rf)
 
-			_prox_matrix, _diss_matrix = self._calculate_rf_proximity_dissimilarity_mat(_X, clf, self.n_estimators)
+			_prox_matrix, _diss_matrix = \
+				self._calculate_rf_proximity_dissimilarity_mat(
+					_X, 
+					clf, 
+					self.n_estimators)
 
 			prox_mat_list.append(_prox_matrix)
 			diss_mat_list.append(_diss_matrix)
@@ -521,6 +530,8 @@ class runMDS(DimReduction):
 
 		coords_list = list()
 		for rep in progressbar(range(self.reps), "{}".format(self.method)):
+			mds = None
+			_coords = None
 			mds = MDS(
 						n_components=self.n_dims, 
 						random_state=self.random_state, 
@@ -592,6 +603,9 @@ class runTSNE(DimReduction):
 
 		coords_list = list()
 		for rep in progressbar(range(self.reps), "t-SNE: "):
+
+			t = None
+			_coords = None
 			t = TSNE(
 				n_components=self.n_components,
 				perplexity=self.perplexity,
