@@ -2,6 +2,10 @@
 from pathlib import Path
 import sys
 
+# Make sure python version is >= 3.6
+if sys.version_info < (3, 6):
+	raise ImportError("Python < 3.6 is not supported!")
+
 # Third-party imports
 import numpy as np
 import pandas as pd
@@ -35,11 +39,11 @@ class DimReduction:
 
 		if _dimreduction is None:
 			if _gt is None:
-				raise TypeError("The 'gt' keyword argument must be defined if dimreduction=None")
+				raise TypeError("'gt' must be defined if dimreduction=None")
 			if _pops is None:
-				raise TypeError("The 'pops' keyword argument must be defined if dimreduction=None")
+				raise TypeError("'pops' must be defined if dimreduction=None")
 			if _prefix is None:
-				raise TypeError("The 'prefix' argument must be defined if dimreduction=None")
+				raise TypeError("'prefix' must be defined if dimreduction=None")
 
 			if _reps is None:
 				self.reps = 1
@@ -51,11 +55,17 @@ class DimReduction:
 
 		else: # _dimreduction is not None
 			if _gt is not None:
-				raise TypeError("The 'dimreduction' and 'gt' arguments cannot both be defined")
+				raise TypeError(
+					"'dimreduction' and 'gt' cannot both be defined"
+				)
 			if _pops is not None:
-				raise TypeError("The 'dimreduction' and 'pops' arguments cannot both be defined")
+				raise TypeError(
+					"'dimreduction' and 'pops' cannot both be defined"
+				)
 			if _prefix is not None:
-				raise TypeError("The 'dimreduction and 'prefix' arguments cannot both be defined")
+				raise TypeError(
+					"'dimreduction and 'prefix' cannot both be defined"
+				)
 
 			if _reps is None:
 				self.set_reps(_dimreduction.reps)
@@ -102,7 +112,37 @@ class DimReduction:
 	def set_reps(self, _reps):
 		self.reps = _reps
 
-	def plot(self, plot_3d=False, show_plot=False, axis1=1, axis2=2, axis3=3, figwidth=6, figheight=6, alpha=1.0, legend=True, legend_inside=False, legend_loc="upper left", marker="o", markersize=6, markeredgecolor="k", markeredgewidth=0.5, labelspacing=0.5, columnspacing=2.0, title=None, title_fontsize=None, markerfirst=True, markerscale=1.0, ncol=1, bbox_to_anchor=(1.0, 1.0), borderaxespad=0.5, legend_edgecolor="black", facecolor="white", framealpha=0.8, shadow=False):
+	def plot(
+		self, 
+		plot_3d=False, 
+		show_plot=False, 
+		axis1=1, 
+		axis2=2, 
+		axis3=3, 
+		figwidth=6, 
+		figheight=6, 
+		alpha=1.0, 
+		legend=True, 
+		legend_inside=False, 
+		legend_loc="upper left", 
+		marker="o", 
+		markersize=6, 
+		markeredgecolor="k", 
+		markeredgewidth=0.5, 
+		labelspacing=0.5, 
+		columnspacing=2.0, 
+		title=None, 
+		title_fontsize=None, 
+		markerfirst=True, 
+		markerscale=1.0, 
+		ncol=1, 
+		bbox_to_anchor=(1.0, 1.0), 
+		borderaxespad=0.5, 
+		legend_edgecolor="black", 
+		facecolor="white", 
+		framealpha=0.8, 
+		shadow=False
+	):
 		"""[Plot PCA results as a scatterplot and save it as a PDF file]
 
 		Args:
@@ -122,22 +162,23 @@ class DimReduction:
 			plot_dir = "{}_output/{}/{}/plots".format(
 				self.prefix, self.method, self.clust_method
 			)
+			current_method = self.clust_method
 
 		else:
 			plot_dir = "{}_output/{}/plots".format(
 				self.prefix, 
 				self.method
 			)
-
-		Path(plot_dir).mkdir(parents=True, exist_ok=True)
-
-		if not hasattr(self, "clust_method"):
 			uniq_pops = list(set(self.pops))
 			colors = self._get_pop_colors(uniq_pops, self.palette, self.colors)
 			pop_df = pd.DataFrame(self.pops, columns=["population"])
+			current_method = self.method
 
+		Path(plot_dir).mkdir(parents=True, exist_ok=True)
 
-		for rep in progressbar(range(self.reps), "{} scatterplot: ".format(self.method)):
+		for rep in progressbar(
+			range(self.reps), "{} scatterplot: ".format(current_method)
+		):
 
 			if hasattr(self, "clust_method"):
 				uniq_pops = list(set(self.labels[rep]))
@@ -154,7 +195,9 @@ class DimReduction:
 
 			if self.method == "PCA":
 				if self.pca_model is None:
-					raise TypeError("pca_model argument must be provided if pca=True")
+					raise TypeError(
+						"pca_model argument must be provided if pca=True"
+					)
 
 			fig = plt.figure(figsize=(figwidth, figheight))
 
@@ -165,23 +208,81 @@ class DimReduction:
 				ax = fig.add_subplot(1,1,1)
 
 			if self.method == "PCA":
-				self._plot_coords(self.coords[rep], axis1, axis2, axis3, plot_3d, ax, pop_df, uniq_pops, colors, alpha, marker, markersize, markeredgecolor, markeredgewidth, self.method, model=self.pca_model[rep])
+				self._plot_coords(
+					self.coords[rep], 
+					axis1, 
+					axis2, 
+					axis3, 
+					plot_3d, 
+					ax, 
+					pop_df, 
+					uniq_pops, 
+					colors, 
+					alpha, 
+					marker, 
+					markersize, 
+					markeredgecolor, 
+					markeredgewidth, 
+					self.method, 
+					model=self.pca_model[rep]
+				)
 
 			else:
-				self._plot_coords(self.coords[rep], axis1, axis2, axis3, plot_3d, ax, pop_df, uniq_pops, colors, alpha, marker, markersize, markeredgecolor, markeredgewidth, self.method)
+				self._plot_coords(
+					self.coords[rep], 
+					axis1, 
+					axis2, 
+					axis3, 
+					plot_3d, 
+					ax, 
+					pop_df, 
+					uniq_pops, 
+					colors, 
+					alpha, 
+					marker, 
+					markersize, 
+					markeredgecolor, 
+					markeredgewidth, 
+					self.method
+				)
 
 			if legend:
 				if legend_inside:
 					if bbox_to_anchor[0] > 1 or \
 						bbox_to_anchor > 1:
-						print("Warning: bbox_to_anchor was set grater than 1.0 (outside plot margins) but legend_inside was set to True. Setting bbox_to_anchor to (1.0, 1.0)")
+						print(
+							"Warning: bbox_to_anchor was set grater than 1.0 "
+								"(outside plot margins) but legend_inside was "
+								"set to True. Setting bbox_to_anchor to "
+								"(1.0, 1.0)"
+						)
 
 				else:
 					if bbox_to_anchor[0] < 1 and \
 						bbox_to_anchor[1] < 1:
-						print("Warning: bbox_to_anchor was set less than 1.0 (inside the plot margins) but legend_inside was set to False. Setting bbox_to_anchor to (1.05, 1.0)")
+						print(
+							"Warning: bbox_to_anchor was set less than 1.0 "
+								"(inside the plot margins) but legend_inside "
+								"was set to False. Setting bbox_to_anchor to "
+								"(1.05, 1.0)"
+						)
 
-				ax.legend(loc=legend_loc, labelspacing=labelspacing, columnspacing=columnspacing, title=title, title_fontsize=title_fontsize, markerfirst=markerfirst, markerscale=markerscale, ncol=ncol, bbox_to_anchor=bbox_to_anchor, borderaxespad=borderaxespad, edgecolor=legend_edgecolor, facecolor=facecolor, framealpha=framealpha, shadow=shadow)
+				ax.legend(
+					loc=legend_loc, 
+					labelspacing=labelspacing, 
+					columnspacing=columnspacing, 
+					title=title, 
+					title_fontsize=title_fontsize, 
+					markerfirst=markerfirst, 
+					markerscale=markerscale, 
+					ncol=ncol, 
+					bbox_to_anchor=bbox_to_anchor, 
+					borderaxespad=borderaxespad, 
+					edgecolor=legend_edgecolor, 
+					facecolor=facecolor, 
+					framealpha=framealpha, 
+					shadow=shadow
+				)
 
 			plot_fn = "{}/scatterplot_{}.pdf".format(plot_dir, rep+1)
 
@@ -193,9 +294,38 @@ class DimReduction:
 			fig.clf()
 			plt.close(fig)
 
-		print("\nSaved {} scatterplot(s) to {}".format(self.method, plot_dir))
+		if hasattr(self, "clust_method"):
+			print(
+				"\nSaved {} scatterplot(s) to {}".format(
+					self.clust_method, plot_dir
+				)
+			)
+		else:
+			print(
+				"\nSaved {} scatterplot(s) to {}".format(
+					self.method, plot_dir
+				)
+			)
 
-	def _plot_coords(self, coords, axis1, axis2, axis3, plot_3d, ax, populations, unique_populations, pop_colors, alpha, marker, markersize, markeredgecolor, markeredgewidth, method, model=None):
+	def _plot_coords(
+		self, 
+		coords, 
+		axis1, 
+		axis2, 
+		axis3, 
+		plot_3d, 
+		ax, 
+		populations, 
+		unique_populations, 
+		pop_colors, 
+		alpha, 
+		marker, 
+		markersize, 
+		markeredgecolor, 
+		markeredgewidth, 
+		method, 
+		model=None
+	):
 		"""[Map colors to populations and make the scatterplot]
 
 		Args:
@@ -243,9 +373,7 @@ class DimReduction:
 
 		if plot_3d:
 			if int(coords.shape[1]) < 3:
-				raise ValueError("plot_3d was specified"
-								"but there are fewer than 3 coordinate axes!"
-				)
+				raise ValueError("plot_3d was specified with < 3 dimensions!")
 			axis3_idx = axis3 - 1
 			z = coords[:, axis3_idx]
 
@@ -269,40 +397,50 @@ class DimReduction:
 
 			if plot_3d:
 				ax.plot3D(
-							x[flt], 
-							y[flt], 
-							z[flt],
-							marker=marker, 
-							linestyle=' ', 
-							color=pop_colors[pop], 
-							label=lab, 
-							markersize=ms, 
-							mec=markeredgecolor, 
-							mew=markeredgewidth, 
-							alpha=alpha
+					x[flt], 
+					y[flt], 
+					z[flt],
+					marker=marker, 
+					linestyle=' ', 
+					color=pop_colors[pop], 
+					label=lab, 
+					markersize=ms, 
+					mec=markeredgecolor, 
+					mew=markeredgewidth, 
+					alpha=alpha
 				)
 
 			else:
 				ax.plot(
-						x[flt], 
-						y[flt], 
-						marker=marker, 
-						linestyle=' ', 
-						color=pop_colors[pop], 
-						label=pop, 
-						markersize=markersize, 
-						mec=markeredgecolor, 
-						mew=markeredgewidth, 
-						alpha=alpha
+					x[flt], 
+					y[flt], 
+					marker=marker, 
+					linestyle=' ', 
+					color=pop_colors[pop], 
+					label=pop, 
+					markersize=markersize, 
+					mec=markeredgecolor, 
+					mew=markeredgewidth, 
+					alpha=alpha
 				)
 
 		if method == "PCA":
-			ax.set_xlabel('PC%s (%.1f%%)' % (axis1, model.explained_variance_ratio_[axis1_idx]*100))
+			ax.set_xlabel("PC {} ({:.1f}%)".format(
+				axis1, model.explained_variance_ratio_[axis1_idx]*100
+				)
+			)
 
-			ax.set_ylabel('PC%s (%.1f%%)' % (axis2, model.explained_variance_ratio_[axis2_idx]*100))
+			ax.set_ylabel("PC {} ({:.1f}%)".format(
+				axis2, model.explained_variance_ratio_[axis2_idx]*100
+				)
+			)
 
 			if plot_3d:
-				ax.set_zlabel('PC%s (%.1f%%)' % (axis3, model.explained_variance_ratio_[axis3_idx]*100))
+				ax.set_zlabel(
+					"PC {} ({:.1f}%)".format(
+						axis3, model.explained_variance_ratio_[axis3_idx]*100
+					)
+				)
 
 		else:
 			ax.set_xlabel("{} Axis {}".format(method, axis1))
@@ -340,7 +478,10 @@ class DimReduction:
 
 		else:
 			if len(colors.keys()) != len(uniq_pops):
-				raise ValueError("\nThe colors argument's list length must equal the number of unique populations!")
+				raise ValueError(
+					"\nThe colors argument's list length must equal the "
+						"number of unique populations!"
+				)
 
 		return colors
 
@@ -351,8 +492,7 @@ class DimReduction:
 		else:
 			labs = self.labels[rep][k]
 
-		label_dir = \
-			"{}_output/{}/{}/labels".format(
+		label_dir = "{}_output/{}/{}/labels".format(
 				self.prefix, self.method, self.clust_method
 		)
 
@@ -389,11 +529,26 @@ class DimReduction:
 		# Remove top and right axis lines
 		sns.despine(ax=_ax)
 
-		_ax.plot(list(_silhouettes.keys()), list(_silhouettes.values()), linewidth=2.5, color="b", linestyle="-")
+		_ax.plot(
+			list(_silhouettes.keys()), 
+			list(_silhouettes.values()), 
+			linewidth=2.5, 
+			color="b", 
+			linestyle="-"
+		)
 
-		_ax.plot(list(_silhouettes.keys()), list(_silhouettes.values()), marker="o", markersize=12, markerfacecolor="b", label="Mean Silhouette Width")
+		_ax.plot(
+			list(_silhouettes.keys()), 
+			list(_silhouettes.values()), 
+			marker="o", 
+			markersize=12, 
+			markerfacecolor="b", 
+			label="Mean Silhouette Width"
+		)
 
-		_ax.axvline(_bestk, color="r", linestyle="--", linewidth=2.5, label="Optimal K")
+		_ax.axvline(
+			_bestk, color="r", linestyle="--", linewidth=2.5, label="Optimal K"
+		)
 
 		_ax.set_ybound(lower=0, upper=1)
 		_ax.set_xlabel("K", fontsize="large")
@@ -418,9 +573,12 @@ class DimReduction:
 		self._plot_sil_blobs(_silhouette_avg, _k, _rep, kwargs)
 		self._plot_clusters(_k, _rep, kwargs)
 
-		plt.suptitle(("PAM Clustering "
-						"with MSW Optimal K = {}".format(_k)),
-						fontsize=kwargs["plot_title_fontsize"], y=kwargs["sup_title_y"])
+		plt.suptitle((
+			"PAM Clustering with MSW Optimal K = {}".format(_k)
+			),
+			fontsize=kwargs["plot_title_fontsize"], 
+			y=kwargs["sup_title_y"]
+		)
 
 		_pp.savefig(bbox_inches="tight")
 
@@ -437,7 +595,9 @@ class DimReduction:
 		sns.despine(ax=ax1, offset=5)
 
 		# Compute the silhouette scores for each sample
-		sample_silhouette_values = silhouette_samples(self.coords[_rep], self.labels[_rep][_k])
+		sample_silhouette_values = silhouette_samples(
+			self.coords[_rep], self.labels[_rep][_k]
+		)
 
 		# The 1st subplot is the silhouette plot
 		# Silhouettes can range between -1 and 1
@@ -468,9 +628,14 @@ class DimReduction:
 			color = cm.nipy_spectral(float(i) / _k)
 
 			# Make the silhouette blobs
-			ax1.fill_betweenx(np.arange(y_lower, y_upper),
-								0, ith_cluster_silhouette_values,
-								facecolor=color, edgecolor=color, alpha=kwargs["sil_alpha"])
+			ax1.fill_betweenx(
+				np.arange(y_lower, y_upper),
+				0, 
+				ith_cluster_silhouette_values,
+				facecolor=color, 
+				edgecolor=color, 
+				alpha=kwargs["sil_alpha"]
+			)
 
 			# For labeling each silhouette blob with their cluster 
 			# numbers as the axis labels
@@ -482,7 +647,12 @@ class DimReduction:
 		############### Silhouette plot settings ##############
 
 		# Put vertical line as average silhouette score among samples
-		ax1.axvline(x=_silhouette_avg, color=kwargs["avg_sil_color"], linestyle=kwargs["avg_sil_linestyle"], ymax=0.99)
+		ax1.axvline(
+			x=_silhouette_avg, 
+			color=kwargs["avg_sil_color"], 
+			linestyle=kwargs["avg_sil_linestyle"], 
+			ymax=0.99
+		)
 
 		# Get array of xticks
 		xticks = np.arange(kwargs["xmin"], 1.2, 0.2)
@@ -490,14 +660,28 @@ class DimReduction:
 		# Set the xaxis labels / ticks
 		ax1.set_xticks(xticks)
 		ax1.set_yticks(yticks)
-		ax1.set_yticklabels(range(1, _k+1), fontsize=kwargs["silplot_ticklab_fontsize"])
+		ax1.set_yticklabels(
+			range(1, _k+1), fontsize=kwargs["silplot_ticklab_fontsize"]
+		)
 
-		ax1.tick_params(axis="both", which="major", labelsize=kwargs["silplot_ticklab_fontsize"], colors="black", left=True, bottom=True)
+		ax1.tick_params(
+			axis="both", 
+			which="major", 
+			labelsize=kwargs["silplot_ticklab_fontsize"], 
+			colors="black", 
+			left=True, 
+			bottom=True
+		)
 
-		ax1.set_title("Silhouettes", pad=kwargs["plot_title_pad"])
-		ax1.set_xlabel("Silhouette Coefficients", fontsize=kwargs["silplot_xlab_fontsize"])
-
-		ax1.set_ylabel("Cluster Labels", fontsize=kwargs["silplot_ylab_fontsize"])
+		ax1.set_title(
+			"Silhouettes", pad=kwargs["plot_title_pad"]
+		)
+		ax1.set_xlabel(
+			"Silhouette Coefficients", fontsize=kwargs["silplot_xlab_fontsize"]
+		)
+		ax1.set_ylabel(
+			"Cluster Labels", fontsize=kwargs["silplot_ylab_fontsize"]
+		)
 
 	def _plot_clusters(self, _k, _rep, kwargs):
 
@@ -508,8 +692,9 @@ class DimReduction:
 			projection = None
 		else:
 			projection = "3d"
-			print("Warning: plot_msw=True but axes > 3."
-				" Plotting in 3D\n")
+			print(
+				"Warning: plot_msw=True but axes > 3. Plotting in 3D\n"
+			)
 
 		ax2 = plt.subplot(1, 2, 2, projection=projection)
 		sns.despine(ax=ax2, offset=5)
@@ -518,15 +703,29 @@ class DimReduction:
 		colors = cm.nipy_spectral(self.labels[_rep][_k].astype(float) / _k)
 
 		if kwargs["axes"] == 3:
-			ax2.scatter(self.coords[_rep][:, 0], self.coords[_rep][:, 1], self.coords[_rep][:, 2], marker=kwargs["marker"], s=kwargs["point_size"], lw=0, alpha=kwargs["point_alpha"], c=colors, edgecolor="k")
+			ax2.scatter(
+				self.coords[_rep][:, 0], 
+				self.coords[_rep][:, 1], 
+				self.coords[_rep][:, 2], 
+				marker=kwargs["marker"], 
+				s=kwargs["point_size"], 
+				lw=0, 
+				alpha=kwargs["point_alpha"], 
+				c=colors, 
+				edgecolor="k"
+			)
 
 			# Labeling the clusters
 			centers = self.models[_rep][_k].cluster_centers_
 
 			for i, c in enumerate(centers, start=1):
 
-				x2, y2, _ = proj3d.proj_transform(c[0], c[1], c[2], 
-					ax2.get_proj())
+				x2, y2, _ = proj3d.proj_transform(
+					c[0], 
+					c[1], 
+					c[2], 
+					ax2.get_proj()
+				)
 
 				ax2.annotate(
 				"{}".format(i), 
@@ -541,37 +740,109 @@ class DimReduction:
 				)
 
 		else:
-			ax2.scatter(self.coords[_rep][:, 0], self.coords[_rep][:, 1], marker=kwargs["marker"], s=kwargs["point_size"], lw=0, alpha=kwargs["point_alpha"],
-					c=colors, edgecolor='k')
+			ax2.scatter(
+				self.coords[_rep][:, 0], 
+				self.coords[_rep][:, 1], 
+				marker=kwargs["marker"], 
+				s=kwargs["point_size"], 
+				lw=0, 
+				alpha=kwargs["point_alpha"],
+				c=colors, 
+				edgecolor='k'
+			)
 
 			# Labeling the clusters
 			centers = self.models[_rep][_k].cluster_centers_
 
 			# Draw white circles at cluster centers
-			ax2.scatter(centers[:, 0], centers[:, 1], marker="o",
-						c=kwargs["cluster_lab_color"], alpha=kwargs["cluster_lab_alpha"], s=kwargs["cluster_lab_2d_shapesize"], edgecolor="k")
+			ax2.scatter(
+				centers[:, 0], 
+				centers[:, 1], 
+				marker="o",
+				c=kwargs["cluster_lab_color"], 
+				alpha=kwargs["cluster_lab_alpha"], 
+				s=kwargs["cluster_lab_2d_shapesize"], 
+				edgecolor="k"
+			)
 
 			for i, c in enumerate(centers, start=1):
-				ax2.scatter(c[0], c[1], marker="{}".format(i), alpha=kwargs["cluster_lab_alpha"], s=kwargs["cluster_lab_2d_textsize"], edgecolor='k')
+				ax2.scatter(
+					c[0], 
+					c[1], 
+					marker="{}".format(i), 
+					alpha=kwargs["cluster_lab_alpha"], 
+					s=kwargs["cluster_lab_2d_textsize"], 
+					edgecolor='k'
+				)
 
 		ax2.set_title("Clustered Data", pad=kwargs["plot_title_pad"])
-		ax2.set_xlabel("\n{} 1".format(self.method), fontsize=kwargs["cluster_xlab_fontsize"])
+		ax2.set_xlabel(
+			"\n{} 1".format(self.method), 
+			fontsize=kwargs["cluster_xlab_fontsize"]
+		)
 
-		ax2.set_ylabel("\n{} 2".format(self.method), fontsize=kwargs["cluster_ylab_fontsize"])
+		ax2.set_ylabel(
+			"\n{} 2".format(self.method), 
+			fontsize=kwargs["cluster_ylab_fontsize"]
+		)
 
 		if kwargs["axes"] == 3:
-			ax2.set_zlabel("\n{} 3".format(self.method), fontsize=kwargs["cluster_zlab_fontsize"])
+			ax2.set_zlabel(
+				"\n{} 3".format(self.method), 
+				fontsize=kwargs["cluster_zlab_fontsize"]
+			)
 
 		ax2.tick_params(axis="both", which="major", labelsize=kwargs["cluster_ticklab_fontsize"], colors="black")
 
-	def msw(self, plot_msw_clusters=False, plot_msw_line=False, plot_all=False, show_all_plots=False, show_clusters_plot=False, show_msw_lineplot=False, axes=2, figwidth=9, figheight=3.5, xmin=0, background_style="white", bottom_margin=None, top_margin=None, left_margin=None, right_margin=None, avg_sil_color="red", avg_sil_linestyle="--", sup_title_y=1.01, plot_title_pad=2, silplot_xlab_fontsize="large", silplot_ylab_fontsize="large", silplot_ticklab_fontsize="large", sil_alpha=0.7, marker="o", cluster_lab_color="#A4D4FF", cluster_lab_shape="circle", cluster_lab_2d_shapesize=400, cluster_lab_2d_textsize=100, cluster_lab_3d_shape_pad=0.3, cluster_xlab_fontsize="large", cluster_ylab_fontsize="large", cluster_zlab_fontsize="large", cluster_ticklab_fontsize="large", cluster_lab_alpha=1.0, point_size=30, point_alpha=0.7, plot_title_fontsize="large"):
+	def msw(
+		self, 
+		plot_msw_clusters=False, 
+		plot_msw_line=False, 
+		plot_all=False, 
+		show_all_plots=False, 
+		show_clusters_plot=False, 
+		show_msw_lineplot=False, 
+		axes=2, 
+		figwidth=9, 
+		figheight=3.5, 
+		xmin=0, 
+		background_style="white", 
+		bottom_margin=None, 
+		top_margin=None, 
+		left_margin=None, 
+		right_margin=None, 
+		avg_sil_color="red", 
+		avg_sil_linestyle="--", 
+		sup_title_y=1.01, 
+		plot_title_pad=2, 
+		silplot_xlab_fontsize="large", 
+		silplot_ylab_fontsize="large", 
+		silplot_ticklab_fontsize="large", 
+		sil_alpha=0.7, 
+		marker="o", 
+		cluster_lab_color="#A4D4FF", 
+		cluster_lab_shape="circle", 
+		cluster_lab_2d_shapesize=400, 
+		cluster_lab_2d_textsize=100, 
+		cluster_lab_3d_shape_pad=0.3, 
+		cluster_xlab_fontsize="large", 
+		cluster_ylab_fontsize="large", 
+		cluster_zlab_fontsize="large", 
+		cluster_ticklab_fontsize="large", 
+		cluster_lab_alpha=1.0, 
+		point_size=30, 
+		point_alpha=0.7, 
+		plot_title_fontsize="large"
+	):
 		
 		if plot_all:
 			plot_msw_clusters = True
 			plot_msw_line = True
 
 		label_dir = \
-			"{}_output/{}/{}/msw/labels".format(self.prefix, self.method, self.clust_method)
+			"{}_output/{}/{}/msw/labels".format(
+				self.prefix, self.method, self.clust_method
+			)
 
 		# Makes all directories in path if any don't exist
 		Path(label_dir).mkdir(parents=True, exist_ok=True)
@@ -584,7 +855,9 @@ class DimReduction:
 				show_msw_lineplot = True
 
 			plot_dir = \
-				"{}_output/{}/{}/msw/plots".format(self.prefix, self.method, self.clust_method)
+				"{}_output/{}/{}/msw/plots".format(
+					self.prefix, self.method, self.clust_method
+				)
 
 			# Makes all directories in path if any don't exist
 			Path(plot_dir).mkdir(parents=True, exist_ok=True)
@@ -593,7 +866,9 @@ class DimReduction:
 
 			if plot_msw_clusters:
 
-				plot_fn = "{}/silhouettes_clusters_{}.pdf".format(plot_dir, rep+1)
+				plot_fn = "{}/silhouettes_clusters_{}.pdf".format(
+					plot_dir, rep+1
+				)
 
 				# For multipage PDF plot
 				pp = PdfPages(plot_fn)
@@ -667,7 +942,13 @@ class DimReduction:
 			bestk = max(silhouettes.items(), key=lambda x: x[1])[0]
 
 			if plot_msw_line:
-				self._plot_msw_line(silhouettes, bestk, show_msw_lineplot, plot_dir, rep)
+				self._plot_msw_line(
+					silhouettes, 
+					bestk, 
+					show_msw_lineplot, 
+					plot_dir, 
+					rep
+				)
 
 			self._write_labels(rep, label_dir, k=bestk)
 			self.pred_labels.append(self.labels[rep][bestk])
