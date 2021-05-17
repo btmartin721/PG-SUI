@@ -8,10 +8,6 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns; sns.set()
 
-# Make sure python version is >= 3.6
-if sys.version_info < (3, 6):
-	raise ImportError("Python < 3.6 is not supported!")
-
 # Custom module imports
 from delimitation_methods.delimitation_model import DelimModel
 from read_input.read_input import GenotypeData
@@ -37,19 +33,24 @@ def main():
 		sys.exit("Error: Only one file type can be specified")
 
 	br_imputation_settings = {
-								"br_n_iter": 1000,
-								"n_nearest_features": 25
-							}
+		"br_n_iter": 1000,
+		"n_nearest_features": 25
+	}
 		
 		# If VCF file is specified.
 	if args.str:
 		if not args.pop_ids and args.popmap is None:
-			sys.exit("\nError: Either --pop_ids or --popmap must be specified\n")
+			raise TypeError("Either --pop_ids or --popmap must be specified\n")
 
 		if args.pop_ids:
-			print("\n--pop_ids was specified as column 2\n".format(args.pop_ids))
+			print(
+				"\n--pop_ids was specified as column 2\n".format(args.pop_ids)
+			)
 		else:
-			print("\n--pop_ids was not specified; using the popmap file to get population IDs\n")
+			print(
+				"\n--pop_ids was not specified; "
+				"using popmap file to get population IDs\n"
+			)
 		
 		if args.onerow_perind:
 			print("\nUsing one row per individual...\n")
@@ -57,27 +58,45 @@ def main():
 			print("\nUsing two rows per individual...\n")
 			
 		if args.onerow_perind:
-			data = GenotypeData(filename=args.str, filetype="structure1row", popmapfile=args.popmap)
+			data = GenotypeData(
+				filename=args.str, 
+				filetype="structure1row", 
+				popmapfile=args.popmap
+			)
 		else:
-			data = GenotypeData(filename=args.str, filetype="structure2row", popmapfile=args.popmap)
+			data = GenotypeData(
+				filename=args.str, 
+				filetype="structure2row", 
+				popmapfile=args.popmap
+			)
 
 	if args.phylip:
 		if (args.pop_ids or 
 			args.onerow_perind):
 
-			print("\nPhylip file was used with structure arguments; ignoring structure file arguments\n")
+			print(
+				"\nPhylip file was used with structure arguments; ignoring "
+				"structure file arguments\n"
+			)
 		
 		if args.popmap is None:
-			sys.exit("\nError: No popmap file supplied with Phylip-formatted input data\n")
+			raise TypeError("No popmap file supplied with PHYLIP file\n")
 		
-		data = GenotypeData(filename=args.phylip, filetype="phylip", popmapfile=args.popmap)
+		data = GenotypeData(
+			filename=args.phylip, 
+			filetype="phylip", 
+			popmapfile=args.popmap
+		)
 		
 	if args.resume_imputed:
 		data.read_imputed(args.resume_imputed, impute_methods="rf")
 		#data.write_imputed(data.imputed_rf_df, args.prefix)
 
 	else:	
-		data.impute_missing(impute_methods="freq_pop", impute_settings=br_imputation_settings)
+		data.impute_missing(
+			impute_methods="freq_pop", 
+			impute_settings=br_imputation_settings
+		)
 
 	colors = {
 		"GU": "#FF00FF",
@@ -91,7 +110,13 @@ def main():
 		"MX": "#FF0000"
 	}
 
-	dr = DimReduction(data.imputed_rf_df, data.populations, args.prefix, colors=colors, reps=2)
+	dr = DimReduction(
+		data.imputed_rf_df, 
+		data.populations, 
+		args.prefix, 
+		colors=colors, 
+		reps=2
+	)
 
 	#pca = runPCA(dimreduction=dr, plot_cumvar=False, keep_pcs=10)
 
@@ -99,7 +124,14 @@ def main():
 
 	rf = runRandomForestUML(dr, n_estimators=1000, n_jobs=4, min_samples_leaf=4)
 
-	rf_cmds = runMDS(dr, dissimilarity_matrix = rf.dissimilarity_matrix, keep_dims=3, n_jobs=4, max_iter=1000, n_init=25)
+	rf_cmds = runMDS(
+		dr, 
+		dissimilarity_matrix=rf.dissimilarity_matrix, 
+		keep_dims=3, 
+		n_jobs=4, 
+		max_iter=1000, 
+		n_init=25
+	)
 
 	#rf_isomds = runMDS(dr, dissimilarity_matrix = rf.dissimilarity_matrix, metric=False, keep_dims=3, n_jobs=4, max_iter=1000, n_init=25)
 
@@ -122,7 +154,10 @@ def main():
 	#tsne_pam = PamClustering(tsne, dimreduction=dr, sampleids=data.individuals)
 	#tsne_pam.msw(plot_msw_clusters=True, plot_msw_line=True, axes=3)
 
-	cmds_dbscan = DBSCANClustering(rf_cmds, dimreduction=dr, sampleids=data.individuals, plot_eps=True)
+	cmds_dbscan = DBSCANClustering(
+		rf_cmds, dimreduction=dr, sampleids=data.individuals, plot_eps=True
+	)
+	
 	cmds_dbscan.plot(plot_3d=True)
 
 	#data.write_imputed(data.imputed_br_df, args.prefix)
