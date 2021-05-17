@@ -1,8 +1,14 @@
 import sys
 
+# Make sure python version is >= 3.6
+if sys.version_info < (3, 6):
+	raise ImportError("Python < 3.6 is not supported!")
+
 import numpy as np
 import pandas as pd
 import toytree as tt
+
+
 
 from read_input.popmap_file import ReadPopmap
 from read_input import impute
@@ -42,14 +48,14 @@ class GenotypeData:
 		self.num_snps = 0
 		self.num_inds = 0
 		self.supported_methods = [
-									"knn", 
-									"freq_global", 
-									"freq_pop", 
-									"rf", 
-									"gb", 
-									"br",
-									"knn_iter"
-								]
+			"knn", 
+			"freq_global", 
+			"freq_pop", 
+			"rf", 
+			"gb", 
+			"br",
+			"knn_iter"
+		]
 
 		
 		if self.filetype is not None:
@@ -60,7 +66,7 @@ class GenotypeData:
 
 	def parse_filetype(self, filetype=None, popmapfile=None):
 		if filetype is None:
-			sys.exit("\nError: No filetype specified.\n")
+			raise OSError("No filetype specified.\n")
 		else:
 			if filetype == "phylip":
 				self.filetype = filetype
@@ -80,7 +86,9 @@ class GenotypeData:
 					self.filetype = "structure2rowPopID"
 					self.read_structure(onerow=False, popids=True)
 			else:
-				sys.exit("\nError: Filetype {} is not supported!\n".format(filetype))
+				raise OSError(
+					"Filetype {} is not supported!\n".format(filetype)
+				)
 
 	def check_filetype(self, filetype):
 		if self.filetype is None:
@@ -88,7 +96,7 @@ class GenotypeData:
 		elif self.filetype == filetype:
 			pass
 		else:
-			sys.exit("\nError: GenotypeData read_XX() call does not match filetype!\n")
+			TypeError("GenotypeData read_XX() call does not match filetype!\n")
 
 	def read_tree(self, treefile):
 		self.guidetree = tt.tree(treefile, tree_format=0)
@@ -113,12 +121,23 @@ class GenotypeData:
 					else:
 						secondline=line.split()
 						if firstline[0] != secondline[0]:
-							sys.exit("\nError: Two rows per individual was specified but sample names do not match: {} and {}\n".format(str(firstline[0]), str(secondline[0])))
+							raise ValueError("Two rows per individual was "
+								"specified but sample names do not match: {} "
+								"and {}\n".format(
+									str(firstline[0]), str(secondline[0])
+								)
+							)
 						ind=firstline[0]
 						pop=None
 						if popids:
 							if firstline[1] != secondline[1]:
-								sys.exit("\nError: Two rows per individual was specified but population IDs do not match: {} {}\n".format(str(firstline[1]), str(secondline[1])))
+								raise ValueError(
+									"Two rows per individual was "
+									"specified but population IDs do not "
+									"match {} {}\n".format(
+										str(firstline[1]), str(secondline[1])
+									)
+								)
 							pop=firstline[1]
 							self.pops.append(pop)
 							firstline=firstline[2:]
@@ -169,14 +188,17 @@ class GenotypeData:
 		self.num_snps = len(self.snps[0])
 		self.num_inds = len(self.samples)
 
-		print("\nFound {} SNPs and {} individuals...\n".format(self.num_snps, self.num_inds))
+		print("\nFound {} SNPs and {} individuals...\n".format(
+			self.num_snps, self.num_inds)
+		)
 
 		# Make sure all sequences are the same length.
 		for item in self.snps:
 			try:
 				assert len(item) == self.num_snps
 			except AssertionError:
-				sys.exit("\nError: There are sequences of different lengths in the structure file\n")
+				sys.exit("There are sequences of different lengths in the "
+					"structure file\n")
 
 	def read_phylip(self):
 		"""[Populates ReadInput object by parsing Phylip]
@@ -209,7 +231,9 @@ class GenotypeData:
 
 				# Error handling if incorrect sequence length
 				if len(snps) != num_snps:
-					sys.exit("\nError: All sequences must be the same length; at least one sequence differs from the header line\n")
+					raise ValueError("All sequences must be the same length; "
+						"at least one sequence differs from the header line\n"
+					)
 
 				snp_data.append(snps)
 				
@@ -230,9 +254,11 @@ class GenotypeData:
 		self.num_snps = num_snps
 		self.num_inds = num_inds
 			
-		# Error hanlding if incorrect number of individuals in header.
+		# Error handling if incorrect number of individuals in header.
 		if len(self.samples) != num_inds:
-			sys.exit("\nError: Incorrect number of individuals are listed in the header\n")
+			raise ValueError(
+				"Incorrect number of individuals listed in header\n"
+			)
 	
 	def convert_012(self, snps, vcf=False):
 		skip=0
@@ -259,7 +285,8 @@ class GenotypeData:
 				if vcf:
 					for i in range(0, len(self.samples)):
 						gen=snps[i][j].split("/")
-						if gen[0] in ["-", "-9", "N"] or gen[1] in ["-", "-9", "N"]:
+						if gen[0] in ["-", "-9", "N"] or \
+							gen[1] in ["-", "-9", "N"]:
 							new_snps[i].append(-9)
 						elif gen[0] == gen[1] and gen[0] == ref:
 							new_snps[i].append(0)
@@ -278,7 +305,10 @@ class GenotypeData:
 						else:
 							new_snps[i].append(1)
 		if skip > 0:
-			print("\nWarning: Skipping",str(skip),"non-biallelic sites\n")
+			print("\nWarning: Skipping {} non-biallelic sites\n".format(
+				str(skip)
+				)
+			)
 		for s in new_snps:
 			self.snps.append(s)
 
@@ -300,7 +330,8 @@ class GenotypeData:
 				"-": [0.0, 0.0, 0.0, 0.0]
 			}
 
-		elif self.filetype == "structure1row" or self.filetype == "structure2row":
+		elif self.filetype == "structure1row" or \
+			self.filetype == "structure2row":
 			onehot_dict = {
 				"1/1": [1.0, 0.0, 0.0, 0.0], 
 				"2/2": [0.0, 1.0, 0.0, 0.0],
@@ -333,7 +364,7 @@ class GenotypeData:
 		self.popmapfile = popmapfile
 		# Join popmap file with main object.
 		if len(self.samples) < 1:
-			sys.exit("\nError: No samples in GenotypeData\n")
+			raise ValueError("No samples in GenotypeData\n")
 		
 		# Instantiate popmap object
 		my_popmap = ReadPopmap(popmapfile)
@@ -341,16 +372,27 @@ class GenotypeData:
 		popmapOK = my_popmap.validate_popmap(self.samples)
 		
 		if not popmapOK:
-			sys.exit("\nError: Not all samples are present in supplied popmap file:", my_popmap.filename,"\n")
+			raise ValueError("Not all samples are present in supplied popmap "
+				"file: {}\n".format(
+					my_popmap.filename
+				)
+			)
 		
 		if len(my_popmap) != len(self.samples):
-			sys.exit("\nError: The number of individuals in the popmap file differs from the number of sequences\n")
+			sys.exit("Error: The number of individuals in the popmap file differs from the number of sequences\n")
 
 		for sample in self.samples:
 			if sample in my_popmap:
 				self.pops.append(my_popmap[sample])
 
-	def impute_missing(self, impute_methods=None, impute_settings=None, pops=None, maxk=None, np=1):
+	def impute_missing(
+		self, 
+		impute_methods=None, 
+		impute_settings=None, 
+		pops=None, 
+		maxk=None, 
+		np=1
+	):
 		"""[Imputes missing data for 012-encoded genotypes. Multiple imputation methods are supported. Some or all of them can be run by setting the impute_methods argument. Settings can be altered with the impute_settings argument]
 
 		Args:
@@ -372,7 +414,8 @@ class GenotypeData:
 		"""
 		self.impute_methods = impute_methods
 							
-		supported_settings, supported_settings_opt = settings.supported_imputation_settings()
+		supported_settings, supported_settings_opt = \
+			settings.supported_imputation_settings()
 
 		# Fetch default settings for each imputation classifier
 		knn_settings = settings.knn_imp_defaults_noniterative(maxk)
@@ -387,7 +430,8 @@ class GenotypeData:
 			if impute_settings["br_verbose"] == 0:
 				impute_settings["br_verbose"] = False
 
-			elif impute_settings["br_verbose"] == 1 or impute_settings["br_verbose"] == 2:
+			elif impute_settings["br_verbose"] == 1 or \
+				impute_settings["br_verbose"] == 2:
 				impute_settings["br_verbose"] = True
 
 		# Update settings if non-default ones were specified
@@ -401,33 +445,49 @@ class GenotypeData:
 		# Validate impute settings
 		for method in self.impute_methods:
 			if maxk and method == "knn":
-				self._check_impute_settings(method, knn_settings, supported_settings_opt, opt=True)
+				self._check_impute_settings(
+					method, knn_settings, supported_settings_opt, opt=True
+				)
 
 			elif not maxk and method == "knn":
-				self._check_impute_settings(method, knn_settings, supported_settings)
+				self._check_impute_settings(
+					method, knn_settings, supported_settings
+				)
 
 			elif method == "rf":
-				self._check_impute_settings(method, rf_settings, supported_settings)
+				self._check_impute_settings(
+					method, rf_settings, supported_settings
+				)
 
 			elif method == "gb":
-				self._check_impute_settings(method, gb_settings, supported_settings)
+				self._check_impute_settings(
+					method, gb_settings, supported_settings
+				)
 
 			elif method == "br":
-				self._check_impute_settings(method, br_settings, supported_settings)
+				self._check_impute_settings(
+					method, br_settings, supported_settings
+				)
 
 			elif method == "knn_iter":
-				self._check_impute_settings(method, knn_iterative_settings, supported_settings)
+				self._check_impute_settings(
+					method, knn_iterative_settings, supported_settings
+				)
 
 		# If one string value is supplied to impute_methods
 		if isinstance(self.impute_methods, str):
 
 			# There can be only one
 			if len(self.impute_methods.split(",")) > 1: 
-				raise TypeError("\nThe method argument must be a list if more than one arguments are specified!")
+				raise TypeError(
+					"'method' must be a list if > 1 arguments are specified"
+				)
 
 			# Must be a supported method
 			if self.impute_methods not in self.supported_methods:
-				raise ValueError("\nThe value supplied to the method argument is not supported!")
+				raise ValueError(
+					"Unrecognized value supplied to the 'method' argument"
+				)
 			
 			# K-NN imputation with K optimization
 			if self.impute_methods == "knn" and maxk:
@@ -444,7 +504,9 @@ class GenotypeData:
 						print(".", end="", flush=True)
 
 					# Run imputations
-					optk, acc = impute.impute_knn_optk(self.snps, self.pops, knn_settings, maxk, np=np)
+					optk, acc = impute.impute_knn_optk(
+						self.snps, self.pops, knn_settings, maxk, np=np
+					)
 
 					# Save the output into lists
 					optimalk_list.append(optk)
@@ -455,7 +517,11 @@ class GenotypeData:
 				optimalk, idx, kcount, nreps = impute.most_common(optimalk_list)
 				perc_k = (kcount / nreps) * 100
 
-				print("\nDone!\nThe best accuracy had n_neighbors = {} with a prediction accuracy of {:.2f}%!\nOptimal n_neighbors was found {:.2f}% of the time\n".format(optimalk, acc_list[idx], perc_k))
+				print("Done!\nThe best accuracy had n_neighbors = {} with a "
+					"prediction accuracy of {:.2f}%!\nOptimal n_neighbors was found {:.2f}% of the time\n".format(
+						optimalk, acc_list[idx], perc_k
+					)
+				)
 
 				# Now run final knn with optimal K
 				knn_settings["n_neighbors"] = int(optimalk)
@@ -471,7 +537,9 @@ class GenotypeData:
 
 			# Run imputation for by-population mode
 			if self.impute_methods == "freq_pop":
-				self.freq_imputed_pop = impute.impute_freq(self.snps, pops=self.pops)
+				self.freq_imputed_pop = impute.impute_freq(
+					self.snps, pops=self.pops
+				)
 
 			if self.impute_methods == "rf":
 				self.rf_imputed_arr = impute.rf_imputer(self.snps, rf_settings)
@@ -480,10 +548,14 @@ class GenotypeData:
 				self.gb_imputed_arr = impute.gb_imputer(self.snps, gb_settings)
 
 			if self.impute_methods == "br":
-				self.br_imputed_arr = impute.bayesianridge_imputer(self.snps, br_settings)
+				self.br_imputed_arr = impute.bayesianridge_imputer(
+					self.snps, br_settings
+				)
 
 			if self.impute_methods == "knn_iter":
-				self.knn_iter_imputed_arr = impute.knn_iterative_imputer(self.snps, knn_iterative_settings)
+				self.knn_iter_imputed_arr = impute.knn_iterative_imputer(
+					self.snps, knn_iterative_settings
+				)
 			
 
 		# If value supplied to impute_methods is a list
@@ -492,7 +564,9 @@ class GenotypeData:
 			for arg in self.impute_methods:
 				# Make sure impute_methods are supported
 				if arg not in self.supported_methods:
-					raise ValueError("\nThe value supplied to the impute_methods argument is not supported!")
+					raise ValueError(
+						"Unrecognized 'impute_methods' argument value supplied"
+					)
 
 			# For each imputation method
 			for arg in self.impute_methods:
@@ -513,7 +587,9 @@ class GenotypeData:
 							print(".", end="", flush=True)
 
 						# Run KNN imputation with K-optimization
-						optk, acc = impute.impute_knn_optk(self.snps, self.pops, knn_settings, maxk, np=np)
+						optk, acc = impute.impute_knn_optk(
+							self.snps, self.pops, knn_settings, maxk, np=np
+						)
 
 						# Save output to list
 						optimalk_list.append(optk)
@@ -521,44 +597,60 @@ class GenotypeData:
 						acc_list.append(acc_perc)
 
 					# Get most commonly found K among all replicates
-					optimalk, idx, kcount, nreps = impute.most_common(optimalk_list)
+					optimalk, idx, kcount, nreps = \
+						impute.most_common(optimalk_list)
 
 					perc_k = (kcount / nreps) * 100
 
-					print("\nDone!\nThe best accuracy had n_neighbors = {} with a prediction accuracy of {:.2f}%!\nOptimal n_neighbors was found {:.2f}% of the time\n".format(optimalk, acc_list[idx], perc_k))
+					print(
+						"Done!\nThe best accuracy had n_neighbors = {} with a " "prediction accuracy of {:.2f}%!\n"
+							"Optimal n_neighbors was found {:.2f}% of the "
+							"time\n".format(optimalk, acc_list[idx], perc_k)
+					)
 
 					# Run final knn imputation with optimal k
 					knn_settings["n_neighbors"] = int(optimalk)
-					self.knn_imputed_df = impute.impute_knn(self.snps, knn_settings)
+					self.knn_imputed_df = \
+						impute.impute_knn(self.snps, knn_settings)
 
 				# If not doing k optimization
 				elif arg == "knn" and not maxk:
 					impupted_df = impute.impute_knn(self.snps, knn_settings)
-					self.knn_imputed_df = impute.impute_knn(self.snps, knn_settings)
+					self.knn_imputed_df = \
+						impute.impute_knn(self.snps, knn_settings)
 
 				# Run imputation my global mode
 				elif arg == "freq_global":
-					self.freq_imputed_global = impute.impute_freq(self.snps)
+					self.freq_imputed_global = \
+						impute.impute_freq(self.snps)
 
 				# Run imputation for by-population mode
 				elif arg == "freq_pop":
 					self.freq_imputed_pop = impute.impute_freq(self.snps, pops=self.pops)
 
 				elif arg == "rf":
-					self.rf_imputed_arr = impute.rf_imputer(self.snps, rf_settings)
+					self.rf_imputed_arr = \
+						impute.rf_imputer(self.snps, rf_settings)
 
 				elif arg == "gb":
-					self.gb_imputed_arr = impute.gb_imputer(self.snps, gb_settings)
+					self.gb_imputed_arr = \
+						impute.gb_imputer(self.snps, gb_settings)
 
 				elif arg == "br":
-					self.br_imputed_arr = impute.br_imputer(self.snps, br_settings)
+					self.br_imputed_arr = \
+						impute.br_imputer(self.snps, br_settings)
 
 				elif arg == "knn_iter":
-					self.knn_iter_imputed_arr = impute.knn_iterative_imputer(self.snps, knn_iterative_settings)
+					self.knn_iter_imputed_arr = impute.knn_iterative_imputer(
+						self.snps, knn_iterative_settings
+					)
 
 		# impute_methods must be either string or list			
 		else:
-			raise ValueError("The impute_methods argument must be either a string or a list!")
+			raise ValueError(
+				"The impute_methods argument must be either a string or a "
+					"list!"
+			)
 		
 	def _check_impute_settings(self, method, settings, supported_settings, opt=False):
 		"""[Validate that impute_settings are supported arguments]
@@ -577,10 +669,15 @@ class GenotypeData:
 		# Make sure settings are supported by imputer
 		for arg in settings.keys():
 			if arg not in supported_settings:
-				raise ValueError("The impute_settings argument {} is not supported".format(arg))
+				raise ValueError(
+					"The impute_settings argument {} is not supported".format(
+						arg
+					)
+				)
 
 			if opt and arg == "n_neighbors":
-				raise ValueError("maxk and n_neighbors cannot both be specified!")
+				raise ValueError(
+					"maxk and n_neighbors cannot both be specified!")
 	
 	def write_imputed(self, data, prefix):
 		"""[Save imputed data to a CSV file]
@@ -601,9 +698,13 @@ class GenotypeData:
 
 		elif isinstance(data, list):
 			with open(outfile, "w") as fout:
-				fout.writelines(",".join(str(j) for j in i) + "\n" for i in data)
+				fout.writelines(
+					",".join(str(j) for j in i) + "\n" for i in data
+				)
 		else:
-			raise TypeError("write_imputed takes either a pandas.DataFrame, numpy.ndarray, or 2-dimensional list")
+			raise TypeError("'write_imputed()' takes either a pandas.DataFrame,"
+				" numpy.ndarray, or 2-dimensional list"
+			)
 
 	def read_imputed(self, filename, impute_methods):
 		"""[Read in imputed CSV file as formatted by write_imputed]
@@ -621,16 +722,21 @@ class GenotypeData:
 		if isinstance(self.impute_methods, list):
 			for method in self.impute_methods:
 				if method == "knn":
-					self.knn_imputed_df = pd.read_csv(filename, dtype="Int8", header=None)
+					self.knn_imputed_df = \
+						pd.read_csv(filename, dtype="Int8", header=None)
 					self.knn_imputed = self.knn_imputed_df.values.tolist()
 
 				elif method == "freq_global":
-					self.freq_imputed_global_df = pd.read_csv(filename, dtype="Int8", header=None)
-					self.freq_imputed_global = self.freq_imputed_global_df.values.tolist()
+					self.freq_imputed_global_df = \
+						pd.read_csv(filename, dtype="Int8", header=None)
+					self.freq_imputed_global = \
+						self.freq_imputed_global_df.values.tolist()
 
 				elif method == "freq_pop":
-					self.freq_imputed_pop_df = pd.read_csv(filename, dtype="Int8", header=None)
-					self.freq_imputed_pop = self.freq_imputed_global_df.values.tolist()
+					self.freq_imputed_pop_df = \
+						pd.read_csv(filename, dtype="Int8", header=None)
+					self.freq_imputed_pop = \
+						self.freq_imputed_global_df.values.tolist()
 
 				elif method == "rf":
 					rf_df = pd.read_csv(filename, dtype="Int8", header=None)
@@ -641,20 +747,29 @@ class GenotypeData:
 					self.gb_imputed_arr = gb_df.to_numpy(dtype=np.int)
 
 				else:
-					raise ValueError("\n{} is not a supported option in impute_methods!".format(method))
+					raise ValueError(
+						"{} is not a supported option in impute_methods!\n".format(
+							method
+						)
+					)
 
 		elif isinstance(self.impute_methods, str):
 			if self.impute_methods == "knn":
-				self.knn_imputed_df = pd.read_csv(filename, dtype="Int8", header=None)
+				self.knn_imputed_df = \
+					pd.read_csv(filename, dtype="Int8", header=None)
 				self.knn_imputed = self.knn_imputed_df.values.tolist()
 
 			elif self.impute_methods == "freq_global":
-				self.freq_imputed_global_df = pd.read_csv(filename, dtype="Int8", header=None)
-				self.freq_imputed_global = self.freq_imputed_global_df.values.tolist()
+				self.freq_imputed_global_df = \
+					pd.read_csv(filename, dtype="Int8", header=None)
+				self.freq_imputed_global = \
+					self.freq_imputed_global_df.values.tolist()
 
 			elif self.impute_methods == "freq_pop":
-				self.freq_imputed_pop_df = pd.read_csv(filename, dtype="Int8", header=None)
-				self.freq_imputed_pop = self.freq_imputed_global_df.values.tolist()
+				self.freq_imputed_pop_df = \
+					pd.read_csv(filename, dtype="Int8", header=None)
+				self.freq_imputed_pop = \
+					self.freq_imputed_global_df.values.tolist()
 
 			elif self.impute_methods == "rf":
 				rf_df = pd.read_csv(filename, dtype="Int8", header=None)
@@ -665,7 +780,11 @@ class GenotypeData:
 				self.gb_imputed_arr = gb_df.to_numpy(dtype=np.int)
 				
 			else:
-				raise ValueError("\n{} is not a supported option in impute_methods!".format(self.impute_methods))
+				raise ValueError(
+					"{} is not a supported option in impute_methods!".format(
+						self.impute_methods
+					)
+				)
 
 	@property
 	def snpcount(self):
@@ -878,13 +997,15 @@ def merge_alleles(first, second=None):
 	ret=list()
 	if second is not None:
 		if len(first) != len(second):
-			sys.exit("\nError: First and second lines have different number of alleles\n")
+			raise ValueError(
+				"First and second lines have different number of alleles\n"
+			)
 		else:
 			for i in range(0, len(first)):
 				ret.append(str(first[i])+"/"+str(second[i]))
 	else:
 		if len(first) % 2 != 0:
-			sys.exit("\nError: Line has non-even number of alleles!\n")
+			raise ValueError("Line has non-even number of alleles!\n")
 		else:
 			for i, j in zip(first[::2], first[1::2]):
 				ret.append(str(i)+"/"+str(j))
