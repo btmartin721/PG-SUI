@@ -22,6 +22,7 @@ from dim_reduction.embed import runTSNE
 from clustering.clustering import PamClustering
 from clustering.clustering import KMeansClustering
 from clustering.clustering import DBSCANClustering
+from clustering.clustering import AffinityPropogationClustering
 
 def main():
 	"""[Class instantiations and main package body]
@@ -159,6 +160,10 @@ def main():
 	)
 	
 	cmds_dbscan.plot(plot_3d=True)
+
+	cmds_affprop = AffinityPropogationClustering(rf_cmds, rf.proximity_matrix, dimreduction=dr, sampleids=data.individuals)
+
+	cmds_affprop.plot(plot_3d=True)
 
 	#data.write_imputed(data.imputed_br_df, args.prefix)
 	
