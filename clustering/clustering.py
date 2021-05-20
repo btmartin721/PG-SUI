@@ -13,6 +13,7 @@ from kneed import KneeLocator
 from sklearn.neighbors import NearestNeighbors
 from sklearn.cluster import KMeans
 from sklearn.cluster import DBSCAN
+from sklearn.cluster import AffinityPropagation
 from sklearn_extra.cluster import KMedoids
 
 # Custom imports
@@ -336,7 +337,6 @@ class DBSCANClustering(DimReduction):
 
 			p (float, optional): [The power of the Minkowski metric to be used to calculate distance between points. If None, then p=2 (equivalent to the Euclidean distance)]. Defaults to None.
 		"""
-
 		# Initialize parent class
 		super().__init__(gt, pops, prefix, reps, colors, palette)
 
@@ -441,5 +441,270 @@ class DBSCANClustering(DimReduction):
 			)
 
 		return dist[kneedle.knee]
+
+class AffinityPropogationClustering(DimReduction):
+	"""[Class to perform Affinity Propogation clustering on embedded data]
+
+	Args:
+		DimReduction ([DimReduction object]): [Inherits from DimReduction]
+	"""
+	def __init__(
+		self, 
+		embedding,
+		proximity_matrix,
+		dimreduction=None, 
+		gt=None, 
+		pops=None, 
+		prefix=None, 
+		reps=None, 
+		colors=None, 
+		palette="Set1", 
+		sampleids=None, 
+		damping=0.5,
+		max_iter=200,
+		convergence_iter=15,
+		verbose=0,
+		random_state=None
+	):
+		"""[Do Affinity Propogation clustering. The embedding object is required. Either a DimReduction object or each of the gt, pops, prefix, reps, and [colors or palette] objects are also required. Clusters are assessed as being nearby to examplar samples that best summarize the data. Clusters are determined as being similar to the examplar data points, and similarity is communicated among points using a propogation algorithm]
+
+		Args:
+			embedding ([runPCA or runMDS object]): [Embedded data created by runPCA() or runMDS()]
+
+			proximity_matrix ([runRandomForestUML proximity matrix]). [Can be retrieved as runRandomForestUML.proximity_matrix]
+
+			dimreduction ([DimReduction object], optional): [Initialized DimReduction object. If not supplied, gt, pops, prefix, reps, colors, and palette must be supplied instead]. Defaults to None.
+
+			gt ([pandas.DataFrame, numpy.ndarray, or 2D-list], optional): [One of the retrievable objects created by GenotypeData() of shape (n_samples, n_sites)]. Defaults to None.
+
+			pops ([list(str)], optional): [List of populations created by GenotypeData of shape (n_samples,). Can be retrieved as GenotypeData.populations]. Defaults to None.
+
+			prefix ([str], optional): [Prefix for outptut files and plots]. Defaults to None.
+
+			reps ([int], optional): [Number of replicates to perform]. Defaults to None.
+
+			colors ([dict(str)], optional): [Dictionary with unique populations IDs as the keys and hex-code colors as the values]. Defaults to None.
+
+			palette (str, optional): [matplotlib color palette to use if colors=None]. Defaults to "Set1".
+
+			sampleids ([list(str)], optional): [Sample IDs to write to labels files of shape (n_samples,). Can be retrieved as GenotypeData.individuals]. Defaults to None.
+
+			damping (float, optional): [Damping factor (between 0.5 and 1) is the extent to which the current value is maintained relative to incoming values (weighted 1 - damping). This is in order to avoid numerical oscilliations when updating the values (messages)]. Defaults to 0.5.
+
+			max_iter (int, optional): [Maximum number of iterations]. Defaults to 200.
+
+			convergence_iter (int, optional): [Number of iterations with no chnage in the number of estimated clusters that stops the convergence]. Defaults to 15.
+
+			verbose (int, optional): [Verbosity level. 0=less verbose]. Defaults to 0. 
+
+			random_state (int, optional): [Pseudo-random number generator to control the starting state. Use an int for reproducible results across function calls or leave as None for randomization between function calls]. Defaults to None.
+
+		Raises:
+			ValueError: ['verbose' argument must be an integer >= 0]
+		"""
+		# Initialize parent class
+		super().__init__(gt, pops, prefix, reps, colors, palette)
+
+		# Validates passed arguments and sets parent class attributes
+		self._validate_args(dimreduction, gt, pops, prefix, reps)
+
+		# Child class attributes
+		self.proximity_matrix = proximity_matrix
+		self.sampleids = sampleids
+		self.damping = damping
+		self.max_iter = max_iter
+		self.convergence_iter = convergence_iter
+		self.verbose = verbose
+		self.random_state = random_state
+		self.clust_method = "AffinityPropogation"
+		self.affinity = "precomputed"
+
+		# To store results
+		self.labels = list()
+		self.models = list()
+		self.pred_labels = list()
+		self.cluster_centers_indices = list()
+		self.best_preference = None
+		self.best_damping = None
+
+		# Get attributes from already instantiated embedding
+		self.coords = embedding.coords
+		self.method = embedding.method
+
+		if self.verbose == 0:
+			self.verbose = False
+		elif self.verbose >=1:
+			self.verbose = True
+		else:
+			raise ValueError("'verbose' argument must be an integer >= 0")
+
+		self.run_ideal_clustering(self.proximity_matrix)
+
+		print("\nBest optimized preference setting: {}".format(
+			self.best_preference)
+		)
+		print("Best optimized damping setting: {}\n".format(
+			self.best_damping)
+		)
+				
+	def fit_predict(self, X, preference):
+		"""[Fit model and predict cluster labels. Sets self.labels (predicted labels) and self.models (fit model). self.labels and self.models are lists with each item corresponding to one replicate]
+
+		Args:
+			X ([pandas.DataFrame]): [Coordinates following dimensionality reduction embedding of shape (n_samples, n_features). Accessed via self.coords]
+
+			damping (float, optional): [damping parameter setting between 0.5 and 1]
+		"""
+		print("\nDoing Affinity Propogation Clustering...\n")
+
+		initial_damping = self.damping
+
+		af = AffinityPropagation(
+			damping=initial_damping,
+			max_iter=self.max_iter,
+			convergence_iter=self.convergence_iter,
+			preference=preference,
+			affinity=self.affinity,
+			verbose=self.verbose,
+			random_state=self.random_state
+		)
+
+		l = af.fit_predict(X)
+		m = af
+
+		l, m, final_damping = \
+			self.tune_damping(X, l, m, initial_damping, preference)
+
+		self.best_damping = final_damping
+
+		return l, len(set(l)), af.cluster_centers_indices_, m
+
+	def tune_damping(self, _X, _l, _m, _damping, _preference, increment=0.05):
+		"""[Checks if predicted labels are all -1, and if so increases the damping parameter by increment]
+
+		Args:
+			_X ([pandas.DataFrame]): [Input coordinates as pandas.DataFrame of shape (n_samples, n_features)]
+
+			_l ([list(int)]): [Predicted labels for affinity propogation]
+
+			_damping ([type]): [Current damping parameter setting]
+
+			increment (float, optional): [Value to increment by if damping setting predicts all -1 labels]
+
+		Returns:
+			_l: [list(int)]: [Predicted labels]
+			_m: [sklearn.cluster.AffinityPropogation]: [Fit model]
+			_damping: [float]: [Current damping value]
+		"""
+		if all(x == -1 for x in _l):
+			if _damping <= 1.0 - increment:
+				_damping += increment
+			else:
+				return _l, _m, _damping
+
+			_af = AffinityPropogation(
+			damping=_damping,
+			max_iter=self.max_iter,
+			convergence_iter=self.convergence_iter,
+			preference=_preference,
+			affinity=self.affinity,
+			verbose=self.verbose,
+			random_state=self.random_state
+		)
+			_l = None
+			_m = None
+			_l = _af.fit_predict(_X)
+			_m = _af
+
+			_l, _m, _damping = self.tune_damping(_X, _l, _damping)
+
+			return _l, _m, _damping
+
+		else:
+			return _l, _m, _damping
+
+	def is_tuning_required(self, similarity_matrix, rows_of_cluster):
+		df = similarity_matrix[rows_of_cluster]
+
+		for val in df.values:
+			if all(np.where(val > 0.5, True, False)):
+				continue
+
+			return True
+
+		return False
+
+	def get_pref_range(self, similarity):
+		starting_point = np.median(similarity)
+
+		if starting_point == 0:
+			starting_point = np.mean(similarity)
+
+		# Let's try to accelerate the pace of values picking
+		if starting_point >= 0.05:
+			step = 1.25
+		else:
+			step = 2.0
+
+		preference_tuning_range = [starting_point]
+		max_val = starting_point
+		while max_val < 1:
+			max_val *= step
+			preference_tuning_range.append(max_val)
+
+		min_val = starting_point
+		while min_val > 0.01:
+			min_val /= step
+			preference_tuning_range.append(min_val)
+
+		return preference_tuning_range
+
+	def run_ideal_clustering(self, similarity):
+
+		for rep in progressbar(
+			range(self.reps), 
+			"{}: ".format(self.clust_method.upper())
+		):
+			preference_tuning_range = self.get_pref_range(similarity[rep])
+
+			best_tested_preference = None
+			for preference in preference_tuning_range:
+				labels, labels_count, cluster_centers_indices, af_model = self.fit_predict(similarity[rep], preference)
+
+				needs_tuning = False
+				wrong_clusters = 0
+				for label_index in range(labels_count):
+					cluster_elements_indexes = np.where(labels == label_index)[0]
+
+					tuning_required = self.is_tuning_required(similarity[rep], cluster_elements_indexes)
+
+					if tuning_required:
+						wrong_clusters += 1
+
+						if not needs_tuning:
+							needs_tuning = True
+
+				if best_tested_preference is None or wrong_clusters < best_tested_preference[1]:
+					best_tested_preference = (preference, wrong_clusters)
+
+				if not needs_tuning:
+					self.labels.append(labels), 
+					self.models.append(af_model)
+					self.save_labels(rep)
+					self.best_preference = best_tested_preference[0]
+					break
+
+			# The clustering has not been tuned enough during the iterations, we choose the less wrong clusters
+			labs, lab_count, centers, mymodel = self.fit_predict(similarity[rep], best_tested_preference[0])
+
+			self.labels.append(labs)
+			self.models.append(mymodel)
+			self.save_labels(rep)
+			self.best_preference = best_tested_preference[0]
+
+
+
+
+
 
 
