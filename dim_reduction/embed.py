@@ -605,7 +605,7 @@ class runRandomForestUML(DimReduction):
 			if pca:
 				_X = X[rep]
 			else:
-				_X = X[rep].copy()
+				_X = X.copy()
 
 			# Fit the model
 			clf.fit(_X)
@@ -1016,6 +1016,7 @@ class runTSNE(DimReduction):
 
 			t = None
 			_coords = None
+
 			t = TSNE(
 				n_components=self.n_components,
 				perplexity=self.perplexity,
