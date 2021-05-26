@@ -9,6 +9,7 @@ if sys.version_info < (3, 6):
 # Third-party imports
 import numpy as np
 import pandas as pd
+import scipy.stats as st
 import seaborn as sns
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
@@ -16,9 +17,15 @@ import matplotlib.cm as cm
 from matplotlib.backends.backend_pdf import PdfPages
 from mpl_toolkits.mplot3d import proj3d
 from mpl_toolkits.mplot3d import Axes3D
+from kneed import KneeLocator
 
+from sklearn.preprocessing import FunctionTransformer
+from sklearn.preprocessing import OneHotEncoder
 from sklearn.metrics import silhouette_score
 from sklearn.metrics import silhouette_samples
+from sklearn.metrics import pairwise_distances
+from sklearn.cluster import KMeans
+from sklearn_extra.cluster import KMedoids
 
 # Custom imports
 from utils.misc import timer
@@ -26,16 +33,19 @@ from utils.misc import progressbar
 
 class DimReduction:
 
-	def __init__(self, gt, pops, prefix, reps=1, colors=None, palette="Set1"):
+	def __init__(self, gt, pops, sampleids, prefix, reps=1, scaler="patterson", colors=None, palette="Set1"):
 
 		self.gt = gt
+
 		self.pops = pops
+		self.sampleids = sampleids
 		self.prefix = prefix
 		self.reps = reps
+		self.scaler = scaler
 		self.colors = colors
 		self.palette = palette
 
-	def _validate_args(self, _dimreduction, _gt, _pops, _prefix, _reps):
+	def _validate_args(self, _dimreduction, _gt, _pops, _sampleids, _prefix, _reps, _scaler):
 
 		if _dimreduction is None:
 			if _gt is None:
@@ -44,13 +54,23 @@ class DimReduction:
 				raise TypeError("'pops' must be defined if dimreduction=None")
 			if _prefix is None:
 				raise TypeError("'prefix' must be defined if dimreduction=None")
+			if _scaler is None:
+				raise TypeError("'scaler' must be defined if dimreduction=None")
+			if _sampleids is None:
+				raise TypeError("'sampleids' must be defined if dimreduction=None")
 
 			if _reps is None:
 				self.reps = 1
 			else:
 				self.reps = _reps
 
+			if _scaler is None:
+				self.scaler = "patterson"
+			else:
+				self.set_scaler(_scaler)
+
 			gt_df = self._validate_type(_gt)
+
 			self.set_gt(gt_df)
 
 		else: # _dimreduction is not None
@@ -66,15 +86,26 @@ class DimReduction:
 				raise TypeError(
 					"'dimreduction and 'prefix' cannot both be defined"
 				)
+			if _sampleids is not None:
+				raise TypeError(
+					"'dimreduction' and 'sampleids' cannot both be defined"
+				)
 
 			if _reps is None:
 				self.set_reps(_dimreduction.reps)
 			else:
 				self.reps = _reps
+
+			if _scaler is None:
+				self.set_scaler(_dimreduction.scaler)
+			else:
+				self.scaler = _scaler
 			
 			gt_df = self._validate_type(_dimreduction.gt)
+
 			self.set_gt(gt_df)
 			self.set_pops(_dimreduction.pops)
+			self.set_sampleids(_dimreduction.sampleids)
 			self.set_prefix(_dimreduction.prefix)
 			self.set_colors(_dimreduction.colors)
 			self.set_palette(_dimreduction.palette)
@@ -94,11 +125,56 @@ class DimReduction:
 
 		return df
 
+	def scale_gt(self, X):
+		"""[Validates scaler options and scales and standardizes self.gt object]
+
+		Args:
+			X ([pandas.DataFrame]): [012-encoded genotype data to scale and transform]
+
+		Raises:
+			ValueError: [scaler must be either "patterson", "standard", or "center"]
+		"""
+		# Scale and center the data
+		if self.scaler == "patterson":
+			std = FunctionTransformer(self.patterson_scaler)
+			X_scaled = std.fit_transform(self.gt)
+			self.set_gt(X_scaled)
+
+		elif self.scaler == "standard":
+			std = FunctionTransformer(self.standard_scaler)
+			X_scaled = std.fit_transform(self.gt)
+			self.set_gt(X_scaled)
+
+		elif self.scaler == "center":
+			std = FunctionTransformer(self.center_scaler)
+			X_scaled = std.fit_transform(self.gt)
+			self.set_gt(X_scaled)
+
+		else:
+			raise ValueError("Unsupported scaler argument provided: {}".format(self.scaler))
+
+	def _convert_onehot(self, _gt):
+		"""[Encode 012-encoded genotypes in one-hot format]
+
+		Args:
+			_gt ([pandas.DataFrame]): [012-encoded genotypes]
+
+		Returns:
+			[pandas.DataFrame]: [One-hot encoded genotypes with three categories (homozygous reference, heterozygous, homozygous alternate)]
+		"""
+		# creating instance of one-hot-encoder
+		enc = OneHotEncoder(sparse=False)
+		enc_df = pd.DataFrame(enc.fit_transform(_gt))
+		return enc_df
+
 	def set_gt(self, _gt):
 		self.gt = _gt
 
 	def set_pops(self, _pops):
 		self.pops = _pops
+
+	def set_sampleids(self, _sampleids):
+		self.sampleids = _sampleids
 
 	def set_prefix(self, _prefix):
 		self.prefix = _prefix
@@ -112,6 +188,9 @@ class DimReduction:
 	def set_reps(self, _reps):
 		self.reps = _reps
 
+	def set_scaler(self, _scaler):
+		self.scaler = _scaler
+
 	def plot(
 		self, 
 		plot_3d=False, 
@@ -121,6 +200,7 @@ class DimReduction:
 		axis3=3, 
 		figwidth=6, 
 		figheight=6, 
+		background_style="white",
 		alpha=1.0, 
 		legend=True, 
 		legend_inside=False, 
@@ -157,6 +237,7 @@ class DimReduction:
 			ValueError: [Must be a supported dimensionality reduction method]
 			TypeError: [If pca=True, pca_model argument must also be set]
 		"""
+		sns.set_style(style=background_style)
 		# Path().mkdir() creates all directories in path if any don't exist
 		if hasattr(self, "clust_method"):
 			plot_dir = "{}_output/{}/{}/plots".format(
@@ -509,7 +590,7 @@ class DimReduction:
 		if k is None:
 			labs = self.labels[_rep]
 		else:
-			labs = self.labels[_rep][_k]
+			labs = self.labels[_rep][k]
 
 		try:
 			with open(label_fn, "w") as fout:
@@ -715,30 +796,6 @@ class DimReduction:
 				edgecolor="k"
 			)
 
-			# Labeling the clusters
-			centers = self.models[_rep][_k].cluster_centers_
-
-			for i, c in enumerate(centers, start=1):
-
-				x2, y2, _ = proj3d.proj_transform(
-					c[0], 
-					c[1], 
-					c[2], 
-					ax2.get_proj()
-				)
-
-				ax2.annotate(
-				"{}".format(i), 
-				xy = (x2, y2), 
-				xytext = (x2, y2),
-				textcoords = "data", 
-				bbox=dict(boxstyle=kwargs["cluster_lab_shape"], 
-					fc=kwargs["cluster_lab_color"], 
-					ec="k",
-					alpha=kwargs["cluster_lab_alpha"],
-					pad=kwargs["cluster_lab_3d_shape_pad"])
-				)
-
 		else:
 			ax2.scatter(
 				self.coords[_rep][:, 0], 
@@ -750,30 +807,6 @@ class DimReduction:
 				c=colors, 
 				edgecolor='k'
 			)
-
-			# Labeling the clusters
-			centers = self.models[_rep][_k].cluster_centers_
-
-			# Draw white circles at cluster centers
-			ax2.scatter(
-				centers[:, 0], 
-				centers[:, 1], 
-				marker="o",
-				c=kwargs["cluster_lab_color"], 
-				alpha=kwargs["cluster_lab_alpha"], 
-				s=kwargs["cluster_lab_2d_shapesize"], 
-				edgecolor="k"
-			)
-
-			for i, c in enumerate(centers, start=1):
-				ax2.scatter(
-					c[0], 
-					c[1], 
-					marker="{}".format(i), 
-					alpha=kwargs["cluster_lab_alpha"], 
-					s=kwargs["cluster_lab_2d_textsize"], 
-					edgecolor='k'
-				)
 
 		ax2.set_title("Clustered Data", pad=kwargs["plot_title_pad"])
 		ax2.set_xlabel(
@@ -952,4 +985,267 @@ class DimReduction:
 
 			self._write_labels(rep, label_dir, k=bestk)
 			self.pred_labels.append(self.labels[rep][bestk])
+
+	@timer
+	def gapstat(self, nboot=100, plot_gap=False, show_plot=False):
+		"""
+		[Calculates gap statistics for each K-value for any clustering algorithm that has an inertia_ attribute. It then selects the optimal K-value by detecting the inflection point (i.e. the knee) of the gap statistic curve. The predicted labels for optimal K are written to one file per replicate. If plot_gap = True, the ]
+
+		Args:
+			nboot (int, optional): [Number of bootstrap replicates to perform to estimate 95% confidence intervals]. Defaults to 100.
+
+			plot_gap (bool, optional): [Whether to plot the gap statistic curve. If True, the plot is saved to disk]. Defaults to False.
+
+			show_plot (bool, optional): [Whether to show the plot in a window. If True, calls matplotlib.pyplot.show()]. Defaults to False.
+		"""
+		# Code adapted from: 
+		# https://glowingpython.blogspot.com/2019/01/a-visual-introduction-to-gap-statistics.html
+
+		print("Calculating Gap Statistic...\n")
+
+		# Must be either K-Means or K-Medoids clustering
+		if not hasattr(self.models[0][2], "inertia_"):
+			raise TypeError("Clustering algorithm is incompatible with Gap Statistic. Try MSW instead")
+
+		# Determine if PAM or KMeans clustering
+		if hasattr(self.models[0][2], "medoid_indices_"):
+			is_kmedoids = True
+		else:
+			is_kmedoids = False
+
+		if len(self.X.shape) == 1:
+			data = self.X.reshape(-1, 1)
+		else:
+			data = self.X
+
+		# Set output directories
+		plot_dir = "{}_output/{}/{}/plots".format(
+			self.prefix, 
+			self.method,
+			self.clust_method
+		)
+
+		# Create output directory for plots if it don't exist
+		Path(plot_dir).mkdir(parents=True, exist_ok=True)
+
+		for rep in progressbar(range(self.reps), "Gap Statistic: "):
+
+			# Initialize numpy array for reference datasets
+			reference = np.zeros((self.X.shape[0], self.X.shape[1]))
+			reference_inertia = list()
+			ondata_inertia = list()
+			cis = list()
+			y_error = dict()
+
+			# For each K-value
+			for k in range(2, self.maxk+1):
+				local_inertia = list()
+
+				# For each bootstrap replicate
+				for _ in range(nboot):
+
+					# Random sampling for reference dataset
+					reference = np.random.random_sample(size=self.X.shape)
+					
+					if is_kmedoids:
+						km = KMedoids(k, method="pam", init=self.init, max_iter=self.max_iter, metric="euclidean")
+					else:
+						km = KMeans(k, init=self.init, n_init=self.n_init, max_iter=self.max_iter, tol=self.tol, algorithm=self.algorithm)
+
+					km.fit(reference)
+					local_inertia.append(km.inertia_)
+
+				ondata_inertia.append(self.models[rep][k].inertia_)
+				reference_inertia.append(np.mean(local_inertia))
+
+				# Compute 95% Confidence interval
+				cis.append(np.quantile(
+					local_inertia, 
+					[0.025, 0.975]
+				))
+
+			# Log-transform inertias
+			ref_inertia_log = np.log(reference_inertia)
+			ref_inertia_log_lower = [np.log(x[0]) for x in cis]
+			ref_inertia_log_upper = [np.log(x[1]) for x in cis]
+
+			ondata_inertia_log = np.log(ondata_inertia)
+			
+			# Calculate gap statistic
+			gap_mean = ref_inertia_log - ondata_inertia_log
+			gap_lower = ref_inertia_log_lower - ondata_inertia_log
+			gap_upper = ref_inertia_log_upper - ondata_inertia_log
+
+			y_error["mean"] = gap_mean
+			y_error["lower"] = gap_lower
+			y_error["upper"] = gap_upper
+
+			# Get inflection point (knee) of curve
+			kneedle = KneeLocator(range(2, self.maxk+1), gap_mean, S=1, curve="concave", direction="increasing")
+
+			bestk = kneedle.knee
+
+			# Save predicted labels to disk
+			self.save_labels(rep, bestk)
+			
+			if plot_gap:
+				self._plot_gap(gap_mean, bestk, y_error, plot_dir, rep, show_plot)
+			
+	def _plot_gap(self, _gap, _bestk, _y_error, _plot_dir, _rep, _show_plot):
+		"""[Plot the gap statistic results as a line plot. Also plots inflection point and 95% CI error bars]
+
+		Args:
+			_gap ([numpy.ndarray]): [Gap statistic means for each K-value]
+
+			_bestk ([int]): [Optimal K-value for current replicate]
+
+			_y_error ([dict(list(float))]): [Dictionary with gap means, gap lower CI, and gap upper CI]
+
+			_plot_dir ([str]): [Directory to save plots]
+
+			_rep ([int]): [Current replicate]
+
+			_show_plot ([bool]): [If True, calls matplotlib.pyplot.show()]
+		"""
+		_fig = plt.figure(figsize=(6, 6))
+		_ax = plt.subplot(1, 1, 1)
+
+		sns.despine(ax=_ax, offset=5)
+		sns.set_style(style="white")
+
+		# Make line plot
+		_ax.plot(
+			range(2, self.maxk+1), 
+			_gap, 
+			marker="o", 
+			linestyle="-", 
+			color="b",
+			linewidth=2
+		)
+		
+		# Plot optimal K inflection point as vertical line
+		_ax.axvline(
+			linewidth=3, 
+			color="red", 
+			linestyle="--", 
+			x=_bestk, 
+			ymin=0, 
+			ymax=1,
+			label = "Optimal K",
+			)
+
+		# Plot 95% CI
+		_ax.errorbar(
+			range(2, self.maxk+1), 
+			_gap, 
+			yerr=[_y_error["mean"] - _y_error["lower"], 
+			_y_error["upper"] - _y_error["mean"]],
+			fmt="o",
+			capsize=3,
+			elinewidth=2
+		)
+
+		# Make legend
+		_ax.legend()
+
+		_ax.set_xlabel("K")
+		_ax.set_ylabel("Gap Statistic")
+
+		# Filename to save plot
+		plot_fn = "{}/gapstat_optimalK_{}.pdf".format(_plot_dir, _rep+1)
+
+		_fig.savefig(plot_fn, bbox_inches="tight")
+
+		if _show_plot:
+			plt.show()
+
+		_fig.clf()
+		plt.close(_fig)
+
+	def convert2distances(self, X):
+		pass
+		#D =
+
+	def patterson_scaler(self, X):
+		"""[Patterson scaler for PCA. The formula for calculating the unit variance per SNP site is: std = np.sqrt((mean / ploidy) * (1 - (mean / ploidy))). Then the data gets centered by subtracting the mean and scale it by dividing by the unit variance per SNP site]
+
+		Args:
+			X ([numpy.ndarray]): [012-encoded genotypes to transform of shape (n_samples, n_sites)]
+
+		Returns:
+			[numpy.ndarray]: [Transformed data, centered and scaled with Patterson scaler, of shape (n_samples, n_features)]
+		"""
+		# Make sure type is np.ndarray
+		if not isinstance(X, np.ndarray):
+			try:
+				X = np.asarray(X)
+			except:
+				raise TypeError("Input genotype data cannot be converted to a numpy.ndarray")
+			
+		# Find mean of each site
+		mean = np.mean(X, axis=0, keepdims=True)
+
+		# Super Deli only supports ploidy of 2 currently
+		ploidy = 2
+
+		# Do Patterson scaling
+		# Ploidy is 2
+		p = mean / ploidy
+		std = np.sqrt(p * (1 - p))
+
+		# Make sure dtype is np.float64
+		X = X.astype(np.float64)
+
+		# Center the data
+		X -= mean
+
+		# Scale the data using the Patterson scaler
+		X /= std
+
+		return X
+
+	def standard_scaler(self, X):
+		"""[Center and standardize data]
+
+		Args:
+			X ([numpy.ndarray]): [012-encoded genotypes to transform of shape (n_samples, n_features)]
+
+		Returns:
+			[numpy.ndarray]: [Transformed data, centered and standardized, of shape (n_samples, n_features)]
+		"""
+		# Make sure data is a numpy.ndarray
+		if not isinstance(X, np.ndarray):
+			X = np.asarray(X)
+			
+		# Make sure dtype is np.float64
+		X = X.astype(np.float64)
+
+		# Center and standardize the data
+		mean = np.mean(X, axis=0, keepdims=True)
+		std = np.std(X, axis=0, keepdims=True)
+		X -= mean
+		X /= std
+
+		return X
+
+	def center_scaler(self, X):
+		"""[Just center the data; don't standardize]
+
+		Args:
+			X ([numpy.ndarray]): [012-encoded genoytpes to transform of shape (n_samples, n_features)]
+
+		Returns:
+			[numpy.ndarray]: [Centered 012-encoded genotypes of shape (n_samples, n_features); not standardized]
+		"""
+		if not isinstance(X, np.ndarray):
+			X = np.asarray(X)
+
+		# Make sure type is np.float64
+		X = X.astype(np.float64)
+
+		# Center the data
+		mean = np.mean(X, axis=0, keepdims=True)
+		X -= mean
+		return X
+
 
