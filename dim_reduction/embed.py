@@ -20,7 +20,16 @@ from sklearn.manifold import TSNE
 # Custom imports
 from dim_reduction.dim_reduction import DimReduction
 from utils.misc import timer
-from utils.misc import progressbar
+from utils.misc import isnotebook
+
+is_notebook = isnotebook()
+
+if is_notebook:
+	from tqdm.notebook import tqdm as progressbar
+else:
+	from tqdm import tqdm as progressbar
+
+#from utils.misc import progressbar
 
 class runPCA(DimReduction):
 	"""[Class to run a principal component analysis]
@@ -28,7 +37,6 @@ class runPCA(DimReduction):
 	Args:
 		DimReduction ([DimReduction]): [Inherits from DimReduction]
 	"""
-
 	def __init__(
 		self, 
 		*,
@@ -170,7 +178,12 @@ class runPCA(DimReduction):
 
 		model_list = list()
 		coords_list = list()
-		for rep in progressbar(range(self.reps), "{}: ".format(self.method)):
+		for rep in progressbar(
+			range(self.reps),
+			desc="{} Replicates: ".format(self.method), 
+			leave=True,
+			position=0
+		):
 
 			if isinstance(pcs, list):
 				pca = PCA(n_components=pcs[rep])
@@ -518,7 +531,11 @@ class runRandomForestUML(DimReduction):
 		prox_mat_list = list()
 		diss_mat_list = list()
 		rf_list = list()
-		for rep in progressbar(range(self.reps), "RF Embedding: "):
+		for rep in progressbar(
+			range(self.reps), 
+			desc="RF Embedding Replicates: ",
+			leave=True,
+			position=0):
 
 			clf = None
 			rf_model = None
@@ -800,7 +817,12 @@ class runMDS(DimReduction):
 		)
 
 		coords_list = list()
-		for rep in progressbar(range(self.reps), "{}".format(self.method)):
+		for rep in progressbar(
+			range(self.reps), 
+			desc="{} Replicates".format(self.method),
+			leave=True,
+			position=0
+		):
 			mds = None
 			_coords = None
 			mds = MDS(
@@ -966,8 +988,11 @@ class runTSNE(DimReduction):
 		)
 
 		coords_list = list()
-		for rep in progressbar(range(self.reps), "t-SNE: "):
-
+		for rep in progressbar(
+			range(self.reps), 
+			desc="t-SNE Replicates: ",
+			leave=True,
+			position=0):
 			t = None
 			_coords = None
 

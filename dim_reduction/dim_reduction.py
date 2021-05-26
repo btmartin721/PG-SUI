@@ -29,7 +29,15 @@ from sklearn_extra.cluster import KMedoids
 
 # Custom imports
 from utils.misc import timer
-from utils.misc import progressbar
+#from utils.misc import progressbar
+from utils.misc import isnotebook
+
+is_notebook = isnotebook()
+
+if is_notebook:
+	from tqdm.notebook import tqdm as progressbar
+else:
+	from tqdm import tqdm as progressbar
 
 class DimReduction:
 
@@ -258,7 +266,10 @@ class DimReduction:
 		Path(plot_dir).mkdir(parents=True, exist_ok=True)
 
 		for rep in progressbar(
-			range(self.reps), "{} scatterplot: ".format(current_method)
+			range(self.reps), 
+			desc="{} Scatterplot Replicates: ".format(current_method),
+			leave=True,
+			position=0
 		):
 
 			if hasattr(self, "clust_method"):
@@ -895,7 +906,12 @@ class DimReduction:
 			# Makes all directories in path if any don't exist
 			Path(plot_dir).mkdir(parents=True, exist_ok=True)
 
-		for rep in progressbar(range(self.reps), "Calculating MSW: "):
+		for rep in progressbar(
+			range(self.reps), 
+			desc="Calculating MSW Replictes: ",
+			leave=True,
+			position=0
+		):
 
 			if plot_msw_clusters:
 
@@ -918,7 +934,11 @@ class DimReduction:
 				)
 
 			silhouettes = dict()
-			for k in range(2, self.maxk+1):
+			for k in progressbar(
+				range(2, self.maxk+1), 
+				desc="K-Values: ", 
+				leave=False, 
+				position=1):
 
 				# Compute mean silhouette scores for each K value
 				silhouette_avg = \
@@ -1028,7 +1048,11 @@ class DimReduction:
 		# Create output directory for plots if it don't exist
 		Path(plot_dir).mkdir(parents=True, exist_ok=True)
 
-		for rep in progressbar(range(self.reps), "Gap Statistic: "):
+		for rep in progressbar(
+			range(self.reps), 
+			desc="Gap Statistic Replicates: ",
+			leave=True,
+			position=0):
 
 			# Initialize numpy array for reference datasets
 			reference = np.zeros((self.X.shape[0], self.X.shape[1]))
@@ -1038,11 +1062,20 @@ class DimReduction:
 			y_error = dict()
 
 			# For each K-value
-			for k in range(2, self.maxk+1):
+			for k in progressbar(
+				range(2, self.maxk+1), 
+				desc="K-Values: ", 
+				leave=False, 
+				position=1):
+
 				local_inertia = list()
 
 				# For each bootstrap replicate
-				for _ in range(nboot):
+				for _ in progressbar(
+					range(nboot), 
+					desc="Bootstrapping: ", 
+					leave=False, 
+					position=2):
 
 					# Random sampling for reference dataset
 					reference = np.random.random_sample(size=self.X.shape)

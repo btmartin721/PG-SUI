@@ -20,8 +20,16 @@ from sklearn_extra.cluster import KMedoids
 
 # Custom imports
 from dim_reduction.dim_reduction import DimReduction
-from utils.misc import progressbar
+#from utils.misc import progressbar
 from utils.misc import timer
+from utils.misc import isnotebook
+
+is_notebook = isnotebook()
+
+if is_notebook:
+	from tqdm.notebook import tqdm as progressbar
+else:
+	from tqdm import tqdm as progressbar
 
 class PamClustering(DimReduction):
 	"""[Class to perform unsupervised PAM clustering on embedded data]
@@ -158,10 +166,20 @@ class PamClustering(DimReduction):
 		else:
 			self.X = list()
 
-		for rep in progressbar(range(self.reps), "{}: ".format(self.clust_method)):
+		for rep in progressbar(
+			range(self.reps), 
+			desc="{} Replicates: ".format(self.clust_method), 
+			leave=True, 
+			position=0):
+
 			l = dict()
 			m = dict()
-			for k in range(2, self.maxk+1):
+			for k in progressbar(
+				range(2, self.maxk+1), 
+				desc="K-Values: ", 
+				leave=False, 
+				position=1):
+
 				_X = None
 				km = None
 				km = KMedoids(
@@ -320,10 +338,19 @@ class KMeansClustering(DimReduction):
 		else:
 			self.X = list()
 
-		for rep in progressbar(range(self.reps), "K-Means: "):
+		for rep in progressbar(
+			range(self.reps), 
+			"K-Means Replicates: ", 
+			leave=True, 
+			position=0):
+
 			l = dict()
 			m = dict()
-			for k in range(2, self.maxk+1):
+			for k in progressbar(
+				range(2, self.maxk+1), 
+				desc="K-Values: ", 
+				leave=False, 
+				position=1):
 
 				_X = None
 				km = None
@@ -499,7 +526,9 @@ class DBSCANClustering(DimReduction):
 		eps = None
 		for rep in progressbar(
 			range(self.reps), 
-			"{}: ".format(self.clust_method)):
+			desc="{} Replicates: ".format(self.clust_method),
+			leave=True,
+			position=0):
 
 			_X = None
 
@@ -802,7 +831,9 @@ class AffinityPropogationClustering(DimReduction):
 
 		for rep in progressbar(
 			range(self.reps), 
-			"{}: ".format(self.clust_method)
+			desc="{} Replicates: ".format(self.clust_method),
+			leave=True,
+			position=0
 		):
 
 			if isinstance(X, list):
@@ -982,11 +1013,19 @@ class AgglomHier(DimReduction):
 
 		self.X = X
 
-		for rep in progressbar(range(self.reps), 
-								"{}: ".format(self.clust_method)):
+		for rep in progressbar(
+			range(self.reps),
+			desc="{} Repilcates: ".format(self.clust_method),
+			leave=True,
+			position=0
+		):
 			l = dict()
 			m = dict()
-			for k in range(2, self.maxk+1):
+			for k in progressbar(
+				range(2, self.maxk+1), 
+				desc="K-Values: ",
+				leave=False,
+				position=1):
 
 				clust = None
 				clust = AgglomerativeClustering(
