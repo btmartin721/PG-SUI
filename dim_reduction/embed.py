@@ -12,8 +12,6 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 from kneed import KneeLocator
-from sklearn.preprocessing import StandardScaler
-from sklearn.preprocessing import FunctionTransformer
 from sklearn.decomposition import PCA
 from sklearn.ensemble import RandomTreesEmbedding
 from sklearn.manifold import MDS
@@ -33,21 +31,24 @@ class runPCA(DimReduction):
 
 	def __init__(
 		self, 
+		*,
 		dimreduction=None, 
 		gt=None, 
-		pops=None, 
+		pops=None,
+		sampleids=None,
 		prefix=None, 
 		reps=None, 
+		scaler=None,
 		colors=None, 
 		palette="Set1", 
 		keep_pcs=10, 
-		scaler="patterson", 
 		plot_cumvar=False, 
+		show_cumvar=False,
 		elbow=False, 
 		pc_var=None, 
 		**kwargs
 	):
-		"""[Run a principal component analysis. The PCA axes can be plotted by calling runPCA.plot(). The PCA plot can be 2D or 3D. If dimreduction=None, gt, pops, prefix, reps, and [colors or palette] must be supplied, and vice versa]
+		"""[Run a principal component analysis. The PCA axes can be plotted by calling runPCA.plot(). The PCA plot can be 2D or 3D. If dimreduction=None, gt, pops, sampleids, prefix, reps, and [colors or palette] must be supplied, and vice versa]
 
 		Args:
 			dimreduction ([DimReduction], optional): [Previous DimReduction instance. Allows a single initialization of DimReduction to be used for multiple embedding methods]. Defaults to None.
@@ -60,15 +61,17 @@ class runPCA(DimReduction):
 
 			reps ([int], optional): [Number of replicates to perform. If None, 1 replicate is performed]. Defaults to None.
 
+			scaler (str, optional): [Scaler to use for genotype data. Valid options include "patterson", "standard", and "center". "patterson" follows a Patterson standardization (Patterson, Price & Reich (2006)) recommended for genetic data that scales the data to unit variance at each SNP. "standard" does regular standardization to unit variance and centers the data. "center" does not do a standardization and just centers the data]. Defaults to "patterson".
+
 			colors ([dict(str: str)], optional): [Dictionary with unique population IDs as the keys and hex-code colors as the corresponding values. If None, then uses the matplotlib palette supplied to palette]. Defaults to None.
 
 			palette (str, optional): [matplotlib palette to use if colors=None]. Defaults to "Set1".
 
 			keep_pcs (int, optional): [Number of principal components to retain]. Defaults to 10.
 
-			scaler (str, optional): [Method to use for scaling the input genotype data. "patterson" centers and scales to unit variance per SNP site, per Patterson (2006). Other supported options include "standard", which centers and scales to overall variance, and "center", which only centers but does not scale the data]. Defaults to "patterson".
-
 			plot_cumvar (bool, optional): [If True, save the PCA cumulative variance plot to disk]. Defaults to False.
+
+			show_cumvar (bool, optional): [If True, shows the PCA cumulative variance plot in an active window]. Defaults to False.
 
 			elbow (bool, optional): [If True, uses the elbow of the PCA cumulative variance plot to determine the number of principal components to retain. Cannot be set at same time as 'pc_var' argument]. Defaults to False.
 
@@ -79,12 +82,13 @@ class runPCA(DimReduction):
 		Raises:
 			TypeError: [Unexpected keyword argument provided to **kwargs]
 		"""
-
 		# Initialize parent class
-		super().__init__(gt, pops, prefix, reps, colors, palette)
+		super().__init__(gt, pops, sampleids, prefix, reps, scaler, colors, palette)
 
 		# Validates passed arguments and sets parent class attributes
-		self._validate_args(dimreduction, gt, pops, prefix, reps)
+		self._validate_args(dimreduction, gt, pops, sampleids, prefix, reps, scaler)
+
+		self.scale_gt(self.gt)
 
 		# Child class attributes
 		self.keep_pcs = keep_pcs
@@ -119,13 +123,15 @@ class runPCA(DimReduction):
 			)
 
 
-		self.coords, self._pca_model = self.fit_transform()
+		self.coords, self._pca_model = self.fit_transform(self.gt, self.keep_pcs)
 
 		if plot_cumvar:
-			self.keep_pcs = self._plot_pca_cumvar(
+			best_pcs = self._plot_pca_cumvar(
 				self.coords, 
 				self._pca_model, 
 				prefix, 
+				self.reps,
+				show_cumvar,
 				elbow, 
 				pc_var, 
 				cumvar_figwidth, 
@@ -139,46 +145,37 @@ class runPCA(DimReduction):
 				cumvar_text_size
 			)
 
-			self.coords, self._pca_model = self.fit_transform()
+			self.coords, self._pca_model = self.fit_transform(self.gt, best_pcs)
 
 	@timer
-	def fit_transform(self):
+	def fit_transform(self, X, pcs):
 		"""[Does principal component analysis on 012-encoded genotypes. By default uses a Patterson scaler to standardize, but you can use two other scalers: 'standard' and 'center'. 'standard' centers and standardizes the data, whereas 'center' just centers it and doesn't standardize it. PCA is performed reps times, with the pca_coords and pca_model objects being stored as a list of embedded coordinates and a list of PCA models]
+
+		Args:
+			X ([pandas.DataFrame or numpy.ndarray]): [012-encoded genotypes]
+
+			pcs ([list(int) or int): [Number of components to retain]
 
 		Returns:
 			coords_list ([list(numpy.ndarray)]): [List of PCA coordinate objects, with each item in the list corresponding to one replicate]
 
 			model_list ([list(sklearn.decomposition.PCA)]): [List of PCA model objects, with each item in the list corresponding to one replicate]
 		"""
-		print("\nDoing PCA...\n")
+		print("\nDoing {}...\n".format(self.method))
 		print(
 			"\nPCA Settings:\n"
-			"\tn_components: """+str(self.keep_pcs)+"\n"
+			"\tn_components: """+str(pcs)+"\n"
 			"\tscaler: """+str(self.scaler)+"\n"
 		)
 
-		# Scale and center the data
-		if self.scaler == "patterson":
-			std = FunctionTransformer(self.patterson_scaler)
-			X = std.fit_transform(self.gt)
-
-		elif self.scaler == "standard":
-			std = FunctionTransformer(self.standard_scaler)
-			X = std.fit_transform(self.gt)
-
-		elif self.scaler == "center":
-			std = FunctionTransformer(self.center_scaler)
-			X = std.fit_transform(self.gt)
-
-		else:
-			raise ValueError(
-				"Unsupported scaler argument provided: {}".format(self.scaler)
-			)
-
 		model_list = list()
 		coords_list = list()
-		for rep in progressbar(range(self.reps), "PCA: "):
-			pca = PCA(n_components=self.keep_pcs)
+		for rep in progressbar(range(self.reps), "{}: ".format(self.method)):
+
+			if isinstance(pcs, list):
+				pca = PCA(n_components=pcs[rep])
+			else:
+				pca = PCA(n_components=pcs)
 
 			model = pca.fit(X)
 			model_list.append(model)
@@ -186,93 +183,13 @@ class runPCA(DimReduction):
 
 		return coords_list, model_list
 
-	def patterson_scaler(self, data):
-		"""[Patterson scaler for PCA. The formula for calculating the unit variance per SNP site is: std = np.sqrt((mean / ploidy) * (1 - (mean / ploidy))). Then the data gets centered by subtracting the mean and scale it by dividing by the unit variance per SNP site]
-
-		Args:
-			data ([numpy.ndarray]): [012-encoded genotypes to transform of shape (n_samples, n_sites)]
-
-		Returns:
-			[numpy.ndarray]: [Transformed data, centered and scaled with Patterson scaler, of shape (n_samples, n_features)]
-		"""
-		# Make sure type is np.ndarray
-		if not isinstance(data, np.ndarray):
-			try:
-				data = np.asarray(data)
-			except:
-				raise TypeError("Input genotype data cannot be converted to a numpy.ndarray")
-		
-		# Find mean of each site
-		mean = np.mean(data, axis=0, keepdims=True)
-
-		# Super Deli only supports ploidy of 2 currently
-		ploidy = 2
-
-		# Do Patterson scaling
-		# Ploidy is 2
-		p = mean / ploidy
-		std = np.sqrt(p * (1 - p))
-
-		# Make sure dtype is np.float64
-		data = data.astype(np.float64)
-
-		# Center the data
-		data -= mean
-
-		# Scale the data using the Patterson scaler
-		data /= std
-
-		return data
-
-	def standard_scaler(self, data):
-		"""[Center and standardize data]
-
-		Args:
-			data ([numpy.ndarray]): [012-encoded genotypes to transform of shape (n_samples, n_features)]
-
-		Returns:
-			[numpy.ndarray]: [Transformed data, centered and standardized, of shape (n_samples, n_features)]
-		"""
-		# Make sure data is a numpy.ndarray
-		if not isinstance(data, np.ndarray):
-			data = np.asarray(data)
-		
-		# Make sure dtype is np.float64
-		data = data.astype(np.float64)
-
-		# Center and standardize the data
-		mean = np.mean(data, axis=0, keepdims=True)
-		std = np.std(data, axis=0, keepdims=True)
-		data -= mean
-		data /= std
-
-		return data
-
-	def center_scaler(self, data):
-		"""[Just center the data; don't standardize]
-
-		Args:
-			data ([numpy.ndarray]): [012-encoded genoytpes to transform of shape (n_samples, n_features)]
-
-		Returns:
-			[numpy.ndarray]: [Centered 012-encoded genotypes of shape (n_samples, n_features); not standardized]
-		"""
-		if not isinstance(data, np.ndarray):
-			data = np.asarray(data)
-
-		# Make sure type is np.float64
-		data = data.astype(np.float64)
-
-		# Center the data
-		mean = np.mean(data, axis=0, keepdims=True)
-		data -= mean
-		return data
-
 	def _plot_pca_cumvar(
 		self, 
 		coords, 
 		model, 
 		prefix, 
+		reps,
+		show_cumvar,
 		elbow, 
 		pc_var, 
 		figwidth, 
@@ -294,6 +211,8 @@ class runPCA(DimReduction):
 
 			prefix ([str]): [Prefix for output plots]
 
+			reps ([int]): [Number of replicates to perform]
+
 			elbow ([bool]): [If True, uses inflection point (elbow) to determine number of principal components to retain]
 
 			pc_var ([bool]): [If True, uses a proportion between 0 and 1 to determine the number of principal components to retain]
@@ -311,101 +230,112 @@ class runPCA(DimReduction):
 		Raises:
 			AttributeError: [pca_model must be defined prior to running this function]
 		"""
-		# Raise error if PCA hasn't been run yet
-		if coords is None:
-			raise AttributeError("\nA PCA coordinates are not defined!")
+		knees = list()
+		for rep in range(reps):
 
-		if elbow is True and pc_var is not None:
-			raise ValueError("elbow and pc_var cannot both be specified!")
+			# Raise error if PCA hasn't been run yet
+			if coords[rep] is None:
+				raise AttributeError("\nA PCA coordinates are not defined!")
 
-		if pc_var is not None:
-			assert isinstance(pc_var, float), "pc_var must be of type float"
-			assert pc_var <= 1.0, "pc_var must be a value between 0.0 and 1.0"
-			assert pc_var > 0.0, "pc_var must be a value greater than 0.0"
+			if elbow is True and pc_var is not None:
+				raise ValueError("elbow and pc_var cannot both be specified!")
 
-		if not elbow and pc_var is None:
-			raise TypeError("plot_cumvar was set to True but either elbow or " "pc_var were not set")
+			if pc_var is not None:
+				assert isinstance(pc_var, float), "pc_var must be of type float"
+				assert pc_var <= 1.0, "pc_var must be a value between 0.0 and 1.0"
+				assert pc_var > 0.0, "pc_var must be a value greater than 0.0"
 
-		# Get the cumulative variance of the principal components
-		cumsum = np.cumsum(model.explained_variance_ratio_)
+			if not elbow and pc_var is None:
+				raise TypeError("plot_cumvar was set to True but either elbow or " "pc_var were not set")
 
-		# From the kneed package
-		# Gets the knee/ elbow of the curve
-		kneedle = KneeLocator(
-			range(1, coords.shape[1]+1), 
-			cumsum, 
-			curve="concave", 
-			direction="increasing"
-		)
+			# Get the cumulative variance of the principal components
+			cumsum = np.cumsum(model[rep].explained_variance_ratio_)
 
-		# Sets plot background style
-		# Uses seaborn
-		sns.set(style=style)
-
-		# Plot the results
-		# Uses matplotlib.pyplot
-		fig = plt.figure(figsize=(figwidth, figheight))
-		ax = fig.add_subplot(1,1,1)
-
-		if elbow:
-			# Plot the explained variance ratio
-			ax.plot(kneedle.y, color=linecolor, linewidth=linewidth)
-
-			# Add text to show inflection point
-			ax.text(
-				0.95, 
-				0.01, 
-				"Knee={}".format(kneedle.knee), 
-				verticalalignment="bottom", 
-				horizontalalignment="right", 
-				transform=ax.transAxes, 
-				color="k", 
-				fontsize=text_size
+			# From the kneed package
+			# Gets the knee/ elbow of the curve
+			kneedle = KneeLocator(
+				range(1, coords[rep].shape[1]+1), 
+				cumsum, 
+				curve="concave", 
+				direction="increasing"
 			)
 
-			knee = kneedle.knee
+			# Sets plot background style
+			# Uses seaborn
+			sns.set(style=style)
 
-		if pc_var is not None:
-			for idx, item in enumerate(cumsum):
-				if cumsum[idx] < pc_var:
-					knee = idx + 1
-				else:
-					break
+			# Plot the results
+			# Uses matplotlib.pyplot
+			fig = plt.figure(figsize=(figwidth, figheight))
+			ax = fig.add_subplot(1,1,1)
 
-			ax.plot(cumsum, color=linecolor, linewidth=linewidth)
 
-			ax.text(
-				0.95, 
-				0.01, 
-				"# PCs: {}".format(knee), 
-				verticalalignment="bottom", 
-				horizontalalignment="right", 
-				transform=ax.transAxes, 
-				color="k", 
-				fontsize=text_size
+			if elbow:
+				# Plot the explained variance ratio
+				ax.plot(kneedle.y, color=linecolor, linewidth=linewidth)
+
+				# Add text to show inflection point
+				ax.text(
+					0.95, 
+					0.01, 
+					"Knee={}".format(kneedle.knee), 
+					verticalalignment="bottom", 
+					horizontalalignment="right", 
+					transform=ax.transAxes, 
+					color="k", 
+					fontsize=text_size
+				)
+
+				knee = kneedle.knee
+				knees.append(knee)
+
+			if pc_var is not None:
+				for idx, item in enumerate(cumsum):
+					if cumsum[idx] < pc_var:
+						knee = idx + 1
+					else:
+						break
+
+				ax.plot(cumsum, color=linecolor, linewidth=linewidth)
+
+				ax.text(
+					0.95, 
+					0.01, 
+					"# PCs: {}".format(knee), 
+					verticalalignment="bottom", 
+					horizontalalignment="right", 
+					transform=ax.transAxes, 
+					color="k", 
+					fontsize=text_size
+				)
+
+			ax.axvline(
+				linewidth=xintercept_width, 
+				color=xintercept_color, 
+				linestyle=xintercept_style, 
+				x=knee, 
+				ymin=0, 
+				ymax=1
 			)
+			
+			# Set axis labels
+			ax.set_xlabel("Number of Components")
+			ax.set_ylabel("Cumulative Explained Variance")
 
-		ax.axvline(
-			linewidth=xintercept_width, 
-			color=xintercept_color, 
-			linestyle=xintercept_style, 
-			x=knee, 
-			ymin=0, 
-			ymax=1
-		)
-		
-		# Set axis labels
-		ax.set_xlabel("Number of Components")
-		ax.set_ylabel("Cumulative Explained Variance")
+			# Add prefix to filename
+			plot_fn = "{}_pca_cumvar_{}.pdf".format(prefix, rep+1)
 
-		# Add prefix to filename
-		plot_fn = "{}_pca_cumvar.pdf".format(prefix)
+			# Save as PDF file
+			fig.savefig(plot_fn, bbox_inches="tight")
 
-		# Save as PDF file
-		fig.savefig(plot_fn, bbox_inches="tight")
+			if show_cumvar:
+				plt.show()
+
+			plt.clf()
+			plt.close(fig)
 
 		# Returns number of principal components at elbow
-		return knee
+		return knees
 
 	@property
 	def	pca_coords(self):
@@ -447,11 +377,14 @@ class runRandomForestUML(DimReduction):
 
 	def __init__(
 		self, 
+		*,
 		dimreduction=None, 
 		gt=None, 
-		pops=None, 
+		pops=None,
+		sampleids=None,
 		prefix=None, 
 		reps=None, 
+		scaler=None,
 		colors=None, 
 		palette="Set1", 
 		pca=None, 
@@ -469,7 +402,7 @@ class runRandomForestUML(DimReduction):
 		verbose=0, 
 		warm_start=False
 	):
-		"""[Run unsupervised random forest embedding on 012-encoded genotypes. Calculates RF embedded coordinates, a proximity matrix, and a dissimilarity matrix. Data must have been imputed using one of the impute methods. Either a DimReduction object must be supplied to the dimreduction argument or gt, pops, prefix, reps, and [colors or palette] must all be supplied]
+		"""[Run unsupervised random forest embedding on 012-encoded genotypes. Calculates RF embedded coordinates, a proximity matrix, and a dissimilarity matrix. Data must have been imputed using one of the impute methods. Either a DimReduction object must be supplied to the dimreduction argument or gt, pops, sampleids, prefix, reps, and [colors or palette] must all be supplied]
 
 		Args:
 			dimreduction ([DimReduction], optional): [Previous DimReduction instance. Allows a single initialization of DimReduction to be used for multiple embedding methods]. Defaults to None.
@@ -481,6 +414,8 @@ class runRandomForestUML(DimReduction):
 			prefix ([str], optional): [Prefix for output files and plots]. Defaults to None.
 
 			reps ([int], optional): [Number of replicates to perform. If None, 1 replicate is performed]. Defaults to None.
+
+			scaler (str, optional): [Scaler to use for genotype data. Valid options include "patterson", "standard", and "center". "patterson" follows a Patterson standardization (Patterson, Price & Reich (2006)) recommended for genetic data that scales the data to unit variance at each SNP. "standard" does regular standardization to unit variance and centers the data. "center" does not do a standardization and just centers the data]. Defaults to "patterson".
 
 			colors ([dict(str: str)], optional): [Dictionary with unique population IDs as the keys and hex-code colors as the corresponding values. If None, then uses the matplotlib palette supplied to palette]. Defaults to None.
 
@@ -514,10 +449,12 @@ class runRandomForestUML(DimReduction):
 		"""
 
 		# Initialize parent class
-		super().__init__(gt, pops, prefix, reps, colors, palette)
+		super().__init__(gt, pops, sampleids, prefix, reps, scaler, colors, palette)
 
 		# Validates passed arguments and sets parent class attributes
-		self._validate_args(dimreduction, gt, pops, prefix, reps)
+		self._validate_args(dimreduction, gt, pops, sampleids, prefix, reps, scaler)
+
+		self.scale_gt(self.gt)
 
 		# Set class attributes
 		self.pca = pca
@@ -562,9 +499,9 @@ class runRandomForestUML(DimReduction):
 			diss_mat_list ([list(numpy.ndarray)]): [List of dissimilarity score matrices, with each matrix corresponding to one item in the list]
 		"""
 		# Print settings to command-line
-		print("\nDoing random forest unsupervised...")
+		print("\nDoing random forest unsupervised embedding...")
 		print(
-		"\nRandom Forest Unsupervised Settings:\n"
+		"\nRandom Forest Embedding Settings:\n"
 		"\tn_estimators: "+str(self.n_estimators)+"\n"
 		"\tmax_depth: "+str(self.max_depth)+"\n"
 		"\tmin_samples_split: "+str(self.min_samples_split)+"\n"
@@ -581,7 +518,7 @@ class runRandomForestUML(DimReduction):
 		prox_mat_list = list()
 		diss_mat_list = list()
 		rf_list = list()
-		for rep in progressbar(range(self.reps), "RF UML: "):
+		for rep in progressbar(range(self.reps), "RF Embedding: "):
 
 			clf = None
 			rf_model = None
@@ -688,7 +625,7 @@ class runRandomForestUML(DimReduction):
 			raise AttributeError("rf_model object is not yet defined")
 
 	@property
-	def proximity_matrix(self):
+	def proximity(self):
 		"""[Getter for the proximity matrix]
 
 		Raises:
@@ -703,7 +640,7 @@ class runRandomForestUML(DimReduction):
 			raise AttributeError("proximity_matrix object is not yet defined")
 
 	@property
-	def dissimilarity_matrix(self):
+	def dissimilarity(self):
 		"""[Getter for the random forest dissimilarity matrix that can be input into runMDS()]
 
 		Raises:
@@ -715,7 +652,7 @@ class runRandomForestUML(DimReduction):
 		if self._diss_matrix is not None:
 			return self._diss_matrix
 		else:
-			raise AttributeError("dissimilarity_matrix object is not yet " "defined")
+			raise AttributeError("proximity object is not yet " "defined")
 
 class runMDS(DimReduction):
 	"""[Class to perform multi-dimensional scaling on 012-encoded genotypes or runRandomForestUML() output]
@@ -726,15 +663,18 @@ class runMDS(DimReduction):
 
 	def __init__(
 		self, 
+		*,
 		dimreduction=None, 
+		distances=None,
 		gt=None, 
-		pops=None, 
+		pops=None,
+		sampleids=None,
 		prefix=None, 
-		reps=None, 
+		reps=None,
+		scaler=None, 
 		colors=None, 
 		palette="Set1", 
 		rf=None, 
-		dissimilarity_matrix=None, 
 		metric=True, 
 		keep_dims=2, 
 		n_init=4, 
@@ -744,10 +684,12 @@ class runMDS(DimReduction):
 		verbose=0, 
 		random_state=None
 	):
-		"""[Run multi-dimensional scaling on output 012-encoded genotypes or runRandomForest() output. If using runRandomForest() output, either the random forest embedded coordinates or the dissimilarity matrix can be used by calling runRandomForestUML.dissimilarity_matrix. Use the metric argument to either perform classical MDS (metric=True) or isotonic MDS (metric=False). >2 dimensions can be retained, and output can be plotted up to 3 dimensions by calling runMDS.plot()]
+		"""[Run multi-dimensional scaling on output 012-encoded genotypes or runRandomForest() high-dimensional output. If using runRandomForest() output, either the random forest embeddeding or the random forest dissimilarity matrix can be accessed as runRandomForestUML.dissimilarity to get distances. If using the random forest output, euclidean distances are used. Use the metric argument to either perform classical MDS (metric=True) or isotonic MDS (metric=False). >2 dimensions can be retained, and output can be plotted up to 3 dimensions by calling runMDS.plot()]
 
 		Args:
 			dimreduction ([DimReduction], optional): [Previous DimReduction instance. Allows a single initialization of DimReduction to be used for multiple embedding methods]. Defaults to None.
+
+			distances ([numpy.ndarray], optional): [Pairwise distance matrix of shape (n_samples, n_samples). Can be any kind of distance matrix or the dissimilarity scores between points from runRandomForestUML() that can be accessed as runRandomForestUML.dissimilarity. Either distances or rf must be supplied. If using rf, euclidean distances are used]. Defaults to None.
 
 			gt ([pandas.DataFrame, numpy.ndarray, or list(list(int))], optional): [One of the imputed objects returned from GenotypeData of shape (n_samples, n_sites)]. Defaults to None.
 
@@ -757,6 +699,8 @@ class runMDS(DimReduction):
 
 			reps ([int], optional): [Number of replicates to perform. If None, 1 replicate is performed]. Defaults to None.
 
+			scaler (str, optional): [Scaler to use for genotype data. Valid options include "patterson", "standard", and "center". "patterson" follows a Patterson standardization (Patterson, Price & Reich (2006)) recommended for genetic data that scales the data to unit variance at each SNP. "standard" does regular standardization to unit variance and centers the data. "center" does not do a standardization and just centers the data]. Defaults to "patterson".
+
 			colors ([dict(str: str)], optional): [Dictionary with unique population IDs as the keys and hex-code colors as the corresponding values. If None, then uses the matplotlib palette supplied to palette]. Defaults to None.
 
 			palette (str, optional): [matplotlib palette to use if colors=None]. Defaults to "Set1".
@@ -764,8 +708,6 @@ class runMDS(DimReduction):
 			reps ([int], optional): [Number of replicates to perform]. Defaults to None.
 
 			rf ([runRandomForestUML], optional): [runRandomForestUML.rf_model object. If not supplied, you must supply the dissimilarity matrix. Either rf or dissimilarity matrix must be supplied]. Defaults to None.
-
-			dissimilarity_matrix ([numpy.ndarray], optional): [Pairwise dissimilarity scores between points from runRandomForestUML() object. Can be accessed as runRandomForestUML.dissimilarity_matrix. Either dissimilarity_matrix or rf must be supplied]. Defaults to None.
 
 			metric (bool, optional): [If True, does classical multi-dimensional scaling. If False, does isotonic (non-metric) MDS]. Defaults to True.
 
@@ -784,19 +726,19 @@ class runMDS(DimReduction):
 			random_state ([int], optional): [Determines the random number generator used to initialize the centers. Pass an int for reproducible results across multiple function calls or set to None for random initializations each time]. Defaults to None.
 
 		Raises:
-			TypeError: [Either rf or dissimilarity_matrix must be defined]
-			TypeError: [rf and dissimilarity_matrix cannot both be defined]
+			TypeError: [Either rf or distances must be defined]
+			TypeError: [rf and distances cannot both be defined]
 		"""
 
 		# Initialize parent class
-		super().__init__(gt, pops, prefix, reps, colors, palette)
+		super().__init__(gt, pops, sampleids, prefix, reps, scaler, colors, palette)
 
 		# Validates passed arguments and sets parent class attributes
-		self._validate_args(dimreduction, gt, pops, prefix, reps)
+		self._validate_args(dimreduction, gt, pops, sampleids, prefix, reps, scaler)
 
 		self.metric = metric
 		self.rf = rf
-		self.dissimilarity_matrix = dissimilarity_matrix
+		self.distances = distances
 		self.n_dims = keep_dims
 		self.n_init = n_init
 		self.max_iter = max_iter
@@ -806,26 +748,26 @@ class runMDS(DimReduction):
 		self.random_state = random_state
 		self.method = None
 
-		if self.rf is None and self.dissimilarity_matrix is None:
+		if self.rf is None and self.distances is None:
 			raise TypeError("Either rf or dissimilarity matrix must be "
 				"defined!")
 
-		if self.rf is not None and self.dissimilarity_matrix is not None:
+		if self.rf is not None and self.distances is not None:
 			raise TypeError("rf and dissimilarity matrix cannot both be "
 				"defined!")
 
 		if self.rf is not None:
 			self.coords = self.fit_transform(self.rf)
 
-		elif self.dissimilarity_matrix is not None:
-			self.coords = self.fit_transform(self.dissimilarity_matrix)
+		elif self.distances is not None:
+			self.coords = self.fit_transform(self.distances)
 
 	@timer
 	def fit_transform(self, X):
 		"""[Do MDS embedding for X over multiple replicates if reps > 1. Stores the coordinates as a list of numpy.ndarrays]
 
 		Args:
-			X ([numpy.ndarray or pandas.DataFrame]): [Either runRandomForestUML.rf_model or runRandomForestUML.dissimilarity_matrix]
+			X ([numpy.ndarray or pandas.DataFrame]): [Either runRandomForestUML.rf_model, runRandomForestUML.dissimilarity, or another pairwise distance matrix of shape (n_samples, n_samples)]
 
 		Returns:
 			[list(numpy.ndarray)]: [List of coordinates with each item as the coordinates of shape (n_samples, n_features) for one replicate]
@@ -839,7 +781,7 @@ class runMDS(DimReduction):
 			self.method = "isoMDS"
 				
 
-		if self.dissimilarity_matrix is None:
+		if self.distances is None:
 			self.dissimilarity = "euclidean"
 		else:
 			self.dissimilarity = "precomputed"
@@ -887,11 +829,15 @@ class runTSNE(DimReduction):
 
 	def __init__(
 		self, 
+		*,
 		dimreduction=None, 
+		distances=None,
 		gt=None, 
-		pops=None, 
+		pops=None,
+		sampleids=None,
 		prefix=None, 
 		reps=None, 
+		scaler=None,
 		colors=None, 
 		palette="Set1", 
 		keep_dims=2, 
@@ -901,19 +847,20 @@ class runTSNE(DimReduction):
 		n_iter=1000, 
 		n_iter_without_progress=300, 
 		min_grad_norm=1e-7, 
-		metric="euclidean", 
 		init="random", 
 		verbose=0, 
 		random_state=None, 
 		method="barnes_hut", 
 		angle=0.5, 
 		n_jobs=1, 
-		square_distances="legacy"
+		metric="euclidean"
 	):
 		"""[Run t-SNE embedding on output 012-encoded genotypes. >2 dimensions can be retained, and output can be plotted up to 3 dimensions by calling runTSNE.plot()]
 
 		Args:
 			dimreduction ([DimReduction], optional): [Previous DimReduction instance. Allows a single initialization of DimReduction to be used for multiple embedding methods]. Defaults to None.
+
+			distances (numpy.ndarray): [Pairwise distance matrix of shape (n_samples, n_samples). Any of the distance metrics from scipy.spatial.distance.pdist or pairwise.PAIRWISE_DISTANCE_FUNCTIONS can be used. Can also be dissimilarity scores retrieved as runRandomForestUML.dissimilarity. If None, then uses euclidean distances for the distance matrix]. Defaults to None.
 
 			gt ([pandas.DataFrame, numpy.ndarray, or list(list(int))], optional): [One of the imputed objects returned from GenotypeData of shape (n_samples, n_sites)]. Defaults to None.
 
@@ -922,6 +869,8 @@ class runTSNE(DimReduction):
 			prefix ([str], optional): [Prefix for output files and plots]. Defaults to None.
 
 			reps ([int], optional): [Number of replicates to perform. If None, 1 replicate is performed]. Defaults to None.
+
+			scaler (str, optional): [Scaler to use for genotype data. Valid options include "patterson", "standard", and "center". "patterson" follows a Patterson standardization (Patterson, Price & Reich (2006)) recommended for genetic data that scales the data to unit variance at each SNP. "standard" does regular standardization to unit variance and centers the data. "center" does not do a standardization and just centers the data]. Defaults to "patterson".
 
 			colors ([dict(str: str)], optional): [Dictionary with unique population IDs as the keys and hex-code colors as the corresponding values. If None, then uses the matplotlib palette supplied to palette]. Defaults to None.
 
@@ -943,8 +892,6 @@ class runTSNE(DimReduction):
 
 			min_grad_norm ([float], optional): [If the gradient norm is below this threshold, the optimization will be stopped]. Defaults to 1e-7.
 
-			metric (str, optional): [The metric to use when calculating distance between instances in a feature array. If metric is a string, it must be one of the options allowed by scipy.spatial.distance.pdist for its metric parameter, or a metric listed in pairwise.PAIRWISE_DISTANCE_FUNCTIONS. If metric is "precomputed", X is asssumed to be a distance matrix. See sklearn.manifold.TSNE documentation]. Defaults to "euclidean".
-
 			init (str, optional): [Initialization of embedding. Possible options are "random", "pca", and a numpy array of shape (n_samples, n_components). PCA initialization cannot be used with precomputed disatnces and is usually more globally stable than random initialization]. Defaults to "random".
 
 			verbose (int, optional): [Verbosity level. 0=less verbose]. Defaults to 0.
@@ -956,14 +903,17 @@ class runTSNE(DimReduction):
 			angle (float, optional): [Only used if method=’barnes_hut’ This is the trade-off between speed and accuracy for Barnes-Hut T-SNE. ‘angle’ is the angular size (referred to as theta in [3]) of a distant node as measured from a point. If this size is below ‘angle’ then it is used as a summary node of all points contained within it. This method is not very sensitive to changes in this parameter in the range of 0.2 - 0.8. Angle less than 0.2 has quickly increasing computation time and angle greater 0.8 has quickly increasing error.]. Defaults to 0.5.
 
 			n_jobs (int, optional): [The number of parallel jobs to run for neighbors search. This parameter has no impact when metric="precomputed" or (metric="euclidean" and method="exact"). None means 1 unless in a joblib.parallel_backend context. -1 means using all processors]. Defaults to 1.
+
+			metric (str, optional): [The metric to use when calculating distance between instances in a feature array. Ignored if distances parameter is not None. If metric is a string, it must be one of the options allowed by scipy.spatial.distance.pdist for its metric parameter, or a metric listed in pairwise.PAIRWISE_DISTANCE_FUNCTIONS. If metric is “precomputed”, X is assumed to be a distance matrix. Alternatively, if metric is a callable function, it is called on each pair of instances (rows) and the resulting value recorded. The callable should take two arrays from X as input and return a value indicating the distance between them. The default is “euclidean” which is interpreted as squared euclidean distance]. Defaults to "euclidean".
 		"""
 
 		# Initialize parent class
-		super().__init__(gt, pops, prefix, reps, colors, palette)
+		super().__init__(gt, pops, sampleids, prefix, reps, scaler, colors, palette)
 
 		# Validates passed arguments and sets parent class attributes
-		self._validate_args(dimreduction, gt, pops, prefix, reps)
+		self._validate_args(dimreduction, gt, pops, sampleids, prefix, reps, scaler)
 
+		self.distances = distances
 		self.n_components = keep_dims
 		self.perplexity = perplexity
 		self.early_exaggeration = early_exaggeration
@@ -980,7 +930,11 @@ class runTSNE(DimReduction):
 		self.n_jobs = n_jobs
 		self.method = "t-SNE"
 
-		self.coords = self.fit_transform(self.gt)
+		if distances is not None:
+			self.metric = "precomputed"
+			self.coords = self.fit_transform(self.distances)
+		else:
+			self.coords = self.fit_transform(self.gt)
 
 	@timer
 	def fit_transform(self, X):
@@ -1031,10 +985,15 @@ class runTSNE(DimReduction):
 				random_state=self.random_state,
 				method=self.tsne_method,
 				angle=self.angle,
-				n_jobs=self.n_jobs
+				n_jobs=self.n_jobs,
+				square_distances=True
 			)
 
-			_coords = t.fit_transform(X.values)
-			coords_list.append(_coords)
+			if isinstance(X, list):
+				_coords = t.fit_transform(X[rep].values)
+				coords_list.append(_coords)
+			else:
+				_coords = t.fit_transform(X.values)
+				coords_list.append(_coords)
 
 		return coords_list
