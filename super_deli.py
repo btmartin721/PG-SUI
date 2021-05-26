@@ -1,28 +1,18 @@
 # Standard library imports
 import argparse
 import sys
-import math
 
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns; sns.set()
 
 # Custom module imports
-from delimitation_methods.delimitation_model import DelimModel
 from read_input.read_input import GenotypeData
 import read_input.impute as impute
 
 from dim_reduction.dim_reduction import DimReduction
-from dim_reduction.embed import runPCA
-from dim_reduction.embed import runRandomForestUML
-from dim_reduction.embed import runMDS
-from dim_reduction.embed import runTSNE
+from dim_reduction.embed import *
 
-from clustering.clustering import PamClustering
-from clustering.clustering import KMeansClustering
-from clustering.clustering import DBSCANClustering
-from clustering.clustering import AffinityPropogationClustering
+from clustering.clustering import *
 
 def main():
 	"""[Class instantiations and main package body]
@@ -44,9 +34,7 @@ def main():
 			raise TypeError("Either --pop_ids or --popmap must be specified\n")
 
 		if args.pop_ids:
-			print(
-				"\n--pop_ids was specified as column 2\n".format(args.pop_ids)
-			)
+			print("\n--pop_ids was specified as column 2\n")
 		else:
 			print(
 				"\n--pop_ids was not specified; "
@@ -114,106 +102,61 @@ def main():
 	dr = DimReduction(
 		data.imputed_rf_df, 
 		data.populations, 
+		data.individuals,
 		args.prefix, 
 		colors=colors, 
 		reps=2
 	)
 
-	#pca = runPCA(dimreduction=dr, plot_cumvar=False, keep_pcs=10)
+	# pca = runPCA(dimreduction=dr, plot_cumvar=False, keep_pcs=10)
 
-	#pca.plot(plot_3d=True)
+	# pca.plot(plot_3d=True)
 
-	rf = runRandomForestUML(dr, n_estimators=1000, n_jobs=4, min_samples_leaf=4)
+	rf = runRandomForestUML(dimreduction=dr, n_estimators=1000, n_jobs=4, min_samples_leaf=4)
 
 	rf_cmds = runMDS(
-		dr, 
-		dissimilarity_matrix=rf.dissimilarity_matrix, 
+		dimreduction=dr, 
+		distances=rf.dissimilarity, 
 		keep_dims=3, 
 		n_jobs=4, 
 		max_iter=1000, 
 		n_init=25
 	)
 
-	#rf_isomds = runMDS(dr, dissimilarity_matrix = rf.dissimilarity_matrix, metric=False, keep_dims=3, n_jobs=4, max_iter=1000, n_init=25)
+	# rf_isomds = runMDS(dr, distances=rf.dissimilarity_matrix, metric=False, keep_dims=3, n_jobs=4, max_iter=1000, n_init=25)
 
-	rf_cmds.plot(plot_3d=True)
-	#rf_isomds.plot(plot_3d=True)
+	# rf_cmds.plot(plot_3d=True)
+	# rf_isomds.plot(plot_3d=True)
 
-	#tsne = runTSNE(dr, keep_dims=3, n_iter=20000, perplexity=15.0)
-	#tsne.plot(plot_3d=True)
+	# tsne = runTSNE(dimreduction=dr, keep_dims=3, n_iter=20000, perplexity=15.0)
+	# tsne.plot(plot_3d=True)
 
-	# rf_cmds.pam(sampleids=data.individuals, silhouettes=True, plot_silhouettes=True)
+	maxk = 9
 
-	#maxk = 9
+	pam_rf = PamClustering(rf_cmds, use_embedding=False, dimreduction=dr, distances=rf.dissimilarity, maxk=9, max_iter=2500)
 
-	#pam = PamClustering(rf_cmds, dimreduction=dr, sampleids=data.individuals)
-	#pam.msw(plot_msw_clusters=True, plot_msw_line=True, axes=3)
+	# pam.msw(plot_msw_clusters=True, plot_msw_line=True, axes=3)
 
-	#kmeans = KMeansClustering(rf_cmds, dimreduction=dr, sampleids=data.individuals, maxk=9)
-	#kmeans.msw(plot_msw_clusters=True, plot_msw_line=True, axes=3)
+	pam_rf.gapstat(plot_gap=True, show_plot=False)
 
-	#tsne_pam = PamClustering(tsne, dimreduction=dr, sampleids=data.individuals)
-	#tsne_pam.msw(plot_msw_clusters=True, plot_msw_line=True, axes=3)
+	# kmeans = KMeansClustering(rf_cmds, dimreduction=dr, sampleids=data.individuals, maxk=9)
+	# kmeans.msw(plot_msw_clusters=True, plot_msw_line=True, axes=3)
 
-	cmds_dbscan = DBSCANClustering(
-		rf_cmds, dimreduction=dr, sampleids=data.individuals, plot_eps=True
-	)
+	# tsne_pam = PamClustering(tsne, dimreduction=dr, sampleids=data.individuals)
+	# tsne_pam.msw(plot_msw_clusters=True, plot_msw_line=True, axes=3)
+
+	# cmds_dbscan = DBSCANClustering(
+	# 	rf_cmds, dimreduction=dr, sampleids=data.individuals, plot_eps=True
+	# )
 	
-	cmds_dbscan.plot(plot_3d=True)
+	#cmds_dbscan.plot(plot_3d=True)
 
-	cmds_affprop = AffinityPropogationClustering(rf_cmds, rf.proximity_matrix, dimreduction=dr, sampleids=data.individuals)
+	#cmds_affprop = AffinityPropogationClustering(rf_cmds, dimreduction=dr, sampleids=data.individuals)
 
-	cmds_affprop.plot(plot_3d=True)
+	#cmds_affprop.plot(plot_3d=True)
 
-	#data.write_imputed(data.imputed_br_df, args.prefix)
-	
-	# pcs = data.indcount - 1
-
-	# pca_settings = {
-	# 	"scaler": "patterson",
-	# 	"n_components": pcs
-	# }
-
-	# mds_settings = {
-	# 	"n_init": 100,
-	# 	"max_iter": 1000,
-	# 	"n_jobs": 4,
-	# 	"eps": 1e-4,
-	# 	"dissimilarity": "precomputed",
-	# 	"n_dims": 3
-	# }
-
-	# tsne_settings = {
-	# 	"n_components": 3,
-	# 	"perplexity": 15
-	# }
-
-	# cmds_scatter_settings = {
-	# 	"bbox_to_anchor": (1.1, 1.0)
-	# }
-
-	# isomds_scatter_settings = {
-	# 	"bbox_to_anchor": (1.1, 1.0)
-	# }
-
-	# tsne_scatter_settings = {
-	# 	"bbox_to_anchor": (1.1, 1.0)
-	# }
-
-	
-
-	# # See matplotlib axvline settings for options
-	# pca_cumvar_settings={"text_size": 14, "style": "white", "figwidth": 6, "figheight": 6, "intercept_width": 3, "intercept_color": "r", "intercept_style": "--"}
-
-	# clusters = DelimModel(data.imputed_rf_df, data.populations, args.prefix)
-
-	# clusters.dim_reduction(data.imputed_rf_df, algorithms=["pca"], pca_settings=pca_settings, mds_settings=mds_settings, plot_pca_scatter=True, plot_pca_cumvar=True, pca_cumvar_settings=pca_cumvar_settings, plot_cmds_scatter=True, plot_isomds_scatter=True, plot_3d=True)
-
-	# rf_embed_settings = {"rf_n_estimators": 1000, "rf_n_jobs": 4}
-
-	#clusters.random_forest_unsupervised(pca_settings={"n_components": 10}, pca_init=True, rf_settings=rf_embed_settings, elbow=False)
-
-	#clusters.dim_reduction(clusters.rf_dissimilarity, algorithms=["cmds", "tsne"], plot_cmds_scatter=True, plot_isomds_scatter=True, mds_settings=mds_settings, tsne_settings=tsne_settings, plot_3d=True, cmds_scatter_settings=cmds_scatter_settings, isomds_scatter_settings=isomds_scatter_settings, plot_tsne_scatter=True, tsne_scatter_settings=tsne_scatter_settings, plot_pca_cumvar=True)
+	#cmds_aggclust = AgglomHier(rf_cmds, dimreduction=dr, maxk=maxk, sampleids=data.individuals)
+	#cmds.msw(plot_msw_clusters=True, plot_msw_line=True, axes=3)
 
 def get_arguments():
 	"""[Parse command-line arguments. Imported with argparse]
