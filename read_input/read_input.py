@@ -711,6 +711,7 @@ class GenotypeData:
 
 		Args:
 			filename ([str]): [Name of imputed CSV file to be read]
+			impute_methods ([str or list(str)]): [Methods used to impute missing data]
 
 		Returns:
 			[pandas.DataFrame]: [Imputed data as DataFrame of 8-bit integers]
