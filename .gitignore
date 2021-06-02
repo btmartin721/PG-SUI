@@ -12,5 +12,4 @@ __pycache__/*
 *.csv
 *_output/
 *.zip
-training_data/
-training_data/*
+training_data/download
