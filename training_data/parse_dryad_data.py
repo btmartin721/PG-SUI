@@ -5,6 +5,7 @@ import re
 import io
 import sys
 from pathlib import Path
+from tqdm import tqdm
 
 
 def unzip_nested_zip_seqfiles(zip_ref, storage_path, extension_list, i, outdir, counter):
@@ -31,6 +32,7 @@ def unzip_nested_zip_seqfiles(zip_ref, storage_path, extension_list, i, outdir, 
 			counter += 1
 			try:
 				zip_ref.extract(filename, outdir)
+
 			except FileNotFoundError:
 				continue
 
@@ -75,11 +77,11 @@ Path(storage_path).mkdir(parents=True, exist_ok=True)
 # List all zipfiles and sort them in natural order (i.e. human order)
 # So e.g. results1, results2, results3, etc.
 zipfiles = os.listdir("training_data/download/")
-zipfiles = ["training_data/download/{}".format(z) for z in zipfiles]
 zipfiles.sort(key=natural_keys)
+zipfiles = ["training_data/download/{}".format(z) for z in zipfiles]
 
 counter = 0
-for cnt, myzip in enumerate(zipfiles, start=1):
+for cnt, myzip in enumerate(tqdm(zipfiles, desc="Extracting Zipfiles: "), start=1):
 	outdir = "{}/results{}".format(storage_path, cnt)
 	Path(outdir).mkdir(parents=True, exist_ok=True)
 
