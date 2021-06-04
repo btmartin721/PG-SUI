@@ -13,3 +13,6 @@ __pycache__/*
 *_output/
 *.zip
 training_data/download
+training_data/extracted
+training_data/extracted/*
+training_data/extracted/
