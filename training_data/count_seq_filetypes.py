@@ -40,6 +40,7 @@ def main():
 
 	extension_list = [".phy", ".phylip", ".str", ".ustr", ".structure", ".loci", ".vcf", ".nex", ".nexus"]
 
+	# Count retained files.
 	totals = dict()
 	for ext in extension_list:
 		file_count = sum(f.endswith(ext) for _, _, files in os.walk(path) for f in files)
