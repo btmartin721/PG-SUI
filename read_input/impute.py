@@ -1,650 +1,879 @@
 # Standard library imports
-import sys
-import os
-from collections import OrderedDict
+
 
 # Third party imports
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 from sklearn.experimental import enable_iterative_imputer
-from sklearn.impute import KNNImputer
 from sklearn.impute import IterativeImputer
-from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.ensemble import ExtraTreesClassifier
 from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.linear_model import BayesianRidge
 from sklearn.neighbors import KNeighborsClassifier
-from sklearn.preprocessing import LabelEncoder
-from sklearn.metrics import mean_squared_error as rmse
-from sklearn.metrics import accuracy_score
 
 # Custom module imports
 from utils import misc
+from utils.misc import timer
 
-@misc.timer
-def impute_knn(data, knn_settings):
-	"""[Impute missing data using the K-nearest neighbors algorithm]
-
-	Raises:
-		ValueError: [If a KNNImputer is not supported]
-		AssertionError: [If there's any missing data left]
-
-	Returns:
-		[pandas.DataFrame]: [imputed dataframe]
-	"""
-	df = pd.DataFrame.from_records(data)
-
-	df.replace(-9, pd.NA, inplace=True)
-
-	for col in df:
-		df[col] = df[col].astype("Int8")
-
-	imputer = KNNImputer(n_neighbors=knn_settings["n_neighbors"], weights=knn_settings["weights"], metric=knn_settings["metric"])
-
-	df = pd.DataFrame(imputer.fit_transform(df), columns = df.columns)
-
-	# If there are any remaining missing data raise error.
-	if any(df.isna().any().to_list()) == True:
-		raise AssertionError("\nThere was a problem with the K-NN imputation. Please inspect your data and try again.")
-
-	for col in df:
-		df[col] = df[col].astype(int)
-
-	return df
-
-@misc.timer
-def impute_knn_optk(snpslist, popslist, knn_settings, maxk, np):
-	"""[Run K-nearest neighbors with n_neighbors ranging from 1 to maxk]
+class ImputeKNN(GenotypeData):
+	"""[Class to impute missing data from 012-encoded genotypes using K-Nearest Neighbors iterative imputation]
 
 	Args:
-		snpslist ([list(list)]): [Snps object from GenotypeData]
-		popslist ([list]): [Population IDs from GenotypeData object]
-		knn_settings ([dict]): [Settings for KNNImputer]
-		maxk ([int]): [Maximum n_neighbors value to test K-NN with]
-		np ([int]): [Number of processors to use for optimization]
-
-	Returns:
-		[int]: [optimal n_neighbors value with lowest RMSE score]
+		GenotypeData ([GenotypeData]): [Inherits from GenotypeData class, which reads input sequence data into a useable object]
 	"""
-	df_X = pd.DataFrame.from_records(snpslist)
-	df_X.replace(-9, pd.NA, inplace=True)
+	def __init__(
+		self, 
+		genotype_data,
+		*, 
+		n_neighbors=5, 
+		weights="distance", 
+		algorithm="auto", 
+		leaf_size=30, 
+		p=2, 
+		metric="minkowski", 
+		n_jobs=1,
+		max_iter=10,
+		tol=1e-3,
+		n_nearest_features=10,
+		initial_strategy="most_frequent",
+		imputation_order="ascending",
+		skip_complete=False,
+		random_state=None,
+		verbose=0
+	):
+		"""[Does K-Nearest Neighbors Iterative imputation of missing data. Iterative imputation uses the n_nearest_features to inform the imputation at each feature (i.e., SNP site), using the N most correlated features per site. The N most correlated features are drawn with probability proportional to correlation for each imputed target feature to ensure coverage of features throughout the imputation process]
 
-	for col in df_X:
-		df_X[col] = df_X[col].astype("Int8")
+		Args:
+			genotype_data ([GenotypeData]): [GenotypeData instance that was used to read in the sequence data]
 
+			n_neighbors (int, optional): [Number of neighbors to use by default for K-Nearest Neighbors queries]. Defaults to 5.
 
-	le = LabelEncoder()
-	pops_encoded = le.fit_transform(popslist)
-	pops_y = pd.Series(pops_encoded)
+			weights (str, optional): [Weight function used in prediction. Possible values: 'Uniform': Uniform weights with all points in each neighborhood weighted equally; 'distance': Weight points by the inverse of their distance, in this case closer neighbors of a query point will have  agreater influence than neighbors that are further away; 'callable': A user-defined function that accepts an array of distances and returns an array of the same shape containing the weights]. Defaults to "distance".
 
-	#RANDOM_STATE = 456
-	errors = list()
-	accuracy = list()
-	for k in range(1, int(maxk)):
-		imputer = KNNImputer(n_neighbors=k)
-		imputed = imputer.fit_transform(df_X)
-		df_imputed = pd.DataFrame(imputed, columns=df_X.columns)
+			algorithm (str, optional): [Algorithm used to compute the nearest neighbors. Possible values: 'ball_tree', 'kd_tree', 'brute', 'auto']. Defaults to "auto".
 
-		X_train, X_test, y_train, y_test = train_test_split(df_imputed, pops_y, test_size=0.2)
-		
-		# NOTE: The below code is for evaluating the random forest model to 
-		# obtain the best parameters.
+			leaf_size (int, optional): [Leaf size passed to BallTree or KDTree. This can affect the speed of the construction and query, as well as the memory required to store the tree. The optimal value depends on the nature of the problem]. Defaults to 30.
 
-		# NOTE: Setting the `warm_start` construction parameter to `True` 
-		# disables support for parallelized ensembles but is necessary for 
-		# tracking the OOB error trajectory during training.
-		# ensemble_clfs = [
-		# 	("RandomForestClassifier, max_features='sqrt'",
-		# 		RandomForestClassifier(warm_start=True, oob_score=True,
-		# 							max_features='sqrt',
-		# 							random_state=RANDOM_STATE)),
-		# 	("RandomForestClassifier, max_features='log2'",
-		# 		RandomForestClassifier(warm_start=True, oob_score=True,
-		# 							max_features="log2",
-		# 							random_state=RANDOM_STATE)),
-		# 	("RandomForestClassifier, max_features=None",
-		# 		RandomForestClassifier(warm_start=True, oob_score=True,
-		# 							max_features=None,
-		# 							random_state=RANDOM_STATE)),
-		# ]
+			p (int, optional): [Power parameter for the Minkowski metric. When p=1, this is equivalent to using manhattan_distance (l1), and if p=2 it is equivalent to using euclidean distance (l2). For arbitrary p, minkowski_distance (l_p) is used]. Defaults to 2.
 
-		# Map a classifier name to a list of (<n_estimators>, <error rate>) 
-		# pairs.
-		#error_rate = OrderedDict((label, []) for label, _ in ensemble_clfs)
+			metric (str, optional): [The distance metric to use for the tree. The default metric is minkowski, and with p=2 this is equivalent to the standard Euclidean metric. See the documentation of sklearn.DistanceMetric for a list of available metrics. If metric is 'precomputed', X is assumed to be a distance matrix and must be square during fit]. Defaults to "minkowski".
 
+			n_jobs (int, optional): [The number of parallel jobs to run for neighbors search. None means 1 unless in a joblib.parallel_backend context. -1 means using all processors]. Defaults to 1.
 
-		# Range of `n_estimators` values to explore.
-		#min_estimators = 50
-		#max_estimators = 1000
+			max_iter (int, optional): [Maximum number of imputation rounds to perform before returning the imputations computed during the final round. A round is a single imputation of each feature with missing values]. Defaults to 10.
 
-		# for label, clf in ensemble_clfs:
-		# 	for i in range(min_estimators, max_estimators + 1, 50):
-		# 		clf.set_params(n_estimators=i)
-		# 		clf.fit(X_train, y_train)
+			tol ([type], optional): [Tolerance of the stopping condition]. Defaults to 1e-3.
 
-		# 		# Record the OOB error for each `n_estimators=i` setting.
-		# 		oob_error = 1 - clf.oob_score_
-		# 		error_rate[label].append((i, oob_error))
+			n_nearest_features (int, optional): [Number of other features to use to estimate the missing values of eacah feature column. If None, then all features will be used, but this can consume an  intractable amount of computing resources. Nearness between features is measured using the absolute correlation coefficient between each feature pair (after initial imputation). To ensure coverage of features throughout the imputation process, the neighbor features are not necessarily nearest, but are drawn with probability proportional to correlation for each imputed target feature. Can provide significant speed-up when the number of features is huge]. Defaults to 10.
 
-		# # Generate the "OOB error rate" vs. "n_estimators" plot.
-		# for label, clf_err in error_rate.items():
-		# 	xs, ys = zip(*clf_err)
-		# 	plt.plot(xs, ys, label=label)
+			initial_strategy (str, optional): [Which strategy to use to initialize the missing values. Same as the strategy parameter in sklearn.impute.SimpleImputer Valid values: {“mean”, “median”, “most_frequent”, or “constant”}]. Defaults to "most_frequent".
 
-		# plt.xlim(min_estimators, max_estimators)
-		# plt.xlabel("n_estimators")
-		# plt.ylabel("OOB error rate")
-		# plt.legend(loc="upper right")
-		# plt.show()
-		# sys.exit()
+			imputation_order (str, optional): [The order in which the features will be imputed. Possible values: 'ascending' (from features with fewest missing values to most), 'descending' (from features with most missing values to fewest), 'roman' (left to right), 'arabic' (right to left), 'random' (a random order for each round). ]. Defaults to "ascending".
 
-		# Classifier to evaluate the best n_neighbors (K)
-		model = RandomForestClassifier(n_estimators=500, 
-										max_features="log2", 
-										n_jobs = np)
+			skip_complete (bool, optional): [If True, then features with missing values during transform that did not have any missing values during fit will be imputed with the initial imputation method only. Set to True if you have many features with no missing values at both fit and transform time to save compute time]. Defaults to False.
 
-		model.fit(X_train, y_train)
-		preds = model.predict(X_test)
+			random_state (int, optional): [The seed of the pseudo random number generator to use for the iterative imputer. Randomizes selection of etimator features if n_nearest_features is not None or the imputation_order is 'random'. Use an integer for determinism. If None, then uses a different random seed each time]. Defaults to None.
 
-		# import sklearn.metrics.mean_squared_error()
-		error = rmse(y_test, preds) 
-		acc = accuracy_score(y_test, preds)
+			verbose (int, optional): [Verbosity flag, controls the debug messages that are issues as functions are evaluated. The higher, the more verbose. Possible values are 0, 1, or 2]. Defaults to 0.
+		"""
+		self.n_neighbors = n_neighbors
+		self.weights = weights
+		self.algorithm = algorithm
+		self.leaf_size = leaf_size
+		self.p = p
+		self.metric = metric
+		self.n_jobs = n_jobs
+		self.max_iter = max_iter
+		self.tol = tol
+		self.n_nearest_features = n_nearest_features
+		self.initial_strategy = initial_strategy
+		self.imputation_order = imputation_order
+		self.skip_complete = skip_complete
+		self.random_state = random_state
+		self.verbose = verbose
 
-		errors.append({'K': k, 'RMSE': error, "ACC": acc})
+		super().__init__()
 
-	# Get the best RMSE score
-	optimalk, test_acc = get_lowest_rmse(errors)
+		self.imputed = self.fit_predict(genotype_data.genotypes_df)
 
-	return optimalk, test_acc
+	@timer
+	def fit_predict(self, X):
+		"""[Do K-nearest neighbors imputation using an Iterative Imputer.
+		Iterative imputer iterates over N other features (i.e. SNP sites)
+		and uses each them to inform missing data predictions in the input column]
 
-def get_lowest_rmse(rmseerrors):
-	"""[Gets the "K" value with the lowest "RMSE" value]
+		Args:
+			X ([pandas.DataFrame]): [012-encoded genotypes from GenotypeData]
 
-	Args:
-		rmseerrors ([list(dict)]): [Object returned from rmse]
-
-	Returns:
-		[int]: [K value with the lowest RMSE score]
-	"""
-	minrmse = None
-	optk = None
-	for item in rmseerrors:
-		rmseval = item["RMSE"]
-		acceval = item["ACC"]
-		k = item["K"]
-		if minrmse:
-			if rmseval < minrmse:
-				optk = k
-				minrmse = rmseval
-				bestacc = acceval
-			else:
-				continue
-		else:
-			optk = k
-			minrmse = item["RMSE"]
-			bestacc = item["ACC"]
-
-	return optk, bestacc
-    
-def most_common(mylist):
-	"""[Get the most frequent value in a list]
-
-	Args:
-		mylist ([list]): [list of values]
-
-	Returns:
-		[int]: [Most frequent integer in the list]
-	"""
-	counter = 0
-	num = mylist[0]
-
-	for i, k in enumerate(mylist):
-		curr_frequency = mylist.count(k)
-		if curr_frequency > counter:
-			counter = curr_frequency
-			num = k
-	final_count = mylist.count(num)
-	reps = len(mylist)
-	return num, i, final_count, reps
-
-@misc.timer
-def rf_imputer(snpslist, settings):
-	"""[Do random forest imputation using Iterative Imputer. Iterative imputer iterates over all the other features (columns) and uses each one as a target variable, thereby informing missingness in the input column]
-
-	Args:
-		snpslist ([list(list)]): [012-encoded genotypes from GenotypeData]
-		settings ([dict]): [Keys as setting arguments, values as setting values]
-
-	Returns:
-		[numpy.ndarray]: [2-D numpy array with imputed genotypes]
-	"""
-	print("\nDoing random forest imputation...\n")
-	print(
-			"""
-			Random Forest Classifier Settings:
-				rf_n_estimators: """+str(settings["rf_n_estimators"])+"""
-				rf_min_samples_leaf: """+str(settings["rf_min_samples_leaf"])+"""
-				rf_n_jobs: """+str(settings["rf_n_jobs"])+"""
-				rf_max_features: """+str(settings["rf_max_features"])+"""
-				rf_criterion: """+str(settings["rf_criterion"])+"""
-				rf_random_state: """+str(settings["rf_random_state"])+"""
-				rf_verbose: """+str(settings["rf_verbose"])+"""
-			
-			Iterative Imputer Settings:
-				initial strategy: """+str(settings["initial_strategy"])+"""
-				max_iter: """+str(settings["max_iter"])+""" 
-				random_state: """+str(settings["random_state"])+""" 
-				tol: """+str(settings["tol"])+"""
-				n_nearest_features: """+str(settings["n_nearest_features"])+"""
-				imputation_order: """+str(settings["imputation_order"])+"""
-				verbose: """+str(settings["verbose"])+"""
-			"""
-	)
-
-	df = format_features(snpslist)
-
-	# Create iterative imputer
-	imputed = IterativeImputer(
-		estimator=ExtraTreesClassifier(
-							n_estimators=settings["rf_n_estimators"],
-							min_samples_leaf=settings["rf_min_samples_leaf"], 
-							n_jobs=settings["rf_n_jobs"],
-							max_features=settings["rf_max_features"],
-							criterion=settings["rf_criterion"],
-							random_state=settings["rf_random_state"],
-							verbose=settings["rf_verbose"]),
-		initial_strategy=settings["initial_strategy"],
-		max_iter=settings["max_iter"], 
-		random_state = settings["random_state"], 
-		tol=settings["tol"], 
-		n_nearest_features=settings["n_nearest_features"], 
-		imputation_order=settings["imputation_order"],
-		verbose=settings["verbose"]
+		Returns:
+			[numpy.ndarray]: [2-D numpy array with imputed genotypes]
+		"""
+		print("\nDoing K-nearest neighbor iterative imputation...\n")
+		print(
+			"\nK Neighbors Classifier Settings:\n"
+			"\tn_neighbors: "+str(self.n_neighbors)+"\n"
+			"\tweights: "+str(self.weights)+"\n"
+			"\talgorithm: "+str(self.algorithm)+"\n"
+			"\tleaf_size: "+str(self.leaf_size)+"\n"
+			"\tpower: "+str(self.p)+"\n"
+			"\tmetric: "+str(self.metric)+"\n"
+			"\tn_jobs: "+str(self.n_jobs)+"\n"
+			"\n"
+			"Iterative Imputer Settings:\n"
+			"\tn_nearest_features: "+str(self.n_nearest_features)+"\n"
+			"\tmax_iter: "+str(self.max_iter)+"\n" 
+			"\ttol: "+str(self.tol)+"\n"
+			"\tinitial strategy: "+str(self.initial_strategy)+"\n"
+			"\timputation_order: "+str(self.imputation_order)+"\n"
+			"\tskip_complete: "+str(self.skip_complete)+"\n"
+			"\trandom_state: "+str(self.random_state)+"\n" 
+			"\tverbose: "+str(self.verbose)+"\n"
 		)
 
-	arr = imputed.fit_transform(df)
+		df = self._format_features(X)
 
-	new_arr = arr.astype(dtype=np.int)
+		# Create iterative imputer
+		imputed = IterativeImputer(
+			estimator=KNeighborsClassifier(
+								n_neighbors=self.n_neighbors,
+								weights=self.weights,
+								algorithm=self.algorithm,
+								leaf_size=self.leaf_size,
+								p=self.p,
+								metric=self.metric,
+								n_jobs=self.n_jobs,
+						),
+			n_nearest_features=self.n_neareast_features, 
+			max_iter=self.max_iter, 
+			tol=self.tol, 
+			initial_strategy=self.initial_strategy,
+			imputation_order=self.imputation_order,
+			skip_complete=self.skip_complete,
+			random_state=self.random_state, 
+			verbose=self.verbose
+		)
 
-	print("\nDone!")
+		arr = imputed.fit_transform(df)
+		new_arr = arr.astype(dtype=np.int)
+		new_df = pd.DataFrame(new_arr)
 
-	return new_arr
+		print("\nDone!")
 
-@misc.timer
-def gb_imputer(snpslist, settings):
-	"""[Do gradient boosting imputation using Iterative Imputer.
-	Iterative imputer iterates over all the other features (columns)
-	and uses each one as a target variable, thereby informing missingness
-	in the input column]
+		return new_df
+
+class ImputeRandomForest(GenotypeData):
+	"""[Class to impute missing data from 012-encoded genotypes using Random Forest iterative imputation]
 
 	Args:
-		snpslist ([list(list)]): [012-encoded genotypes from GenotypeData]
-		settings ([dict]): [Keys as setting arguments, values as setting values]
-
-	Returns:
-		[numpy.ndarray]: [2-D numpy array with imputed genotypes]
+		GenotypeData ([GenotypeData]): [Inherits from GenotypeData class used to read in input sequence data]
 	"""
-	print("\nDoing gradient boosting iterative imputation...\n")
-	print(
-			"""
-			Gradient Boosting Classifier Settings:
-				gb_n_estimators: """+str(settings["gb_n_estimators"])+"""
-				gb_min_samples_leaf: """+str(settings["gb_min_samples_leaf"])+"""
-				gb_learning_rate: """+str(settings["gb_learning_rate"])+"""
-				gb_max_features: """+str(settings["gb_max_features"])+"""
-				gb_criterion: """+str(settings["gb_criterion"])+"""
-				gb_subsample: """+str(settings["gb_subsample"])+"""
-				gb_loss: """+str(settings["gb_loss"])+"""
-				gb_min_samples_split: """+str(settings["gb_min_samples_split"])+"""
-				gb_max_depth: """+str(settings["gb_max_depth"])+"""
-				gb_validation_fraction: """+str(settings["gb_validation_fraction"])+"""
-				gb_n_iter_no_change: """+str(settings["gb_n_iter_no_change"])+"""
-				gb_tol: """+str(settings["gb_tol"])+"""
-				gb_random_state: """+str(settings["gb_random_state"])+"""
-				gb_verbose: """+str(settings["gb_verbose"])+"""
+	def __init__(
+		self, 
+		genotype_data,
+		*, 
+		n_estimators=100,
+		criterion="gini",
+		max_depth=None, 
+		min_samples_split=2,
+		min_samples_leaf=1, 
+		min_weight_fraction_leaf=0.0,
+		max_features="auto",
+		max_leaf_nodes=None,
+		min_impurity_decrease=0.0,
+		bootstrap=False,
+		oob_score=False,
+		max_samples=None,
+		rf_random_state=None,
+		n_jobs=1,
+		max_iter=10,
+		tol=1e-3,
+		n_nearest_features=10,
+		initial_strategy="most_frequent",
+		imputation_order="ascending",
+		skip_complete=False,
+		random_state=None,
+		verbose=0
+	):
+		"""[Does Random Forest Iterative imputation of missing data. Iterative imputation uses the n_nearest_features to inform the imputation at each feature (i.e., SNP site), using the N most correlated features per site. The N most correlated features are drawn with probability proportional to correlation for each imputed target feature to ensure coverage of features throughout the imputation process]
+
+		Args:
+			genotype_data ([GenotypeData]): [GenotypeData instance that was used to read in the sequence data]
+
+			n_estimators (int, optional): [The number of trees in the forest. Increasing this value can improves the fit, but at the cost of compute time]. Defaults to 100.
+
+			criterion (str, optional): [The function to measure the quality of a split. Supported values are 'gini' for the Gini impurity and 'entropy' for the information gain]. Defaults to "gini".
+
+			max_depth (int, optional): [The maximum depth of the tree. If None, then nodes are expanded until all leaves are pure or until all leaves contain less than min_samples_split samples]. Defaults to None.
+
+			min_samples_split (int or float, optional): [The minimum number of samples required to split an internal node. If value is an integer, then considers min_samples_split as the minimum number. If value is a floating point, then min_samples_split is a fraction and (min_samples_split * n_samples), rounded up to the nearest integer, are the minimum number of samples for each split]. Defaults to 2.
+
+			min_samples_leaf (int or float, optional): [The minimum number of samples required to be at a leaf node. A split point at any depth will only be considered if it leaves at least min_samples_leaf training samples in each of the left and right branches. This may have the effect of smoothing the model, especially in regression. If value is an integer, then min_samples_leaf is the minimum number. If value is floating point, then min_samples_leaf is a fraction and (min_samples_leaf * n_samples) rounded up to the nearest integer is the minimum number of samples for each node]. Defaults to 1.
+
+			min_weight_fraction_leaf (float, optional): [The minimum weighted fraction of the sum total of weights (of all the input samples) required to be at a leaf node. Samples have equal weight when sample_weight is not provided.]. Defaults to 0.0.
+
+			max_features (int or float, optional): [The number of features to consider when looking for the best split. If int, then consider 'max_features' features at each split. If float, then 'max_features' is a fraction and (max_features * n_samples) features, rounded to the nearest integer, are considered at each split. If 'auto', then max_features=sqrt(n_features). If 'sqrt', then max_features=sqrt(n_features). If 'log2', then max_features=log2(n_features). If None, then max_features=n_features]. Defaults to "auto".
+
+			max_leaf_nodes (int, optional): [Grow trees with max_leaf_nodes in best-first fashion. Best nodes are defined as relative reduction in impurity. If None then unlimited number of leaf nodes]. Defaults to None.
+
+			min_impurity_decrease (float, optional): [A node will be split if this split induces a decrease of the impurity greater than or equal to this value. See sklearn.ensemble.ExtraTreesClassifier documentation for more information]. Defaults to 0.0.
+
+			bootstrap (bool, optional): [Whether bootstrap samples are used when building trees. If False, the whole dataset is used to build each tree]. Defaults to False.
+
+			oob_score (bool, optional): [Whether to use out-of-bag samples to estimate the generalization score. Only available if bootstrap=True]. Defaults to False.
+
+			max_samples (int or float, optional): [If bootstrap is True, the number of samples to draw from X to train each base estimator. If None (default), then draws X.shape[0] samples. if int, then draw 'max_samples' samples. If float, then draw (max_samples * X.shape[0] samples) with max_samples in the interval (0, 1)]. Defaults to None.
+
+			rf_random_state (int, optional): [Controls three sources of randomness for sklearn.ensemble.ExtraTreesClassifier: The bootstrapping of the samples used when building trees (if bootstrap=True), the sampling of the features to consider when looking for the best split at each node (if max_features < n_features), and the draw of the splits for each of the max_features. If None, then uses a different random seed each time the imputation is run]. Defaults to None.
+
+			n_jobs (int, optional): [The number of parallel jobs to run for the random forest trees. None means 1 unless in a joblib.parallel_backend context. -1 means using all processors]. Defaults to 1.
+
+			max_iter (int, optional): [Maximum number of imputation rounds to perform before returning the imputations computed during the final round. A round is a single imputation of each feature with missing values]. Defaults to 10.
+
+			tol ([type], optional): [Tolerance of the stopping condition]. Defaults to 1e-3.
+
+			n_nearest_features (int, optional): [Number of other features to use to estimate the missing values of eacah feature column. If None, then all features will be used, but this can consume an  intractable amount of computing resources. Nearness between features is measured using the absolute correlation coefficient between each feature pair (after initial imputation). To ensure coverage of features throughout the imputation process, the neighbor features are not necessarily nearest, but are drawn with probability proportional to correlation for each imputed target feature. Can provide significant speed-up when the number of features is huge]. Defaults to 10.
+
+			initial_strategy (str, optional): [Which strategy to use to initialize the missing values. Same as the strategy parameter in sklearn.impute.SimpleImputer Valid values: {“mean”, “median”, “most_frequent”, or “constant”}]. Defaults to "most_frequent".
+
+			imputation_order (str, optional): [The order in which the features will be imputed. Possible values: 'ascending' (from features with fewest missing values to most), 'descending' (from features with most missing values to fewest), 'roman' (left to right), 'arabic' (right to left), 'random' (a random order for each round). ]. Defaults to "ascending".
+
+			skip_complete (bool, optional): [If True, then features with missing values during transform that did not have any missing values during fit will be imputed with the initial imputation method only. Set to True if you have many features with no missing values at both fit and transform time to save compute time]. Defaults to False.
+
+			random_state (int, optional): [The seed of the pseudo random number generator to use for the iterative imputer. Randomizes selection of etimator features if n_nearest_features is not None or the imputation_order is 'random'. Use an integer for determinism. If None, then uses a different random seed each time]. Defaults to None.
+
+			verbose (int, optional): [Verbosity flag, controls the debug messages that are issues as functions are evaluated. The higher, the more verbose. Possible values are 0, 1, or 2]. Defaults to 0.
+		"""
+		self.n_estimators = n_estimators
+		self.criterion = criterion
+		self.max_depth = max_depth 
+		self.min_samples_split = min_samples_split
+		self.min_samples_leaf = min_samples_leaf 
+		self.min_weight_fraction_leaf = min_weight_fraction_leaf
+		self.max_features = max_features
+		self.max_leaf_nodes = max_leaf_nodes
+		self.min_impurity_decrease = min_impurity_decrease
+		self.bootstrap = bootstrap
+		self.oob_score = oob_score
+		self.max_samples = self.max_samples
+		self.rf_random_state = self.rf_random_state
+		self.n_jobs = n_jobs
+		self.max_iter = max_iter
+		self.tol = tol
+		self.n_nearest_features = n_neareast_features
+		self.initial_strategy = initial_strategy
+		self.imputation_order = imputation_order
+		self.skip_complete = skip_complete
+		self.random_state = random_state
+		self.verbose = verbose
+
+		super().__init__()
+
+		self.imputed = self.fit_predict(genotype_data.genotypes_df)
+
+	@timer
+	def fit_predict(self, X):
+		"""[Do random forest imputation using Iterative Imputer. Iterative imputer iterates over all the other features (columns) and uses each one as a target variable, thereby informing missingness in the input column]
+
+		Args:
+			X ([pandas.DataFrame]): [012-encoded genotypes from GenotypeData object]
+
+		Returns:
+			[pandas.DataFrame]: [DataFrame with imputed missing data]
+		"""
+		print("\nDoing random forest imputation...\n")
+
+		print(
+			"\nRandom Forest Classifier Settings:\n"
+			"\tn_estimators: "+str(self.n_estimators)+"\n"
+			"\tcriterion: "+str(self.criterion)+"\n"
+			"\tmax_depth: "+str(self.max_depth)+"\n"
+			"\tmin_samples_split: "+str(self.min_samples_split)+"\n"
+			"\tmin_samples_leaf: "+str(self.min_samples_leaf)+"\n"
+			"\tmin_weight_fraction_leaf: "+str(self.min_weight_fraction_leaf)+"\n"
+			"\tmax_features: "+str(self.max_features)+"\n"
+			"\tmax_leaf_nodes: "+str(self.max_leaf_nodes)+"\n"
+			"\tmin_impurity_decrease: "+str(self.min_impurity_decrease)+"\n"
+			"\tbootstrap: "+str(self.bootstrap)+"\n"
+			"\toob_score: "+str(self.oob_score)+"\n"
+			"\tmax_samples: "+str(self.max_samples)+"\n"
+			"\trf_random_state: "+str(self.rf_random_state)+"\n"
+			"\tn_jobs: "+str(self.n_jobs)+"\n"
+			"\n"
+			"\nIterative Imputer Settings:\n"
+			"\tn_nearest_features: "+str(self.n_nearest_features)+"\n"
+			"\tmax_iter: "+str(self.max_iter)+"\n" 
+			"\ttol: "+str(self.tol)+"\n"
+			"\tinitial strategy: "+str(self.initial_strategy)+"\n"
+			"\timputation_order: "+str(self.imputation_order)+"\n"
+			"\tskip_complete: "+str(self.skip_complete)+"\n"
+			"\trandom_state: "+str(self.random_state)+"\n" 
+			"\tverbose: "+str(self.verbose)+"\n"
+		)
+
+		df = self._format_features(X)
+
+		# Create iterative imputer
+		imputed = IterativeImputer(
+			estimator=ExtraTreesClassifier(
+				n_estimators=self.n_estimators,
+				criterion=self.criterion,
+				max_depth=self.max_depth,
+				min_samples_split=self.min_samples_split,
+				min_samples_leaf=self.min_samples_leaf, 
+				min_weight_fraction_leaf=self.min_weight_fraction_leaf,
+				max_features=self.max_features,
+				max_leaf_nodes=self.max_leaf_nodes,
+				min_impurity_decrease=self.min_impurity_decrease,
+				bootstrap=self.bootstrap,
+				oob_score=self.oob_score,
+				max_samples=self.max_samples,
+				random_state=self.rf_random_state,
+				n_jobs=self.n_jobs),
+			n_nearest_features=self.n_nearest_features, 
+			max_iter=self.max_iter, 
+			tol=self.tol, 
+			initial_strategy=self.initial_strategy,
+			imputation_order=self.imputation_order,
+			skip_complete=self.skip_complete,
+			random_state=self.random_state, 
+			verbose=self.verbose
+		)
+
+		arr = imputed.fit_transform(df)
+		new_arr = arr.astype(dtype=np.int)
+		new_df = pd.DataFrame(new_arr)
+
+		print("\nDone!")
+
+		return new_df
+
+class ImputeGradientBoosting(GenotypeData):
+	"""[Class to impute missing data from 012-encoded genotypes using Random Forest iterative imputation]
+
+	Args:
+		GenotypeData ([GenotypeData]): [Inherits from GenotypeData class used to read in sequence data]
+	"""
+	def __init__(
+		self,
+		genotype_data,
+		*,
+		n_estimators=100,
+		loss="deviance",
+		learning_rate=0.1,
+		subsample=1.0,
+		criterion="friedman_mse",
+		min_samples_split=2,
+		min_samples_leaf=1,
+		min_weight_fraction_leaf=0.0,
+		max_depth=3,
+		min_impurity_decrease=0.0,
+		max_features=None,
+		max_leaf_nodes=None,
+		gb_random_state=None,
+		max_iter=10,
+		tol=1e-3,
+		n_nearest_features=10,
+		initial_strategy="most_frequent",
+		imputation_order="ascending",
+		skip_complete=False,
+		random_state=None,
+		verbose=0
+	):
+		"""[Does Random Forest Iterative imputation of missing data. Iterative imputation uses the n_nearest_features to inform the imputation at each feature (i.e., SNP site), using the N most correlated features per site. The N most correlated features are drawn with probability proportional to correlation for each imputed target feature to ensure coverage of features throughout the imputation process]
+
+		Args:
+			genotype_data ([GenotypeData]): [GenotypeData instance that was used to read in the sequence data]			
 			
-			Iterative Imputer Settings:
-				initial strategy: """+str(settings["initial_strategy"])+"""
-				max_iter: """+str(settings["max_iter"])+""" 
-				random_state: """+str(settings["random_state"])+""" 
-				tol: """+str(settings["tol"])+"""
-				n_nearest_features: """+str(settings["n_nearest_features"])+"""
-				imputation_order: """+str(settings["imputation_order"])+"""
-				verbose: """+str(settings["verbose"])+"""
-			"""
-	)
+			n_estimators (int, optional): [The number of boosting stages to perform. Gradient boosting is fairly robust to over-fitting so a large number usually results in better performance]. Defaults to 100.
 
-	df = format_features(snpslist)
+			loss (str, optional): [The loss function to be optimized. ‘deviance’ refers to deviance (=logistic regression) for classification with probabilistic outputs. For loss ‘exponential’ gradient boosting recovers the AdaBoost algorithm]. Defaults to "deviance".
 
-	# Create iterative imputer
-	imputed = IterativeImputer(
-		estimator=GradientBoostingClassifier(
-						n_estimators=settings["gb_n_estimators"], 
-						min_samples_leaf=settings["gb_min_samples_leaf"],
-						max_features=settings["gb_max_features"],
-						learning_rate=settings["gb_learning_rate"],
-						criterion=settings["gb_criterion"],
-						subsample=settings["gb_subsample"],
-						loss=settings["gb_loss"],
-						min_samples_split=settings["gb_min_samples_split"],
-						max_depth=settings["gb_max_depth"],
-						random_state=settings["gb_random_state"],
-						verbose=settings["gb_verbose"],
-						validation_fraction=settings["gb_validation_fraction"],
-						n_iter_no_change=settings["gb_n_iter_no_change"],
-						tol=settings["gb_tol"]
-					),
-		initial_strategy=settings["initial_strategy"],
-		max_iter=settings["max_iter"], 
-		random_state = settings["random_state"], 
-		tol=settings["tol"], 
-		n_nearest_features=settings["n_nearest_features"], 
-		imputation_order=settings["imputation_order"],
-		verbose=settings["verbose"]
-	)
+			learning_rate (float, optional): [Learning rate shrinks the contribution of each tree by learning_rate. There is a trade-off between learning_rate and n_estimators]. Defaults to 0.1.
 
-	arr = imputed.fit_transform(df)
+			subsample (float, optional): [The fraction of samples to be used for fitting the individual base learners. If smaller than 1.0 this results in Stochastic Gradient Boosting. subsample interacts with the parameter n_estimators. Choosing subsample < 1.0 leads to a reduction of variance and an increase in bias]. Defaults to 1.0.
 
-	new_arr = arr.astype(dtype=np.int)
+			criterion (str, optional): [The function to measure the quality of a split. Supported criteria are 'friedman_mse' for the mean squared error with improvement score by Friedman and 'mse' for mean squared error. The default value of 'friedman_mse' is generally the best as it can provide a better approximation in some cases]. Defaults to "friedman_mse".
 
-	print("\nDone!")
+			min_samples_split (int or float, optional): [The minimum number of samples required to split an internal node. If value is an integer, then consider min_samples_split as the minimum number. If value is a floating point, then min_samples_split is a fraction and (min_samples_split * n_samples) is rounded up to the nearest integer and used as the number of samples per split]. Defaults to 2.
 
-	return new_arr
+			min_samples_leaf (int or float, optional): [The minimum number of samples required to be at a leaf node. A split point at any depth will only be considered if it leaves at least min_samples_leaf training samples in each of the left and right branches. This may have the effect of smoothing the model, especially in regression. If value is an integer, consider min_samples_leaf as the minimum number. If value is a floating point, then min_samples_leaf is a fraction and (min_samples_leaf * n_samples) rounded up to the nearest integer is the minimum number of samples per node]. Defaults to 1.
 
-@misc.timer
-def bayesianridge_imputer(snpslist, settings):
-	"""[Do bayesian ridge imputation using Iterative Imputer.
-	Iterative imputer iterates over all the other features (columns)
-	and uses each one as a target variable, thereby informing missingness
-	in the input column]
+			min_weight_fraction_leaf (float, optional): [The minimum weighted fraction of the sum total of weights (of all the input samples) required to be at a leaf node. Samples have equal weight when sample_weight is not provided]. Defaults to 0.0.
+
+			max_depth (int, optional): [The maximum depth of the individual regression estimators. The maximum depth limits the number of nodes in the tree. Tune this parameter for best performance; the best value depends on the interaction of the input variables.]. Defaults to 3.
+
+			min_impurity_decrease (float, optional): [A node will be split if this split induces a decrease of the impurity greater than or equal to this value]. Defaults to 0.0. See sklearn.ensemble.GradientBoostingClassifier documentation for more information]. Defaults to 0.0.
+
+			max_features (int, float, or str, optional): [The number of features to consider when looking for the best split. If value is an integer, then consider 'max_features' features at each split. If value is a floating point, then 'max_features' is a fraction and (max_features * n_features) is rounded to the nearest integer and considered as the number of features per split. If 'auto', then max_features=sqrt(n_features). If 'sqrt', then max_features=sqrt(n_features). If 'log2', then max_features=log2(n_features). If None, then max_features=n_features]. Defaults to None.
+
+			max_leaf_nodes (int, optional): [Grow trees with 'max_leaf_nodes' in best-first fashion. Best nodes are defined as relative reduction in impurity. If None then uses an unlimited number of leaf nodes]. Defaults to None.
+
+			gb_random_state (int, optional): [Controls the random seed given to each Tree estimator at each boosting iteration. In addition, it controls the random permutation of the features at each split. Pass an int for reproducible output across multiple function calls. If None, then uses a different random seed for each function call]. Defaults to None.
+
+			max_iter (int, optional): [Maximum number of imputation rounds to perform before returning the imputations computed during the final round. A round is a single imputation of each feature with missing values]. Defaults to 10.
+
+			tol ([type], optional): [Tolerance of the stopping condition]. Defaults to 1e-3.
+
+			n_nearest_features (int, optional): [Number of other features to use to estimate the missing values of eacah feature column. If None, then all features will be used, but this can consume an  intractable amount of computing resources. Nearness between features is measured using the absolute correlation coefficient between each feature pair (after initial imputation). To ensure coverage of features throughout the imputation process, the neighbor features are not necessarily nearest, but are drawn with probability proportional to correlation for each imputed target feature. Can provide significant speed-up when the number of features is huge]. Defaults to 10.
+
+			initial_strategy (str, optional): [Which strategy to use to initialize the missing values. Same as the strategy parameter in sklearn.impute.SimpleImputer Valid values: {“mean”, “median”, “most_frequent”, or “constant”}]. Defaults to "most_frequent".
+
+			imputation_order (str, optional): [The order in which the features will be imputed. Possible values: 'ascending' (from features with fewest missing values to most), 'descending' (from features with most missing values to fewest), 'roman' (left to right), 'arabic' (right to left), 'random' (a random order for each round). ]. Defaults to "ascending".
+
+			skip_complete (bool, optional): [If True, then features with missing values during transform that did not have any missing values during fit will be imputed with the initial imputation method only. Set to True if you have many features with no missing values at both fit and transform time to save compute time]. Defaults to False.
+
+			random_state (int, optional): [The seed of the pseudo random number generator to use for the iterative imputer. Randomizes selection of etimator features if n_nearest_features is not None or the imputation_order is 'random'. Use an integer for determinism. If None, then uses a different random seed each time]. Defaults to None.
+
+			verbose (int, optional): [Verbosity flag, controls the debug messages that are issues as functions are evaluated. The higher, the more verbose. Possible values are 0, 1, or 2]. Defaults to 0.
+		"""
+		self.n_estimators = n_estimators
+		self.loss = loss
+		self.learning_rate = learning_rate
+		self.subsample = subsample
+		self.criterion = criterion
+		self.min_samples_split = min_samples_split
+		self.min_samples_leaf = min_samples_leaf
+		self.min_weight_fraction_leaf = min_weight_fraction_leaf
+		self.max_depth = max_depth
+		self.min_impurity_decrease = min_impurity_decrease
+		self.max_features = max_features
+		self.max_leaf_nodes = max_leaf_nodes
+		self.gb_random_state = gb_random_state
+		self.max_iter = max_iter
+		self.tol = tol
+		self.n_nearest_features = n_nearest_features
+		self.initial_strategy = initial_strategy
+		self.imputation_order = imputation_order
+		self.skip_complete = skip_complete
+		self.random_state = random_state
+		self.verbose = verbose
+
+		super().__init__()
+
+		self.imputed = self.fit_predict(genotype_data.genotypes_df)
+
+	@timer
+	def fit_predict(self, X):
+		"""[Do gradient boosting iterative imputation. Iterative imputer iterates over all the other features (columns)	and uses each one as a target variable, thereby informing missingness in the input column]
+
+		Args:
+			X (pandas.DataFrame): [DataFrame of 012-encoded genotypes from GenotypeData object]
+
+		Returns:
+			[pandas.DataFrame]: [DataFrame with imputed 012-encoded genotypes]
+		"""
+		print("\nDoing gradient boosting iterative imputation...\n")
+		print(
+			"\nGradient Boosting Classifier Settings:\n"
+			"\tn_estimators: "+str(self.n_estimators)+"\n"
+			"\tloss: "+str(self.loss)+"\n"
+			"\tlearning_rate: "+str(self.learning_rate)+"\n"
+			"\tsubsample: "+str(self.subsample)+"\n"
+			"\tcriterion: "+str(self.criterion)+"\n"
+			"\tmin_samples_split: "+str(self.min_samples_split)+"\n"
+			"\tmin_samples_leaf: "+str(self.min_samples_leaf)+"\n"
+			"\tmin_weight_fraction_leaf: "+str(self.min_weight_fraction_leaf)+"\n"
+			"\tmax_depth: "+str(self.max_depth)+"\n"
+			"\tmin_impurity_decrease: "+str(self.min_impurity_decrease)+"\n"
+			"\tmax_features: "+str(self.max_features)+"\n"
+			"\tmax_leaf_nodes: "+str(self.max_leaf_nodes)+"\n"
+			"\tgb_random_state: "+str(self.gb_random_state)+"\n"
+			"\n"
+			"Iterative Imputer Settings\n:
+			"\tn_nearest_features: "+str(self.n_nearest_features)+"\n"
+			"\tmax_iter: "+str(self.max_iter)+"\n" 
+			"\ttol: "+str(self.tol)+"\n"
+			"\tinitial strategy: "+str(self.initial_strategy)+"\n"
+			"\timputation_order: "+str(self.imputation_order)+"\n"
+			"\tskip_complete: "+str(self.skip_complete)+"\n"
+			"\trandom_state: "+str(self.random_state)+"\n" 
+			"\tverbose: "+str(self.verbose)+"\n"
+		)
+
+		df = self._format_features(X)
+
+		"\tn_estimators: "+str(self.n_estimators)+"\n"
+		"\tloss: "+str(self.loss)+"\n"
+		"\tlearning_rate: "+str(self.learning_rate)+"\n"
+		"\tsubsample: "+str(self.subsample)+"\n"
+		"\tcriterion: "+str(self.criterion)+"\n"
+		"\tmin_samples_split: "+str(self.min_samples_split)+"\n"
+		"\tmin_samples_leaf: "+str(self.min_samples_leaf)+"\n"
+		"\tmin_weight_fraction_leaf: "+str(self.min_weight_fraction_leaf)+"\n"
+		"\tmax_depth: "+str(self.max_depth)+"\n"
+		"\tmin_impurity_decrease: "+str(self.min_impurity_decrease)+"\n"
+		"\tmax_features: "+str(self.max_features)+"\n"
+		"\tmax_leaf_nodes: "+str(self.max_leaf_nodes)+"\n"
+		"\tgb_random_state: "+str(self.gb_random_state)+"\n"
+
+		# Create iterative imputer
+		imputed = IterativeImputer(
+			estimator=GradientBoostingClassifier(
+				n_estimators=self.n_estimators, 
+				loss=self.loss,
+				learning_rate=self.learning_rate,
+				subsample=self.subsample,
+				criterion=self.criterion,
+				min_samples_split=self.min_samples_split,
+				min_samples_leaf=self.min_samples_leaf,
+				min_weight_fraction_leaf=self.min_weight_fraction_leaf,
+				max_depth=self.max_depth,
+				min_impurity_decrease=self.min_impurity_decrease,
+				max_features=self.max_features,
+				max_leaf_nodes=self.max_leaf_nodes,
+				random_state=self.gb_random_state
+			),
+			n_nearest_features=self.n_nearest_features, 
+			max_iter=self.max_iter, 
+			tol=self.tol, 
+			initial_strategy=self.initial_strategy,
+			imputation_order=self.imputation_order,
+			random_state=self.random_state, 
+			verbose=self.verbose
+		)
+
+		arr = imputed.fit_transform(df)
+		new_arr = arr.astype(dtype=np.int)
+		new_df = pd.DataFrame(new_arr)
+
+		print("\nDone!")
+
+		return new_df
+
+
+class ImputeBayesianRidge(GenotypeData):
+	"""[Class to impute missing data from 012-encoded genotypes using Bayesian ridge iterative imputation]
 
 	Args:
-		snpslist ([list(list)]): [012-encoded genotypes from GenotypeData]
-		settings ([dict]): [Keys as setting arguments, values as setting values]
-
-	Returns:
-		[numpy.ndarray]: [2-D numpy array with imputed genotypes]
+		GenotypeData ([GenotypeData]): [Inherits from GenotypeData class used to read in sequence data]
 	"""
-	print("\nDoing bayesian ridge iterative imputation...\n")
-	print(
-			"""
-			Bayesian Ridge Regression Settings:
-				br_n_iter: """+str(settings["br_n_iter"])+"""
-				br_tol: """+str(settings["br_tol"])+"""
-				br_alpha_1: """+str(settings["br_alpha_1"])+"""
-				br_alpha_2: """+str(settings["br_alpha_2"])+"""
-				br_lambda_1: """+str(settings["br_lambda_1"])+"""
-				br_lambda_2: """+str(settings["br_lambda_2"])+"""
-				br_alpha_init: """+str(settings["br_alpha_init"])+"""
-				br_lambda_init: """+str(settings["br_lambda_init"])+"""
-				br_verbose: """+str(settings["br_verbose"])+"""
+	def __init__(
+		self,
+		genotype_data,
+		*,
+		n_iter=300,
+		br_tol=1e-3,
+		alpha_1=1e-6,
+		alpha_2=1e-6,
+		lambda_1=1e-6,
+		lambda_2=1e-6,
+		alpha_init=None,
+		lambda_init=None,
+		max_iter=10,
+		tol=1e-3,
+		n_nearest_features=10,
+		initial_strategy="most_frequent",
+		imputation_order="ascending",
+		skip_complete=False,
+		random_state=None,
+		verbose=0
+	):
+		"""[Does Bayesian Ridge Iterative imputation of missing data. Iterative imputation uses the n_nearest_features to inform the imputation at each feature (i.e., SNP site), using the N most correlated features per site. The N most correlated features are drawn with probability proportional to correlation for each imputed target feature to ensure coverage of features throughout the imputation process]
 
-			Iterative Imputer Settings:
-				initial strategy: """+str(settings["initial_strategy"])+"""
-				max_iter: """+str(settings["max_iter"])+""" 
-				random_state: """+str(settings["random_state"])+""" 
-				tol: """+str(settings["tol"])+"""
-				n_nearest_features: """+str(settings["n_nearest_features"])+"""
-				imputation_order: """+str(settings["imputation_order"])+"""
-				verbose: """+str(settings["verbose"])+"""
-			"""
-	)
+		Args:
+			genotype_data ([GenotypeData]): [GenotypeData instance that was used to read in the sequence data]			
+				
+			n_iter (int, optional): [Maximum number of iterations. Should be greater than or equal to 1]. Defaults to 300.
 
-	df = format_features(snpslist)
+			br_tol (float, optional): [Stop the algorithm if w has converged]. Defaults to 1e-3.
 
-	# Create iterative imputer
-	imputed = IterativeImputer(
-		estimator=BayesianRidge(
-							n_iter=settings["br_n_iter"],
-							tol=settings["br_tol"],
-							alpha_1=settings["br_alpha_1"],
-							alpha_2=settings["br_alpha_2"],
-							lambda_1=settings["br_lambda_1"],
-							lambda_2=settings["br_lambda_2"],
-							alpha_init=settings["br_alpha_init"],
-							lambda_init=settings["br_lambda_init"],
-							verbose=settings["br_verbose"]
-					),
-		initial_strategy=settings["initial_strategy"],
-		max_iter=settings["max_iter"], 
-		random_state = settings["random_state"], 
-		tol=settings["tol"], 
-		n_nearest_features=settings["n_nearest_features"], 
-		imputation_order=settings["imputation_order"],
-		verbose=settings["verbose"],
-		sample_posterior=settings["br_sample_posterior"]
-	)
+			alpha_1 (float, optional): [Hyper-parameter: shape parameter for the Gamma distribution prior over the alpha parameter]. Defaults to 1e-6.
 
-	arr = imputed.fit_transform(df)
+			alpha_2 (float, optional): [Hyper-parameter: inverse scale parameter (rate parameter) for the Gamma distribution prior over the alpha parameter]. Defaults to 1e-6.
 
-	new_arr = arr.astype(dtype=np.int)
+			lambda_1 (float, optional): [Hyper-parameter: shape parameter for the Gamma distribution prior over the lambda parameter]. Defaults to 1e-6.
 
-	print("\nDone!")
+			lambda_2 (float, optional): [Hyper-parameter: inverse scale parameter (rate parameter) for the Gamma distribution prior over the lambda parameter]. Defaults to 1e-6.
 
-	return new_arr
+			alpha_init (float, optional): [Initial value for alpha (precision of the noise). If None, alpha_init is 1/Var(y).]. Defaults to None.
 
-@misc.timer
-def knn_iterative_imputer(snpslist, settings):
-	"""[Do K-nearest neighbors imputation using Iterative Imputer.
-	Iterative imputer iterates over all the other features (columns)
-	and uses each one as a target variable, thereby informing missingness
-	in the input column]
+			lambda_init (float, optional): [Initial value for lambda (precision of the weights). If None, lambda_init is 1]. Defaults to None.
+
+			max_iter (int, optional): [Maximum number of imputation rounds to perform before returning the imputations computed during the final round. A round is a single imputation of each feature with missing values]. Defaults to 10.
+
+			tol ([type], optional): [Tolerance of the stopping condition]. Defaults to 1e-3.
+
+			n_nearest_features (int, optional): [Number of other features to use to estimate the missing values of eacah feature column. If None, then all features will be used, but this can consume an  intractable amount of computing resources. Nearness between features is measured using the absolute correlation coefficient between each feature pair (after initial imputation). To ensure coverage of features throughout the imputation process, the neighbor features are not necessarily nearest, but are drawn with probability proportional to correlation for each imputed target feature. Can provide significant speed-up when the number of features is huge]. Defaults to 10.
+
+			initial_strategy (str, optional): [Which strategy to use to initialize the missing values. Same as the strategy parameter in sklearn.impute.SimpleImputer Valid values: {“mean”, “median”, “most_frequent”, or “constant”}]. Defaults to "most_frequent".
+
+			imputation_order (str, optional): [The order in which the features will be imputed. Possible values: 'ascending' (from features with fewest missing values to most), 'descending' (from features with most missing values to fewest), 'roman' (left to right), 'arabic' (right to left), 'random' (a random order for each round). ]. Defaults to "ascending".
+
+			skip_complete (bool, optional): [If True, then features with missing values during transform that did not have any missing values during fit will be imputed with the initial imputation method only. Set to True if you have many features with no missing values at both fit and transform time to save compute time]. Defaults to False.
+
+			random_state (int, optional): [The seed of the pseudo random number generator to use for the iterative imputer. Randomizes selection of etimator features if n_nearest_features is not None or the imputation_order is 'random'. Use an integer for determinism. If None, then uses a different random seed each time]. Defaults to None.
+
+			verbose (int, optional): [Verbosity flag, controls the debug messages that are issues as functions are evaluated. The higher, the more verbose. Possible values are 0, 1, or 2]. Defaults to 0.
+		"""
+		self.n_iter = n_iter,
+		self.br_tol = br_tol,
+		self.alpha_1 = alpha_1,
+		self.alpha_2 = alpha_2,
+		self.lambda_1 = lambda_1,
+		self.lambda_2 = lambda_2,
+		self.alpha_init = alpha_init,
+		self.lambda_init = lambda_init,
+		self.max_iter = max_iter,
+		self.tol = tol,
+		self.n_nearest_features = n_nearest_features,
+		self.initial_strategy = initial_strategy,
+		self.imputation_order = imputation_order,
+		self.skip_complete = skip_complete,
+		self.random_state = random_state,
+		self.verbose = verbose
+
+		self.normalize = True
+		self.sample_posterior = True
+
+		super().__init__()
+
+		self.imputed = self.fit_predict(genotype_data.genotypes_df)
+
+	@timer
+	def fit_predict(self, X):
+		"""[Do bayesian ridge imputation using Iterative Imputer.
+		Iterative imputer iterates over all the other features (columns)
+		and uses each one as a target variable, thereby informing missingness
+		in the input column]
+
+		Args:
+			X ([pandas.DataFrame]): [DataFrame 012-encoded genotypes from GenotypeData instance]
+
+		Returns:
+			[pandas.DataFrame]: [DataFrame with 012-encoded imputed genotypes of shape(n_samples, n_features)]
+		"""
+		print("\nDoing Bayesian ridge iterative imputation...\n")
+		print(
+			"\nBayesian Ridge Regression Settings:\n"
+			"\tn_iter: "+str(self.n_iter)+"\n"
+			"\tbr_tol: "+str(self.br_tol)+"\n"
+			"\talpha_1: "+str(self.alpha_1)+"\n"
+			"\talpha_2: "+str(self.alpha_2)+"\n"
+			"\tlambda_1: "+str(self.lambda_1)+"\n"
+			"\tlambda_2: "+str(self.lambda_2)+"\n"
+			"\talpha_init: "+str(self.alpha_init)+"\n"
+			"\tlambda_init: "+str(self.lambda_init)+"\n"
+			"\n"
+			"Iterative Imputer Settings:\n"
+			"\tn_nearest_features: "+str(self.n_nearest_features)+"\n"
+			"\tmax_iter: "+str(self.max_iter)+"\n" 
+			"\ttol: "+str(self.tol)+"\n"
+			"\tinitial strategy: "+str(self.initial_strategy)+"\n"
+			"\timputation_order: "+str(self.imputation_order)+"\n"
+			"\tskip_complete: "+str(self.skip_complete)+"\n"
+			"\trandom_state: "+str(self.random_state)+"\n" 
+			"\tverbose: "+str(self.verbose)+"\n"
+		)
+
+		df = self._format_features(X)
+
+		# Create iterative imputer
+		imputed = IterativeImputer(
+			estimator=BayesianRidge(
+				n_iter=self.n_iter,
+				tol=self.br_tol,
+				alpha_1=self.alpha_1,
+				alpha_2=self.alpha_2,
+				lambda_1=self.lambda_1,
+				lambda_2=self.lambda_2,
+				alpha_init=self.alpha_init,
+				lambda_init=self.lambda_init,
+				normalize=self.normalize
+			),
+			n_nearest_features=self.n_nearest_features, 
+			max_iter=self.max_iter, 
+			tol=self.tol, 
+			initial_strategy=self.initial_strategy,
+			imputation_order=self.imputation_order,
+			skip_complete=self.skip_complete,
+			random_state=self.random_state, 
+			verbose=self.verbose,
+			sample_posterior=self.sample_posterior
+		)
+
+		arr = imputed.fit_transform(df)
+		new_arr = arr.astype(dtype=np.int)
+		new_df = pd.DataFrame(new_arr)
+
+		print("\nDone!")
+
+		return new_df
+
+class ImputeAlleleFreq(GenotypeData):
+	"""[Class to impute missing data by global or population-wisse allele frequency]
 
 	Args:
-		snpslist ([list(list)]): [012-encoded genotypes from GenotypeData]
-		settings ([dict]): [Keys as setting arguments, values as setting values]
-
-	Returns:
-		[numpy.ndarray]: [2-D numpy array with imputed genotypes]
+		GenotypeData ([GenotypeData]): [Inherits from GenotypeData class that reads input data from a sequence file]
 	"""
-	print("\nDoing K-nearest neighbor iterative imputation...\n")
-	print(
-			"""
-			K Neighbors Classifier Settings:
-				knn_it_n_neighbors: """+str(settings["knn_it_n_neighbors"])+"""
-				knn_it_weights: """+str(settings["knn_it_weights"])+"""
-				knn_it_algorithm: """+str(settings["knn_it_algorithm"])+"""
-				knn_it_leaf_size: """+str(settings["knn_it_leaf_size"])+"""
-				knn_it_power: """+str(settings["knn_it_power"])+"""
-				knn_it_metric: """+str(settings["knn_it_metric"])+"""
-				knn_it_metric_params: """+str(settings["knn_it_metric_params"])+"""
-				n_jobs: """+str(settings["knn_it_n_jobs"])+"""
+	def __init__(
+		self, 
+		genotype_data, 
+		*, 
+		pops=None, 
+		diploid=True, 
+		default=0, 
+		missing=-9
+	):
+		"""[Impute missing data by global allele frequency. Population IDs can be sepcified with the pops argument. if pops is None, then imputation is by global allele frequency. If pops is not None, then imputation is by population-wise allele frequency. A list of population IDs in the appropriate format can be obtained from the GenotypeData object as GenotypeData.populations]
 
-			Iterative Imputer Settings:
-				initial strategy: """+str(settings["initial_strategy"])+"""
-				max_iter: """+str(settings["max_iter"])+""" 
-				random_state: """+str(settings["random_state"])+""" 
-				tol: """+str(settings["tol"])+"""
-				n_nearest_features: """+str(settings["n_nearest_features"])+"""
-				imputation_order: """+str(settings["imputation_order"])+"""
-				verbose: """+str(settings["verbose"])+"""
-				"""
-	)
+		Args:
+			pops ([list(str)], optional): [If None, then imputes by global allele frequency. If not None, then imputes population-wise and pops should be a list of population assignments. The list of population assignments can be obtained from the GenotypeData object as GenotypeData.populations]. Defaults to None.
 
-	df = format_features(snpslist)
+			diploid (bool, optional): [When diploid=True, function assumes 0=homozygous ref; 1=heterozygous; 2=homozygous alt. 0-1-2 genotypes are decomposed to compute p (=frequency of ref) and q (=frequency of alt). In this case, p and q alleles are sampled to generate either 0 (hom-p), 1 (het), or 2 (hom-q) genotypes. When diploid=FALSE, 0-1-2 are sampled according to their observed frequency]. Defaults to True.
 
-	# Create iterative imputer
-	imputed = IterativeImputer(
-		estimator=KNeighborsClassifier(
-							n_neighbors=settings["knn_it_n_neighbors"],
-							weights=settings["knn_it_weights"],
-							algorithm=settings["knn_it_algorithm"],
-							leaf_size=settings["knn_it_leaf_size"],
-							p=settings["knn_it_power"],
-							metric=settings["knn_it_metric"],
-							metric_params=settings["knn_it_metric_params"],
-							n_jobs=settings["knn_it_n_jobs"],
-					),
-		initial_strategy=settings["initial_strategy"],
-		max_iter=settings["max_iter"], 
-		random_state = settings["random_state"], 
-		tol=settings["tol"], 
-		n_nearest_features=settings["n_nearest_features"], 
-		imputation_order=settings["imputation_order"],
-		verbose=settings["verbose"]
-	)
+			default (int, optional): [Value to set if no alleles sampled at a locus]. Defaults to 0.
 
-	arr = imputed.fit_transform(df)
+			missing (int, optional): [Missing data value]. Defaults to -9.
+		"""
+		self.pops = pops
+		self.diploid = diploid
+		self.default = default
+		self.missing = missing
 
-	new_arr = arr.astype(dtype=np.int)
+		super().__init__()
 
-	print("\nDone!")
+		self.imputed = self.fit_predict(genotype_data.genotypes_list)
 
-	return new_arr
+	@timer
+	def fit_predict(self, X):
+		"""[Impute missing genotypes using allele frequencies, with missing alleles coded as negative; usually -9]
+		
+		Args:
+			X ([list(list(int))]): [012-encoded genotypes obtained from the GenotypeData object as GenotypeData.genotypes_list]
 
-@misc.timer
-def impute_freq(data, pops=None, diploid=True, default=0, missing=-9):
-	"""[Impute missing genotypes using allele frequencies, with missing alleles coded as negative; usually -9]
-	
-	Args:
-		data ([list(list)]): [List containing list of genotypes in integer format]
-
-		pop ([list], optional): [List of population assignments. Default is None
-			When pop=None, allele frequencies are computed globally]
-
-		diploid ([Boolean] optional): [When TRUE, function assumes 0=homozygous ref; 1=heterozygous; 2=homozygous alt
-			When diploid=FALSE, 0,1, and 2 are sampled according to their observed frequency
-			When dipoid=TRUE, 0-1-2 genotypes are decomposed to compute p (=frequency of ref) and q (=frequency of alt)
-				In this case, p and q alleles are sampled to generate either 0 (hom-p), 1 (het), or 2 (hom-q) genotypes]
-
-		default ([int, optional]): [Value to set if no alleles sampled at locus]. Default = 0
-		missing ([int, optional]): [missing data value]. Default = -9
-
-	Returns:
-		[list(list)]: [Imputed genotypes of same dimensions as data]
-	"""
-	if pops:
-		print("\nImputing by population allele frequencies...")
-	else:
-		print("\nImputing by global allele frequency...")
-
-	bak=data
-	data=[x[:] for x in bak]
-	if pops is not None:
-		pop_indices = misc.get_indices(pops)
-	loc_index=0
-	for locus in data:
-		if pops is None:
-			allele_probs = get_allele_probs(locus, diploid)
-			#print(allele_probs)
-			if misc.all_zero(list(allele_probs.values())) or not allele_probs:
-				print("\nWarning: No alleles sampled at locus",str(loc_index),"setting all values to:",str(default))
-				gen_index=0
-				for geno in locus:
-					data[loc_index][gen_index] = default
-					gen_index+=1
-			else:
-				gen_index=0
-				for geno in locus:
-					if geno == missing:
-						data[loc_index][gen_index] = sample_allele(allele_probs, diploid=True)
-					gen_index+=1
-					
+		Returns:
+			[pandas.DataFrame]: [Imputed genotypes of same dimensions as data]
+		"""
+		if self.pops:
+			print("\nImputing by population allele frequencies...")
 		else:
-			for pop in pop_indices.keys():
-				allele_probs = get_allele_probs(locus, diploid, missing=missing, indices=pop_indices[pop])
-				#print(pop,"--",allele_probs)
-				if misc.all_zero(list(allele_probs.values())) or not allele_probs:
-					print("\nWarning: No alleles sampled at locus",str(loc_index),"setting all values to:",str(default))
+			print("\nImputing by global allele frequency...")
+
+		data = [item[:] for item in X]
+
+		if self.pops is not None:
+			pop_indices = misc.get_indices(self.pops)
+
+		loc_index=0
+		for locus in data:
+			if self.pops is None:
+				allele_probs = self._get_allele_probs(locus, self.diploid)
+				#print(allele_probs)
+				if misc.all_zero(list(allele_probs.values())) or \
+					not allele_probs:
+					print("\nWarning: No alleles sampled at locus", 
+						str(loc_index), 
+						"setting all values to:",str(self.default))
 					gen_index=0
 					for geno in locus:
-						data[loc_index][gen_index] = default
+						data[loc_index][gen_index] = self.default
 						gen_index+=1
+
 				else:
 					gen_index=0
 					for geno in locus:
-						if geno == missing:
-							data[loc_index][gen_index] = sample_allele(allele_probs, diploid=True)
-						gen_index+=1
-				
-		loc_index+=1
-
-	print("Done!")
-	return(data)
-
-def sample_allele(allele_probs, diploid=True):
-	if diploid:
-		alleles=misc.weighted_draw(allele_probs, 2)
-		if alleles[0] == alleles[1]:
-			return(alleles[0])
-		else:
-			return(1)
-	else:
-		return(misc.weighted_draw(allele_probs, 1)[0])
-
-def get_allele_probs(genotypes, diploid=True, missing=-9, indices=None):
-	data=genotypes
-	length=len(genotypes)
-	
-	if indices is not None:
-		data = [genotypes[index] for index in indices]
-		length = len(data)
-	
-	if len(set(data))==1:
-		if data[0] == missing:
-			ret=dict()
-			return(ret)
-		else:
-			ret=dict()
-			ret[data[0]] = 1.0
-			return(ret)
-	
-	if diploid:
-		length = length*2
-		ret = {0:0.0, 2:0.0}
-		for g in data:
-			if g == 0:
-				ret[0] += 2
-			elif g == 2:
-				ret[2] += 2
-			elif g == 1:
-				ret[0] += 1
-				ret[2] += 1
-			elif g == missing:
-				length -= 2
+						if geno == self.missing:
+							data[loc_index][gen_index] = \
+								self._sample_allele(allele_probs, diploid=True)
+						gen_index += 1
+						
 			else:
-				print("\nWarning: Ignoring unrecognized allele",str(g),"in get_allele_probs\n")
-		for allele in ret.keys():
-			ret[allele] = ret[allele]/float(length)
-		return(ret)
-	else:
-		ret=dict()
-		for key in set(data):
-			if key != missing:
-				ret[key] = 0.0
-		for g in data:
-			if g == missing:
-				length -= 1
+				for pop in pop_indices.keys():
+					allele_probs = self._get_allele_probs(
+						locus, self.diploid, 
+						missing=self.missing, 
+						indices=pop_indices[pop]
+					)
+					#print(pop,"--",allele_probs)
+					if misc.all_zero(list(allele_probs.values())) or \
+						not allele_probs:
+						print("\nWarning: No alleles sampled at locus", 
+							str(loc_index), 
+							"setting all values to:", 
+							str(self.default)
+						)
+						gen_index=0
+						for geno in locus:
+							data[loc_index][gen_index] = self.default
+							gen_index += 1
+					else:
+						gen_index=0
+						for geno in locus:
+							if geno == self.missing:
+								data[loc_index][gen_index] = \
+									self._sample_allele(
+										allele_probs, 
+										diploid=True
+									)
+							gen_index += 1
+					
+			loc_index += 1
+
+		df = pd.DataFrame(data)
+
+		print("Done!")
+		return df
+
+	def _sample_allele(self, allele_probs, diploid=True):
+		if diploid:
+			alleles=misc.weighted_draw(allele_probs, 2)
+			if alleles[0] == alleles[1]:
+				return alleles[0]
 			else:
-				ret[g] += 1
-		for allele in ret.keys():
-			ret[allele] = ret[allele]/float(length)
-		return(ret)
+				return 1
+		else:
+			return misc.weighted_draw(allele_probs, 1)[0]
 
-def impute_common(data, pops=None):
-	pass
-
-def format_features(featurelist, missing_val=-9):
-	"""[Format a 2D list for input into iterative imputer]
-
-	Args:
-		featurelist ([list(list)]): [2D list of features with shape(n_samples, n_features)]
-		missing_val (int, optional): [Missing value to replace with numpy.nan]. Defaults to -9.
-
-	Returns:
-		[pandas.DataFrame]: [Formatted pandas.DataFrame for input into IterativeImputer]
-	"""
-	# Make pandas.DataFrame from 2D list
-	df = pd.DataFrame.from_records(featurelist)
-
-	# Replace missing data with NaN
-	df.replace(missing_val, np.nan, inplace=True)
-
-	# Cast features as 8-bit integers
-	for col in df:
-		df[col] = df[col].astype("Int8")
-
-	return df
-
+	def _get_allele_probs(
+		self, genotypes, diploid=True, missing=-9, indices=None
+	):
+		data=genotypes
+		length=len(genotypes)
+		
+		if indices is not None:
+			data = [genotypes[index] for index in indices]
+			length = len(data)
+		
+		if len(set(data))==1:
+			if data[0] == missing:
+				ret=dict()
+				return ret
+			else:
+				ret=dict()
+				ret[data[0]] = 1.0
+				return ret
+		
+		if diploid:
+			length = length*2
+			ret = {0:0.0, 2:0.0}
+			for g in data:
+				if g == 0:
+					ret[0] += 2
+				elif g == 2:
+					ret[2] += 2
+				elif g == 1:
+					ret[0] += 1
+					ret[2] += 1
+				elif g == missing:
+					length -= 2
+				else:
+					print("\nWarning: Ignoring unrecognized allele", 
+						str(g), 
+						"in get_allele_probs\n"
+					)
+			for allele in ret.keys():
+				ret[allele] = ret[allele] / float(length)
+			return ret
+		else:
+			ret=dict()
+			for key in set(data):
+				if key != missing:
+					ret[key] = 0.0
+			for g in data:
+				if g == missing:
+					length -= 1
+				else:
+					ret[g] += 1
+			for allele in ret.keys():
+				ret[allele] = ret[allele] / float(length)
+			return ret

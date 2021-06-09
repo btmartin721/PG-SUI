@@ -11,3 +11,14 @@ __pycache__/*
 *.pdf
 *.csv
 *_output/
+*.zip
+training_data/download
+training_data/extracted
+training_data/extracted/*
+training_data/extracted/
+training_data/extracted_backup/
+training_data/extracted_backup/*
+training_data/extracted_backup
+training_data/collated
+training_data/collated/*
+training_data/collated/
