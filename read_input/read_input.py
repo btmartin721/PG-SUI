@@ -57,7 +57,6 @@ class GenotypeData:
 			"knn_iter"
 		]
 
-		
 		if self.filetype is not None:
 			self.parse_filetype(filetype, popmapfile)
 		
@@ -787,6 +786,26 @@ class GenotypeData:
 					)
 				)
 
+	def _format_features(self, df, missing_val=-9):
+		"""[Format a 2D list for input into iterative imputer]
+
+		Args:
+			df ([pandas.DataFrame]): [DataFrame of features with shape(n_samples, n_features)]
+
+			missing_val (int, optional): [Missing value to replace with numpy.nan]. Defaults to -9.
+
+		Returns:
+			[pandas.DataFrame]: [Formatted pandas.DataFrame for input into IterativeImputer]
+		"""
+		# Replace missing data with NaN
+		X = df.replace(missing_val, np.nan)
+
+		# Cast features as 8-bit integers
+		for col in df:
+			X[col] = X[col].astype("Int8")
+
+		return X
+
 	@property
 	def snpcount(self):
 		"""[Getter for number of snps in the dataset]
@@ -860,130 +879,13 @@ class GenotypeData:
 		return self.onehot
 	
 	@property
-	def imputed_knn_df(self):
-		"""[Getter for 012 genotypes with K-NN missing data imputation]
+	def imputed(self):
+		"""[Getter for imputed 012-encoded genotypes]
 
 		Returns:
-			[pandas.DataFrame()]: [pandas DataFrame with the imputed 012 genotypes]
+			[pandas.DataFrame]: [DataFrame with missing data imputed]
 		"""
-		return self.knn_imputed_df
-
-	@property
-	def imputed_knn(self):
-		"""[Getter for 012 genotypes with K-NN missing data imputation]
-
-		Returns:
-			[pandas.DataFrame()]: [pandas DataFrame with the imputed 012 genotypes]
-		"""
-		return self.knn_imputed_df.values.tolist()
-
-	@property
-	def imputed_freq_global(self):
-		"""[Getter for 012 genotypes imputed by global allele frequency]
-
-		Returns:
-			[list(list)]: [Imputed genotype data]
-		"""
-		return self.freq_imputed_global
-	
-	@property
-	def imputed_freq_pop(self):
-		"""[Getter for 012 genotypes imputed by population allele frequency]
-
-		Returns:
-			[list(list)]: [Imputed genotype data]
-		"""
-		return self.freq_imputed_pop
-
-	@property
-	def imputed_freq_global_df(self):
-		"""[Getter for 012 genotypes imputed by global allele frequency]
-
-		Returns:
-			[pandas.DataFrame]: [Imputed genotype data]
-		"""
-		return pd.DataFrame.from_records(self.freq_imputed_global)
-	
-	@property
-	def imputed_freq_pop_df(self):
-		"""[Getter for 012 genotypes imputed by population allele frequency]
-
-		Returns:
-			[pandas.DataFrame]: [Imputed genotype data]
-		"""
-		return pd.DataFrame.from_records(self.freq_imputed_pop)
-
-	@property
-	def imputed_rf_np(self):
-		"""[Getter for 012 genotypes imputed by random forest iterative imputation]
-
-		Returns:
-			[numpy array]: [Imputed 012-encoded genotype data]
-		"""
-		return self.rf_imputed_arr
-
-	@property
-	def imputed_rf_df(self):
-		"""[Getter for 012 genotypes imputed by random forest iterative imputation]
-
-		Returns:
-			[pandas.DataFrame]: [Imputed 012-encoded genotype data]
-		"""
-		return pd.DataFrame(self.rf_imputed_arr)
-
-	@property
-	def imputed_gb_np(self):
-		"""[Getter for 012 genotypes imputed by gradient boosting iterative imputation]
-
-		Returns:
-			[numpy array]: [Imputed 012-encoded genotype data]
-		"""
-		return self.gb_imputed_arr
-
-	@property
-	def imputed_gb_df(self):
-		"""[Getter for 012 genotypes imputed by gradient boosting iterative imputation]
-
-		Returns:
-			[pandas.DataFrame]: [Imputed 012-encoded genotype data]
-		"""
-		return pd.DataFrame(self.gb_imputed_arr)
-
-	@property
-	def imputed_br_df(self):
-		"""[Getter for 012 genotypes imputed by bayesian ridge iterative imputation]
-
-		Returns:
-			[pandas.DataFrame]: [Imputed 012-encoded genotype data]
-		"""
-		return pd.DataFrame(self.br_imputed_arr)
-
-	@property
-	def imputed_br_np(self):
-		"""[Getter for 012 genotypes imputed by bayesian ridge iterative imputation]
-
-		Returns:
-			[numpy.ndarray]: [Imputed 012-encoded genotype data]
-		"""
-		return self.br_imputed_arr
-
-	@property
-	def imputed_knn_iter_df(self):
-		"""[Getter for 012 genotypes imputed by K-NN iterative imputation]
-
-		Returns:
-			[pandas.DataFrame]: [Imputed 012-encoded genotype data]
-		"""
-		return pd.DataFrame(self.knn_iter_imputed_arr)
-
-	@property
-	def imputed_knn_iter_np(self):
-		"""[Getter for 012 genotypes imputed by K-NN iterative imputation]
-
-		Returns:
-			[numpy.ndarray]: [Imputed 012-encoded genotype data]
-		"""
-		return self.knn_iter_imputed_arr
+		return self.imputed
 		
 def merge_alleles(first, second=None):
 	"""[Merges first and second alleles in structure file]
