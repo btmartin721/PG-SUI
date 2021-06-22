@@ -5,6 +5,7 @@ import time
 import datetime
 
 from numpy.random import choice
+from skopt import BayesSearchCV
 
 def get_indices(l):
 	"""
@@ -82,4 +83,25 @@ def isnotebook():
 			return False  
 	except NameError:
 		# Probably standard Python interpreter
-		return False      
+		return False
+
+def bayes_search_CV_init(self, estimator, search_spaces, optimizer_kwargs=None,	n_iter=50, scoring=None, fit_params=None, n_jobs=1,	n_points=1, iid=True, refit=True, cv=None, verbose=0,
+	pre_dispatch='2*n_jobs', random_state=None,	error_score='raise', 
+	return_train_score=False
+):
+
+	self.search_spaces = search_spaces
+	self.n_iter = n_iter
+	self.n_points = n_points
+	self.random_state = random_state
+	self.optimizer_kwargs = optimizer_kwargs
+	self._check_search_space(self.search_spaces)
+	self.fit_params = fit_params
+
+	super(BayesSearchCV, self).__init__(
+		estimator=estimator, scoring=scoring,
+		n_jobs=n_jobs, refit=refit, cv=cv, verbose=verbose,
+		pre_dispatch=pre_dispatch, error_score=error_score,
+		return_train_score=return_train_score
+	)
+

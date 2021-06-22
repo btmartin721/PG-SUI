@@ -4,10 +4,11 @@ import sys
 
 import numpy as np
 import pandas as pd
+import scipy.stats as stats
 
 # Custom module imports
 from read_input.read_input import GenotypeData
-import read_input.impute as impute
+from read_input.impute import *
 
 from dim_reduction.dim_reduction import DimReduction
 from dim_reduction.embed import *
@@ -23,11 +24,6 @@ def main():
 	if args.str and args.phylip:
 		sys.exit("Error: Only one file type can be specified")
 
-	br_imputation_settings = {
-		"br_n_iter": 1000,
-		"n_nearest_features": 25
-	}
-		
 		# If VCF file is specified.
 	if args.str:
 		if not args.pop_ids and args.popmap is None:
@@ -76,52 +72,60 @@ def main():
 			filetype="phylip", 
 			popmapfile=args.popmap
 		)
-		
+
 	if args.resume_imputed:
 		data.read_imputed(args.resume_imputed, impute_methods="rf")
 		#data.write_imputed(data.imputed_rf_df, args.prefix)
 
 	else:	
-		data.impute_missing(
-			impute_methods="freq_pop", 
-			impute_settings=br_imputation_settings
-		)
+		grid_params = {
+			"alpha_1": stats.uniform(1e-8, 1e-3),
+			"alpha_2": stats.uniform(1e-8, 1e-3),
+			"lambda_1": stats.uniform(1e-8, 1e-3),
+			"lambda_2": stats.uniform(1e-8, 1e-3)
+		}
+		
 
-	colors = {
-		"GU": "#FF00FF",
-		"EA": "#FF8C00",
-		"TT": "#228B22",
-		"TC": "#6495ED",
-		"DS": "#00FFFF",
-		"ON": "#800080",
-		"CH": "#696969",
-		"FL": "#FFFF00",
-		"MX": "#FF0000"
-	}
+		br_imp = \
+			ImputeBayesianRidge(data, n_nearest_features=3, n_iter=50, gridparams=grid_params, cv=3)
 
-	dr = DimReduction(
-		data.imputed_rf_df, 
-		data.populations, 
-		data.individuals,
-		args.prefix, 
-		colors=colors, 
-		reps=2
-	)
+		br_imp.write_imputed(br_imp.imputed, args.prefix)
+
+	# colors = {
+	# 	"GU": "#FF00FF",
+	# 	"EA": "#FF8C00",
+	# 	"TT": "#228B22",
+	# 	"TC": "#6495ED",
+	# 	"DS": "#00FFFF",
+	# 	"ON": "#800080",
+	# 	"CH": "#696969",
+	# 	"FL": "#FFFF00",
+	# 	"MX": "#FF0000"
+	# }
+
+	# dr = DimReduction(
+	# 	data.imputed_rf_df, 
+	# 	data.populations, 
+	# 	data.individuals,
+	# 	args.prefix, 
+	# 	colors=colors, 
+	# 	reps=2
+	#)
 
 	# pca = runPCA(dimreduction=dr, plot_cumvar=False, keep_pcs=10)
 
 	# pca.plot(plot_3d=True)
 
-	rf = runRandomForestUML(dimreduction=dr, n_estimators=1000, n_jobs=4, min_samples_leaf=4)
+	#rf = runRandomForestUML(dimreduction=dr, n_estimators=1000, n_jobs=4, min_samples_leaf=4)
 
-	rf_cmds = runMDS(
-		dimreduction=dr, 
-		distances=rf.dissimilarity, 
-		keep_dims=3, 
-		n_jobs=4, 
-		max_iter=1000, 
-		n_init=25
-	)
+	# rf_cmds = runMDS(
+	# 	dimreduction=dr, 
+	# 	distances=rf.dissimilarity, 
+	# 	keep_dims=3, 
+	# 	n_jobs=4, 
+	# 	max_iter=1000, 
+	# 	n_init=25
+	# )
 
 	# rf_isomds = runMDS(dr, distances=rf.dissimilarity_matrix, metric=False, keep_dims=3, n_jobs=4, max_iter=1000, n_init=25)
 
@@ -131,13 +135,13 @@ def main():
 	# tsne = runTSNE(dimreduction=dr, keep_dims=3, n_iter=20000, perplexity=15.0)
 	# tsne.plot(plot_3d=True)
 
-	maxk = 9
+	#maxk = 9
 
-	pam_rf = PamClustering(rf_cmds, use_embedding=False, dimreduction=dr, distances=rf.dissimilarity, maxk=9, max_iter=2500)
+	#pam_rf = PamClustering(rf_cmds, use_embedding=False, dimreduction=dr, distances=rf.dissimilarity, maxk=9, max_iter=2500)
 
 	# pam.msw(plot_msw_clusters=True, plot_msw_line=True, axes=3)
 
-	pam_rf.gapstat(plot_gap=True, show_plot=False)
+	#pam_rf.gapstat(plot_gap=True, show_plot=False)
 
 	# kmeans = KMeansClustering(rf_cmds, dimreduction=dr, sampleids=data.individuals, maxk=9)
 	# kmeans.msw(plot_msw_clusters=True, plot_msw_line=True, axes=3)

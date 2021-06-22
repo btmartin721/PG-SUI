@@ -65,15 +65,15 @@ def count_alleles(l, vcf=False):
 	Returns:
 		[int]: [Total number of alleles in l]
 	"""
-	all=list()
+	all_items=list()
 	for i in l:
 		if vcf:
-			all.extend(i.split("/"))
+			all_items.extend(i.split("/"))
 			#print(i.split("/"))
 		else:
-			all.extend(get_iupac_caseless(i))
-	all = remove_items(all, ["-9", "-", "N", -9])
-	return len(set(all))
+			all_items.extend(get_iupac_caseless(i))
+	all_items = remove_items(all_items, ["-9", "-", "N", -9])
+	return len(set(all_items))
 
 def get_major_allele(l, num=None, vcf=False):
 	"""[Get most common alleles in list]
@@ -86,14 +86,14 @@ def get_major_allele(l, num=None, vcf=False):
 	Returns:
 		[list]: [[num] most common alleles in descending order]
 	"""
-	all=list()
+	all_items=list()
 	for i in l:
 		if vcf:
-			all.extend(i.split("/"))
+			all_items.extend(i.split("/"))
 		else:
-			all.extend(get_iupac_caseless(i))
+			all_items.extend(get_iupac_caseless(i))
 
-	c = Counter(all) # requires collections import
+	c = Counter(all_items) # requires collections import
 	rets = c.most_common(num)
 
 	# Returns two most common non-ambiguous bases

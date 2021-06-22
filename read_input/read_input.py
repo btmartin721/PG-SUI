@@ -8,10 +8,7 @@ import numpy as np
 import pandas as pd
 import toytree as tt
 
-
-
 from read_input.popmap_file import ReadPopmap
-from read_input import impute
 from utils import sequence_tools
 from utils import settings
 
@@ -271,9 +268,7 @@ class GenotypeData:
 					loc.append(snps[i][j])
 				else:
 					loc.append(snps[i][j].upper())
-			#**NOTE**: Here we could switch to !=2 to also remove monomorphic sites? 
-			# 
-			# **NOTE**I agree. Monomorphic sites might violate assumptions.
+
 			if sequence_tools.count_alleles(loc, vcf=vcf) != 2:
 				skip+=1
 				continue
@@ -786,25 +781,23 @@ class GenotypeData:
 					)
 				)
 
-	def _format_features(self, df, missing_val=-9):
-		"""[Format a 2D list for input into iterative imputer]
-
-		Args:
-			df ([pandas.DataFrame]): [DataFrame of features with shape(n_samples, n_features)]
-
-			missing_val (int, optional): [Missing value to replace with numpy.nan]. Defaults to -9.
+	@property
+	def best_accuracy(self):
+		"""[Getter for best imputer accuracy]
 
 		Returns:
-			[pandas.DataFrame]: [Formatted pandas.DataFrame for input into IterativeImputer]
+			[float]: [Accuracy for best imputer parameters]
 		"""
-		# Replace missing data with NaN
-		X = df.replace(missing_val, np.nan)
+		return self.best_acc 
+	
+	@property
+	def best_impute_params(self):
+		"""[Getter for best imputer parameters]
 
-		# Cast features as 8-bit integers
-		for col in df:
-			X[col] = X[col].astype("Int8")
-
-		return X
+		Returns:
+			[dict]: [Best parameters for imputer classifier]
+		"""
+		return self.best_params 
 
 	@property
 	def snpcount(self):
@@ -867,7 +860,8 @@ class GenotypeData:
 		Returns:
 			[pandas.DataFrame]: [012-encoded genotypes as pandas DataFrame]
 		"""
-		return pd.DataFrame.from_records(self.snps)
+		df = pd.DataFrame.from_records(self.snps).astype("Int8")
+		return df.replace(["-9", -9, "-", "N"], np.nan)
 
 	@property
 	def genotypes_onehot(self):
