@@ -96,7 +96,8 @@ def blank_q_matrix(default=0.0):
 			q[nuc1][nuc2] = default
 	return(q)
 
-#Function to read a phylip file. Returns dict (key=sample) of lists (sequences divided by site)
+#Function to read a phylip file. 
+# Returns dict (key=sample) of lists (sequences divided by site)
 def readPhylip(phy):
 	if os.path.exists(phy):
 		with open(phy, 'r') as fh:
@@ -185,8 +186,9 @@ def impute_phylo(tree, genotypes, Q, site_rates=None, exclude_N=False):
 		for samp in genotypes.keys():
 			if genotypes[samp][snp_index].upper() == "N":
 				bads.append(samp)
-				#go backwards into tree until a node informed by actual data is found 
-				#node = tree.search_nodes(name=samp)[0]
+				# go backwards into tree until a node informed by actual data 
+				# is found 
+				# node = tree.search_nodes(name=samp)[0]
 				node = tree.idx_dict[tree.get_mrca_idx_from_tip_labels(names=samp)]
 				dist = node.dist
 				node = node.up
