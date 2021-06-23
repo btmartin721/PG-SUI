@@ -74,7 +74,8 @@ def main():
 		)
 
 	if args.resume_imputed:
-		data.read_imputed(args.resume_imputed, impute_methods="rf")
+		pass
+		#data.read_imputed(args.resume_imputed, impute_methods="rf")
 		#data.write_imputed(data.imputed_rf_df, args.prefix)
 
 	else:	
@@ -87,9 +88,7 @@ def main():
 		
 
 		br_imp = \
-			ImputeBayesianRidge(data, n_nearest_features=3, n_iter=50, gridparams=grid_params, cv=3)
-
-		br_imp.write_imputed(br_imp.imputed, args.prefix)
+			ImputeBayesianRidge(data, prefix="example_data/imputed/test_br", n_nearest_features=3, n_iter=50, gridparams=grid_params, cv=3)
 
 	# colors = {
 	# 	"GU": "#FF00FF",

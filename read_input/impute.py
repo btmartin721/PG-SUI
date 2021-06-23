@@ -45,9 +45,11 @@ class Impute:
 	def __init__(
 		self,
 		clf,
+		clf_type,
 		kwargs
 	):
 		self.clf = clf
+		self.clf_type = clf_type
 
 		# Separate local variables into separate settings objects		
 		self.gridparams, \
@@ -55,9 +57,8 @@ class Impute:
 		self.clf_kwargs, \
 		self.grid_iter, \
 		self.cv, \
-		self.n_jobs = self._gather_impute_settings(kwargs)
-
-		super().__init__()
+		self.n_jobs, \
+		self.prefix = self._gather_impute_settings(kwargs)
 
 	@timer
 	def fit_predict(self, X):
@@ -71,15 +72,19 @@ class Impute:
 
 		# Do a grid search and get the transformed data with the best parameters
 		else:
-			imputed_df, best_acc, best_params = \
+			imputed_df, best_score, best_params = \
 				self._impute_gridsearch(X)
 
 			print("Grid Search Results:")
-			print("Accuracy (best parameters): {:0.2f}".format(best_acc))
+			if self.clf_type == "regressor":
+				print("RMSE (best parameters): {:0.2f}".format(best_score))
+			else:
+				print("Accuracy (best parameters): {:0.2f}".format(best_score))
+				
 			print("Best Parameters: {}\n".format(best_params))
 
 		print("\nDone!\n")
-		return imputed_df, best_acc, best_params
+		return imputed_df, best_score, best_params
 
 	def _impute_single(self, df):
 
@@ -96,10 +101,10 @@ class Impute:
 		
 	def _impute_gridsearch(self, df):
 
-		df_tmp = self.subset_data_for_testing(df, 0.1)
+		df_tmp = self.subset_data_for_testing(df, 0.05)
 		df2 = self._remove_nonbiallelic(df_tmp)
 
-		if self.clf == BayesianRidge:
+		if self.clf_type == "regressor":
 			for col in df2.columns:
 				df2[col] = df2[col].astype(float)
 
@@ -110,9 +115,10 @@ class Impute:
 		search_space = self.gridparams
 
 		acc_scorer = make_scorer(accuracy_score)
-		mse_scorer = make_scorer(mean_squared_error, greater_is_better=False)
-
-		cv = RepeatedStratifiedKFold(n_splits=self.cv, n_repeats=3, random_state=None)
+		mse_scorer = make_scorer(
+			mean_squared_error, 
+			greater_is_better=False, 
+			squared=False)
 
 		clf = self.clf(**self.clf_kwargs)
 
@@ -122,7 +128,7 @@ class Impute:
 
 		print("Doing grid search...")
 		params_list = list()
-		acc_list = list()
+		score_list = list()
 		for i in progressbar(range(len(imputer.imputation_sequence_)), desc="Grid Search"):
 
 			neighbor_feat_idx = imputer.imputation_sequence_[i][1]
@@ -132,88 +138,111 @@ class Impute:
 			Y = df2.iloc[:, feat_idx]
 
 			missing_rows_mask = Y.isna()
-			if missing_rows_mask.eq(False).all() or missing_rows_mask.eq(True).all():
-				X_train = X.copy()
-				Y_train = Y.copy()
+			if missing_rows_mask.eq(False).all() or \
+				missing_rows_mask.eq(True).all():
+				continue
 			else:
 				X_train = X[~missing_rows_mask]
 				Y_train = Y[~missing_rows_mask]
-
+			
 			X_train = X_train.fillna(X_train.mode().iloc[0])
 
-			if self.clf == BayesianRidge:
+			if self.clf_type == "regressor":
 				search = RandomizedSearchCV(self.clf(), param_distributions=search_space, n_iter=10, scoring=mse_scorer, n_jobs=self.n_jobs, cv=self.cv)
 			else:
 				search = RandomizedSearchCV(self.clf(), param_distributions=search_space, scoring=acc_scorer, n_jobs=self.n_jobs, cv=self.cv)
 
-			#print("Doing Bayesian grid search...")
-			if self.clf == BayesianRidge:
-				search.fit(X_train, Y_train)
-			else:
-				search.fit(X_train, Y_train)
+			search.fit(X_train, Y_train)
 			
 			params_list.append(search.best_params_)
-			acc_list.append(search.best_score_)
+			score_list.append(search.best_score_)
 		
-		c = Counter()
 		best_params = dict()
 		keys = list(params_list[0].keys())
 		for k in keys:
-			k_count = Counter(map(itemgetter(k), params_list))
-			best_params[k] = k_count.most_common()[0][0]
+			if isinstance(params_list[0][k], int):
+				best_params[k] = \
+					self._average_list_of_dicts(params_list, k, is_int=True)
 
-		avg_acc = sum(acc_list) / len(acc_list)
+			elif isinstance(params_list[0][k], float):
+				best_params[k] = self._average_list_of_dicts(params_list, k)
+
+			elif isinstance(params_list[0][k], str):
+				best_params[k] = self._mode_list_of_dicts(params_list, k)
+
+			elif isinstance(params_list[0][k], bool):
+				best_params[k] = self._mode_list_of_dicts(params_list, k)
+
+		avg_score = sum(score_list) / len(score_list)
 
 		best_clf = self.clf(**best_params)
 		best_imputer = self._define_iterative_imputer(best_clf)
 		best_df_imp = self._impute_fit_transform(df2, best_imputer)
 
-		# df_imputed = pd.DataFrame()
-		# if self.clf == BayesianRidge:
-		# 	for target in imp.imputation_sequence_:
-		# 		col_list = list()
-		# 		df_og.iloc[:, int(target[0])].fillna(np.nan, inplace=True)
-		# 		for idx, feature in enumerate(df_og.iloc[:, int(target[0])]):
-		# 			if pd.isnull(feature):
-		# 				coef = target[2].coef_
-		# 				intercept = target[2].intercept_
-		# 				rowsum = np.array([x * y for x, y in zip(df_og.iloc[idx, target[1]].tolist(), coef)])
-		# 				missing_val = np.sum(rowsum) + intercept
-		# 				col_list.append(missing_val)
-		# 			else:
-		# 				col_list.append(feature)
-		# 		df_imputed[int(target[0])] = col_list
-
-		# print(df_imputed)
-		# sys.exit(0)
-				
-		# for feature in df_og[target[0]]:
-		# 	if self.clf == BayesianRidge:
-		# 		print(feature[0])
-		# testcnt += 1
-		# if testcnt == 5:
-		# 	sys.exit()
-
-					
-			
-			
-		#imputer = self._define_iterative_imputer(clf)
-
-		#pipe = Pipeline(steps=[("imp", imputer), ("clf", clf)])
-
-		# if self.clf == BayesianRidge:
-		# 	search = BayesSearchCV(pipe, search_space, scoring=mse_scorer, n_jobs=self.n_jobs, cv=5)
-		# else:
-		# 	search = BayesSearchCV(pipe, search_space, scoring=acc_scorer, n_jobs=self.n_jobs, cv=cv)
-
-
-
-		# best_acc = search.best_score_
-		# best_params = search.best_params_
-
-
 		print("Done with {} imputation!\n".format(str(self.clf)))
-		return best_df_imp, avg_acc, best_params
+		return best_df_imp, abs(avg_score), best_params
+
+	def write_imputed(self, data, best_score, best_params):
+		"""[Save imputed data to a CSV file]
+
+		Args:
+			data ([pandas.DataFrame, numpy.array, or list(list)]): [Object returned from impute_missing()]
+
+			best_score ([float]): [Best RMSE or accuracy score for the regressor or classifier, respectively]
+
+			best_params ([dict]): [Best parameters from grid search]
+
+		Raises:
+			TypeError: [Must be of type pandas.DataFrame, numpy.array, or list]
+		"""
+		outfile = "{}_imputed_012.csv".format(self.prefix)
+		if isinstance(data, pd.DataFrame):
+			data.to_csv(outfile, header=False, index=False)
+
+		elif isinstance(data, np.ndarray):
+			np.savetxt(outfile, data, delimiter=",")
+
+		elif isinstance(data, list):
+			with open(outfile, "w") as fout:
+				fout.writelines(
+					",".join(str(j) for j in i) + "\n" for i in data
+				)
+		else:
+			raise TypeError("'write_imputed()' takes either a pandas.DataFrame,"
+				" numpy.ndarray, or 2-dimensional list"
+			)
+
+		best_score_outfile = "{}_imputed_best_score.csv".format(self.prefix)
+		best_params_outfile = "{}_imputed_best_params.csv".format(self.prefix)
+
+		with open(best_score_outfile, "w") as fout:
+			fout.write("{}".format(best_score))
+
+		with open(best_params_outfile, "w") as fout:
+			fout.write("parameter\tbest_value\n")
+			for k, v in best_params.items():
+				fout.write("{},{}\n".format(k, v))
+
+	def read_imputed(self, filename):
+		"""[Read in imputed CSV file as formatted by write_imputed]
+
+		Args:
+			filename ([str]): [Name of imputed CSV file to be read]
+
+		Returns:
+			[pandas.DataFrame]: [Imputed data as DataFrame of 8-bit integers]
+		"""
+		return pd.read_csv(filename, dtype="Int8", header=None)
+
+	def _mode_list_of_dicts(self, l, k):
+		k_count = Counter(map(itemgetter(k), l))
+		return k_count.most_common()[0][0]
+
+	def _average_list_of_dicts(self, l, k, is_int=False):
+		if is_int:
+			return int(sum(d[k] for d in l) / len(l))
+		else:
+			return sum(d[k] for d in l) / len(l)
 
 	def _remove_nonbiallelic(self, df):
 		
@@ -236,7 +265,12 @@ class Impute:
 		gridparams = kwargs.pop("gridparams")
 		cv = kwargs.pop("cv")
 		n_jobs = kwargs.pop("n_jobs")
+		prefix = kwargs.pop("prefix")
 		grid_iter = kwargs.pop("grid_iter")
+
+		if prefix is None:
+			prefix = "output"
+
 		imp_kwargs = kwargs.copy()
 		clf_kwargs = kwargs.copy()
 
@@ -260,7 +294,7 @@ class Impute:
 			if k not in imp_keys:
 				imp_kwargs.pop(k)
 
-		return gridparams, imp_kwargs, clf_kwargs, grid_iter, cv, n_jobs
+		return gridparams, imp_kwargs, clf_kwargs, grid_iter, cv, n_jobs, prefix
 
 	def _format_features(self, df, missing_val=-9):
 		"""[Format a 2D list for input into iterative imputer]
@@ -319,10 +353,7 @@ class Impute:
 		cols = np.random.choice(df.columns, 
 								int(len(df.columns) * col_selection_rate))
 
-		#cols_not_sampled = sorted(np.setxor1d(cols, df.columns))
-
 		df_cp = df.copy()
-		#good_cols = list()
 		for col in progressbar(cols, desc="CV Random Sampling: "):
 			data_drop_rate = np.random.choice(np.arange(0.15, 0.5, 0.02), 1)[0]
 
@@ -332,54 +363,6 @@ class Impute:
 			current_col = df_cp[col].values
 			df_cp[col].iloc[drop_ind] = np.nan
 		return df_cp, cols
-			#cnt = 1
-			#df_cp, good_cols = \
-				#self._reshuffle_missing(df_cp, col, good_cols, reshuffle_retries)
-
-		# 	if (
-		# 		not df_cp[col].isin([0]).any() or
-		# 		not df_cp[col].isin([1]).any() or
-		# 		not df_cp[col].isin([2]).any()
-		# 	):
-		# 		while cnt <= new_col_retries:
-		# 			cnt += 1
-		# 			if (
-		# 				not df_cp[col].isin([0]).any() or
-		# 				not df_cp[col].isin([1]).any() or
-		# 				not df_cp[col].isin([2]).any()
-		# 			):
-
-		# 				if len(cols_not_sampled) > 0:
-		# 					new_col = np.random.choice(cols_not_sampled, 1)
-		# 					df_cp = df_cp.assign(col=df_cp[new_col].values)
-
-		# 					np.delete(cols_not_sampled, 
-		# 						np.where(cols_not_sampled == new_col))
-
-		# 					df_cp, good_cols = \
-		# 						self._reshuffle_missing(
-		# 							df_cp, col, good_cols, reshuffle_retries)
-		# 				else:
-		# 					break
-
-		# 			elif (
-		# 					df_cp[col].isin([0]).any() and
-		# 					df_cp[col].isin([1]).any() and
-		# 					df_cp[col].isin([2]).any()
-		# 			):
-		# 				break
-
-		# df_cp = df_cp.loc[:, df_cp.columns.isin(good_cols)]
-
-		assert len(df_cp.columns) > 0, \
-			"All columns were monomorphic. CV could not be performed!"
-		
-		print("\nRemoved {} monomorphic columns during cross-validation\n"
-			"{} sites remaining\n".format(len(cols) - len(good_cols), 
-				len(df_cp.columns))
-		)
-
-		return df_cp, np.array(good_cols)
 
 	def _reshuffle_missing(self, df_cp, col, good_cols, retries):
 		data_drop_rate = np.random.choice(np.arange(0.15, 0.5, 0.02), 1)[0]
@@ -489,6 +472,7 @@ class ImputeKNN:
 		self, 
 		genotype_data,
 		*, 
+		prefix=None,
 		gridparams=None,
 		grid_iter=50,
 		cv=5,
@@ -512,6 +496,8 @@ class ImputeKNN:
 
 		Args:
 			genotype_data ([GenotypeData]): [GenotypeData instance that was used to read in the sequence data]
+
+			prefix ([str]): [Prefix for imputed data's output filename]
 
 			n_neighbors (int, optional): [Number of neighbors to use by default for K-Nearest Neighbors queries]. Defaults to 5.
 
@@ -545,11 +531,16 @@ class ImputeKNN:
 		"""
 		# Get local variables into dictionary object
 		kwargs = locals()
-		self.clf = KNeighborsClassifier
-		imputer = Impute(self.clf, kwargs)
 
-		self.imputed, self.best_acc, self.best_params = \
+		self.clf_type = "classifier"
+		self.clf = KNeighborsClassifier
+
+		imputer = Impute(self.clf, self.clf_type, kwargs)
+
+		self.imputed, self.best_score, self.best_params = \
 			imputer.fit_predict(genotype_data.genotypes_df)
+
+		imputer.write_imputed(self.imputed, self.best_score, self.best_params)
 
 class ImputeRandomForest:
 	"""[Class to impute missing data from 012-encoded genotypes using Random Forest iterative imputation]
@@ -558,6 +549,7 @@ class ImputeRandomForest:
 		self, 
 		genotype_data,
 		*, 
+		prefix=None,
 		gridparams=None,
 		grid_iter=50,
 		cv=5,
@@ -588,6 +580,8 @@ class ImputeRandomForest:
 
 		Args:
 			genotype_data ([GenotypeData]): [GenotypeData instance that was used to read in the sequence data]
+
+			prefix ([str]): [Prefix for imputed data's output filename]
 
 			n_estimators (int, optional): [The number of trees in the forest. Increasing this value can improves the fit, but at the cost of compute time]. Defaults to 100.
 
@@ -635,11 +629,16 @@ class ImputeRandomForest:
 		"""
 		# Get local variables into dictionary object
 		kwargs = locals()
-		self.clf = ExtraTreesClassifier
-		imputer = Impute(self.clf, kwargs)
 
-		self.imputed, self.best_acc, self.best_params = \
+		self.clf = ExtraTreesClassifier
+		self.clf_type = "classifier"
+
+		imputer = Impute(self.clf, self.clf_type, kwargs)
+
+		self.imputed, self.best_score, self.best_params = \
 			imputer.fit_predict(genotype_data.genotypes_df)
+
+		imputer.write_imputed(self.imputed, self.best_score, self.best_params)
 
 class ImputeGradientBoosting:
 	"""[Class to impute missing data from 012-encoded genotypes using Random Forest iterative imputation]
@@ -648,6 +647,7 @@ class ImputeGradientBoosting:
 		self,
 		genotype_data,
 		*,
+		prefix=None,
 		gridparams=None,
 		grid_iter=50,
 		cv=5,
@@ -677,7 +677,9 @@ class ImputeGradientBoosting:
 		"""[Does Random Forest Iterative imputation of missing data. Iterative imputation uses the n_nearest_features to inform the imputation at each feature (i.e., SNP site), using the N most correlated features per site. The N most correlated features are drawn with probability proportional to correlation for each imputed target feature to ensure coverage of features throughout the imputation process]
 
 		Args:
-			genotype_data ([GenotypeData]): [GenotypeData instance that was used to read in the sequence data]			
+			genotype_data ([GenotypeData]): [GenotypeData instance that was used to read in the sequence data]
+
+			prefix ([str]): [Prefix for imputed data's output filename]
 			
 			n_estimators (int, optional): [The number of boosting stages to perform. Gradient boosting is fairly robust to over-fitting so a large number usually results in better performance]. Defaults to 100.
 
@@ -724,12 +726,15 @@ class ImputeGradientBoosting:
 		# Get local variables into dictionary object
 		kwargs = locals()
 
+		self.clf_type = "classifier"
 		self.clf = GradientBoostingClassifier
 
-		imputer = Impute(self.clf, kwargs)
+		imputer = Impute(self.clf, self.clf_type, kwargs)
 
-		self.imputed, self.best_acc, self.best_params = \
+		self.imputed, self.best_score, self.best_params = \
 			imputer.fit_predict(genotype_data.genotypes_df)
+
+		imputer.write_imputed(self.imputed, self.best_score, self.best_params)
 
 class ImputeBayesianRidge:
 	"""[Class to impute missing data from 012-encoded genotypes using Bayesian ridge iterative imputation]
@@ -738,6 +743,7 @@ class ImputeBayesianRidge:
 		self,
 		genotype_data,
 		*,
+		prefix=None,
 		gridparams=None,
 		grid_iter=50,
 		cv=5,
@@ -762,7 +768,9 @@ class ImputeBayesianRidge:
 		"""[Does Bayesian Ridge Iterative imputation of missing data. Iterative imputation uses the n_nearest_features to inform the imputation at each feature (i.e., SNP site), using the N most correlated features per site. The N most correlated features are drawn with probability proportional to correlation for each imputed target feature to ensure coverage of features throughout the imputation process]
 
 		Args:
-			genotype_data ([GenotypeData]): [GenotypeData instance that was used to read in the sequence data]			
+			genotype_data ([GenotypeData]): [GenotypeData instance that was used to read in the sequence data]	
+
+			prefix ([str]): [Prefix for imputed data's output filename]		
 				
 			n_iter (int, optional): [Maximum number of iterations. Should be greater than or equal to 1]. Defaults to 300.
 
@@ -801,12 +809,15 @@ class ImputeBayesianRidge:
 		kwargs["normalize"] = True
 		kwargs["sample_posterior"] = True
 
+		self.clf_type = "regressor"
 		self.clf = BayesianRidge
 
-		imputer = Impute(self.clf, kwargs)
+		imputer = Impute(self.clf, self.clf_type, kwargs)
 
-		self.imputed, self.best_acc, self.best_params = \
+		self.imputed, self.best_score, self.best_params = \
 			imputer.fit_predict(genotype_data.genotypes_df)
+
+		imputer.write_imputed(self.imputed, self.best_score, self.best_params)
 
 class ImputeXGBoost:
 
@@ -814,6 +825,7 @@ class ImputeXGBoost:
 		self, 
 		genotype_data, 
 		*, 
+		prefix=None,
 		gridparams=None,
 		grid_iter=50,
 		cv=5,
@@ -847,12 +859,15 @@ class ImputeXGBoost:
 		kwargs = locals()
 		kwargs["num_class"] = 3
 
+		self.clf_type = "classifier"
 		self.clf = XGBClassifier
 		
-		imputer = Impute(self.clf, kwargs)
+		imputer = Impute(self.clf, self.clf_type, kwargs)
 
-		self.imputed, self.best_acc, self.best_params = \
+		self.imputed, self.best_score, self.best_params = \
 			imputer.fit_predict(genotype_data.genotypes_df)
+
+		imputer.write_imputed(self.imputed, self.best_score, self.best_params)
 
 class ImputeAlleleFreq(GenotypeData):
 	"""[Class to impute missing data by global or population-wisse allele frequency]
