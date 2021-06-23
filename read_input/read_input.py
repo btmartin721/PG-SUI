@@ -8,10 +8,7 @@ import numpy as np
 import pandas as pd
 import toytree as tt
 
-
-
 from read_input.popmap_file import ReadPopmap
-from read_input import impute
 from utils import sequence_tools
 from utils import settings
 
@@ -271,9 +268,7 @@ class GenotypeData:
 					loc.append(snps[i][j])
 				else:
 					loc.append(snps[i][j].upper())
-			#**NOTE**: Here we could switch to !=2 to also remove monomorphic sites? 
-			# 
-			# **NOTE**I agree. Monomorphic sites might violate assumptions.
+
 			if sequence_tools.count_alleles(loc, vcf=vcf) != 2:
 				skip+=1
 				continue
@@ -678,133 +673,23 @@ class GenotypeData:
 				raise ValueError(
 					"maxk and n_neighbors cannot both be specified!")
 	
-	def write_imputed(self, data, prefix):
-		"""[Save imputed data to a CSV file]
-
-		Args:
-			data ([pandas.DataFrame, numpy.array, or list(list)]): [Object returned from impute_missing()]
-			prefix ([str]): [Prefix for output CSV file]
-
-		Raises:
-			TypeError: [Must be of type pandas.DataFrame, numpy.array, or list]
-		"""
-		outfile = "{}_imputed_012.csv".format(prefix)
-		if isinstance(data, pd.DataFrame):
-			data.to_csv(outfile, header = False, index = False)
-
-		elif isinstance(data, np.ndarray):
-			np.savetxt(outfile, data, delimiter=",")
-
-		elif isinstance(data, list):
-			with open(outfile, "w") as fout:
-				fout.writelines(
-					",".join(str(j) for j in i) + "\n" for i in data
-				)
-		else:
-			raise TypeError("'write_imputed()' takes either a pandas.DataFrame,"
-				" numpy.ndarray, or 2-dimensional list"
-			)
-
-	def read_imputed(self, filename, impute_methods):
-		"""[Read in imputed CSV file as formatted by write_imputed]
-
-		Args:
-			filename ([str]): [Name of imputed CSV file to be read]
-			impute_methods ([str or list(str)]): [Methods used to impute missing data]
+	@property
+	def best_accuracy(self):
+		"""[Getter for best imputer accuracy]
 
 		Returns:
-			[pandas.DataFrame]: [Imputed data as DataFrame of 8-bit integers]
-
-		Raises:
-			ValueError: [Must be supported impute_method option]
+			[float]: [Accuracy for best imputer parameters]
 		"""
-		self.impute_methods = impute_methods
-		if isinstance(self.impute_methods, list):
-			for method in self.impute_methods:
-				if method == "knn":
-					self.knn_imputed_df = \
-						pd.read_csv(filename, dtype="Int8", header=None)
-					self.knn_imputed = self.knn_imputed_df.values.tolist()
-
-				elif method == "freq_global":
-					self.freq_imputed_global_df = \
-						pd.read_csv(filename, dtype="Int8", header=None)
-					self.freq_imputed_global = \
-						self.freq_imputed_global_df.values.tolist()
-
-				elif method == "freq_pop":
-					self.freq_imputed_pop_df = \
-						pd.read_csv(filename, dtype="Int8", header=None)
-					self.freq_imputed_pop = \
-						self.freq_imputed_global_df.values.tolist()
-
-				elif method == "rf":
-					rf_df = pd.read_csv(filename, dtype="Int8", header=None)
-					self.rf_imputed_arr = rf_df.to_numpy(dtype=np.int)
-
-				elif method == "gb":
-					gb_df = pd.read_csv(filename, dtype="Int8", header=None)
-					self.gb_imputed_arr = gb_df.to_numpy(dtype=np.int)
-
-				else:
-					raise ValueError(
-						"{} is not a supported option in impute_methods!\n".format(
-							method
-						)
-					)
-
-		elif isinstance(self.impute_methods, str):
-			if self.impute_methods == "knn":
-				self.knn_imputed_df = \
-					pd.read_csv(filename, dtype="Int8", header=None)
-				self.knn_imputed = self.knn_imputed_df.values.tolist()
-
-			elif self.impute_methods == "freq_global":
-				self.freq_imputed_global_df = \
-					pd.read_csv(filename, dtype="Int8", header=None)
-				self.freq_imputed_global = \
-					self.freq_imputed_global_df.values.tolist()
-
-			elif self.impute_methods == "freq_pop":
-				self.freq_imputed_pop_df = \
-					pd.read_csv(filename, dtype="Int8", header=None)
-				self.freq_imputed_pop = \
-					self.freq_imputed_global_df.values.tolist()
-
-			elif self.impute_methods == "rf":
-				rf_df = pd.read_csv(filename, dtype="Int8", header=None)
-				self.rf_imputed_arr = rf_df.to_numpy(dtype=np.int)
-
-			elif self.impute_methods == "gb":
-				gb_df = pd.read_csv(filename, dtype="Int8", header=None)
-				self.gb_imputed_arr = gb_df.to_numpy(dtype=np.int)
-				
-			else:
-				raise ValueError(
-					"{} is not a supported option in impute_methods!".format(
-						self.impute_methods
-					)
-				)
-
-	def _format_features(self, df, missing_val=-9):
-		"""[Format a 2D list for input into iterative imputer]
-
-		Args:
-			df ([pandas.DataFrame]): [DataFrame of features with shape(n_samples, n_features)]
-
-			missing_val (int, optional): [Missing value to replace with numpy.nan]. Defaults to -9.
+		return self.best_acc 
+	
+	@property
+	def best_impute_params(self):
+		"""[Getter for best imputer parameters]
 
 		Returns:
-			[pandas.DataFrame]: [Formatted pandas.DataFrame for input into IterativeImputer]
+			[dict]: [Best parameters for imputer classifier]
 		"""
-		# Replace missing data with NaN
-		X = df.replace(missing_val, np.nan)
-
-		# Cast features as 8-bit integers
-		for col in df:
-			X[col] = X[col].astype("Int8")
-
-		return X
+		return self.best_params 
 
 	@property
 	def snpcount(self):
@@ -867,7 +752,8 @@ class GenotypeData:
 		Returns:
 			[pandas.DataFrame]: [012-encoded genotypes as pandas DataFrame]
 		"""
-		return pd.DataFrame.from_records(self.snps)
+		df = pd.DataFrame.from_records(self.snps).astype("Int8")
+		return df.replace(["-9", -9, "-", "N"], np.nan)
 
 	@property
 	def genotypes_onehot(self):

@@ -1,37 +1,488 @@
 # Standard library imports
-
+import sys
+from collections import Counter
+from operator import itemgetter
 
 # Third party imports
 import numpy as np
 import pandas as pd
+import xgboost as xgb
 from sklearn.experimental import enable_iterative_imputer
 from sklearn.impute import IterativeImputer
 from sklearn.ensemble import ExtraTreesClassifier
 from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.linear_model import BayesianRidge
 from sklearn.neighbors import KNeighborsClassifier
+from xgboost.sklearn import XGBClassifier
+from sklearn.model_selection import cross_val_score
+from sklearn.model_selection import RepeatedStratifiedKFold
+from sklearn.pipeline import Pipeline
+from skopt import BayesSearchCV
+from skopt.space import Real, Categorical, Integer
+from sklearn.model_selection import RandomizedSearchCV
+from sklearn.metrics import make_scorer
+from sklearn.metrics import accuracy_score
+from sklearn.metrics import mean_squared_error
 
 # Custom module imports
+from read_input.read_input import GenotypeData
 from utils import misc
 from utils.misc import timer
+from utils.misc import bayes_search_CV_init
+from utils import sequence_tools
 
-class ImputeKNN(GenotypeData):
+from utils.misc import isnotebook
+
+is_notebook = isnotebook()
+
+if is_notebook:
+	from tqdm.notebook import tqdm as progressbar
+else:
+	from tqdm import tqdm as progressbar
+
+class Impute:
+
+	def __init__(
+		self,
+		clf,
+		clf_type,
+		kwargs
+	):
+		self.clf = clf
+		self.clf_type = clf_type
+
+		# Separate local variables into separate settings objects		
+		self.gridparams, \
+		self.imp_kwargs, \
+		self.clf_kwargs, \
+		self.grid_iter, \
+		self.cv, \
+		self.n_jobs, \
+		self.prefix = self._gather_impute_settings(kwargs)
+
+	@timer
+	def fit_predict(self, X):
+
+		#df = self._format_features(X)
+		
+		# Don't do a grid search
+		if self.gridparams is None:
+			imputed_df, best_acc, best_params = \
+				self._impute_single(X)
+
+		# Do a grid search and get the transformed data with the best parameters
+		else:
+			imputed_df, best_score, best_params = \
+				self._impute_gridsearch(X)
+
+			print("Grid Search Results:")
+			if self.clf_type == "regressor":
+				print("RMSE (best parameters): {:0.2f}".format(best_score))
+			else:
+				print("Accuracy (best parameters): {:0.2f}".format(best_score))
+				
+			print("Best Parameters: {}\n".format(best_params))
+
+		print("\nDone!\n")
+		return imputed_df, best_score, best_params
+
+	def _impute_single(self, df):
+
+		print(
+			"Doing {} imputation without grid search...".format(str(self.clf)))
+
+		clf = self.clf(**self.clf_kwargs)
+		imputer = self._define_iterative_imputer(clf)
+
+		df_imp = self._impute_fit_transform(df, imputer)
+
+		print("Done with {} imputation!\n".format(str(self.clf)))
+		return df_imp, None, None
+		
+	def _impute_gridsearch(self, df):
+
+		df_tmp = self.subset_data_for_testing(df, 0.05)
+		df2 = self._remove_nonbiallelic(df_tmp)
+
+		if self.clf_type == "regressor":
+			for col in df2.columns:
+				df2[col] = df2[col].astype(float)
+
+		print("Test dataset size: {}\n".format(len(df2.columns)))
+		print("Doing {} imputation...".format(str(self.clf)))
+
+		#search_space = self._validate_gridparams(self.gridparams)
+		search_space = self.gridparams
+
+		acc_scorer = make_scorer(accuracy_score)
+		mse_scorer = make_scorer(
+			mean_squared_error, 
+			greater_is_better=False, 
+			squared=False)
+
+		clf = self.clf(**self.clf_kwargs)
+
+		print("Doing initial imputation...")
+		imputer = self._define_iterative_imputer(clf)
+		imp_arr = imputer.fit_transform(df2)
+
+		print("Doing grid search...")
+		params_list = list()
+		score_list = list()
+		for i in progressbar(range(len(imputer.imputation_sequence_)), desc="Grid Search"):
+
+			neighbor_feat_idx = imputer.imputation_sequence_[i][1]
+			feat_idx = int(imputer.imputation_sequence_[i][0])
+
+			X = df2.iloc[:, neighbor_feat_idx]
+			Y = df2.iloc[:, feat_idx]
+
+			missing_rows_mask = Y.isna()
+			if missing_rows_mask.eq(False).all() or \
+				missing_rows_mask.eq(True).all():
+				continue
+			else:
+				X_train = X[~missing_rows_mask]
+				Y_train = Y[~missing_rows_mask]
+			
+			X_train = X_train.fillna(X_train.mode().iloc[0])
+
+			if self.clf_type == "regressor":
+				search = RandomizedSearchCV(self.clf(), param_distributions=search_space, n_iter=10, scoring=mse_scorer, n_jobs=self.n_jobs, cv=self.cv)
+			else:
+				search = RandomizedSearchCV(self.clf(), param_distributions=search_space, scoring=acc_scorer, n_jobs=self.n_jobs, cv=self.cv)
+
+			search.fit(X_train, Y_train)
+			
+			params_list.append(search.best_params_)
+			score_list.append(search.best_score_)
+		
+		best_params = dict()
+		keys = list(params_list[0].keys())
+		for k in keys:
+			if isinstance(params_list[0][k], int):
+				best_params[k] = \
+					self._average_list_of_dicts(params_list, k, is_int=True)
+
+			elif isinstance(params_list[0][k], float):
+				best_params[k] = self._average_list_of_dicts(params_list, k)
+
+			elif isinstance(params_list[0][k], str):
+				best_params[k] = self._mode_list_of_dicts(params_list, k)
+
+			elif isinstance(params_list[0][k], bool):
+				best_params[k] = self._mode_list_of_dicts(params_list, k)
+
+		avg_score = sum(score_list) / len(score_list)
+
+		best_clf = self.clf(**best_params)
+		best_imputer = self._define_iterative_imputer(best_clf)
+		best_df_imp = self._impute_fit_transform(df2, best_imputer)
+
+		print("Done with {} imputation!\n".format(str(self.clf)))
+		return best_df_imp, abs(avg_score), best_params
+
+	def write_imputed(self, data, best_score, best_params):
+		"""[Save imputed data to a CSV file]
+
+		Args:
+			data ([pandas.DataFrame, numpy.array, or list(list)]): [Object returned from impute_missing()]
+
+			best_score ([float]): [Best RMSE or accuracy score for the regressor or classifier, respectively]
+
+			best_params ([dict]): [Best parameters from grid search]
+
+		Raises:
+			TypeError: [Must be of type pandas.DataFrame, numpy.array, or list]
+		"""
+		outfile = "{}_imputed_012.csv".format(self.prefix)
+		if isinstance(data, pd.DataFrame):
+			data.to_csv(outfile, header=False, index=False)
+
+		elif isinstance(data, np.ndarray):
+			np.savetxt(outfile, data, delimiter=",")
+
+		elif isinstance(data, list):
+			with open(outfile, "w") as fout:
+				fout.writelines(
+					",".join(str(j) for j in i) + "\n" for i in data
+				)
+		else:
+			raise TypeError("'write_imputed()' takes either a pandas.DataFrame,"
+				" numpy.ndarray, or 2-dimensional list"
+			)
+
+		best_score_outfile = "{}_imputed_best_score.csv".format(self.prefix)
+		best_params_outfile = "{}_imputed_best_params.csv".format(self.prefix)
+
+		with open(best_score_outfile, "w") as fout:
+			fout.write("{}".format(best_score))
+
+		with open(best_params_outfile, "w") as fout:
+			fout.write("parameter\tbest_value\n")
+			for k, v in best_params.items():
+				fout.write("{},{}\n".format(k, v))
+
+	def read_imputed(self, filename):
+		"""[Read in imputed CSV file as formatted by write_imputed]
+
+		Args:
+			filename ([str]): [Name of imputed CSV file to be read]
+
+		Returns:
+			[pandas.DataFrame]: [Imputed data as DataFrame of 8-bit integers]
+		"""
+		return pd.read_csv(filename, dtype="Int8", header=None)
+
+	def _mode_list_of_dicts(self, l, k):
+		k_count = Counter(map(itemgetter(k), l))
+		return k_count.most_common()[0][0]
+
+	def _average_list_of_dicts(self, l, k, is_int=False):
+		if is_int:
+			return int(sum(d[k] for d in l) / len(l))
+		else:
+			return sum(d[k] for d in l) / len(l)
+
+	def _remove_nonbiallelic(self, df):
+		
+		df_cp = df.copy()
+		bad_cols = list()
+		for col in df_cp.columns:
+			if not df_cp[col].isin([0]).any() or not df_cp[col].isin([2]).any():
+				bad_cols.append(col)
+
+		return df_cp.drop(bad_cols, axis=1)
+
+	def subset_data_for_testing(self, df, column_percent):
+		cols = np.random.choice(df.columns, 
+			int(len(df.columns) * column_percent), replace=False)
+
+		df2 = df.loc[:, cols]
+		return df2
+
+	def _gather_impute_settings(self, kwargs):
+		gridparams = kwargs.pop("gridparams")
+		cv = kwargs.pop("cv")
+		n_jobs = kwargs.pop("n_jobs")
+		prefix = kwargs.pop("prefix")
+		grid_iter = kwargs.pop("grid_iter")
+
+		if prefix is None:
+			prefix = "output"
+
+		imp_kwargs = kwargs.copy()
+		clf_kwargs = kwargs.copy()
+
+		imp_keys = ["n_nearest_features", "max_iter", "tol", "initial_strategy", "imputation_order", "skip_complete", "random_state", "verbose", "sample_posterior"]
+
+		to_remove = ["genotype_data", "self", "__class__"]
+
+		for k, v in clf_kwargs.copy().items():
+			if k in to_remove:
+				clf_kwargs.pop(k)
+			if k in imp_keys:
+				clf_kwargs.pop(k)
+				
+		if "clf_random_state" in clf_kwargs:
+			clf_kwargs["random_state"] = clf_kwargs.pop("clf_random_state")
+
+		if "clf_tol" in clf_kwargs:
+			clf_kwargs["tol"] = clf_kwargs.pop("clf_tol")
+					
+		for k, v in imp_kwargs.copy().items():
+			if k not in imp_keys:
+				imp_kwargs.pop(k)
+
+		return gridparams, imp_kwargs, clf_kwargs, grid_iter, cv, n_jobs, prefix
+
+	def _format_features(self, df, missing_val=-9):
+		"""[Format a 2D list for input into iterative imputer]
+
+		Args:
+			df ([pandas.DataFrame]): [DataFrame of features with shape(n_samples, n_features)]
+
+			missing_val (int, optional): [Missing value to replace with numpy.nan]. Defaults to -9.
+
+		Returns:
+			[pandas.DataFrame]: [Formatted pandas.DataFrame for input into IterativeImputer]
+		"""
+		# Replace missing data with NaN
+		X = df.replace(missing_val, np.nan)
+		return X
+
+	def _validate_gridparams(self, params):
+		"""[Convert values in dictionary of lists to Bayesian distribution space for use with BayesSearchCV]
+
+		Args:
+			params ([dict(list)]): [Dictionary of lists with grid search parameters]
+
+		Raises:
+			TypeError: [Unrecognized gridparam value types]
+
+		Returns:
+			[dict(Int, Real, Categorical)]: [Dictionary with values converted to distribution space]
+		"""
+		search_space = dict()
+		for k, v in params.items():
+			if all(isinstance(item, int) for item in v):
+				search_space[k] = Integer(v)
+			elif all(isinstance(item, str) for item in v):
+				search_space[k] = Categorical(v)
+			elif all(isinstance(item, float) for item in v):
+				search_space[k] = Real(v)
+			else:
+				raise TypeError("Unknown type in gridparams values!")
+
+		return search_space
+
+	def _defile_dataset(self, df, col_selection_rate=0.40):
+		"""[Function to select 40% of the columns in a pandas DataFrame and change anywhere from 15% to 50% of the values in each of those columns to np.nan (missing data). Since we know the true values of the ones changed to np.nan, we can assess the accuracy of the classifier and do a grid search]
+
+		Args:
+			df ([pandas.DataFrame]): [012-encoded genotypes to extract columns from.]
+
+			col_selection_rate (float, optional): [Proportion of the DataFrame to extract]. Defaults to 0.40.
+
+		Returns:
+			[pandas.DataFrame]: [DataFrame with newly missing values]
+			[numpy.ndarray]: [Columns that were extracted via random sampling]
+		"""
+		# Code adapted from: 
+		# https://medium.com/analytics-vidhya/using-scikit-learns-iterative-imputer-694c3cca34de	
+		cols = np.random.choice(df.columns, 
+								int(len(df.columns) * col_selection_rate))
+
+		df_cp = df.copy()
+		for col in progressbar(cols, desc="CV Random Sampling: "):
+			data_drop_rate = np.random.choice(np.arange(0.15, 0.5, 0.02), 1)[0]
+
+			drop_ind = np.random.choice(np.arange(len(df_cp[col])), 
+				size=int(len(df_cp[col])*data_drop_rate), replace=False)
+
+			current_col = df_cp[col].values
+			df_cp[col].iloc[drop_ind] = np.nan
+		return df_cp, cols
+
+	def _reshuffle_missing(self, df_cp, col, good_cols, retries):
+		data_drop_rate = np.random.choice(np.arange(0.15, 0.5, 0.02), 1)[0]
+
+		drop_ind = np.random.choice(np.arange(len(df_cp[col])), 
+			size=int(len(df_cp[col])*data_drop_rate), replace=False)
+
+		current_col = df_cp[col].values
+		df_cp[col].iloc[drop_ind] = np.nan
+
+		cnt = 1
+		while cnt <= retries:
+			if (
+				not df_cp[col].isin([0]).any() or
+				not df_cp[col].isin([1]).any() or
+				not df_cp[col].isin([2]).any()
+			):
+				cnt += 1
+				df_cp = df_cp.assign(col=current_col)
+				
+				data_drop_rate = \
+					np.random.choice(np.arange(0.15, 0.5, 0.02), 1)[0]
+
+				drop_ind = np.random.choice(np.arange(len(df_cp[col])), 
+					size=int(len(df_cp[col])*data_drop_rate), 
+					replace=False)
+
+				df_cp[col].iloc[drop_ind] = np.nan
+
+			elif (
+					df_cp[col].isin([0]).any() and
+					df_cp[col].isin([1]).any() and
+					df_cp[col].isin([2]).any()
+			):
+				good_cols.append(col)
+				return df_cp, good_cols
+
+		return df_cp, good_cols
+
+	def _impute_eval(self, df_orig, clf):
+		"""[Function to run IterativeImputer on a DataFrame. The dataframe will be randomly sampled and a fraction of the known, true values are converted to missing data to allow evalutation of the model]
+
+		Args:
+			df_orig ([pandas.DataFrame]): [Original DataFrame with 012-encoded genotypes]
+
+			clf ([sklearn Classifier]): [Classifier instance to use with IterativeImputer]
+
+		Returns:
+			[pandas.DataFrame]: [Subsampled DataFrame with known, true values]
+			[pandas.DataFrame]: [Subsampled DataFrame with true values converted to missing data]
+			[pandas.DataFrame]: [Subsampled DataFrame with imputed missing values]
+			[int]: [Number of iterations required to converge]
+		"""
+		df_miss, cols = self._defile_dataset(df_orig)
+		df_orig_slice = df_orig[cols]
+		imputer = self._define_iterative_imputer(clf)
+		df_stg = df_miss.copy()
+
+		print("\nDoing initial imputation...")
+		imp_arr = imputer.fit_transform(df_stg)
+		print("Done!\n")
+
+		return df_orig_slice, df_miss[cols], pd.DataFrame(imp_arr[:,[df_orig.columns.get_loc(i) for i in cols]], columns=cols), imputer.n_iter_, imputer
+
+	def _impute_fit_transform(self, df, imputer):
+		"""[Do the fit_transform for IterativeImputer and format as a pandas.dataFrame object]
+
+		Args:
+
+			df ([pandas.DataFrame]): [DataFrame with missing data to impute]
+
+			imputer ([sklearn.impute.IterativeImputer]): [IterativeImputer instance]
+
+		Returns:
+			[pandas.DataFrame]: [Imputed DataFrame object]
+
+		Raises:
+			AssertionError: [Ensure no missing data remains in imputed DataFrame]
+		"""
+		arr = imputer.fit_transform(df)
+		new_arr = arr.astype(dtype=np.int)
+		new_df = pd.DataFrame(new_arr)
+
+		# if new_df.isnull().values.any():
+		# 	raise AssertionError("Imputation failed: There is still missing data")
+					
+		return new_df
+
+	def _define_iterative_imputer(self, clf):
+		"""[Define an IterativeImputer instance]
+
+		Args:
+			clf ([sklearn Classifier]): [Classifier to use with IterativeImputer]
+
+		Returns:
+			[sklearn.impute.IterativeImputer]: [IterativeImputer instance]
+		"""
+		# Create iterative imputer
+		imp = IterativeImputer(estimator=clf, **self.imp_kwargs)
+		return imp
+		
+
+class ImputeKNN:
 	"""[Class to impute missing data from 012-encoded genotypes using K-Nearest Neighbors iterative imputation]
-
-	Args:
-		GenotypeData ([GenotypeData]): [Inherits from GenotypeData class, which reads input sequence data into a useable object]
 	"""
 	def __init__(
 		self, 
 		genotype_data,
 		*, 
+		prefix=None,
+		gridparams=None,
+		grid_iter=50,
+		cv=5,
+		n_jobs=1,
 		n_neighbors=5, 
 		weights="distance", 
 		algorithm="auto", 
 		leaf_size=30, 
 		p=2, 
 		metric="minkowski", 
-		n_jobs=1,
 		max_iter=10,
 		tol=1e-3,
 		n_nearest_features=10,
@@ -45,6 +496,8 @@ class ImputeKNN(GenotypeData):
 
 		Args:
 			genotype_data ([GenotypeData]): [GenotypeData instance that was used to read in the sequence data]
+
+			prefix ([str]): [Prefix for imputed data's output filename]
 
 			n_neighbors (int, optional): [Number of neighbors to use by default for K-Nearest Neighbors queries]. Defaults to 5.
 
@@ -76,101 +529,31 @@ class ImputeKNN(GenotypeData):
 
 			verbose (int, optional): [Verbosity flag, controls the debug messages that are issues as functions are evaluated. The higher, the more verbose. Possible values are 0, 1, or 2]. Defaults to 0.
 		"""
-		self.n_neighbors = n_neighbors
-		self.weights = weights
-		self.algorithm = algorithm
-		self.leaf_size = leaf_size
-		self.p = p
-		self.metric = metric
-		self.n_jobs = n_jobs
-		self.max_iter = max_iter
-		self.tol = tol
-		self.n_nearest_features = n_nearest_features
-		self.initial_strategy = initial_strategy
-		self.imputation_order = imputation_order
-		self.skip_complete = skip_complete
-		self.random_state = random_state
-		self.verbose = verbose
+		# Get local variables into dictionary object
+		kwargs = locals()
 
-		super().__init__()
+		self.clf_type = "classifier"
+		self.clf = KNeighborsClassifier
 
-		self.imputed = self.fit_predict(genotype_data.genotypes_df)
+		imputer = Impute(self.clf, self.clf_type, kwargs)
 
-	@timer
-	def fit_predict(self, X):
-		"""[Do K-nearest neighbors imputation using an Iterative Imputer.
-		Iterative imputer iterates over N other features (i.e. SNP sites)
-		and uses each them to inform missing data predictions in the input column]
+		self.imputed, self.best_score, self.best_params = \
+			imputer.fit_predict(genotype_data.genotypes_df)
 
-		Args:
-			X ([pandas.DataFrame]): [012-encoded genotypes from GenotypeData]
+		imputer.write_imputed(self.imputed, self.best_score, self.best_params)
 
-		Returns:
-			[numpy.ndarray]: [2-D numpy array with imputed genotypes]
-		"""
-		print("\nDoing K-nearest neighbor iterative imputation...\n")
-		print(
-			"\nK Neighbors Classifier Settings:\n"
-			"\tn_neighbors: "+str(self.n_neighbors)+"\n"
-			"\tweights: "+str(self.weights)+"\n"
-			"\talgorithm: "+str(self.algorithm)+"\n"
-			"\tleaf_size: "+str(self.leaf_size)+"\n"
-			"\tpower: "+str(self.p)+"\n"
-			"\tmetric: "+str(self.metric)+"\n"
-			"\tn_jobs: "+str(self.n_jobs)+"\n"
-			"\n"
-			"Iterative Imputer Settings:\n"
-			"\tn_nearest_features: "+str(self.n_nearest_features)+"\n"
-			"\tmax_iter: "+str(self.max_iter)+"\n" 
-			"\ttol: "+str(self.tol)+"\n"
-			"\tinitial strategy: "+str(self.initial_strategy)+"\n"
-			"\timputation_order: "+str(self.imputation_order)+"\n"
-			"\tskip_complete: "+str(self.skip_complete)+"\n"
-			"\trandom_state: "+str(self.random_state)+"\n" 
-			"\tverbose: "+str(self.verbose)+"\n"
-		)
-
-		df = self._format_features(X)
-
-		# Create iterative imputer
-		imputed = IterativeImputer(
-			estimator=KNeighborsClassifier(
-								n_neighbors=self.n_neighbors,
-								weights=self.weights,
-								algorithm=self.algorithm,
-								leaf_size=self.leaf_size,
-								p=self.p,
-								metric=self.metric,
-								n_jobs=self.n_jobs,
-						),
-			n_nearest_features=self.n_neareast_features, 
-			max_iter=self.max_iter, 
-			tol=self.tol, 
-			initial_strategy=self.initial_strategy,
-			imputation_order=self.imputation_order,
-			skip_complete=self.skip_complete,
-			random_state=self.random_state, 
-			verbose=self.verbose
-		)
-
-		arr = imputed.fit_transform(df)
-		new_arr = arr.astype(dtype=np.int)
-		new_df = pd.DataFrame(new_arr)
-
-		print("\nDone!")
-
-		return new_df
-
-class ImputeRandomForest(GenotypeData):
+class ImputeRandomForest:
 	"""[Class to impute missing data from 012-encoded genotypes using Random Forest iterative imputation]
-
-	Args:
-		GenotypeData ([GenotypeData]): [Inherits from GenotypeData class used to read in input sequence data]
 	"""
 	def __init__(
 		self, 
 		genotype_data,
 		*, 
+		prefix=None,
+		gridparams=None,
+		grid_iter=50,
+		cv=5,
+		n_jobs=1,
 		n_estimators=100,
 		criterion="gini",
 		max_depth=None, 
@@ -183,8 +566,7 @@ class ImputeRandomForest(GenotypeData):
 		bootstrap=False,
 		oob_score=False,
 		max_samples=None,
-		rf_random_state=None,
-		n_jobs=1,
+		clf_random_state=None,
 		max_iter=10,
 		tol=1e-3,
 		n_nearest_features=10,
@@ -198,6 +580,8 @@ class ImputeRandomForest(GenotypeData):
 
 		Args:
 			genotype_data ([GenotypeData]): [GenotypeData instance that was used to read in the sequence data]
+
+			prefix ([str]): [Prefix for imputed data's output filename]
 
 			n_estimators (int, optional): [The number of trees in the forest. Increasing this value can improves the fit, but at the cost of compute time]. Defaults to 100.
 
@@ -223,7 +607,7 @@ class ImputeRandomForest(GenotypeData):
 
 			max_samples (int or float, optional): [If bootstrap is True, the number of samples to draw from X to train each base estimator. If None (default), then draws X.shape[0] samples. if int, then draw 'max_samples' samples. If float, then draw (max_samples * X.shape[0] samples) with max_samples in the interval (0, 1)]. Defaults to None.
 
-			rf_random_state (int, optional): [Controls three sources of randomness for sklearn.ensemble.ExtraTreesClassifier: The bootstrapping of the samples used when building trees (if bootstrap=True), the sampling of the features to consider when looking for the best split at each node (if max_features < n_features), and the draw of the splits for each of the max_features. If None, then uses a different random seed each time the imputation is run]. Defaults to None.
+			clf_random_state (int, optional): [Controls three sources of randomness for sklearn.ensemble.ExtraTreesClassifier: The bootstrapping of the samples used when building trees (if bootstrap=True), the sampling of the features to consider when looking for the best split at each node (if max_features < n_features), and the draw of the splits for each of the max_features. If None, then uses a different random seed each time the imputation is run]. Defaults to None.
 
 			n_jobs (int, optional): [The number of parallel jobs to run for the random forest trees. None means 1 unless in a joblib.parallel_backend context. -1 means using all processors]. Defaults to 1.
 
@@ -243,120 +627,31 @@ class ImputeRandomForest(GenotypeData):
 
 			verbose (int, optional): [Verbosity flag, controls the debug messages that are issues as functions are evaluated. The higher, the more verbose. Possible values are 0, 1, or 2]. Defaults to 0.
 		"""
-		self.n_estimators = n_estimators
-		self.criterion = criterion
-		self.max_depth = max_depth 
-		self.min_samples_split = min_samples_split
-		self.min_samples_leaf = min_samples_leaf 
-		self.min_weight_fraction_leaf = min_weight_fraction_leaf
-		self.max_features = max_features
-		self.max_leaf_nodes = max_leaf_nodes
-		self.min_impurity_decrease = min_impurity_decrease
-		self.bootstrap = bootstrap
-		self.oob_score = oob_score
-		self.max_samples = self.max_samples
-		self.rf_random_state = self.rf_random_state
-		self.n_jobs = n_jobs
-		self.max_iter = max_iter
-		self.tol = tol
-		self.n_nearest_features = n_neareast_features
-		self.initial_strategy = initial_strategy
-		self.imputation_order = imputation_order
-		self.skip_complete = skip_complete
-		self.random_state = random_state
-		self.verbose = verbose
+		# Get local variables into dictionary object
+		kwargs = locals()
 
-		super().__init__()
+		self.clf = ExtraTreesClassifier
+		self.clf_type = "classifier"
 
-		self.imputed = self.fit_predict(genotype_data.genotypes_df)
+		imputer = Impute(self.clf, self.clf_type, kwargs)
 
-	@timer
-	def fit_predict(self, X):
-		"""[Do random forest imputation using Iterative Imputer. Iterative imputer iterates over all the other features (columns) and uses each one as a target variable, thereby informing missingness in the input column]
+		self.imputed, self.best_score, self.best_params = \
+			imputer.fit_predict(genotype_data.genotypes_df)
 
-		Args:
-			X ([pandas.DataFrame]): [012-encoded genotypes from GenotypeData object]
+		imputer.write_imputed(self.imputed, self.best_score, self.best_params)
 
-		Returns:
-			[pandas.DataFrame]: [DataFrame with imputed missing data]
-		"""
-		print("\nDoing random forest imputation...\n")
-
-		print(
-			"\nRandom Forest Classifier Settings:\n"
-			"\tn_estimators: "+str(self.n_estimators)+"\n"
-			"\tcriterion: "+str(self.criterion)+"\n"
-			"\tmax_depth: "+str(self.max_depth)+"\n"
-			"\tmin_samples_split: "+str(self.min_samples_split)+"\n"
-			"\tmin_samples_leaf: "+str(self.min_samples_leaf)+"\n"
-			"\tmin_weight_fraction_leaf: "+str(self.min_weight_fraction_leaf)+"\n"
-			"\tmax_features: "+str(self.max_features)+"\n"
-			"\tmax_leaf_nodes: "+str(self.max_leaf_nodes)+"\n"
-			"\tmin_impurity_decrease: "+str(self.min_impurity_decrease)+"\n"
-			"\tbootstrap: "+str(self.bootstrap)+"\n"
-			"\toob_score: "+str(self.oob_score)+"\n"
-			"\tmax_samples: "+str(self.max_samples)+"\n"
-			"\trf_random_state: "+str(self.rf_random_state)+"\n"
-			"\tn_jobs: "+str(self.n_jobs)+"\n"
-			"\n"
-			"\nIterative Imputer Settings:\n"
-			"\tn_nearest_features: "+str(self.n_nearest_features)+"\n"
-			"\tmax_iter: "+str(self.max_iter)+"\n" 
-			"\ttol: "+str(self.tol)+"\n"
-			"\tinitial strategy: "+str(self.initial_strategy)+"\n"
-			"\timputation_order: "+str(self.imputation_order)+"\n"
-			"\tskip_complete: "+str(self.skip_complete)+"\n"
-			"\trandom_state: "+str(self.random_state)+"\n" 
-			"\tverbose: "+str(self.verbose)+"\n"
-		)
-
-		df = self._format_features(X)
-
-		# Create iterative imputer
-		imputed = IterativeImputer(
-			estimator=ExtraTreesClassifier(
-				n_estimators=self.n_estimators,
-				criterion=self.criterion,
-				max_depth=self.max_depth,
-				min_samples_split=self.min_samples_split,
-				min_samples_leaf=self.min_samples_leaf, 
-				min_weight_fraction_leaf=self.min_weight_fraction_leaf,
-				max_features=self.max_features,
-				max_leaf_nodes=self.max_leaf_nodes,
-				min_impurity_decrease=self.min_impurity_decrease,
-				bootstrap=self.bootstrap,
-				oob_score=self.oob_score,
-				max_samples=self.max_samples,
-				random_state=self.rf_random_state,
-				n_jobs=self.n_jobs),
-			n_nearest_features=self.n_nearest_features, 
-			max_iter=self.max_iter, 
-			tol=self.tol, 
-			initial_strategy=self.initial_strategy,
-			imputation_order=self.imputation_order,
-			skip_complete=self.skip_complete,
-			random_state=self.random_state, 
-			verbose=self.verbose
-		)
-
-		arr = imputed.fit_transform(df)
-		new_arr = arr.astype(dtype=np.int)
-		new_df = pd.DataFrame(new_arr)
-
-		print("\nDone!")
-
-		return new_df
-
-class ImputeGradientBoosting(GenotypeData):
+class ImputeGradientBoosting:
 	"""[Class to impute missing data from 012-encoded genotypes using Random Forest iterative imputation]
-
-	Args:
-		GenotypeData ([GenotypeData]): [Inherits from GenotypeData class used to read in sequence data]
 	"""
 	def __init__(
 		self,
 		genotype_data,
 		*,
+		prefix=None,
+		gridparams=None,
+		grid_iter=50,
+		cv=5,
+		n_jobs=1,
 		n_estimators=100,
 		loss="deviance",
 		learning_rate=0.1,
@@ -369,7 +664,7 @@ class ImputeGradientBoosting(GenotypeData):
 		min_impurity_decrease=0.0,
 		max_features=None,
 		max_leaf_nodes=None,
-		gb_random_state=None,
+		clf_random_state=None,
 		max_iter=10,
 		tol=1e-3,
 		n_nearest_features=10,
@@ -382,7 +677,9 @@ class ImputeGradientBoosting(GenotypeData):
 		"""[Does Random Forest Iterative imputation of missing data. Iterative imputation uses the n_nearest_features to inform the imputation at each feature (i.e., SNP site), using the N most correlated features per site. The N most correlated features are drawn with probability proportional to correlation for each imputed target feature to ensure coverage of features throughout the imputation process]
 
 		Args:
-			genotype_data ([GenotypeData]): [GenotypeData instance that was used to read in the sequence data]			
+			genotype_data ([GenotypeData]): [GenotypeData instance that was used to read in the sequence data]
+
+			prefix ([str]): [Prefix for imputed data's output filename]
 			
 			n_estimators (int, optional): [The number of boosting stages to perform. Gradient boosting is fairly robust to over-fitting so a large number usually results in better performance]. Defaults to 100.
 
@@ -408,7 +705,7 @@ class ImputeGradientBoosting(GenotypeData):
 
 			max_leaf_nodes (int, optional): [Grow trees with 'max_leaf_nodes' in best-first fashion. Best nodes are defined as relative reduction in impurity. If None then uses an unlimited number of leaf nodes]. Defaults to None.
 
-			gb_random_state (int, optional): [Controls the random seed given to each Tree estimator at each boosting iteration. In addition, it controls the random permutation of the features at each split. Pass an int for reproducible output across multiple function calls. If None, then uses a different random seed for each function call]. Defaults to None.
+			clf_random_state (int, optional): [Controls the random seed given to each Tree estimator at each boosting iteration. In addition, it controls the random permutation of the features at each split. Pass an int for reproducible output across multiple function calls. If None, then uses a different random seed for each function call]. Defaults to None.
 
 			max_iter (int, optional): [Maximum number of imputation rounds to perform before returning the imputations computed during the final round. A round is a single imputation of each feature with missing values]. Defaults to 10.
 
@@ -426,133 +723,33 @@ class ImputeGradientBoosting(GenotypeData):
 
 			verbose (int, optional): [Verbosity flag, controls the debug messages that are issues as functions are evaluated. The higher, the more verbose. Possible values are 0, 1, or 2]. Defaults to 0.
 		"""
-		self.n_estimators = n_estimators
-		self.loss = loss
-		self.learning_rate = learning_rate
-		self.subsample = subsample
-		self.criterion = criterion
-		self.min_samples_split = min_samples_split
-		self.min_samples_leaf = min_samples_leaf
-		self.min_weight_fraction_leaf = min_weight_fraction_leaf
-		self.max_depth = max_depth
-		self.min_impurity_decrease = min_impurity_decrease
-		self.max_features = max_features
-		self.max_leaf_nodes = max_leaf_nodes
-		self.gb_random_state = gb_random_state
-		self.max_iter = max_iter
-		self.tol = tol
-		self.n_nearest_features = n_nearest_features
-		self.initial_strategy = initial_strategy
-		self.imputation_order = imputation_order
-		self.skip_complete = skip_complete
-		self.random_state = random_state
-		self.verbose = verbose
+		# Get local variables into dictionary object
+		kwargs = locals()
 
-		super().__init__()
+		self.clf_type = "classifier"
+		self.clf = GradientBoostingClassifier
 
-		self.imputed = self.fit_predict(genotype_data.genotypes_df)
+		imputer = Impute(self.clf, self.clf_type, kwargs)
 
-	@timer
-	def fit_predict(self, X):
-		"""[Do gradient boosting iterative imputation. Iterative imputer iterates over all the other features (columns)	and uses each one as a target variable, thereby informing missingness in the input column]
+		self.imputed, self.best_score, self.best_params = \
+			imputer.fit_predict(genotype_data.genotypes_df)
 
-		Args:
-			X (pandas.DataFrame): [DataFrame of 012-encoded genotypes from GenotypeData object]
+		imputer.write_imputed(self.imputed, self.best_score, self.best_params)
 
-		Returns:
-			[pandas.DataFrame]: [DataFrame with imputed 012-encoded genotypes]
-		"""
-		print("\nDoing gradient boosting iterative imputation...\n")
-		print(
-			"\nGradient Boosting Classifier Settings:\n"
-			"\tn_estimators: "+str(self.n_estimators)+"\n"
-			"\tloss: "+str(self.loss)+"\n"
-			"\tlearning_rate: "+str(self.learning_rate)+"\n"
-			"\tsubsample: "+str(self.subsample)+"\n"
-			"\tcriterion: "+str(self.criterion)+"\n"
-			"\tmin_samples_split: "+str(self.min_samples_split)+"\n"
-			"\tmin_samples_leaf: "+str(self.min_samples_leaf)+"\n"
-			"\tmin_weight_fraction_leaf: "+str(self.min_weight_fraction_leaf)+"\n"
-			"\tmax_depth: "+str(self.max_depth)+"\n"
-			"\tmin_impurity_decrease: "+str(self.min_impurity_decrease)+"\n"
-			"\tmax_features: "+str(self.max_features)+"\n"
-			"\tmax_leaf_nodes: "+str(self.max_leaf_nodes)+"\n"
-			"\tgb_random_state: "+str(self.gb_random_state)+"\n"
-			"\n"
-			"Iterative Imputer Settings\n:
-			"\tn_nearest_features: "+str(self.n_nearest_features)+"\n"
-			"\tmax_iter: "+str(self.max_iter)+"\n" 
-			"\ttol: "+str(self.tol)+"\n"
-			"\tinitial strategy: "+str(self.initial_strategy)+"\n"
-			"\timputation_order: "+str(self.imputation_order)+"\n"
-			"\tskip_complete: "+str(self.skip_complete)+"\n"
-			"\trandom_state: "+str(self.random_state)+"\n" 
-			"\tverbose: "+str(self.verbose)+"\n"
-		)
-
-		df = self._format_features(X)
-
-		"\tn_estimators: "+str(self.n_estimators)+"\n"
-		"\tloss: "+str(self.loss)+"\n"
-		"\tlearning_rate: "+str(self.learning_rate)+"\n"
-		"\tsubsample: "+str(self.subsample)+"\n"
-		"\tcriterion: "+str(self.criterion)+"\n"
-		"\tmin_samples_split: "+str(self.min_samples_split)+"\n"
-		"\tmin_samples_leaf: "+str(self.min_samples_leaf)+"\n"
-		"\tmin_weight_fraction_leaf: "+str(self.min_weight_fraction_leaf)+"\n"
-		"\tmax_depth: "+str(self.max_depth)+"\n"
-		"\tmin_impurity_decrease: "+str(self.min_impurity_decrease)+"\n"
-		"\tmax_features: "+str(self.max_features)+"\n"
-		"\tmax_leaf_nodes: "+str(self.max_leaf_nodes)+"\n"
-		"\tgb_random_state: "+str(self.gb_random_state)+"\n"
-
-		# Create iterative imputer
-		imputed = IterativeImputer(
-			estimator=GradientBoostingClassifier(
-				n_estimators=self.n_estimators, 
-				loss=self.loss,
-				learning_rate=self.learning_rate,
-				subsample=self.subsample,
-				criterion=self.criterion,
-				min_samples_split=self.min_samples_split,
-				min_samples_leaf=self.min_samples_leaf,
-				min_weight_fraction_leaf=self.min_weight_fraction_leaf,
-				max_depth=self.max_depth,
-				min_impurity_decrease=self.min_impurity_decrease,
-				max_features=self.max_features,
-				max_leaf_nodes=self.max_leaf_nodes,
-				random_state=self.gb_random_state
-			),
-			n_nearest_features=self.n_nearest_features, 
-			max_iter=self.max_iter, 
-			tol=self.tol, 
-			initial_strategy=self.initial_strategy,
-			imputation_order=self.imputation_order,
-			random_state=self.random_state, 
-			verbose=self.verbose
-		)
-
-		arr = imputed.fit_transform(df)
-		new_arr = arr.astype(dtype=np.int)
-		new_df = pd.DataFrame(new_arr)
-
-		print("\nDone!")
-
-		return new_df
-
-
-class ImputeBayesianRidge(GenotypeData):
+class ImputeBayesianRidge:
 	"""[Class to impute missing data from 012-encoded genotypes using Bayesian ridge iterative imputation]
-
-	Args:
-		GenotypeData ([GenotypeData]): [Inherits from GenotypeData class used to read in sequence data]
 	"""
 	def __init__(
 		self,
 		genotype_data,
 		*,
+		prefix=None,
+		gridparams=None,
+		grid_iter=50,
+		cv=5,
+		n_jobs=1,
 		n_iter=300,
-		br_tol=1e-3,
+		clf_tol=1e-3,
 		alpha_1=1e-6,
 		alpha_2=1e-6,
 		lambda_1=1e-6,
@@ -571,11 +768,13 @@ class ImputeBayesianRidge(GenotypeData):
 		"""[Does Bayesian Ridge Iterative imputation of missing data. Iterative imputation uses the n_nearest_features to inform the imputation at each feature (i.e., SNP site), using the N most correlated features per site. The N most correlated features are drawn with probability proportional to correlation for each imputed target feature to ensure coverage of features throughout the imputation process]
 
 		Args:
-			genotype_data ([GenotypeData]): [GenotypeData instance that was used to read in the sequence data]			
+			genotype_data ([GenotypeData]): [GenotypeData instance that was used to read in the sequence data]	
+
+			prefix ([str]): [Prefix for imputed data's output filename]		
 				
 			n_iter (int, optional): [Maximum number of iterations. Should be greater than or equal to 1]. Defaults to 300.
 
-			br_tol (float, optional): [Stop the algorithm if w has converged]. Defaults to 1e-3.
+			clf_tol (float, optional): [Stop the algorithm if w has converged]. Defaults to 1e-3.
 
 			alpha_1 (float, optional): [Hyper-parameter: shape parameter for the Gamma distribution prior over the alpha parameter]. Defaults to 1e-6.
 
@@ -605,99 +804,70 @@ class ImputeBayesianRidge(GenotypeData):
 
 			verbose (int, optional): [Verbosity flag, controls the debug messages that are issues as functions are evaluated. The higher, the more verbose. Possible values are 0, 1, or 2]. Defaults to 0.
 		"""
-		self.n_iter = n_iter,
-		self.br_tol = br_tol,
-		self.alpha_1 = alpha_1,
-		self.alpha_2 = alpha_2,
-		self.lambda_1 = lambda_1,
-		self.lambda_2 = lambda_2,
-		self.alpha_init = alpha_init,
-		self.lambda_init = lambda_init,
-		self.max_iter = max_iter,
-		self.tol = tol,
-		self.n_nearest_features = n_nearest_features,
-		self.initial_strategy = initial_strategy,
-		self.imputation_order = imputation_order,
-		self.skip_complete = skip_complete,
-		self.random_state = random_state,
-		self.verbose = verbose
+		# Get local variables into dictionary object
+		kwargs = locals()
+		kwargs["normalize"] = True
+		kwargs["sample_posterior"] = True
 
-		self.normalize = True
-		self.sample_posterior = True
+		self.clf_type = "regressor"
+		self.clf = BayesianRidge
 
-		super().__init__()
+		imputer = Impute(self.clf, self.clf_type, kwargs)
 
-		self.imputed = self.fit_predict(genotype_data.genotypes_df)
+		self.imputed, self.best_score, self.best_params = \
+			imputer.fit_predict(genotype_data.genotypes_df)
 
-	@timer
-	def fit_predict(self, X):
-		"""[Do bayesian ridge imputation using Iterative Imputer.
-		Iterative imputer iterates over all the other features (columns)
-		and uses each one as a target variable, thereby informing missingness
-		in the input column]
+		imputer.write_imputed(self.imputed, self.best_score, self.best_params)
 
-		Args:
-			X ([pandas.DataFrame]): [DataFrame 012-encoded genotypes from GenotypeData instance]
+class ImputeXGBoost:
 
-		Returns:
-			[pandas.DataFrame]: [DataFrame with 012-encoded imputed genotypes of shape(n_samples, n_features)]
-		"""
-		print("\nDoing Bayesian ridge iterative imputation...\n")
-		print(
-			"\nBayesian Ridge Regression Settings:\n"
-			"\tn_iter: "+str(self.n_iter)+"\n"
-			"\tbr_tol: "+str(self.br_tol)+"\n"
-			"\talpha_1: "+str(self.alpha_1)+"\n"
-			"\talpha_2: "+str(self.alpha_2)+"\n"
-			"\tlambda_1: "+str(self.lambda_1)+"\n"
-			"\tlambda_2: "+str(self.lambda_2)+"\n"
-			"\talpha_init: "+str(self.alpha_init)+"\n"
-			"\tlambda_init: "+str(self.lambda_init)+"\n"
-			"\n"
-			"Iterative Imputer Settings:\n"
-			"\tn_nearest_features: "+str(self.n_nearest_features)+"\n"
-			"\tmax_iter: "+str(self.max_iter)+"\n" 
-			"\ttol: "+str(self.tol)+"\n"
-			"\tinitial strategy: "+str(self.initial_strategy)+"\n"
-			"\timputation_order: "+str(self.imputation_order)+"\n"
-			"\tskip_complete: "+str(self.skip_complete)+"\n"
-			"\trandom_state: "+str(self.random_state)+"\n" 
-			"\tverbose: "+str(self.verbose)+"\n"
-		)
+	def __init__(
+		self, 
+		genotype_data, 
+		*, 
+		prefix=None,
+		gridparams=None,
+		grid_iter=50,
+		cv=5,
+		n_jobs=1, 
+		n_estimators=100, 
+		max_depth=6, 
+		learning_rate=0.1, 
+		booster="gbtree", 
+		tree_method="auto", 
+		gamma=0, 
+		min_child_weight=1, 
+		max_delta_step=0, 
+		subsample=1, 
+		colsample_bytree=1, 
+		reg_lambda=1, 
+		reg_alpha=0, 
+		objective="multi:softmax", 
+		eval_metric="error",
+		clf_random_state=None,
+		n_nearest_features=10,
+		max_iter=10,
+		tol=1e-3,
+		initial_strategy="most_frequent",
+		imputation_order="ascending",
+		skip_complete=False,
+		random_state=None,
+		verbose=0
+	):
 
-		df = self._format_features(X)
+		# Get local variables into dictionary object
+		kwargs = locals()
+		kwargs["num_class"] = 3
 
-		# Create iterative imputer
-		imputed = IterativeImputer(
-			estimator=BayesianRidge(
-				n_iter=self.n_iter,
-				tol=self.br_tol,
-				alpha_1=self.alpha_1,
-				alpha_2=self.alpha_2,
-				lambda_1=self.lambda_1,
-				lambda_2=self.lambda_2,
-				alpha_init=self.alpha_init,
-				lambda_init=self.lambda_init,
-				normalize=self.normalize
-			),
-			n_nearest_features=self.n_nearest_features, 
-			max_iter=self.max_iter, 
-			tol=self.tol, 
-			initial_strategy=self.initial_strategy,
-			imputation_order=self.imputation_order,
-			skip_complete=self.skip_complete,
-			random_state=self.random_state, 
-			verbose=self.verbose,
-			sample_posterior=self.sample_posterior
-		)
+		self.clf_type = "classifier"
+		self.clf = XGBClassifier
+		
+		imputer = Impute(self.clf, self.clf_type, kwargs)
 
-		arr = imputed.fit_transform(df)
-		new_arr = arr.astype(dtype=np.int)
-		new_df = pd.DataFrame(new_arr)
+		self.imputed, self.best_score, self.best_params = \
+			imputer.fit_predict(genotype_data.genotypes_df)
 
-		print("\nDone!")
-
-		return new_df
+		imputer.write_imputed(self.imputed, self.best_score, self.best_params)
 
 class ImputeAlleleFreq(GenotypeData):
 	"""[Class to impute missing data by global or population-wisse allele frequency]
@@ -784,7 +954,7 @@ class ImputeAlleleFreq(GenotypeData):
 						missing=self.missing, 
 						indices=pop_indices[pop]
 					)
-					#print(pop,"--",allele_probs)
+
 					if misc.all_zero(list(allele_probs.values())) or \
 						not allele_probs:
 						print("\nWarning: No alleles sampled at locus", 
@@ -877,3 +1047,4 @@ class ImputeAlleleFreq(GenotypeData):
 			for allele in ret.keys():
 				ret[allele] = ret[allele] / float(length)
 			return ret
+        
