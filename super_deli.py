@@ -6,6 +6,8 @@ import numpy as np
 import pandas as pd
 import scipy.stats as stats
 
+from skopt.space import Real, Integer, Categorical
+
 # Custom module imports
 from read_input.read_input import GenotypeData
 from read_input.impute import *
@@ -79,16 +81,41 @@ def main():
 		#data.write_imputed(data.imputed_rf_df, args.prefix)
 
 	else:	
+		# grid_params = {
+		# 	"n_estimators": Integer(100, 1000, name="n_estimators"),
+		# 	"max_depth": Integer(2, 10, name="max_depth"),
+		# 	"booster": Categorical(["gbtree", "gblinear", "dart"], name="booster"), 
+		# 	"learning_rate": Real(0.005, 0.5, prior="log-uniform", name="learning_rate"),
+		# 	"gamma": Real(0.0, 0.4, name="gamma"),
+		# 	"min_child_weight": Integer(1, 6, name="min_child_weight"),
+		# 	"subsample": Real(0.5, 1.0, name="subsample"),
+		# 	"colsample_bytree": Real(0.5, 1.0, name="colsample_bytree"),
+		# 	"reg_alpha": Real(1e-5, 100.0, prior="log-uniform", name="reg_alpha"),
+		# 	"reg_lambda": Real(1e-5, 100.0, prior="log-uniform", name="reg_lambda")
+		# }
+		# grid_params = {
+		# 	"n_estimators": [100, 300],
+		# 	"max_depth": [2, 3],
+		# 	"min_samples_split": [2, 3], 
+		# 	"min_samples_leaf": [1, 2],
+		# 	"max_features": ["sqrt", "log2"],
+		# }
+
 		grid_params = {
-			"alpha_1": stats.uniform(1e-8, 1e-3),
-			"alpha_2": stats.uniform(1e-8, 1e-3),
-			"lambda_1": stats.uniform(1e-8, 1e-3),
-			"lambda_2": stats.uniform(1e-8, 1e-3)
+			"alpha_1": stats.loguniform(1e-6, 0.01),
+			"alpha_2": stats.loguniform(1e-6, 0.01),
+			"lambda_1": stats.loguniform(1e-6, 0.01),
+			"lambda_2": stats.loguniform(1e-6, 0.01),
+			"tol": [1e-3, 1e-4]
 		}
+
+
 		
 
-		br_imp = \
-			ImputeBayesianRidge(data, prefix="example_data/imputed/test_br", n_nearest_features=3, n_iter=50, gridparams=grid_params, cv=3)
+		#br_imp = \
+			#ImputeBayesianRidge(data, prefix="example_data/imputed/test_br", n_nearest_features=3, n_iter=50, gridparams=grid_params, cv=3)
+
+		br_imp = ImputeBayesianRidge(data, prefix="test_br", n_iter=1000, gridparams=grid_params, grid_iter=10, cv=3, n_jobs=4, max_iter=10, n_nearest_features=4)
 
 	# colors = {
 	# 	"GU": "#FF00FF",

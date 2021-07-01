@@ -2,13 +2,15 @@
 import sys
 from collections import Counter
 from operator import itemgetter
+from statistics import mean
 
 # Third party imports
 import numpy as np
 import pandas as pd
 import xgboost as xgb
 from sklearn.experimental import enable_iterative_imputer
-from sklearn.impute import IterativeImputer
+#from sklearn.impute import IterativeImputer
+from read_input.iterative_imputer import IterativeImputer
 from sklearn.ensemble import ExtraTreesClassifier
 from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.linear_model import BayesianRidge
@@ -87,7 +89,14 @@ class Impute:
 		return imputed_df, best_score, best_params
 
 	def _impute_single(self, df):
+		"""[Run IterativeImputer without a grid search]
 
+		Args:
+			df ([pandas.DataFrame]): [DataFrame of 012-encoded genotypes]
+
+		Returns:
+			[pandas.DataFrame]: [Imputed 012-encoded genotypes]
+		"""
 		print(
 			"Doing {} imputation without grid search...".format(str(self.clf)))
 
@@ -100,87 +109,61 @@ class Impute:
 		return df_imp, None, None
 		
 	def _impute_gridsearch(self, df):
+		"""[Do IterativeImputer with RandomizedGridCV]
 
-		df_tmp = self.subset_data_for_testing(df, 0.05)
-		df2 = self._remove_nonbiallelic(df_tmp)
+		Args:
+			df ([pandas.DataFrame]): [DataFrame with 012-encoded genotypes]
 
-		if self.clf_type == "regressor":
-			for col in df2.columns:
-				df2[col] = df2[col].astype(float)
+		Returns:
+			[pandas.DataFrame]: [DataFrame with 012-encoded genotypes imputed using the best parameters found from the grid search]
 
-		print("Test dataset size: {}\n".format(len(df2.columns)))
-		print("Doing {} imputation...".format(str(self.clf)))
+			[float]: [Absolute value of the best score found during the grid search]
+
+			[dict]: [Best parameters found during the grid search]
+		"""
+		df_subset = self.subset_data_for_testing(df, 0.05)
+		df_subset = self._remove_nonbiallelic(df_subset)
+
+		print("Test dataset size: {}\n".format(len(df_subset.columns)))
+		print("Doing grid search...")
 
 		#search_space = self._validate_gridparams(self.gridparams)
 		search_space = self.gridparams
 
-		acc_scorer = make_scorer(accuracy_score)
-		mse_scorer = make_scorer(
-			mean_squared_error, 
-			greater_is_better=False, 
-			squared=False)
+		clf = self.clf()
 
-		clf = self.clf(**self.clf_kwargs)
+		imputer = self._define_iterative_imputer(
+			clf, search_space, self.n_jobs, self.grid_iter, self.cv, self.clf_type)
 
-		print("Doing initial imputation...")
-		imputer = self._define_iterative_imputer(clf)
-		imp_arr = imputer.fit_transform(df2)
+		imp_arr, params_list, score_list = imputer.fit_transform(df_subset)
+		df_imp = pd.DataFrame(imp_arr)
+		df_imp = df_imp.round(0).astype("Int8")
 
-		print("Doing grid search...")
-		params_list = list()
-		score_list = list()
-		for i in progressbar(range(len(imputer.imputation_sequence_)), desc="Grid Search"):
+		best_params = self._get_best_params(params_list)
+		avg_score = mean(x for x in score_list if x != -9)
 
-			neighbor_feat_idx = imputer.imputation_sequence_[i][1]
-			feat_idx = int(imputer.imputation_sequence_[i][0])
-
-			X = df2.iloc[:, neighbor_feat_idx]
-			Y = df2.iloc[:, feat_idx]
-
-			missing_rows_mask = Y.isna()
-			if missing_rows_mask.eq(False).all() or \
-				missing_rows_mask.eq(True).all():
-				continue
-			else:
-				X_train = X[~missing_rows_mask]
-				Y_train = Y[~missing_rows_mask]
-			
-			X_train = X_train.fillna(X_train.mode().iloc[0])
-
-			if self.clf_type == "regressor":
-				search = RandomizedSearchCV(self.clf(), param_distributions=search_space, n_iter=10, scoring=mse_scorer, n_jobs=self.n_jobs, cv=self.cv)
-			else:
-				search = RandomizedSearchCV(self.clf(), param_distributions=search_space, scoring=acc_scorer, n_jobs=self.n_jobs, cv=self.cv)
-
-			search.fit(X_train, Y_train)
-			
-			params_list.append(search.best_params_)
-			score_list.append(search.best_score_)
+		print("Done with {} imputation!\n".format(str(self.clf)))
+		return df_imp, abs(avg_score), best_params
 		
+	def _get_best_params(self, params_list):
 		best_params = dict()
 		keys = list(params_list[0].keys())
 		for k in keys:
-			if isinstance(params_list[0][k], int):
-				best_params[k] = \
-					self._average_list_of_dicts(params_list, k, is_int=True)
+			if all(isinstance(x[k], (int, float)) for x in params_list):
+				if all(isinstance(y[k], int) for y in params_list):
+					best_params[k] = \
+						self._average_list_of_dicts(params_list, k, is_int=True)
 
-			elif isinstance(params_list[0][k], float):
-				best_params[k] = self._average_list_of_dicts(params_list, k)
+				elif all(isinstance(z[k], float) for z in params_list):
+					best_params[k] = self._average_list_of_dicts(params_list, k)
 
-			elif isinstance(params_list[0][k], str):
+			elif all(isinstance(x[k], (str, bool)) for x in params_list):
+				best_params[k] = self._mode_list_of_dicts(params_list, k)
+			
+			else:
 				best_params[k] = self._mode_list_of_dicts(params_list, k)
 
-			elif isinstance(params_list[0][k], bool):
-				best_params[k] = self._mode_list_of_dicts(params_list, k)
-
-		avg_score = sum(score_list) / len(score_list)
-
-		best_clf = self.clf(**best_params)
-		best_imputer = self._define_iterative_imputer(best_clf)
-		best_df_imp = self._impute_fit_transform(df2, best_imputer)
-
-		print("Done with {} imputation!\n".format(str(self.clf)))
-		return best_df_imp, abs(avg_score), best_params
+		return best_params
 
 	def write_imputed(self, data, best_score, best_params):
 		"""[Save imputed data to a CSV file]
@@ -235,17 +218,45 @@ class Impute:
 		return pd.read_csv(filename, dtype="Int8", header=None)
 
 	def _mode_list_of_dicts(self, l, k):
+		"""[Get mode for key k in a list of dictionaries]
+
+		Args:
+			l ([list(dict)]): [List of dictionaries]
+			k ([str]): [Key to find the mode across all dictionaries in l]
+
+		Returns:
+			[str]: [Most common value across list of dictionaries for one key]
+		"""
 		k_count = Counter(map(itemgetter(k), l))
 		return k_count.most_common()[0][0]
 
 	def _average_list_of_dicts(self, l, k, is_int=False):
+		"""[Get average of a given key in a list of dictionaries]
+
+		Args:
+			l ([list(dict)]): [List of dictionaries]
+
+			k ([str]): [Key to find average across list of dictionaries]
+
+			is_int (bool, optional): [Whether or not the value for key k is an integer. If False, it is expected to be of type float]. Defaults to False.
+
+		Returns:
+			[int or float]: [average of given key across list of dictionaries]
+		"""
 		if is_int:
 			return int(sum(d[k] for d in l) / len(l))
 		else:
 			return sum(d[k] for d in l) / len(l)
 
 	def _remove_nonbiallelic(self, df):
-		
+		"""[Remove sites that do not have both 0 and 2 encoded values in a column]
+
+		Args:
+			df ([pandas.DataFrame]): [DataFrame with 012-encoded genotypes]
+
+		Returns:
+			[pandas.DataFrame]: [DataFrame with non-biallelic sites removed]
+		"""
 		df_cp = df.copy()
 		bad_cols = list()
 		for col in df_cp.columns:
@@ -255,13 +266,36 @@ class Impute:
 		return df_cp.drop(bad_cols, axis=1)
 
 	def subset_data_for_testing(self, df, column_percent):
-		cols = np.random.choice(df.columns, 
-			int(len(df.columns) * column_percent), replace=False)
+		"""[Randomly subsets pandas.DataFrame with ```column_percent``` fraction of the data. Allows faster testing]
+
+		Args:
+			df ([pandas.DataFrame]): [DataFrame with 012-encoded genotypes]
+			column_percent ([float]): [Fraction of DataFrame to randomly subset. Should be between 0 and 1]
+
+		Returns:
+			[pandas.DataFrame]: [Subset DataFrame]
+		"""
+		cols = sorted(np.random.choice(df.columns, 
+			int(len(df.columns) * column_percent), replace=False), reverse=False)
 
 		df2 = df.loc[:, cols]
 		return df2
 
 	def _gather_impute_settings(self, kwargs):
+		"""[Gather impute settings from the various imputation classes and IterativeImputer. Gathers them for use with the Impute() class. Returns dictionary with keys as keyword arguments and the values as the settings. The imputation can then be run by specifying e.g. IterativeImputer(**imp_kwargs)]
+
+		Args:
+			kwargs ([dict]): [Dictionary with keys as the keyword arguments and their corresponding values]
+
+		Returns:
+			[dict]: [Parameters to run with grid search]
+			[dict]: [IterativeImputer kwargs]
+			[dict]: [Classifier kwargs]
+			[grid_iter]: [Number of iterations to run with grid search]
+			[cv]: [Number of cross-validation folds to use]
+			[n_jobs]: [Number of processors to use with grid search]
+			[prefix]: [Prefix for output files]
+		"""
 		gridparams = kwargs.pop("gridparams")
 		cv = kwargs.pop("cv")
 		n_jobs = kwargs.pop("n_jobs")
@@ -451,17 +485,19 @@ class Impute:
 					
 		return new_df
 
-	def _define_iterative_imputer(self, clf):
+	def _define_iterative_imputer(self, clf, search_space, n_jobs, n_iter, cv, clf_type):
 		"""[Define an IterativeImputer instance]
 
 		Args:
 			clf ([sklearn Classifier]): [Classifier to use with IterativeImputer]
 
+			search_space ([dict]): [gridparams dictionary with search space to explore in random grid search]
+
 		Returns:
 			[sklearn.impute.IterativeImputer]: [IterativeImputer instance]
 		"""
 		# Create iterative imputer
-		imp = IterativeImputer(estimator=clf, **self.imp_kwargs)
+		imp = IterativeImputer(search_space, estimator=clf, grid_n_jobs=n_jobs, grid_n_iter=n_iter, grid_cv=cv, clf_type=clf_type, **self.imp_kwargs)
 		return imp
 		
 
@@ -807,7 +843,7 @@ class ImputeBayesianRidge:
 		# Get local variables into dictionary object
 		kwargs = locals()
 		kwargs["normalize"] = True
-		kwargs["sample_posterior"] = True
+		kwargs["sample_posterior"] = False
 
 		self.clf_type = "regressor"
 		self.clf = BayesianRidge
@@ -858,6 +894,7 @@ class ImputeXGBoost:
 		# Get local variables into dictionary object
 		kwargs = locals()
 		kwargs["num_class"] = 3
+		kwargs["use_label_encoder"] = True
 
 		self.clf_type = "classifier"
 		self.clf = XGBClassifier
