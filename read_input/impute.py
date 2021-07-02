@@ -1,8 +1,10 @@
 # Standard library imports
 import sys
+import os
 from collections import Counter
 from operator import itemgetter
 from statistics import mean
+from pathlib import Path
 
 # Third party imports
 import numpy as np
@@ -16,12 +18,9 @@ from sklearn.ensemble import ExtraTreesClassifier
 from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.linear_model import BayesianRidge
 from sklearn.neighbors import KNeighborsClassifier
-from xgboost.sklearn import XGBClassifier
 from sklearn.model_selection import cross_val_score
 from sklearn.model_selection import RepeatedStratifiedKFold
 from sklearn.pipeline import Pipeline
-from skopt import BayesSearchCV
-from skopt.space import Real, Categorical, Integer
 from sklearn.model_selection import RandomizedSearchCV
 from sklearn.metrics import make_scorer
 from sklearn.metrics import accuracy_score
@@ -66,9 +65,30 @@ class Impute:
 
 	@timer
 	def fit_predict(self, X):
+		"""[Fit and predict with IterativeImputer(clf). if ```gridparams is None```, then a grid search is not performed. If gridparams is not None, then a RandomizedSearchCV is performed on a subset of the data and a final imputation is done on the whole dataset using the best found parameters]
 
-		#df = self._format_features(X)
-		
+		Args:
+			X ([pandas.DataFrame]): [DataFrame with 012-encoded genotypes]
+
+		Returns:
+			[pandas.DataFrame]: [DataFrame with 012-encoded genotypes and missing data imputed]
+
+			[float]: [Best score found from grid search. If self.clf is a regressor, will be the lowest root mean squared error. If self.clf is a classifier, will be the highest percent accuracy]
+
+			[dict]: [Best parameters found using grid search]
+		"""
+		# Test if output file can be written to
+		try:
+			outfile = "{}_imputed_012.csv".format(self.prefix)
+			with open(outfile, "w") as fout:
+				pass
+		except IOError as e:
+			print("Error: {}, {}".format(e.errno, e.strerror))
+			if e.errno == errno.EACCES:
+				print("Permission denied: Cannot write to {}".format(outfile))
+			elif e.errno == errno.EISDIR:
+				print("Could not write to {}; is a directory".format(outfile))
+
 		# Don't do a grid search
 		if self.gridparams is None:
 			imputed_df, best_acc, best_params = \
@@ -81,9 +101,10 @@ class Impute:
 
 			print("Grid Search Results:")
 			if self.clf_type == "regressor":
-				print("RMSE (best parameters): {:0.2f}".format(best_score))
+				print("RMSE (best parameters): {:.2f}".format(best_score))
 			else:
-				print("Accuracy (best parameters): {:0.2f}".format(best_score))
+				best_score = 100 * best_score
+				print("Accuracy (best parameters): {:.2f}%".format(best_score))
 				
 			print("Best Parameters: {}\n".format(best_params))
 

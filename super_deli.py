@@ -6,8 +6,6 @@ import numpy as np
 import pandas as pd
 import scipy.stats as stats
 
-from skopt.space import Real, Integer, Categorical
-
 # Custom module imports
 from read_input.read_input import GenotypeData
 from read_input.impute import *
@@ -81,26 +79,58 @@ def main():
 		#data.write_imputed(data.imputed_rf_df, args.prefix)
 
 	else:	
-		# Random Forest gridparams
-		# grid_params = {
-		# 	"n_estimators": [100, 300],
-		# 	"max_depth": [2, 3],
-		# 	"min_samples_split": [2, 3], 
-		# 	"max_features": ["sqrt", "log2"]
-		# }
 
-		# Bayesian Ridge gridparams
+		# Number of trees in random forest
+		n_estimators = \
+			[int(x) for x in np.linspace(start=100, stop=1000, num=10)]
+
+		# Number of features to consider at every split
+		max_features = ["sqrt", "log2"]
+
+		# Maximum number of levels in the tree
+		max_depth = [int(x) for x in np.linspace(10, 110, num=11)]
+		max_depth.append(None)
+
+		# Minimmum number of samples required to split a node
+		min_samples_split = [int(x) for x in np.linspace(2, 10, num=5)]
+
+		# Minimum number of samples required at each leaf node
+		min_samples_leaf = [int(x) for x in np.linspace(1, 5, num=5)]
+
+		# Proportion of dataset to use with bootstrapping
+		max_samples = [x for x in np.linspace(0.5, 1.0, num=6)]
+
+		# Random Forest gridparams
 		grid_params = {
-			"alpha_1": stats.loguniform(1e-6, 1e-3),
-			"alpha_2": stats.loguniform(1e-6, 1e-3),
-			"lambda_1": stats.loguniform(1e-6, 1e-3),
-			"lambda_2": stats.loguniform(1e-6, 1e-3),
+			"n_estimators": n_estimators,
+			"max_features": max_features,
+			"max_depth": max_depth,
+			"min_samples_split": min_samples_split, 
+			"min_samples_leaf": min_samples_leaf,
+			"max_samples": max_samples
 		}
 
-		# rf_imp = \
-		# 	ImputeRandomForest(data, prefix="example_data/imputed/test_rf", n_nearest_features=3, gridparams=grid_params, cv=3, grid_iter=10, n_jobs=4, max_iter=10)
+		# Bayesian Ridge gridparams
+		# grid_params = {
+		# 	"alpha_1": stats.loguniform(1e-6, 1e-3),
+		# 	"alpha_2": stats.loguniform(1e-6, 1e-3),
+		# 	"lambda_1": stats.loguniform(1e-6, 1e-3),
+		# 	"lambda_2": stats.loguniform(1e-6, 1e-3),
+		# }
 
-		br_imp = ImputeBayesianRidge(data, prefix="test_br", n_iter=1000, gridparams=grid_params, grid_iter=10, cv=3, n_jobs=4, max_iter=10, n_nearest_features=4, subset_proportion=0.05)
+		rf_imp = ImputeRandomForest(
+				data, 
+				prefix="example_data/imputed/rf_gridsearch_test", 
+				n_nearest_features=25, 
+				gridparams=grid_params, 
+				cv=5, 
+				grid_iter=50, 
+				n_jobs=-1, 
+				max_iter=50, 
+				boostrap=True
+		)
+
+		# br_imp = ImputeBayesianRidge(data, prefix="test_br", n_iter=1000, gridparams=grid_params, grid_iter=10, cv=3, n_jobs=4, max_iter=10, n_nearest_features=4, subset_proportion=0.05)
 
 	# colors = {
 	# 	"GU": "#FF00FF",
