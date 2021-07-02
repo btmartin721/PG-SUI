@@ -10,7 +10,8 @@ import pandas as pd
 import xgboost as xgb
 from sklearn.experimental import enable_iterative_imputer
 #from sklearn.impute import IterativeImputer
-from read_input.iterative_imputer import IterativeImputer
+from read_input.iterative_imputer import IterativeImputer as CustomIterImputer
+from sklearn.impute import IterativeImputer as OriginalIterativeImputer
 from sklearn.ensemble import ExtraTreesClassifier
 from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.linear_model import BayesianRidge
@@ -60,7 +61,8 @@ class Impute:
 		self.grid_iter, \
 		self.cv, \
 		self.n_jobs, \
-		self.prefix = self._gather_impute_settings(kwargs)
+		self.prefix, \
+		self.subset_proportion = self._gather_impute_settings(kwargs)
 
 	@timer
 	def fit_predict(self, X):
@@ -87,83 +89,6 @@ class Impute:
 
 		print("\nDone!\n")
 		return imputed_df, best_score, best_params
-
-	def _impute_single(self, df):
-		"""[Run IterativeImputer without a grid search]
-
-		Args:
-			df ([pandas.DataFrame]): [DataFrame of 012-encoded genotypes]
-
-		Returns:
-			[pandas.DataFrame]: [Imputed 012-encoded genotypes]
-		"""
-		print(
-			"Doing {} imputation without grid search...".format(str(self.clf)))
-
-		clf = self.clf(**self.clf_kwargs)
-		imputer = self._define_iterative_imputer(clf)
-
-		df_imp = self._impute_fit_transform(df, imputer)
-
-		print("Done with {} imputation!\n".format(str(self.clf)))
-		return df_imp, None, None
-		
-	def _impute_gridsearch(self, df):
-		"""[Do IterativeImputer with RandomizedGridCV]
-
-		Args:
-			df ([pandas.DataFrame]): [DataFrame with 012-encoded genotypes]
-
-		Returns:
-			[pandas.DataFrame]: [DataFrame with 012-encoded genotypes imputed using the best parameters found from the grid search]
-
-			[float]: [Absolute value of the best score found during the grid search]
-
-			[dict]: [Best parameters found during the grid search]
-		"""
-		df_subset = self.subset_data_for_testing(df, 0.05)
-		df_subset = self._remove_nonbiallelic(df_subset)
-
-		print("Test dataset size: {}\n".format(len(df_subset.columns)))
-		print("Doing grid search...")
-
-		#search_space = self._validate_gridparams(self.gridparams)
-		search_space = self.gridparams
-
-		clf = self.clf()
-
-		imputer = self._define_iterative_imputer(
-			clf, search_space, self.n_jobs, self.grid_iter, self.cv, self.clf_type)
-
-		imp_arr, params_list, score_list = imputer.fit_transform(df_subset)
-		df_imp = pd.DataFrame(imp_arr)
-		df_imp = df_imp.round(0).astype("Int8")
-
-		best_params = self._get_best_params(params_list)
-		avg_score = mean(x for x in score_list if x != -9)
-
-		print("Done with {} imputation!\n".format(str(self.clf)))
-		return df_imp, abs(avg_score), best_params
-		
-	def _get_best_params(self, params_list):
-		best_params = dict()
-		keys = list(params_list[0].keys())
-		for k in keys:
-			if all(isinstance(x[k], (int, float)) for x in params_list):
-				if all(isinstance(y[k], int) for y in params_list):
-					best_params[k] = \
-						self._average_list_of_dicts(params_list, k, is_int=True)
-
-				elif all(isinstance(z[k], float) for z in params_list):
-					best_params[k] = self._average_list_of_dicts(params_list, k)
-
-			elif all(isinstance(x[k], (str, bool)) for x in params_list):
-				best_params[k] = self._mode_list_of_dicts(params_list, k)
-			
-			else:
-				best_params[k] = self._mode_list_of_dicts(params_list, k)
-
-		return best_params
 
 	def write_imputed(self, data, best_score, best_params):
 		"""[Save imputed data to a CSV file]
@@ -199,10 +124,10 @@ class Impute:
 		best_params_outfile = "{}_imputed_best_params.csv".format(self.prefix)
 
 		with open(best_score_outfile, "w") as fout:
-			fout.write("{}".format(best_score))
+			fout.write("{:.2f}".format(best_score))
 
 		with open(best_params_outfile, "w") as fout:
-			fout.write("parameter\tbest_value\n")
+			fout.write("parameter,best_value\n")
 			for k, v in best_params.items():
 				fout.write("{},{}\n".format(k, v))
 
@@ -216,6 +141,132 @@ class Impute:
 			[pandas.DataFrame]: [Imputed data as DataFrame of 8-bit integers]
 		"""
 		return pd.read_csv(filename, dtype="Int8", header=None)
+
+	def subset_data_for_testing(self, df, column_percent):
+		"""[Randomly subsets pandas.DataFrame with ```column_percent``` fraction of the data. Allows faster testing]
+
+		Args:
+			df ([pandas.DataFrame]): [DataFrame with 012-encoded genotypes]
+
+			column_percent ([float]): [Proportion of DataFrame to randomly subset. Should be between 0 and 1]
+
+		Returns:
+			[pandas.DataFrame]: [Randomly subset DataFrame]
+		"""
+		# Get a random numpy arrray of column names to select
+		cols = sorted(np.random.choice(df.columns, 
+			int(len(df.columns) * column_percent), replace=False), reverse=False)
+
+		# Subset the DataFrame
+		df_sub = df.loc[:, cols]
+		return df_sub
+
+	def _impute_single(self, df):
+		"""[Run IterativeImputer without a grid search]
+
+		Args:
+			df ([pandas.DataFrame]): [DataFrame of 012-encoded genotypes]
+
+		Returns:
+			[pandas.DataFrame]: [Imputed 012-encoded genotypes]
+		"""
+		print(
+			"Doing {} imputation without grid search...".format(str(self.clf)))
+
+		clf = self.clf(**self.clf_kwargs)
+		imputer = self._define_iterative_imputer(clf)
+
+		df_imp = self._impute_fit_transform(df, imputer)
+
+		print("Done with {} imputation!\n".format(str(self.clf)))
+		return df_imp, None, None
+		
+	def _impute_gridsearch(self, df):
+		"""[Do IterativeImputer with RandomizedSearchCV]
+
+		Args:
+			df ([pandas.DataFrame]): [DataFrame with 012-encoded genotypes]
+
+		Returns:
+			[pandas.DataFrame]: [DataFrame with 012-encoded genotypes imputed using the best parameters found from the grid search]
+
+			[float]: [Absolute value of the best score found during the grid search]
+
+			[dict]: [Best parameters found during the grid search]
+		"""
+		df_subset = self.subset_data_for_testing(df, self.subset_proportion)
+		df_subset = self._remove_nonbiallelic(df_subset)
+
+		print("Test dataset size: {}\n".format(len(df_subset.columns)))
+		print("Doing grid search...")
+
+		clf = self.clf()
+
+		imputer = self._define_iterative_imputer(
+			clf, 
+			self.n_jobs, 
+			self.grid_iter, 
+			self.cv, 
+			self.clf_type,
+			self.gridparams
+		)
+
+		_, params_list, score_list = imputer.fit_transform(df_subset)
+
+		print("Done!")
+
+		# Average or mode of best parameters
+		best_params = self._get_best_params(params_list)
+		avg_score = mean(x for x in score_list if x != -9)
+
+		# Change values to the ones in best_params
+		self.clf_kwargs.update(best_params)
+
+		test = self.clf()
+		if hasattr(test, "n_jobs"):
+			best_clf = self.clf(n_jobs=self.n_jobs, **self.clf_kwargs)
+		else:
+			best_clf = self.clf(**self.clf_kwargs)
+
+		print("Doing imputation with best found parameters...")
+
+		best_imputer = self._define_iterative_imputer(best_clf)
+
+		imp_arr_full = best_imputer.fit_transform(df)
+
+		if self.clf_type == "classifier":
+			df_imp = pd.DataFrame(imp_arr_full, dtype="Int8")
+		else:
+			# Regressor. Needs to be rounded to integer first.
+			df_imp = pd.DataFrame(imp_arr_full)
+			df_imp = df_imp.round(0).astype("Int8")
+
+		print("Done with {} imputation!\n".format(str(self.clf)))
+		return df_imp, abs(avg_score), best_params
+		
+	def _get_best_params(self, params_list):
+		best_params = dict()
+		keys = list(params_list[0].keys())
+		first_key = keys[0]
+
+		params_list = list(filter(lambda i: i[first_key] != -9, params_list))
+
+		for k in keys:
+			if all(isinstance(x[k], (int, float)) for x in params_list if x[k]):
+				if all(isinstance(y[k], int) for y in params_list):
+					best_params[k] = \
+						self._average_list_of_dicts(params_list, k, is_int=True)
+
+				elif all(isinstance(z[k], float) for z in params_list):
+					best_params[k] = self._average_list_of_dicts(params_list, k)
+
+			elif all(isinstance(x[k], (str, bool)) for x in params_list):
+				best_params[k] = self._mode_list_of_dicts(params_list, k)
+			
+			else:
+				best_params[k] = self._mode_list_of_dicts(params_list, k)
+
+		return best_params
 
 	def _mode_list_of_dicts(self, l, k):
 		"""[Get mode for key k in a list of dictionaries]
@@ -265,22 +316,6 @@ class Impute:
 
 		return df_cp.drop(bad_cols, axis=1)
 
-	def subset_data_for_testing(self, df, column_percent):
-		"""[Randomly subsets pandas.DataFrame with ```column_percent``` fraction of the data. Allows faster testing]
-
-		Args:
-			df ([pandas.DataFrame]): [DataFrame with 012-encoded genotypes]
-			column_percent ([float]): [Fraction of DataFrame to randomly subset. Should be between 0 and 1]
-
-		Returns:
-			[pandas.DataFrame]: [Subset DataFrame]
-		"""
-		cols = sorted(np.random.choice(df.columns, 
-			int(len(df.columns) * column_percent), replace=False), reverse=False)
-
-		df2 = df.loc[:, cols]
-		return df2
-
 	def _gather_impute_settings(self, kwargs):
 		"""[Gather impute settings from the various imputation classes and IterativeImputer. Gathers them for use with the Impute() class. Returns dictionary with keys as keyword arguments and the values as the settings. The imputation can then be run by specifying e.g. IterativeImputer(**imp_kwargs)]
 
@@ -301,6 +336,7 @@ class Impute:
 		n_jobs = kwargs.pop("n_jobs")
 		prefix = kwargs.pop("prefix")
 		grid_iter = kwargs.pop("grid_iter")
+		subset_proportion = kwargs.pop("subset_proportion")
 
 		if prefix is None:
 			prefix = "output"
@@ -328,7 +364,7 @@ class Impute:
 			if k not in imp_keys:
 				imp_kwargs.pop(k)
 
-		return gridparams, imp_kwargs, clf_kwargs, grid_iter, cv, n_jobs, prefix
+		return gridparams, imp_kwargs, clf_kwargs, grid_iter, cv, n_jobs, prefix, subset_proportion
 
 	def _format_features(self, df, missing_val=-9):
 		"""[Format a 2D list for input into iterative imputer]
@@ -344,31 +380,6 @@ class Impute:
 		# Replace missing data with NaN
 		X = df.replace(missing_val, np.nan)
 		return X
-
-	def _validate_gridparams(self, params):
-		"""[Convert values in dictionary of lists to Bayesian distribution space for use with BayesSearchCV]
-
-		Args:
-			params ([dict(list)]): [Dictionary of lists with grid search parameters]
-
-		Raises:
-			TypeError: [Unrecognized gridparam value types]
-
-		Returns:
-			[dict(Int, Real, Categorical)]: [Dictionary with values converted to distribution space]
-		"""
-		search_space = dict()
-		for k, v in params.items():
-			if all(isinstance(item, int) for item in v):
-				search_space[k] = Integer(v)
-			elif all(isinstance(item, str) for item in v):
-				search_space[k] = Categorical(v)
-			elif all(isinstance(item, float) for item in v):
-				search_space[k] = Real(v)
-			else:
-				raise TypeError("Unknown type in gridparams values!")
-
-		return search_space
 
 	def _defile_dataset(self, df, col_selection_rate=0.40):
 		"""[Function to select 40% of the columns in a pandas DataFrame and change anywhere from 15% to 50% of the values in each of those columns to np.nan (missing data). Since we know the true values of the ones changed to np.nan, we can assess the accuracy of the classifier and do a grid search]
@@ -398,46 +409,8 @@ class Impute:
 			df_cp[col].iloc[drop_ind] = np.nan
 		return df_cp, cols
 
-	def _reshuffle_missing(self, df_cp, col, good_cols, retries):
-		data_drop_rate = np.random.choice(np.arange(0.15, 0.5, 0.02), 1)[0]
-
-		drop_ind = np.random.choice(np.arange(len(df_cp[col])), 
-			size=int(len(df_cp[col])*data_drop_rate), replace=False)
-
-		current_col = df_cp[col].values
-		df_cp[col].iloc[drop_ind] = np.nan
-
-		cnt = 1
-		while cnt <= retries:
-			if (
-				not df_cp[col].isin([0]).any() or
-				not df_cp[col].isin([1]).any() or
-				not df_cp[col].isin([2]).any()
-			):
-				cnt += 1
-				df_cp = df_cp.assign(col=current_col)
-				
-				data_drop_rate = \
-					np.random.choice(np.arange(0.15, 0.5, 0.02), 1)[0]
-
-				drop_ind = np.random.choice(np.arange(len(df_cp[col])), 
-					size=int(len(df_cp[col])*data_drop_rate), 
-					replace=False)
-
-				df_cp[col].iloc[drop_ind] = np.nan
-
-			elif (
-					df_cp[col].isin([0]).any() and
-					df_cp[col].isin([1]).any() and
-					df_cp[col].isin([2]).any()
-			):
-				good_cols.append(col)
-				return df_cp, good_cols
-
-		return df_cp, good_cols
-
 	def _impute_eval(self, df_orig, clf):
-		"""[Function to run IterativeImputer on a DataFrame. The dataframe will be randomly sampled and a fraction of the known, true values are converted to missing data to allow evalutation of the model]
+		"""[Function to run IterativeImputer on a DataFrame. The dataframe columns will be randomly subset and a fraction of the known, true values are converted to missing data to allow evalutation of the model with either accuracy or mean_squared_error scores]
 
 		Args:
 			df_orig ([pandas.DataFrame]): [Original DataFrame with 012-encoded genotypes]
@@ -446,12 +419,21 @@ class Impute:
 
 		Returns:
 			[pandas.DataFrame]: [Subsampled DataFrame with known, true values]
+
 			[pandas.DataFrame]: [Subsampled DataFrame with true values converted to missing data]
+
 			[pandas.DataFrame]: [Subsampled DataFrame with imputed missing values]
+
 			[int]: [Number of iterations required to converge]
+
+			[sklearn IterativeImputer object]: [Fit IterativeImputer model]
 		"""
+		# Subset the DataFrame randomly and replace known values with np.nan
 		df_miss, cols = self._defile_dataset(df_orig)
+
+		# Slice the original DataFrame to the same columns as df_miss
 		df_orig_slice = df_orig[cols]
+
 		imputer = self._define_iterative_imputer(clf)
 		df_stg = df_miss.copy()
 
@@ -480,27 +462,45 @@ class Impute:
 		new_arr = arr.astype(dtype=np.int)
 		new_df = pd.DataFrame(new_arr)
 
-		# if new_df.isnull().values.any():
-		# 	raise AssertionError("Imputation failed: There is still missing data")
-					
 		return new_df
 
-	def _define_iterative_imputer(self, clf, search_space, n_jobs, n_iter, cv, clf_type):
+	def _define_iterative_imputer(self, clf, n_jobs=None, n_iter=None, cv=None, clf_type=None, search_space=None):
 		"""[Define an IterativeImputer instance]
 
 		Args:
 			clf ([sklearn Classifier]): [Classifier to use with IterativeImputer]
 
-			search_space ([dict]): [gridparams dictionary with search space to explore in random grid search]
+			n_jobs (int, optional): [Number of parallel jobs to use with the IterativeImputer grid search. Ignored if search_space=None]. Defaults to None.
+
+			n_iter (int, optional): [Number of iterations for grid search. Ignored if search_space=None]. Defaults to None.
+
+			cv (int, optional): [Number of cross-validation folds to use with grid search. Ignored if search_space=None]. Defaults to None
+
+			clf_type (str, optional): [Type of estimator. Valid options are "classifier" or "regressor". Ignored if search_space=None]. Defaults to None.
+
+			search_space (dict, optional): [gridparams dictionary with search space to explore in random grid search]. Defaults to None.
 
 		Returns:
 			[sklearn.impute.IterativeImputer]: [IterativeImputer instance]
 		"""
-		# Create iterative imputer
-		imp = IterativeImputer(search_space, estimator=clf, grid_n_jobs=n_jobs, grid_n_iter=n_iter, grid_cv=cv, clf_type=clf_type, **self.imp_kwargs)
+
+		if search_space is None:
+			imp = OriginalIterativeImputer(estimator=clf, **self.imp_kwargs)
+		
+		else:
+			# Create iterative imputer
+			imp = CustomIterImputer(
+				search_space, 
+				estimator=clf, 
+				grid_n_jobs=n_jobs, 
+				grid_n_iter=n_iter, 
+				grid_cv=cv, 
+				clf_type=clf_type, 
+				**self.imp_kwargs
+			)
+
 		return imp
 		
-
 class ImputeKNN:
 	"""[Class to impute missing data from 012-encoded genotypes using K-Nearest Neighbors iterative imputation]
 	"""
@@ -512,6 +512,7 @@ class ImputeKNN:
 		gridparams=None,
 		grid_iter=50,
 		cv=5,
+		subset_proportion=0.2,
 		n_jobs=1,
 		n_neighbors=5, 
 		weights="distance", 
@@ -535,6 +536,16 @@ class ImputeKNN:
 
 			prefix ([str]): [Prefix for imputed data's output filename]
 
+			gridparams (dict, optional): [Dictionary with lists as values or distributions of parameters. Distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). ```gridparams``` will be used for a randomized grid search. The grid search will determine the optimal parameters as those that maximize accuracy (or minimize root mean squared error for BayesianRidge regressor). **NOTE: Takes a long time, so run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. The full imputation can be performed by setting ```gridparams=None``` (default)]. Defaults to None.
+
+			grid_iter (int, optional): [Number of iterations for randomized grid search]. Defaults to 50.
+
+			cv (int, optional): [Number of folds for cross-validation during randomized grid search]. Defaults to 5.
+
+			subset_proportion (float, optional): [Proportion of the dataset to randomly subset for the grid search. Should be between 0 and 1, and should also be small, because the grid search takes a long time]. Defaults to 0.2.
+
+			n_jobs (int, optional): [Number of parallel jobs to use. If ```gridparams``` is not None, n_jobs is used for the grid search. Otherwise it is used for the classifier. -1 means using all available processors]. Defaults to 1.
+
 			n_neighbors (int, optional): [Number of neighbors to use by default for K-Nearest Neighbors queries]. Defaults to 5.
 
 			weights (str, optional): [Weight function used in prediction. Possible values: 'Uniform': Uniform weights with all points in each neighborhood weighted equally; 'distance': Weight points by the inverse of their distance, in this case closer neighbors of a query point will have  agreater influence than neighbors that are further away; 'callable': A user-defined function that accepts an array of distances and returns an array of the same shape containing the weights]. Defaults to "distance".
@@ -546,8 +557,6 @@ class ImputeKNN:
 			p (int, optional): [Power parameter for the Minkowski metric. When p=1, this is equivalent to using manhattan_distance (l1), and if p=2 it is equivalent to using euclidean distance (l2). For arbitrary p, minkowski_distance (l_p) is used]. Defaults to 2.
 
 			metric (str, optional): [The distance metric to use for the tree. The default metric is minkowski, and with p=2 this is equivalent to the standard Euclidean metric. See the documentation of sklearn.DistanceMetric for a list of available metrics. If metric is 'precomputed', X is assumed to be a distance matrix and must be square during fit]. Defaults to "minkowski".
-
-			n_jobs (int, optional): [The number of parallel jobs to run for neighbors search. None means 1 unless in a joblib.parallel_backend context. -1 means using all processors]. Defaults to 1.
 
 			max_iter (int, optional): [Maximum number of imputation rounds to perform before returning the imputations computed during the final round. A round is a single imputation of each feature with missing values]. Defaults to 10.
 
@@ -589,6 +598,7 @@ class ImputeRandomForest:
 		gridparams=None,
 		grid_iter=50,
 		cv=5,
+		subset_proportion=0.2,
 		n_jobs=1,
 		n_estimators=100,
 		criterion="gini",
@@ -619,6 +629,16 @@ class ImputeRandomForest:
 
 			prefix ([str]): [Prefix for imputed data's output filename]
 
+			gridparams (dict, optional): [Dictionary with lists as values or distributions of parameters. Distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). ```gridparams``` will be used for a randomized grid search. The grid search will determine the optimal parameters as those that maximize accuracy (or minimize root mean squared error for BayesianRidge regressor). **NOTE: Takes a long time, so run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. The full imputation can be performed by setting ```gridparams=None``` (default)]. Defaults to None.
+
+			grid_iter (int, optional): [Number of iterations for randomized grid search]. Defaults to 50.
+
+			cv (int, optional): [Number of folds for cross-validation during randomized grid search]. Defaults to 5.
+
+			subset_proportion (float, optional): [Proportion of the dataset to randomly subset for the grid search. Should be between 0 and 1, and should also be small, because the grid search takes a long time]. Defaults to 0.2.
+
+			n_jobs (int, optional): [Number of parallel jobs to use. If ```gridparams``` is not None, n_jobs is used for the grid search. Otherwise it is used for the classifier. -1 means using all available processors]. Defaults to 1.
+
 			n_estimators (int, optional): [The number of trees in the forest. Increasing this value can improves the fit, but at the cost of compute time]. Defaults to 100.
 
 			criterion (str, optional): [The function to measure the quality of a split. Supported values are 'gini' for the Gini impurity and 'entropy' for the information gain]. Defaults to "gini".
@@ -644,8 +664,6 @@ class ImputeRandomForest:
 			max_samples (int or float, optional): [If bootstrap is True, the number of samples to draw from X to train each base estimator. If None (default), then draws X.shape[0] samples. if int, then draw 'max_samples' samples. If float, then draw (max_samples * X.shape[0] samples) with max_samples in the interval (0, 1)]. Defaults to None.
 
 			clf_random_state (int, optional): [Controls three sources of randomness for sklearn.ensemble.ExtraTreesClassifier: The bootstrapping of the samples used when building trees (if bootstrap=True), the sampling of the features to consider when looking for the best split at each node (if max_features < n_features), and the draw of the splits for each of the max_features. If None, then uses a different random seed each time the imputation is run]. Defaults to None.
-
-			n_jobs (int, optional): [The number of parallel jobs to run for the random forest trees. None means 1 unless in a joblib.parallel_backend context. -1 means using all processors]. Defaults to 1.
 
 			max_iter (int, optional): [Maximum number of imputation rounds to perform before returning the imputations computed during the final round. A round is a single imputation of each feature with missing values]. Defaults to 10.
 
@@ -687,6 +705,7 @@ class ImputeGradientBoosting:
 		gridparams=None,
 		grid_iter=50,
 		cv=5,
+		subset_proportion=0.2,
 		n_jobs=1,
 		n_estimators=100,
 		loss="deviance",
@@ -716,6 +735,16 @@ class ImputeGradientBoosting:
 			genotype_data ([GenotypeData]): [GenotypeData instance that was used to read in the sequence data]
 
 			prefix ([str]): [Prefix for imputed data's output filename]
+
+			gridparams (dict, optional): [Dictionary with lists as values or distributions of parameters. Distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). ```gridparams``` will be used for a randomized grid search. The grid search will determine the optimal parameters as those that maximize accuracy (or minimize root mean squared error for BayesianRidge regressor). **NOTE: Takes a long time, so run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. The full imputation can be performed by setting ```gridparams=None``` (default)]. Defaults to None.
+
+			grid_iter (int, optional): [Number of iterations for randomized grid search]. Defaults to 50.
+
+			cv (int, optional): [Number of folds for cross-validation during randomized grid search]. Defaults to 5.
+
+			subset_proportion (float, optional): [Proportion of the dataset to randomly subset for the grid search. Should be between 0 and 1, and should also be small, because the grid search takes a long time]. Defaults to 0.2.
+
+			n_jobs (int, optional): [Number of parallel jobs to use. If ```gridparams``` is not None, n_jobs is used for the grid search. Otherwise it is used for the classifier. -1 means using all available processors]. Defaults to 1.
 			
 			n_estimators (int, optional): [The number of boosting stages to perform. Gradient boosting is fairly robust to over-fitting so a large number usually results in better performance]. Defaults to 100.
 
@@ -783,6 +812,7 @@ class ImputeBayesianRidge:
 		gridparams=None,
 		grid_iter=50,
 		cv=5,
+		subset_proportion=0.2,
 		n_jobs=1,
 		n_iter=300,
 		clf_tol=1e-3,
@@ -806,7 +836,17 @@ class ImputeBayesianRidge:
 		Args:
 			genotype_data ([GenotypeData]): [GenotypeData instance that was used to read in the sequence data]	
 
-			prefix ([str]): [Prefix for imputed data's output filename]		
+			prefix ([str]): [Prefix for imputed data's output filename]
+
+			gridparams (dict, optional): [Dictionary with lists as values or distributions of parameters. Distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). ```gridparams``` will be used for a randomized grid search. The grid search will determine the optimal parameters as those that maximize accuracy (or minimize root mean squared error for BayesianRidge regressor). **NOTE: Takes a long time, so run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. The full imputation can be performed by setting ```gridparams=None``` (default)]. Defaults to None.
+
+			grid_iter (int, optional): [Number of iterations for randomized grid search]. Defaults to 50.
+
+			cv (int, optional): [Number of folds for cross-validation during randomized grid search]. Defaults to 5.
+
+			subset_proportion (float, optional): [Proportion of the dataset to randomly subset for the grid search. Should be between 0 and 1, and should also be small, because the grid search takes a long time]. Defaults to 0.2.
+
+			n_jobs (int, optional): [Number of parallel jobs to use. If ```gridparams``` is not None, n_jobs is used for the grid search. Otherwise it is used for the regressor. -1 means using all available processors]. Defaults to 1.	
 				
 			n_iter (int, optional): [Maximum number of iterations. Should be greater than or equal to 1]. Defaults to 300.
 
@@ -855,56 +895,58 @@ class ImputeBayesianRidge:
 
 		imputer.write_imputed(self.imputed, self.best_score, self.best_params)
 
-class ImputeXGBoost:
+# DEPRECATED
+# class ImputeXGBoost:
 
-	def __init__(
-		self, 
-		genotype_data, 
-		*, 
-		prefix=None,
-		gridparams=None,
-		grid_iter=50,
-		cv=5,
-		n_jobs=1, 
-		n_estimators=100, 
-		max_depth=6, 
-		learning_rate=0.1, 
-		booster="gbtree", 
-		tree_method="auto", 
-		gamma=0, 
-		min_child_weight=1, 
-		max_delta_step=0, 
-		subsample=1, 
-		colsample_bytree=1, 
-		reg_lambda=1, 
-		reg_alpha=0, 
-		objective="multi:softmax", 
-		eval_metric="error",
-		clf_random_state=None,
-		n_nearest_features=10,
-		max_iter=10,
-		tol=1e-3,
-		initial_strategy="most_frequent",
-		imputation_order="ascending",
-		skip_complete=False,
-		random_state=None,
-		verbose=0
-	):
+# 	def __init__(
+# 		self, 
+# 		genotype_data, 
+# 		*, 
+# 		prefix=None,
+# 		gridparams=None,
+# 		grid_iter=50,
+# 		cv=5,
 
-		# Get local variables into dictionary object
-		kwargs = locals()
-		kwargs["num_class"] = 3
-		kwargs["use_label_encoder"] = True
+# 		n_jobs=1, 
+# 		n_estimators=100, 
+# 		max_depth=6, 
+# 		learning_rate=0.1, 
+# 		booster="gbtree", 
+# 		tree_method="auto", 
+# 		gamma=0, 
+# 		min_child_weight=1, 
+# 		max_delta_step=0, 
+# 		subsample=1, 
+# 		colsample_bytree=1, 
+# 		reg_lambda=1, 
+# 		reg_alpha=0, 
+# 		objective="multi:softmax", 
+# 		eval_metric="error",
+# 		clf_random_state=None,
+# 		n_nearest_features=10,
+# 		max_iter=10,
+# 		tol=1e-3,
+# 		initial_strategy="most_frequent",
+# 		imputation_order="ascending",
+# 		skip_complete=False,
+# 		random_state=None,
+# 		verbose=0
+# 	):
 
-		self.clf_type = "classifier"
-		self.clf = XGBClassifier
+# 		# Get local variables into dictionary object
+# 		kwargs = locals()
+# 		kwargs["num_class"] = 3
+# 		kwargs["use_label_encoder"] = True
+
+# 		self.clf_type = "classifier"
+# 		self.clf = XGBClassifier
 		
-		imputer = Impute(self.clf, self.clf_type, kwargs)
+# 		imputer = Impute(self.clf, self.clf_type, kwargs)
 
-		self.imputed, self.best_score, self.best_params = \
-			imputer.fit_predict(genotype_data.genotypes_df)
+# 		self.imputed, self.best_score, self.best_params = \
+# 			imputer.fit_predict(genotype_data.genotypes_df)
 
-		imputer.write_imputed(self.imputed, self.best_score, self.best_params)
+# 		imputer.write_imputed(self.imputed, self.best_score, self.best_params)
 
 class ImputeAlleleFreq(GenotypeData):
 	"""[Class to impute missing data by global or population-wisse allele frequency]
