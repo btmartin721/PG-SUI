@@ -2,9 +2,13 @@ from time import time
 from collections import namedtuple
 import warnings
 import sys
+import inspect # for tqdm new_print
+
 
 from scipy import stats
 import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
 
 from sklearn.base import clone
 from sklearn.exceptions import ConvergenceWarning
@@ -27,10 +31,12 @@ from sklearn.model_selection import RandomizedSearchCV
 from sklearn.model_selection import StratifiedKFold
 
 from sklearn_genetic import GASearchCV
+from sklearn_genetic.plots import plot_fitness_evolution
 from sklearn_genetic.space import Continuous, Categorical, Integer
-#from sklearn_genetic.callbacks import ConsecutiveStopping
+from sklearn_genetic.callbacks import ConsecutiveStopping, DeltaThreshold, ThresholdStopping
 
 from utils.misc import isnotebook
+from utils.misc import new_print
 
 is_notebook = isnotebook()
 
@@ -39,6 +45,8 @@ if is_notebook:
 else:
 	from tqdm import tqdm as progressbar
 
+# globaly replace print with new_print
+inspect.builtins.print = new_print
 
 _ImputerTriplet = namedtuple('_ImputerTriplet', ['feat_idx',
 												'neighbor_feat_idx',
@@ -204,7 +212,9 @@ class IterativeImputer(_BaseImputer):
 	"""
 	def __init__(self,
 				search_space,
-				estimator=None, *,
+				prefix,
+				estimator=None, 
+				*,
 				missing_values=np.nan,
 				sample_posterior=False,
 				max_iter=10,
@@ -231,6 +241,7 @@ class IterativeImputer(_BaseImputer):
 		)
 
 		self.search_space = search_space
+		self.prefix = prefix
 		self.estimator = estimator
 		self.sample_posterior = sample_posterior
 		self.max_iter = max_iter
@@ -255,8 +266,9 @@ class IterativeImputer(_BaseImputer):
 							mask_missing_values,
 							feat_idx,
 							neighbor_feat_idx,
+							pp,
 							estimator=None,
-							fit_mode=True
+							fit_mode=True,
 	):
 		"""Impute a single feature from the others provided.
 		This function predicts the missing values of one of the features using
@@ -280,6 +292,9 @@ class IterativeImputer(_BaseImputer):
 			If None, it will be cloned from self._estimator.
 		fit_mode : boolean, default=True
 			Whether to fit and predict with the estimator or just predict.
+
+		pp : PdfPages matplotlib object for saving multiple figures to PDF file.
+
 		Returns
 		-------
 		X_filled : ndarray
@@ -302,14 +317,26 @@ class IterativeImputer(_BaseImputer):
 			greater_is_better=False, 
 			squared=False)
 
-		cross_val = StratifiedKFold(n_splits=self.grid_cv)
+		cross_val = StratifiedKFold(n_splits=self.grid_cv, shuffle=True)
 
 		# Modified code
+		# If regressor
 		if self.clf_type == "regressor":
+			# Do randomized grid search
 			if not self.ga:
-				search = RandomizedSearchCV(estimator, param_distributions=self.search_space, n_iter=self.grid_n_iter, scoring=rmse_scorer, n_jobs=self.grid_n_jobs, cv=5)
+				search = RandomizedSearchCV(
+					estimator, 
+					param_distributions=self.search_space, 
+					n_iter=self.grid_n_iter, 
+					scoring=rmse_scorer, 
+					n_jobs=self.grid_n_jobs, 
+					cv=cross_val
+				)
+
+			# Do genetic algorithm
 			else:
-				search = GASearchCV(estimator=estimator,
+				search = GASearchCV(
+					estimator=estimator,
 					cv=cross_val,
 					scoring=rmse_scorer,
 					population_size=10,
@@ -319,15 +346,33 @@ class IterativeImputer(_BaseImputer):
 					crossover_probability=0.8,
 					mutation_probability=0.1,
 					param_grid=self.search_space,
-					criteria='min',
-					algorithm='eaMuPlusLambda',
+					criteria="min",
+					algorithm="eaMuPlusLambda",
 					n_jobs=self.grid_n_jobs,
-					verbose=False)
+					verbose=False
+				)
+				
+				callbacks = DeltaThreshold(
+					threshold=1e-3, metric="fitness"
+				)
+
+		# If classifier
 		else:
 			if not self.ga:
-				search = RandomizedSearchCV(estimator, param_distributions=self.search_space, n_iter=self.grid_n_iter, scoring=acc_scorer, n_jobs=self.grid_n_jobs, cv=cross_val)
+				# Do randomized grid search
+				search = RandomizedSearchCV(
+					estimator, 
+					param_distributions=self.search_space, 
+					n_iter=self.grid_n_iter, 
+					scoring=acc_scorer, 
+					n_jobs=self.grid_n_jobs, 
+					cv=cross_val
+				)
+
+			# Do genetic algorithm
 			else:
-				search = GASearchCV(estimator=estimator,
+				search = GASearchCV(
+					estimator=estimator,
 					cv=cross_val,
 					scoring=acc_scorer,
 					population_size=10,
@@ -337,19 +382,36 @@ class IterativeImputer(_BaseImputer):
 					crossover_probability=0.8,
 					mutation_probability=0.1,
 					param_grid=self.search_space,
-					criteria='max',
-					algorithm='eaMuPlusLambda',
+					criteria="max",
+					algorithm="eaMuPlusLambda",
 					n_jobs=self.grid_n_jobs,
-					verbose=False)
+					verbose=False
+				)
+
+				consecutive_callback = ConsecutiveStopping(
+					generations=5, metric="fitness"
+				)
+
+				# If accuracy exceeds threshold, 
+				threshold_callback = ThresholdStopping(
+					threshold=0.98, metric="fitness_max"
+				)
+
+				callbacks = [consecutive_callback, threshold_callback]
 
 		missing_row_mask = mask_missing_values[:, feat_idx]
 		if fit_mode:
 			X_train = _safe_indexing(X_filled[:, neighbor_feat_idx],
 									~missing_row_mask)
+
 			y_train = _safe_indexing(X_filled[:, feat_idx],
 									~missing_row_mask)
 
-			search.fit(X_train, y_train)
+			search.fit(X_train, y_train, callbacks=callbacks)
+
+			if pp is not None:
+				plot_fitness_evolution(search)
+				pp.savefig()
 
 		
 		# if no missing values, don't predict
@@ -357,8 +419,10 @@ class IterativeImputer(_BaseImputer):
 			return X_filled, estimator, None
 
 		# get posterior samples if there is at least one missing value
-		X_test = _safe_indexing(X_filled[:, neighbor_feat_idx],
-								missing_row_mask)
+		X_test = _safe_indexing(
+			X_filled[:, neighbor_feat_idx],	missing_row_mask
+		)
+
 		if self.sample_posterior:
 			mus, sigmas = search.predict(X_test, return_std=True)
 			imputed_values = np.zeros(mus.shape, dtype=X_filled.dtype)
@@ -382,6 +446,7 @@ class IterativeImputer(_BaseImputer):
 											loc=mus, scale=sigmas)
 			imputed_values[inrange_mask] = truncated_normal.rvs(
 				random_state=self.random_state_)
+
 		else:
 			imputed_values = search.predict(X_test)
 			imputed_values = np.clip(imputed_values,
@@ -390,6 +455,7 @@ class IterativeImputer(_BaseImputer):
 
 		# update the feature
 		X_filled[missing_row_mask, feat_idx] = imputed_values
+
 		return X_filled, estimator, search
 
 	def _get_neighbor_feat_idx(self,
@@ -658,10 +724,12 @@ class IterativeImputer(_BaseImputer):
 		abs_corr_mat = self._get_abs_corr_mat(Xt)
 
 		n_samples, n_features = Xt.shape
+
 		if self.verbose > 0:
 			print("[IterativeImputer] Completing matrix with shape %s"
 				% (X.shape,))
 		start_t = time()
+
 		if not self.sample_posterior:
 			Xt_previous = Xt.copy()
 			normalized_tol = self.tol * np.max(
@@ -670,6 +738,11 @@ class IterativeImputer(_BaseImputer):
 
 		params_list = list()
 		score_list = list()
+		if self.ga:
+			pp = PdfPages("{}_score_traces.pdf".format(self.prefix))
+		else:
+			pp = None
+
 		for self.n_iter_ in progressbar(range(1, self.max_iter + 1), desc="Iteration: "):
 
 			if self.imputation_order == 'random':
@@ -678,15 +751,20 @@ class IterativeImputer(_BaseImputer):
 			# Reset lists for current iteration
 			params_list.clear()
 			score_list.clear()
-			for feat_idx in progressbar(ordered_idx, desc="Feature: ", leave=False, position=1):
+			for feat_idx in progressbar(
+				ordered_idx, desc="Feature: ", leave=False, position=1
+			):
+
 				neighbor_feat_idx = self._get_neighbor_feat_idx(n_features,
 																feat_idx,
 																abs_corr_mat)
+
 				Xt, estimator, search = self._impute_one_feature(
 					Xt, 
 					mask_missing_values, 
 					feat_idx, 
 					neighbor_feat_idx, 
+					pp,
 					estimator=None, 
 					fit_mode=True
 				)
@@ -699,18 +777,25 @@ class IterativeImputer(_BaseImputer):
 
 				if search is not None:
 
-					if hasattr(search, "history"):\
+					params_list.append(search.best_params_)
+					score_list.append(search.best_score_)
 
-						params_list.append(search.best_params)
+					#if hasattr(search, "history"):
 
-						if self.clf_type == "regressor":
-							score_list.append(search.history["fitness"][np.argmin(search.history["fitness"])])
-						else:
-							score_list.append(search.history["fitness"][np.argmax(search.history["fitness"])])
-					else:
-						params_list.append(search.best_params_)
-						score_list.append(search.best_score_)
+
+						# if self.clf_type == "regressor":
+						# 	score_list.append(search.history["fitness"][np.argmin(search.history["fitness"])])
+
+						# else:
+						# 	score_list.append(search.history["fitness"][np.argmax(search.history["fitness"])])
+
+					# else:
+					# 	params_list.append(search.best_params_)
+					# 	score_list.append(search.best_score_)
+
 				else:
+					# Search is None
+					# Thus, there was no missing data in the given feature
 					tmp_dict = dict()
 					for k in self.search_space.keys():
 						tmp_dict[k] = -9
@@ -740,7 +825,10 @@ class IterativeImputer(_BaseImputer):
 			if not self.sample_posterior:
 				warnings.warn("[IterativeImputer] Early stopping criterion not"
 							" reached.", ConvergenceWarning)
+
 		Xt[~mask_missing_values] = X[~mask_missing_values]
+		pp.close()
+
 		return super()._concatenate_indicator(Xt, X_indicator), params_list, score_list
 
 	def transform(self, X):

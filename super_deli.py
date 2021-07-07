@@ -81,37 +81,48 @@ def main():
 
 	else:	
 
-		# Number of trees in random forest
-		n_estimators = \
-			[int(x) for x in np.linspace(start=100, stop=1000, num=10)]
+		# # For randmizedsearchcv
+		# # Number of trees in random forest
+		# n_estimators = \
+		# 	[int(x) for x in np.linspace(start=100, stop=1000, num=10)]
 
-		# Number of features to consider at every split
-		max_features = ["sqrt", "log2"]
+		# # Number of features to consider at every split
+		# max_features = ["sqrt", "log2"]
 
-		# Maximum number of levels in the tree
-		max_depth = [int(x) for x in np.linspace(10, 110, num=11)]
-		max_depth.append(None)
+		# # Maximum number of levels in the tree
+		# max_depth = [int(x) for x in np.linspace(10, 110, num=11)]
+		# max_depth.append(None)
 
-		# Minimmum number of samples required to split a node
-		min_samples_split = [int(x) for x in np.linspace(2, 10, num=5)]
+		# # Minimmum number of samples required to split a node
+		# min_samples_split = [int(x) for x in np.linspace(2, 10, num=5)]
 
-		# Minimum number of samples required at each leaf node
-		min_samples_leaf = [int(x) for x in np.linspace(1, 5, num=5)]
+		# # Minimum number of samples required at each leaf node
+		# min_samples_leaf = [int(x) for x in np.linspace(1, 5, num=5)]
 
-		# Proportion of dataset to use with bootstrapping
-		max_samples = [x for x in np.linspace(0.5, 1.0, num=6)]
+		# # Proportion of dataset to use with bootstrapping
+		# max_samples = [x for x in np.linspace(0.5, 1.0, num=6)]
 
-		# Random Forest gridparams
-		grid_params = {
-			"n_estimators": n_estimators,
-			"max_features": max_features,
-			"max_depth": max_depth,
-			"min_samples_split": min_samples_split, 
-			"min_samples_leaf": min_samples_leaf,
-			"max_samples": max_samples
-		}
+		# # Random Forest gridparams - RandomizedSearchCV
+		# grid_params = {
+		# 	"n_estimators": n_estimators,
+		# 	"max_features": max_features,
+		# 	"max_depth": max_depth,
+		# 	"min_samples_split": min_samples_split, 
+		# 	"min_samples_leaf": min_samples_leaf,
+		# 	"max_samples": max_samples
+		# }
 
-		# Bayesian Ridge gridparams
+		# Random Forest gridparams - Genetic Algorithms
+		# grid_params = {
+		# 	"n_estimators": n_estimators,
+		# 	"max_features": max_features,
+		# 	"max_depth": max_depth,
+		# 	"min_samples_split": min_samples_split, 
+		# 	"min_samples_leaf": min_samples_leaf,
+		# 	"max_samples": max_samples
+		# }
+
+		# Bayesian Ridge gridparams - RandomizedSearchCV
 		# grid_params = {
 		# 	"alpha_1": stats.loguniform(1e-6, 1e-3),
 		# 	"alpha_2": stats.loguniform(1e-6, 1e-3),
@@ -139,7 +150,7 @@ def main():
 		# 		bootstrap=True
 		# )
 
-		br_imp = ImputeBayesianRidge(data, prefix="test_br_ga", n_iter=1000, gridparams=grid_params, grid_iter=10, cv=3, n_jobs=4, max_iter=10, n_nearest_features=4, subset_proportion=0.05, ga=True)
+		br_imp = ImputeBayesianRidge(data, prefix=args.prefix, n_iter=100, gridparams=grid_params, grid_iter=10, cv=3, n_jobs=4, max_iter=10, n_nearest_features=3, subset_proportion=0.01, ga=True)
 
 	# colors = {
 	# 	"GU": "#FF00FF",

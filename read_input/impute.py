@@ -225,6 +225,7 @@ class Impute:
 
 		imputer = self._define_iterative_imputer(
 			clf, 
+			self.prefix,
 			self.n_jobs, 
 			self.grid_iter, 
 			self.cv, 
@@ -332,10 +333,18 @@ class Impute:
 		"""
 		df_cp = df.copy()
 		bad_cols = list()
-		for col in df_cp.columns:
-			if not df_cp[col].isin([0]).any() or not df_cp[col].isin([2]).any():
-				bad_cols.append(col)
 
+		if pd.__version__[0] == 0:
+			for col in df_cp.columns:
+				if not df_cp[col].isin([0]).any() or not df_cp[col].isin([2]).any():
+					bad_cols.append(col)
+		
+		# pandas 1.X.X
+		else:
+			for col in df_cp.columns:
+				if 0 not in df[col].unique() and 2 not in df[col].unique():
+					bad_cols.append(col)
+		
 		return df_cp.drop(bad_cols, axis=1)
 
 	def _gather_impute_settings(self, kwargs):
@@ -487,11 +496,13 @@ class Impute:
 
 		return new_df
 
-	def _define_iterative_imputer(self, clf, n_jobs=None, n_iter=None, cv=None, clf_type=None, ga=False, search_space=None):
+	def _define_iterative_imputer(self, clf, prefix="out", n_jobs=None, n_iter=None, cv=None, clf_type=None, ga=False, search_space=None):
 		"""[Define an IterativeImputer instance]
 
 		Args:
 			clf ([sklearn Classifier]): [Classifier to use with IterativeImputer]
+
+			prefix (str, optional): [Prefix for saving GA plots to PDF file]. Defaults to None.
 
 			n_jobs (int, optional): [Number of parallel jobs to use with the IterativeImputer grid search. Ignored if search_space=None]. Defaults to None.
 
@@ -516,6 +527,7 @@ class Impute:
 			# Create iterative imputer
 			imp = CustomIterImputer(
 				search_space, 
+				self.prefix,
 				estimator=clf, 
 				grid_n_jobs=n_jobs, 
 				grid_n_iter=n_iter, 

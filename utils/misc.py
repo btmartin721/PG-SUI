@@ -7,6 +7,24 @@ import datetime
 from numpy.random import choice
 #from skopt import BayesSearchCV
 
+def new_print(*args, **kwargs):
+	# From: https://stackoverflow.com/questions/36986929/redirect-print-command-in-python-script-through-tqdm-write
+	# If progressbar.write raises error, use built-in print
+	is_notebook = isnotebook()
+
+	if is_notebook:
+		from tqdm.notebook import tqdm as progressbar
+	else:
+		from tqdm import tqdm as progressbar
+
+	# store builtin print
+	old_print = print
+
+	try:
+		progressbar.write(*args, **kwargs)
+	except:
+		old_print(*args, ** kwargs)
+
 def get_indices(l):
 	"""
 	[Takes a list and returns dict giving indices matching each possible 
@@ -70,6 +88,11 @@ def progressbar(it, prefix="", size=60, file=sys.stdout):
 	file.flush()
 
 def isnotebook():
+	"""[Checks whether in Jupyter notebook]
+
+	Returns:
+		[bool]: [True if in Jupyter notebook, False otherwise]
+	"""
 	try:
 		shell = get_ipython().__class__.__name__
 		if shell == 'ZMQInteractiveShell':
@@ -84,6 +107,7 @@ def isnotebook():
 	except NameError:
 		# Probably standard Python interpreter
 		return False
+
 
 # def bayes_search_CV_init(self, estimator, search_spaces, optimizer_kwargs=None,	n_iter=50, scoring=None, fit_params=None, n_jobs=1,	n_points=1, iid=True, refit=True, cv=None, verbose=0,
 # 	pre_dispatch='2*n_jobs', random_state=None,	error_score='raise', 
