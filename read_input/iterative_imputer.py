@@ -698,12 +698,17 @@ class IterativeImputer(_BaseImputer):
 				self.imputation_sequence_.append(estimator_triplet)
 
 				if search is not None:
-					print(search.__dict__)
-					params_list.append(search.best_params)
 
-					if hasattr(search, "history"):
-						score_list.append(search.history["fitness"][search.best_index_])
+					if hasattr(search, "history"):\
+
+						params_list.append(search.best_params)
+
+						if self.clf_type == "regressor":
+							score_list.append(search.history["fitness"][np.argmin(search.history["fitness"])])
+						else:
+							score_list.append(search.history["fitness"][np.argmax(search.history["fitness"])])
 					else:
+						params_list.append(search.best_params_)
 						score_list.append(search.best_score_)
 				else:
 					tmp_dict = dict()
