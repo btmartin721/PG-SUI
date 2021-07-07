@@ -5,6 +5,7 @@ import sys
 import numpy as np
 import pandas as pd
 import scipy.stats as stats
+from sklearn_genetic.space import Continuous, Categorical, Integer
 
 # Custom module imports
 from read_input.read_input import GenotypeData
@@ -118,19 +119,27 @@ def main():
 		# 	"lambda_2": stats.loguniform(1e-6, 1e-3),
 		# }
 
-		rf_imp = ImputeRandomForest(
-				data, 
-				prefix="example_data/imputed/rf_gridsearch_test", 
-				n_nearest_features=25, 
-				gridparams=grid_params, 
-				cv=5, 
-				grid_iter=50, 
-				n_jobs=-1, 
-				max_iter=50, 
-				boostrap=True
-		)
+		# Bayesian Ridge gridparams - Genetic algorithm
+		grid_params = {
+			"alpha_1": Continuous(1e-6, 1e-3, distribution="log-uniform"),
+			"alpha_2": Continuous(1e-6, 1e-3, distribution="log-uniform"),
+			"lambda_1": Continuous(1e-6, 1e-3, distribution="log-uniform"),
+			"lambda_2": Continuous(1e-6, 1e-3, distribution="log-uniform")
+		}
 
-		# br_imp = ImputeBayesianRidge(data, prefix="test_br", n_iter=1000, gridparams=grid_params, grid_iter=10, cv=3, n_jobs=4, max_iter=10, n_nearest_features=4, subset_proportion=0.05)
+		# rf_imp = ImputeRandomForest(
+		# 		data, 
+		# 		prefix="example_data/imputed/rf_gridsearch_test", 
+		# 		n_nearest_features=25, 
+		# 		gridparams=grid_params, 
+		# 		cv=5, 
+		# 		grid_iter=50, 
+		# 		n_jobs=-1, 
+		# 		max_iter=50, 
+		# 		bootstrap=True
+		# )
+
+		br_imp = ImputeBayesianRidge(data, prefix="test_br", n_iter=1000, gridparams=grid_params, grid_iter=10, cv=3, n_jobs=4, max_iter=10, n_nearest_features=4, subset_proportion=0.05, ga=True)
 
 	# colors = {
 	# 	"GU": "#FF00FF",

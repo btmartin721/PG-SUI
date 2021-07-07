@@ -9,9 +9,8 @@ from pathlib import Path
 # Third party imports
 import numpy as np
 import pandas as pd
-import xgboost as xgb
+#import xgboost as xgb
 from sklearn.experimental import enable_iterative_imputer
-#from sklearn.impute import IterativeImputer
 from read_input.iterative_imputer import IterativeImputer as CustomIterImputer
 from sklearn.impute import IterativeImputer as OriginalIterativeImputer
 from sklearn.ensemble import ExtraTreesClassifier
@@ -30,7 +29,7 @@ from sklearn.metrics import mean_squared_error
 from read_input.read_input import GenotypeData
 from utils import misc
 from utils.misc import timer
-from utils.misc import bayes_search_CV_init
+#from utils.misc import bayes_search_CV_init
 from utils import sequence_tools
 
 from utils.misc import isnotebook
@@ -61,7 +60,8 @@ class Impute:
 		self.cv, \
 		self.n_jobs, \
 		self.prefix, \
-		self.subset_proportion = self._gather_impute_settings(kwargs)
+		self.subset_proportion, \
+		self.ga = self._gather_impute_settings(kwargs)
 
 	@timer
 	def fit_predict(self, X):
@@ -229,7 +229,8 @@ class Impute:
 			self.grid_iter, 
 			self.cv, 
 			self.clf_type,
-			self.gridparams
+			self.ga,
+			self.gridparams,
 		)
 
 		_, params_list, score_list = imputer.fit_transform(df_subset)
@@ -358,6 +359,7 @@ class Impute:
 		prefix = kwargs.pop("prefix")
 		grid_iter = kwargs.pop("grid_iter")
 		subset_proportion = kwargs.pop("subset_proportion")
+		ga = kwargs.pop("ga")
 
 		if prefix is None:
 			prefix = "output"
@@ -385,7 +387,7 @@ class Impute:
 			if k not in imp_keys:
 				imp_kwargs.pop(k)
 
-		return gridparams, imp_kwargs, clf_kwargs, grid_iter, cv, n_jobs, prefix, subset_proportion
+		return gridparams, imp_kwargs, clf_kwargs, grid_iter, cv, n_jobs, prefix, subset_proportion, ga
 
 	def _format_features(self, df, missing_val=-9):
 		"""[Format a 2D list for input into iterative imputer]
@@ -485,7 +487,7 @@ class Impute:
 
 		return new_df
 
-	def _define_iterative_imputer(self, clf, n_jobs=None, n_iter=None, cv=None, clf_type=None, search_space=None):
+	def _define_iterative_imputer(self, clf, n_jobs=None, n_iter=None, cv=None, clf_type=None, ga=False, search_space=None):
 		"""[Define an IterativeImputer instance]
 
 		Args:
@@ -498,6 +500,8 @@ class Impute:
 			cv (int, optional): [Number of cross-validation folds to use with grid search. Ignored if search_space=None]. Defaults to None
 
 			clf_type (str, optional): [Type of estimator. Valid options are "classifier" or "regressor". Ignored if search_space=None]. Defaults to None.
+
+			ga (bool, optional): [Whether to use genetic algorithm for the grid search. If False, uses RandomizedSearchCV instead]. Defaults to False.
 
 			search_space (dict, optional): [gridparams dictionary with search space to explore in random grid search]. Defaults to None.
 
@@ -517,6 +521,7 @@ class Impute:
 				grid_n_iter=n_iter, 
 				grid_cv=cv, 
 				clf_type=clf_type, 
+				ga=ga,
 				**self.imp_kwargs
 			)
 
@@ -533,6 +538,7 @@ class ImputeKNN:
 		gridparams=None,
 		grid_iter=50,
 		cv=5,
+		ga=False,
 		subset_proportion=0.2,
 		n_jobs=1,
 		n_neighbors=5, 
@@ -562,6 +568,8 @@ class ImputeKNN:
 			grid_iter (int, optional): [Number of iterations for randomized grid search]. Defaults to 50.
 
 			cv (int, optional): [Number of folds for cross-validation during randomized grid search]. Defaults to 5.
+
+			ga (bool, optional): [Whether to use a genetic algorithm for the grid search. If False, a RandomizedSearchCV is done instead]. Defaults to False.
 
 			subset_proportion (float, optional): [Proportion of the dataset to randomly subset for the grid search. Should be between 0 and 1, and should also be small, because the grid search takes a long time]. Defaults to 0.2.
 
@@ -619,6 +627,7 @@ class ImputeRandomForest:
 		gridparams=None,
 		grid_iter=50,
 		cv=5,
+		ga=False,
 		subset_proportion=0.2,
 		n_jobs=1,
 		n_estimators=100,
@@ -655,6 +664,8 @@ class ImputeRandomForest:
 			grid_iter (int, optional): [Number of iterations for randomized grid search]. Defaults to 50.
 
 			cv (int, optional): [Number of folds for cross-validation during randomized grid search]. Defaults to 5.
+
+			ga (bool, optional): [Whether to use a genetic algorithm for the grid search. If False, a RandomizedSearchCV is done instead]. Defaults to False.
 
 			subset_proportion (float, optional): [Proportion of the dataset to randomly subset for the grid search. Should be between 0 and 1, and should also be small, because the grid search takes a long time]. Defaults to 0.2.
 
@@ -726,6 +737,7 @@ class ImputeGradientBoosting:
 		gridparams=None,
 		grid_iter=50,
 		cv=5,
+		ga=False,
 		subset_proportion=0.2,
 		n_jobs=1,
 		n_estimators=100,
@@ -762,6 +774,8 @@ class ImputeGradientBoosting:
 			grid_iter (int, optional): [Number of iterations for randomized grid search]. Defaults to 50.
 
 			cv (int, optional): [Number of folds for cross-validation during randomized grid search]. Defaults to 5.
+
+			ga (bool, optional): [Whether to use a genetic algorithm for the grid search. If False, a RandomizedSearchCV is done instead]. Defaults to False.
 
 			subset_proportion (float, optional): [Proportion of the dataset to randomly subset for the grid search. Should be between 0 and 1, and should also be small, because the grid search takes a long time]. Defaults to 0.2.
 
@@ -833,6 +847,7 @@ class ImputeBayesianRidge:
 		gridparams=None,
 		grid_iter=50,
 		cv=5,
+		ga=False,
 		subset_proportion=0.2,
 		n_jobs=1,
 		n_iter=300,
@@ -864,6 +879,8 @@ class ImputeBayesianRidge:
 			grid_iter (int, optional): [Number of iterations for randomized grid search]. Defaults to 50.
 
 			cv (int, optional): [Number of folds for cross-validation during randomized grid search]. Defaults to 5.
+
+			ga (bool, optional): [Whether to use a genetic algorithm for the grid search. If False, a RandomizedSearchCV is done instead]. Defaults to False.
 
 			subset_proportion (float, optional): [Proportion of the dataset to randomly subset for the grid search. Should be between 0 and 1, and should also be small, because the grid search takes a long time]. Defaults to 0.2.
 

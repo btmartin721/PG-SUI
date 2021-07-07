@@ -26,6 +26,10 @@ from sklearn.metrics import accuracy_score, mean_squared_error, make_scorer
 from sklearn.model_selection import RandomizedSearchCV
 from sklearn.model_selection import StratifiedKFold
 
+from sklearn_genetic import GASearchCV
+from sklearn_genetic.space import Continuous, Categorical, Integer
+#from sklearn_genetic.callbacks import ConsecutiveStopping
+
 from utils.misc import isnotebook
 
 is_notebook = isnotebook()
@@ -217,7 +221,8 @@ class IterativeImputer(_BaseImputer):
 				grid_cv=5,
 				grid_n_jobs=1,
 				grid_n_iter=10,
-				clf_type="classifier"
+				clf_type="classifier",
+				ga=False
 	):
 				
 		super().__init__(
@@ -242,6 +247,7 @@ class IterativeImputer(_BaseImputer):
 		self.grid_n_jobs = grid_n_jobs
 		self.grid_n_iter = grid_n_iter
 		self.clf_type = clf_type
+		self.ga = ga
 
 	@ignore_warnings(category=UserWarning)
 	def _impute_one_feature(self,
@@ -300,9 +306,41 @@ class IterativeImputer(_BaseImputer):
 
 		# Modified code
 		if self.clf_type == "regressor":
-			search = RandomizedSearchCV(estimator, param_distributions=self.search_space, n_iter=self.grid_n_iter, scoring=rmse_scorer, n_jobs=self.grid_n_jobs, cv=5)
+			if not self.ga:
+				search = RandomizedSearchCV(estimator, param_distributions=self.search_space, n_iter=self.grid_n_iter, scoring=rmse_scorer, n_jobs=self.grid_n_jobs, cv=5)
+			else:
+				search = GASearchCV(estimator=estimator,
+					cv=cross_val,
+					scoring=rmse_scorer,
+					population_size=10,
+					generations=self.grid_n_iter,
+					tournament_size=3,
+					elitism=True,
+					crossover_probability=0.8,
+					mutation_probability=0.1,
+					param_grid=self.search_space,
+					criteria='min',
+					algorithm='eaMuPlusLambda',
+					n_jobs=self.grid_n_jobs,
+					verbose=False)
 		else:
-			search = RandomizedSearchCV(estimator, param_distributions=self.search_space, n_iter=self.grid_n_iter, scoring=acc_scorer, n_jobs=self.grid_n_jobs, cv=cross_val)
+			if not self.ga:
+				search = RandomizedSearchCV(estimator, param_distributions=self.search_space, n_iter=self.grid_n_iter, scoring=acc_scorer, n_jobs=self.grid_n_jobs, cv=cross_val)
+			else:
+				search = GASearchCV(estimator=estimator,
+					cv=cross_val,
+					scoring=acc_scorer,
+					population_size=10,
+					generations=self.grid_n_iter,
+					tournament_size=3,
+					elitism=True,
+					crossover_probability=0.8,
+					mutation_probability=0.1,
+					param_grid=self.search_space,
+					criteria='max',
+					algorithm='eaMuPlusLambda',
+					n_jobs=self.grid_n_jobs,
+					verbose=False)
 
 		missing_row_mask = mask_missing_values[:, feat_idx]
 		if fit_mode:
@@ -312,6 +350,7 @@ class IterativeImputer(_BaseImputer):
 									~missing_row_mask)
 
 			search.fit(X_train, y_train)
+
 		
 		# if no missing values, don't predict
 		if np.sum(missing_row_mask) == 0:
@@ -659,8 +698,13 @@ class IterativeImputer(_BaseImputer):
 				self.imputation_sequence_.append(estimator_triplet)
 
 				if search is not None:
-					params_list.append(search.best_params_)
-					score_list.append(search.best_score_)
+					print(search.__dict__)
+					params_list.append(search.best_params)
+
+					if hasattr(search, "history"):
+						score_list.append(search.history["fitness"][search.best_index_])
+					else:
+						score_list.append(search.best_score_)
 				else:
 					tmp_dict = dict()
 					for k in self.search_space.keys():
