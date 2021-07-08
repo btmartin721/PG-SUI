@@ -2,13 +2,16 @@ from time import time
 from collections import namedtuple
 import warnings
 import sys
+import os
 import inspect # for tqdm new_print
+import shutil
 
 
 from scipy import stats
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
+import seaborn as sns
 
 from sklearn.base import clone
 from sklearn.exceptions import ConvergenceWarning
@@ -31,7 +34,7 @@ from sklearn.model_selection import RandomizedSearchCV
 from sklearn.model_selection import StratifiedKFold
 
 from sklearn_genetic import GASearchCV
-from sklearn_genetic.plots import plot_fitness_evolution
+from sklearn_genetic.plots import plot_fitness_evolution, plot_search_space
 from sklearn_genetic.space import Continuous, Categorical, Integer
 from sklearn_genetic.callbacks import ConsecutiveStopping, DeltaThreshold, ThresholdStopping
 
@@ -212,6 +215,7 @@ class IterativeImputer(_BaseImputer):
 	"""
 	def __init__(self,
 				search_space,
+				clf_kwargs,
 				prefix,
 				estimator=None, 
 				*,
@@ -241,6 +245,7 @@ class IterativeImputer(_BaseImputer):
 		)
 
 		self.search_space = search_space
+		self.clf_kwargs = clf_kwargs
 		self.prefix = prefix
 		self.estimator = estimator
 		self.sample_posterior = sample_posterior
@@ -266,7 +271,6 @@ class IterativeImputer(_BaseImputer):
 							mask_missing_values,
 							feat_idx,
 							neighbor_feat_idx,
-							pp,
 							estimator=None,
 							fit_mode=True,
 	):
@@ -292,8 +296,6 @@ class IterativeImputer(_BaseImputer):
 			If None, it will be cloned from self._estimator.
 		fit_mode : boolean, default=True
 			Whether to fit and predict with the estimator or just predict.
-
-		pp : PdfPages matplotlib object for saving multiple figures to PDF file.
 
 		Returns
 		-------
@@ -407,12 +409,11 @@ class IterativeImputer(_BaseImputer):
 			y_train = _safe_indexing(X_filled[:, feat_idx],
 									~missing_row_mask)
 
-			search.fit(X_train, y_train, callbacks=callbacks)
+			if self.ga:
+				search.fit(X_train, y_train, callbacks=callbacks)
 
-			if pp is not None:
-				plot_fitness_evolution(search)
-				pp.savefig()
-
+			else:
+				search.fit(X_train, y_train)
 		
 		# if no missing values, don't predict
 		if np.sum(missing_row_mask) == 0:
@@ -738,12 +739,25 @@ class IterativeImputer(_BaseImputer):
 
 		params_list = list()
 		score_list = list()
+		iter_list = list()
 		if self.ga:
-			pp = PdfPages("{}_score_traces.pdf".format(self.prefix))
-		else:
-			pp = None
+			sns.set_style("white")
 
 		for self.n_iter_ in progressbar(range(1, self.max_iter + 1), desc="Iteration: "):
+
+			iter_list.append(self.n_iter_)
+
+			if self.ga:
+				pp_oneline = PdfPages(".score_traces_separate_{}.pdf".format(self.n_iter_))
+
+				pp_lines = PdfPages(".score_traces_combined_{}.pdf".format(self.n_iter_))
+
+				pp_space = PdfPages(".search_space_{}.pdf".format(self.n_iter_))
+
+			else:
+				pp_oneline = None
+				pp_lines = None
+				pp_space = None
 
 			if self.imputation_order == 'random':
 				ordered_idx = self._get_ordered_idx(mask_missing_values)
@@ -751,6 +765,7 @@ class IterativeImputer(_BaseImputer):
 			# Reset lists for current iteration
 			params_list.clear()
 			score_list.clear()
+			searches = list()
 			for feat_idx in progressbar(
 				ordered_idx, desc="Feature: ", leave=False, position=1
 			):
@@ -763,11 +778,12 @@ class IterativeImputer(_BaseImputer):
 					Xt, 
 					mask_missing_values, 
 					feat_idx, 
-					neighbor_feat_idx, 
-					pp,
+					neighbor_feat_idx,
 					estimator=None, 
 					fit_mode=True
 				)
+
+				searches.append(search)
 
 				estimator_triplet = _ImputerTriplet(feat_idx,
 													neighbor_feat_idx,
@@ -780,18 +796,22 @@ class IterativeImputer(_BaseImputer):
 					params_list.append(search.best_params_)
 					score_list.append(search.best_score_)
 
-					#if hasattr(search, "history"):
+					if self.ga:
+						plt.cla()
+						plt.clf()
+						plt.close()
 
+						plot_fitness_evolution(search)
+						pp_oneline.savefig(bbox_inches="tight")
+						plt.cla()
+						plt.clf()
+						plt.close()
 
-						# if self.clf_type == "regressor":
-						# 	score_list.append(search.history["fitness"][np.argmin(search.history["fitness"])])
-
-						# else:
-						# 	score_list.append(search.history["fitness"][np.argmax(search.history["fitness"])])
-
-					# else:
-					# 	params_list.append(search.best_params_)
-					# 	score_list.append(search.best_score_)
+						plot_search_space(search)
+						pp_space.savefig(bbox_inches="tight")
+						plt.cla()
+						plt.clf()
+						plt.close()
 
 				else:
 					# Search is None
@@ -815,19 +835,76 @@ class IterativeImputer(_BaseImputer):
 					print('[IterativeImputer] '
 						'Change: {}, scaled tolerance: {} '.format(
 							inf_norm, normalized_tol))
+
 				if inf_norm < normalized_tol:
 					if self.verbose > 0:
 						print('[IterativeImputer] Early stopping criterion '
 							'reached.')
+
+					if self.ga:
+						pp_oneline.close()
+						pp_space.close()
+
+						pp_oneline.close()
+						pp_space.close()
+
+						plt.cla()
+						plt.clf()
+						plt.close()
+						for iter_search in searches:
+							if iter_search is not None:
+								plot_fitness_evolution(iter_search)
+								pp_lines.savefig(bbox_inches="tight")
+						plt.cla()
+						plt.clf()
+						plt.close()
+
+					pp_lines.close()
+
 					break
 				Xt_previous = Xt.copy()
+			
+			if self.ga:
+				pp_oneline.close()
+				pp_space.close()
+
+				plt.cla()
+				plt.clf()
+				plt.close()
+				for iter_search in searches:
+					if iter_search is not None:
+						plot_fitness_evolution(iter_search)
+				
+				pp_lines.savefig(bbox_inches="tight")
+
+				plt.cla()
+				plt.clf()
+				plt.close()
+				pp_lines.close()
+
 		else:
 			if not self.sample_posterior:
 				warnings.warn("[IterativeImputer] Early stopping criterion not"
 							" reached.", ConvergenceWarning)
 
+
 		Xt[~mask_missing_values] = X[~mask_missing_values]
-		pp.close()
+
+		if self.ga:
+			# Remove all files except last iteration
+			final_iter = iter_list.pop()
+
+			[os.remove(".score_traces_separate_{}.pdf".format(x)) for x in iter_list]
+
+			[os.remove(".score_traces_combined_{}.pdf".format(x)) for x in iter_list]
+
+			[os.remove(".search_space_{}.pdf".format(x)) for x in iter_list]
+
+			shutil.move(".score_traces_separate_{}.pdf".format(final_iter), "{}_score_traces_separate.pdf".format(self.prefix))
+
+			shutil.move(".score_traces_combined_{}.pdf".format(final_iter), "{}_score_traces_combined.pdf".format(self.prefix))
+
+			shutil.move(".search_space_{}.pdf".format(final_iter), "{}_search_space.pdf".format(self.prefix))
 
 		return super()._concatenate_indicator(Xt, X_indicator), params_list, score_list
 

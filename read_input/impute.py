@@ -225,13 +225,14 @@ class Impute:
 
 		imputer = self._define_iterative_imputer(
 			clf, 
+			self.clf_kwargs,
 			self.prefix,
 			self.n_jobs, 
 			self.grid_iter, 
 			self.cv, 
 			self.clf_type,
 			self.ga,
-			self.gridparams,
+			self.gridparams
 		)
 
 		_, params_list, score_list = imputer.fit_transform(df_subset)
@@ -262,7 +263,8 @@ class Impute:
 		else:
 			# Regressor. Needs to be rounded to integer first.
 			df_imp = pd.DataFrame(imp_arr_full)
-			df_imp = df_imp.round(0).astype("Int8")
+			for col in df_imp.columns:
+				df_imp[col] = df_imp[col].round(0).astype("Int8")
 
 		print("Done with {} imputation!\n".format(str(self.clf)))
 		return df_imp, abs(avg_score), best_params
@@ -496,11 +498,13 @@ class Impute:
 
 		return new_df
 
-	def _define_iterative_imputer(self, clf, prefix="out", n_jobs=None, n_iter=None, cv=None, clf_type=None, ga=False, search_space=None):
+	def _define_iterative_imputer(self, clf, clf_kwargs=None, prefix="out", n_jobs=None, n_iter=None, cv=None, clf_type=None, ga=False, search_space=None):
 		"""[Define an IterativeImputer instance]
 
 		Args:
 			clf ([sklearn Classifier]): [Classifier to use with IterativeImputer]
+
+			clf_kwargs ([dict]): [Keyword arguments for classifier] 
 
 			prefix (str, optional): [Prefix for saving GA plots to PDF file]. Defaults to None.
 
@@ -527,7 +531,8 @@ class Impute:
 			# Create iterative imputer
 			imp = CustomIterImputer(
 				search_space, 
-				self.prefix,
+				clf_kwargs,
+				prefix,
 				estimator=clf, 
 				grid_n_jobs=n_jobs, 
 				grid_n_iter=n_iter, 

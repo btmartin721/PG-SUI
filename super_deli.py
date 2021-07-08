@@ -150,7 +150,7 @@ def main():
 		# 		bootstrap=True
 		# )
 
-		br_imp = ImputeBayesianRidge(data, prefix=args.prefix, n_iter=100, gridparams=grid_params, grid_iter=10, cv=3, n_jobs=4, max_iter=10, n_nearest_features=3, subset_proportion=0.01, ga=True)
+		br_imp = ImputeBayesianRidge(data, prefix=args.prefix, n_iter=100, gridparams=grid_params, grid_iter=3, cv=3, n_jobs=4, max_iter=2, n_nearest_features=3, subset_proportion=0.005, ga=True)
 
 	# colors = {
 	# 	"GU": "#FF00FF",
