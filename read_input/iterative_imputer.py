@@ -46,12 +46,10 @@ is_notebook = isnotebook()
 if is_notebook:
 	from tqdm.notebook import tqdm as progressbar
 else:
-	from tqdm import tqdm as progressbar
-
-	# For running on linux servers.
 	if sys.platform == "linux" or sys.platform == "linux2":
-		from utils.misc import tqdm_linux
-		progressbar.status_printer = tqdm_linux.status_printer
+		from tqdm.auto import tqdm as progressbar
+	else:
+		from tqdm import tqdm as progressbar
 
 # globaly replace print with new_print
 inspect.builtins.print = new_print
