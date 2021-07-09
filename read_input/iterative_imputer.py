@@ -47,7 +47,7 @@ if is_notebook:
 	from tqdm.notebook import tqdm as progressbar
 else:
 	if sys.platform == "linux" or sys.platform == "linux2":
-		from tqdm.auto import tqdm as progressbar
+		from tqdm.notebook import tqdm as progressbar
 	else:
 		from tqdm import tqdm as progressbar
 
