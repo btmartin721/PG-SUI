@@ -56,6 +56,7 @@ class Impute:
 		self.gridparams, \
 		self.imp_kwargs, \
 		self.clf_kwargs, \
+		self.ga_kwargs, \
 		self.grid_iter, \
 		self.cv, \
 		self.n_jobs, \
@@ -226,6 +227,7 @@ class Impute:
 		imputer = self._define_iterative_imputer(
 			clf, 
 			self.clf_kwargs,
+			self.ga_kwargs,
 			self.prefix,
 			self.n_jobs, 
 			self.grid_iter, 
@@ -377,8 +379,11 @@ class Impute:
 
 		imp_kwargs = kwargs.copy()
 		clf_kwargs = kwargs.copy()
+		ga_kwargs = kwargs.copy()
 
 		imp_keys = ["n_nearest_features", "max_iter", "tol", "initial_strategy", "imputation_order", "skip_complete", "random_state", "verbose", "sample_posterior"]
+
+		ga_keys = ["population_size", "tournament_size", "elitism", "crossover_probability", "mutation_probability", "ga_algorithm"]
 
 		to_remove = ["genotype_data", "self", "__class__"]
 
@@ -387,18 +392,33 @@ class Impute:
 				clf_kwargs.pop(k)
 			if k in imp_keys:
 				clf_kwargs.pop(k)
+			if k in ga_keys:
+				clf_kwargs.pop(k)
 				
 		if "clf_random_state" in clf_kwargs:
 			clf_kwargs["random_state"] = clf_kwargs.pop("clf_random_state")
 
 		if "clf_tol" in clf_kwargs:
 			clf_kwargs["tol"] = clf_kwargs.pop("clf_tol")
-					
+
 		for k, v in imp_kwargs.copy().items():
 			if k not in imp_keys:
 				imp_kwargs.pop(k)
 
-		return gridparams, imp_kwargs, clf_kwargs, grid_iter, cv, n_jobs, prefix, subset_proportion, ga
+		for k, v in ga_kwargs.copy().items():
+			if k not in ga_keys:
+				ga_kwargs.pop(k)
+
+		if "ga_algorithm" in ga_kwargs:
+			ga_kwargs["algorithm"] = ga_kwargs.pop("ga_algorithm")
+
+		if self.clf_type == "regressor":
+			ga_kwargs["criteria"] = "min"
+
+		elif self.clf_type == "classifier":
+			ga_kwargs["criteria"] = "max"
+
+		return gridparams, imp_kwargs, clf_kwargs, ga_kwargs, grid_iter, cv, n_jobs, prefix, subset_proportion, ga
 
 	def _format_features(self, df, missing_val=-9):
 		"""[Format a 2D list for input into iterative imputer]
@@ -498,13 +518,15 @@ class Impute:
 
 		return new_df
 
-	def _define_iterative_imputer(self, clf, clf_kwargs=None, prefix="out", n_jobs=None, n_iter=None, cv=None, clf_type=None, ga=False, search_space=None):
+	def _define_iterative_imputer(self, clf, clf_kwargs=None, ga_kwargs=None, prefix="out", n_jobs=None, n_iter=None, cv=None, clf_type=None, ga=False, search_space=None):
 		"""[Define an IterativeImputer instance]
 
 		Args:
 			clf ([sklearn Classifier]): [Classifier to use with IterativeImputer]
 
-			clf_kwargs ([dict]): [Keyword arguments for classifier] 
+			clf_kwargs (dict, optional): [Keyword arguments for classifier]. Defaults to None.
+
+			ga_kwargs (dict, optional): [Keyword arguments for genetic algorithm grid search]. Defaults to None.
 
 			prefix (str, optional): [Prefix for saving GA plots to PDF file]. Defaults to None.
 
@@ -532,6 +554,7 @@ class Impute:
 			imp = CustomIterImputer(
 				search_space, 
 				clf_kwargs,
+				ga_kwargs,
 				prefix,
 				estimator=clf, 
 				grid_n_jobs=n_jobs, 
@@ -556,6 +579,12 @@ class ImputeKNN:
 		grid_iter=50,
 		cv=5,
 		ga=False,
+		population_size=10,
+		tournament_size=3,
+		elitism=True,
+		crossover_probability=0.8,
+		mutation_probability=0.1,
+		ga_algorithm="eaMuPlusLambda",
 		subset_proportion=0.2,
 		n_jobs=1,
 		n_neighbors=5, 
@@ -587,6 +616,18 @@ class ImputeKNN:
 			cv (int, optional): [Number of folds for cross-validation during randomized grid search]. Defaults to 5.
 
 			ga (bool, optional): [Whether to use a genetic algorithm for the grid search. If False, a RandomizedSearchCV is done instead]. Defaults to False.
+
+			population_size (int, optional): [For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. See GASearchCV documentation]. Defaults to 10.
+
+			tournament_size (int, optional): [For genetic algorithm grid search: Number of individuals to perform tournament selection. See GASearchCV documentation]. Defaults to 3.
+
+			elitism (bool, optional): [For genetic algorithm grid search:     If True takes the tournament_size best solution to the next generation. See GASearchCV documentation]. Defaults to True.
+
+			crossover_probability (float, optional): [For genetic algorithm grid search: Probability of crossover operation between two individuals. See GASearchCV documentation]. Defaults to 0.8.
+
+			mutation_probability (float, optional): [For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation]. Defaults to 0.1.
+
+			ga_algorithm (str, optional): [For genetic algorithm grid search: Evolutionary algorithm to use. See more details in the deap algorithms documentation]. Defaults to "eaMuPlusLambda".
 
 			subset_proportion (float, optional): [Proportion of the dataset to randomly subset for the grid search. Should be between 0 and 1, and should also be small, because the grid search takes a long time]. Defaults to 0.2.
 
@@ -645,6 +686,12 @@ class ImputeRandomForest:
 		grid_iter=50,
 		cv=5,
 		ga=False,
+		population_size=10,
+		tournament_size=3,
+		elitism=True,
+		crossover_probability=0.8,
+		mutation_probability=0.1,
+		ga_algorithm="eaMuPlusLambda",
 		subset_proportion=0.2,
 		n_jobs=1,
 		n_estimators=100,
@@ -683,6 +730,18 @@ class ImputeRandomForest:
 			cv (int, optional): [Number of folds for cross-validation during randomized grid search]. Defaults to 5.
 
 			ga (bool, optional): [Whether to use a genetic algorithm for the grid search. If False, a RandomizedSearchCV is done instead]. Defaults to False.
+
+			population_size (int, optional): [For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. See GASearchCV documentation]. Defaults to 10.
+
+			tournament_size (int, optional): [For genetic algorithm grid search: Number of individuals to perform tournament selection. See GASearchCV documentation]. Defaults to 3.
+
+			elitism (bool, optional): [For genetic algorithm grid search:     If True takes the tournament_size best solution to the next generation. See GASearchCV documentation]. Defaults to True.
+
+			crossover_probability (float, optional): [For genetic algorithm grid search: Probability of crossover operation between two individuals. See GASearchCV documentation]. Defaults to 0.8.
+
+			mutation_probability (float, optional): [For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation]. Defaults to 0.1.
+
+			ga_algorithm (str, optional): [For genetic algorithm grid search: Evolutionary algorithm to use. See more details in the deap algorithms documentation]. Defaults to "eaMuPlusLambda".
 
 			subset_proportion (float, optional): [Proportion of the dataset to randomly subset for the grid search. Should be between 0 and 1, and should also be small, because the grid search takes a long time]. Defaults to 0.2.
 
@@ -755,6 +814,12 @@ class ImputeGradientBoosting:
 		grid_iter=50,
 		cv=5,
 		ga=False,
+		population_size=10,
+		tournament_size=3,
+		elitism=True,
+		crossover_probability=0.8,
+		mutation_probability=0.1,
+		ga_algorithm="eaMuPlusLambda",
 		subset_proportion=0.2,
 		n_jobs=1,
 		n_estimators=100,
@@ -793,6 +858,18 @@ class ImputeGradientBoosting:
 			cv (int, optional): [Number of folds for cross-validation during randomized grid search]. Defaults to 5.
 
 			ga (bool, optional): [Whether to use a genetic algorithm for the grid search. If False, a RandomizedSearchCV is done instead]. Defaults to False.
+
+			population_size (int, optional): [For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. See GASearchCV documentation]. Defaults to 10.
+
+			tournament_size (int, optional): [For genetic algorithm grid search: Number of individuals to perform tournament selection. See GASearchCV documentation]. Defaults to 3.
+
+			elitism (bool, optional): [For genetic algorithm grid search:     If True takes the tournament_size best solution to the next generation. See GASearchCV documentation]. Defaults to True.
+
+			crossover_probability (float, optional): [For genetic algorithm grid search: Probability of crossover operation between two individuals. See GASearchCV documentation]. Defaults to 0.8.
+
+			mutation_probability (float, optional): [For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation]. Defaults to 0.1.
+
+			ga_algorithm (str, optional): [For genetic algorithm grid search: Evolutionary algorithm to use. See more details in the deap algorithms documentation]. Defaults to "eaMuPlusLambda".
 
 			subset_proportion (float, optional): [Proportion of the dataset to randomly subset for the grid search. Should be between 0 and 1, and should also be small, because the grid search takes a long time]. Defaults to 0.2.
 
@@ -865,6 +942,12 @@ class ImputeBayesianRidge:
 		grid_iter=50,
 		cv=5,
 		ga=False,
+		population_size=10,
+		tournament_size=3,
+		elitism=True,
+		crossover_probability=0.8,
+		mutation_probability=0.1,
+		ga_algorithm="eaMuPlusLambda",
 		subset_proportion=0.2,
 		n_jobs=1,
 		n_iter=300,
@@ -898,6 +981,18 @@ class ImputeBayesianRidge:
 			cv (int, optional): [Number of folds for cross-validation during randomized grid search]. Defaults to 5.
 
 			ga (bool, optional): [Whether to use a genetic algorithm for the grid search. If False, a RandomizedSearchCV is done instead]. Defaults to False.
+
+			population_size (int, optional): [For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. See GASearchCV documentation]. Defaults to 10.
+
+			tournament_size (int, optional): [For genetic algorithm grid search: Number of individuals to perform tournament selection. See GASearchCV documentation]. Defaults to 3.
+
+			elitism (bool, optional): [For genetic algorithm grid search:     If True takes the tournament_size best solution to the next generation. See GASearchCV documentation]. Defaults to True.
+
+			crossover_probability (float, optional): [For genetic algorithm grid search: Probability of crossover operation between two individuals. See GASearchCV documentation]. Defaults to 0.8.
+
+			mutation_probability (float, optional): [For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation]. Defaults to 0.1.
+
+			ga_algorithm (str, optional): [For genetic algorithm grid search: Evolutionary algorithm to use. See more details in the deap algorithms documentation]. Defaults to "eaMuPlusLambda".
 
 			subset_proportion (float, optional): [Proportion of the dataset to randomly subset for the grid search. Should be between 0 and 1, and should also be small, because the grid search takes a long time]. Defaults to 0.2.
 

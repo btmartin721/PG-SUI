@@ -216,6 +216,7 @@ class IterativeImputer(_BaseImputer):
 	def __init__(self,
 				search_space,
 				clf_kwargs,
+				ga_kwargs,
 				prefix,
 				estimator=None, 
 				*,
@@ -246,6 +247,7 @@ class IterativeImputer(_BaseImputer):
 
 		self.search_space = search_space
 		self.clf_kwargs = clf_kwargs
+		self.ga_kwargs = ga_kwargs
 		self.prefix = prefix
 		self.estimator = estimator
 		self.sample_posterior = sample_posterior
@@ -314,93 +316,52 @@ class IterativeImputer(_BaseImputer):
 
 		# Modified code
 		acc_scorer = make_scorer(accuracy_score)
+
 		rmse_scorer = make_scorer(
 			mean_squared_error, 
 			greater_is_better=False, 
-			squared=False)
+			squared=False
+		)
 
 		cross_val = StratifiedKFold(n_splits=self.grid_cv, shuffle=True)
 
 		# Modified code
 		# If regressor
 		if self.clf_type == "regressor":
-			# Do randomized grid search
-			if not self.ga:
-				search = RandomizedSearchCV(
-					estimator, 
-					param_distributions=self.search_space, 
-					n_iter=self.grid_n_iter, 
-					scoring=rmse_scorer, 
-					n_jobs=self.grid_n_jobs, 
-					cv=cross_val
-				)
+			metric = rmse_scorer
 
-			# Do genetic algorithm
-			else:
-				search = GASearchCV(
-					estimator=estimator,
-					cv=cross_val,
-					scoring=rmse_scorer,
-					population_size=10,
-					generations=self.grid_n_iter,
-					tournament_size=3,
-					elitism=True,
-					crossover_probability=0.8,
-					mutation_probability=0.1,
-					param_grid=self.search_space,
-					criteria="min",
-					algorithm="eaMuPlusLambda",
-					n_jobs=self.grid_n_jobs,
-					verbose=False
-				)
-				
-				callbacks = DeltaThreshold(
-					threshold=1e-3, metric="fitness"
-				)
+			if self.ga:
+				callback = DeltaThreshold(threshold=1e-3, metric="fitness")
 
-		# If classifier
 		else:
-			if not self.ga:
-				# Do randomized grid search
-				search = RandomizedSearchCV(
-					estimator, 
-					param_distributions=self.search_space, 
-					n_iter=self.grid_n_iter, 
-					scoring=acc_scorer, 
-					n_jobs=self.grid_n_jobs, 
-					cv=cross_val
-				)
+			metric = acc_scorer
 
-			# Do genetic algorithm
-			else:
-				search = GASearchCV(
-					estimator=estimator,
-					cv=cross_val,
-					scoring=acc_scorer,
-					population_size=10,
-					generations=self.grid_n_iter,
-					tournament_size=3,
-					elitism=True,
-					crossover_probability=0.8,
-					mutation_probability=0.1,
-					param_grid=self.search_space,
-					criteria="max",
-					algorithm="eaMuPlusLambda",
-					n_jobs=self.grid_n_jobs,
-					verbose=False
-				)
+			if self.ga:
+				callback = ConsecutiveStopping(generations=5, metric="fitness")			
+		# Do randomized grid search
+		if not self.ga:
+			search = RandomizedSearchCV(
+				estimator, 
+				param_distributions=self.search_space, 
+				n_iter=self.grid_n_iter, 
+				scoring=metric, 
+				n_jobs=self.grid_n_jobs, 
+				cv=cross_val
+			)
 
-				callbacks = ConsecutiveStopping(
-					generations=5, metric="fitness"
-				)
-
-				# # If accuracy exceeds threshold, 
-				# threshold_callback = ThresholdStopping(
-				# 	threshold=0.98, metric="fitness_max"
-				# )
-
-				# callbacks = [consecutive_callback, threshold_callback]
-
+		# Do genetic algorithm
+		else:
+			search = GASearchCV(
+				estimator=estimator,
+				cv=cross_val,
+				scoring=metric,
+				generations=self.grid_n_iter,
+				param_grid=self.search_space,
+				n_jobs=self.grid_n_jobs,
+				verbose=False,
+				**self.ga_kwargs
+			)
+				
 		missing_row_mask = mask_missing_values[:, feat_idx]
 		if fit_mode:
 			X_train = _safe_indexing(X_filled[:, neighbor_feat_idx],
@@ -410,7 +371,7 @@ class IterativeImputer(_BaseImputer):
 									~missing_row_mask)
 
 			if self.ga:
-				search.fit(X_train, y_train, callbacks=callbacks)
+				search.fit(X_train, y_train, callbacks=callback)
 
 			else:
 				search.fit(X_train, y_train)
