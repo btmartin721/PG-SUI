@@ -390,16 +390,16 @@ class IterativeImputer(_BaseImputer):
 					verbose=False
 				)
 
-				consecutive_callback = ConsecutiveStopping(
+				callbacks = ConsecutiveStopping(
 					generations=5, metric="fitness"
 				)
 
-				# If accuracy exceeds threshold, 
-				threshold_callback = ThresholdStopping(
-					threshold=0.98, metric="fitness_max"
-				)
+				# # If accuracy exceeds threshold, 
+				# threshold_callback = ThresholdStopping(
+				# 	threshold=0.98, metric="fitness_max"
+				# )
 
-				callbacks = [consecutive_callback, threshold_callback]
+				# callbacks = [consecutive_callback, threshold_callback]
 
 		missing_row_mask = mask_missing_values[:, feat_idx]
 		if fit_mode:
@@ -654,6 +654,7 @@ class IterativeImputer(_BaseImputer):
 			)
 		return limit
 
+	@ignore_warnings(category=UserWarning)
 	def fit_transform(self, X, y=None):
 		"""Fits the imputer on X and return the transformed X.
 		Parameters
@@ -745,19 +746,14 @@ class IterativeImputer(_BaseImputer):
 
 		for self.n_iter_ in progressbar(range(1, self.max_iter + 1), desc="Iteration: "):
 
-			iter_list.append(self.n_iter_)
-
 			if self.ga:
+				iter_list.append(self.n_iter_)
+
 				pp_oneline = PdfPages(".score_traces_separate_{}.pdf".format(self.n_iter_))
 
 				pp_lines = PdfPages(".score_traces_combined_{}.pdf".format(self.n_iter_))
 
 				pp_space = PdfPages(".search_space_{}.pdf".format(self.n_iter_))
-
-			else:
-				pp_oneline = None
-				pp_lines = None
-				pp_space = None
 
 			if self.imputation_order == 'random':
 				ordered_idx = self._get_ordered_idx(mask_missing_values)
@@ -845,21 +841,19 @@ class IterativeImputer(_BaseImputer):
 						pp_oneline.close()
 						pp_space.close()
 
-						pp_oneline.close()
-						pp_space.close()
-
 						plt.cla()
 						plt.clf()
 						plt.close()
 						for iter_search in searches:
 							if iter_search is not None:
 								plot_fitness_evolution(iter_search)
-								pp_lines.savefig(bbox_inches="tight")
+
+						pp_lines.savefig(bbox_inches="tight")
+
 						plt.cla()
 						plt.clf()
 						plt.close()
-
-					pp_lines.close()
+						pp_lines.close()
 
 					break
 				Xt_previous = Xt.copy()
@@ -886,7 +880,6 @@ class IterativeImputer(_BaseImputer):
 			if not self.sample_posterior:
 				warnings.warn("[IterativeImputer] Early stopping criterion not"
 							" reached.", ConvergenceWarning)
-
 
 		Xt[~mask_missing_values] = X[~mask_missing_values]
 
