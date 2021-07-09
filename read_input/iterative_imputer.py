@@ -48,6 +48,11 @@ if is_notebook:
 else:
 	from tqdm import tqdm as progressbar
 
+	# For running on linux servers.
+	if sys.platform == "linux" or sys.platform == "linux2":
+		from utils.misc import tqdm_linux
+		progressbar.status_printer = tqdm_linux.status_printer
+
 # globaly replace print with new_print
 inspect.builtins.print = new_print
 
@@ -705,7 +710,7 @@ class IterativeImputer(_BaseImputer):
 		if self.ga:
 			sns.set_style("white")
 
-		for self.n_iter_ in progressbar(range(1, self.max_iter + 1), desc="Iteration: "):
+		for self.n_iter_ in progressbar(range(1, self.max_iter + 1), desc="Iteration: ", leave=True, position=0):
 
 			if self.ga:
 				iter_list.append(self.n_iter_)
