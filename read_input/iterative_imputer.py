@@ -618,7 +618,6 @@ class IterativeImputer(_BaseImputer):
 			)
 		return limit
 
-	@ignore_warnings(category=UserWarning)
 	def fit_transform(self, X, y=None):
 		"""Fits the imputer on X and return the transformed X.
 		Parameters
