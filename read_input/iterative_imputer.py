@@ -3,7 +3,6 @@ from collections import namedtuple
 import warnings
 import sys
 import os
-import inspect # for tqdm new_print
 import shutil
 
 
@@ -40,7 +39,6 @@ from sklearn_genetic.space import Continuous, Categorical, Integer
 from sklearn_genetic.callbacks import ConsecutiveStopping, DeltaThreshold, ThresholdStopping
 
 from utils.misc import isnotebook
-from utils.misc import new_print
 
 is_notebook = isnotebook()
 
@@ -51,9 +49,6 @@ else:
 		from tqdm.auto import tqdm as progressbar
 	else:
 		from tqdm import tqdm as progressbar
-
-# globaly replace print with new_print
-inspect.builtins.print = new_print
 
 _ImputerTriplet = namedtuple('_ImputerTriplet', ['feat_idx',
 												'neighbor_feat_idx',
@@ -241,7 +236,8 @@ class IterativeImputer(_BaseImputer):
 				grid_n_jobs=1,
 				grid_n_iter=10,
 				clf_type="classifier",
-				ga=False
+				ga=False,
+				disable_progressbar=False
 	):
 				
 		super().__init__(
@@ -270,6 +266,7 @@ class IterativeImputer(_BaseImputer):
 		self.grid_n_iter = grid_n_iter
 		self.clf_type = clf_type
 		self.ga = ga
+		self.disable_progressbar = disable_progressbar
 
 	@ignore_warnings(category=UserWarning)
 	def _impute_one_feature(self,
@@ -871,7 +868,12 @@ class IterativeImputer(_BaseImputer):
 		if self.ga:
 			sns.set_style("white")
 
-		for self.n_iter_ in progressbar(range(1, self.max_iter + 1), desc="Iteration: ", leave=True, position=0):
+		total_iter = self.max_iter+1
+
+		for self.n_iter_ in progressbar(
+			range(1, total_iter), 
+			desc="Iteration: ", disable=self.disable_progressbar
+		):
 
 			if self.ga:
 				iter_list.append(self.n_iter_)
@@ -889,9 +891,19 @@ class IterativeImputer(_BaseImputer):
 			params_list.clear()
 			score_list.clear()
 			searches = list()
+
+			if self.disable_progressbar:
+				feat_counter = 0
+				total_features = len(ordered_idx)
+
 			for feat_idx in progressbar(
-				ordered_idx, desc="Feature: ", leave=False, position=1
+				ordered_idx, desc="Feature: ", leave=False, position=1, 
+				disable=self.disable_progressbar
 			):
+
+				if self.disable_progressbar:
+					feat_counter += 1
+					print(f"\nIteration: {self.n_iter_}/{self.max_iter+1} ({int((self.n_iter_ / total_iter) * 100)}%)\nFeature: {feat_counter}/{total_features} ({int((feat_counter / total_features) * 100)}%)\n")
 
 				neighbor_feat_idx = self._get_neighbor_feat_idx(n_features,
 																feat_idx,
@@ -1130,13 +1142,9 @@ class IterativeImputer(_BaseImputer):
 		df = logbook_to_pandas(estimator.logbook)
 		if features:
 			stats = df[features]
-			print("features")
-			print(stats)
 		else:
 			variables = [*estimator.space.parameters, "score"]
 			stats = df[variables]
-			print("variables")
-			print(stats)
 
 		g = sns.PairGrid(stats, diag_sharey=False, height=height)
 

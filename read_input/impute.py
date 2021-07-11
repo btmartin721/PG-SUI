@@ -62,7 +62,8 @@ class Impute:
 		self.n_jobs, \
 		self.prefix, \
 		self.column_subset, \
-		self.ga = self._gather_impute_settings(kwargs)
+		self.ga, \
+		self.disable_progressbar = self._gather_impute_settings(kwargs)
 
 	@timer
 	def fit_predict(self, X):
@@ -234,15 +235,16 @@ class Impute:
 
 		imputer = self._define_iterative_imputer(
 			clf, 
-			self.clf_kwargs,
-			self.ga_kwargs,
-			self.prefix,
-			self.n_jobs, 
-			self.grid_iter, 
-			self.cv, 
-			self.clf_type,
-			self.ga,
-			self.gridparams
+			clf_kwargs=self.clf_kwargs,
+			ga_kwargs=self.ga_kwargs,
+			prefix=self.prefix,
+			n_jobs=self.n_jobs, 
+			n_iter=self.grid_iter, 
+			cv=self.cv, 
+			clf_type=self.clf_type,
+			ga=self.ga,
+			search_space=self.gridparams,
+			disable_progressbar=self.disable_progressbar
 		)
 
 		_, params_list, score_list = imputer.fit_transform(df_subset)
@@ -381,6 +383,7 @@ class Impute:
 		grid_iter = kwargs.pop("grid_iter")
 		column_subset = kwargs.pop("column_subset")
 		ga = kwargs.pop("ga")
+		disable_progressbar = kwargs.pop("disable_progressbar")
 
 		if prefix is None:
 			prefix = "output"
@@ -426,7 +429,7 @@ class Impute:
 		elif self.clf_type == "classifier":
 			ga_kwargs["criteria"] = "max"
 
-		return gridparams, imp_kwargs, clf_kwargs, ga_kwargs, grid_iter, cv, n_jobs, prefix, column_subset, ga
+		return gridparams, imp_kwargs, clf_kwargs, ga_kwargs, grid_iter, cv, n_jobs, prefix, column_subset, ga, disable_progressbar
 
 	def _format_features(self, df, missing_val=-9):
 		"""[Format a 2D list for input into iterative imputer]
@@ -526,7 +529,7 @@ class Impute:
 
 		return new_df
 
-	def _define_iterative_imputer(self, clf, clf_kwargs=None, ga_kwargs=None, prefix="out", n_jobs=None, n_iter=None, cv=None, clf_type=None, ga=False, search_space=None):
+	def _define_iterative_imputer(self, clf, clf_kwargs=None, ga_kwargs=None, prefix="out", n_jobs=None, n_iter=None, cv=None, clf_type=None, ga=False, search_space=None, disable_progressbar=False):
 		"""[Define an IterativeImputer instance]
 
 		Args:
@@ -550,6 +553,8 @@ class Impute:
 
 			search_space (dict, optional): [gridparams dictionary with search space to explore in random grid search]. Defaults to None.
 
+			disable_progressbar (bool, optional): [Whether or not to disable the tqdm progress bar]. Defaults to False.
+
 		Returns:
 			[sklearn.impute.IterativeImputer]: [IterativeImputer instance]
 		"""
@@ -570,6 +575,7 @@ class Impute:
 				grid_cv=cv, 
 				clf_type=clf_type, 
 				ga=ga,
+				disable_progressbar=disable_progressbar,
 				**self.imp_kwargs
 			)
 
@@ -594,6 +600,7 @@ class ImputeKNN:
 		mutation_probability=0.1,
 		ga_algorithm="eaMuPlusLambda",
 		column_subset=0.1,
+		disable_progressbar=False,
 		n_jobs=1,
 		n_neighbors=5, 
 		weights="distance", 
@@ -638,6 +645,8 @@ class ImputeKNN:
 			ga_algorithm (str, optional): [For genetic algorithm grid search: Evolutionary algorithm to use. See more details in the deap algorithms documentation]. Defaults to "eaMuPlusLambda".
 
 			column_subset (int or float, optional): [If float, proportion of the dataset to randomly subset for the grid search. Should be between 0 and 1, and should also be small, because the grid search takes a long time. If int, subset ```column_subset``` columns]. Defaults to 0.1.
+
+			disable_progressbar (bool, optional): [Whether or not to disable the tqdm progress bar when doing the imputation. If True, progress bar is disabled, which is useful when running the imputation on e.g. an HPC cluster. If the bar is disabled, a status update will be printed to standard output for each iteration and feature instead. If False, the tqdm progress bar will be used]
 
 			n_jobs (int, optional): [Number of parallel jobs to use. If ```gridparams``` is not None, n_jobs is used for the grid search. Otherwise it is used for the classifier. -1 means using all available processors]. Defaults to 1.
 
@@ -701,6 +710,7 @@ class ImputeRandomForest:
 		mutation_probability=0.1,
 		ga_algorithm="eaMuPlusLambda",
 		column_subset=0.1,
+		disable_progressbar=False,
 		n_jobs=1,
 		n_estimators=100,
 		criterion="gini",
@@ -752,6 +762,8 @@ class ImputeRandomForest:
 			ga_algorithm (str, optional): [For genetic algorithm grid search: Evolutionary algorithm to use. See more details in the deap algorithms documentation]. Defaults to "eaMuPlusLambda".
 
 			column_subset (int or float, optional): [If float, proportion of the dataset to randomly subset for the grid search. Should be between 0 and 1, and should also be small, because the grid search takes a long time. If int, subset ```column_subset``` columns]. Defaults to 0.1.
+
+			disable_progressbar (bool, optional): [Whether or not to disable the tqdm progress bar when doing the imputation. If True, progress bar is disabled, which is useful when running the imputation on e.g. an HPC cluster. If the bar is disabled, a status update will be printed to standard output for each iteration and feature instead. If False, the tqdm progress bar will be used]
 
 			n_jobs (int, optional): [Number of parallel jobs to use. If ```gridparams``` is not None, n_jobs is used for the grid search. Otherwise it is used for the classifier. -1 means using all available processors]. Defaults to 1.
 
@@ -829,6 +841,7 @@ class ImputeGradientBoosting:
 		mutation_probability=0.1,
 		ga_algorithm="eaMuPlusLambda",
 		column_subset=0.1,
+		disable_progressbar=False,
 		n_jobs=1,
 		n_estimators=100,
 		loss="deviance",
@@ -880,6 +893,8 @@ class ImputeGradientBoosting:
 			ga_algorithm (str, optional): [For genetic algorithm grid search: Evolutionary algorithm to use. See more details in the deap algorithms documentation]. Defaults to "eaMuPlusLambda".
 
 			column_subset (int or float, optional): [If float, proportion of the dataset to randomly subset for the grid search. Should be between 0 and 1, and should also be small, because the grid search takes a long time. If int, subset ```column_subset``` columns]. Defaults to 0.1.
+
+			disable_progressbar (bool, optional): [Whether or not to disable the tqdm progress bar when doing the imputation. If True, progress bar is disabled, which is useful when running the imputation on e.g. an HPC cluster. If the bar is disabled, a status update will be printed to standard output for each iteration and feature instead. If False, the tqdm progress bar will be used]
 
 			n_jobs (int, optional): [Number of parallel jobs to use. If ```gridparams``` is not None, n_jobs is used for the grid search. Otherwise it is used for the classifier. -1 means using all available processors]. Defaults to 1.
 			
@@ -957,6 +972,7 @@ class ImputeBayesianRidge:
 		mutation_probability=0.1,
 		ga_algorithm="eaMuPlusLambda",
 		column_subset=0.1,
+		disable_progressbar=False,
 		n_jobs=1,
 		n_iter=300,
 		clf_tol=1e-3,
@@ -1003,6 +1019,8 @@ class ImputeBayesianRidge:
 			ga_algorithm (str, optional): [For genetic algorithm grid search: Evolutionary algorithm to use. See more details in the deap algorithms documentation]. Defaults to "eaMuPlusLambda".
 
 			column_subset (int or float, optional): [If float, proportion of the dataset to randomly subset for the grid search. Should be between 0 and 1, and should also be small, because the grid search takes a long time. If int, subset ```column_subset``` columns]. Defaults to 0.1.
+
+			disable_progressbar (bool, optional): [Whether or not to disable the tqdm progress bar when doing the imputation. If True, progress bar is disabled, which is useful when running the imputation on e.g. an HPC cluster. If the bar is disabled, a status update will be printed to standard output for each iteration and feature instead. If False, the tqdm progress bar will be used]
 
 			n_jobs (int, optional): [Number of parallel jobs to use. If ```gridparams``` is not None, n_jobs is used for the grid search. Otherwise it is used for the regressor. -1 means using all available processors]. Defaults to 1.	
 				

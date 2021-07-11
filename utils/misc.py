@@ -9,24 +9,6 @@ from tqdm.utils import disp_len, _unicode # for overriding status_print
 from numpy.random import choice
 #from skopt import BayesSearchCV
 
-def new_print(*args, **kwargs):
-	# From: https://stackoverflow.com/questions/36986929/redirect-print-command-in-python-script-through-tqdm-write
-	# If progressbar.write raises error, use built-in print
-	is_notebook = isnotebook()
-
-	if is_notebook:
-		from tqdm.notebook import tqdm as progressbar
-	else:
-		from tqdm import tqdm as progressbar
-
-	# store builtin print
-	old_print = print
-
-	try:
-		progressbar.write(*args, **kwargs)
-	except:
-		old_print(*args, ** kwargs)
-
 def get_indices(l):
 	"""
 	[Takes a list and returns dict giving indices matching each possible 
