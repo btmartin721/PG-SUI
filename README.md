@@ -6,7 +6,7 @@ A comprehensive machine learning species delimitation package
 
 ## Requirements
 
-+ python == 3.7
++ python >= 3.7
 + pandas >= 1.2.5
 + numpy >= 1.20
 + matplotlib
