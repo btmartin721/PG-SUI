@@ -148,12 +148,12 @@ def main():
 		rf_imp = ImputeRandomForest(
 				data, 
 				prefix=args.prefix, 
-				n_nearest_features=25, 
+				n_nearest_features=20, 
 				gridparams=grid_params, 
 				cv=3, 
 				grid_iter=50, 
-				n_jobs=4, 
-				max_iter=20, 
+				n_jobs=32, 
+				max_iter=25, 
 				column_subset=50,
 				ga=True
 		)
