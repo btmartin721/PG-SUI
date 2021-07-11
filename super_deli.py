@@ -80,7 +80,6 @@ def main():
 		#data.write_imputed(data.imputed_rf_df, args.prefix)
 
 	else:	
-
 		# # For randmizedsearchcv
 		# # Number of trees in random forest
 		n_estimators = \
@@ -153,9 +152,9 @@ def main():
 				gridparams=grid_params, 
 				cv=3, 
 				grid_iter=50, 
-				n_jobs=32, 
+				n_jobs=4, 
 				max_iter=20, 
-				subset_proportion=0.025,
+				column_subset=50,
 				ga=True
 		)
 

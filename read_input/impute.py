@@ -61,7 +61,7 @@ class Impute:
 		self.cv, \
 		self.n_jobs, \
 		self.prefix, \
-		self.subset_proportion, \
+		self.column_subset, \
 		self.ga = self._gather_impute_settings(kwargs)
 
 	@timer
@@ -164,20 +164,28 @@ class Impute:
 		"""
 		return pd.read_csv(filename, dtype="Int8", header=None)
 
-	def subset_data_for_testing(self, df, column_percent):
+	def subset_data_for_testing(self, df, columns_to_subset):
 		"""[Randomly subsets pandas.DataFrame with ```column_percent``` fraction of the data. Allows faster testing]
 
 		Args:
 			df ([pandas.DataFrame]): [DataFrame with 012-encoded genotypes]
 
-			column_percent ([float]): [Proportion of DataFrame to randomly subset. Should be between 0 and 1]
+			columns_to_subset ([int or float]): [If float, proportion of DataFrame to randomly subset, which should be between 0 and 1. if integer, subsets ```columns_to_subset``` random columns]
 
 		Returns:
 			[pandas.DataFrame]: [Randomly subset DataFrame]
 		"""
 		# Get a random numpy arrray of column names to select
-		cols = sorted(np.random.choice(df.columns, 
-			int(len(df.columns) * column_percent), replace=False), reverse=False)
+		if isinstance(columns_to_subset, float):
+			sub = int(len(df.columns) * columns_to_subset)
+
+		elif isinstance(columns_to_subset, int):
+			sub = columns_to_subset
+
+		cols = sorted(np.random.choice(
+					df.columns, sub, replace=False), 
+				reverse=False
+		)
 
 		# Subset the DataFrame
 		df_sub = df.loc[:, cols]
@@ -216,7 +224,7 @@ class Impute:
 
 			[dict]: [Best parameters found during the grid search]
 		"""
-		df_subset = self.subset_data_for_testing(df, self.subset_proportion)
+		df_subset = self.subset_data_for_testing(df, self.column_subset)
 		df_subset = self._remove_nonbiallelic(df_subset)
 
 		print("Test dataset size: {}\n".format(len(df_subset.columns)))
@@ -371,7 +379,7 @@ class Impute:
 		n_jobs = kwargs.pop("n_jobs")
 		prefix = kwargs.pop("prefix")
 		grid_iter = kwargs.pop("grid_iter")
-		subset_proportion = kwargs.pop("subset_proportion")
+		column_subset = kwargs.pop("column_subset")
 		ga = kwargs.pop("ga")
 
 		if prefix is None:
@@ -418,7 +426,7 @@ class Impute:
 		elif self.clf_type == "classifier":
 			ga_kwargs["criteria"] = "max"
 
-		return gridparams, imp_kwargs, clf_kwargs, ga_kwargs, grid_iter, cv, n_jobs, prefix, subset_proportion, ga
+		return gridparams, imp_kwargs, clf_kwargs, ga_kwargs, grid_iter, cv, n_jobs, prefix, column_subset, ga
 
 	def _format_features(self, df, missing_val=-9):
 		"""[Format a 2D list for input into iterative imputer]
@@ -585,7 +593,7 @@ class ImputeKNN:
 		crossover_probability=0.8,
 		mutation_probability=0.1,
 		ga_algorithm="eaMuPlusLambda",
-		subset_proportion=0.2,
+		column_subset=0.1,
 		n_jobs=1,
 		n_neighbors=5, 
 		weights="distance", 
@@ -629,7 +637,7 @@ class ImputeKNN:
 
 			ga_algorithm (str, optional): [For genetic algorithm grid search: Evolutionary algorithm to use. See more details in the deap algorithms documentation]. Defaults to "eaMuPlusLambda".
 
-			subset_proportion (float, optional): [Proportion of the dataset to randomly subset for the grid search. Should be between 0 and 1, and should also be small, because the grid search takes a long time]. Defaults to 0.2.
+			column_subset (int or float, optional): [If float, proportion of the dataset to randomly subset for the grid search. Should be between 0 and 1, and should also be small, because the grid search takes a long time. If int, subset ```column_subset``` columns]. Defaults to 0.1.
 
 			n_jobs (int, optional): [Number of parallel jobs to use. If ```gridparams``` is not None, n_jobs is used for the grid search. Otherwise it is used for the classifier. -1 means using all available processors]. Defaults to 1.
 
@@ -692,7 +700,7 @@ class ImputeRandomForest:
 		crossover_probability=0.8,
 		mutation_probability=0.1,
 		ga_algorithm="eaMuPlusLambda",
-		subset_proportion=0.2,
+		column_subset=0.1,
 		n_jobs=1,
 		n_estimators=100,
 		criterion="gini",
@@ -743,7 +751,7 @@ class ImputeRandomForest:
 
 			ga_algorithm (str, optional): [For genetic algorithm grid search: Evolutionary algorithm to use. See more details in the deap algorithms documentation]. Defaults to "eaMuPlusLambda".
 
-			subset_proportion (float, optional): [Proportion of the dataset to randomly subset for the grid search. Should be between 0 and 1, and should also be small, because the grid search takes a long time]. Defaults to 0.2.
+			column_subset (int or float, optional): [If float, proportion of the dataset to randomly subset for the grid search. Should be between 0 and 1, and should also be small, because the grid search takes a long time. If int, subset ```column_subset``` columns]. Defaults to 0.1.
 
 			n_jobs (int, optional): [Number of parallel jobs to use. If ```gridparams``` is not None, n_jobs is used for the grid search. Otherwise it is used for the classifier. -1 means using all available processors]. Defaults to 1.
 
@@ -820,7 +828,7 @@ class ImputeGradientBoosting:
 		crossover_probability=0.8,
 		mutation_probability=0.1,
 		ga_algorithm="eaMuPlusLambda",
-		subset_proportion=0.2,
+		column_subset=0.1,
 		n_jobs=1,
 		n_estimators=100,
 		loss="deviance",
@@ -871,7 +879,7 @@ class ImputeGradientBoosting:
 
 			ga_algorithm (str, optional): [For genetic algorithm grid search: Evolutionary algorithm to use. See more details in the deap algorithms documentation]. Defaults to "eaMuPlusLambda".
 
-			subset_proportion (float, optional): [Proportion of the dataset to randomly subset for the grid search. Should be between 0 and 1, and should also be small, because the grid search takes a long time]. Defaults to 0.2.
+			column_subset (int or float, optional): [If float, proportion of the dataset to randomly subset for the grid search. Should be between 0 and 1, and should also be small, because the grid search takes a long time. If int, subset ```column_subset``` columns]. Defaults to 0.1.
 
 			n_jobs (int, optional): [Number of parallel jobs to use. If ```gridparams``` is not None, n_jobs is used for the grid search. Otherwise it is used for the classifier. -1 means using all available processors]. Defaults to 1.
 			
@@ -948,7 +956,7 @@ class ImputeBayesianRidge:
 		crossover_probability=0.8,
 		mutation_probability=0.1,
 		ga_algorithm="eaMuPlusLambda",
-		subset_proportion=0.2,
+		column_subset=0.1,
 		n_jobs=1,
 		n_iter=300,
 		clf_tol=1e-3,
@@ -994,7 +1002,7 @@ class ImputeBayesianRidge:
 
 			ga_algorithm (str, optional): [For genetic algorithm grid search: Evolutionary algorithm to use. See more details in the deap algorithms documentation]. Defaults to "eaMuPlusLambda".
 
-			subset_proportion (float, optional): [Proportion of the dataset to randomly subset for the grid search. Should be between 0 and 1, and should also be small, because the grid search takes a long time]. Defaults to 0.2.
+			column_subset (int or float, optional): [If float, proportion of the dataset to randomly subset for the grid search. Should be between 0 and 1, and should also be small, because the grid search takes a long time. If int, subset ```column_subset``` columns]. Defaults to 0.1.
 
 			n_jobs (int, optional): [Number of parallel jobs to use. If ```gridparams``` is not None, n_jobs is used for the grid search. Otherwise it is used for the regressor. -1 means using all available processors]. Defaults to 1.	
 				

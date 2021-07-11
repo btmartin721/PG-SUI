@@ -442,8 +442,8 @@ class GenotypeData:
 		"""
 		df = pd.DataFrame.from_records(self.snps)
 		df.replace(
-			to_replace=["-9", -9, "-", "N"], 
-			value=[np.nan, np.nan, np.nan, np.nan], 
+			to_replace=-9, 
+			value=np.nan, 
 			inplace=True
 		)
 		return df.astype("Int8")
