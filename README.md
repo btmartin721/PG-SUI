@@ -6,9 +6,9 @@ A comprehensive machine learning species delimitation package
 
 ## Requirements
 
-+ python >= 3.8
-+ pandas >= 1.3
-+ numpy >= 1.21
++ python == 3.7
++ pandas >= 1.2.5
++ numpy >= 1.20
 + matplotlib
 + seaborn
 + kneed
@@ -19,15 +19,16 @@ A comprehensive machine learning species delimitation package
 + sklearn-genetic-opt >= 0.6.0
 + toytree
 
-Python < 3.8 is not currently supported.  
+Python versions other than 3.7 are not currently supported.  
 
 The requirements can mostly be installed with conda. The only module that isn't available on conda is sklearn-genetic-opt, which can be installed via pip.
 
 ```
-create -n super_deli python=3.8
+create -n super_deli python=3.7
 conda activate super_deli
-conda install -c conda-forge matplotlib seaborn jupyterlab toytree scikit-learn scikit-learn-extra tqdm kneed
-pip install sklearn-genetic-opt[all]
+conda install matplotlib seaborn jupyterlab scikit-learn tqdm pandas numpy
+conda install -c conda-forge toytree scikit-learn-extra kneed
+pip install sklearn-genetic-opt[all] # For genetic algorithm plotting functions
 ```
 
 ## Input files
