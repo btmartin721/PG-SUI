@@ -151,11 +151,11 @@ def main():
 				prefix=args.prefix, 
 				n_nearest_features=25, 
 				gridparams=grid_params, 
-				cv=5, 
+				cv=3, 
 				grid_iter=50, 
 				n_jobs=32, 
-				max_iter=50, 
-				subset_proportion=0.2,
+				max_iter=20, 
+				subset_proportion=0.025,
 				ga=True
 		)
 
