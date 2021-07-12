@@ -779,6 +779,7 @@ class IterativeImputer(_BaseImputer):
 			)
 		return limit
 
+	@ignore_warnings(category=UserWarning)
 	def fit_transform(self, X, y=None):
 		"""Fits the imputer on X and return the transformed X.
 		Parameters
@@ -868,7 +869,7 @@ class IterativeImputer(_BaseImputer):
 		if self.ga:
 			sns.set_style("white")
 
-		total_iter = self.max_iter+1
+		total_iter = self.max_iter
 
 		for self.n_iter_ in progressbar(
 			range(1, total_iter), 
@@ -903,7 +904,7 @@ class IterativeImputer(_BaseImputer):
 
 				if self.disable_progressbar:
 					feat_counter += 1
-					print(f"\nIteration: {self.n_iter_}/{self.max_iter+1} ({int((self.n_iter_ / total_iter) * 100)}%)\nFeature: {feat_counter}/{total_features} ({int((feat_counter / total_features) * 100)}%)\n")
+					print(f"\nIteration: {self.n_iter_}/{self.max_iter} ({int((self.n_iter_ / total_iter) * 100)}%)\nFeature: {feat_counter}/{total_features} ({int((feat_counter / total_features) * 100)}%)\n")
 
 				neighbor_feat_idx = self._get_neighbor_feat_idx(n_features,
 																feat_idx,

@@ -13,6 +13,7 @@ import pandas as pd
 from sklearn.experimental import enable_iterative_imputer
 from read_input.iterative_imputer import IterativeImputer as CustomIterImputer
 from sklearn.impute import IterativeImputer as OriginalIterativeImputer
+from sklearn.preprocessing import LabelEncoder
 from sklearn.ensemble import ExtraTreesClassifier
 from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.linear_model import BayesianRidge
@@ -165,7 +166,7 @@ class Impute:
 		"""
 		return pd.read_csv(filename, dtype="Int8", header=None)
 
-	def subset_data_for_testing(self, df, columns_to_subset):
+	def subset_data_for_testing(self, df, columns_to_subset, original_num_cols):
 		"""[Randomly subsets pandas.DataFrame with ```column_percent``` fraction of the data. Allows faster testing]
 
 		Args:
@@ -173,23 +174,40 @@ class Impute:
 
 			columns_to_subset ([int or float]): [If float, proportion of DataFrame to randomly subset, which should be between 0 and 1. if integer, subsets ```columns_to_subset``` random columns]
 
+			original_num_cols ([int]): [Number of columns in original DataFrame]
+
 		Returns:
 			[pandas.DataFrame]: [Randomly subset DataFrame]
 		"""
 		# Get a random numpy arrray of column names to select
 		if isinstance(columns_to_subset, float):
-			sub = int(len(df.columns) * columns_to_subset)
+			if (original_num_cols * columns_to_subset) > len(df.columns):
+				print("Warning: column_subset is greater than remaining columns following filtering. Using all columns")
+				all_cols = True
+			else:
+				all_cols = False
+
+			if all_cols:
+				df_sub = df.copy()
+			else:
+				sub = int(original_num_cols * columns_to_subset)
+				df_sub = df.sample(frac=sub, axis="columns", replace=False)
 
 		elif isinstance(columns_to_subset, int):
-			sub = columns_to_subset
-
-		cols = sorted(np.random.choice(
-					df.columns, sub, replace=False), 
-				reverse=False
-		)
-
-		# Subset the DataFrame
-		df_sub = df.loc[:, cols]
+			if columns_to_subset > len(df.columns):
+				print("Warning: column_subset is greater than remaining columns following filtering. Using all columns")
+				all_cols = True
+			else:
+				all_cols = False
+			
+			if all_cols:
+				df_sub = df.copy()
+			else:
+				sub = columns_to_subset
+				df_sub = df.sample(n=sub, axis="columns", replace=False)
+		
+		df_sub.columns = df_sub.columns.astype(str)
+		
 		return df_sub
 
 	def _impute_single(self, df):
@@ -225,8 +243,9 @@ class Impute:
 
 			[dict]: [Best parameters found during the grid search]
 		"""
-		df_subset = self.subset_data_for_testing(df, self.column_subset)
-		df_subset = self._remove_nonbiallelic(df_subset)
+		original_num_cols = len(df.columns)
+		df_tmp = self._remove_nonbiallelic(df)
+		df_subset = self.subset_data_for_testing(df_tmp, self.column_subset, original_num_cols)
 
 		print("Test dataset size: {}\n".format(len(df_subset.columns)))
 		print("Doing grid search...")
@@ -337,29 +356,57 @@ class Impute:
 			return sum(d[k] for d in l) / len(l)
 
 	def _remove_nonbiallelic(self, df):
-		"""[Remove sites that do not have both 0 and 2 encoded values in a column]
+		"""[Remove sites that do not have both 0 and 2 encoded values in a column and if any of the allele counts is less than the number of cross-validation folds]
 
 		Args:
 			df ([pandas.DataFrame]): [DataFrame with 012-encoded genotypes]
 
 		Returns:
-			[pandas.DataFrame]: [DataFrame with non-biallelic sites removed]
+			[pandas.DataFrame]: [DataFrame with sites removed]
 		"""
+		cv2 = self.cv * 2
 		df_cp = df.copy()
 		bad_cols = list()
-
 		if pd.__version__[0] == 0:
 			for col in df_cp.columns:
-				if not df_cp[col].isin([0]).any() or not df_cp[col].isin([2]).any():
+				if not df_cp[col].isin([0.0]).any() or not df_cp[col].isin([2.0]).any():
+					bad_cols.append(col)
+
+				if len(df_cp[df_cp[col] == 0.0]) < cv2:
+					bad_cols.append(col)
+
+				if df_cp[col].isin([1.0]).any():
+					if len(df_cp[df_cp[col] == 1]) < cv2:
+						bad_cols.append(col)
+
+				if len(df_cp[df_cp[col] == 2.0]) < cv2:
 					bad_cols.append(col)
 		
 		# pandas 1.X.X
 		else:
 			for col in df_cp.columns:
-				if 0 not in df[col].unique() and 2 not in df[col].unique():
+				if 0.0 not in df[col].unique() and 2.0 not in df[col].unique():
+					bad_cols.append(col)
+
+				elif len(df_cp[df_cp[col] == 0.0]) < cv2:
+					bad_cols.append(col)
+
+				elif 1.0 in df_cp[col].unique():
+					if len(df_cp[df_cp[col] == 1.0]) < cv2:
+						bad_cols.append(col)
+
+				elif len(df_cp[df_cp[col] == 2.0]) < cv2:
 					bad_cols.append(col)
 		
-		return df_cp.drop(bad_cols, axis=1)
+
+		df_removed = df_cp.drop(bad_cols, axis=1)
+
+		print(f"{len(bad_cols)} columns removed for being non-biallelic or having genotype counts < number of cross-validation folds\nSubsetting from {len(df_removed.columns)} remaining columns\n")
+		
+		return df_removed
+
+	# Remove site if has < number of cv folds
+
 
 	def _gather_impute_settings(self, kwargs):
 		"""[Gather impute settings from the various imputation classes and IterativeImputer. Gathers them for use with the Impute() class. Returns dictionary with keys as keyword arguments and the values as the settings. The imputation can then be run by specifying e.g. IterativeImputer(**imp_kwargs)]

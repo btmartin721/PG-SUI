@@ -122,11 +122,10 @@ def main():
 		# }
 
 		grid_params = {
-			"n_estimators": Integer(100, 1000),
 			"max_features": Categorical(["sqrt", "log2"]),
 			"min_samples_split": Integer(2, 10), 
 			"min_samples_leaf": Integer(1, 10),
-			"max_depth": Integer(10, 110)
+			"max_depth": Integer(3, 110)
 		}
 
 		# Bayesian Ridge gridparams - RandomizedSearchCV
@@ -148,6 +147,7 @@ def main():
 		rf_imp = ImputeRandomForest(
 				data, 
 				prefix=args.prefix, 
+				n_estimators=1000,
 				n_nearest_features=5, 
 				gridparams=grid_params, 
 				cv=3, 

@@ -446,7 +446,7 @@ class GenotypeData:
 			value=np.nan, 
 			inplace=True
 		)
-		return df.astype("Int8")
+		return df.astype(np.float32)
 
 	@property
 	def genotypes_onehot(self):
