@@ -19,6 +19,14 @@ from mpl_toolkits.mplot3d import proj3d
 from mpl_toolkits.mplot3d import Axes3D
 from kneed import KneeLocator
 
+# Requires scikit-learn-intellex package
+if get_processor_name().strip().startswith("Intel"):
+	try:
+		from sklearnex import patch_sklearn
+		patch_sklearn()
+	except ImportError:
+		print("Warning: Intel CPU detected but scikit-learn-intellex is not installed. We recommend installing it to speed up computation.")
+
 from sklearn.preprocessing import FunctionTransformer
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.metrics import silhouette_score

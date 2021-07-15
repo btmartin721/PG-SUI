@@ -7,11 +7,6 @@ import pandas as pd
 import scipy.stats as stats
 from sklearn_genetic.space import Continuous, Categorical, Integer
 
-from utils.misc import get_processor_name
-
-print(get_processor_name().strip().startswith("Intel"))
-sys.exit()
-
 # Custom module imports
 from read_input.read_input import GenotypeData
 from read_input.impute import *
@@ -149,20 +144,20 @@ def main():
 		# 	"lambda_2": Continuous(1e-6, 1e-3, distribution="log-uniform")
 		# }
 
-		rf_imp = ImputeRandomForest(
-				data, 
-				prefix=args.prefix, 
-				n_estimators=1000,
-				n_nearest_features=5, 
-				gridparams=grid_params, 
-				cv=3, 
-				grid_iter=40, 
-				n_jobs=32, 
-				max_iter=25, 
-				column_subset=100,
-				ga=True,
-				disable_progressbar=True
-		)
+		# rf_imp = ImputeRandomForest(
+		# 		data, 
+		# 		prefix=args.prefix, 
+		# 		n_estimators=1000,
+		# 		n_nearest_features=5, 
+		# 		gridparams=grid_params, 
+		# 		cv=3, 
+		# 		grid_iter=40, 
+		# 		n_jobs=32, 
+		# 		max_iter=25, 
+		# 		column_subset=100,
+		# 		ga=True,
+		# 		disable_progressbar=True
+		# )
 
 		# br_imp = ImputeBayesianRidge(data, prefix=args.prefix, n_iter=100, gridparams=grid_params, grid_iter=3, cv=3, n_jobs=4, max_iter=2, n_nearest_features=3, column_subset=0.005, ga=True, disable_progressbar=True)
 

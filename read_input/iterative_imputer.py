@@ -11,8 +11,15 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 import seaborn as sns
 
-#from sklearnex import patch_sklearn
-#patch_sklearn()
+from utils.misc import get_processor_name
+
+# Requires scikit-learn-intellex package
+if get_processor_name().strip().startswith("Intel"):
+	try:
+		from sklearnex import patch_sklearn
+		patch_sklearn()
+	except ImportError:
+		print("Warning: Intel CPU detected but scikit-learn-intellex is not installed. We recommend installing it to speed up computation.")
 
 from sklearn.base import clone
 from sklearn.exceptions import ConvergenceWarning

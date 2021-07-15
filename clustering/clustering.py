@@ -10,6 +10,15 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from kneed import KneeLocator
+
+# Requires scikit-learn-intellex package
+if get_processor_name().strip().startswith("Intel"):
+	try:
+		from sklearnex import patch_sklearn
+		patch_sklearn()
+	except ImportError:
+		print("Warning: Intel CPU detected but scikit-learn-intellex is not installed. We recommend installing it to speed up computation.")
+
 from sklearn.metrics.pairwise import euclidean_distances
 from sklearn.neighbors import NearestNeighbors
 from sklearn.cluster import KMeans

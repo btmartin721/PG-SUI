@@ -9,6 +9,15 @@ from pathlib import Path
 # Third party imports
 import numpy as np
 import pandas as pd
+
+# Requires scikit-learn-intellex package
+if get_processor_name().strip().startswith("Intel"):
+	try:
+		from sklearnex import patch_sklearn
+		patch_sklearn()
+	except ImportError:
+		print("Warning: Intel CPU detected but scikit-learn-intellex is not installed. We recommend installing it to speed up computation.")
+
 #import xgboost as xgb
 from sklearn.experimental import enable_iterative_imputer
 from read_input.iterative_imputer import IterativeImputer as CustomIterImputer

@@ -10,8 +10,16 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-
 from kneed import KneeLocator
+
+# Requires scikit-learn-intellex package
+if get_processor_name().strip().startswith("Intel"):
+	try:
+		from sklearnex import patch_sklearn
+		patch_sklearn()
+	except ImportError:
+		print("Warning: Intel CPU detected but scikit-learn-intellex is not installed. We recommend installing it to speed up computation.")
+
 from sklearn.decomposition import PCA
 from sklearn.ensemble import RandomTreesEmbedding
 from sklearn.manifold import MDS
