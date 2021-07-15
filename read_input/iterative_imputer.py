@@ -2,9 +2,15 @@ from time import time
 from collections import namedtuple
 import warnings
 import sys
+import os
+import shutil
+
 
 from scipy import stats
 import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
+import seaborn as sns
 
 from sklearn.base import clone
 from sklearn.exceptions import ConvergenceWarning
@@ -26,6 +32,12 @@ from sklearn.metrics import accuracy_score, mean_squared_error, make_scorer
 from sklearn.model_selection import RandomizedSearchCV
 from sklearn.model_selection import StratifiedKFold
 
+from sklearn_genetic import GASearchCV
+from sklearn_genetic.plots import plot_fitness_evolution
+from sklearn_genetic.utils import logbook_to_pandas
+from sklearn_genetic.space import Continuous, Categorical, Integer
+from sklearn_genetic.callbacks import ConsecutiveStopping, DeltaThreshold, ThresholdStopping
+
 from utils.misc import isnotebook
 
 is_notebook = isnotebook()
@@ -33,8 +45,10 @@ is_notebook = isnotebook()
 if is_notebook:
 	from tqdm.notebook import tqdm as progressbar
 else:
-	from tqdm import tqdm as progressbar
-
+	if sys.platform == "linux" or sys.platform == "linux2":
+		from tqdm.auto import tqdm as progressbar
+	else:
+		from tqdm import tqdm as progressbar
 
 _ImputerTriplet = namedtuple('_ImputerTriplet', ['feat_idx',
 												'neighbor_feat_idx',
@@ -200,7 +214,11 @@ class IterativeImputer(_BaseImputer):
 	"""
 	def __init__(self,
 				search_space,
-				estimator=None, *,
+				clf_kwargs,
+				ga_kwargs,
+				prefix,
+				estimator=None, 
+				*,
 				missing_values=np.nan,
 				sample_posterior=False,
 				max_iter=10,
@@ -217,7 +235,9 @@ class IterativeImputer(_BaseImputer):
 				grid_cv=5,
 				grid_n_jobs=1,
 				grid_n_iter=10,
-				clf_type="classifier"
+				clf_type="classifier",
+				ga=False,
+				disable_progressbar=False
 	):
 				
 		super().__init__(
@@ -226,6 +246,9 @@ class IterativeImputer(_BaseImputer):
 		)
 
 		self.search_space = search_space
+		self.clf_kwargs = clf_kwargs
+		self.ga_kwargs = ga_kwargs
+		self.prefix = prefix
 		self.estimator = estimator
 		self.sample_posterior = sample_posterior
 		self.max_iter = max_iter
@@ -242,6 +265,8 @@ class IterativeImputer(_BaseImputer):
 		self.grid_n_jobs = grid_n_jobs
 		self.grid_n_iter = grid_n_iter
 		self.clf_type = clf_type
+		self.ga = ga
+		self.disable_progressbar = disable_progressbar
 
 	@ignore_warnings(category=UserWarning)
 	def _impute_one_feature(self,
@@ -250,7 +275,7 @@ class IterativeImputer(_BaseImputer):
 							feat_idx,
 							neighbor_feat_idx,
 							estimator=None,
-							fit_mode=True
+							fit_mode=True,
 	):
 		"""Impute a single feature from the others provided.
 		This function predicts the missing values of one of the features using
@@ -274,6 +299,7 @@ class IterativeImputer(_BaseImputer):
 			If None, it will be cloned from self._estimator.
 		fit_mode : boolean, default=True
 			Whether to fit and predict with the estimator or just predict.
+
 		Returns
 		-------
 		X_filled : ndarray
@@ -291,35 +317,75 @@ class IterativeImputer(_BaseImputer):
 
 		# Modified code
 		acc_scorer = make_scorer(accuracy_score)
+
 		rmse_scorer = make_scorer(
 			mean_squared_error, 
 			greater_is_better=False, 
-			squared=False)
+			squared=False
+		)
 
-		cross_val = StratifiedKFold(n_splits=self.grid_cv)
+		cross_val = StratifiedKFold(n_splits=self.grid_cv, shuffle=False)
 
 		# Modified code
+		# If regressor
 		if self.clf_type == "regressor":
-			search = RandomizedSearchCV(estimator, param_distributions=self.search_space, n_iter=self.grid_n_iter, scoring=rmse_scorer, n_jobs=self.grid_n_jobs, cv=5)
-		else:
-			search = RandomizedSearchCV(estimator, param_distributions=self.search_space, n_iter=self.grid_n_iter, scoring=acc_scorer, n_jobs=self.grid_n_jobs, cv=cross_val)
+			metric = rmse_scorer
 
+			if self.ga:
+				callback = DeltaThreshold(threshold=1e-3, metric="fitness")
+
+		else:
+			metric = acc_scorer
+
+			if self.ga:
+				callback = ConsecutiveStopping(generations=5, metric="fitness")			
+		# Do randomized grid search
+		if not self.ga:
+			search = RandomizedSearchCV(
+				estimator, 
+				param_distributions=self.search_space, 
+				n_iter=self.grid_n_iter, 
+				scoring=metric, 
+				n_jobs=self.grid_n_jobs, 
+				cv=cross_val
+			)
+
+		# Do genetic algorithm
+		else:
+			search = GASearchCV(
+				estimator=estimator,
+				cv=cross_val,
+				scoring=metric,
+				generations=self.grid_n_iter,
+				param_grid=self.search_space,
+				n_jobs=self.grid_n_jobs,
+				verbose=False,
+				**self.ga_kwargs
+			)
+				
 		missing_row_mask = mask_missing_values[:, feat_idx]
 		if fit_mode:
 			X_train = _safe_indexing(X_filled[:, neighbor_feat_idx],
 									~missing_row_mask)
+
 			y_train = _safe_indexing(X_filled[:, feat_idx],
 									~missing_row_mask)
 
-			search.fit(X_train, y_train)
+			if self.ga:
+				search.fit(X_train, y_train, callbacks=callback)
+
+			else:
+				search.fit(X_train, y_train)
 		
 		# if no missing values, don't predict
 		if np.sum(missing_row_mask) == 0:
 			return X_filled, estimator, None
 
 		# get posterior samples if there is at least one missing value
-		X_test = _safe_indexing(X_filled[:, neighbor_feat_idx],
-								missing_row_mask)
+		X_test = _safe_indexing(
+			X_filled[:, neighbor_feat_idx],	missing_row_mask
+		)
+
 		if self.sample_posterior:
 			mus, sigmas = search.predict(X_test, return_std=True)
 			imputed_values = np.zeros(mus.shape, dtype=X_filled.dtype)
@@ -343,6 +409,7 @@ class IterativeImputer(_BaseImputer):
 											loc=mus, scale=sigmas)
 			imputed_values[inrange_mask] = truncated_normal.rvs(
 				random_state=self.random_state_)
+
 		else:
 			imputed_values = search.predict(X_test)
 			imputed_values = np.clip(imputed_values,
@@ -351,6 +418,7 @@ class IterativeImputer(_BaseImputer):
 
 		# update the feature
 		X_filled[missing_row_mask, feat_idx] = imputed_values
+
 		return X_filled, estimator, search
 
 	def _get_neighbor_feat_idx(self,
@@ -430,6 +498,169 @@ class IterativeImputer(_BaseImputer):
 							"'ascending', 'descending', or "
 							"'random'.".format(self.imputation_order))
 		return ordered_idx
+
+	def _num_features(self, X):
+		"""Return the number of features in an array-like X.
+		This helper function tries hard to avoid to materialize an array version
+		of X unless necessary. For instance, if X is a list of lists,
+		this function will return the length of the first element, assuming
+		that subsequent elements are all lists of the same length without
+		checking.
+		Parameters
+		----------
+		X : array-like
+			array-like to get the number of features.
+		Returns
+		-------
+		features : int
+			Number of features
+		"""
+		type_ = type(X)
+		if type_.__module__ == "builtins":
+			type_name = type_.__qualname__
+		else:
+			type_name = f"{type_.__module__}.{type_.__qualname__}"
+		message = f"Unable to find the number of features from X of type {type_name}"
+		if not hasattr(X, "__len__") and not hasattr(X, "shape"):
+			if not hasattr(X, "__array__"):
+				raise TypeError(message)
+			# Only convert X to a numpy array if there is no cheaper, heuristic
+			# option.
+			X = np.asarray(X)
+
+		if hasattr(X, "shape"):
+			if not hasattr(X.shape, "__len__") or len(X.shape) <= 1:
+				message += f" with shape {X.shape}"
+				raise TypeError(message)
+			return X.shape[1]
+
+		first_sample = X[0]
+
+		# Do not consider an array-like of strings or dicts to be a 2D array
+		if isinstance(first_sample, (str, bytes, dict)):
+			message += f" where the samples are of type {type(first_sample).__qualname__}"
+			raise TypeError(message)
+
+		try:
+			# If X is a list of lists, for instance, we assume that all nested
+			# lists have the same length without checking or converting to
+			# a numpy array to keep this function call as cheap as possible.
+			return len(first_sample)
+		except Exception as err:
+			raise TypeError(message) from err
+
+	def _check_n_features(self, X, reset):
+		"""Set the `n_features_in_` attribute, or check against it.
+		Parameters
+		----------
+		X : {ndarray, sparse matrix} of shape (n_samples, n_features)
+			The input samples.
+		reset : bool
+			If True, the `n_features_in_` attribute is set to `X.shape[1]`.
+			If False and the attribute exists, then check that it is equal to
+			`X.shape[1]`. If False and the attribute does *not* exist, then
+			the check is skipped.
+			.. note::
+			It is recommended to call reset=True in `fit` and in the first
+			call to `partial_fit`. All other methods that validate `X`
+			should set `reset=False`.
+		"""
+		try:
+			n_features = self._num_features(X)
+		except TypeError as e:
+			if not reset and hasattr(self, "n_features_in_"):
+				raise ValueError(
+					"X does not contain any features, but "
+					f"{self.__class__.__name__} is expecting "
+					f"{self.n_features_in_} features"
+				) from e
+			# If the number of features is not defined and reset=True,
+			# then we skip this check
+			return
+
+		if reset:
+			self.n_features_in_ = n_features
+			return
+
+		if not hasattr(self, "n_features_in_"):
+			# Skip this check if the expected number of expected input features
+			# was not recorded by calling fit first. This is typically the case
+			# for stateless transformers.
+			return
+
+		if n_features != self.n_features_in_:
+			raise ValueError(
+				f"X has {n_features} features, but {self.__class__.__name__} "
+				f"is expecting {self.n_features_in_} features as input."
+			)
+
+	def _validate_data(self, X, y='no_validation', reset=True,
+				   validate_separately=False, **check_params):
+		"""Validate input data and set or check the `n_features_in_` attribute.
+		Parameters
+		----------
+		X : {array-like, sparse matrix, dataframe} of shape \
+				(n_samples, n_features)
+			The input samples.
+		y : array-like of shape (n_samples,), default='no_validation'
+			The targets.
+			- If `None`, `check_array` is called on `X`. If the estimator's
+			requires_y tag is True, then an error will be raised.
+			- If `'no_validation'`, `check_array` is called on `X` and the
+			estimator's requires_y tag is ignored. This is a default
+			placeholder and is never meant to be explicitly set.
+			- Otherwise, both `X` and `y` are checked with either `check_array`
+			or `check_X_y` depending on `validate_separately`.
+		reset : bool, default=True
+			Whether to reset the `n_features_in_` attribute.
+			If False, the input will be checked for consistency with data
+			provided when reset was last True.
+			.. note::
+			It is recommended to call reset=True in `fit` and in the first
+			call to `partial_fit`. All other methods that validate `X`
+			should set `reset=False`.
+		validate_separately : False or tuple of dicts, default=False
+			Only used if y is not None.
+			If False, call validate_X_y(). Else, it must be a tuple of kwargs
+			to be used for calling check_array() on X and y respectively.
+		**check_params : kwargs
+			Parameters passed to :func:`sklearn.utils.check_array` or
+			:func:`sklearn.utils.check_X_y`. Ignored if validate_separately
+			is not False.
+		Returns
+		-------
+		out : {ndarray, sparse matrix} or tuple of these
+			The validated input. A tuple is returned if `y` is not None.
+		"""
+
+		if y is None:
+			if self._get_tags()['requires_y']:
+				raise ValueError(
+					f"This {self.__class__.__name__} estimator "
+					f"requires y to be passed, but the target y is None."
+				)
+			X = check_array(X, **check_params)
+			out = X
+		elif isinstance(y, str) and y == 'no_validation':
+			X = check_array(X, **check_params)
+			out = X
+		else:
+			if validate_separately:
+				# We need this because some estimators validate X and y
+				# separately, and in general, separately calling check_array()
+				# on X and y isn't equivalent to just calling check_X_y()
+				# :(
+				check_X_params, check_y_params = validate_separately
+				X = check_array(X, **check_X_params)
+				y = check_array(y, **check_y_params)
+			else:
+				X, y = check_X_y(X, y, **check_params)
+			out = X, y
+
+		if check_params.get('ensure_2d', True):
+			self._check_n_features(X, reset=reset)
+
+		return out
 
 	def _get_abs_corr_mat(self, X_filled, tolerance=1e-6):
 		"""Get absolute correlation matrix between features.
@@ -548,6 +779,7 @@ class IterativeImputer(_BaseImputer):
 			)
 		return limit
 
+	@ignore_warnings(category=UserWarning)
 	def fit_transform(self, X, y=None):
 		"""Fits the imputer on X and return the transformed X.
 		Parameters
@@ -619,10 +851,12 @@ class IterativeImputer(_BaseImputer):
 		abs_corr_mat = self._get_abs_corr_mat(Xt)
 
 		n_samples, n_features = Xt.shape
+
 		if self.verbose > 0:
 			print("[IterativeImputer] Completing matrix with shape %s"
 				% (X.shape,))
 		start_t = time()
+
 		if not self.sample_posterior:
 			Xt_previous = Xt.copy()
 			normalized_tol = self.tol * np.max(
@@ -631,7 +865,25 @@ class IterativeImputer(_BaseImputer):
 
 		params_list = list()
 		score_list = list()
-		for self.n_iter_ in progressbar(range(1, self.max_iter + 1), desc="Iteration: "):
+		iter_list = list()
+		if self.ga:
+			sns.set_style("white")
+
+		total_iter = self.max_iter
+
+		for self.n_iter_ in progressbar(
+			range(1, total_iter), 
+			desc="Iteration: ", disable=self.disable_progressbar
+		):
+
+			if self.ga:
+				iter_list.append(self.n_iter_)
+
+				pp_oneline = PdfPages(".score_traces_separate_{}.pdf".format(self.n_iter_))
+
+				pp_lines = PdfPages(".score_traces_combined_{}.pdf".format(self.n_iter_))
+
+				pp_space = PdfPages(".search_space_{}.pdf".format(self.n_iter_))
 
 			if self.imputation_order == 'random':
 				ordered_idx = self._get_ordered_idx(mask_missing_values)
@@ -639,18 +891,35 @@ class IterativeImputer(_BaseImputer):
 			# Reset lists for current iteration
 			params_list.clear()
 			score_list.clear()
-			for feat_idx in progressbar(ordered_idx, desc="Feature: ", leave=False, position=1):
+			searches = list()
+
+			if self.disable_progressbar:
+				feat_counter = 0
+				total_features = len(ordered_idx)
+
+			for feat_idx in progressbar(
+				ordered_idx, desc="Feature: ", leave=False, position=1, 
+				disable=self.disable_progressbar
+			):
+
+				if self.disable_progressbar:
+					feat_counter += 1
+					print(f"\nIteration: {self.n_iter_}/{self.max_iter} ({int((self.n_iter_ / total_iter) * 100)}%)\nFeature: {feat_counter}/{total_features} ({int((feat_counter / total_features) * 100)}%)\n")
+
 				neighbor_feat_idx = self._get_neighbor_feat_idx(n_features,
 																feat_idx,
 																abs_corr_mat)
+
 				Xt, estimator, search = self._impute_one_feature(
 					Xt, 
 					mask_missing_values, 
 					feat_idx, 
-					neighbor_feat_idx, 
+					neighbor_feat_idx,
 					estimator=None, 
 					fit_mode=True
 				)
+
+				searches.append(search)
 
 				estimator_triplet = _ImputerTriplet(feat_idx,
 													neighbor_feat_idx,
@@ -659,9 +928,30 @@ class IterativeImputer(_BaseImputer):
 				self.imputation_sequence_.append(estimator_triplet)
 
 				if search is not None:
+
 					params_list.append(search.best_params_)
 					score_list.append(search.best_score_)
+
+					if self.ga:
+						plt.cla()
+						plt.clf()
+						plt.close()
+
+						plot_fitness_evolution(search)
+						pp_oneline.savefig(bbox_inches="tight")
+						plt.cla()
+						plt.clf()
+						plt.close()
+
+						self.plot_search_space(search)
+						pp_space.savefig(bbox_inches="tight")
+						plt.cla()
+						plt.clf()
+						plt.close()
+
 				else:
+					# Search is None
+					# Thus, there was no missing data in the given feature
 					tmp_dict = dict()
 					for k in self.search_space.keys():
 						tmp_dict[k] = -9
@@ -681,17 +971,74 @@ class IterativeImputer(_BaseImputer):
 					print('[IterativeImputer] '
 						'Change: {}, scaled tolerance: {} '.format(
 							inf_norm, normalized_tol))
+
 				if inf_norm < normalized_tol:
 					if self.verbose > 0:
 						print('[IterativeImputer] Early stopping criterion '
 							'reached.')
+
+					if self.ga:
+						pp_oneline.close()
+						pp_space.close()
+
+						plt.cla()
+						plt.clf()
+						plt.close()
+						for iter_search in searches:
+							if iter_search is not None:
+								plot_fitness_evolution(iter_search)
+
+						pp_lines.savefig(bbox_inches="tight")
+
+						plt.cla()
+						plt.clf()
+						plt.close()
+						pp_lines.close()
+
 					break
 				Xt_previous = Xt.copy()
+			
+			if self.ga:
+				pp_oneline.close()
+				pp_space.close()
+
+				plt.cla()
+				plt.clf()
+				plt.close()
+				for iter_search in searches:
+					if iter_search is not None:
+						plot_fitness_evolution(iter_search)
+				
+				pp_lines.savefig(bbox_inches="tight")
+
+				plt.cla()
+				plt.clf()
+				plt.close()
+				pp_lines.close()
+
 		else:
 			if not self.sample_posterior:
 				warnings.warn("[IterativeImputer] Early stopping criterion not"
 							" reached.", ConvergenceWarning)
+
 		Xt[~mask_missing_values] = X[~mask_missing_values]
+
+		if self.ga:
+			# Remove all files except last iteration
+			final_iter = iter_list.pop()
+
+			[os.remove(".score_traces_separate_{}.pdf".format(x)) for x in iter_list]
+
+			[os.remove(".score_traces_combined_{}.pdf".format(x)) for x in iter_list]
+
+			[os.remove(".search_space_{}.pdf".format(x)) for x in iter_list]
+
+			shutil.move(".score_traces_separate_{}.pdf".format(final_iter), "{}_score_traces_separate.pdf".format(self.prefix))
+
+			shutil.move(".score_traces_combined_{}.pdf".format(final_iter), "{}_score_traces_combined.pdf".format(self.prefix))
+
+			shutil.move(".search_space_{}.pdf".format(final_iter), "{}_search_space.pdf".format(self.prefix))
+
 		return super()._concatenate_indicator(Xt, X_indicator), params_list, score_list
 
 	def transform(self, X):
@@ -772,3 +1119,68 @@ class IterativeImputer(_BaseImputer):
 		"""
 		self.fit_transform(X)
 		return self
+
+	def plot_search_space(self, estimator, height=2, s=25, features: list = None):
+		"""
+		Parameters
+		----------
+		estimator: estimator object
+			A fitted estimator from :class:`~sklearn_genetic.GASearchCV`
+		height: float, default=2
+			Height of each facet
+		s: float, default=5
+			Size of the markers in scatter plot
+		features: list, default=None
+			Subset of features to plot, if ``None`` it plots all the features by default
+
+		Returns
+		-------
+		Pair plot of the used hyperparameters during the search
+
+		"""
+		sns.set_style("white")
+
+		df = logbook_to_pandas(estimator.logbook)
+		if features:
+			stats = df[features]
+		else:
+			variables = [*estimator.space.parameters, "score"]
+			stats = df[variables]
+
+		g = sns.PairGrid(stats, diag_sharey=False, height=height)
+
+		g = g.map_upper(sns.scatterplot, s=s, color="r", alpha=0.2)
+
+		try:
+			g = g.map_lower(
+				sns.kdeplot,
+				shade=True,
+				cmap=sns.color_palette("ch:s=.25,rot=-.25", as_cmap=True),
+			)
+		except np.linalg.LinAlgError as err:
+			if "singular matrix" in str(err).lower():
+				g = g.map_lower(
+					sns.scatterplot, s=s, color="b", alpha=1.0
+				)
+			else:
+				raise
+
+		try:
+			g = g.map_diag(
+				sns.kdeplot, 
+				shade=True, 
+				palette="crest", 
+				alpha=0.2, 
+				color="red"
+			)
+		except np.linalg.LinAlgError as err:
+			if "singular matrix" in str(err).lower():
+				g = g.map_diag(
+					sns.histplot,
+					color="red",
+					alpha=1.0,
+					kde=False
+				)
+				
+		return g
+

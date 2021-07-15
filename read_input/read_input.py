@@ -440,8 +440,13 @@ class GenotypeData:
 		Returns:
 			[pandas.DataFrame]: [012-encoded genotypes as pandas DataFrame]
 		"""
-		df = pd.DataFrame.from_records(self.snps).astype("Int8")
-		return df.replace(["-9", -9, "-", "N"], np.nan)
+		df = pd.DataFrame.from_records(self.snps)
+		df.replace(
+			to_replace=-9, 
+			value=np.nan, 
+			inplace=True
+		)
+		return df.astype(np.float32)
 
 	@property
 	def genotypes_onehot(self):

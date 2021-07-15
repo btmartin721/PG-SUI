@@ -4,8 +4,10 @@ import functools
 import time
 import datetime
 
+from tqdm import tqdm
+from tqdm.utils import disp_len, _unicode # for overriding status_print
 from numpy.random import choice
-from skopt import BayesSearchCV
+#from skopt import BayesSearchCV
 
 def get_indices(l):
 	"""
@@ -70,6 +72,11 @@ def progressbar(it, prefix="", size=60, file=sys.stdout):
 	file.flush()
 
 def isnotebook():
+	"""[Checks whether in Jupyter notebook]
+
+	Returns:
+		[bool]: [True if in Jupyter notebook, False otherwise]
+	"""
 	try:
 		shell = get_ipython().__class__.__name__
 		if shell == 'ZMQInteractiveShell':
@@ -85,23 +92,54 @@ def isnotebook():
 		# Probably standard Python interpreter
 		return False
 
-def bayes_search_CV_init(self, estimator, search_spaces, optimizer_kwargs=None,	n_iter=50, scoring=None, fit_params=None, n_jobs=1,	n_points=1, iid=True, refit=True, cv=None, verbose=0,
-	pre_dispatch='2*n_jobs', random_state=None,	error_score='raise', 
-	return_train_score=False
-):
+class tqdm_linux(tqdm):
+	"""
+	Decorate an iterable object, returning an iterator which acts exactly
+	like the original iterable, but prints a dynamically updating
+	progressbar every time a value is requested.
+	"""
+	@staticmethod
+	def status_printer(self, file):
+		"""
+		Manage the printing and in-place updating of a line of characters.
+		Note that if the string is longer than a line, then in-place
+		updating may not work (it will print a new line at each refresh).
 
-	self.search_spaces = search_spaces
-	self.n_iter = n_iter
-	self.n_points = n_points
-	self.random_state = random_state
-	self.optimizer_kwargs = optimizer_kwargs
-	self._check_search_space(self.search_spaces)
-	self.fit_params = fit_params
+		Overridden to work with linux HPC clusters. Replaced '\r' with '\n' in fp_write() function.
+		"""
+		fp = file
+		fp_flush = getattr(fp, 'flush', lambda: None)  # pragma: no cover
 
-	super(BayesSearchCV, self).__init__(
-		estimator=estimator, scoring=scoring,
-		n_jobs=n_jobs, refit=refit, cv=cv, verbose=verbose,
-		pre_dispatch=pre_dispatch, error_score=error_score,
-		return_train_score=return_train_score
-	)
+		def fp_write(s):
+			fp.write(_unicode(s))
+			fp_flush()
+
+		last_len = [0]
+
+		def print_status(s):
+			len_s = disp_len(s)
+			fp_write('\n' + s + (' ' * max(last_len[0] - len_s, 0)))
+			last_len[0] = len_s
+
+		return print_status
+
+# def bayes_search_CV_init(self, estimator, search_spaces, optimizer_kwargs=None,	n_iter=50, scoring=None, fit_params=None, n_jobs=1,	n_points=1, iid=True, refit=True, cv=None, verbose=0,
+# 	pre_dispatch='2*n_jobs', random_state=None,	error_score='raise', 
+# 	return_train_score=False
+# ):
+
+# 	self.search_spaces = search_spaces
+# 	self.n_iter = n_iter
+# 	self.n_points = n_points
+# 	self.random_state = random_state
+# 	self.optimizer_kwargs = optimizer_kwargs
+# 	self._check_search_space(self.search_spaces)
+# 	self.fit_params = fit_params
+
+# 	super(BayesSearchCV, self).__init__(
+# 		estimator=estimator, scoring=scoring,
+# 		n_jobs=n_jobs, refit=refit, cv=cv, verbose=verbose,
+# 		pre_dispatch=pre_dispatch, error_score=error_score,
+# 		return_train_score=return_train_score
+# 	)
 

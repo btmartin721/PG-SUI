@@ -5,6 +5,7 @@ import sys
 import numpy as np
 import pandas as pd
 import scipy.stats as stats
+from sklearn_genetic.space import Continuous, Categorical, Integer
 
 # Custom module imports
 from read_input.read_input import GenotypeData
@@ -79,8 +80,8 @@ def main():
 		#data.write_imputed(data.imputed_rf_df, args.prefix)
 
 	else:	
-
-		# Number of trees in random forest
+		# # For randmizedsearchcv
+		# # Number of trees in random forest
 		n_estimators = \
 			[int(x) for x in np.linspace(start=100, stop=1000, num=10)]
 
@@ -100,17 +101,34 @@ def main():
 		# Proportion of dataset to use with bootstrapping
 		max_samples = [x for x in np.linspace(0.5, 1.0, num=6)]
 
-		# Random Forest gridparams
+		# # Random Forest gridparams - RandomizedSearchCV
+		# grid_params = {
+		# 	"n_estimators": n_estimators,
+		# 	"max_features": max_features,
+		# 	"max_depth": max_depth,
+		# 	"min_samples_split": min_samples_split, 
+		# 	"min_samples_leaf": min_samples_leaf,
+		# 	"max_samples": max_samples
+		# }
+
+		# Random Forest gridparams - Genetic Algorithms
+		# grid_params = {
+		# 	"n_estimators": Integer(100, 500),
+		# 	"max_features": max_features,
+		# 	"max_depth": max_depth,
+		# 	"min_samples_split": min_samples_split, 
+		# 	"min_samples_leaf": min_samples_leaf,
+		# 	"max_samples": max_samples
+		# }
+
 		grid_params = {
-			"n_estimators": n_estimators,
-			"max_features": max_features,
-			"max_depth": max_depth,
-			"min_samples_split": min_samples_split, 
-			"min_samples_leaf": min_samples_leaf,
-			"max_samples": max_samples
+			"max_features": Categorical(["sqrt", "log2"]),
+			"min_samples_split": Integer(2, 10), 
+			"min_samples_leaf": Integer(1, 10),
+			"max_depth": Integer(3, 110)
 		}
 
-		# Bayesian Ridge gridparams
+		# Bayesian Ridge gridparams - RandomizedSearchCV
 		# grid_params = {
 		# 	"alpha_1": stats.loguniform(1e-6, 1e-3),
 		# 	"alpha_2": stats.loguniform(1e-6, 1e-3),
@@ -118,19 +136,30 @@ def main():
 		# 	"lambda_2": stats.loguniform(1e-6, 1e-3),
 		# }
 
+		# Bayesian Ridge gridparams - Genetic algorithm
+		# grid_params = {
+		# 	"alpha_1": Continuous(1e-6, 1e-3, distribution="log-uniform"),
+		# 	"alpha_2": Continuous(1e-6, 1e-3, distribution="log-uniform"),
+		# 	"lambda_1": Continuous(1e-6, 1e-3, distribution="log-uniform"),
+		# 	"lambda_2": Continuous(1e-6, 1e-3, distribution="log-uniform")
+		# }
+
 		rf_imp = ImputeRandomForest(
 				data, 
-				prefix="example_data/imputed/rf_gridsearch_test", 
-				n_nearest_features=25, 
+				prefix=args.prefix, 
+				n_estimators=1000,
+				n_nearest_features=5, 
 				gridparams=grid_params, 
-				cv=5, 
-				grid_iter=50, 
-				n_jobs=-1, 
-				max_iter=50, 
-				boostrap=True
+				cv=3, 
+				grid_iter=40, 
+				n_jobs=32, 
+				max_iter=25, 
+				column_subset=100,
+				ga=True,
+				disable_progressbar=True
 		)
 
-		# br_imp = ImputeBayesianRidge(data, prefix="test_br", n_iter=1000, gridparams=grid_params, grid_iter=10, cv=3, n_jobs=4, max_iter=10, n_nearest_features=4, subset_proportion=0.05)
+		# br_imp = ImputeBayesianRidge(data, prefix=args.prefix, n_iter=100, gridparams=grid_params, grid_iter=3, cv=3, n_jobs=4, max_iter=2, n_nearest_features=3, column_subset=0.005, ga=True, disable_progressbar=True)
 
 	# colors = {
 	# 	"GU": "#FF00FF",

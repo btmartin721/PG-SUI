@@ -9,11 +9,11 @@ from pathlib import Path
 # Third party imports
 import numpy as np
 import pandas as pd
-import xgboost as xgb
+#import xgboost as xgb
 from sklearn.experimental import enable_iterative_imputer
-#from sklearn.impute import IterativeImputer
 from read_input.iterative_imputer import IterativeImputer as CustomIterImputer
 from sklearn.impute import IterativeImputer as OriginalIterativeImputer
+from sklearn.preprocessing import LabelEncoder
 from sklearn.ensemble import ExtraTreesClassifier
 from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.linear_model import BayesianRidge
@@ -30,7 +30,7 @@ from sklearn.metrics import mean_squared_error
 from read_input.read_input import GenotypeData
 from utils import misc
 from utils.misc import timer
-from utils.misc import bayes_search_CV_init
+#from utils.misc import bayes_search_CV_init
 from utils import sequence_tools
 
 from utils.misc import isnotebook
@@ -57,11 +57,14 @@ class Impute:
 		self.gridparams, \
 		self.imp_kwargs, \
 		self.clf_kwargs, \
+		self.ga_kwargs, \
 		self.grid_iter, \
 		self.cv, \
 		self.n_jobs, \
 		self.prefix, \
-		self.subset_proportion = self._gather_impute_settings(kwargs)
+		self.column_subset, \
+		self.ga, \
+		self.disable_progressbar = self._gather_impute_settings(kwargs)
 
 	@timer
 	def fit_predict(self, X):
@@ -163,23 +166,48 @@ class Impute:
 		"""
 		return pd.read_csv(filename, dtype="Int8", header=None)
 
-	def subset_data_for_testing(self, df, column_percent):
+	def subset_data_for_testing(self, df, columns_to_subset, original_num_cols):
 		"""[Randomly subsets pandas.DataFrame with ```column_percent``` fraction of the data. Allows faster testing]
 
 		Args:
 			df ([pandas.DataFrame]): [DataFrame with 012-encoded genotypes]
 
-			column_percent ([float]): [Proportion of DataFrame to randomly subset. Should be between 0 and 1]
+			columns_to_subset ([int or float]): [If float, proportion of DataFrame to randomly subset, which should be between 0 and 1. if integer, subsets ```columns_to_subset``` random columns]
+
+			original_num_cols ([int]): [Number of columns in original DataFrame]
 
 		Returns:
 			[pandas.DataFrame]: [Randomly subset DataFrame]
 		"""
 		# Get a random numpy arrray of column names to select
-		cols = sorted(np.random.choice(df.columns, 
-			int(len(df.columns) * column_percent), replace=False), reverse=False)
+		if isinstance(columns_to_subset, float):
+			if (original_num_cols * columns_to_subset) > len(df.columns):
+				print("Warning: column_subset is greater than remaining columns following filtering. Using all columns")
+				all_cols = True
+			else:
+				all_cols = False
 
-		# Subset the DataFrame
-		df_sub = df.loc[:, cols]
+			if all_cols:
+				df_sub = df.copy()
+			else:
+				sub = int(original_num_cols * columns_to_subset)
+				df_sub = df.sample(frac=sub, axis="columns", replace=False)
+
+		elif isinstance(columns_to_subset, int):
+			if columns_to_subset > len(df.columns):
+				print("Warning: column_subset is greater than remaining columns following filtering. Using all columns")
+				all_cols = True
+			else:
+				all_cols = False
+			
+			if all_cols:
+				df_sub = df.copy()
+			else:
+				sub = columns_to_subset
+				df_sub = df.sample(n=sub, axis="columns", replace=False)
+		
+		df_sub.columns = df_sub.columns.astype(str)
+		
 		return df_sub
 
 	def _impute_single(self, df):
@@ -215,8 +243,9 @@ class Impute:
 
 			[dict]: [Best parameters found during the grid search]
 		"""
-		df_subset = self.subset_data_for_testing(df, self.subset_proportion)
-		df_subset = self._remove_nonbiallelic(df_subset)
+		original_num_cols = len(df.columns)
+		df_tmp = self._remove_nonbiallelic(df)
+		df_subset = self.subset_data_for_testing(df_tmp, self.column_subset, original_num_cols)
 
 		print("Test dataset size: {}\n".format(len(df_subset.columns)))
 		print("Doing grid search...")
@@ -225,11 +254,16 @@ class Impute:
 
 		imputer = self._define_iterative_imputer(
 			clf, 
-			self.n_jobs, 
-			self.grid_iter, 
-			self.cv, 
-			self.clf_type,
-			self.gridparams
+			clf_kwargs=self.clf_kwargs,
+			ga_kwargs=self.ga_kwargs,
+			prefix=self.prefix,
+			n_jobs=self.n_jobs, 
+			n_iter=self.grid_iter, 
+			cv=self.cv, 
+			clf_type=self.clf_type,
+			ga=self.ga,
+			search_space=self.gridparams,
+			disable_progressbar=self.disable_progressbar
 		)
 
 		_, params_list, score_list = imputer.fit_transform(df_subset)
@@ -260,7 +294,8 @@ class Impute:
 		else:
 			# Regressor. Needs to be rounded to integer first.
 			df_imp = pd.DataFrame(imp_arr_full)
-			df_imp = df_imp.round(0).astype("Int8")
+			for col in df_imp.columns:
+				df_imp[col] = df_imp[col].round(0).astype("Int8")
 
 		print("Done with {} imputation!\n".format(str(self.clf)))
 		return df_imp, abs(avg_score), best_params
@@ -321,21 +356,57 @@ class Impute:
 			return sum(d[k] for d in l) / len(l)
 
 	def _remove_nonbiallelic(self, df):
-		"""[Remove sites that do not have both 0 and 2 encoded values in a column]
+		"""[Remove sites that do not have both 0 and 2 encoded values in a column and if any of the allele counts is less than the number of cross-validation folds]
 
 		Args:
 			df ([pandas.DataFrame]): [DataFrame with 012-encoded genotypes]
 
 		Returns:
-			[pandas.DataFrame]: [DataFrame with non-biallelic sites removed]
+			[pandas.DataFrame]: [DataFrame with sites removed]
 		"""
+		cv2 = self.cv * 2
 		df_cp = df.copy()
 		bad_cols = list()
-		for col in df_cp.columns:
-			if not df_cp[col].isin([0]).any() or not df_cp[col].isin([2]).any():
-				bad_cols.append(col)
+		if pd.__version__[0] == 0:
+			for col in df_cp.columns:
+				if not df_cp[col].isin([0.0]).any() or not df_cp[col].isin([2.0]).any():
+					bad_cols.append(col)
 
-		return df_cp.drop(bad_cols, axis=1)
+				if len(df_cp[df_cp[col] == 0.0]) < cv2:
+					bad_cols.append(col)
+
+				if df_cp[col].isin([1.0]).any():
+					if len(df_cp[df_cp[col] == 1]) < cv2:
+						bad_cols.append(col)
+
+				if len(df_cp[df_cp[col] == 2.0]) < cv2:
+					bad_cols.append(col)
+		
+		# pandas 1.X.X
+		else:
+			for col in df_cp.columns:
+				if 0.0 not in df[col].unique() and 2.0 not in df[col].unique():
+					bad_cols.append(col)
+
+				elif len(df_cp[df_cp[col] == 0.0]) < cv2:
+					bad_cols.append(col)
+
+				elif 1.0 in df_cp[col].unique():
+					if len(df_cp[df_cp[col] == 1.0]) < cv2:
+						bad_cols.append(col)
+
+				elif len(df_cp[df_cp[col] == 2.0]) < cv2:
+					bad_cols.append(col)
+		
+
+		df_removed = df_cp.drop(bad_cols, axis=1)
+
+		print(f"{len(bad_cols)} columns removed for being non-biallelic or having genotype counts < number of cross-validation folds\nSubsetting from {len(df_removed.columns)} remaining columns\n")
+		
+		return df_removed
+
+	# Remove site if has < number of cv folds
+
 
 	def _gather_impute_settings(self, kwargs):
 		"""[Gather impute settings from the various imputation classes and IterativeImputer. Gathers them for use with the Impute() class. Returns dictionary with keys as keyword arguments and the values as the settings. The imputation can then be run by specifying e.g. IterativeImputer(**imp_kwargs)]
@@ -357,15 +428,20 @@ class Impute:
 		n_jobs = kwargs.pop("n_jobs")
 		prefix = kwargs.pop("prefix")
 		grid_iter = kwargs.pop("grid_iter")
-		subset_proportion = kwargs.pop("subset_proportion")
+		column_subset = kwargs.pop("column_subset")
+		ga = kwargs.pop("ga")
+		disable_progressbar = kwargs.pop("disable_progressbar")
 
 		if prefix is None:
 			prefix = "output"
 
 		imp_kwargs = kwargs.copy()
 		clf_kwargs = kwargs.copy()
+		ga_kwargs = kwargs.copy()
 
 		imp_keys = ["n_nearest_features", "max_iter", "tol", "initial_strategy", "imputation_order", "skip_complete", "random_state", "verbose", "sample_posterior"]
+
+		ga_keys = ["population_size", "tournament_size", "elitism", "crossover_probability", "mutation_probability", "ga_algorithm"]
 
 		to_remove = ["genotype_data", "self", "__class__"]
 
@@ -374,18 +450,33 @@ class Impute:
 				clf_kwargs.pop(k)
 			if k in imp_keys:
 				clf_kwargs.pop(k)
+			if k in ga_keys:
+				clf_kwargs.pop(k)
 				
 		if "clf_random_state" in clf_kwargs:
 			clf_kwargs["random_state"] = clf_kwargs.pop("clf_random_state")
 
 		if "clf_tol" in clf_kwargs:
 			clf_kwargs["tol"] = clf_kwargs.pop("clf_tol")
-					
+
 		for k, v in imp_kwargs.copy().items():
 			if k not in imp_keys:
 				imp_kwargs.pop(k)
 
-		return gridparams, imp_kwargs, clf_kwargs, grid_iter, cv, n_jobs, prefix, subset_proportion
+		for k, v in ga_kwargs.copy().items():
+			if k not in ga_keys:
+				ga_kwargs.pop(k)
+
+		if "ga_algorithm" in ga_kwargs:
+			ga_kwargs["algorithm"] = ga_kwargs.pop("ga_algorithm")
+
+		if self.clf_type == "regressor":
+			ga_kwargs["criteria"] = "min"
+
+		elif self.clf_type == "classifier":
+			ga_kwargs["criteria"] = "max"
+
+		return gridparams, imp_kwargs, clf_kwargs, ga_kwargs, grid_iter, cv, n_jobs, prefix, column_subset, ga, disable_progressbar
 
 	def _format_features(self, df, missing_val=-9):
 		"""[Format a 2D list for input into iterative imputer]
@@ -485,11 +576,17 @@ class Impute:
 
 		return new_df
 
-	def _define_iterative_imputer(self, clf, n_jobs=None, n_iter=None, cv=None, clf_type=None, search_space=None):
+	def _define_iterative_imputer(self, clf, clf_kwargs=None, ga_kwargs=None, prefix="out", n_jobs=None, n_iter=None, cv=None, clf_type=None, ga=False, search_space=None, disable_progressbar=False):
 		"""[Define an IterativeImputer instance]
 
 		Args:
 			clf ([sklearn Classifier]): [Classifier to use with IterativeImputer]
+
+			clf_kwargs (dict, optional): [Keyword arguments for classifier]. Defaults to None.
+
+			ga_kwargs (dict, optional): [Keyword arguments for genetic algorithm grid search]. Defaults to None.
+
+			prefix (str, optional): [Prefix for saving GA plots to PDF file]. Defaults to None.
 
 			n_jobs (int, optional): [Number of parallel jobs to use with the IterativeImputer grid search. Ignored if search_space=None]. Defaults to None.
 
@@ -499,7 +596,11 @@ class Impute:
 
 			clf_type (str, optional): [Type of estimator. Valid options are "classifier" or "regressor". Ignored if search_space=None]. Defaults to None.
 
+			ga (bool, optional): [Whether to use genetic algorithm for the grid search. If False, uses RandomizedSearchCV instead]. Defaults to False.
+
 			search_space (dict, optional): [gridparams dictionary with search space to explore in random grid search]. Defaults to None.
+
+			disable_progressbar (bool, optional): [Whether or not to disable the tqdm progress bar]. Defaults to False.
 
 		Returns:
 			[sklearn.impute.IterativeImputer]: [IterativeImputer instance]
@@ -512,11 +613,16 @@ class Impute:
 			# Create iterative imputer
 			imp = CustomIterImputer(
 				search_space, 
+				clf_kwargs,
+				ga_kwargs,
+				prefix,
 				estimator=clf, 
 				grid_n_jobs=n_jobs, 
 				grid_n_iter=n_iter, 
 				grid_cv=cv, 
 				clf_type=clf_type, 
+				ga=ga,
+				disable_progressbar=disable_progressbar,
 				**self.imp_kwargs
 			)
 
@@ -533,7 +639,15 @@ class ImputeKNN:
 		gridparams=None,
 		grid_iter=50,
 		cv=5,
-		subset_proportion=0.2,
+		ga=False,
+		population_size=10,
+		tournament_size=3,
+		elitism=True,
+		crossover_probability=0.8,
+		mutation_probability=0.1,
+		ga_algorithm="eaMuPlusLambda",
+		column_subset=0.1,
+		disable_progressbar=False,
 		n_jobs=1,
 		n_neighbors=5, 
 		weights="distance", 
@@ -563,7 +677,23 @@ class ImputeKNN:
 
 			cv (int, optional): [Number of folds for cross-validation during randomized grid search]. Defaults to 5.
 
-			subset_proportion (float, optional): [Proportion of the dataset to randomly subset for the grid search. Should be between 0 and 1, and should also be small, because the grid search takes a long time]. Defaults to 0.2.
+			ga (bool, optional): [Whether to use a genetic algorithm for the grid search. If False, a RandomizedSearchCV is done instead]. Defaults to False.
+
+			population_size (int, optional): [For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. See GASearchCV documentation]. Defaults to 10.
+
+			tournament_size (int, optional): [For genetic algorithm grid search: Number of individuals to perform tournament selection. See GASearchCV documentation]. Defaults to 3.
+
+			elitism (bool, optional): [For genetic algorithm grid search:     If True takes the tournament_size best solution to the next generation. See GASearchCV documentation]. Defaults to True.
+
+			crossover_probability (float, optional): [For genetic algorithm grid search: Probability of crossover operation between two individuals. See GASearchCV documentation]. Defaults to 0.8.
+
+			mutation_probability (float, optional): [For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation]. Defaults to 0.1.
+
+			ga_algorithm (str, optional): [For genetic algorithm grid search: Evolutionary algorithm to use. See more details in the deap algorithms documentation]. Defaults to "eaMuPlusLambda".
+
+			column_subset (int or float, optional): [If float, proportion of the dataset to randomly subset for the grid search. Should be between 0 and 1, and should also be small, because the grid search takes a long time. If int, subset ```column_subset``` columns]. Defaults to 0.1.
+
+			disable_progressbar (bool, optional): [Whether or not to disable the tqdm progress bar when doing the imputation. If True, progress bar is disabled, which is useful when running the imputation on e.g. an HPC cluster. If the bar is disabled, a status update will be printed to standard output for each iteration and feature instead. If False, the tqdm progress bar will be used]
 
 			n_jobs (int, optional): [Number of parallel jobs to use. If ```gridparams``` is not None, n_jobs is used for the grid search. Otherwise it is used for the classifier. -1 means using all available processors]. Defaults to 1.
 
@@ -619,7 +749,15 @@ class ImputeRandomForest:
 		gridparams=None,
 		grid_iter=50,
 		cv=5,
-		subset_proportion=0.2,
+		ga=False,
+		population_size=10,
+		tournament_size=3,
+		elitism=True,
+		crossover_probability=0.8,
+		mutation_probability=0.1,
+		ga_algorithm="eaMuPlusLambda",
+		column_subset=0.1,
+		disable_progressbar=False,
 		n_jobs=1,
 		n_estimators=100,
 		criterion="gini",
@@ -656,7 +794,23 @@ class ImputeRandomForest:
 
 			cv (int, optional): [Number of folds for cross-validation during randomized grid search]. Defaults to 5.
 
-			subset_proportion (float, optional): [Proportion of the dataset to randomly subset for the grid search. Should be between 0 and 1, and should also be small, because the grid search takes a long time]. Defaults to 0.2.
+			ga (bool, optional): [Whether to use a genetic algorithm for the grid search. If False, a RandomizedSearchCV is done instead]. Defaults to False.
+
+			population_size (int, optional): [For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. See GASearchCV documentation]. Defaults to 10.
+
+			tournament_size (int, optional): [For genetic algorithm grid search: Number of individuals to perform tournament selection. See GASearchCV documentation]. Defaults to 3.
+
+			elitism (bool, optional): [For genetic algorithm grid search:     If True takes the tournament_size best solution to the next generation. See GASearchCV documentation]. Defaults to True.
+
+			crossover_probability (float, optional): [For genetic algorithm grid search: Probability of crossover operation between two individuals. See GASearchCV documentation]. Defaults to 0.8.
+
+			mutation_probability (float, optional): [For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation]. Defaults to 0.1.
+
+			ga_algorithm (str, optional): [For genetic algorithm grid search: Evolutionary algorithm to use. See more details in the deap algorithms documentation]. Defaults to "eaMuPlusLambda".
+
+			column_subset (int or float, optional): [If float, proportion of the dataset to randomly subset for the grid search. Should be between 0 and 1, and should also be small, because the grid search takes a long time. If int, subset ```column_subset``` columns]. Defaults to 0.1.
+
+			disable_progressbar (bool, optional): [Whether or not to disable the tqdm progress bar when doing the imputation. If True, progress bar is disabled, which is useful when running the imputation on e.g. an HPC cluster. If the bar is disabled, a status update will be printed to standard output for each iteration and feature instead. If False, the tqdm progress bar will be used]
 
 			n_jobs (int, optional): [Number of parallel jobs to use. If ```gridparams``` is not None, n_jobs is used for the grid search. Otherwise it is used for the classifier. -1 means using all available processors]. Defaults to 1.
 
@@ -726,7 +880,15 @@ class ImputeGradientBoosting:
 		gridparams=None,
 		grid_iter=50,
 		cv=5,
-		subset_proportion=0.2,
+		ga=False,
+		population_size=10,
+		tournament_size=3,
+		elitism=True,
+		crossover_probability=0.8,
+		mutation_probability=0.1,
+		ga_algorithm="eaMuPlusLambda",
+		column_subset=0.1,
+		disable_progressbar=False,
 		n_jobs=1,
 		n_estimators=100,
 		loss="deviance",
@@ -763,7 +925,23 @@ class ImputeGradientBoosting:
 
 			cv (int, optional): [Number of folds for cross-validation during randomized grid search]. Defaults to 5.
 
-			subset_proportion (float, optional): [Proportion of the dataset to randomly subset for the grid search. Should be between 0 and 1, and should also be small, because the grid search takes a long time]. Defaults to 0.2.
+			ga (bool, optional): [Whether to use a genetic algorithm for the grid search. If False, a RandomizedSearchCV is done instead]. Defaults to False.
+
+			population_size (int, optional): [For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. See GASearchCV documentation]. Defaults to 10.
+
+			tournament_size (int, optional): [For genetic algorithm grid search: Number of individuals to perform tournament selection. See GASearchCV documentation]. Defaults to 3.
+
+			elitism (bool, optional): [For genetic algorithm grid search:     If True takes the tournament_size best solution to the next generation. See GASearchCV documentation]. Defaults to True.
+
+			crossover_probability (float, optional): [For genetic algorithm grid search: Probability of crossover operation between two individuals. See GASearchCV documentation]. Defaults to 0.8.
+
+			mutation_probability (float, optional): [For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation]. Defaults to 0.1.
+
+			ga_algorithm (str, optional): [For genetic algorithm grid search: Evolutionary algorithm to use. See more details in the deap algorithms documentation]. Defaults to "eaMuPlusLambda".
+
+			column_subset (int or float, optional): [If float, proportion of the dataset to randomly subset for the grid search. Should be between 0 and 1, and should also be small, because the grid search takes a long time. If int, subset ```column_subset``` columns]. Defaults to 0.1.
+
+			disable_progressbar (bool, optional): [Whether or not to disable the tqdm progress bar when doing the imputation. If True, progress bar is disabled, which is useful when running the imputation on e.g. an HPC cluster. If the bar is disabled, a status update will be printed to standard output for each iteration and feature instead. If False, the tqdm progress bar will be used]
 
 			n_jobs (int, optional): [Number of parallel jobs to use. If ```gridparams``` is not None, n_jobs is used for the grid search. Otherwise it is used for the classifier. -1 means using all available processors]. Defaults to 1.
 			
@@ -833,7 +1011,15 @@ class ImputeBayesianRidge:
 		gridparams=None,
 		grid_iter=50,
 		cv=5,
-		subset_proportion=0.2,
+		ga=False,
+		population_size=10,
+		tournament_size=3,
+		elitism=True,
+		crossover_probability=0.8,
+		mutation_probability=0.1,
+		ga_algorithm="eaMuPlusLambda",
+		column_subset=0.1,
+		disable_progressbar=False,
 		n_jobs=1,
 		n_iter=300,
 		clf_tol=1e-3,
@@ -865,7 +1051,23 @@ class ImputeBayesianRidge:
 
 			cv (int, optional): [Number of folds for cross-validation during randomized grid search]. Defaults to 5.
 
-			subset_proportion (float, optional): [Proportion of the dataset to randomly subset for the grid search. Should be between 0 and 1, and should also be small, because the grid search takes a long time]. Defaults to 0.2.
+			ga (bool, optional): [Whether to use a genetic algorithm for the grid search. If False, a RandomizedSearchCV is done instead]. Defaults to False.
+
+			population_size (int, optional): [For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. See GASearchCV documentation]. Defaults to 10.
+
+			tournament_size (int, optional): [For genetic algorithm grid search: Number of individuals to perform tournament selection. See GASearchCV documentation]. Defaults to 3.
+
+			elitism (bool, optional): [For genetic algorithm grid search:     If True takes the tournament_size best solution to the next generation. See GASearchCV documentation]. Defaults to True.
+
+			crossover_probability (float, optional): [For genetic algorithm grid search: Probability of crossover operation between two individuals. See GASearchCV documentation]. Defaults to 0.8.
+
+			mutation_probability (float, optional): [For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation]. Defaults to 0.1.
+
+			ga_algorithm (str, optional): [For genetic algorithm grid search: Evolutionary algorithm to use. See more details in the deap algorithms documentation]. Defaults to "eaMuPlusLambda".
+
+			column_subset (int or float, optional): [If float, proportion of the dataset to randomly subset for the grid search. Should be between 0 and 1, and should also be small, because the grid search takes a long time. If int, subset ```column_subset``` columns]. Defaults to 0.1.
+
+			disable_progressbar (bool, optional): [Whether or not to disable the tqdm progress bar when doing the imputation. If True, progress bar is disabled, which is useful when running the imputation on e.g. an HPC cluster. If the bar is disabled, a status update will be printed to standard output for each iteration and feature instead. If False, the tqdm progress bar will be used]
 
 			n_jobs (int, optional): [Number of parallel jobs to use. If ```gridparams``` is not None, n_jobs is used for the grid search. Otherwise it is used for the regressor. -1 means using all available processors]. Defaults to 1.	
 				
