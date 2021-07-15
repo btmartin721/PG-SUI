@@ -3,6 +3,9 @@ import os
 import functools
 import time
 import datetime
+import platform
+import subprocess
+import re
 
 from tqdm import tqdm
 from tqdm.utils import disp_len, _unicode # for overriding status_print
@@ -91,6 +94,22 @@ def isnotebook():
 	except NameError:
 		# Probably standard Python interpreter
 		return False
+
+def get_processor_name():
+	if platform.system() == "Windows":
+		return platform.processor()
+	elif platform.system() == "Darwin":
+		os.environ['PATH'] = os.environ['PATH'] + os.pathsep + '/usr/sbin'
+		command ="sysctl -n machdep.cpu.brand_string"
+		return subprocess.check_output(command).strip()
+	elif platform.system() == "Linux":
+		command = "cat /proc/cpuinfo"
+		all_info = subprocess.check_output(command, shell=True).strip()
+		all_info = all_info.decode("utf-8")
+		for line in all_info.split("\n"):
+			if "model name" in line:
+				return re.sub( ".*model name.*:", "", line,1)
+	return ""
 
 class tqdm_linux(tqdm):
 	"""

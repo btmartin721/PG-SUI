@@ -5,12 +5,14 @@ import sys
 import os
 import shutil
 
-
 from scipy import stats
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 import seaborn as sns
+
+from sklearnex import patch_sklearn
+patch_sklearn()
 
 from sklearn.base import clone
 from sklearn.exceptions import ConvergenceWarning
@@ -156,6 +158,39 @@ class IterativeImputer(_BaseImputer):
 		missing values at fit/train time, the feature won't appear on
 		the missing indicator even if there are missing values at
 		transform/test time.
+	grid_cv=5 : integer, default=5
+		The number of cross-validation folds to use with the grid search. CV 
+		folds will be stratified, and it will attempt to balance the genotypes 
+		in each fold. IMPORTANT: Sites with fewer than ```2 * grid_cv``` of 
+		each genotypes will be removed prior to doing the random subsetting 
+		because otherwise the imputation would fail. At least two of each 
+		gentoype are required to be present in each fold.
+	grid_n_jobs : integer, default=1
+		The number of processors to use with the grid search. Set 
+		```grid_n_jobs``` to -1 to use all available processors.
+	grid_n_iter : integer, default=10
+		The number of iterations (for RandomizedSearchCV) or generations (for 
+		the genetic algorithm) to run with the grid search. For the genetic 
+		algorithm, an early stopping callback method is implemented that will 
+		stop if the accuracy does not improve for more than 5 consecutive 
+		generations.
+	clf_type : string, default="classifier"
+		Whether to run ```"classifier"``` or ```"regression"``` based imputation.
+	ga : boolean, default=False
+		Whether or not to use the genetic algorithm. If False, it does 
+		RandomizedSearchCV instead. If True, it uses the genetic algorithm.
+	disable_progressbar : boolean, default=False
+		Whether or not to disable the tqdm progress bar. If True, disables the 
+		progress bar. If False, tqdm is used for the progress bar. This can be 
+		useful if you are running the imputation on an HPC cluster or are 
+		saving the standard output to a file. If True, progress updates will be 
+		printed to the screen every ```progress_update_frequency``` iterations.
+	progress_update_frequency : integer, default=10
+		How often to display progress updates (as a percentage) if 
+		```disable_progressbar``` is 
+		True. If ```progress_update_frequency=10```, then it displays progress 
+		updates every 10%.
+
 	Attributes
 	----------
 	initial_imputer_ : object of type :class:`~sklearn.impute.SimpleImputer`
@@ -178,6 +213,7 @@ class IterativeImputer(_BaseImputer):
 	random_state_ : RandomState instance
 		RandomState instance that is generated either from a seed, the random
 		number generator or by `np.random`.
+
 	See Also
 	--------
 	SimpleImputer : Univariate imputation of missing values.
@@ -237,7 +273,8 @@ class IterativeImputer(_BaseImputer):
 				grid_n_iter=10,
 				clf_type="classifier",
 				ga=False,
-				disable_progressbar=False
+				disable_progressbar=False,
+				progress_update_frequency=10
 	):
 				
 		super().__init__(
@@ -267,6 +304,7 @@ class IterativeImputer(_BaseImputer):
 		self.clf_type = clf_type
 		self.ga = ga
 		self.disable_progressbar = disable_progressbar
+		self.progress_update_frequency = progress_update_frequency
 
 	@ignore_warnings(category=UserWarning)
 	def _impute_one_feature(self,

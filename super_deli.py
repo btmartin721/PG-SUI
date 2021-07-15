@@ -7,6 +7,11 @@ import pandas as pd
 import scipy.stats as stats
 from sklearn_genetic.space import Continuous, Categorical, Integer
 
+from utils.misc import get_processor_name
+
+print(get_processor_name().strip().startswith("Intel"))
+sys.exit()
+
 # Custom module imports
 from read_input.read_input import GenotypeData
 from read_input.impute import *
