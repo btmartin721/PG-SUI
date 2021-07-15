@@ -22,3 +22,6 @@ training_data/extracted_backup
 training_data/collated
 training_data/collated/*
 training_data/collated/
+.ipynb_checkpoints
+.ipynb_checkpoints/
+.ipynb_checkpoints/*
