@@ -11,8 +11,8 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 import seaborn as sns
 
-from sklearnex import patch_sklearn
-patch_sklearn()
+#from sklearnex import patch_sklearn
+#patch_sklearn()
 
 from sklearn.base import clone
 from sklearn.exceptions import ConvergenceWarning
