@@ -12,6 +12,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 import seaborn as sns
 
 from utils.misc import get_processor_name
+from utils.misc import HiddenPrints
 
 # Requires scikit-learn-intellex package
 if get_processor_name().strip().startswith("Intel"):
@@ -397,16 +398,17 @@ class IterativeImputer(_BaseImputer):
 
 		# Do genetic algorithm
 		else:
-			search = GASearchCV(
-				estimator=estimator,
-				cv=cross_val,
-				scoring=metric,
-				generations=self.grid_n_iter,
-				param_grid=self.search_space,
-				n_jobs=self.grid_n_jobs,
-				verbose=False,
-				**self.ga_kwargs
-			)
+			with HiddenPrints():
+				search = GASearchCV(
+					estimator=estimator,
+					cv=cross_val,
+					scoring=metric,
+					generations=self.grid_n_iter,
+					param_grid=self.search_space,
+					n_jobs=self.grid_n_jobs,
+					verbose=False,
+					**self.ga_kwargs
+				)
 				
 		missing_row_mask = mask_missing_values[:, feat_idx]
 		if fit_mode:
@@ -417,7 +419,8 @@ class IterativeImputer(_BaseImputer):
 									~missing_row_mask)
 
 			if self.ga:
-				search.fit(X_train, y_train, callbacks=callback)
+				with HiddenPrints():
+					search.fit(X_train, y_train, callbacks=callback)
 
 			else:
 				search.fit(X_train, y_train)
@@ -911,13 +914,14 @@ class IterativeImputer(_BaseImputer):
 		params_list = list()
 		score_list = list()
 		iter_list = list()
+
 		if self.ga:
 			sns.set_style("white")
 
 		total_iter = self.max_iter
 
 		for self.n_iter_ in progressbar(
-			range(1, total_iter), 
+			range(1, total_iter+1), 
 			desc="Iteration: ", disable=self.disable_progressbar
 		):
 
@@ -939,17 +943,12 @@ class IterativeImputer(_BaseImputer):
 			searches = list()
 
 			if self.disable_progressbar:
-				feat_counter = 0
-				total_features = len(ordered_idx)
+				print(f"Iteration Progress: {self.n_iter_}/{self.max_iter} ({int((self.n_iter_ / total_iter) * 100)}%)")
 
 			for feat_idx in progressbar(
 				ordered_idx, desc="Feature: ", leave=False, position=1, 
 				disable=self.disable_progressbar
 			):
-
-				if self.disable_progressbar:
-					feat_counter += 1
-					print(f"\nIteration: {self.n_iter_}/{self.max_iter} ({int((self.n_iter_ / total_iter) * 100)}%)\nFeature: {feat_counter}/{total_features} ({int((feat_counter / total_features) * 100)}%)\n")
 
 				neighbor_feat_idx = self._get_neighbor_feat_idx(n_features,
 																feat_idx,

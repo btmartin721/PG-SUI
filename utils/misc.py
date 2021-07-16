@@ -142,6 +142,17 @@ class tqdm_linux(tqdm):
 
 		return print_status
 
+class HiddenPrints:
+	"""[Class to supress printing within a with statement]
+	"""
+	def __enter__(self):
+		self._original_stdout = sys.stdout
+		sys.stdout = open(os.devnull, 'w')
+
+	def __exit__(self, exc_type, exc_val, exc_tb):
+		sys.stdout.close()
+		sys.stdout = self._original_stdout
+
 # def bayes_search_CV_init(self, estimator, search_spaces, optimizer_kwargs=None,	n_iter=50, scoring=None, fit_params=None, n_jobs=1,	n_points=1, iid=True, refit=True, cv=None, verbose=0,
 # 	pre_dispatch='2*n_jobs', random_state=None,	error_score='raise', 
 # 	return_train_score=False

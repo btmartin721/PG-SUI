@@ -17,25 +17,23 @@ if get_processor_name().strip().startswith("Intel"):
 	try:
 		from sklearnex import patch_sklearn
 		patch_sklearn()
+		intelex = True
 	except ImportError:
 		print("Warning: Intel CPU detected but scikit-learn-intelex is not installed. We recommend installing it to speed up computation.")
+		intelex = False
+else:
+	intelex = False
 
 #import xgboost as xgb
 from sklearn.experimental import enable_iterative_imputer
 from read_input.iterative_imputer import IterativeImputer as CustomIterImputer
 from sklearn.impute import IterativeImputer as OriginalIterativeImputer
-from sklearn.preprocessing import LabelEncoder
 from sklearn.ensemble import ExtraTreesClassifier
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.linear_model import BayesianRidge
 from sklearn.neighbors import KNeighborsClassifier
-from sklearn.model_selection import cross_val_score
-from sklearn.model_selection import RepeatedStratifiedKFold
-from sklearn.pipeline import Pipeline
 from sklearn.model_selection import RandomizedSearchCV
-from sklearn.metrics import make_scorer
-from sklearn.metrics import accuracy_score
-from sklearn.metrics import mean_squared_error
 
 # Custom module imports
 from read_input.read_input import GenotypeData
@@ -192,7 +190,8 @@ class Impute:
 		"""
 		# Get a random numpy arrray of column names to select
 		if isinstance(columns_to_subset, float):
-			if (original_num_cols * columns_to_subset) > len(df.columns):
+			n = int(original_num_cols * columns_to_subset)
+			if n > len(df.columns):
 				print("Warning: column_subset is greater than remaining columns following filtering. Using all columns")
 				all_cols = True
 			else:
@@ -201,7 +200,7 @@ class Impute:
 			if all_cols:
 				df_sub = df.copy()
 			else:
-				df_sub = df.sample(frac=columns_to_subset, axis="columns", replace=False)
+				df_sub = df.sample(n=n, axis="columns", replace=False)
 
 		elif isinstance(columns_to_subset, int):
 			if columns_to_subset > len(df.columns):
@@ -229,15 +228,14 @@ class Impute:
 		Returns:
 			[pandas.DataFrame]: [Imputed 012-encoded genotypes]
 		"""
-		print(
-			"Doing {} imputation without grid search...".format(str(self.clf)))
+		print(f"Doing {self.clf.__name__} imputation without grid search...")
 
 		clf = self.clf(**self.clf_kwargs)
 		imputer = self._define_iterative_imputer(clf)
 
 		df_imp = self._impute_fit_transform(df, imputer)
 
-		print("Done with {} imputation!\n".format(str(self.clf)))
+		print(f"\nDone with {self.clf.__name__} imputation!\n")
 		return df_imp, None, None
 		
 	def _impute_gridsearch(self, df):
@@ -255,9 +253,11 @@ class Impute:
 		"""
 		original_num_cols = len(df.columns)
 		df_tmp = self._remove_nonbiallelic(df)
-		df_subset = self.subset_data_for_testing(df_tmp, self.column_subset, original_num_cols)
+		df_subset = self.subset_data_for_testing(
+			df_tmp, self.column_subset, original_num_cols
+		)
 
-		print("Test dataset size: {}\n".format(len(df_subset.columns)))
+		print(f"Test dataset size: {len(df_subset.columns)}\n")
 		print("Doing grid search...")
 
 		clf = self.clf()
@@ -278,7 +278,7 @@ class Impute:
 
 		_, params_list, score_list = imputer.fit_transform(df_subset)
 
-		print("Done!")
+		print("\nDone!")
 
 		# Average or mode of best parameters
 		best_params = self._get_best_params(params_list)
@@ -293,7 +293,7 @@ class Impute:
 		else:
 			best_clf = self.clf(**self.clf_kwargs)
 
-		print("Doing imputation with best found parameters...")
+		print("\nDoing imputation with best found parameters...")
 
 		best_imputer = self._define_iterative_imputer(best_clf)
 
@@ -307,7 +307,7 @@ class Impute:
 			for col in df_imp.columns:
 				df_imp[col] = df_imp[col].round(0).astype("Int8")
 
-		print("Done with {} imputation!\n".format(str(self.clf)))
+		print(f"\nDone with {self.clf.__name__} imputation!\n")
 		return df_imp, abs(avg_score), best_params
 		
 	def _get_best_params(self, params_list):
@@ -769,6 +769,7 @@ class ImputeRandomForest:
 		column_subset=0.1,
 		disable_progressbar=False,
 		n_jobs=1,
+		extratrees=True,
 		n_estimators=100,
 		criterion="gini",
 		max_depth=None, 
@@ -824,6 +825,8 @@ class ImputeRandomForest:
 
 			n_jobs (int, optional): [Number of parallel jobs to use. If ```gridparams``` is not None, n_jobs is used for the grid search. Otherwise it is used for the classifier. -1 means using all available processors]. Defaults to 1.
 
+			extra_trees (bool, optional): [Whether to use ExtraTreesClassifier (If True) instead of RandomForestClassifier (If False). ExtraTreesClassifier is faster, but is not supported by the scikit-learn-intelex patch and RandomForestClassifier is. If using an Intel CPU, the optimizations provided by the scikit-learn-intelex patch might make setting ```extratrees=False``` worthwhile. If you are not using an Intel CPU, the scikit-learn-intelex library is not supported and ExtraTreesClassifier will be faster with similar performance. NOTE: If using scikit-learn-intelex, ```criterion``` must be set to "gini" and ```oob_score``` to False, as those parameters are not currently supported]. Defaults to True.
+
 			n_estimators (int, optional): [The number of trees in the forest. Increasing this value can improves the fit, but at the cost of compute time]. Defaults to 100.
 
 			criterion (str, optional): [The function to measure the quality of a split. Supported values are 'gini' for the Gini impurity and 'entropy' for the information gain]. Defaults to "gini".
@@ -869,7 +872,21 @@ class ImputeRandomForest:
 		# Get local variables into dictionary object
 		kwargs = locals()
 
-		self.clf = ExtraTreesClassifier
+		self.extratrees = kwargs.pop("extratrees")
+
+		if self.extratrees:
+			self.clf = ExtraTreesClassifier
+
+		elif intelex and not self.extratrees:
+			self.clf = RandomForestClassifier
+
+			if kwargs["criterion"] != "gini":
+				raise ValueError("criterion must be set to 'gini' if using the RandomForestClassifier with scikit-learn-intelex")
+			if kwargs["oob_score"]:
+				raise ValueError("oob_score must be set to False if using the RandomForestClassifier with scikit-learn-intelex")
+		else:
+			self.clf = RandomForestClassifier
+
 		self.clf_type = "classifier"
 
 		imputer = Impute(self.clf, self.clf_type, kwargs)
