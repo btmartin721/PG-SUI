@@ -11,6 +11,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from kneed import KneeLocator
 
+from utils.misc import get_processor_name
+
 # Requires scikit-learn-intellex package
 if get_processor_name().strip().startswith("Intel"):
 	try:

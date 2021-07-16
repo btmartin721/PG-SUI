@@ -19,7 +19,7 @@ if get_processor_name().strip().startswith("Intel"):
 		from sklearnex import patch_sklearn
 		patch_sklearn()
 	except ImportError:
-		print("Warning: Intel CPU detected but scikit-learn-intellex is not installed. We recommend installing it to speed up computation.")
+		pass
 
 from sklearn.base import clone
 from sklearn.exceptions import ConvergenceWarning

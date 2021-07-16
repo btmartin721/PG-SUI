@@ -12,6 +12,8 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from kneed import KneeLocator
 
+from utils.misc import get_processor_name
+
 # Requires scikit-learn-intellex package
 if get_processor_name().strip().startswith("Intel"):
 	try:

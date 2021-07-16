@@ -10,7 +10,6 @@ from sklearn_genetic.space import Continuous, Categorical, Integer
 from utils.misc import get_processor_name
 
 print(get_processor_name().strip().startswith("Intel"))
-sys.exit()
 
 # Custom module imports
 from read_input.read_input import GenotypeData
@@ -126,12 +125,12 @@ def main():
 		# 	"max_samples": max_samples
 		# }
 
-		grid_params = {
-			"max_features": Categorical(["sqrt", "log2"]),
-			"min_samples_split": Integer(2, 10), 
-			"min_samples_leaf": Integer(1, 10),
-			"max_depth": Integer(3, 110)
-		}
+		# grid_params = {
+		# 	"max_features": Categorical(["sqrt", "log2"]),
+		# 	"min_samples_split": Integer(2, 10), 
+		# 	"min_samples_leaf": Integer(1, 10),
+		# 	"max_depth": Integer(3, 110)
+		# }
 
 		# Bayesian Ridge gridparams - RandomizedSearchCV
 		# grid_params = {
@@ -142,12 +141,12 @@ def main():
 		# }
 
 		# Bayesian Ridge gridparams - Genetic algorithm
-		# grid_params = {
-		# 	"alpha_1": Continuous(1e-6, 1e-3, distribution="log-uniform"),
-		# 	"alpha_2": Continuous(1e-6, 1e-3, distribution="log-uniform"),
-		# 	"lambda_1": Continuous(1e-6, 1e-3, distribution="log-uniform"),
-		# 	"lambda_2": Continuous(1e-6, 1e-3, distribution="log-uniform")
-		# }
+		grid_params = {
+			"alpha_1": Continuous(1e-6, 1e-3, distribution="log-uniform"),
+			"alpha_2": Continuous(1e-6, 1e-3, distribution="log-uniform"),
+			"lambda_1": Continuous(1e-6, 1e-3, distribution="log-uniform"),
+			"lambda_2": Continuous(1e-6, 1e-3, distribution="log-uniform")
+		}
 
 		# rf_imp = ImputeRandomForest(
 		# 		data, 
@@ -164,7 +163,7 @@ def main():
 		# 		disable_progressbar=True
 		# )
 
-		# br_imp = ImputeBayesianRidge(data, prefix=args.prefix, n_iter=100, gridparams=grid_params, grid_iter=3, cv=3, n_jobs=4, max_iter=2, n_nearest_features=3, column_subset=0.005, ga=True, disable_progressbar=True)
+		br_imp = ImputeBayesianRidge(data, prefix=args.prefix, n_iter=100, gridparams=grid_params, grid_iter=3, cv=3, n_jobs=4, max_iter=2, n_nearest_features=3, column_subset=0.005, ga=True, disable_progressbar=True)
 
 	# colors = {
 	# 	"GU": "#FF00FF",

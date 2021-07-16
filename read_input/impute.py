@@ -10,13 +10,15 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from utils.misc import get_processor_name
+
 # Requires scikit-learn-intellex package
 if get_processor_name().strip().startswith("Intel"):
 	try:
 		from sklearnex import patch_sklearn
 		patch_sklearn()
 	except ImportError:
-		print("Warning: Intel CPU detected but scikit-learn-intellex is not installed. We recommend installing it to speed up computation.")
+		print("Warning: Intel CPU detected but scikit-learn-intelex is not installed. We recommend installing it to speed up computation.")
 
 #import xgboost as xgb
 from sklearn.experimental import enable_iterative_imputer
@@ -199,8 +201,7 @@ class Impute:
 			if all_cols:
 				df_sub = df.copy()
 			else:
-				sub = int(original_num_cols * columns_to_subset)
-				df_sub = df.sample(frac=sub, axis="columns", replace=False)
+				df_sub = df.sample(frac=columns_to_subset, axis="columns", replace=False)
 
 		elif isinstance(columns_to_subset, int):
 			if columns_to_subset > len(df.columns):

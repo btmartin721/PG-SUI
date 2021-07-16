@@ -25,3 +25,4 @@ training_data/collated/
 .ipynb_checkpoints
 .ipynb_checkpoints/
 .ipynb_checkpoints/*
+*.html
