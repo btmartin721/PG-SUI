@@ -88,24 +88,24 @@ def main():
 	else:	
 		# # For randmizedsearchcv
 		# # Number of trees in random forest
-		n_estimators = \
-			[int(x) for x in np.linspace(start=100, stop=1000, num=10)]
+		# n_estimators = \
+		# 	[int(x) for x in np.linspace(start=100, stop=1000, num=10)]
 
-		# Number of features to consider at every split
-		max_features = ["sqrt", "log2"]
+		# # Number of features to consider at every split
+		# max_features = ["sqrt", "log2"]
 
-		# Maximum number of levels in the tree
-		max_depth = [int(x) for x in np.linspace(10, 110, num=11)]
-		max_depth.append(None)
+		# # Maximum number of levels in the tree
+		# max_depth = [int(x) for x in np.linspace(10, 110, num=11)]
+		# max_depth.append(None)
 
-		# Minimmum number of samples required to split a node
-		min_samples_split = [int(x) for x in np.linspace(2, 10, num=5)]
+		# # Minimmum number of samples required to split a node
+		# min_samples_split = [int(x) for x in np.linspace(2, 10, num=5)]
 
-		# Minimum number of samples required at each leaf node
-		min_samples_leaf = [int(x) for x in np.linspace(1, 5, num=5)]
+		# # Minimum number of samples required at each leaf node
+		# min_samples_leaf = [int(x) for x in np.linspace(1, 5, num=5)]
 
-		# Proportion of dataset to use with bootstrapping
-		max_samples = [x for x in np.linspace(0.5, 1.0, num=6)]
+		# # Proportion of dataset to use with bootstrapping
+		# max_samples = [x for x in np.linspace(0.5, 1.0, num=6)]
 
 		# # Random Forest gridparams - RandomizedSearchCV
 		# grid_params = {
@@ -127,12 +127,12 @@ def main():
 		# 	"max_samples": max_samples
 		# }
 
-		# grid_params = {
-		# 	"max_features": Categorical(["sqrt", "log2"]),
-		# 	"min_samples_split": Integer(2, 10), 
-		# 	"min_samples_leaf": Integer(1, 10),
-		# 	"max_depth": Integer(3, 110)
-		# }
+		grid_params = {
+			"max_features": Categorical(["sqrt", "log2"]),
+			"min_samples_split": Integer(2, 10), 
+			"min_samples_leaf": Integer(1, 10),
+			"max_depth": Integer(3, 110)
+		}
 
 		# Bayesian Ridge gridparams - RandomizedSearchCV
 		# grid_params = {
@@ -142,30 +142,33 @@ def main():
 		# 	"lambda_2": stats.loguniform(1e-6, 1e-3),
 		# }
 
-		# Bayesian Ridge gridparams - Genetic algorithm
-		grid_params = {
-			"alpha_1": Continuous(1e-6, 1e-3, distribution="log-uniform"),
-			"alpha_2": Continuous(1e-6, 1e-3, distribution="log-uniform"),
-			"lambda_1": Continuous(1e-6, 1e-3, distribution="log-uniform"),
-			"lambda_2": Continuous(1e-6, 1e-3, distribution="log-uniform")
-		}
+		# # Bayesian Ridge gridparams - Genetic algorithm
+		# grid_params = {
+		# 	"alpha_1": Continuous(1e-6, 1e-3, distribution="log-uniform"),
+		# 	"alpha_2": Continuous(1e-6, 1e-3, distribution="log-uniform"),
+		# 	"lambda_1": Continuous(1e-6, 1e-3, distribution="log-uniform"),
+		# 	"lambda_2": Continuous(1e-6, 1e-3, distribution="log-uniform")
+		# }
 
-		# rf_imp = ImputeRandomForest(
-		# 		data, 
-		# 		prefix=args.prefix, 
-		# 		n_estimators=1000,
-		# 		n_nearest_features=5, 
-		# 		gridparams=grid_params, 
-		# 		cv=3, 
-		# 		grid_iter=40, 
-		# 		n_jobs=32, 
-		# 		max_iter=25, 
-		# 		column_subset=100,
-		# 		ga=True,
-		# 		disable_progressbar=True
-		# )
+		rf_imp = ImputeRandomForest(
+				data, 
+				prefix=args.prefix, 
+				n_estimators=1000,
+				n_nearest_features=5, 
+				gridparams=grid_params, 
+				cv=3, 
+				grid_iter=40, 
+				n_jobs=48, 
+				max_iter=25, 
+				column_subset=100,
+				ga=True,
+				disable_progressbar=True,
+				extratrees=False, 
+				mutation_probability=0.2, 
+				progress_update_percent=20
+		)
 
-		br_imp = ImputeBayesianRidge(data, prefix=args.prefix, n_iter=100, gridparams=grid_params, grid_iter=3, cv=3, n_jobs=4, max_iter=2, n_nearest_features=3, column_subset=3, ga=True, disable_progressbar=True, progress_update_percent=20)
+		# br_imp = ImputeBayesianRidge(data, prefix=args.prefix, n_iter=100, gridparams=grid_params, grid_iter=3, cv=3, n_jobs=4, max_iter=2, n_nearest_features=3, column_subset=3, ga=True, disable_progressbar=True, progress_update_percent=20)
 
 	# colors = {
 	# 	"GU": "#FF00FF",
