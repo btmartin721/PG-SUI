@@ -284,7 +284,7 @@ class Impute:
 			disable_progressbar=self.disable_progressbar,
 			progress_update_percent=self.progress_update_percent,
 			scoring_metric=self.scoring_metric,
-			early_stop_gen=early_stop_gen
+			early_stop_gen=self.early_stop_gen
 		)
 
 		_, params_list, score_list = imputer.fit_transform(df_subset)
@@ -711,7 +711,7 @@ class ImputeKNN:
 
 		n_neighbors (int, optional): [Number of neighbors to use by default for K-Nearest Neighbors queries]. Defaults to 5.
 
-		weights (str, optional): [Weight function used in prediction. Possible values: 'Uniform': Uniform weights with all points in each neighborhood weighted equally; 'distance': Weight points by the inverse of their distance, in this case closer neighbors of a query point will have  agreater influence than neighbors that are further away; 'callable': A user-defined function that accepts an array of distances and returns an array of the same shape containing the weights]. Defaults to "distance".
+		weights (str, optional): [Weight function used in prediction. Possible values: 'Uniform': Uniform weights with all points in each neighborhood weighted equally; 'distance': Weight points by the inverse of their distance, in this case closer neighbors of a query point will have  a greater influence than neighbors that are further away; 'callable': A user-defined function that accepts an array of distances and returns an array of the same shape containing the weights]. Defaults to "distance".
 
 		algorithm (str, optional): [Algorithm used to compute the nearest neighbors. Possible values: 'ball_tree', 'kd_tree', 'brute', 'auto']. Defaults to "auto".
 

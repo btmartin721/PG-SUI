@@ -366,20 +366,12 @@ class IterativeImputer(_BaseImputer):
 			estimator = clone(self._estimator)
 
 		# Modified code
-		acc_scorer = make_scorer(accuracy_score)
-
-		rmse_scorer = make_scorer(
-			mean_squared_error, 
-			greater_is_better=False, 
-			squared=False
-		)
-
-		cross_val = StratifiedKFold(n_splits=self.grid_cv, shuffle=False)
+		cross_val = StratifiedKFold(n_splits=self.grid_cv, shuffle=True)
 
 		# Modified code
 		# If regressor
 		if self.clf_type == "regressor":
-d			if self.ga:
+			if self.ga:
 				callback = DeltaThreshold(threshold=1e-3, metric="fitness")
 
 		else:
@@ -544,10 +536,11 @@ d			if self.ga:
 			ordered_idx = missing_values_idx
 			self.random_state_.shuffle(ordered_idx)
 		else:
-			raise ValueError("Got an invalid imputation order: '{0}'. It must "
-							"be one of the following: 'roman', 'arabic', "
-							"'ascending', 'descending', or "
-							"'random'.".format(self.imputation_order))
+			raise ValueError(
+				f"Got an invalid imputation order: '{self.imputation_order}'. "
+				f"It must be one of the following: 'roman', 'arabic', "
+				f"'ascending', 'descending', or 'random'."
+			)
 		return ordered_idx
 
 	def _num_features(self, X):
@@ -849,13 +842,12 @@ d			if self.ga:
 
 		if self.max_iter < 0:
 			raise ValueError(
-				"'max_iter' should be a positive integer. Got {} instead."
-				.format(self.max_iter))
+				f"'max_iter' should be a positive integer. Got {self.max_iter} instead."
+			)
 
 		if self.tol < 0:
 			raise ValueError(
-				"'tol' should be a non-negative float. Got {} instead."
-				.format(self.tol)
+				f"'tol' should be a non-negative float. Got {self.tol} instead"
 			)
 
 		if self.estimator is None:
@@ -933,11 +925,17 @@ d			if self.ga:
 			if self.ga:
 				iter_list.append(self.n_iter_)
 
-				pp_oneline = PdfPages(".score_traces_separate_{}.pdf".format(self.n_iter_))
+				pp_oneline = PdfPages(
+					f".score_traces_separate_{self.n_iter_}.pdf"
+				)
 
-				pp_lines = PdfPages(".score_traces_combined_{}.pdf".format(self.n_iter_))
+				pp_lines = PdfPages(
+					f".score_traces_combined_{self.n_iter_}.pdf"
+				)
 
-				pp_space = PdfPages(".search_space_{}.pdf".format(self.n_iter_))
+				pp_space = PdfPages(
+					f".search_space_{self.n_iter_}.pdf"
+				)
 
 			if self.imputation_order == 'random':
 				ordered_idx = self._get_ordered_idx(mask_missing_values)
@@ -1017,7 +1015,14 @@ d			if self.ga:
 					current_perc = int((i / total_features) * 100)
 
 					if current_perc >= print_perc_interval:
-						print(f"Feature Progress: {i}/{total_features} ({current_perc}%)")
+						print(
+							f"Feature Progress (Iteration {self.n_iter_}/"
+							f"{self.max_iter}): {i}/{total_features} "
+							f"({current_perc}%)"
+						)
+
+						if i == len(ordered_idx):
+							print("")
 
 						while print_perc_interval < current_perc:
 							print_perc_interval += self.progress_update_percent
@@ -1031,9 +1036,10 @@ d			if self.ga:
 				inf_norm = np.linalg.norm(Xt - Xt_previous, ord=np.inf,
 										axis=None)
 				if self.verbose > 0:
-					print('[IterativeImputer] '
-						'Change: {}, scaled tolerance: {} '.format(
-							inf_norm, normalized_tol))
+					print(
+						f"[IterativeImputer] Change: {inf_norm}, "
+						f"scaled tolerance: {normalized_tol} "
+					)
 
 				if inf_norm < normalized_tol:
 					if self.verbose > 0:
@@ -1090,17 +1096,24 @@ d			if self.ga:
 			# Remove all files except last iteration
 			final_iter = iter_list.pop()
 
-			[os.remove(".score_traces_separate_{}.pdf".format(x)) for x in iter_list]
+			[os.remove(f".score_traces_separate_{x}.pdf") for x in iter_list]
+			[os.remove(f".score_traces_combined_{x}.pdf") for x in iter_list]
+			[os.remove(f".search_space_{x}.pdf") for x in iter_list]
 
-			[os.remove(".score_traces_combined_{}.pdf".format(x)) for x in iter_list]
+			shutil.move(
+				f".score_traces_separate_{final_iter}.pdf", 
+				f"{self.prefix}_score_traces_separate.pdf"
+			)
 
-			[os.remove(".search_space_{}.pdf".format(x)) for x in iter_list]
+			shutil.move(
+				f".score_traces_combined_{final_iter}.pdf", 
+				f"{self.prefix}_score_traces_combined.pdf"
+			)
 
-			shutil.move(".score_traces_separate_{}.pdf".format(final_iter), "{}_score_traces_separate.pdf".format(self.prefix))
-
-			shutil.move(".score_traces_combined_{}.pdf".format(final_iter), "{}_score_traces_combined.pdf".format(self.prefix))
-
-			shutil.move(".search_space_{}.pdf".format(final_iter), "{}_search_space.pdf".format(self.prefix))
+			shutil.move(
+				f".search_space_{final_iter}.pdf", 
+				f"{self.prefix}_search_space.pdf"
+			)
 
 		return super()._concatenate_indicator(Xt, X_indicator), params_list, score_list
 
