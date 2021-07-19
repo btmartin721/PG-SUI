@@ -282,7 +282,9 @@ class IterativeImputer(_BaseImputer):
 				clf_type="classifier",
 				ga=False,
 				disable_progressbar=False,
-				progress_update_frequency=10
+				progress_update_percent=None,
+				scoring_metric="accuracy",
+				early_stop_gen=5
 	):
 				
 		super().__init__(
@@ -312,7 +314,9 @@ class IterativeImputer(_BaseImputer):
 		self.clf_type = clf_type
 		self.ga = ga
 		self.disable_progressbar = disable_progressbar
-		self.progress_update_frequency = progress_update_frequency
+		self.progress_update_percent = progress_update_percent
+		self.scoring_metric = scoring_metric
+		self.early_stop_gen = early_stop_gen
 
 	@ignore_warnings(category=UserWarning)
 	def _impute_one_feature(self,
@@ -375,23 +379,22 @@ class IterativeImputer(_BaseImputer):
 		# Modified code
 		# If regressor
 		if self.clf_type == "regressor":
-			metric = rmse_scorer
-
-			if self.ga:
+d			if self.ga:
 				callback = DeltaThreshold(threshold=1e-3, metric="fitness")
 
 		else:
-			metric = acc_scorer
-
 			if self.ga:
-				callback = ConsecutiveStopping(generations=5, metric="fitness")			
+				callback = ConsecutiveStopping(
+					generations=self.early_stop_gen, metric="fitness"
+				)
+
 		# Do randomized grid search
 		if not self.ga:
 			search = RandomizedSearchCV(
 				estimator, 
 				param_distributions=self.search_space, 
 				n_iter=self.grid_n_iter, 
-				scoring=metric, 
+				scoring=self.scoring_metric, 
 				n_jobs=self.grid_n_jobs, 
 				cv=cross_val
 			)
@@ -402,7 +405,7 @@ class IterativeImputer(_BaseImputer):
 				search = GASearchCV(
 					estimator=estimator,
 					cv=cross_val,
-					scoring=metric,
+					scoring=self.scoring_metric,
 					generations=self.grid_n_iter,
 					param_grid=self.search_space,
 					n_jobs=self.grid_n_jobs,
@@ -894,6 +897,8 @@ class IterativeImputer(_BaseImputer):
 		# and a better way would be good.
 		# see: https://goo.gl/KyCNwj and subsequent comments
 		ordered_idx = self._get_ordered_idx(mask_missing_values)
+		total_features = len(ordered_idx)
+
 		self.n_features_with_missing_ = len(ordered_idx)
 
 		abs_corr_mat = self._get_abs_corr_mat(Xt)
@@ -945,10 +950,13 @@ class IterativeImputer(_BaseImputer):
 			if self.disable_progressbar:
 				print(f"Iteration Progress: {self.n_iter_}/{self.max_iter} ({int((self.n_iter_ / total_iter) * 100)}%)")
 
-			for feat_idx in progressbar(
+			if self.progress_update_percent is not None:
+				print_perc_interval = self.progress_update_percent
+
+			for i, feat_idx in enumerate(progressbar(
 				ordered_idx, desc="Feature: ", leave=False, position=1, 
 				disable=self.disable_progressbar
-			):
+			), start=1):
 
 				neighbor_feat_idx = self._get_neighbor_feat_idx(n_features,
 																feat_idx,
@@ -972,7 +980,7 @@ class IterativeImputer(_BaseImputer):
 				self.imputation_sequence_.append(estimator_triplet)
 
 				if search is not None:
-
+					# There was missing data in the feature
 					params_list.append(search.best_params_)
 					score_list.append(search.best_score_)
 
@@ -1002,6 +1010,17 @@ class IterativeImputer(_BaseImputer):
 					params_list.append(tmp_dict)
 
 					score_list.append(-9)
+
+				# Only print feature updates at each progress_update_percent
+				# interval
+				if self.progress_update_percent is not None:
+					current_perc = int((i / total_features) * 100)
+
+					if current_perc >= print_perc_interval:
+						print(f"Feature Progress: {i}/{total_features} ({current_perc}%)")
+
+						while print_perc_interval < current_perc:
+							print_perc_interval += self.progress_update_percent
 
 			if self.verbose > 1:
 				print('[IterativeImputer] Ending imputation round '
