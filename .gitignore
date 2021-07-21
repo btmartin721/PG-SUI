@@ -12,6 +12,7 @@ __pycache__/*
 *.csv
 *_output/
 *.zip
+*logfile.txt
 training_data/download
 training_data/extracted
 training_data/extracted/*
