@@ -4,6 +4,7 @@ import warnings
 import sys
 import os
 import shutil
+import logging
 
 from scipy import stats
 import numpy as np
@@ -13,6 +14,7 @@ import seaborn as sns
 
 from utils.misc import get_processor_name
 from utils.misc import HiddenPrints
+from utils.misc import StreamToLogger
 
 # Requires scikit-learn-intellex package
 if get_processor_name().strip().startswith("Intel"):
@@ -83,6 +85,19 @@ class IterativeImputer(_BaseImputer):
 
 	Parameters
 	----------
+
+	sl_stdout : logging object
+		The logging object to save standard output to
+	sl_stderr : logging object
+		The logging object to save standard error to
+	search_space : sklearn_genetic.space object or dict
+		The parameter distributions or values to use for the grid search
+	clf_kwargs : dict
+		A dictionary with the classifier keyword arguments
+	ga_kwargs : dict
+		A dictionary with the genetic alrgorithm arguments
+	prefix : str
+		Prefix for output files
 	estimator : estimator object, default=BayesianRidge()
 		The estimator to use at each step of the round-robin imputation.
 		If ``sample_posterior`` is True, the estimator must support
@@ -257,6 +272,8 @@ class IterativeImputer(_BaseImputer):
 		<https://www.jstor.org/stable/2984099>`_
 	"""
 	def __init__(self,
+				sl_stdout,
+				sl_stderr,
 				search_space,
 				clf_kwargs,
 				ga_kwargs,
@@ -318,6 +335,9 @@ class IterativeImputer(_BaseImputer):
 		self.scoring_metric = scoring_metric
 		self.early_stop_gen = early_stop_gen
 
+		sys.stdout = sl_stdout
+		sys.stderr = sl_stderr
+
 	@ignore_warnings(category=UserWarning)
 	def _impute_one_feature(self,
 							X_filled,
@@ -325,7 +345,7 @@ class IterativeImputer(_BaseImputer):
 							feat_idx,
 							neighbor_feat_idx,
 							estimator=None,
-							fit_mode=True,
+							fit_mode=True
 	):
 		"""Impute a single feature from the others provided.
 		This function predicts the missing values of one of the features using

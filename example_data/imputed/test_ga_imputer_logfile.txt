@@ -1,0 +1,34 @@
+1429 columns removed for being non-biallelic or having genotype counts < number of cross-validation folds
+Subsetting from 595 remaining columns
+
+Test dataset size: 3
+
+Doing grid search...
+Iteration Progress: 1/2 (50%)
+Feature Progress (Iteration 1/2): 1/3 (33%)
+Feature Progress (Iteration 1/2): 2/3 (66%)
+Feature Progress (Iteration 1/2): 3/3 (100%)
+
+Iteration Progress: 2/2 (100%)
+Feature Progress (Iteration 2/2): 1/3 (33%)
+Feature Progress (Iteration 2/2): 2/3 (66%)
+Feature Progress (Iteration 2/2): 3/3 (100%)
+
+
+Done!
+
+Doing imputation with best found parameters...
+C:\Users\evobi\anaconda3\envs\super_deli_py37_intellex\lib\site-packages\sklearn\impute\_iterative.py:686: ConvergenceWarning: [IterativeImputer] Early stopping criterion not reached.
+  " reached.", ConvergenceWarning)
+
+Done with BayesianRidge imputation!
+
+Grid Search Results:
+RMSE (best parameters): 0.27
+Best Parameters: {'alpha_1': 0.00012617959322372917, 'alpha_2': 0.00025389951519232015, 'lambda_1': 2.0207317774575694e-05, 'lambda_2': 3.302347092696775e-05}
+
+
+Done!
+
+Finshed 'fit_predict' in 0:01:29.697406
+

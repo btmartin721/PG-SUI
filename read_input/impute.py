@@ -1,6 +1,7 @@
 # Standard library imports
 import sys
 import os
+import logging
 from collections import Counter
 from operator import itemgetter
 from statistics import mean
@@ -11,6 +12,7 @@ import numpy as np
 import pandas as pd
 
 from utils.misc import get_processor_name
+from utils.misc import StreamToLogger
 
 # Requires scikit-learn-intellex package
 if get_processor_name().strip().startswith("Intel"):
@@ -77,6 +79,30 @@ class Impute:
 		self.progress_update_percent, \
 		self.scoring_metric, \
 		self.early_stop_gen = self._gather_impute_settings(kwargs)
+
+		self.logfilepath = f"{self.prefix}_imputer_logfile.txt"
+
+		# Remove logfile if exists
+		try:
+			os.remove(self.logfilepath)
+		except OSError:
+			pass
+
+		# Save STDOUT and STDERR to logfile
+		logging.basicConfig(
+			level=logging.INFO,
+			format="%(message)s",
+			filename=self.logfilepath,
+			filemode="a"
+		)
+
+		stdout_logger = logging.getLogger("STDOUT")
+		self.sl_stdout = StreamToLogger(stdout_logger, logging.INFO)
+		sys.stdout = self.sl_stdout
+
+		stderr_logger = logging.getLogger("STDERR")
+		self.sl_stderr = StreamToLogger(stderr_logger, logging.ERROR)
+		sys.stderr = self.sl_stderr
 
 	@timer
 	def fit_predict(self, X):
@@ -272,6 +298,8 @@ class Impute:
 
 		imputer = self._define_iterative_imputer(
 			clf, 
+			sl_stdout=self.sl_stdout,
+			sl_stderr=self.sl_stderr,
 			clf_kwargs=self.clf_kwargs,
 			ga_kwargs=self.ga_kwargs,
 			prefix=self.prefix,
@@ -608,11 +636,15 @@ class Impute:
 
 		return new_df
 
-	def _define_iterative_imputer(self, clf, clf_kwargs=None, ga_kwargs=None, prefix="out", n_jobs=None, n_iter=None, cv=None, clf_type=None, ga=False, search_space=None, disable_progressbar=False, progress_update_percent=None, scoring_metric=None, early_stop_gen=None):
+	def _define_iterative_imputer(self, clf, sl_stdout=None, sl_stderr=None, clf_kwargs=None, ga_kwargs=None, prefix="out", n_jobs=None, n_iter=None, cv=None, clf_type=None, ga=False, search_space=None, disable_progressbar=False, progress_update_percent=None, scoring_metric=None, early_stop_gen=None):
 		"""[Define an IterativeImputer instance]
 
 		Args:
 			clf ([sklearn Classifier]): [Classifier to use with IterativeImputer]
+
+			sl_stdout (StreamToLogger object, optional): [Logger to save standard output to]. Defaults to None.
+
+			sl_stderr (StreamToLogger object, optional): [Logger to save standard error to]. Defaults to None.
 
 			clf_kwargs (dict, optional): [Keyword arguments for classifier]. Defaults to None.
 
@@ -650,6 +682,8 @@ class Impute:
 		else:
 			# Create iterative imputer
 			imp = CustomIterImputer(
+				sl_stdout,
+				sl_stderr,
 				search_space, 
 				clf_kwargs,
 				ga_kwargs,
