@@ -1033,7 +1033,7 @@ class IterativeImputerGridSearch(_BaseImputer):
 				# Only print feature updates at each progress_update_percent
 				# interval
 				if self.progress_update_percent is not None:
-					current_perc = int((i / total_features) * 100)
+					current_perc = (i / total_features) * 100
 
 					if current_perc >= print_perc_interval:
 						with open(self.logfilepath, "a") as fout:
@@ -1042,7 +1042,7 @@ class IterativeImputerGridSearch(_BaseImputer):
 								print(
 									f"Feature Progress (Iteration {self.n_iter_}/"
 									f"{self.max_iter}): {i}/{total_features} "
-									f"({current_perc}%)"
+									f"({int(current_perc)}%)"
 								)
 
 							if i == len(ordered_idx):

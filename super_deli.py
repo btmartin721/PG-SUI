@@ -150,7 +150,7 @@ def main():
 		# 	"lambda_2": Continuous(1e-6, 1e-3, distribution="log-uniform")
 		# }
 
-		# Random forest imputation with genetic algorithm grid search
+		# # Random forest imputation with genetic algorithm grid search
 		rf_imp = ImputeRandomForest(
 				data, 
 				prefix=args.prefix, 
