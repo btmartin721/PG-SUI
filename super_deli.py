@@ -142,33 +142,35 @@ def main():
 		# 	"lambda_2": stats.loguniform(1e-6, 1e-3),
 		# }
 
-		# # Bayesian Ridge gridparams - Genetic algorithm
-		grid_params = {
-			"alpha_1": Continuous(1e-6, 1e-3, distribution="log-uniform"),
-			"alpha_2": Continuous(1e-6, 1e-3, distribution="log-uniform"),
-			"lambda_1": Continuous(1e-6, 1e-3, distribution="log-uniform"),
-			"lambda_2": Continuous(1e-6, 1e-3, distribution="log-uniform")
-		}
+		# # # Bayesian Ridge gridparams - Genetic algorithm
+		# grid_params = {
+		# 	"alpha_1": Continuous(1e-6, 1e-3, distribution="log-uniform"),
+		# 	"alpha_2": Continuous(1e-6, 1e-3, distribution="log-uniform"),
+		# 	"lambda_1": Continuous(1e-6, 1e-3, distribution="log-uniform"),
+		# 	"lambda_2": Continuous(1e-6, 1e-3, distribution="log-uniform")
+		# }
 
-		# rf_imp = ImputeRandomForest(
-		# 		data, 
-		# 		prefix=args.prefix, 
-		# 		n_estimators=1000,
-		# 		n_nearest_features=10, 
-		# 		gridparams=grid_params, 
-		# 		cv=3, 
-		# 		grid_iter=40, 
-		# 		n_jobs=4, 
-		# 		max_iter=30, 
-		# 		column_subset=100,
-		# 		ga=True,
-		# 		disable_progressbar=True,
-		# 		extratrees=False, 
-		# 		mutation_probability=0.1, 
-		# 		progress_update_percent=20
-		# )
+		# Random forest imputation with genetic algorithm grid search
+		rf_imp = ImputeRandomForest(
+				data, 
+				prefix=args.prefix, 
+				n_estimators=1000,
+				n_nearest_features=10, 
+				gridparams=grid_params, 
+				cv=3, 
+				grid_iter=40, 
+				n_jobs=48, 
+				max_iter=30, 
+				column_subset=100,
+				ga=True,
+				disable_progressbar=True,
+				extratrees=False, 
+				mutation_probability=0.1, 
+				progress_update_percent=20,
+				chunk_size=0.2
+		)
 
-		br_imp = ImputeBayesianRidge(data, prefix=args.prefix, n_iter=100, gridparams=grid_params, grid_iter=3, cv=3, n_jobs=4, max_iter=2, n_nearest_features=3, column_subset=3, ga=True, disable_progressbar=True, progress_update_percent=20, chunk_size=0.25)
+		# br_imp = ImputeBayesianRidge(data, prefix=args.prefix, n_iter=100, gridparams=grid_params, grid_iter=3, cv=3, n_jobs=4, max_iter=2, n_nearest_features=3, column_subset=3, ga=True, disable_progressbar=True, progress_update_percent=20, chunk_size=0.25)
 
 	# colors = {
 	# 	"GU": "#FF00FF",
