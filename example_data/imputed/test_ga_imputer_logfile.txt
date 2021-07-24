@@ -6,3 +6,11 @@ Test dataset size: 3
 Doing grid search...
 Iteration Progress: 1/2 (50%)
 Feature Progress (Iteration 1/2): 1/3 (33%)
+Feature Progress (Iteration 1/2): 2/3 (66%)
+Feature Progress (Iteration 1/2): 3/3 (100%)
+
+Iteration Progress: 2/2 (100%)
+Feature Progress (Iteration 2/2): 1/3 (33%)
+Feature Progress (Iteration 2/2): 2/3 (66%)
+Feature Progress (Iteration 2/2): 3/3 (100%)
+
