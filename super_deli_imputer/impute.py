@@ -29,9 +29,9 @@ else:
 #import xgboost as xgb
 from sklearn.experimental import enable_iterative_imputer
 
-from super_deli_imputer.iterative_imputer_gridsearch import IterativeImputerGridSearch as CustomIterImputer
-
-from super_deli_imputer.iterative_imputer_full import IterativeImputerFull as OriginalIterativeImputer
+from super_deli_imputer.iterative_imputer_custom import (
+	IterativeImputerGridSearch, IterativeImputerAllData
+)
 
 from sklearn.ensemble import ExtraTreesClassifier
 from sklearn.ensemble import RandomForestClassifier
@@ -750,11 +750,11 @@ class Impute:
 		"""
 
 		if search_space is None:
-			imp = OriginalIterativeImputer(logfilepath, clf_kwargs, prefix, estimator=clf, disable_progressbar=disable_progressbar, progress_update_percent=progress_update_percent, **self.imp_kwargs)
+			imp = IterativeImputerAllData(logfilepath, clf_kwargs, prefix, estimator=clf, disable_progressbar=disable_progressbar, progress_update_percent=progress_update_percent, **self.imp_kwargs)
 		
 		else:
 			# Create iterative imputer
-			imp = CustomIterImputer(
+			imp = IterativeImputerGridSearch(
 				logfilepath,
 				search_space, 
 				clf_kwargs,

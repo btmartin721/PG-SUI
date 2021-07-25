@@ -4,6 +4,7 @@ import warnings
 import sys
 import os
 import shutil
+import math
 
 from contextlib import redirect_stdout
 from scipy import stats
@@ -879,16 +880,16 @@ class IterativeImputerFull(_BaseImputer):
 				# Only print feature updates at each progress_update_percent
 				# interval
 				if self.progress_update_percent is not None:
-					current_perc = (i / total_features) * 100
+					current_perc = math.ceil((i / total_features) * 100)
 
 					if current_perc >= print_perc_interval:
 						with open(self.logfilepath, "a") as fout:
 							# Redirect progress to file
 							with redirect_stdout(fout):
 								print(
-									f"Feature Progress (Iteration {self.n_iter_}/"
-									f"{self.max_iter}): {i}/{total_features} "
-									f"({int(current_perc)}%)"
+									f"Feature Progress (Iteration "
+									f"{self.n_iter_}/{self.max_iter}): "
+									f"{i}/{total_features} ({current_perc}%)"
 								)
 
 							if i == len(ordered_idx):

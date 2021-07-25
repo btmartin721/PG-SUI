@@ -1,102 +1,44 @@
 from time import time
 from collections import namedtuple
 import warnings
-import sys
-import os
-import shutil
 
-from contextlib import redirect_stdout
 from scipy import stats
 import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_pdf import PdfPages
-import seaborn as sns
 
-from sklearn.base import clone
-from sklearn.exceptions import ConvergenceWarning
-from sklearn.utils._testing import ignore_warnings
-from sklearn.preprocessing import normalize
+from ..base import clone
+from ..exceptions import ConvergenceWarning
+from ..preprocessing import normalize
+from ..utils import (check_array, check_random_state, _safe_indexing,
+					is_scalar_nan)
+from ..utils.validation import FLOAT_DTYPES, check_is_fitted
+from ..utils._mask import _get_mask
 
-from sklearn.utils import (
-	check_array, check_random_state, _safe_indexing, is_scalar_nan
-)
+from ._base import _BaseImputer
+from ._base import SimpleImputer
+from ._base import _check_inputs_dtype
 
-from sklearn.utils.validation import FLOAT_DTYPES, check_is_fitted
-from sklearn.utils._mask import _get_mask
-
-from sklearn.impute import SimpleImputer
-from sklearn.impute._base import _BaseImputer
-from sklearn.impute._base import _check_inputs_dtype
-
-from sklearn.metrics import accuracy_score, mean_squared_error, make_scorer
-from sklearn.model_selection import RandomizedSearchCV
-from sklearn.model_selection import StratifiedKFold
-
-from sklearn_genetic import GASearchCV
-from sklearn_genetic.plots import plot_fitness_evolution
-from sklearn_genetic.utils import logbook_to_pandas
-from sklearn_genetic.space import Continuous, Categorical, Integer
-from sklearn_genetic.callbacks import ConsecutiveStopping, DeltaThreshold, ThresholdStopping
-
-from utils.misc import get_processor_name
-from utils.misc import HiddenPrints
-from utils.misc import StreamToLogger
-from utils.misc import isnotebook
-
-# Requires scikit-learn-intellex package
-if get_processor_name().strip().startswith("Intel"):
-	try:
-		from sklearnex import patch_sklearn
-		patch_sklearn(verbose=False)
-	except ImportError:
-		print(
-			"Processor not compatible with scikit-learn-intelex; using "
-			"default configuration"
-		)
-
-is_notebook = isnotebook()
-
-if is_notebook:
-	from tqdm.notebook import tqdm as progressbar
-else:
-	if sys.platform == "linux" or sys.platform == "linux2":
-		from tqdm.auto import tqdm as progressbar
-	else:
-		from tqdm import tqdm as progressbar
 
 _ImputerTriplet = namedtuple('_ImputerTriplet', ['feat_idx',
 												'neighbor_feat_idx',
 												'estimator'])
 
-class IterativeImputerGridSearch(_BaseImputer):
+
+class IterativeImputer(_BaseImputer):
 	"""Multivariate imputer that estimates each feature from all the others.
 	A strategy for imputing missing values by modeling each feature with
 	missing values as a function of other features in a round-robin fashion.
 	Read more in the :ref:`User Guide <iterative_imputer>`.
 	.. versionadded:: 0.21
 	.. note::
-		This estimator is still **experimental** for now: the predictions
-		and the API might change without any deprecation cycle. To use it,
-		you need to explicitly import ``enable_iterative_imputer``::
+	This estimator is still **experimental** for now: the predictions
+	and the API might change without any deprecation cycle. To use it,
+	you need to explicitly import ``enable_iterative_imputer``::
 		>>> # explicitly require this experimental feature
 		>>> from sklearn.experimental import enable_iterative_imputer  # noqa
 		>>> # now you can import normally from sklearn.impute
 		>>> from sklearn.impute import IterativeImputer
-	.. note::
-		IterativeImputer has been modified from the original source code by Bradley T. Martin.
-
 	Parameters
 	----------
-	logfilepath : str
-		Path to the progress log file.
-	search_space : sklearn_genetic.space object or dict
-		The parameter distributions or values to use for the grid search
-	clf_kwargs : dict
-		A dictionary with the classifier keyword arguments
-	ga_kwargs : dict
-		A dictionary with the genetic alrgorithm arguments
-	prefix : str
-		Prefix for output files
 	estimator : estimator object, default=BayesianRidge()
 		The estimator to use at each step of the round-robin imputation.
 		If ``sample_posterior`` is True, the estimator must support
@@ -156,13 +98,13 @@ class IterativeImputerGridSearch(_BaseImputer):
 		scalar. If array-like, expects shape (n_features,), one min value for
 		each feature. The default is `-np.inf`.
 		.. versionchanged:: 0.23
-			Added support for array-like.
+		Added support for array-like.
 	max_value : float or array-like of shape (n_features,), default=np.inf
 		Maximum possible imputed value. Broadcast to shape (n_features,) if
 		scalar. If array-like, expects shape (n_features,), one max value for
 		each feature. The default is `np.inf`.
 		.. versionchanged:: 0.23
-			Added support for array-like.
+		Added support for array-like.
 	verbose : int, default=0
 		Verbosity flag, controls the debug messages that are issued
 		as functions are evaluated. The higher, the more verbose. Can be 0, 1,
@@ -180,39 +122,6 @@ class IterativeImputerGridSearch(_BaseImputer):
 		missing values at fit/train time, the feature won't appear on
 		the missing indicator even if there are missing values at
 		transform/test time.
-	grid_cv=5 : integer, default=5
-		The number of cross-validation folds to use with the grid search. CV 
-		folds will be stratified, and it will attempt to balance the genotypes 
-		in each fold. IMPORTANT: Sites with fewer than ```2 * grid_cv``` of 
-		each genotypes will be removed prior to doing the random subsetting 
-		because otherwise the imputation would fail. At least two of each 
-		gentoype are required to be present in each fold.
-	grid_n_jobs : integer, default=1
-		The number of processors to use with the grid search. Set 
-		```grid_n_jobs``` to -1 to use all available processors.
-	grid_n_iter : integer, default=10
-		The number of iterations (for RandomizedSearchCV) or generations (for 
-		the genetic algorithm) to run with the grid search. For the genetic 
-		algorithm, an early stopping callback method is implemented that will 
-		stop if the accuracy does not improve for more than 5 consecutive 
-		generations.
-	clf_type : string, default="classifier"
-		Whether to run ```"classifier"``` or ```"regression"``` based imputation.
-	ga : boolean, default=False
-		Whether or not to use the genetic algorithm. If False, it does 
-		RandomizedSearchCV instead. If True, it uses the genetic algorithm.
-	disable_progressbar : boolean, default=False
-		Whether or not to disable the tqdm progress bar. If True, disables the 
-		progress bar. If False, tqdm is used for the progress bar. This can be 
-		useful if you are running the imputation on an HPC cluster or are 
-		saving the standard output to a file. If True, progress updates will be 
-		printed to the screen every ```progress_update_frequency``` iterations.
-	progress_update_frequency : integer, default=10
-		How often to display progress updates (as a percentage) if 
-		```disable_progressbar``` is 
-		True. If ```progress_update_frequency=10```, then it displays progress 
-		updates every 10%.
-
 	Attributes
 	----------
 	initial_imputer_ : object of type :class:`~sklearn.impute.SimpleImputer`
@@ -235,7 +144,6 @@ class IterativeImputerGridSearch(_BaseImputer):
 	random_state_ : RandomState instance
 		RandomState instance that is generated either from a seed, the random
 		number generator or by `np.random`.
-
 	See Also
 	--------
 	SimpleImputer : Univariate imputation of missing values.
@@ -250,8 +158,8 @@ class IterativeImputerGridSearch(_BaseImputer):
 	>>> X = [[np.nan, 2, 3], [4, np.nan, 6], [10, np.nan, 9]]
 	>>> imp_mean.transform(X)
 	array([[ 6.9584...,  2.       ,  3.        ],
-			[ 4.       ,  2.6000...,  6.        ],
-			[10.       ,  4.9999...,  9.        ]])
+		[ 4.       ,  2.6000...,  6.        ],
+		[10.       ,  4.9999...,  9.        ]])
 	Notes
 	-----
 	To support imputation in inductive mode we store each feature's estimator
@@ -271,13 +179,7 @@ class IterativeImputerGridSearch(_BaseImputer):
 		<https://www.jstor.org/stable/2984099>`_
 	"""
 	def __init__(self,
-				logfilepath,
-				search_space,
-				clf_kwargs,
-				ga_kwargs,
-				prefix,
-				estimator=None, 
-				*,
+				estimator=None, *,
 				missing_values=np.nan,
 				sample_posterior=False,
 				max_iter=10,
@@ -290,28 +192,12 @@ class IterativeImputerGridSearch(_BaseImputer):
 				max_value=np.inf,
 				verbose=0,
 				random_state=None,
-				add_indicator=False,
-				grid_cv=5,
-				grid_n_jobs=1,
-				grid_n_iter=10,
-				clf_type="classifier",
-				ga=False,
-				disable_progressbar=False,
-				progress_update_percent=None,
-				scoring_metric="accuracy",
-				early_stop_gen=5
-	):
-				
+				add_indicator=False):
 		super().__init__(
 			missing_values=missing_values,
 			add_indicator=add_indicator
 		)
 
-		self.logfilepath = logfilepath
-		self.search_space = search_space
-		self.clf_kwargs = clf_kwargs
-		self.ga_kwargs = ga_kwargs
-		self.prefix = prefix
 		self.estimator = estimator
 		self.sample_posterior = sample_posterior
 		self.max_iter = max_iter
@@ -324,25 +210,14 @@ class IterativeImputerGridSearch(_BaseImputer):
 		self.max_value = max_value
 		self.verbose = verbose
 		self.random_state = random_state
-		self.grid_cv = grid_cv
-		self.grid_n_jobs = grid_n_jobs
-		self.grid_n_iter = grid_n_iter
-		self.clf_type = clf_type
-		self.ga = ga
-		self.disable_progressbar = disable_progressbar
-		self.progress_update_percent = progress_update_percent
-		self.scoring_metric = scoring_metric
-		self.early_stop_gen = early_stop_gen
 
-	@ignore_warnings(category=UserWarning)
 	def _impute_one_feature(self,
 							X_filled,
 							mask_missing_values,
 							feat_idx,
 							neighbor_feat_idx,
 							estimator=None,
-							fit_mode=True
-	):
+							fit_mode=True):
 		"""Impute a single feature from the others provided.
 		This function predicts the missing values of one of the features using
 		the current estimates of all the other features. The ``estimator`` must
@@ -365,7 +240,6 @@ class IterativeImputerGridSearch(_BaseImputer):
 			If None, it will be cloned from self._estimator.
 		fit_mode : boolean, default=True
 			Whether to fit and predict with the estimator or just predict.
-
 		Returns
 		-------
 		X_filled : ndarray
@@ -381,72 +255,23 @@ class IterativeImputerGridSearch(_BaseImputer):
 		if estimator is None:
 			estimator = clone(self._estimator)
 
-		# Modified code
-		cross_val = StratifiedKFold(n_splits=self.grid_cv, shuffle=True)
-
-		# Modified code
-		# If regressor
-		if self.clf_type == "regressor":
-			if self.ga:
-				callback = DeltaThreshold(threshold=1e-3, metric="fitness")
-
-		else:
-			if self.ga:
-				callback = ConsecutiveStopping(
-					generations=self.early_stop_gen, metric="fitness"
-				)
-
-		# Do randomized grid search
-		if not self.ga:
-			search = RandomizedSearchCV(
-				estimator, 
-				param_distributions=self.search_space, 
-				n_iter=self.grid_n_iter, 
-				scoring=self.scoring_metric, 
-				n_jobs=self.grid_n_jobs, 
-				cv=cross_val
-			)
-
-		# Do genetic algorithm
-		else:
-			with HiddenPrints():
-				search = GASearchCV(
-					estimator=estimator,
-					cv=cross_val,
-					scoring=self.scoring_metric,
-					generations=self.grid_n_iter,
-					param_grid=self.search_space,
-					n_jobs=self.grid_n_jobs,
-					verbose=False,
-					**self.ga_kwargs
-				)
-				
 		missing_row_mask = mask_missing_values[:, feat_idx]
 		if fit_mode:
 			X_train = _safe_indexing(X_filled[:, neighbor_feat_idx],
 									~missing_row_mask)
-
 			y_train = _safe_indexing(X_filled[:, feat_idx],
 									~missing_row_mask)
+			estimator.fit(X_train, y_train)
 
-			if self.ga:
-				with HiddenPrints():
-					search.fit(X_train, y_train, callbacks=callback)
-
-			else:
-				search.fit(X_train, y_train)
-		
 		# if no missing values, don't predict
 		if np.sum(missing_row_mask) == 0:
-			return X_filled, estimator, None
+			return X_filled, estimator
 
 		# get posterior samples if there is at least one missing value
-		X_test = _safe_indexing(
-			X_filled[:, neighbor_feat_idx],	missing_row_mask
-		)
-
+		X_test = _safe_indexing(X_filled[:, neighbor_feat_idx],
+								missing_row_mask)
 		if self.sample_posterior:
-			mus, sigmas = search.predict(X_test, return_std=True)
+			mus, sigmas = estimator.predict(X_test, return_std=True)
 			imputed_values = np.zeros(mus.shape, dtype=X_filled.dtype)
 			# two types of problems: (1) non-positive sigmas
 			# (2) mus outside legal range of min_value and max_value
@@ -468,17 +293,15 @@ class IterativeImputerGridSearch(_BaseImputer):
 											loc=mus, scale=sigmas)
 			imputed_values[inrange_mask] = truncated_normal.rvs(
 				random_state=self.random_state_)
-
 		else:
-			imputed_values = search.predict(X_test)
+			imputed_values = estimator.predict(X_test)
 			imputed_values = np.clip(imputed_values,
 									self._min_value[feat_idx],
 									self._max_value[feat_idx])
 
 		# update the feature
 		X_filled[missing_row_mask, feat_idx] = imputed_values
-
-		return X_filled, estimator, search
+		return X_filled, estimator
 
 	def _get_neighbor_feat_idx(self,
 							n_features,
@@ -552,175 +375,11 @@ class IterativeImputerGridSearch(_BaseImputer):
 			ordered_idx = missing_values_idx
 			self.random_state_.shuffle(ordered_idx)
 		else:
-			raise ValueError(
-				f"Got an invalid imputation order: '{self.imputation_order}'. "
-				f"It must be one of the following: 'roman', 'arabic', "
-				f"'ascending', 'descending', or 'random'."
-			)
+			raise ValueError("Got an invalid imputation order: '{0}'. It must "
+							"be one of the following: 'roman', 'arabic', "
+							"'ascending', 'descending', or "
+							"'random'.".format(self.imputation_order))
 		return ordered_idx
-
-	def _num_features(self, X):
-		"""Return the number of features in an array-like X.
-		This helper function tries hard to avoid to materialize an array version
-		of X unless necessary. For instance, if X is a list of lists,
-		this function will return the length of the first element, assuming
-		that subsequent elements are all lists of the same length without
-		checking.
-		Parameters
-		----------
-		X : array-like
-			array-like to get the number of features.
-		Returns
-		-------
-		features : int
-			Number of features
-		"""
-		type_ = type(X)
-		if type_.__module__ == "builtins":
-			type_name = type_.__qualname__
-		else:
-			type_name = f"{type_.__module__}.{type_.__qualname__}"
-		message = f"Unable to find the number of features from X of type {type_name}"
-		if not hasattr(X, "__len__") and not hasattr(X, "shape"):
-			if not hasattr(X, "__array__"):
-				raise TypeError(message)
-			# Only convert X to a numpy array if there is no cheaper, heuristic
-			# option.
-			X = np.asarray(X)
-
-		if hasattr(X, "shape"):
-			if not hasattr(X.shape, "__len__") or len(X.shape) <= 1:
-				message += f" with shape {X.shape}"
-				raise TypeError(message)
-			return X.shape[1]
-
-		first_sample = X[0]
-
-		# Do not consider an array-like of strings or dicts to be a 2D array
-		if isinstance(first_sample, (str, bytes, dict)):
-			message += f" where the samples are of type {type(first_sample).__qualname__}"
-			raise TypeError(message)
-
-		try:
-			# If X is a list of lists, for instance, we assume that all nested
-			# lists have the same length without checking or converting to
-			# a numpy array to keep this function call as cheap as possible.
-			return len(first_sample)
-		except Exception as err:
-			raise TypeError(message) from err
-
-	def _check_n_features(self, X, reset):
-		"""Set the `n_features_in_` attribute, or check against it.
-		Parameters
-		----------
-		X : {ndarray, sparse matrix} of shape (n_samples, n_features)
-			The input samples.
-		reset : bool
-			If True, the `n_features_in_` attribute is set to `X.shape[1]`.
-			If False and the attribute exists, then check that it is equal to
-			`X.shape[1]`. If False and the attribute does *not* exist, then
-			the check is skipped.
-			.. note::
-			It is recommended to call reset=True in `fit` and in the first
-			call to `partial_fit`. All other methods that validate `X`
-			should set `reset=False`.
-		"""
-		try:
-			n_features = self._num_features(X)
-		except TypeError as e:
-			if not reset and hasattr(self, "n_features_in_"):
-				raise ValueError(
-					"X does not contain any features, but "
-					f"{self.__class__.__name__} is expecting "
-					f"{self.n_features_in_} features"
-				) from e
-			# If the number of features is not defined and reset=True,
-			# then we skip this check
-			return
-
-		if reset:
-			self.n_features_in_ = n_features
-			return
-
-		if not hasattr(self, "n_features_in_"):
-			# Skip this check if the expected number of expected input features
-			# was not recorded by calling fit first. This is typically the case
-			# for stateless transformers.
-			return
-
-		if n_features != self.n_features_in_:
-			raise ValueError(
-				f"X has {n_features} features, but {self.__class__.__name__} "
-				f"is expecting {self.n_features_in_} features as input."
-			)
-
-	def _validate_data(self, X, y='no_validation', reset=True,
-				   validate_separately=False, **check_params):
-		"""Validate input data and set or check the `n_features_in_` attribute.
-		Parameters
-		----------
-		X : {array-like, sparse matrix, dataframe} of shape \
-				(n_samples, n_features)
-			The input samples.
-		y : array-like of shape (n_samples,), default='no_validation'
-			The targets.
-			- If `None`, `check_array` is called on `X`. If the estimator's
-			requires_y tag is True, then an error will be raised.
-			- If `'no_validation'`, `check_array` is called on `X` and the
-			estimator's requires_y tag is ignored. This is a default
-			placeholder and is never meant to be explicitly set.
-			- Otherwise, both `X` and `y` are checked with either `check_array`
-			or `check_X_y` depending on `validate_separately`.
-		reset : bool, default=True
-			Whether to reset the `n_features_in_` attribute.
-			If False, the input will be checked for consistency with data
-			provided when reset was last True.
-			.. note::
-			It is recommended to call reset=True in `fit` and in the first
-			call to `partial_fit`. All other methods that validate `X`
-			should set `reset=False`.
-		validate_separately : False or tuple of dicts, default=False
-			Only used if y is not None.
-			If False, call validate_X_y(). Else, it must be a tuple of kwargs
-			to be used for calling check_array() on X and y respectively.
-		**check_params : kwargs
-			Parameters passed to :func:`sklearn.utils.check_array` or
-			:func:`sklearn.utils.check_X_y`. Ignored if validate_separately
-			is not False.
-		Returns
-		-------
-		out : {ndarray, sparse matrix} or tuple of these
-			The validated input. A tuple is returned if `y` is not None.
-		"""
-
-		if y is None:
-			if self._get_tags()['requires_y']:
-				raise ValueError(
-					f"This {self.__class__.__name__} estimator "
-					f"requires y to be passed, but the target y is None."
-				)
-			X = check_array(X, **check_params)
-			out = X
-		elif isinstance(y, str) and y == 'no_validation':
-			X = check_array(X, **check_params)
-			out = X
-		else:
-			if validate_separately:
-				# We need this because some estimators validate X and y
-				# separately, and in general, separately calling check_array()
-				# on X and y isn't equivalent to just calling check_X_y()
-				# :(
-				check_X_params, check_y_params = validate_separately
-				X = check_array(X, **check_X_params)
-				y = check_array(y, **check_y_params)
-			else:
-				X, y = check_X_y(X, y, **check_params)
-			out = X, y
-
-		if check_params.get('ensure_2d', True):
-			self._check_n_features(X, reset=reset)
-
-		return out
 
 	def _get_abs_corr_mat(self, X_filled, tolerance=1e-6):
 		"""Get absolute correlation matrix between features.
@@ -839,7 +498,6 @@ class IterativeImputerGridSearch(_BaseImputer):
 			)
 		return limit
 
-	@ignore_warnings(category=UserWarning)
 	def fit_transform(self, X, y=None):
 		"""Fits the imputer on X and return the transformed X.
 		Parameters
@@ -858,12 +516,13 @@ class IterativeImputerGridSearch(_BaseImputer):
 
 		if self.max_iter < 0:
 			raise ValueError(
-				f"'max_iter' should be a positive integer. Got {self.max_iter} instead."
-			)
+				"'max_iter' should be a positive integer. Got {} instead."
+				.format(self.max_iter))
 
 		if self.tol < 0:
 			raise ValueError(
-				f"'tol' should be a non-negative float. Got {self.tol} instead"
+				"'tol' should be a non-negative float. Got {} instead."
+				.format(self.tol)
 			)
 
 		if self.estimator is None:
@@ -905,152 +564,35 @@ class IterativeImputerGridSearch(_BaseImputer):
 		# and a better way would be good.
 		# see: https://goo.gl/KyCNwj and subsequent comments
 		ordered_idx = self._get_ordered_idx(mask_missing_values)
-		total_features = len(ordered_idx)
-
 		self.n_features_with_missing_ = len(ordered_idx)
 
 		abs_corr_mat = self._get_abs_corr_mat(Xt)
 
 		n_samples, n_features = Xt.shape
-
 		if self.verbose > 0:
 			print("[IterativeImputer] Completing matrix with shape %s"
 				% (X.shape,))
 		start_t = time()
-
 		if not self.sample_posterior:
 			Xt_previous = Xt.copy()
 			normalized_tol = self.tol * np.max(
 				np.abs(X[~mask_missing_values])
-		)
-
-		params_list = list()
-		score_list = list()
-		iter_list = list()
-
-		if self.ga:
-			sns.set_style("white")
-
-		total_iter = self.max_iter
-
-		for self.n_iter_ in progressbar(
-			range(1, total_iter+1), 
-			desc="Iteration: ", disable=self.disable_progressbar
-		):
-
-			if self.ga:
-				iter_list.append(self.n_iter_)
-
-				pp_oneline = PdfPages(
-					f".score_traces_separate_{self.n_iter_}.pdf"
-				)
-
-				pp_lines = PdfPages(
-					f".score_traces_combined_{self.n_iter_}.pdf"
-				)
-
-				pp_space = PdfPages(
-					f".search_space_{self.n_iter_}.pdf"
-				)
-
+			)
+		for self.n_iter_ in range(1, self.max_iter + 1):
 			if self.imputation_order == 'random':
 				ordered_idx = self._get_ordered_idx(mask_missing_values)
 
-			# Reset lists for current iteration
-			params_list.clear()
-			score_list.clear()
-			searches = list()
-
-			if self.disable_progressbar:
-				with open(self.logfilepath, "a") as fout:
-					# Redirect to progress logfile
-					with redirect_stdout(fout):
-						print(
-							f"Iteration Progress: {self.n_iter_}/{self.max_iter} ({int((self.n_iter_ / total_iter) * 100)}%)"
-						)
-
-			if self.progress_update_percent is not None:
-				print_perc_interval = self.progress_update_percent
-
-			for i, feat_idx in enumerate(progressbar(
-				ordered_idx, desc="Feature: ", leave=False, position=1, 
-				disable=self.disable_progressbar
-			), start=1):
-
+			for feat_idx in ordered_idx:
 				neighbor_feat_idx = self._get_neighbor_feat_idx(n_features,
 																feat_idx,
 																abs_corr_mat)
-
-				Xt, estimator, search = self._impute_one_feature(
-					Xt, 
-					mask_missing_values, 
-					feat_idx, 
-					neighbor_feat_idx,
-					estimator=None, 
-					fit_mode=True
-				)
-
-				searches.append(search)
-
+				Xt, estimator = self._impute_one_feature(
+					Xt, mask_missing_values, feat_idx, neighbor_feat_idx,
+					estimator=None, fit_mode=True)
 				estimator_triplet = _ImputerTriplet(feat_idx,
 													neighbor_feat_idx,
 													estimator)
-
 				self.imputation_sequence_.append(estimator_triplet)
-
-				if search is not None:
-					# There was missing data in the feature
-					params_list.append(search.best_params_)
-					score_list.append(search.best_score_)
-
-					if self.ga:
-						plt.cla()
-						plt.clf()
-						plt.close()
-
-						plot_fitness_evolution(search)
-						pp_oneline.savefig(bbox_inches="tight")
-						plt.cla()
-						plt.clf()
-						plt.close()
-
-						self.plot_search_space(search)
-						pp_space.savefig(bbox_inches="tight")
-						plt.cla()
-						plt.clf()
-						plt.close()
-
-				else:
-					# Search is None
-					# Thus, there was no missing data in the given feature
-					tmp_dict = dict()
-					for k in self.search_space.keys():
-						tmp_dict[k] = -9
-					params_list.append(tmp_dict)
-
-					score_list.append(-9)
-
-				# Only print feature updates at each progress_update_percent
-				# interval
-				if self.progress_update_percent is not None:
-					current_perc = (i / total_features) * 100
-
-					if current_perc >= print_perc_interval:
-						with open(self.logfilepath, "a") as fout:
-							# Redirect progress to file
-							with redirect_stdout(fout):
-								print(
-									f"Feature Progress (Iteration {self.n_iter_}/"
-									f"{self.max_iter}): {i}/{total_features} "
-									f"({int(current_perc)}%)"
-								)
-
-							if i == len(ordered_idx):
-								with redirect_stdout(fout):
-									print("")
-
-						while print_perc_interval < current_perc:
-							print_perc_interval += self.progress_update_percent
 
 			if self.verbose > 1:
 				print('[IterativeImputer] Ending imputation round '
@@ -1061,86 +603,21 @@ class IterativeImputerGridSearch(_BaseImputer):
 				inf_norm = np.linalg.norm(Xt - Xt_previous, ord=np.inf,
 										axis=None)
 				if self.verbose > 0:
-					print(
-						f"[IterativeImputer] Change: {inf_norm}, "
-						f"scaled tolerance: {normalized_tol} "
-					)
-
+					print('[IterativeImputer] '
+						'Change: {}, scaled tolerance: {} '.format(
+							inf_norm, normalized_tol))
 				if inf_norm < normalized_tol:
 					if self.verbose > 0:
 						print('[IterativeImputer] Early stopping criterion '
 							'reached.')
-
-					if self.ga:
-						pp_oneline.close()
-						pp_space.close()
-
-						plt.cla()
-						plt.clf()
-						plt.close()
-						for iter_search in searches:
-							if iter_search is not None:
-								plot_fitness_evolution(iter_search)
-
-						pp_lines.savefig(bbox_inches="tight")
-
-						plt.cla()
-						plt.clf()
-						plt.close()
-						pp_lines.close()
-
 					break
 				Xt_previous = Xt.copy()
-			
-			if self.ga:
-				pp_oneline.close()
-				pp_space.close()
-
-				plt.cla()
-				plt.clf()
-				plt.close()
-				for iter_search in searches:
-					if iter_search is not None:
-						plot_fitness_evolution(iter_search)
-				
-				pp_lines.savefig(bbox_inches="tight")
-
-				plt.cla()
-				plt.clf()
-				plt.close()
-				pp_lines.close()
-
 		else:
 			if not self.sample_posterior:
 				warnings.warn("[IterativeImputer] Early stopping criterion not"
 							" reached.", ConvergenceWarning)
-
 		Xt[~mask_missing_values] = X[~mask_missing_values]
-
-		if self.ga:
-			# Remove all files except last iteration
-			final_iter = iter_list.pop()
-
-			[os.remove(f".score_traces_separate_{x}.pdf") for x in iter_list]
-			[os.remove(f".score_traces_combined_{x}.pdf") for x in iter_list]
-			[os.remove(f".search_space_{x}.pdf") for x in iter_list]
-
-			shutil.move(
-				f".score_traces_separate_{final_iter}.pdf", 
-				f"{self.prefix}_score_traces_separate.pdf"
-			)
-
-			shutil.move(
-				f".score_traces_combined_{final_iter}.pdf", 
-				f"{self.prefix}_score_traces_combined.pdf"
-			)
-
-			shutil.move(
-				f".search_space_{final_iter}.pdf", 
-				f"{self.prefix}_search_space.pdf"
-			)
-
-		return super()._concatenate_indicator(Xt, X_indicator), params_list, score_list
+		return super()._concatenate_indicator(Xt, X_indicator)
 
 	def transform(self, X):
 		"""Imputes all missing values in X.
@@ -1170,11 +647,8 @@ class IterativeImputerGridSearch(_BaseImputer):
 			print("[IterativeImputer] Completing matrix with shape %s"
 				% (X.shape,))
 		start_t = time()
-
-		params_list = list()
-		score_list = list()
 		for it, estimator_triplet in enumerate(self.imputation_sequence_):
-			Xt, _, search = self._impute_one_feature(
+			Xt, _ = self._impute_one_feature(
 				Xt,
 				mask_missing_values,
 				estimator_triplet.feat_idx,
@@ -1182,28 +656,16 @@ class IterativeImputerGridSearch(_BaseImputer):
 				estimator=estimator_triplet.estimator,
 				fit_mode=False
 			)
-
-			if search is not None:
-				params_list.append(search.best_params_)
-				score_list.append(search.best_score_)
-			else:
-				tmp_dict = dict()
-				for k in search_space.keys():
-					tmp_dict[k] = -9
-				params_list.append(tmp_dict)
-
-				score_list.append(-9)
-
 			if not (it + 1) % imputations_per_round:
 				if self.verbose > 1:
 					print('[IterativeImputer] Ending imputation round '
-							'%d/%d, elapsed time %0.2f'
-							% (i_rnd + 1, self.n_iter_, time() - start_t))
+						'%d/%d, elapsed time %0.2f'
+						% (i_rnd + 1, self.n_iter_, time() - start_t))
 				i_rnd += 1
 
 		Xt[~mask_missing_values] = X[~mask_missing_values]
 
-		return super()._concatenate_indicator(Xt, X_indicator), params_list, score_list
+		return super()._concatenate_indicator(Xt, X_indicator)
 
 	def fit(self, X, y=None):
 		"""Fits the imputer on X and return self.
@@ -1220,68 +682,3 @@ class IterativeImputerGridSearch(_BaseImputer):
 		"""
 		self.fit_transform(X)
 		return self
-
-	def plot_search_space(self, estimator, height=2, s=25, features: list = None):
-		"""
-		Parameters
-		----------
-		estimator: estimator object
-			A fitted estimator from :class:`~sklearn_genetic.GASearchCV`
-		height: float, default=2
-			Height of each facet
-		s: float, default=5
-			Size of the markers in scatter plot
-		features: list, default=None
-			Subset of features to plot, if ``None`` it plots all the features by default
-
-		Returns
-		-------
-		Pair plot of the used hyperparameters during the search
-
-		"""
-		sns.set_style("white")
-
-		df = logbook_to_pandas(estimator.logbook)
-		if features:
-			stats = df[features]
-		else:
-			variables = [*estimator.space.parameters, "score"]
-			stats = df[variables]
-
-		g = sns.PairGrid(stats, diag_sharey=False, height=height)
-
-		g = g.map_upper(sns.scatterplot, s=s, color="r", alpha=0.2)
-
-		try:
-			g = g.map_lower(
-				sns.kdeplot,
-				shade=True,
-				cmap=sns.color_palette("ch:s=.25,rot=-.25", as_cmap=True),
-			)
-		except np.linalg.LinAlgError as err:
-			if "singular matrix" in str(err).lower():
-				g = g.map_lower(
-					sns.scatterplot, s=s, color="b", alpha=1.0
-				)
-			else:
-				raise
-
-		try:
-			g = g.map_diag(
-				sns.kdeplot, 
-				shade=True, 
-				palette="crest", 
-				alpha=0.2, 
-				color="red"
-			)
-		except np.linalg.LinAlgError as err:
-			if "singular matrix" in str(err).lower():
-				g = g.map_diag(
-					sns.histplot,
-					color="red",
-					alpha=1.0,
-					kde=False
-				)
-				
-		return g
-
