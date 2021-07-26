@@ -120,7 +120,7 @@ class Impute:
 
 		# Don't do a grid search
 		if self.gridparams is None:
-			imputed_df, best_acc, best_params = \
+			imputed_df, best_score, best_params = \
 				self._impute_single(X)
 
 		# Do a grid search and get the transformed data with the best parameters
@@ -178,11 +178,13 @@ class Impute:
 		"""
 		return pd.read_csv(filename, dtype="Int8", header=None)
 
-	def df2chunks(self, df, chunk_size):
+	def df2chunks(self, df, imputer, chunk_size):
 		"""[Break up pandas.DataFrame into chunks. If set to 1.0 of type float, then returns only one chunk containing all the data]
 
 		Args:
 			df ([pandas.DataFrame]): [DataFrame to split into chunks]
+
+			imputer ([IterativeImputerAllData instance]): [IterativeImputer instance]
 
 			chunk_size ([int or float]): [If integer, then breaks DataFrame into ```chunk_size``` chunks. If float, breaks DataFrame up into ```chunk_size * len(df.columns)``` chunks]
 
@@ -192,6 +194,9 @@ class Impute:
 		Raises:
 			[ValueError]: [chunk_size must be of type int or float]
 		"""
+		#X = df.to_numpy()
+		#imp_index_info = imputer.get_nearest_features(X)
+
 		if isinstance(chunk_size, (int, float)):
 
 			chunks = list()
@@ -315,13 +320,16 @@ class Impute:
 			clf_kwargs=self.clf_kwargs,
 			prefix=self.prefix,
 			disable_progressbar=self.disable_progressbar,
-			progress_update_percent=self.progress_update_percent,
+			progress_update_percent=self.progress_update_percent
 		)
 
-		df_imp = self._impute_fit_transform(df, imputer)
+		#df_chunks = self.df2chunks(df, imputer, self.chunk_size)
+		imputed_df = self._impute_df(df, imputer, len(df.columns))
+
+		self._validate_imputed(imputed_df)
 
 		print(f"\nDone with {self.clf.__name__} imputation!\n")
-		return df_imp, None, None
+		return imputed_df, None, None
 		
 	def _impute_gridsearch(self, df):
 		"""[Do IterativeImputer with RandomizedSearchCV]
@@ -342,7 +350,7 @@ class Impute:
 			df_tmp, self.column_subset, original_num_cols
 		)
 
-		print(f"Test dataset size: {len(df_subset.columns)}\n")
+		print(f"Validation dataset size: {len(df_subset.columns)}\n")
 		print("Doing grid search...")
 
 		clf = self.clf()
@@ -370,6 +378,7 @@ class Impute:
 		print("\nDone!")
 
 		# Average or mode of best parameters
+		# and write them to a file
 		best_params = self._get_best_params(params_list)
 		avg_score = mean(x for x in score_list if x != -9)
 		self._write_imputed_params_score(avg_score, best_params)
@@ -385,7 +394,6 @@ class Impute:
 
 		print("\nDoing imputation with best found parameters...")
 
-		df_chunks = self.df2chunks(df, self.chunk_size)
 
 		best_imputer = self._define_iterative_imputer(
 			best_clf,
@@ -396,25 +404,48 @@ class Impute:
 			progress_update_percent=self.progress_update_percent
 		)
 
-		imputed_chunks = list()
-		for chunk in df_chunks:
-			imp_arr_full = best_imputer.fit_transform(chunk)
+		#df_chunks = self.df2chunks(df, self.chunk_size)
+		imputed_df = self._impute_df(
+			df, best_imputer, original_num_cols)
 
-			if self.clf_type == "classifier":
-				df_imp = pd.DataFrame(imp_arr_full, dtype="Int8")
-			else:
-				# Regressor. Needs to be rounded to integer first.
-				df_imp = pd.DataFrame(imp_arr_full)
-				for col in df_imp.columns:
-					df_imp[col] = df_imp[col].round(0).astype("Int8")
-			
-			imputed_chunks.append(df_imp)
-
-		concat_df = pd.concat(imputed_chunks, axis=1)
-		assert len(concat_df.columns) == original_num_cols, "Failed merge operation: Could not merge chunks back together"
+		self._validate_imputed(imputed_df)
 
 		print(f"\nDone with {self.clf.__name__} imputation!\n")
-		return concat_df, abs(avg_score), best_params
+		return imputed_df, abs(avg_score), best_params
+
+	def _impute_df(self, df, imputer, original_num_cols):
+		"""[Impute list of pandas.DataFrame objects using IterativeImputer]
+
+		Args:
+			df ([list(pandas.DataFrame)]): [Dataframe with 012-encoded genotypes]
+
+			imputer ([IterativeImputerAllData instance]): [Defined IterativeImputerAllData instance to perform the imputation]
+
+			original_num_cols ([int]): [Number of columns in original dataset]
+
+		Returns:
+			[pandas.DataFrame]: [Single DataFrame object, with all the imputed chunks concatenated together]
+		"""
+		#imputed_chunks = list()
+		#num_chunks = len(df_chunks)
+		#for i, Xchunk in enumerate(df_chunks, start=1):
+		if self.clf_type == "classifier":
+			df_imp = pd.DataFrame(imputer.fit_transform(df), dtype="Int8")
+		else:
+			# Regressor. Needs to be rounded to integer first.
+			df_imp = pd.DataFrame(imputer.fit_transform(df))
+			df_imp = df_imp.round(0).astype("Int8")
+				
+			#imputed_chunks.append(df_imp)
+
+		#concat_df = pd.concat(imputed_chunks, axis=1)
+		#assert len(concat_df.columns) == original_num_cols, "Failed merge operation: Could not merge chunks back together"
+	
+		return df_imp
+
+	def _validate_imputed(self, df):
+		assert not df.isnull().values.any(), (
+			"Imputation failed...Missing values found in the imputed dataset")
 		
 	def _get_best_params(self, params_list):
 		best_params = dict()
@@ -689,27 +720,6 @@ class Impute:
 		print("Done!\n")
 
 		return df_orig_slice, df_miss[cols], pd.DataFrame(imp_arr[:,[df_orig.columns.get_loc(i) for i in cols]], columns=cols), imputer.n_iter_, imputer
-
-	def _impute_fit_transform(self, df, imputer):
-		"""[Do the fit_transform for IterativeImputer and format as a pandas.dataFrame object]
-
-		Args:
-
-			df ([pandas.DataFrame]): [DataFrame with missing data to impute]
-
-			imputer ([sklearn.impute.IterativeImputer]): [IterativeImputer instance]
-
-		Returns:
-			[pandas.DataFrame]: [Imputed DataFrame object]
-
-		Raises:
-			AssertionError: [Ensure no missing data remains in imputed DataFrame]
-		"""
-		arr = imputer.fit_transform(df)
-		new_arr = arr.astype(dtype=np.int)
-		new_df = pd.DataFrame(new_arr)
-
-		return new_df
 
 	def _define_iterative_imputer(self, clf, logfilepath, clf_kwargs=None, ga_kwargs=None, prefix="out", n_jobs=None, n_iter=None, cv=None, clf_type=None, ga=False, search_space=None, disable_progressbar=False, progress_update_percent=None, scoring_metric=None, early_stop_gen=None):
 		"""[Define an IterativeImputer instance]

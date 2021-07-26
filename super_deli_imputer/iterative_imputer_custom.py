@@ -37,15 +37,15 @@ from sklearn.model_selection import StratifiedKFold
 
 # Genetic algorithm grid search imports
 from sklearn_genetic import GASearchCV
-from sklearn_genetic.plots import plot_fitness_evolution
-from sklearn_genetic.utils import logbook_to_pandas
-from sklearn_genetic.space import Continuous, Categorical, Integer
 from sklearn_genetic.callbacks import ConsecutiveStopping, DeltaThreshold
+from sklearn_genetic.plots import plot_fitness_evolution
+from sklearn_genetic.space import Continuous, Categorical, Integer
+from sklearn_genetic.utils import logbook_to_pandas
 
 # Custom function imports
 from utils.misc import get_processor_name
-from utils.misc import isnotebook
 from utils.misc import HiddenPrints
+from utils.misc import isnotebook
 
 # Uses scikit-learn-intellex package if CPU is Intel
 if get_processor_name().strip().startswith("Intel"):
@@ -72,7 +72,10 @@ _ImputerTripletAll = namedtuple(
 	'_ImputerTripletAll', ['feat_idx', 'neighbor_feat_idx', 'estimator'])
 
 _ImputerTripletGrid = namedtuple(
-'_ImputerTripletGrid', ['feat_idx', 'neighbor_feat_idx', 'estimator'])
+	'_ImputerTripletGrid', ['feat_idx', 'neighbor_feat_idx', 'estimator'])
+
+_ImputerDoubletChunker = namedtuple(
+	'_ImputerDoubletChunker', ['feat_idx', 'neighbor_feat_idx'])
 
 class IterativeImputerAllData(IterativeImputer):
 	"""[Overridden IterativeImputer methods. Herein, progress status updates and several other improvements have been added. IterativeImputer is a multivariate imputer that estimates each feature from all the others. A strategy for imputing missing values by modeling each feature with missing values as a function of other features in a round-robin fashion.Read more in the scikit-learn :ref:`User Guide <iterative_imputer>`. scikit-learn versionadded:: 0.21...note::This estimator is still **experimental** for now: the predictions and the API might change without any deprecation cycle. To use it, you need to explicitly import ``enable_iterative_imputer``:: >>> # explicitly require this experimental feature >>> from sklearn.experimental import enable_iterative_imputer >>> # now you can import normally from sklearn.impute >>> from sklearn.impute import IterativeImputer]
@@ -299,7 +302,7 @@ class IterativeImputerAllData(IterativeImputer):
 		Args:
 			X [(array-like, shape (n_samples, n_features))]: [Input data, where "n_samples" is the number of samples and "n_features" is the number of features]
 
-		y ([None]) [Ignored]
+			y ([None]) [Ignored]
 
 		Returns:
 			Xt [(array-like, shape (n_samples, n_features))]: [The imputed input data]
@@ -377,6 +380,9 @@ class IterativeImputerAllData(IterativeImputer):
 
 		total_iter = self.max_iter
 
+		###########################################
+		### Iteration Start
+		###########################################
 		for self.n_iter_ in progressbar(
 			range(1, total_iter+1), 
 			desc="Iteration: ", disable=self.disable_progressbar
@@ -385,16 +391,23 @@ class IterativeImputerAllData(IterativeImputer):
 				ordered_idx = self._get_ordered_idx(mask_missing_values)
 
 			if self.disable_progressbar:
+				#chunk_perc = math.ceil((current_chunk / total_chunks) * 100)
 				with open(self.logfilepath, "a") as fout:
 					# Redirect to progress logfile
 					with redirect_stdout(fout):
 						print(
-							f"Iteration Progress: {self.n_iter_}/{self.max_iter} ({int((self.n_iter_ / total_iter) * 100)}%)"
+							f"Iteration Progress: "
+							f"{self.n_iter_}/{self.max_iter} "
+							f"({int((self.n_iter_ / total_iter) * 100)}%)"
 						)
 
-			if self.progress_update_percent is not None:
+			if self.progress_update_percent is not None and \
+				self.disable_progressbar:
 				print_perc_interval = self.progress_update_percent
 
+			##########################
+			### Feature Start
+			##########################
 			for i, feat_idx in enumerate(progressbar(
 				ordered_idx, desc="Feature: ", leave=False, position=1, 
 				disable=self.disable_progressbar
@@ -421,7 +434,8 @@ class IterativeImputerAllData(IterativeImputer):
 
 				# Only print feature updates at each progress_update_percent
 				# interval
-				if self.progress_update_percent is not None:
+				if self.progress_update_percent is not None and \
+					self.disable_progressbar:
 					current_perc = math.ceil((i / total_features) * 100)
 
 					if current_perc >= print_perc_interval:
@@ -434,9 +448,8 @@ class IterativeImputerAllData(IterativeImputer):
 									f"{i}/{total_features} ({current_perc}%)"
 								)
 
-							if i == len(ordered_idx):
-								with redirect_stdout(fout):
-									print("")
+								if i == len(ordered_idx):
+									print("\n", end="")
 
 						while print_perc_interval <= current_perc:
 							print_perc_interval += self.progress_update_percent
@@ -471,6 +484,51 @@ class IterativeImputerAllData(IterativeImputer):
 		Xt[~mask_missing_values] = X[~mask_missing_values]
 
 		return super(IterativeImputer, self)._concatenate_indicator(Xt, X_indicator)
+
+	def _get_nearest_features(self, X):
+		"""[Fits the imputer on X and return the transformed X]
+
+		Args:
+			X [(array-like, shape (n_samples, n_features))]: [Input data, where "n_samples" is the number of samples and "n_features" is the number of features]
+
+			Returns:
+				imp_sequence [list(namedtuple)]: [Indexes of features and nearest features]
+		"""
+		self.random_state_ = getattr(self, "random_state_", 
+		check_random_state(self.random_state))
+
+		X, Xt, mask_missing_values, complete_mask = (
+			self._initial_imputation(X, in_fit=True))
+
+		# order in which to impute
+		# note this is probably too slow for large feature data (d > 100000)
+		# and a better way would be good.
+		# see: https://goo.gl/KyCNwj and subsequent comments
+		ordered_idx = self._get_ordered_idx(mask_missing_values)
+
+		abs_corr_mat = self._get_abs_corr_mat(Xt)
+
+		n_samples, n_features = Xt.shape
+
+		total_iter = self.max_iter
+
+		imp_sequence = list()
+
+		for self.n_iter_ in	range(1, total_iter+1):
+			if self.imputation_order == 'random':
+				ordered_idx = self._get_ordered_idx(mask_missing_values)
+
+			for feat_idx in ordered_idx:
+				neighbor_feat_idx = self._get_neighbor_feat_idx(n_features,
+																feat_idx,
+																abs_corr_mat)
+
+				estimator_doublet = _ImputerDoubletChunker(feat_idx,
+													neighbor_feat_idx)
+				
+				imp_sequence.append(estimator_doublet)
+
+		return imp_sequence
 
 class IterativeImputerGridSearch(IterativeImputer):
 	"""[Overridden IterativeImputer methods. Herein, two types of grid searches, progress status updates, and several other improvements have been added. IterativeImputer is a multivariate imputer that estimates each feature from all the others. A strategy for imputing missing values by modeling each feature with missing values as a function of other features in a round-robin fashion.Read more in the scikit-learn :ref:`User Guide <iterative_imputer>`. scikit-learn versionadded:: 0.21...note::This estimator is still **experimental** for now: the predictions and the API might change without any deprecation cycle. To use it, you need to explicitly import ``enable_iterative_imputer``:: >>> # explicitly require this experimental feature >>> from sklearn.experimental import enable_iterative_imputer >>> # now you can import normally from sklearn.impute >>> from sklearn.impute import IterativeImputer]
