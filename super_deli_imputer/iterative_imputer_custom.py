@@ -375,18 +375,31 @@ class IterativeImputerAllData(IterativeImputer):
 		if not self.sample_posterior:
 			Xt_previous = Xt.copy()
 			normalized_tol = self.tol * np.max(
-				np.abs(X[~mask_missing_values])
-		)
+				np.abs(X[~mask_missing_values]))
 
 		total_iter = self.max_iter
+
+		###########################################
+		### Get indexes for features and neighbors
+		###########################################
+		imputation_features = list()
+		for current_iter in range(1, total_iter+1):
+			if self.imputation_order == 'random':
+				ordered_idx = self._get_ordered_idx(mask_missing_values)
+
+			for i, feature_doublet in self._get_nearest_features(
+				ordered_idx, n_features, abs_corr_mat):
+
+				imputation_features.append(feature_doublet)
 
 		###########################################
 		### Iteration Start
 		###########################################
 		for self.n_iter_ in progressbar(
 			range(1, total_iter+1), 
-			desc="Iteration: ", disable=self.disable_progressbar
-		):
+			desc="Iteration: ", 
+			disable=self.disable_progressbar):
+
 			if self.imputation_order == 'random':
 				ordered_idx = self._get_ordered_idx(mask_missing_values)
 
@@ -401,41 +414,45 @@ class IterativeImputerAllData(IterativeImputer):
 							f"({int((self.n_iter_ / total_iter) * 100)}%)"
 						)
 
-			if self.progress_update_percent is not None and \
-				self.disable_progressbar:
+			if (self.progress_update_percent is not None and 
+					self.disable_progressbar):
 				print_perc_interval = self.progress_update_percent
+
+			print(n_features)
+			sys.exit()
 
 			##########################
 			### Feature Start
 			##########################
-			for i, feat_idx in enumerate(progressbar(
-				ordered_idx, desc="Feature: ", leave=False, position=1, 
-				disable=self.disable_progressbar
-			), start=1):
-
-				neighbor_feat_idx = self._get_neighbor_feat_idx(n_features,
-																feat_idx,
-																abs_corr_mat)
+			#for chunk in chunks(imputation_features, n_features):
+			for i, feature_doublet in enumerate(
+				progressbar(
+					imputation_features, 
+					desc="Feature: ", 
+					leave=False, 
+					position=1, 
+					disable=self.disable_progressbar), 
+				start=1):
 
 				Xt, estimator = self._impute_one_feature(
 					Xt, 
 					mask_missing_values, 
-					feat_idx, 
-					neighbor_feat_idx,
+					feature_doublet.feat_idx, 
+					feature_doublet.neighbor_feat_idx,
 					estimator=None, 
-					fit_mode=True
-				)
+					fit_mode=True)
 
-				estimator_triplet = _ImputerTripletAll(feat_idx,
-													neighbor_feat_idx,
-													estimator)
+				estimator_triplet = _ImputerTripletAll(
+					feature_doublet.feat_idx, 
+					feature_doublet.neighbor_feat_idx, 
+					estimator)
 
 				self.imputation_sequence_.append(estimator_triplet)
 
 				# Only print feature updates at each progress_update_percent
 				# interval
-				if self.progress_update_percent is not None and \
-					self.disable_progressbar:
+				if (self.progress_update_percent is not None and 
+						self.disable_progressbar):
 					current_perc = math.ceil((i / total_features) * 100)
 
 					if current_perc >= print_perc_interval:
@@ -445,8 +462,7 @@ class IterativeImputerAllData(IterativeImputer):
 								print(
 									f"Feature Progress (Iteration "
 									f"{self.n_iter_}/{self.max_iter}): "
-									f"{i}/{total_features} ({current_perc}%)"
-								)
+									f"{i}/{total_features} ({current_perc}%)")
 
 								if i == len(ordered_idx):
 									print("\n", end="")
@@ -465,8 +481,7 @@ class IterativeImputerAllData(IterativeImputer):
 				if self.verbose > 0:
 					print(
 						f"[IterativeImputer] Change: {inf_norm}, "
-						f"scaled tolerance: {normalized_tol} "
-					)
+						f"scaled tolerance: {normalized_tol} ")
 
 				if inf_norm < normalized_tol:
 					if self.verbose > 0:
@@ -485,50 +500,41 @@ class IterativeImputerAllData(IterativeImputer):
 
 		return super(IterativeImputer, self)._concatenate_indicator(Xt, X_indicator)
 
-	def _get_nearest_features(self, X):
-		"""[Fits the imputer on X and return the transformed X]
+	def chunks(self, l, n):
+		"""[Yield successive n-sized chunks from list l]
 
 		Args:
-			X [(array-like, shape (n_samples, n_features))]: [Input data, where "n_samples" is the number of samples and "n_features" is the number of features]
+			l ([list]): [List from which to get chunks of n-size]
 
-			Returns:
-				imp_sequence [list(namedtuple)]: [Indexes of features and nearest features]
+			n ([int]): [Chunk size]
 		"""
-		self.random_state_ = getattr(self, "random_state_", 
-		check_random_state(self.random_state))
+		for i in range(0, len(l), n):
+			yield lst[i:i + n]
 
-		X, Xt, mask_missing_values, complete_mask = (
-			self._initial_imputation(X, in_fit=True))
+	def _get_nearest_features(self, ordered_idx, n_features, abs_corr_mat):
+		"""[Generator function that gets a namedtuple with the current feature being imputed (``feat_idx``) and the nearest neighbors (``neighbor_feat_idx``) of the current feature]
 
-		# order in which to impute
-		# note this is probably too slow for large feature data (d > 100000)
-		# and a better way would be good.
-		# see: https://goo.gl/KyCNwj and subsequent comments
-		ordered_idx = self._get_ordered_idx(mask_missing_values)
+		Args:
+			ordered_idx ([numpy.ndarray]): [Ordered feature indexes]
 
-		abs_corr_mat = self._get_abs_corr_mat(Xt)
+			n_features ([int]): [Number of features in input matrix]
 
-		n_samples, n_features = Xt.shape
+			abs_corr_mat ([numpy.ndarray]): [Absolute correlation matrix of input features]
 
-		total_iter = self.max_iter
+			Yields:
+				cnt ([int]): [Current index of ``feat_idx``]
 
-		imp_sequence = list()
+				feature_doublet ([namedtuple]): [namedtuple containing ``feat_idx`` and ``neighbor_feat_idx``]
+		"""
+		for cnt, feat_idx in enumerate(ordered_idx):
+			neighbor_feat_idx = self._get_neighbor_feat_idx(n_features,
+															feat_idx,
+															abs_corr_mat)
 
-		for self.n_iter_ in	range(1, total_iter+1):
-			if self.imputation_order == 'random':
-				ordered_idx = self._get_ordered_idx(mask_missing_values)
+			feature_doublet = _ImputerDoubletChunker(
+				feat_idx, neighbor_feat_idx)
 
-			for feat_idx in ordered_idx:
-				neighbor_feat_idx = self._get_neighbor_feat_idx(n_features,
-																feat_idx,
-																abs_corr_mat)
-
-				estimator_doublet = _ImputerDoubletChunker(feat_idx,
-													neighbor_feat_idx)
-				
-				imp_sequence.append(estimator_doublet)
-
-		return imp_sequence
+			yield cnt, feature_doublet
 
 class IterativeImputerGridSearch(IterativeImputer):
 	"""[Overridden IterativeImputer methods. Herein, two types of grid searches, progress status updates, and several other improvements have been added. IterativeImputer is a multivariate imputer that estimates each feature from all the others. A strategy for imputing missing values by modeling each feature with missing values as a function of other features in a round-robin fashion.Read more in the scikit-learn :ref:`User Guide <iterative_imputer>`. scikit-learn versionadded:: 0.21...note::This estimator is still **experimental** for now: the predictions and the API might change without any deprecation cycle. To use it, you need to explicitly import ``enable_iterative_imputer``:: >>> # explicitly require this experimental feature >>> from sklearn.experimental import enable_iterative_imputer >>> # now you can import normally from sklearn.impute >>> from sklearn.impute import IterativeImputer]
