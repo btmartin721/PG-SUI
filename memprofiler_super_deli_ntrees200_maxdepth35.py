@@ -99,7 +99,7 @@ def main():
 			prefix=prefix, 
 			n_estimators=200,
 			n_nearest_features=3, 
-			n_jobs=4, 
+			n_jobs=1, 
 			max_iter=3, 
 			disable_progressbar=True,
 			extratrees=False, 
@@ -137,18 +137,18 @@ def main():
 
 	# pca.plot(plot_3d=True)
 
-	#rf = runRandomForestUML(dimreduction=dr, n_estimators=1000, n_jobs=4, min_samples_leaf=4)
+	#rf = runRandomForestUML(dimreduction=dr, n_estimators=1000, n_jobs=1, min_samples_leaf=4)
 
 	# rf_cmds = runMDS(
 	# 	dimreduction=dr, 
 	# 	distances=rf.dissimilarity, 
 	# 	keep_dims=3, 
-	# 	n_jobs=4, 
+	# 	n_jobs=1, 
 	# 	max_iter=1000, 
 	# 	n_init=25
 	# )
 
-	# rf_isomds = runMDS(dr, distances=rf.dissimilarity_matrix, metric=False, keep_dims=3, n_jobs=4, max_iter=1000, n_init=25)
+	# rf_isomds = runMDS(dr, distances=rf.dissimilarity_matrix, metric=False, keep_dims=3, n_jobs=1, max_iter=1000, n_init=25)
 
 	# rf_cmds.plot(plot_3d=True)
 	# rf_isomds.plot(plot_3d=True)
