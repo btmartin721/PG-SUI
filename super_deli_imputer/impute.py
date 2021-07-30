@@ -47,6 +47,8 @@ from utils.misc import timer
 #from utils.misc import bayes_search_CV_init
 from utils import sequence_tools
 
+from memory_profiler import memory_usage
+
 from utils.misc import isnotebook
 
 is_notebook = isnotebook()
@@ -118,6 +120,11 @@ class Impute:
 			elif e.errno == errno.EISDIR:
 				print("Could not write to {}; is a directory".format(outfile))
 
+
+		mem_usage = memory_usage((self._impute_single, (X,)))
+		with open(f"profiling_results/memUsage_{self.prefix}.txt", "w") as fout:
+			fout.write(f"{max(mem_usage)}")
+		sys.exit()			
 		# Don't do a grid search
 		if self.gridparams is None:
 			imputed_df, best_score, best_params = \

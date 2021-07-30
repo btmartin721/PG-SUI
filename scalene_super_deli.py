@@ -15,7 +15,7 @@ print(get_processor_name().strip().startswith("Intel"))
 
 # Custom module imports
 from read_input.read_input import GenotypeData
-from read_input.impute import *
+from super_deli_imputer.impute import *
 
 from dim_reduction.dim_reduction import DimReduction
 from dim_reduction.embed import *
@@ -70,12 +70,12 @@ def main():
 	# }
 
 	# Bayesian Ridge gridparams - Genetic algorithm
-	grid_params = {
-		"alpha_1": Continuous(1e-6, 1e-3, distribution="log-uniform"),
-		"alpha_2": Continuous(1e-6, 1e-3, distribution="log-uniform"),
-		"lambda_1": Continuous(1e-6, 1e-3, distribution="log-uniform"),
-		"lambda_2": Continuous(1e-6, 1e-3, distribution="log-uniform")
-	}
+	# grid_params = {
+	# 	"alpha_1": Continuous(1e-6, 1e-3, distribution="log-uniform"),
+	# 	"alpha_2": Continuous(1e-6, 1e-3, distribution="log-uniform"),
+	# 	"lambda_1": Continuous(1e-6, 1e-3, distribution="log-uniform"),
+	# 	"lambda_2": Continuous(1e-6, 1e-3, distribution="log-uniform")
+	# }
 
 	# rf_imp = ImputeRandomForest(
 	# 		data, 
@@ -92,9 +92,25 @@ def main():
 	# 		disable_progressbar=True
 	# )
 
-	prefix = "example_data/imputed/profiling_test_ga"
+	prefix = "profiling_test_ntrees~_maxdepth&"
 
-	br_imp = ImputeBayesianRidge(data, prefix=prefix, n_iter=100, gridparams=grid_params, grid_iter=3, cv=3, n_jobs=1, max_iter=2, n_nearest_features=3, column_subset=10, ga=True, disable_progressbar=True)
+	rf_imp = ImputeRandomForest(
+			data, 
+			prefix=prefix, 
+			n_estimators=~,
+			n_nearest_features=3, 
+			n_jobs=4, 
+			max_iter=3, 
+			disable_progressbar=True,
+			extratrees=False, 
+			progress_update_percent=20,
+			max_features="log2",
+			min_samples_split=6,
+			min_samples_leaf=4,
+			max_depth=&
+	)
+
+	# br_imp = ImputeBayesianRidge(data, prefix=prefix, n_iter=100, gridparams=grid_params, grid_iter=3, cv=3, n_jobs=1, max_iter=2, n_nearest_features=3, column_subset=10, ga=True, disable_progressbar=True)
 
 	# colors = {
 	# 	"GU": "#FF00FF",

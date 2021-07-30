@@ -16,6 +16,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 
 ## For stats and numeric operations
 import numpy as np
+import pandas as pd
 from scipy import stats
 
 # scikit-learn imports
@@ -383,16 +384,6 @@ class IterativeImputerAllData(IterativeImputer):
 
 		total_iter = self.max_iter
 
-		# ###########################################
-		# ### Get indexes for features and neighbors
-		# ###########################################
-		# for current_iter in range(1, total_iter+1):
-		# 	if self.imputation_order == 'random':
-		# 		ordered_idx = self._get_ordered_idx(mask_missing_values)
-
-
-				
-
 		###########################################
 		### Iteration Start
 		###########################################
@@ -422,80 +413,86 @@ class IterativeImputerAllData(IterativeImputer):
 			##########################
 			### Feature Start
 			##########################
-			imputation_features = list()
-			for i, feature_tup in self._get_nearest_features(
-				ordered_idx, n_features, abs_corr_mat):
+			# imputation_features = list()
+			# for i, feature_tup in self._get_nearest_features(
+			# 	ordered_idx, n_features, abs_corr_mat):
 
-				imputation_features.append(feature_tup)
+			# 	imputation_features.append(feature_tup)
 
-			for current_chunk, chunk in enumerate(
-				self.chunks(imputation_features, self.chunk_size)):
+			# for current_chunk, chunk in enumerate(
+			# 	self.chunks(imputation_features, self.chunk_size)):
 
-				if self.disable_progressbar:
-					with open(self.logfilepath, "a") as fout:
-						with redirect_stdout(fout):
-							print(f"\nChunk {current_chunk}")
+			# if self.disable_progressbar:
+			# 	with open(self.logfilepath, "a") as fout:
+			# 		with redirect_stdout(fout):
+			# 			print(f"\nChunk {current_chunk}")
 
-				filter_indices = list()
-				for item in chunk:
-					current_feat = item[0]
-					neighbor = item[1].tolist()
+			# filter_indices = list()
+			# for item in chunk:
+			# 	current_feat = item[0]
+			# 	neighbor = item[1].tolist()
 
-					filter_indices.append(current_feat)
-					filter_indices.extend(neighbor)
+			# 	filter_indices.append(current_feat)
+			# 	filter_indices.extend(neighbor)
 
-				filter_indices = list(set(filter_indices))
+			# filter_indices = list(set(filter_indices))
 
-				Xt_chunks = Xt[:, filter_indices]
+			#Xt_chunks = pd.DataFrame(Xt)
+			#Xt_chunks = Xt_chunks.iloc[:, filter_indices]
 
-				for i, feature_tup in enumerate(
-					progressbar(
-						chunk, 
-						desc="Feature: ", 
-						leave=False, 
-						position=2, 
-						disable=self.disable_progressbar), 
-					start=1):
+			for i, feat_idx in enumerate(
+				progressbar(
+					ordered_idx, 
+					desc="Feature: ", 
+					leave=False, 
+					position=1, 
+					disable=self.disable_progressbar), 
+				start=1):
 
-					feat_idx = feature_tup[0]
-					neighbor_feat_idx = feature_tup[1]
+				neighbor_feat_idx = self._get_neighbor_feat_idx(
+					n_features,
+					feat_idx,
+					abs_corr_mat)
 
-					Xt_chunks, estimator = self._impute_one_feature(
-						Xt_chunks, 
-						mask_missing_values, 
-						feat_idx, 
-						neighbor_feat_idx,
-						estimator=None, 
-						fit_mode=True)
+				# feat_idx = feature_tup[0]
+				# neighbor_feat_idx = feature_tup[1]
 
-					estimator_triplet = _ImputerTripletAll(
-						feature_doublet.feat_idx, 
-						feature_doublet.neighbor_feat_idx, 
-						estimator)
+				Xt, estimator = self._impute_one_feature(
+					Xt, 
+					mask_missing_values, 
+					feat_idx, 
+					neighbor_feat_idx,
+					estimator=None, 
+					fit_mode=True)
 
-					self.imputation_sequence_.append(estimator_triplet)
+				estimator_triplet = _ImputerTripletAll(
+					feat_idx, 
+					neighbor_feat_idx, 
+					estimator)
 
-					# Only print feature updates at each progress_update_percent
-					# interval
-					if (self.progress_update_percent is not None and 
-							self.disable_progressbar):
-						current_perc = math.ceil((i / total_features) * 100)
+				self.imputation_sequence_.append(estimator_triplet)
 
-						if current_perc >= print_perc_interval:
-							with open(self.logfilepath, "a") as fout:
-								# Redirect progress to file
-								with redirect_stdout(fout):
-									print(
-										f"Feature Progress (Iteration "
-										f"{self.n_iter_}/{self.max_iter}): "
-										f"{i}/{total_features} ({current_perc}"
-										f"%)")
+				# Only print feature updates at each progress_update_percent
+				# interval
+				if (self.progress_update_percent is not None and 
+						self.disable_progressbar):
+					current_perc = math.ceil((i / total_features) * 100)
 
-									if i == len(ordered_idx):
-										print("\n", end="")
+					if current_perc >= print_perc_interval:
+						with open(self.logfilepath, "a") as fout:
+							# Redirect progress to file
+							with redirect_stdout(fout):
+								print(
+									f"Feature Progress (Iteration "
+									f"{self.n_iter_}/{self.max_iter}): "
+									f"{i}/{total_features} ({current_perc}"
+									f"%)")
 
-							while print_perc_interval <= current_perc:
-								print_perc_interval += self.progress_update_percent
+								if i == len(ordered_idx):
+									print("\n", end="")
+
+						while print_perc_interval <= current_perc:
+							print_perc_interval += self.progress_update_percent
 
 			if self.verbose > 1:
 				print('[IterativeImputer] Ending imputation round '
@@ -503,8 +500,9 @@ class IterativeImputerAllData(IterativeImputer):
 					% (self.n_iter_, self.max_iter, time() - start_t))
 
 			if not self.sample_posterior:
-				inf_norm = np.linalg.norm(Xt_chunks - Xt_previous, ord=np.inf,
-										axis=None)
+				inf_norm = np.linalg.norm(
+					Xt - Xt_previous, ord=np.inf, axis=None)
+
 				if self.verbose > 0:
 					print(
 						f"[IterativeImputer] Change: {inf_norm}, "
@@ -516,16 +514,16 @@ class IterativeImputerAllData(IterativeImputer):
 							'reached.')
 								
 					break
-				Xt_previous = Xt_chunks.copy()
+				Xt_previous = Xt.copy()
 				
 		else:
 			if not self.sample_posterior:
 				warnings.warn("[IterativeImputer] Early stopping criterion not"
 							" reached.", ConvergenceWarning)
 
-		Xt_chunks[~mask_missing_values] = X[~mask_missing_values]
+		Xt[~mask_missing_values] = X[~mask_missing_values]
 
-		return super(IterativeImputer, self)._concatenate_indicator(Xt_chunks, X_indicator)
+		return super(IterativeImputer, self)._concatenate_indicator(Xt, X_indicator)
 
 	def chunks(self, l, n):
 		"""[Yield successive n-sized chunks from list l]
