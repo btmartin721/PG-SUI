@@ -320,7 +320,8 @@ class Impute:
 			clf_kwargs=self.clf_kwargs,
 			prefix=self.prefix,
 			disable_progressbar=self.disable_progressbar,
-			progress_update_percent=self.progress_update_percent
+			progress_update_percent=self.progress_update_percent,
+			chunk_size=self.chunk_size
 		)
 
 		#df_chunks = self.df2chunks(df, imputer, self.chunk_size)
@@ -401,7 +402,8 @@ class Impute:
 			clf_kwargs=self.clf_kwargs,
 			prefix=self.prefix,
 			disable_progressbar=self.disable_progressbar,
-			progress_update_percent=self.progress_update_percent
+			progress_update_percent=self.progress_update_percent,
+			chunk_size=self.chunk_size
 		)
 
 		#df_chunks = self.df2chunks(df, self.chunk_size)
@@ -710,7 +712,8 @@ class Impute:
 			clf_kwargs=self.clf_kwargs,
 			prefix=self.prefix,
 			disable_progressbar=self.disable_progressbar,
-			progress_update_percent=self.progress_update_percent
+			progress_update_percent=self.progress_update_percent,
+			chunk_size=self.chunk_size
 		)
 		
 		df_stg = df_miss.copy()
@@ -721,13 +724,15 @@ class Impute:
 
 		return df_orig_slice, df_miss[cols], pd.DataFrame(imp_arr[:,[df_orig.columns.get_loc(i) for i in cols]], columns=cols), imputer.n_iter_, imputer
 
-	def _define_iterative_imputer(self, clf, logfilepath, clf_kwargs=None, ga_kwargs=None, prefix="out", n_jobs=None, n_iter=None, cv=None, clf_type=None, ga=False, search_space=None, disable_progressbar=False, progress_update_percent=None, scoring_metric=None, early_stop_gen=None):
+	def _define_iterative_imputer(self, clf, logfilepath, chunk_size=1.0, clf_kwargs=None, ga_kwargs=None, prefix="out", n_jobs=None, n_iter=None, cv=None, clf_type=None, ga=False, search_space=None, disable_progressbar=False, progress_update_percent=None, scoring_metric=None, early_stop_gen=None):
 		"""[Define an IterativeImputer instance]
 
 		Args:
 			clf ([sklearn Classifier]): [Classifier to use with IterativeImputer]
 
 			logfilepath [str]: [Path to progress log file]
+
+			chunk_size (int or float, optional): [Size of chunks to impute. If type is integer, then impute in chunks of ``int(chunk_size)``. If type is float, then imputes in chunks of ``chunk_size * n_features``]
 
 			clf_kwargs (dict, optional): [Keyword arguments for classifier]. Defaults to None.
 
@@ -760,7 +765,7 @@ class Impute:
 		"""
 
 		if search_space is None:
-			imp = IterativeImputerAllData(logfilepath, clf_kwargs, prefix, estimator=clf, disable_progressbar=disable_progressbar, progress_update_percent=progress_update_percent, **self.imp_kwargs)
+			imp = IterativeImputerAllData(logfilepath, clf_kwargs, prefix, estimator=clf, disable_progressbar=disable_progressbar, progress_update_percent=progress_update_percent, chunk_size=chunk_size, **self.imp_kwargs)
 		
 		else:
 			# Create iterative imputer

@@ -93,7 +93,9 @@ class IterativeImputerAllData(IterativeImputer):
 
 		disable_progressbar (bool, optional): [Whether or not to disable the tqdm progress bar. If True, disables the progress bar. If False, tqdm is used for the progress bar. This can be useful if you are running the imputation on an HPC cluster or are saving the standard output to a file. If True, progress updates will be printed to the screen every ```progress_update_frequency``` iterations]. Defaults to False.
 
-		progress_update_frequency (int, optional) : [How often to display progress updates (as a percentage) if ``disable_progressbar`` is True. If ``progress_update_frequency=10``, then it displays progress updates every 10%]. Defaults to 10.
+		progress_update_frequency (int, optional): [How often to display progress updates (as a percentage) if ``disable_progressbar`` is True. If ``progress_update_frequency=10``, then it displays progress updates every 10%]. Defaults to 10.
+
+		chunk_size (int or float, optional): [Break up dataset into ``chunk_size`` chunks to reduce memory usage if type is integer, then uses ``chunk_size`` chunks. If type is float, then uses ``chunk_size * n_features`` chunks]. Defaults to 1.0.
 
 		missing_values (int or np.nan, optional): [The placeholder for the missing values. All occurrences of `missing_values` will be imputed. For pandas' dataframes with	nullable integer dtypes with missing values, `missing_values` should be set to `np.nan`, since `pd.NA` will be converted to `np.nan`]. Defaults to np.nan.
 
@@ -167,6 +169,7 @@ class IterativeImputerAllData(IterativeImputer):
 				clf_type="classifier",
 				disable_progressbar=False,
 				progress_update_percent=None,
+				chunk_size=1.0,
 				missing_values=np.nan,
 				sample_posterior=False,
 				max_iter=10,
@@ -201,6 +204,7 @@ class IterativeImputerAllData(IterativeImputer):
 		self.clf_type = clf_type
 		self.disable_progressbar = disable_progressbar
 		self.progress_update_percent = progress_update_percent
+		self.chunk_size = chunk_size
 
 	@ignore_warnings(category=UserWarning)
 	def _impute_one_feature(self,
@@ -379,18 +383,15 @@ class IterativeImputerAllData(IterativeImputer):
 
 		total_iter = self.max_iter
 
-		###########################################
-		### Get indexes for features and neighbors
-		###########################################
-		imputation_features = list()
-		for current_iter in range(1, total_iter+1):
-			if self.imputation_order == 'random':
-				ordered_idx = self._get_ordered_idx(mask_missing_values)
+		# ###########################################
+		# ### Get indexes for features and neighbors
+		# ###########################################
+		# for current_iter in range(1, total_iter+1):
+		# 	if self.imputation_order == 'random':
+		# 		ordered_idx = self._get_ordered_idx(mask_missing_values)
 
-			for i, feature_doublet in self._get_nearest_features(
-				ordered_idx, n_features, abs_corr_mat):
 
-				imputation_features.append(feature_doublet)
+				
 
 		###########################################
 		### Iteration Start
@@ -418,57 +419,83 @@ class IterativeImputerAllData(IterativeImputer):
 					self.disable_progressbar):
 				print_perc_interval = self.progress_update_percent
 
-			print(n_features)
-			sys.exit()
-
 			##########################
 			### Feature Start
 			##########################
-			#for chunk in chunks(imputation_features, n_features):
-			for i, feature_doublet in enumerate(
-				progressbar(
-					imputation_features, 
-					desc="Feature: ", 
-					leave=False, 
-					position=1, 
-					disable=self.disable_progressbar), 
-				start=1):
+			imputation_features = list()
+			for i, feature_tup in self._get_nearest_features(
+				ordered_idx, n_features, abs_corr_mat):
 
-				Xt, estimator = self._impute_one_feature(
-					Xt, 
-					mask_missing_values, 
-					feature_doublet.feat_idx, 
-					feature_doublet.neighbor_feat_idx,
-					estimator=None, 
-					fit_mode=True)
+				imputation_features.append(feature_tup)
 
-				estimator_triplet = _ImputerTripletAll(
-					feature_doublet.feat_idx, 
-					feature_doublet.neighbor_feat_idx, 
-					estimator)
+			for current_chunk, chunk in enumerate(
+				self.chunks(imputation_features, self.chunk_size)):
 
-				self.imputation_sequence_.append(estimator_triplet)
+				if self.disable_progressbar:
+					with open(self.logfilepath, "a") as fout:
+						with redirect_stdout(fout):
+							print(f"\nChunk {current_chunk}")
 
-				# Only print feature updates at each progress_update_percent
-				# interval
-				if (self.progress_update_percent is not None and 
-						self.disable_progressbar):
-					current_perc = math.ceil((i / total_features) * 100)
+				filter_indices = list()
+				for item in chunk:
+					current_feat = item[0]
+					neighbor = item[1].tolist()
 
-					if current_perc >= print_perc_interval:
-						with open(self.logfilepath, "a") as fout:
-							# Redirect progress to file
-							with redirect_stdout(fout):
-								print(
-									f"Feature Progress (Iteration "
-									f"{self.n_iter_}/{self.max_iter}): "
-									f"{i}/{total_features} ({current_perc}%)")
+					filter_indices.append(current_feat)
+					filter_indices.extend(neighbor)
 
-								if i == len(ordered_idx):
-									print("\n", end="")
+				filter_indices = list(set(filter_indices))
 
-						while print_perc_interval <= current_perc:
-							print_perc_interval += self.progress_update_percent
+				Xt_chunks = Xt[:, filter_indices]
+
+				for i, feature_tup in enumerate(
+					progressbar(
+						chunk, 
+						desc="Feature: ", 
+						leave=False, 
+						position=2, 
+						disable=self.disable_progressbar), 
+					start=1):
+
+					feat_idx = feature_tup[0]
+					neighbor_feat_idx = feature_tup[1]
+
+					Xt_chunks, estimator = self._impute_one_feature(
+						Xt_chunks, 
+						mask_missing_values, 
+						feat_idx, 
+						neighbor_feat_idx,
+						estimator=None, 
+						fit_mode=True)
+
+					estimator_triplet = _ImputerTripletAll(
+						feature_doublet.feat_idx, 
+						feature_doublet.neighbor_feat_idx, 
+						estimator)
+
+					self.imputation_sequence_.append(estimator_triplet)
+
+					# Only print feature updates at each progress_update_percent
+					# interval
+					if (self.progress_update_percent is not None and 
+							self.disable_progressbar):
+						current_perc = math.ceil((i / total_features) * 100)
+
+						if current_perc >= print_perc_interval:
+							with open(self.logfilepath, "a") as fout:
+								# Redirect progress to file
+								with redirect_stdout(fout):
+									print(
+										f"Feature Progress (Iteration "
+										f"{self.n_iter_}/{self.max_iter}): "
+										f"{i}/{total_features} ({current_perc}"
+										f"%)")
+
+									if i == len(ordered_idx):
+										print("\n", end="")
+
+							while print_perc_interval <= current_perc:
+								print_perc_interval += self.progress_update_percent
 
 			if self.verbose > 1:
 				print('[IterativeImputer] Ending imputation round '
@@ -476,7 +503,7 @@ class IterativeImputerAllData(IterativeImputer):
 					% (self.n_iter_, self.max_iter, time() - start_t))
 
 			if not self.sample_posterior:
-				inf_norm = np.linalg.norm(Xt - Xt_previous, ord=np.inf,
+				inf_norm = np.linalg.norm(Xt_chunks - Xt_previous, ord=np.inf,
 										axis=None)
 				if self.verbose > 0:
 					print(
@@ -489,16 +516,16 @@ class IterativeImputerAllData(IterativeImputer):
 							'reached.')
 								
 					break
-				Xt_previous = Xt.copy()
+				Xt_previous = Xt_chunks.copy()
 				
 		else:
 			if not self.sample_posterior:
 				warnings.warn("[IterativeImputer] Early stopping criterion not"
 							" reached.", ConvergenceWarning)
 
-		Xt[~mask_missing_values] = X[~mask_missing_values]
+		Xt_chunks[~mask_missing_values] = X[~mask_missing_values]
 
-		return super(IterativeImputer, self)._concatenate_indicator(Xt, X_indicator)
+		return super(IterativeImputer, self)._concatenate_indicator(Xt_chunks, X_indicator)
 
 	def chunks(self, l, n):
 		"""[Yield successive n-sized chunks from list l]
@@ -508,8 +535,32 @@ class IterativeImputerAllData(IterativeImputer):
 
 			n ([int]): [Chunk size]
 		"""
+		if isinstance(n, (int, float)):
+			if isinstance(n, float):
+				if n > 1.0:
+					raise ValueError(
+						f"If chunk_size is of type float, must be "
+						f"between 0.0 and 1.0; Value supplied was {n}")
+
+				elif n == 1.0:
+					# All data in one chunk
+					print(
+						"Imputing all features at once since chunk_size is "
+						"set to 1.0")
+
+					yield l
+
+				tmp = n
+				n = None
+				n = math.ceil(len(l) * tmp)
+
+		else:
+			raise ValueError(
+				f"chunk_size must be of type float or integer, "
+				f"but type {type(chunk_size)} was passed")
+
 		for i in range(0, len(l), n):
-			yield lst[i:i + n]
+			yield l[i:i + n]
 
 	def _get_nearest_features(self, ordered_idx, n_features, abs_corr_mat):
 		"""[Generator function that gets a namedtuple with the current feature being imputed (``feat_idx``) and the nearest neighbors (``neighbor_feat_idx``) of the current feature]
@@ -531,10 +582,7 @@ class IterativeImputerAllData(IterativeImputer):
 															feat_idx,
 															abs_corr_mat)
 
-			feature_doublet = _ImputerDoubletChunker(
-				feat_idx, neighbor_feat_idx)
-
-			yield cnt, feature_doublet
+			yield cnt, (feat_idx, neighbor_feat_idx)
 
 class IterativeImputerGridSearch(IterativeImputer):
 	"""[Overridden IterativeImputer methods. Herein, two types of grid searches, progress status updates, and several other improvements have been added. IterativeImputer is a multivariate imputer that estimates each feature from all the others. A strategy for imputing missing values by modeling each feature with missing values as a function of other features in a round-robin fashion.Read more in the scikit-learn :ref:`User Guide <iterative_imputer>`. scikit-learn versionadded:: 0.21...note::This estimator is still **experimental** for now: the predictions and the API might change without any deprecation cycle. To use it, you need to explicitly import ``enable_iterative_imputer``:: >>> # explicitly require this experimental feature >>> from sklearn.experimental import enable_iterative_imputer >>> # now you can import normally from sklearn.impute >>> from sklearn.impute import IterativeImputer]
