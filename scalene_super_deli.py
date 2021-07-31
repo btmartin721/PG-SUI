@@ -15,7 +15,7 @@ print(get_processor_name().strip().startswith("Intel"))
 
 # Custom module imports
 from read_input.read_input import GenotypeData
-from super_deli_imputer.impute import *
+from impute.impute import *
 
 from dim_reduction.dim_reduction import DimReduction
 from dim_reduction.embed import *
