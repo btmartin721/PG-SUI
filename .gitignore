@@ -12,8 +12,9 @@ __pycache__/*
 *.csv
 *_output/
 *.zip
-*logfile.txt
+*_logfile.txt
 *_log.txt
+*.html
 example_data/imputed/*_log.txt
 training_data/download
 training_data/extracted
@@ -28,4 +29,3 @@ training_data/collated/
 .ipynb_checkpoints
 .ipynb_checkpoints/
 .ipynb_checkpoints/*
-*.html
