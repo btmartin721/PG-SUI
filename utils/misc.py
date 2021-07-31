@@ -3,6 +3,10 @@ import os
 import functools
 import time
 import datetime
+import platform
+import subprocess
+import re
+import logging
 
 from tqdm import tqdm
 from tqdm.utils import disp_len, _unicode # for overriding status_print
@@ -92,6 +96,22 @@ def isnotebook():
 		# Probably standard Python interpreter
 		return False
 
+def get_processor_name():
+	if platform.system() == "Windows":
+		return platform.processor()
+	elif platform.system() == "Darwin":
+		os.environ['PATH'] = os.environ['PATH'] + os.pathsep + '/usr/sbin'
+		command ="sysctl -n machdep.cpu.brand_string"
+		return subprocess.check_output(command).strip()
+	elif platform.system() == "Linux":
+		command = "cat /proc/cpuinfo"
+		all_info = subprocess.check_output(command, shell=True).strip()
+		all_info = all_info.decode("utf-8")
+		for line in all_info.split("\n"):
+			if "model name" in line:
+				return re.sub( ".*model name.*:", "", line,1)
+	return ""
+
 class tqdm_linux(tqdm):
 	"""
 	Decorate an iterable object, returning an iterator which acts exactly
@@ -122,6 +142,45 @@ class tqdm_linux(tqdm):
 			last_len[0] = len_s
 
 		return print_status
+
+class HiddenPrints:
+	"""[Class to supress printing within a with statement]
+	"""
+	def __enter__(self):
+		self._original_stdout = sys.stdout
+		sys.stdout = open(os.devnull, 'w')
+
+	def __exit__(self, exc_type, exc_val, exc_tb):
+		sys.stdout.close()
+		sys.stdout = self._original_stdout
+
+class StreamToLogger(object):
+	"""
+	Fake file-like stream object that redirects writes to a logger instance.
+	"""
+	def __init__(self, logger, log_level=logging.INFO):
+		self.logger = logger
+		self.log_level = log_level
+		self.linebuf = ''
+
+	def write(self, buf):
+		temp_linebuf = self.linebuf + buf
+		self.linebuf = ''
+		for line in temp_linebuf.splitlines(True):
+			# From the io.TextIOWrapper docs:
+			#   On output, if newline is None, any '\n' characters written
+			#   are translated to the system default line separator.
+			# By default sys.stdout.write() expects '\n' newlines and then
+			# translates them so this is still cross platform.
+			if line[-1] == '\n':
+				self.logger.log(self.log_level, line.rstrip())
+			else:
+				self.linebuf += line
+
+	def flush(self):
+		if self.linebuf != '':
+			self.logger.log(self.log_level, self.linebuf.rstrip())
+		self.linebuf = ''
 
 # def bayes_search_CV_init(self, estimator, search_spaces, optimizer_kwargs=None,	n_iter=50, scoring=None, fit_params=None, n_jobs=1,	n_points=1, iid=True, refit=True, cv=None, verbose=0,
 # 	pre_dispatch='2*n_jobs', random_state=None,	error_score='raise', 
