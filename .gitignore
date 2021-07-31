@@ -13,6 +13,8 @@ __pycache__/*
 *_output/
 *.zip
 *logfile.txt
+*_log.txt
+example_data/imputed/*_log.txt
 training_data/download
 training_data/extracted
 training_data/extracted/*
