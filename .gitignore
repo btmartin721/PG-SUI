@@ -15,6 +15,7 @@ __pycache__/*
 *_logfile.txt
 *_log.txt
 *.html
+DEPRECATED*.py
 example_data/imputed/*_log.txt
 training_data/download
 training_data/extracted
