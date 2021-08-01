@@ -43,6 +43,9 @@ cheerful_brights = ["#258039", "#F5BE41", "#31A9B8", "#CF3721"]
 cpal = sns.color_palette(bright_painterly).as_hex()
 
 sns.barplot(data=df, x="N Estimators", y="RAM Usage", hue="Max Depth", palette=cpal)
+
+sns.despine()
+
 plt.xlabel("Number of RF Trees")
 plt.ylabel("RAM Usage (Gb)")
 
