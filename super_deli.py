@@ -188,7 +188,7 @@ def main():
 
 		# br_imp = ImputeBayesianRidge(data, prefix=args.prefix, n_iter=100, gridparams=grid_params, grid_iter=3, cv=3, n_jobs=4, max_iter=2, n_nearest_features=3, column_subset=3, ga=True, disable_progressbar=True, progress_update_percent=20, chunk_size=0.25)
 
-		br_imp = ImputeBayesianRidge(data, prefix=args.prefix, alpha_1=0.0002689638465560243, alpha_2=0.0001473822173361299, lambda_1=0.0003281735206234651, lambda_2=0.00020767920087590963, chunk_size=0.25, n_iter=100, n_nearest_features=3, progress_update_percent=20, disable_progressbar=True, max_iter=2)
+		br_imp = ImputeBayesianRidge(data, prefix=args.prefix, alpha_1=0.0002689638465560243, alpha_2=0.0001473822173361299, lambda_1=0.0003281735206234651, lambda_2=0.00020767920087590963, n_iter=100, n_nearest_features=3, progress_update_percent=20, disable_progressbar=True, max_iter=2)
 
 	# colors = {
 	# 	"GU": "#FF00FF",
