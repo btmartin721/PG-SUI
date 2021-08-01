@@ -1,18 +1,44 @@
 # Standard library imports
-import sys
-import os
+import errno
 import math
+import os
+import sys
 from collections import Counter
 from operator import itemgetter
 from statistics import mean
-from pathlib import Path
 
 # Third party imports
 import numpy as np
 import pandas as pd
+#from memory_profiler import memory_usage
 
+# Scikit-learn imports
+from sklearn.ensemble import ExtraTreesClassifier
+from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.experimental import enable_iterative_imputer
+from sklearn.linear_model import BayesianRidge
+from sklearn.neighbors import KNeighborsClassifier
+
+# Custom module imports
+from impute.iterative_imputer_custom import (
+	IterativeImputerGridSearch, IterativeImputerAllData)
+
+from read_input.read_input import GenotypeData
+
+from utils import sequence_tools
+from utils import misc
 from utils.misc import get_processor_name
+from utils.misc import isnotebook
 from utils.misc import StreamToLogger
+from utils.misc import timer
+
+is_notebook = isnotebook()
+
+if is_notebook:
+	from tqdm.notebook import tqdm as progressbar
+else:
+	from tqdm import tqdm as progressbar
 
 # Requires scikit-learn-intellex package
 if get_processor_name().strip().startswith("Intel"):
@@ -26,38 +52,6 @@ if get_processor_name().strip().startswith("Intel"):
 else:
 	intelex = False
 
-#import xgboost as xgb
-from sklearn.experimental import enable_iterative_imputer
-
-from impute.iterative_imputer_custom import (
-	IterativeImputerGridSearch, IterativeImputerAllData
-)
-
-from sklearn.ensemble import ExtraTreesClassifier
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.ensemble import GradientBoostingClassifier
-from sklearn.linear_model import BayesianRidge
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.model_selection import RandomizedSearchCV
-
-# Custom module imports
-from read_input.read_input import GenotypeData
-from utils import misc
-from utils.misc import timer
-#from utils.misc import bayes_search_CV_init
-from utils import sequence_tools
-
-#from memory_profiler import memory_usage
-
-from utils.misc import isnotebook
-
-is_notebook = isnotebook()
-
-if is_notebook:
-	from tqdm.notebook import tqdm as progressbar
-else:
-	from tqdm import tqdm as progressbar
-
 class Impute:
 
 	def __init__(
@@ -70,21 +64,21 @@ class Impute:
 		self.clf_type = clf_type
 
 		# Separate local variables into separate settings objects		
-		self.gridparams, \
-		self.imp_kwargs, \
-		self.clf_kwargs, \
-		self.ga_kwargs, \
-		self.grid_iter, \
-		self.cv, \
-		self.n_jobs, \
-		self.prefix, \
-		self.column_subset, \
-		self.ga, \
-		self.disable_progressbar, \
-		self.progress_update_percent, \
-		self.scoring_metric, \
-		self.early_stop_gen, \
-		self.chunk_size = self._gather_impute_settings(kwargs)
+		(self.gridparams,
+			self.imp_kwargs,
+			self.clf_kwargs,
+			self.ga_kwargs,
+			self.grid_iter,
+			self.cv,
+			self.n_jobs,
+			self.prefix,
+			self.column_subset,
+			self.ga,
+			self.disable_progressbar,
+			self.progress_update_percent,
+			self.scoring_metric,
+			self.early_stop_gen,
+			self.chunk_size) = self._gather_impute_settings(kwargs)
 
 		self.logfilepath = f"{self.prefix}_imputer_progress_log.txt"
 
@@ -110,15 +104,15 @@ class Impute:
 		"""
 		# Test if output file can be written to
 		try:
-			outfile = "{}_imputed_012.csv".format(self.prefix)
+			outfile = f"{self.prefix}_imputed_012.csv"
 			with open(outfile, "w") as fout:
 				pass
 		except IOError as e:
-			print("Error: {}, {}".format(e.errno, e.strerror))
+			print(f"Error: {e.errno}, {e.strerror}")
 			if e.errno == errno.EACCES:
-				print("Permission denied: Cannot write to {}".format(outfile))
+				sys.exit(f"Permission denied: Cannot write to {outfile}")
 			elif e.errno == errno.EISDIR:
-				print("Could not write to {}; is a directory".format(outfile))
+				sys.exit(f"Could not write to {outfile}; It is a directory")
 
 
 		#mem_usage = memory_usage((self._impute_single, (X,)))
@@ -128,22 +122,20 @@ class Impute:
 				
 		# Don't do a grid search
 		if self.gridparams is None:
-			imputed_df, best_score, best_params = \
-				self._impute_single(X)
+			imputed_df, best_score, best_params = self._impute_single(X)
 
 		# Do a grid search and get the transformed data with the best parameters
 		else:
-			imputed_df, best_score, best_params = \
-				self._impute_gridsearch(X)
+			imputed_df, best_score, best_params = self._impute_gridsearch(X)
 
 			print("Grid Search Results:")
 			if self.clf_type == "regressor":
-				print("RMSE (best parameters): {:.2f}".format(best_score))
+				print(f"RMSE (best parameters): {best_score:.2f}")
 			else:
 				best_score = 100 * best_score
-				print("Accuracy (best parameters): {:.2f}%".format(best_score))
+				print(f"Accuracy (best parameters): {best_score:.2f}%")
 				
-			print("Best Parameters: {}\n".format(best_params))
+			print(f"Best Parameters: {best_params}\n")
 
 		print("\nDone!\n")
 		return imputed_df, best_score, best_params
@@ -168,8 +160,7 @@ class Impute:
 		elif isinstance(data, list):
 			with open(outfile, "w") as fout:
 				fout.writelines(
-					",".join(str(j) for j in i) + "\n" for i in data
-				)
+					",".join(str(j) for j in i) + "\n" for i in data)
 		else:
 			raise TypeError("'write_imputed()' takes either a pandas.DataFrame,"
 				" numpy.ndarray, or 2-dimensional list"
@@ -202,9 +193,6 @@ class Impute:
 		Raises:
 			[ValueError]: [chunk_size must be of type int or float]
 		"""
-		#X = df.to_numpy()
-		#imp_index_info = imputer.get_nearest_features(X)
-
 		if isinstance(chunk_size, (int, float)):
 
 			chunks = list()
@@ -220,8 +208,8 @@ class Impute:
 					chunks.append(df_cp)
 					print(
 						"Imputing all features at once since chunk_size is "
-						"set to 1.0"
-					)
+						"set to 1.0")
+
 					return chunks
 
 				tmp = chunk_size
@@ -231,8 +219,7 @@ class Impute:
 		else:
 			raise ValueError(
 				f"chunk_size must be of type float or integer, "
-				f"but type {type(chunk_size)} was passed"
-			)
+				f"but type {type(chunk_size)} was passed")
 
 		chunk_len_list = list()
 		num_chunks = math.ceil(len(df.columns) / chunk_size)
@@ -329,11 +316,10 @@ class Impute:
 			prefix=self.prefix,
 			disable_progressbar=self.disable_progressbar,
 			progress_update_percent=self.progress_update_percent,
-			chunk_size=self.chunk_size
-		)
+			chunk_size=self.chunk_size)
 
-		#df_chunks = self.df2chunks(df, imputer, self.chunk_size)
-		imputed_df = self._impute_df(df, imputer, len(df.columns))
+		df_chunks = self.df2chunks(df, imputer, self.chunk_size)
+		imputed_df = self._impute_df(df_chunks, imputer, len(df.columns))
 
 		self._validate_imputed(imputed_df)
 
@@ -356,8 +342,7 @@ class Impute:
 		original_num_cols = len(df.columns)
 		df_tmp = self._remove_nonbiallelic(df)
 		df_subset = self.subset_data_for_gridsearch(
-			df_tmp, self.column_subset, original_num_cols
-		)
+			df_tmp, self.column_subset, original_num_cols)
 
 		print(f"Validation dataset size: {len(df_subset.columns)}\n")
 		print("Doing grid search...")
@@ -379,8 +364,7 @@ class Impute:
 			disable_progressbar=self.disable_progressbar,
 			progress_update_percent=self.progress_update_percent,
 			scoring_metric=self.scoring_metric,
-			early_stop_gen=self.early_stop_gen
-		)
+			early_stop_gen=self.early_stop_gen)
 
 		_, params_list, score_list = imputer.fit_transform(df_subset)
 
@@ -411,23 +395,21 @@ class Impute:
 			prefix=self.prefix,
 			disable_progressbar=self.disable_progressbar,
 			progress_update_percent=self.progress_update_percent,
-			chunk_size=self.chunk_size
-		)
+			chunk_size=self.chunk_size)
 
-		#df_chunks = self.df2chunks(df, self.chunk_size)
-		imputed_df = self._impute_df(
-			df, best_imputer, original_num_cols)
+		df_chunks = self.df2chunks(df, self.chunk_size)
+		imputed_df = self._impute_df(df_chunks, best_imputer, original_num_cols)
 
 		self._validate_imputed(imputed_df)
 
 		print(f"\nDone with {self.clf.__name__} imputation!\n")
 		return imputed_df, abs(avg_score), best_params
 
-	def _impute_df(self, df, imputer, original_num_cols):
+	def _impute_df(self, df_chunks, imputer, original_num_cols):
 		"""[Impute list of pandas.DataFrame objects using IterativeImputer]
 
 		Args:
-			df ([list(pandas.DataFrame)]): [Dataframe with 012-encoded genotypes]
+			df_chunks ([list(pandas.DataFrame)]): [Dataframe with 012-encoded genotypes]
 
 			imputer ([IterativeImputerAllData instance]): [Defined IterativeImputerAllData instance to perform the imputation]
 
@@ -436,22 +418,23 @@ class Impute:
 		Returns:
 			[pandas.DataFrame]: [Single DataFrame object, with all the imputed chunks concatenated together]
 		"""
-		#imputed_chunks = list()
-		#num_chunks = len(df_chunks)
-		#for i, Xchunk in enumerate(df_chunks, start=1):
-		if self.clf_type == "classifier":
-			df_imp = pd.DataFrame(imputer.fit_transform(df), dtype="Int8")
-		else:
-			# Regressor. Needs to be rounded to integer first.
-			df_imp = pd.DataFrame(imputer.fit_transform(df))
-			df_imp = df_imp.round(0).astype("Int8")
-				
-			#imputed_chunks.append(df_imp)
+		imputed_chunks = list()
+		num_chunks = len(df_chunks)
+		for i, Xchunk in enumerate(df_chunks, start=1):
+			if self.clf_type == "classifier":
+				df_imp = pd.DataFrame(
+					imputer.fit_transform(Xchunk), dtype="Int8")
+			else:
+				# Regressor. Needs to be rounded to integer first.
+				df_imp = pd.DataFrame(imputer.fit_transform(Xchunk))
+				df_imp = df_imp.round(0).astype("Int8")
+					
+				imputed_chunks.append(df_imp)
 
-		#concat_df = pd.concat(imputed_chunks, axis=1)
-		#assert len(concat_df.columns) == original_num_cols, "Failed merge operation: Could not merge chunks back together"
+		concat_df = pd.concat(imputed_chunks, axis=1)
+		assert len(concat_df.columns) == original_num_cols, "Failed merge operation: Could not merge chunks back together"
 	
-		return df_imp
+		return concat_df
 
 	def _validate_imputed(self, df):
 		assert not df.isnull().values.any(), (
@@ -721,8 +704,7 @@ class Impute:
 			prefix=self.prefix,
 			disable_progressbar=self.disable_progressbar,
 			progress_update_percent=self.progress_update_percent,
-			chunk_size=self.chunk_size
-		)
+			chunk_size=self.chunk_size)
 		
 		df_stg = df_miss.copy()
 
@@ -730,7 +712,14 @@ class Impute:
 		imp_arr = imputer.fit_transform(df_stg)
 		print("Done!\n")
 
-		return df_orig_slice, df_miss[cols], pd.DataFrame(imp_arr[:,[df_orig.columns.get_loc(i) for i in cols]], columns=cols), imputer.n_iter_, imputer
+		return (
+			df_orig_slice, 
+			df_miss[cols], 
+			pd.DataFrame(
+				imp_arr[:,[df_orig.columns.get_loc(i) for i in cols]], 
+				columns=cols), 
+			imputer.n_iter_, 
+			imputer)
 
 	def _define_iterative_imputer(self, clf, logfilepath, chunk_size=1.0, clf_kwargs=None, ga_kwargs=None, prefix="out", n_jobs=None, n_iter=None, cv=None, clf_type=None, ga=False, search_space=None, disable_progressbar=False, progress_update_percent=None, scoring_metric=None, early_stop_gen=None):
 		"""[Define an IterativeImputer instance]
@@ -793,8 +782,7 @@ class Impute:
 				progress_update_percent=progress_update_percent,
 				scoring_metric=scoring_metric,
 				early_stop_gen=early_stop_gen,
-				**self.imp_kwargs
-			)
+				**self.imp_kwargs)
 
 		return imp
 		
@@ -913,8 +901,9 @@ class ImputeKNN:
 
 		imputer = Impute(self.clf, self.clf_type, kwargs)
 
-		self.imputed, self.best_score, self.best_params = \
-			imputer.fit_predict(genotype_data.genotypes_df)
+		(self.imputed, 
+			self.best_score, 
+			self.best_params) = imputer.fit_predict(genotype_data.genotypes_df)
 
 		imputer.write_imputed(self.imputed)
 
@@ -1071,8 +1060,9 @@ class ImputeRandomForest:
 
 		imputer = Impute(self.clf, self.clf_type, kwargs)
 
-		self.imputed, self.best_score, self.best_params = \
-			imputer.fit_predict(genotype_data.genotypes_df)
+		(self.imputed, 
+			self.best_score, 
+			self.best_params) = imputer.fit_predict(genotype_data.genotypes_df)
 
 		imputer.write_imputed(self.imputed)
 
@@ -1212,8 +1202,9 @@ class ImputeGradientBoosting:
 
 		imputer = Impute(self.clf, self.clf_type, kwargs)
 
-		self.imputed, self.best_score, self.best_params = \
-			imputer.fit_predict(genotype_data.genotypes_df)
+		(self.imputed, 
+			self.best_score, 
+			self.best_params) = imputer.fit_predict(genotype_data.genotypes_df)
 
 		imputer.write_imputed(self.imputed)
 
@@ -1340,8 +1331,9 @@ class ImputeBayesianRidge:
 
 		imputer = Impute(self.clf, self.clf_type, kwargs)
 
-		self.imputed, self.best_score, self.best_params = \
-			imputer.fit_predict(genotype_data.genotypes_df)
+		(self.imputed, 
+			self.best_score, 
+			self.best_params) = imputer.fit_predict(genotype_data.genotypes_df)
 
 		imputer.write_imputed(self.imputed)
 
@@ -1481,16 +1473,14 @@ class ImputeAlleleFreq(GenotypeData):
 					allele_probs = self._get_allele_probs(
 						locus, self.diploid, 
 						missing=self.missing, 
-						indices=pop_indices[pop]
-					)
+						indices=pop_indices[pop])
 
 					if misc.all_zero(list(allele_probs.values())) or \
 						not allele_probs:
 						print("\nWarning: No alleles sampled at locus", 
 							str(loc_index), 
 							"setting all values to:", 
-							str(self.default)
-						)
+							str(self.default))
 						gen_index=0
 						for geno in locus:
 							data[loc_index][gen_index] = self.default
@@ -1502,8 +1492,7 @@ class ImputeAlleleFreq(GenotypeData):
 								data[loc_index][gen_index] = \
 									self._sample_allele(
 										allele_probs, 
-										diploid=True
-									)
+										diploid=True)
 							gen_index += 1
 					
 			loc_index += 1
@@ -1558,8 +1547,7 @@ class ImputeAlleleFreq(GenotypeData):
 				else:
 					print("\nWarning: Ignoring unrecognized allele", 
 						str(g), 
-						"in get_allele_probs\n"
-					)
+						"in get_allele_probs\n")
 			for allele in ret.keys():
 				ret[allele] = ret[allele] / float(length)
 			return ret
