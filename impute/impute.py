@@ -397,7 +397,7 @@ class Impute:
 			progress_update_percent=self.progress_update_percent,
 			chunk_size=self.chunk_size)
 
-		df_chunks = self.df2chunks(df, self.chunk_size)
+		df_chunks = self.df2chunks(df, best_imputer, self.chunk_size)
 		imputed_df = self._impute_df(df_chunks, best_imputer, original_num_cols)
 
 		self._validate_imputed(imputed_df)
