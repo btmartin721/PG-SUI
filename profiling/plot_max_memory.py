@@ -53,6 +53,20 @@ plt.ylabel("RAM Usage (Gb)")
 
 plt.savefig("profiling/ntrees_maxdepth_profiling.pdf", bbox_inches="tight")
 
+plt.cla()
+plt.clf()
+plt.close()
+
+sns.set_context("paper", font_scale=1.5)
+
+sns.lineplot(data=df, x=df["N Estimators"], y=df["RAM Usage"])
+
+plt.xticks(ticks=[50, 100, 150, 200])
+sns.despine(offset=5)
+plt.xlabel("Number of RF Trees")
+plt.ylabel("RAM Usage (Gb)")
+plt.savefig("profiling/ntrees_lineplot_profiling.pdf", bbox_inches="tight")
+
 
 
 
