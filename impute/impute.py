@@ -424,6 +424,9 @@ class Impute:
 			if self.clf_type == "classifier":
 				df_imp = pd.DataFrame(
 					imputer.fit_transform(Xchunk), dtype="Int8")
+
+				imputed_chunks.append(df_imp)
+				
 			else:
 				# Regressor. Needs to be rounded to integer first.
 				df_imp = pd.DataFrame(imputer.fit_transform(Xchunk))
