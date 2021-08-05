@@ -23,10 +23,14 @@ from scipy import stats
 from sklearn.base import clone
 from sklearn.experimental import enable_iterative_imputer
 from sklearn.impute import IterativeImputer
+from sklearn.impute import SimpleImputer
+from sklearn.impute._base import _check_inputs_dtype
 
 ## For warnings
 from sklearn.exceptions import ConvergenceWarning
+from sklearn.utils._mask import _get_mask
 from sklearn.utils._testing import ignore_warnings
+from sklearn.utils.validation import FLOAT_DTYPES, check_is_fitted
 
 ## Required for IterativeImputer.fit_transform()
 from sklearn.utils import (
@@ -109,7 +113,7 @@ class IterativeImputerAllData(IterativeImputer):
 		n_nearest_features (int, optional): [Number of other features to use to estimate the missing values of each feature column. Nearness between features is measured using the absolute correlation coefficient between each feature pair (after initial imputation). To ensure coverage of features throughout the imputation process, the neighbor features are not necessarily nearest,	but are drawn with probability proportional to correlation for each	imputed target feature. Can provide significant speed-up when the number of features is huge. If ``None``, all features will be used]. Defaults to None.
 
 		initial_strategy (str, optional): [Which strategy to use to initialize the missing values. Same as the ``strategy`` parameter in :class:`~sklearn.impute.SimpleImputer`	Valid values: {"mean", "median", "most_frequent", or "constant"}]. Defaults to 'mean'.
-		
+
 		imputation_order (str, optional): [The order in which the features will be imputed. Possible values: "ascending" (From features with fewest missing values to most), "descending" (From features with most missing values to fewest, "roman" (Left to right), "arabic" (Right to left),  random" (A random order for each round)]. Defaults to 'ascending'.
 
 		skip_complete (bool, optional): [If ``True`` then features with missing values during ``transform`` that did not have any missing values during ``fit`` will be imputed with the initial imputation method only. Set to ``True`` if you have	many features with no missing values at both ``fit`` and ``transform`` time to save compute]. Defaults to False.
@@ -185,7 +189,14 @@ class IterativeImputerAllData(IterativeImputer):
 				random_state=None,
 				add_indicator=False
 	):
-		super().__init__(estimator=estimator, missing_values=missing_values, sample_posterior=sample_posterior, max_iter=max_iter, tol=tol, n_nearest_features=n_nearest_features, initial_strategy=initial_strategy, imputation_order=imputation_order, skip_complete=skip_complete, min_value=min_value, max_value=max_value, verbose=verbose, random_state=random_state, add_indicator=add_indicator)
+		super().__init__(
+			estimator=estimator, missing_values=missing_values, 
+			sample_posterior=sample_posterior, max_iter=max_iter, tol=tol,
+			n_nearest_features=n_nearest_features, 
+			initial_strategy=initial_strategy, 
+			imputation_order=imputation_order, skip_complete=skip_complete, 
+			min_value=min_value, max_value=max_value, verbose=verbose, 
+			random_state=random_state, add_indicator=add_indicator)
 
 		self.logfilepath = logfilepath
 		self.clf_kwargs = clf_kwargs
@@ -710,7 +721,14 @@ class IterativeImputerGridSearch(IterativeImputer):
 				add_indicator=False
 	):
 
-		super().__init__(estimator=estimator, missing_values=missing_values, sample_posterior=sample_posterior, max_iter=max_iter, tol=tol, n_nearest_features=n_nearest_features, initial_strategy=initial_strategy, imputation_order=imputation_order, skip_complete=skip_complete, min_value=min_value, max_value=max_value, verbose=verbose, random_state=random_state, add_indicator=add_indicator)
+		super().__init__(
+			estimator=estimator, missing_values=missing_values, 
+			sample_posterior=sample_posterior, max_iter=max_iter, tol=tol, 
+			n_nearest_features=n_nearest_features, 
+			initial_strategy=initial_strategy, 
+			imputation_order=imputation_order, skip_complete=skip_complete, 
+			min_value=min_value, max_value=max_value, verbose=verbose, 
+			random_state=random_state, add_indicator=add_indicator)
 
 		self.logfilepath = logfilepath
 		self.search_space = search_space
@@ -776,7 +794,7 @@ class IterativeImputerGridSearch(IterativeImputer):
 			estimator = clone(self._estimator)
 
 		# Modified code
-		cross_val = StratifiedKFold(n_splits=self.grid_cv, shuffle=True)
+		cross_val = StratifiedKFold(n_splits=self.grid_cv, shuffle=False)
 
 		# Modified code
 		# If regressor
@@ -969,8 +987,7 @@ class IterativeImputerGridSearch(IterativeImputer):
 
 		for self.n_iter_ in progressbar(
 			range(1, total_iter+1), 
-			desc="Iteration: ", disable=self.disable_progressbar
-		):
+			desc="Iteration: ", disable=self.disable_progressbar):
 
 			if self.ga:
 				iter_list.append(self.n_iter_)
@@ -1148,7 +1165,7 @@ class IterativeImputerGridSearch(IterativeImputer):
 			if not self.sample_posterior:
 				warnings.warn("[IterativeImputer] Early stopping criterion not"
 							" reached.", ConvergenceWarning)
-
+		
 		Xt[~mask_missing_values] = X[~mask_missing_values]
 
 		if self.ga:

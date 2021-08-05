@@ -1,3 +1,4 @@
+import os
 import sys
 
 # Make sure python version is >= 3.6
@@ -13,16 +14,43 @@ from utils import sequence_tools
 from utils import settings
 
 class GenotypeData:
-	"""[Class to read genotype data and convert to onehot encoding]
+	"""[Class to read genotype and tree data and encode genotypes in 012 and onehot format
 	
-	Possible filetype values:
-		- phylip
-		- structure1row
-		- structure2row 
-		- vcf (TBD)
-		- Any others?
-	
-	Note: If popmapfile is supplied, read_structure assumes NO popID column
+	Args:
+		filename ([str]): [Path to input file containing genotypes]
+
+		filetype ([str]): [Type of input genotype file. Possible ``filetype`` values include: 'phylip', 'structure1row', or 'structure2row'. VCF compatibility may be added in the future, but is not currently supported]
+
+		popmapfile ([str]): [Path to population map file. If ``popmapfile`` is supplied and ``filetype`` is one of the STRUCTURE formats, then the structure file is assumed to have NO popID column]
+
+	Attributes:
+		samples ([list(str)]): [List containing sample IDs of shape (n_samples,)]
+
+		snps ([list(list(str))]): [2D list of shape (n_samples, n_sites) containing genotypes]
+
+		pops ([list(str)]): [List of population IDs of shape (n_samples,)]
+
+		onehot ([list(list(list(float)))]): [One-hot encoded genotypes as a 3D list of shape (n_samples, n_sites, 4). The inner-most list represents the four nucleotide bases in the order of 'A', 'T', 'G', 'C'. If position 0 contains a 1.0, then the site is an 'A'. If position 1 contains a 1.0, then the site is a 'T'...etc. Two values of 0.5 indicates a heterozygote. Missing data is encoded as four values of 0.0]
+
+		guidetree ([toytree object]): [Input guide tree as a toytree object]
+
+		num_snps ([int]): [Number of SNPs (features) present in the dataset]
+
+		num_inds: ([int]): [Number of individuals (samples) present in the dataset]
+
+	Properties:
+		snpcount ([int]): [Number of SNPs (features) in the dataset]
+		indcount ([int]): [Number of individuals (samples) in the dataset]
+		populations ([list(str)]): [List of population IDs of shape (n_samples,)]
+
+		individuals ([list(str)]): [List of sample IDs of shape (n_samples,)]
+		genotypes_list ([list(list(str))]): [List of 012-encoded genotypes of shape (n_samples, n_sites)]
+
+		genotypes_nparray ([numpy.ndarray]): [Numpy array of 012-encoded genotypes of shape (n_samples, n_sites)]
+
+		genotypes_df ([pandas.DataFrame]): [Pandas DataFrame of 012-encoded genotypes of shape (n_samples, n_sites). Missing values are encoded as -9]
+
+		genotypes_onehot ([numpy.ndarray(numpy.ndarray(numpy.ndarray)))]): [One-hot encoded numpy array (n_samples, n_sites, 4). The inner-most array consists of one-hot encoded values for the four nucleotides in the order of 'A', 'T', 'G', 'C'. Values of 0.5 indicate heterozygotes, and missing values contain 0.0 for all four nucleotides]
 	"""
 	def __init__(self, filename=None, filetype=None, popmapfile=None):
 		self.filename = filename
@@ -33,26 +61,8 @@ class GenotypeData:
 		self.pops = list()
 		self.onehot = list()
 		self.guidetree = None
-		self.freq_imputed_global = list()
-		self.freq_imputed_pop = list()
-		self.knn_imputed = list()
-		self.impute_methods = None
-		self.df = None
-		self.knn_imputed_df = None
-		self.rf_imputed_arr = None
-		self.gb_imputed_arr = None
-		self.br_imputed_arr = None
 		self.num_snps = 0
 		self.num_inds = 0
-		self.supported_methods = [
-			"knn", 
-			"freq_global", 
-			"freq_pop", 
-			"rf", 
-			"gb", 
-			"br",
-			"knn_iter"
-		]
 
 		if self.filetype is not None:
 			self.parse_filetype(filetype, popmapfile)
@@ -82,9 +92,7 @@ class GenotypeData:
 					self.filetype = "structure2rowPopID"
 					self.read_structure(onerow=False, popids=True)
 			else:
-				raise OSError(
-					"Filetype {} is not supported!\n".format(filetype)
-				)
+				raise OSError(f"Filetype {filetype} is not supported!\n")
 
 	def check_filetype(self, filetype):
 		if self.filetype is None:
@@ -92,10 +100,70 @@ class GenotypeData:
 		elif self.filetype == filetype:
 			pass
 		else:
-			TypeError("GenotypeData read_XX() call does not match filetype!\n")
+			raise TypeError(
+				"GenotypeData read_XX() call does not match filetype!\n")
 
 	def read_tree(self, treefile):
-		self.guidetree = tt.tree(treefile, tree_format=0)
+		"""[Read Newick-style phylogenetic tree into toytree object. Format should be of type 0 (see toytree documentation)]
+
+		Args:
+			treefile ([str]): [Path to Newick-style tree file]
+
+		Returns:
+			[toytree object]: [Tree as toytree object]
+		"""
+		if not os.path.isfile(treefile):
+			raise FileNotFoundError(f"File {treefile} not found!")
+		
+		assert os.access(treefile, os.R_OK), f"File {treefile} isn't readable"
+
+		return tt.tree(treefile, tree_format=0)
+
+	def q_from_iqtree(self, iqfile):
+		"""[Read in q-matrix from *.iqtree file. The *.iqtree file is output when running IQ-TREE and contains the standard output of the IQ-TREE run]
+
+		Args:
+			iqfile ([str]): [Path to *.iqtree file]
+
+		Returns:
+			[pandas.DataFrame]: [Q-matrix as pandas DataFrame]
+
+		Raises:
+			FileNotFoundError: [If iqtree file could not be found]
+			IOError: [If iqtree file could not be read from]
+		"""
+		q = self.blank_q_matrix()
+		qlines=list()
+		try:
+			with open(iqfile, "r") as fin:
+				foundLine=False
+				matlinecount=0
+				for line in fin:
+					line = line.strip()
+					if not line:
+						continue
+					if "Rate matrix Q" in line:
+						foundLine=True
+						continue 
+					if foundLine:
+						matlinecount+=1
+						if matlinecount > 4:
+							break
+						stuff=line.split()
+						qlines.append(stuff)
+					else:
+						continue
+		except (IOError, FileNotFoundError):
+			sys.exit(f"Could not open iqtree file {iqfile}")
+
+		# Population q matrix with values from iqtree file
+		order=[l[0] for l in qlines]
+		for l in qlines:
+			for index in range(0,4):
+				q[l[0]][order[index]] = float(l[index+1])
+
+		qdf = pd.DataFrame(q)
+		return(qdf.T)
 
 	def read_structure(self, onerow=False, popids=True):
 		"""[Read a structure file with two rows per individual]
@@ -176,6 +244,7 @@ class GenotypeData:
 
 		print("\nConverting genotypes to 012 format...")
 		# Convert snp_data to 012 format
+		
 		self.convert_012(snp_data, vcf=True)
 
 		print("Done!")
@@ -244,6 +313,7 @@ class GenotypeData:
 
 		print("\nConverting genotypes to 012 encoding...")
 		# Convert snp_data to 012 format
+
 		self.convert_012(snp_data)
 		print("Done!")
 		
@@ -255,15 +325,65 @@ class GenotypeData:
 			raise ValueError(
 				"Incorrect number of individuals listed in header\n"
 			)
+
+	def read_phylip_tree_imputation(self, phy):
+		"""[Function to read a phylip file. Returns dict (key=sample) of lists (sequences divided by site; i.e., all sites for one sample across all columns)]
+
+		Args:
+			phy ([str]): [Path to PHYLIP file]
+
+		Raises:
+			IOError: [Raise exception if PHYLIP file could not be read from]
+			FileNotFoundError: [Raise exception if PHYLIP file not found]
+		"""
+		if os.path.exists(phy):
+			with open(phy, "r") as fh:
+				try:
+					num=0
+					ret = dict()
+					for line in fh:
+						line = line.strip()
+						if not line:
+							continue
+						num += 1
+						if num == 1:
+							continue
+						arr = line.split()
+						ret[arr[0]] = list(arr[1])
+					return ret
+
+				except IOError:
+					print(f"Could not read file {phy}")
+					sys.exit(1)
+				finally:
+					fh.close()
+		else:
+			raise FileNotFoundError(f"File {phy} not found!")
 	
-	def convert_012(self, snps, vcf=False):
-		skip=0
-		new_snps=list()
-		for i in range(0, len(self.samples)):
+	def convert_012(self, snps, vcf=False, impute_mode=False):
+		"""[Encode IUPAC nucleotides as 0 (reference), 1 (heterogygous), and 2 (alternate) alleles]
+
+		Args:
+			snps ([list(list(str))]): [2D list of genotypes of shape (n_samples, n_sites)]
+
+			vcf (bool, optional): [Whether or not VCF file input is provided]. Defaults to False.
+
+			impute_mode (bool, optional): [Whether or not convert_012() is called in impute mode. If True, then returns the 012-encoded genotypes and does not set the ``self.snps`` attribute. If False, it does the opposite]. Defaults to False.
+
+		Returns:
+			(list(list(int)), optional): [012-encoded genotypes as a 2D list of shape (n_samples, n_sites). Only returns value if ``impute_mode`` is True]
+		"""
+		skip = 0
+		new_snps = list()
+		
+		if impute_mode:
+			imp_snps = list()
+			
+		for i in range(0, len(snps)):
 			new_snps.append([])
 		for j in range(0, len(snps[0])):
 			loc=list()
-			for i in range(0, len(self.samples)):
+			for i in range(0, len(snps)):
 				if vcf:
 					loc.append(snps[i][j])
 				else:
@@ -277,34 +397,44 @@ class GenotypeData:
 				ref=str(ref)
 				alt=str(alt)
 				if vcf:
-					for i in range(0, len(self.samples)):
+					for i in range(0, len(snps)):
 						gen=snps[i][j].split("/")
-						if gen[0] in ["-", "-9", "N"] or \
-							gen[1] in ["-", "-9", "N"]:
+						if (gen[0] in ["-", "-9", "N"] or
+							gen[1] in ["-", "-9", "N"]):
 							new_snps[i].append(-9)
+						
 						elif gen[0] == gen[1] and gen[0] == ref:
 							new_snps[i].append(0)
+						
 						elif gen[0] == gen[1] and gen[0] == alt:
 							new_snps[i].append(2)
+						
 						else:
 							new_snps[i].append(1)
 				else:
-					for i in range(0, len(self.samples)):
+					for i in range(0, len(snps)):
 						if loc[i] in ["-", "-9", "N"]:
 							new_snps[i].append(-9)
+						
 						elif loc[i] == ref:
 							new_snps[i].append(0)
+						
 						elif loc[i] == alt:
 							new_snps[i].append(2)
+						
 						else:
 							new_snps[i].append(1)
 		if skip > 0:
-			print("\nWarning: Skipping {} non-biallelic sites\n".format(
-				str(skip)
-				)
-			)
+			print(f"\nWarning: Skipping {skip} non-biallelic sites\n")
+
 		for s in new_snps:
-			self.snps.append(s)
+			if impute_mode:
+				imp_snps.append(s)
+			else:
+				self.snps.append(s)
+
+		if impute_mode:
+			return imp_snps
 
 	def convert_onehot(self, snp_data):
 
@@ -324,8 +454,8 @@ class GenotypeData:
 				"-": [0.0, 0.0, 0.0, 0.0]
 			}
 
-		elif self.filetype == "structure1row" or \
-			self.filetype == "structure2row":
+		elif (self.filetype == "structure1row" or 
+			self.filetype == "structure2row"):
 			onehot_dict = {
 				"1/1": [1.0, 0.0, 0.0, 0.0], 
 				"2/2": [0.0, 1.0, 0.0, 0.0],

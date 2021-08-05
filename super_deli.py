@@ -11,8 +11,6 @@ from sklearn_genetic.space import Continuous, Categorical, Integer
 
 from utils.misc import get_processor_name
 
-print(get_processor_name().strip().startswith("Intel"))
-
 # Custom module imports
 from read_input.read_input import GenotypeData
 from impute.impute import *
@@ -92,27 +90,27 @@ def main():
 		#	start=100, stop=1000, num=10)]
 
 		# Number of features to consider at every split
-		max_features = ["sqrt", "log2"]
+		# max_features = ["sqrt", "log2"]
 
-		# Maximum number of levels in the tree
-		max_depth = [int(x) for x in np.linspace(10, 110, num=11)]
-		max_depth.append(None)
+		# # Maximum number of levels in the tree
+		# max_depth = [int(x) for x in np.linspace(10, 110, num=11)]
+		# max_depth.append(None)
 
-		# Minimmum number of samples required to split a node
-		min_samples_split = [int(x) for x in np.linspace(2, 10, num=5)]
+		# # Minimmum number of samples required to split a node
+		# min_samples_split = [int(x) for x in np.linspace(2, 10, num=5)]
 
-		# Minimum number of samples required at each leaf node
-		min_samples_leaf = [int(x) for x in np.linspace(1, 5, num=5)]
+		# # Minimum number of samples required at each leaf node
+		# min_samples_leaf = [int(x) for x in np.linspace(1, 5, num=5)]
 
-		# Proportion of dataset to use with bootstrapping
-		#max_samples = [x for x in np.linspace(0.5, 1.0, num=6)]
+		# # Proportion of dataset to use with bootstrapping
+		# #max_samples = [x for x in np.linspace(0.5, 1.0, num=6)]
 
-		# # Random Forest gridparams - RandomizedSearchCV
-		grid_params = {
-			"max_features": max_features,
-			"max_depth": max_depth,
-			"min_samples_split": min_samples_split,
-			"min_samples_leaf": min_samples_leaf}
+		# # # Random Forest gridparams - RandomizedSearchCV
+		# grid_params = {
+		# 	"max_features": max_features,
+		# 	"max_depth": max_depth,
+		# 	"min_samples_split": min_samples_split,
+		# 	"min_samples_leaf": min_samples_leaf}
 
 		# Random Forest gridparams - Genetic Algorithms
 		# grid_params = {
@@ -168,23 +166,23 @@ def main():
 		# )
 
 		# RandomizedSearchCV Test
-		rf_imp = ImputeRandomForest(
-				data, 
-				prefix=args.prefix, 
-				n_estimators=50,
-				n_nearest_features=3, 
-				gridparams=grid_params, 
-				cv=3, 
-				grid_iter=40, 
-				n_jobs=4, 
-				max_iter=2, 
-				column_subset=3,
-				ga=False,
-				disable_progressbar=True,
-				extratrees=False, 
-				progress_update_percent=20,
-				chunk_size=0.2 
-		)
+		# rf_imp = ImputeRandomForest(
+		# 		data, 
+		# 		prefix=args.prefix, 
+		# 		n_estimators=50,
+		# 		n_nearest_features=3, 
+		# 		gridparams=grid_params, 
+		# 		cv=3, 
+		# 		grid_iter=40, 
+		# 		n_jobs=4, 
+		# 		max_iter=2, 
+		# 		column_subset=3,
+		# 		ga=False,
+		# 		disable_progressbar=True,
+		# 		extratrees=False, 
+		# 		progress_update_percent=20,
+		# 		chunk_size=0.2 
+		# )
 
 		# rf_imp = ImputeRandomForest(
 		# 		data, 
@@ -202,9 +200,11 @@ def main():
 		# 		max_depth=6
 		# )
 
-		# br_imp = ImputeBayesianRidge(data, prefix=args.prefix, n_iter=100, gridparams=grid_params, grid_iter=3, cv=3, n_jobs=4, max_iter=2, n_nearest_features=3, column_subset=3, ga=False, disable_progressbar=True, progress_update_percent=20, chunk_size=1.0)
+		# br_imp = ImputeBayesianRidge(data, prefix=args.prefix, n_iter=100, gridparams=grid_params, grid_iter=3, cv=3, n_jobs=4, max_iter=5, n_nearest_features=3, column_subset=4, ga=False, disable_progressbar=True, progress_update_percent=20, chunk_size=1.0)
 
-		# br_imp = ImputeBayesianRidge(data, prefix=args.prefix, alpha_1=0.0002689638465560243, alpha_2=0.0001473822173361299, lambda_1=0.0003281735206234651, lambda_2=0.00020767920087590963, n_iter=100, n_nearest_features=3, progress_update_percent=20, disable_progressbar=True, max_iter=2)
+		br_imp = ImputeBayesianRidge(data, prefix=args.prefix, alpha_1=0.0002689638465560243, alpha_2=0.0001473822173361299, lambda_1=0.0003281735206234651, lambda_2=0.00020767920087590963, n_iter=100, n_nearest_features=3, progress_update_percent=20, disable_progressbar=True, max_iter=2)
+
+		#ImputePhylo(args.phylip, args.treefile, args.iqtree, save_plots=True)
 
 	# colors = {
 	# 	"GU": "#FF00FF",
@@ -284,7 +284,7 @@ def get_arguments():
 		[argparse object]: [contains command-line arguments; accessed as method]
 	"""
 
-	parser = argparse.ArgumentParser(description="Convert VCF file to BGC format (with genotype uncertainties). Currently only handles three populations maximum (P1, P2, and Admixed).", add_help=False)
+	parser = argparse.ArgumentParser(description="Machine learning missing data imputation and species delimitation", add_help=False)
 
 	required_args = parser.add_argument_group("Required arguments")
 	filetype_args = parser.add_argument_group("File type arguments (choose only one)")
@@ -306,6 +306,11 @@ def get_arguments():
 								required=False,
 								default=None,
 								help="Newick-formatted treefile")
+
+	filetype_args.add_argument("-i", "--iqtree",
+							type=str,
+							required=False,
+							help=".iqtree output file containing Rate Matrix Q")
 
 	# Structure Arguments
 	structure_args.add_argument("--onerow_perind",

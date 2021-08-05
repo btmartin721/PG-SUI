@@ -5,11 +5,16 @@ import os
 import sys
 from collections import Counter
 from operator import itemgetter
-from statistics import mean
+from pathlib import Path
+from statistics import mean, median
 
 # Third party imports
 import numpy as np
 import pandas as pd
+import scipy.linalg
+import toyplot.pdf
+import toyplot as tp
+import toytree as tt
 #from memory_profiler import memory_usage
 
 # Scikit-learn imports
@@ -17,7 +22,10 @@ from sklearn.ensemble import ExtraTreesClassifier
 from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.experimental import enable_iterative_imputer
+from sklearn.impute import SimpleImputer
 from sklearn.linear_model import BayesianRidge
+from sklearn.metrics import accuracy_score
+from sklearn.metrics import mean_squared_error
 from sklearn.neighbors import KNeighborsClassifier
 
 # Custom module imports
@@ -78,7 +86,8 @@ class Impute:
 			self.progress_update_percent,
 			self.scoring_metric,
 			self.early_stop_gen,
-			self.chunk_size) = self._gather_impute_settings(kwargs)
+			self.chunk_size,
+			self.accuracy_only) = self._gather_impute_settings(kwargs)
 
 		self.logfilepath = f"{self.prefix}_imputer_progress_log.txt"
 
@@ -277,7 +286,7 @@ class Impute:
 		
 		return df_sub
 
-	def _write_imputed_params_score(self, best_score, best_params):
+	def _write_imputed_params_score(self, df_scores, best_params):
 		"""[Save best_score and best_params to files]
 
 		Args:
@@ -288,8 +297,8 @@ class Impute:
 		best_score_outfile = f"{self.prefix}_imputed_best_score.csv"
 		best_params_outfile = f"{self.prefix}_imputed_best_params.csv"
 
-		with open(best_score_outfile, "w") as fout:
-			fout.write(f"{best_score:.2f}")
+		df_scores.to_csv(
+			best_score_outfile, header=True, index=False, float_format="%.2f")
 
 		with open(best_params_outfile, "w") as fout:
 			fout.write("parameter,best_value\n")
@@ -318,13 +327,22 @@ class Impute:
 			progress_update_percent=self.progress_update_percent,
 			chunk_size=self.chunk_size)
 
+		#if self.accuracy_only is not None:
+		#df_og, df_defiled, df_imp, n_iter, df_filled = self._impute_eval(
+		#		df, clf)
+
+		#score_list, avg_score = self._calculate_clf_score(
+				#df_filled, df_imp)
+		#else:
+		#avg_score = None
+
 		df_chunks = self.df2chunks(df, imputer, self.chunk_size)
 		imputed_df = self._impute_df(df_chunks, imputer, len(df.columns))
 
 		self._validate_imputed(imputed_df)
 
 		print(f"\nDone with {self.clf.__name__} imputation!\n")
-		return imputed_df, None, None
+		return imputed_df, avg_score, None
 		
 	def _impute_gridsearch(self, df):
 		"""[Do IterativeImputer with RandomizedSearchCV]
@@ -373,8 +391,21 @@ class Impute:
 		# Average or mode of best parameters
 		# and write them to a file
 		best_params = self._get_best_params(params_list)
-		avg_score = mean(x for x in score_list if x != -9)
-		self._write_imputed_params_score(avg_score, best_params)
+
+		avg_score = mean(abs(x) for x in score_list if x != -9)
+		median_score = median(abs(x) for x in score_list if x != -9)
+		max_score = max(abs(x) for x in score_list if x != -9)
+		min_score = min(abs(x) for x in score_list if x != -9)
+
+		df_scores = pd.DataFrame({
+			"Mean": avg_score,
+			"Median": median_score,
+			"Min": min_score,
+			"Max": max_score}, index=[0])
+
+		self._write_imputed_params_score(df_scores, best_params)
+
+		sys.exit()
 
 		# Change values to the ones in best_params
 		self.clf_kwargs.update(best_params)
@@ -583,6 +614,7 @@ class Impute:
 		scoring_metric = kwargs.pop("scoring_metric")
 		early_stop_gen = kwargs.pop("early_stop_gen")
 		chunk_size = kwargs.pop("chunk_size")
+		accuracy_only = kwargs.pop("accuracy_only")
 
 		progress_update_percent = kwargs.pop("progress_update_percent")
 
@@ -630,7 +662,10 @@ class Impute:
 		elif self.clf_type == "classifier":
 			ga_kwargs["criteria"] = "max"
 
-		return gridparams, imp_kwargs, clf_kwargs, ga_kwargs, grid_iter, cv, n_jobs, prefix, column_subset, ga, disable_progressbar, progress_update_percent, scoring_metric, early_stop_gen, chunk_size
+		return (
+			gridparams, imp_kwargs, clf_kwargs, ga_kwargs, grid_iter, 
+			cv, n_jobs, prefix, column_subset, ga, disable_progressbar,
+			progress_update_percent, scoring_metric, early_stop_gen, chunk_size, accuracy_only)
 
 	def _format_features(self, df, missing_val=-9):
 		"""[Format a 2D list for input into iterative imputer]
@@ -648,7 +683,7 @@ class Impute:
 		return X
 
 	def _defile_dataset(self, df, col_selection_rate=0.40):
-		"""[Function to select 40% of the columns in a pandas DataFrame and change anywhere from 15% to 50% of the values in each of those columns to np.nan (missing data). Since we know the true values of the ones changed to np.nan, we can assess the accuracy of the classifier and do a grid search]
+		"""[Function to select ``col_selection_rate * columns`` columns in a pandas DataFrame and change anywhere from 15% to 50% of the values in each of those columns to np.nan (missing data). Since we know the true values of the ones changed to np.nan, we can assess the accuracy of the classifier and do a grid search]
 
 		Args:
 			df ([pandas.DataFrame]): [012-encoded genotypes to extract columns from.]
@@ -660,19 +695,27 @@ class Impute:
 			[numpy.ndarray]: [Columns that were extracted via random sampling]
 		"""
 		# Code adapted from: 
-		# https://medium.com/analytics-vidhya/using-scikit-learns-iterative-imputer-694c3cca34de	
+		# https://medium.com/analytics-vidhya/using-scikit-learns-iterative-imputer-694c3cca34de
+
 		cols = np.random.choice(df.columns, 
 								int(len(df.columns) * col_selection_rate))
 
 		df_cp = df.copy()
-		for col in progressbar(cols, desc="CV Random Sampling: "):
+		
+		# Fill in unknown values with imputations
+		# simple_imputer = SimpleImputer(
+		# 	strategy=self.imp_kwargs["initial_strategy"])
+
+		#df_filled = pd.DataFrame(simple_imputer.fit_transform(df_cp))
+
+		for col in cols:
 			data_drop_rate = np.random.choice(np.arange(0.15, 0.5, 0.02), 1)[0]
 
 			drop_ind = np.random.choice(np.arange(len(df_cp[col])), 
 				size=int(len(df_cp[col])*data_drop_rate), replace=False)
 
-			current_col = df_cp[col].values
 			df_cp[col].iloc[drop_ind] = np.nan
+
 		return df_cp, cols
 
 	def _impute_eval(self, df_orig, clf):
@@ -692,13 +735,13 @@ class Impute:
 
 			[int]: [Number of iterations required to converge]
 
-			[sklearn IterativeImputer object]: [Fit IterativeImputer model]
+			[pandas.DataFrame]: [DataFrame with missing values that are not of interest filled in]
 		"""
 		# Subset the DataFrame randomly and replace known values with np.nan
-		df_miss, cols = self._defile_dataset(df_orig)
+		df_mod, cols = self._defile_dataset(df_orig)
 
 		# Slice the original DataFrame to the same columns as df_miss
-		df_orig_slice = df_orig[cols]
+		#df_orig_slice = df_orig[cols]
 
 		imputer = self._define_iterative_imputer(
 			clf,
@@ -709,22 +752,96 @@ class Impute:
 			progress_update_percent=self.progress_update_percent,
 			chunk_size=self.chunk_size)
 		
-		df_stg = df_miss.copy()
+		#df_stg = df_miss.copy()
+		df2 = df_mod.copy()
 
-		print("\nDoing initial imputation...")
-		imp_arr = imputer.fit_transform(df_stg)
+		df_mod_trans = imputer.fit_transform(df2)
+		np_mod_trans = df_mod_trans[:, 
+		[df_orig.columns.get_loc(i) for i in cols]]
+
+		df_orig_np = df_orig[cols].values
+
+		score_list = list()
+		for i in range(len(cols)):
+			if self.clf_type == "classifier":
+				score_list.append(accuracy_score(df_orig_np[:, i], np_mod_trans[:, i]))
+			else:
+				score_list.append(mean_squared_error(df_orig_np[:, i], np_mod_trans[:, i]))
+		
+		print(score_list)
+		sys.exit()
 		print("Done!\n")
 
-		return (
-			df_orig_slice, 
-			df_miss[cols], 
-			pd.DataFrame(
-				imp_arr[:,[df_orig.columns.get_loc(i) for i in cols]], 
-				columns=cols), 
-			imputer.n_iter_, 
-			imputer)
+		# return (
+		# 	df_orig_slice, 
+		# 	df_miss[cols], 
+		# 	pd.DataFrame(
+		# 		imp_arr[:,[df_orig.columns.get_loc(i) for i in cols]], 
+		# 		columns=cols), 
+		# 	imputer.n_iter_)
 
-	def _define_iterative_imputer(self, clf, logfilepath, chunk_size=1.0, clf_kwargs=None, ga_kwargs=None, prefix="out", n_jobs=None, n_iter=None, cv=None, clf_type=None, ga=False, search_space=None, disable_progressbar=False, progress_update_percent=None, scoring_metric=None, early_stop_gen=None):
+	def _calculate_clf_score(self, df_filled, df_imp):
+		"""[Calculate the performance score of the classifier or regressor. Also writes performance statistics to a file]
+
+		Args:
+			df_filled ([pandas.DataFrame]): [DataFrame slice with missing values filled by SimpleImputer]
+			df_imp ([type]): [DataFrame slice with imputed values]
+
+		Returns:
+			[pandas.DataFrame]: [DataFrame with mean, median, min, and max scores among all features]
+
+			[float]: [Average score among all features]
+		"""
+		score_list = list()
+
+		# if self.clf_type == "classifier":
+		# 	df_filled = df_filled.astype("Int8")
+		# 	df_imp = df_imp.astype("Int8")
+		# 	print(df_filled.dtypes)
+
+		# else:
+		# 	df_filled = df_filled.round(0).astype("Int32")
+		# 	df_imp[df_imp < 0] = 0
+		# 	df_imp = df_imp.round(0)
+		# 	df_imp = df_imp.astype("Int32")
+
+		# print(f"df_filled: {df_filled.shape}")
+		# print(f"df_imp: {df_imp.shape}")
+		# for i in range(len(df_filled.columns)):
+		# 	if self.clf_type == "classifier":
+		# 		score_list.append(accuracy_score(
+		# 			df_filled[df_filled.columns[i]], df_imp[df_imp.columns[i]]))
+			
+		# 	else:
+		# 		# Regressor
+		# 		score_list.append(mean_squared_error(
+		# 			df_filled[df_filled.columns[i]], df_imp[df_imp.columns[i]]))
+
+		avg_score = mean(score_list)
+		median_score = median(score_list)
+		min_score = min(score_list)
+		max_score = max(score_list)
+
+		best_score_outfile = f"{self.prefix}_imputed_best_score.csv"
+
+		df_scores = pd.DataFrame({
+			"Mean": avg_score,
+			"Median": median_score,
+			"Min": min_score,
+			"Max": max_score})
+					
+		df_scores.to_csv(
+			best_score_outfile, 
+			header=True, index=False, float_format="%.2f")
+
+		return df_scores, abs(avg_score)
+
+
+	def _define_iterative_imputer(
+		self, clf, logfilepath, chunk_size=1.0, clf_kwargs=None, 
+		ga_kwargs=None, prefix="out", n_jobs=None, n_iter=None, cv=None, 
+		clf_type=None, ga=False, search_space=None, disable_progressbar=False, 
+		progress_update_percent=None, scoring_metric=None, early_stop_gen=None):
 		"""[Define an IterativeImputer instance]
 
 		Args:
@@ -765,7 +882,11 @@ class Impute:
 		"""
 
 		if search_space is None:
-			imp = IterativeImputerAllData(logfilepath, clf_kwargs, prefix, estimator=clf, disable_progressbar=disable_progressbar, progress_update_percent=progress_update_percent, chunk_size=chunk_size, **self.imp_kwargs)
+			imp = IterativeImputerAllData(
+				logfilepath, clf_kwargs, prefix, estimator=clf, 
+				disable_progressbar=disable_progressbar, 
+				progress_update_percent=progress_update_percent, 
+				chunk_size=chunk_size, **self.imp_kwargs)
 		
 		else:
 			# Create iterative imputer
@@ -802,6 +923,8 @@ class ImputeKNN:
 		grid_iter (int, optional): [Number of iterations for randomized grid search]. Defaults to 50.
 
 		cv (int, optional): [Number of folds for cross-validation during randomized grid search]. Defaults to 5.
+
+		accuracy_only (float, optional): [Calculates the accuracy of the imputation using a subset of columns equal to ``n_features * accuracy_only``. Does not do a grid search, and only works if ``gridparams`` is None. Calculating accuracy can be turned off altogether by setting ``accuracy_only`` to None]. Defaults to 0.4.
 
 		ga (bool, optional): [Whether to use a genetic algorithm for the grid search. If False, a RandomizedSearchCV is done instead]. Defaults to False.
 
@@ -849,7 +972,7 @@ class ImputeKNN:
 
 		n_nearest_features (int, optional): [Number of other features to use to estimate the missing values of eacah feature column. If None, then all features will be used, but this can consume an  intractable amount of computing resources. Nearness between features is measured using the absolute correlation coefficient between each feature pair (after initial imputation). To ensure coverage of features throughout the imputation process, the neighbor features are not necessarily nearest, but are drawn with probability proportional to correlation for each imputed target feature. Can provide significant speed-up when the number of features is huge]. Defaults to 10.
 
-		initial_strategy (str, optional): [Which strategy to use to initialize the missing values. Same as the strategy parameter in sklearn.impute.SimpleImputer Valid values: {“mean”, “median”, “most_frequent”, or “constant”}]. Defaults to "most_frequent".
+		initial_strategy (str, optional): [Which strategy to use to initialize the missing values. Same as the strategy parameter in sklearn.impute.SimpleImputer Valid values: {“mean”, “median”, or “most_frequent”}. Defaults to "most_frequent".
 
 		imputation_order (str, optional): [The order in which the features will be imputed. Possible values: 'ascending' (from features with fewest missing values to most), 'descending' (from features with most missing values to fewest), 'roman' (left to right), 'arabic' (right to left), 'random' (a random order for each round). ]. Defaults to "ascending".
 
@@ -867,6 +990,7 @@ class ImputeKNN:
 		gridparams=None,
 		grid_iter=50,
 		cv=5,
+		accuracy_only=0.4,
 		ga=False,
 		population_size=10,
 		tournament_size=3,
@@ -923,6 +1047,8 @@ class ImputeRandomForest:
 		grid_iter (int, optional): [Number of iterations for randomized grid search]. Defaults to 50.
 
 		cv (int, optional): [Number of folds for cross-validation during randomized grid search]. Defaults to 5.
+
+		accuracy_only (float, optional): [Calculates the accuracy of the imputation using a subset of columns equal to ``n_features * accuracy_only``. Does not do a grid search, and only works if ``gridparams`` is None. Calculating accuracy can be turned off altogether by setting ``accuracy_only`` to None]. Defaults to 0.4.
 
 		ga (bool, optional): [Whether to use a genetic algorithm for the grid search. If False, a RandomizedSearchCV is done instead]. Defaults to False.
 
@@ -986,7 +1112,7 @@ class ImputeRandomForest:
 
 		n_nearest_features (int, optional): [Number of other features to use to estimate the missing values of eacah feature column. If None, then all features will be used, but this can consume an  intractable amount of computing resources. Nearness between features is measured using the absolute correlation coefficient between each feature pair (after initial imputation). To ensure coverage of features throughout the imputation process, the neighbor features are not necessarily nearest, but are drawn with probability proportional to correlation for each imputed target feature. Can provide significant speed-up when the number of features is huge]. Defaults to 10.
 
-		initial_strategy (str, optional): [Which strategy to use to initialize the missing values. Same as the strategy parameter in sklearn.impute.SimpleImputer Valid values: {“mean”, “median”, “most_frequent”, or “constant”}]. Defaults to "most_frequent".
+		initial_strategy (str, optional): [Which strategy to use to initialize the missing values. Same as the strategy parameter in sklearn.impute.SimpleImputer Valid values: {“mean”, “median”, or “most_frequent”}]. Defaults to "most_frequent".
 
 		imputation_order (str, optional): [The order in which the features will be imputed. Possible values: 'ascending' (from features with fewest missing values to most), 'descending' (from features with most missing values to fewest), 'roman' (left to right), 'arabic' (right to left), 'random' (a random order for each round). ]. Defaults to "ascending".
 
@@ -1004,6 +1130,7 @@ class ImputeRandomForest:
 		gridparams=None,
 		grid_iter=50,
 		cv=5,
+		accuracy_only=0.4,
 		ga=False,
 		population_size=10,
 		tournament_size=3,
@@ -1083,6 +1210,8 @@ class ImputeGradientBoosting:
 
 		cv (int, optional): [Number of folds for cross-validation during randomized grid search]. Defaults to 5.
 
+		accuracy_only (float, optional): [Calculates the accuracy of the imputation using a subset of columns equal to ``n_features * accuracy_only``. Does not do a grid search, and only works if ``gridparams`` is None. Calculating accuracy can be turned off altogether by setting ``accuracy_only`` to None]. Defaults to 0.4.
+
 		ga (bool, optional): [Whether to use a genetic algorithm for the grid search. If False, a RandomizedSearchCV is done instead]. Defaults to False.
 
 		population_size (int, optional): [For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. See GASearchCV documentation]. Defaults to 10.
@@ -1143,7 +1272,7 @@ class ImputeGradientBoosting:
 
 		n_nearest_features (int, optional): [Number of other features to use to estimate the missing values of eacah feature column. If None, then all features will be used, but this can consume an  intractable amount of computing resources. Nearness between features is measured using the absolute correlation coefficient between each feature pair (after initial imputation). To ensure coverage of features throughout the imputation process, the neighbor features are not necessarily nearest, but are drawn with probability proportional to correlation for each imputed target feature. Can provide significant speed-up when the number of features is huge]. Defaults to 10.
 
-		initial_strategy (str, optional): [Which strategy to use to initialize the missing values. Same as the strategy parameter in sklearn.impute.SimpleImputer Valid values: {“mean”, “median”, “most_frequent”, or “constant”}]. Defaults to "most_frequent".
+		initial_strategy (str, optional): [Which strategy to use to initialize the missing values. Same as the strategy parameter in sklearn.impute.SimpleImputer Valid values: {“mean”, “median”, or “most_frequent”}]. Defaults to "populations".
 
 		imputation_order (str, optional): [The order in which the features will be imputed. Possible values: 'ascending' (from features with fewest missing values to most), 'descending' (from features with most missing values to fewest), 'roman' (left to right), 'arabic' (right to left), 'random' (a random order for each round). ]. Defaults to "ascending".
 
@@ -1161,6 +1290,7 @@ class ImputeGradientBoosting:
 		gridparams=None,
 		grid_iter=50,
 		cv=5,
+		accuracy_only=0.4,
 		ga=False,
 		population_size=10,
 		tournament_size=3,
@@ -1225,6 +1355,8 @@ class ImputeBayesianRidge:
 
 		cv (int, optional): [Number of folds for cross-validation during randomized grid search]. Defaults to 5.
 
+		accuracy_only (float, optional): [Calculates the accuracy of the imputation using a subset of columns equal to ``n_features * accuracy_only``. Does not do a grid search, and only works if ``gridparams`` is None. Calculating accuracy can be turned off altogether by setting ``accuracy_only`` to None]. Defaults to 0.4.
+
 		ga (bool, optional): [Whether to use a genetic algorithm for the grid search. If False, a RandomizedSearchCV is done instead]. Defaults to False.
 
 		population_size (int, optional): [For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. See GASearchCV documentation]. Defaults to 10.
@@ -1275,7 +1407,7 @@ class ImputeBayesianRidge:
 
 		n_nearest_features (int, optional): [Number of other features to use to estimate the missing values of eacah feature column. If None, then all features will be used, but this can consume an  intractable amount of computing resources. Nearness between features is measured using the absolute correlation coefficient between each feature pair (after initial imputation). To ensure coverage of features throughout the imputation process, the neighbor features are not necessarily nearest, but are drawn with probability proportional to correlation for each imputed target feature. Can provide significant speed-up when the number of features is huge]. Defaults to 10.
 
-		initial_strategy (str, optional): [Which strategy to use to initialize the missing values. Same as the strategy parameter in sklearn.impute.SimpleImputer Valid values: {“mean”, “median”, “most_frequent”, or “constant”}]. Defaults to "most_frequent".
+		initial_strategy (str, optional): [Which strategy to use to initialize the missing values. Same as the strategy parameter in sklearn.impute.SimpleImputer Valid values: {“mean”, “median”, or “most_frequent”}]. Defaults to "most_frequent".
 
 		imputation_order (str, optional): [The order in which the features will be imputed. Possible values: 'ascending' (from features with fewest missing values to most), 'descending' (from features with most missing values to fewest), 'roman' (left to right), 'arabic' (right to left), 'random' (a random order for each round). ]. Defaults to "ascending".
 
@@ -1293,6 +1425,7 @@ class ImputeBayesianRidge:
 		gridparams=None,
 		grid_iter=50,
 		cv=5,
+		accuracy_only=0.4,
 		ga=False,
 		population_size=10,
 		tournament_size=3,
@@ -1393,45 +1526,390 @@ class ImputeBayesianRidge:
 
 # 		imputer.write_imputed(self.imputed)
 
+class ImputePhylo(GenotypeData):
+	"""[Impute missing data using a phylogenetic tree to inform the imputation]
+
+		Args:
+			phylipfile ([str]): [Path to PHYLIP-formatted file to impute]
+
+			treefile ([str]): [Path to Newick-formatted phylogenetic tree file]
+
+			qmatrix ([str]): [Path to *.iqtree file containing Rate Matrix Q table]
+
+			prefix (str, optional): [Prefix to use with output files]
+
+			save_plots (str, optional): [Whether to save PDF files with genotype imputations for each site. It makes one PDF file per locus, so if you have a lot of loci it will make a lot of PDF files]. Defaults to False.
+	"""
+	def __init__(self, phylipfile, treefile, qmatrix, prefix="phylo", save_plots=False):
+		self.phylipfile = phylipfile
+		self.treefile = treefile
+		self.qmatrix = qmatrix
+		self.prefix = prefix
+		self.save_plots = save_plots
+
+		super().__init__()
+
+		data = self.read_phylip_tree_imputation(self.phylipfile)
+		tree = self.read_tree(self.treefile)
+		q = self.q_from_iqtree(self.qmatrix)
+
+		imputed = self.impute_phylo(tree, data, q)
+
+		outfile = f"{prefix}_imputed_012.csv"
+		imputed.to_csv(outfile, header=False, index=False)
+
+	def q_from_file(self, fname, label=True):
+		q = self.blank_q_matrix()
+		
+		if not label:
+			print(
+				"Warning: Assuming the following nucleotide order: A, C, G, T")
+		
+		with open(fname, "r") as fin:
+			header=True
+			qlines=list()
+			for line in fin:
+				line=line.strip()
+				if not line:
+					continue
+				if header:
+					if label:
+						order = line.split()
+						header=False
+					else:
+						order = ['A', 'C', 'G', 'T']
+					continue
+				else:
+					qlines.append(line.split())
+		fin.close()
+		
+		for l in qlines:
+			for index in range(0,4):
+				q[l[0]][order[index]] = float(l[index+1])
+		qdf = pd.DataFrame(q)
+		return(qdf.T)
+		
+	def print_q(self, q):
+		print("Rate matrix Q:")
+		print("\tA\tC\tG\tT\t")
+		for nuc1 in ['A', 'C', 'G', 'T']:
+			print(nuc1, end="\t")
+			for nuc2 in ['A', 'C', 'G', 'T']:
+				print(q[nuc1][nuc2], end="\t")
+			print("")
+
+	def blank_q_matrix(self, default=0.0):
+		q=dict()
+		for nuc1 in ['A', 'C', 'G', 'T']:
+			q[nuc1] = dict()
+			for nuc2 in ['A', 'C', 'G', 'T']:
+				q[nuc1][nuc2] = default
+		return(q)
+
+	def impute_phylo(
+		self, tree, genotypes, Q, site_rates=None, exclude_N=False):
+		"""[Imputes genotype values by using a provided guide 
+			tree to inform the imputation, assuming maximum parsimony]
+		
+		Sketch:
+			For each SNP:
+				1) if site_rates, get site-transformated Q matrix
+				
+				2) Postorder traversal of tree to compute ancestral 
+				state likelihoods for internal nodes (tips -> root)
+					If exclude_N==True, then ignore N tips for this step
+					
+				3) Preorder traversal of tree to populate missing genotypes
+				with the maximum likelihood state (root -> tips)
+
+		Args:
+			tree ([toytree object]): [Toytree object]
+
+			genotypes ([dict(list)]): [Dictionary with key=sampleids, value=sequences]
+
+			Q ([pandas.DataFrame]): [Rate Matrix Q from .iqtree file]
+		"""	
+		# For each SNP: 
+		nsites = list(set([len(v) for v in genotypes.values()]))
+		assert len(nsites) == 1, "Some sites have different lengths!"
+
+		outdir = f"{self.prefix}_imputation_plots"
+
+		if self.save_plots:
+			Path(outdir).mkdir(parents=True, exist_ok=True)
+
+		for snp_index in progressbar(
+			range(nsites[0]), desc="Feature Progress: ", leave=True):
+			node_lik = dict()
+			
+			#LATER: Need to get site rates
+			rate = 1.0
+			
+			site_Q = Q.copy(deep=True)*rate
+			
+			#calculate state likelihoods for internal nodes
+			for node in tree.treenode.traverse("postorder"):
+				if node.is_leaf():
+					continue
+
+				if node.idx not in node_lik:
+					node_lik[node.idx] = None
+
+				for child in node.get_leaves():
+					#get branch length to child
+					#bl = child.edge.length
+					#get transition probs 
+					pt = self.transition_probs(site_Q, child.dist)
+					if child.is_leaf():
+						if child.name in genotypes:
+							#get genotype 
+							sum = None
+
+							for allele in self.get_iupac_full(
+								genotypes[child.name][snp_index]):
+								if sum is None:
+									sum = list(pt[allele])
+								else:
+									sum = [sum[i] + val for i, val in enumerate(
+										list(pt[allele]))]
+
+							if node_lik[node.idx] is None:
+								node_lik[node.idx] = sum
+							
+							else:
+								node_lik[node.idx] = [
+									sum[i] * val for i, val in enumerate(
+										node_lik[node.idx])]
+						else:
+							# raise error 
+							sys.exit(
+								f"Error: Taxon {child.name} not found in "
+								f"genotypes")
+					
+					else:
+						l = self.get_internal_lik(pt, node_lik[child.idx])
+						if node_lik[node.idx] is None:
+							node_lik[node.idx] = l 
+						
+						else:
+							node_lik[node.idx] = [
+								l[i] * val for i, val in enumerate(
+									node_lik[node.idx])]
+			
+			# infer most likely states for tips with missing data 
+			# for each child node:
+			bads = list()
+			for samp in genotypes.keys():
+				if genotypes[samp][snp_index].upper() == "N":
+					bads.append(samp)
+					# go backwards into tree until a node informed by 
+					# actual data 
+					# is found 
+					# node = tree.search_nodes(name=samp)[0]
+					node = tree.idx_dict[
+						tree.get_mrca_idx_from_tip_labels(names=samp)]
+					dist = node.dist
+					node = node.up
+					imputed = None
+					
+					while node and imputed is None:
+						if self.allMissing(
+							tree, node.idx, snp_index, genotypes):
+							dist += node.dist
+							node = node.up
+						
+						else:
+							pt = self.transition_probs(site_Q, dist)
+							lik = self.get_internal_lik(pt, node_lik[node.idx])
+							maxpos = lik.index(max(lik))
+							if maxpos == 0:
+								imputed = "A"
+							
+							elif maxpos == 1:
+								imputed = "C"
+							
+							elif maxpos == 2:
+								imputed = "G"
+							
+							else:
+								imputed = "T"
+
+					genotypes[samp][snp_index] = imputed
+			
+			if self.save_plots:
+				self.draw_imputed_position(
+					tree, bads, genotypes, snp_index, 
+						f"{outdir}/{self.prefix}_pos{snp_index}.pdf")
+
+		df = pd.DataFrame.from_dict(genotypes, orient="index")
+
+		# Make sure no missing data remains in the dataset
+		assert not df.isin([-9]).any().any(), (
+			"Imputation failed...Missing values found in the imputed dataset")
+
+		gt = df.to_numpy().tolist()
+		return pd.DataFrame.from_records(self.convert_012(gt, impute_mode=True))
+
+	def get_nuc_colors(self, nucs):
+		ret = list()
+		for nuc in nucs:
+			nuc = nuc.upper()
+			if nuc == "A":
+				ret.append("#0000FF") #blue
+			elif nuc == "C":
+				ret.append("#FF0000") #red
+			elif nuc == "G":
+				ret.append("#00FF00") #green
+			elif nuc == "T":
+				ret.append("#FFFF00") #yellow
+			elif nuc == "R":
+				ret.append("#0dbaa9") #blue-green
+			elif nuc == "Y":
+				ret.append("#FFA500") #orange
+			elif nuc == "K":
+				ret.append("#9acd32") #yellow-green
+			elif nuc == "M":
+				ret.append("#800080") #purple 
+			elif nuc == "S":
+				ret.append("#964B00")
+			elif nuc == "W":
+				ret.append("#C0C0C0")
+			else:
+				ret.append("#000000")
+		return(ret)
+
+	def label_bads(self, tips, labels, bads):
+		for i, t in enumerate(tips):
+			if t in bads:
+				labels[i] = "*"+str(labels[i])+"*"
+		return(labels)
+
+	def draw_imputed_position(self, tree, bads, genotypes, pos, out="tree.pdf"):
+		#print(tree.get_tip_labels())
+		sizes = [8 if i in bads else 0 for i in tree.get_tip_labels()]
+		colors = [genotypes[i][pos] for i in tree.get_tip_labels()]
+		labels = colors
+		
+		labels = self.label_bads(tree.get_tip_labels(), labels, bads)
+		
+		colors = self.get_nuc_colors(colors)
+		
+		mystyle = {
+			"edge_type": 'p',
+			"edge_style": {
+				"stroke": tt.colors[0],
+				"stroke-width": 1,
+			},
+			"tip_labels_align": True,
+			"tip_labels_style": {
+				"font-size": "5px"
+			},
+			"node_labels": False
+		}
+		
+		canvas, axes, mark = tree.draw(
+			tip_labels_colors=colors,
+			#node_sizes = sizes,
+			tip_labels = labels,
+			width=400, height=600, 
+			**mystyle
+		)
+		
+		toyplot.pdf.render(canvas, out)
+
+	def allMissing(self, tree, node_index, snp_index, genotypes):
+		for des in tree.get_tip_labels(idx=node_index):
+			if genotypes[des][snp_index].upper() not in ["N", "-"]:
+				return(False)
+		return(True)
+
+	def get_internal_lik(self, pt, lik_arr):
+		ret = list()
+		for i, val in enumerate(lik_arr):
+			
+			col = list(pt.iloc[:,i])
+			sum = 0.0
+			for v in col:
+				sum += v*val
+			ret.append(sum)
+		return(ret)
+
+	def transition_probs(self, Q, t):
+		ret = Q.copy(deep=True)
+		m = Q.to_numpy()
+		pt = scipy.linalg.expm(m*t)
+		ret[:] = pt
+		return(ret)
+
+	def get_iupac_full(self, char):
+		char = char.upper()
+		iupac = {
+			"A"	: ["A"],
+			"G"	: ["G"],
+			"C"	: ["C"],
+			"T"	: ["T"],
+			"N"	: ["A", "C", "T", "G"],
+			"-"	: ["A", "C", "T", "G"],
+			"R"	: ["A","G"],
+			"Y"	: ["C","T"],
+			"S"	: ["G","C"],
+			"W"	: ["A","T"],
+			"K"	: ["G","T"],
+			"M"	: ["A","C"],
+			"B"	: ["C","G", "T"],
+			"D"	: ["A","G", "T"],
+			"H"	: ["A","C", "T"],
+			"V"	: ["A","C", "G"]
+		}
+		ret = iupac[char]
+		return(ret)
+
 class ImputeAlleleFreq(GenotypeData):
-	"""[Class to impute missing data by global or population-wisse allele frequency]
+	"""
+	[Impute missing data by global allele frequency. Population IDs can be sepcified with the pops argument. if pops is None, then imputation is by global allele frequency. If pops is not None, then imputation is by population-wise allele frequency. A list of population IDs in the appropriate format can be obtained from the GenotypeData object as GenotypeData.populations]
 
 	Args:
-		GenotypeData ([GenotypeData]): [Inherits from GenotypeData class that reads input data from a sequence file]
+		genotype_data ([GenotypeData]): [GenotypeData instance. If ``genotype_data`` is not defined, then ``genotypes`` must be defined instead, and they cannot both be defined]. Defaults to None.
+				
+		genotypes ([pandas.DataFrame], optional): [012-encoded genotypes to be imputed. If ``genotypes`` is None, then uses ``genotype_data`` of type GenotypeData. One of ``genotypes`` or ``genotype_data`` must be defined]. Defaults to None.
+
+		pops ([list(str)], optional): [If None, then imputes by global allele frequency. If not None, then imputes population-wise and pops should be a list of population assignments. The list of population assignments can be obtained from the GenotypeData object as GenotypeData.populations]. Defaults to None.
+
+		diploid (bool, optional): [When diploid=True, function assumes 0=homozygous ref; 1=heterozygous; 2=homozygous alt. 0-1-2 genotypes are decomposed to compute p (=frequency of ref) and q (=frequency of alt). In this case, p and q alleles are sampled to generate either 0 (hom-p), 1 (het), or 2 (hom-q) genotypes. When diploid=FALSE, 0-1-2 are sampled according to their observed frequency]. Defaults to True.
+
+		default (int, optional): [Value to set if no alleles sampled at a locus]. Defaults to 0.
+
+		missing (int, optional): [Missing data value]. Defaults to -9.
+
+		prefix (str, optional): [Prefix for writing output files]
+
+		write_output (bool, optional): [Whether to save imputed output to a file. If ``write_output`` is False, then just returns the imputed values. If ``write_output`` is True, then it saves the imputed data as a CSV file called ``<prefix>_imputed_012.csv``]
 	"""
 	def __init__(
-		self, 
-		genotype_data, 
+		self,
+		genotype_data=None,
 		*, 
 		pops=None, 
 		diploid=True, 
 		default=0, 
-		missing=-9
+		missing=-9,
+		prefix="out",
+		write_output=False
 	):
-		"""[Impute missing data by global allele frequency. Population IDs can be sepcified with the pops argument. if pops is None, then imputation is by global allele frequency. If pops is not None, then imputation is by population-wise allele frequency. A list of population IDs in the appropriate format can be obtained from the GenotypeData object as GenotypeData.populations]
-
-		Args:
-			pops ([list(str)], optional): [If None, then imputes by global allele frequency. If not None, then imputes population-wise and pops should be a list of population assignments. The list of population assignments can be obtained from the GenotypeData object as GenotypeData.populations]. Defaults to None.
-
-			diploid (bool, optional): [When diploid=True, function assumes 0=homozygous ref; 1=heterozygous; 2=homozygous alt. 0-1-2 genotypes are decomposed to compute p (=frequency of ref) and q (=frequency of alt). In this case, p and q alleles are sampled to generate either 0 (hom-p), 1 (het), or 2 (hom-q) genotypes. When diploid=FALSE, 0-1-2 are sampled according to their observed frequency]. Defaults to True.
-
-			default (int, optional): [Value to set if no alleles sampled at a locus]. Defaults to 0.
-
-			missing (int, optional): [Missing data value]. Defaults to -9.
-		"""
 		self.pops = pops
 		self.diploid = diploid
 		self.default = default
 		self.missing = missing
+		self.prefix = prefix
 
 		super().__init__()
-
+	
 		self.imputed = self.fit_predict(genotype_data.genotypes_list)
 
 	@timer
 	def fit_predict(self, X):
 		"""[Impute missing genotypes using allele frequencies, with missing alleles coded as negative; usually -9]
-		
+				
 		Args:
 			X ([list(list(int))]): [012-encoded genotypes obtained from the GenotypeData object as GenotypeData.genotypes_list]
 
@@ -1470,7 +1948,7 @@ class ImputeAlleleFreq(GenotypeData):
 							data[loc_index][gen_index] = \
 								self._sample_allele(allele_probs, diploid=True)
 						gen_index += 1
-						
+								
 			else:
 				for pop in pop_indices.keys():
 					allele_probs = self._get_allele_probs(
@@ -1497,7 +1975,7 @@ class ImputeAlleleFreq(GenotypeData):
 										allele_probs, 
 										diploid=True)
 							gen_index += 1
-					
+							
 			loc_index += 1
 
 		df = pd.DataFrame(data)
@@ -1520,11 +1998,11 @@ class ImputeAlleleFreq(GenotypeData):
 	):
 		data=genotypes
 		length=len(genotypes)
-		
+				
 		if indices is not None:
 			data = [genotypes[index] for index in indices]
 			length = len(data)
-		
+				
 		if len(set(data))==1:
 			if data[0] == missing:
 				ret=dict()
@@ -1533,7 +2011,7 @@ class ImputeAlleleFreq(GenotypeData):
 				ret=dict()
 				ret[data[0]] = 1.0
 				return ret
-		
+				
 		if diploid:
 			length = length*2
 			ret = {0:0.0, 2:0.0}
@@ -1567,4 +2045,13 @@ class ImputeAlleleFreq(GenotypeData):
 			for allele in ret.keys():
 				ret[allele] = ret[allele] / float(length)
 			return ret
-        
+
+	def get_imputed_genotypes(self):
+		"""[Getter for the imputed genotypes]
+
+		Returns:
+			[pandas.DataFrame]: [Imputed 012-encoded genotypes as DataFrame]
+		"""
+		return self.imputed
+			
+
