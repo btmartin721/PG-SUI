@@ -1,5 +1,6 @@
 # Standard library imports
 import errno
+import gc
 import math
 import os
 import sys
@@ -15,6 +16,8 @@ import scipy.linalg
 import toyplot.pdf
 import toyplot as tp
 import toytree as tt
+
+from scipy import stats as st
 #from memory_profiler import memory_usage
 
 # Scikit-learn imports
@@ -29,6 +32,7 @@ from sklearn.metrics import mean_squared_error
 from sklearn.neighbors import KNeighborsClassifier
 
 # Custom module imports
+
 from impute.iterative_imputer_custom import (
 	IterativeImputerGridSearch, IterativeImputerAllData)
 
@@ -87,7 +91,7 @@ class Impute:
 			self.scoring_metric,
 			self.early_stop_gen,
 			self.chunk_size,
-			self.accuracy_only) = self._gather_impute_settings(kwargs)
+			self.validation_only) = self._gather_impute_settings(kwargs)
 
 		self.logfilepath = f"{self.prefix}_imputer_progress_log.txt"
 
@@ -131,23 +135,31 @@ class Impute:
 				
 		# Don't do a grid search
 		if self.gridparams is None:
-			imputed_df, best_score, best_params = self._impute_single(X)
+			imputed_df, df_scores, best_params = self._impute_single(X)
+			
+			if df_scores is not None:
+				self._print_scores(df_scores)
 
 		# Do a grid search and get the transformed data with the best parameters
 		else:
-			imputed_df, best_score, best_params = self._impute_gridsearch(X)
+			imputed_df, df_scores, best_params = self._impute_gridsearch(X)
 
 			print("Grid Search Results:")
 			if self.clf_type == "regressor":
-				print(f"RMSE (best parameters): {best_score:.2f}")
+				for col in df_scores:
+					print(
+						f"{self.scoring_metric} {col} (best parameters): "
+						f"{df_scores[col].iloc[0]}")
 			else:
-				best_score = 100 * best_score
-				print(f"Accuracy (best parameters): {best_score:.2f}%")
+				for col in df_scores:
+					print(
+						f"{self.scoring_metric} {col} (best parameters): "
+						f"{df_scores[col].iloc[0]}")
 				
 			print(f"Best Parameters: {best_params}\n")
 
 		print("\nDone!\n")
-		return imputed_df, best_score, best_params
+		return imputed_df, best_params
 
 	def write_imputed(self, data):
 		"""[Save imputed data to a CSV file]
@@ -186,13 +198,11 @@ class Impute:
 		"""
 		return pd.read_csv(filename, dtype="Int8", header=None)
 
-	def df2chunks(self, df, imputer, chunk_size):
+	def df2chunks(self, df, chunk_size):
 		"""[Break up pandas.DataFrame into chunks. If set to 1.0 of type float, then returns only one chunk containing all the data]
 
 		Args:
 			df ([pandas.DataFrame]): [DataFrame to split into chunks]
-
-			imputer ([IterativeImputerAllData instance]): [IterativeImputer instance]
 
 			chunk_size ([int or float]): [If integer, then breaks DataFrame into ```chunk_size``` chunks. If float, breaks DataFrame up into ```chunk_size * len(df.columns)``` chunks]
 
@@ -286,6 +296,16 @@ class Impute:
 		
 		return df_sub
 
+	def _print_scores(self, df_scores):
+		"""[Print pandas Dataframe with validation scores]
+
+		Args:
+			df ([pandas.DataFrame]): [DataFrame with score statistics]
+		"""
+		print("Validation scores:")
+		for col in df_scores.columns:
+			print(f"{col}: {df_scores[col].iloc[0]}")
+
 	def _write_imputed_params_score(self, df_scores, best_params):
 		"""[Save best_score and best_params to files]
 
@@ -318,31 +338,35 @@ class Impute:
 
 		clf = self.clf(**self.clf_kwargs)
 
+		if self.validation_only is not None:
+			print("Estimating validation scores...")
+
+			df_scores = self._imputer_validation(df, clf)
+
+			print("\nDone!\n")
+
+		else:
+			df_scores = None
+
 		imputer = self._define_iterative_imputer(
 			clf, 
 			self.logfilepath,
 			clf_kwargs=self.clf_kwargs,
 			prefix=self.prefix,
 			disable_progressbar=self.disable_progressbar,
-			progress_update_percent=self.progress_update_percent,
-			chunk_size=self.chunk_size)
+			progress_update_percent=self.progress_update_percent)
 
-		#if self.accuracy_only is not None:
-		#df_og, df_defiled, df_imp, n_iter, df_filled = self._impute_eval(
-		#		df, clf)
-
-		#score_list, avg_score = self._calculate_clf_score(
-				#df_filled, df_imp)
-		#else:
-		#avg_score = None
-
-		df_chunks = self.df2chunks(df, imputer, self.chunk_size)
+		df_chunks = self.df2chunks(df, self.chunk_size)
 		imputed_df = self._impute_df(df_chunks, imputer, len(df.columns))
+
+		lst2del = [df_chunks]
+		del lst2del
+		gc.collect()
 
 		self._validate_imputed(imputed_df)
 
 		print(f"\nDone with {self.clf.__name__} imputation!\n")
-		return imputed_df, avg_score, None
+		return imputed_df, df_scores, None
 		
 	def _impute_gridsearch(self, df):
 		"""[Do IterativeImputer with RandomizedSearchCV]
@@ -361,6 +385,10 @@ class Impute:
 		df_tmp = self._remove_nonbiallelic(df)
 		df_subset = self.subset_data_for_gridsearch(
 			df_tmp, self.column_subset, original_num_cols)
+
+		lst2del = [df_tmp]
+		del lst2del
+		gc.collect()
 
 		print(f"Validation dataset size: {len(df_subset.columns)}\n")
 		print("Doing grid search...")
@@ -384,9 +412,12 @@ class Impute:
 			scoring_metric=self.scoring_metric,
 			early_stop_gen=self.early_stop_gen)
 
-		_, params_list, score_list = imputer.fit_transform(df_subset)
+		Xt, params_list, score_list = imputer.fit_transform(df_subset)
 
 		print("\nDone!")
+
+		del imputer
+		del Xt
 
 		# Average or mode of best parameters
 		# and write them to a file
@@ -403,9 +434,17 @@ class Impute:
 			"Min": min_score,
 			"Max": max_score}, index=[0])
 
-		self._write_imputed_params_score(df_scores, best_params)
+		del avg_score
+		del median_score
+		del max_score
+		del min_score
 
-		sys.exit()
+		if self.clf_type == "classifier":
+			df_scores = df_scores.apply(lambda x: x*100)
+
+		df_scores = df_scores.round(2)
+
+		self._write_imputed_params_score(df_scores, best_params)
 
 		# Change values to the ones in best_params
 		self.clf_kwargs.update(best_params)
@@ -416,8 +455,10 @@ class Impute:
 		else:
 			best_clf = self.clf(**self.clf_kwargs)
 
-		print("\nDoing imputation with best found parameters...")
+		del test
+		gc.collect()
 
+		print("\nDoing imputation with best found parameters...")
 
 		best_imputer = self._define_iterative_imputer(
 			best_clf,
@@ -425,16 +466,86 @@ class Impute:
 			clf_kwargs=self.clf_kwargs,
 			prefix=self.prefix,
 			disable_progressbar=self.disable_progressbar,
-			progress_update_percent=self.progress_update_percent,
-			chunk_size=self.chunk_size)
+			progress_update_percent=self.progress_update_percent)
 
-		df_chunks = self.df2chunks(df, best_imputer, self.chunk_size)
+		df_chunks = self.df2chunks(df, self.chunk_size)
 		imputed_df = self._impute_df(df_chunks, best_imputer, original_num_cols)
+
+		lst2del = [df_chunks]
+		del df_chunks
+		gc.collect()
 
 		self._validate_imputed(imputed_df)
 
 		print(f"\nDone with {self.clf.__name__} imputation!\n")
-		return imputed_df, abs(avg_score), best_params
+		return imputed_df, df_scores, best_params
+
+	def _imputer_validation(self, df, clf):
+		reps = list()
+		for cnt, rep in enumerate(progressbar(
+			range(self.cv), desc="Validation replicates: ", leave=True,
+				disable=self.disable_progressbar),
+			start=1):
+
+			if self.disable_progressbar:
+				perc = int((cnt / self.cv) * 100)
+				print(f"Validation replicate {cnt}/{self.cv} ({perc}%)")
+
+			score_list = self._impute_eval(df, clf)
+
+			score_list_filtered = filter(lambda x: x != -9, score_list)
+
+			if score_list_filtered:
+				reps.append(score_list_filtered)
+			else:
+				continue
+
+		if not reps:
+			raise ValueError("None of the features could be validated!")
+
+		reps_t = np.array(reps).T.tolist()
+		cis = list()
+		if len(reps_t) > 1:
+			for rep in reps_t:
+				rep = [abs(x) for x in rep]
+						
+				cis.append(st.t.interval(
+					alpha=0.95, df=len(rep)-1, loc=np.mean(rep), 
+					scale=st.sem(rep)))
+							
+			ci_lower = mean(x[0] for x in cis)
+			ci_upper = mean(x[1] for x in cis)
+		else:
+			print("Warning: Only one replicate was useful; skipping "
+					"calculation of 95% CI")
+					
+			ci_lower = np.nan
+			ci_upper = np.nan
+
+		avg_score = mean(abs(x) for x in score_list if x != -9)
+		median_score = median(abs(x) for x in score_list if x != -9)
+		max_score = max(abs(x) for x in score_list if x != -9)
+		min_score = min(abs(x) for x in score_list if x != -9)
+
+		df_scores = pd.DataFrame({
+			"Mean": [avg_score],
+			"Median": [median_score],
+			"Min": [min_score],
+			"Max": [max_score],
+			"Lower 95% CI": [ci_lower],
+			"Upper 95% CI": [ci_upper]})
+
+		if self.clf_type == "classifier":
+			df_scores = df_scores.apply(lambda x: x*100)
+
+		df_scores = df_scores.round(2)
+
+		outfile = f"{self.prefix}_imputed_best_score.csv"
+		df_scores.to_csv(
+			outfile, 
+			header=True, index=False)
+
+		return df_scores
 
 	def _impute_df(self, df_chunks, imputer, original_num_cols):
 		"""[Impute list of pandas.DataFrame objects using IterativeImputer]
@@ -467,6 +578,9 @@ class Impute:
 
 		concat_df = pd.concat(imputed_chunks, axis=1)
 		assert len(concat_df.columns) == original_num_cols, "Failed merge operation: Could not merge chunks back together"
+
+		del imputed_chunks
+		gc.collect()
 	
 		return concat_df
 
@@ -572,15 +686,11 @@ class Impute:
 				elif len(df_cp[df_cp[col] == 2.0]) < cv2:
 					bad_cols.append(col)
 		
-
-		df_removed = df_cp.drop(bad_cols, axis=1)
+		df_cp.drop(bad_cols, axis=1, inplace=True)
 
 		print(f"{len(bad_cols)} columns removed for being non-biallelic or having genotype counts < number of cross-validation folds\nSubsetting from {len(df_removed.columns)} remaining columns\n")
 		
-		return df_removed
-
-	# Remove site if has < number of cv folds
-
+		return df_cp
 
 	def _gather_impute_settings(self, kwargs):
 		"""[Gather impute settings from the various imputation classes and IterativeImputer. Gathers them for use with the Impute() class. Returns dictionary with keys as keyword arguments and the values as the settings. The imputation can then be run by specifying e.g. IterativeImputer(**imp_kwargs)]
@@ -614,7 +724,7 @@ class Impute:
 		scoring_metric = kwargs.pop("scoring_metric")
 		early_stop_gen = kwargs.pop("early_stop_gen")
 		chunk_size = kwargs.pop("chunk_size")
-		accuracy_only = kwargs.pop("accuracy_only")
+		validation_only = kwargs.pop("validation_only")
 
 		progress_update_percent = kwargs.pop("progress_update_percent")
 
@@ -665,7 +775,7 @@ class Impute:
 		return (
 			gridparams, imp_kwargs, clf_kwargs, ga_kwargs, grid_iter, 
 			cv, n_jobs, prefix, column_subset, ga, disable_progressbar,
-			progress_update_percent, scoring_metric, early_stop_gen, chunk_size, accuracy_only)
+			progress_update_percent, scoring_metric, early_stop_gen, chunk_size, validation_only)
 
 	def _format_features(self, df, missing_val=-9):
 		"""[Format a 2D list for input into iterative imputer]
@@ -700,45 +810,42 @@ class Impute:
 		cols = np.random.choice(df.columns, 
 								int(len(df.columns) * col_selection_rate))
 
-		df_cp = df.copy()
-		
-		# Fill in unknown values with imputations
-		# simple_imputer = SimpleImputer(
-		# 	strategy=self.imp_kwargs["initial_strategy"])
+		# Fill in unknown values with simple imputations
+		simple_imputer = SimpleImputer(
+			strategy=self.imp_kwargs["initial_strategy"])
 
-		#df_filled = pd.DataFrame(simple_imputer.fit_transform(df_cp))
+		df_validation = pd.DataFrame(simple_imputer.fit_transform(df))
+		df_filled = df_validation.copy()
+
+		del simple_imputer
+		gc.collect()
 
 		for col in cols:
 			data_drop_rate = np.random.choice(np.arange(0.15, 0.5, 0.02), 1)[0]
 
-			drop_ind = np.random.choice(np.arange(len(df_cp[col])), 
-				size=int(len(df_cp[col])*data_drop_rate), replace=False)
+			drop_ind = np.random.choice(np.arange(len(df_validation[col])), 
+				size=int(len(df_validation[col])*data_drop_rate), replace=False)
 
-			df_cp[col].iloc[drop_ind] = np.nan
+			# Introduce random np.nan values
+			df_validation[col].iloc[drop_ind] = np.nan
 
-		return df_cp, cols
+		return df_filled, df_validation, cols
 
-	def _impute_eval(self, df_orig, clf):
+	def _impute_eval(self, df, clf):
 		"""[Function to run IterativeImputer on a DataFrame. The dataframe columns will be randomly subset and a fraction of the known, true values are converted to missing data to allow evalutation of the model with either accuracy or mean_squared_error scores]
 
 		Args:
-			df_orig ([pandas.DataFrame]): [Original DataFrame with 012-encoded genotypes]
+			df ([pandas.DataFrame]): [Original DataFrame with 012-encoded genotypes]
 
 			clf ([sklearn Classifier]): [Classifier instance to use with IterativeImputer]
 
 		Returns:
-			[pandas.DataFrame]: [Subsampled DataFrame with known, true values]
-
-			[pandas.DataFrame]: [Subsampled DataFrame with true values converted to missing data]
-
-			[pandas.DataFrame]: [Subsampled DataFrame with imputed missing values]
-
-			[int]: [Number of iterations required to converge]
-
-			[pandas.DataFrame]: [DataFrame with missing values that are not of interest filled in]
+			[list]: [List of validation scores for the current imputation]
 		"""
 		# Subset the DataFrame randomly and replace known values with np.nan
-		df_mod, cols = self._defile_dataset(df_orig)
+		df_known, df_valid, cols = self._defile_dataset(df)
+		df_known_slice = df_known[cols]
+		df_valid_slice = df_valid[cols]
 
 		# Slice the original DataFrame to the same columns as df_miss
 		#df_orig_slice = df_orig[cols]
@@ -749,96 +856,34 @@ class Impute:
 			clf_kwargs=self.clf_kwargs,
 			prefix=self.prefix,
 			disable_progressbar=self.disable_progressbar,
-			progress_update_percent=self.progress_update_percent,
-			chunk_size=self.chunk_size)
-		
-		#df_stg = df_miss.copy()
-		df2 = df_mod.copy()
+			progress_update_percent=self.progress_update_percent)
 
-		df_mod_trans = imputer.fit_transform(df2)
-		np_mod_trans = df_mod_trans[:, 
-		[df_orig.columns.get_loc(i) for i in cols]]
+		df_stg = df_valid.copy()
+		imp_arr = imputer.fit_transform(df_stg)
 
-		df_orig_np = df_orig[cols].values
+		df_imp = pd.DataFrame(
+			imp_arr[:, [df_known.columns.get_loc(i) for i in cols]])
 
+		# Get score of each column
 		score_list = list()
-		for i in range(len(cols)):
+		for i in range(len(df_known_slice.columns)):
+			# Adapted from: https://medium.com/analytics-vidhya/using-scikit-learns-iterative-imputer-694c3cca34de
 			if self.clf_type == "classifier":
-				score_list.append(accuracy_score(df_orig_np[:, i], np_mod_trans[:, i]))
+				score_list.append(accuracy_score(df_known[df_known.columns[i]], df_imp[df_imp.columns[i]]))
 			else:
-				score_list.append(mean_squared_error(df_orig_np[:, i], np_mod_trans[:, i]))
+				score_list.append(mean_squared_error(df_known[df_known.columns[i]], df_imp[df_imp.columns[i]]))
 		
-		print(score_list)
-		sys.exit()
-		print("Done!\n")
+		lst2del = [df_stg, df_imp, df_known, df_known_slice, df_valid_slice, df_valid]
+		del lst2del
+		del imp_arr
+		del imputer
+		del cols
+		gc.collect()
 
-		# return (
-		# 	df_orig_slice, 
-		# 	df_miss[cols], 
-		# 	pd.DataFrame(
-		# 		imp_arr[:,[df_orig.columns.get_loc(i) for i in cols]], 
-		# 		columns=cols), 
-		# 	imputer.n_iter_)
-
-	def _calculate_clf_score(self, df_filled, df_imp):
-		"""[Calculate the performance score of the classifier or regressor. Also writes performance statistics to a file]
-
-		Args:
-			df_filled ([pandas.DataFrame]): [DataFrame slice with missing values filled by SimpleImputer]
-			df_imp ([type]): [DataFrame slice with imputed values]
-
-		Returns:
-			[pandas.DataFrame]: [DataFrame with mean, median, min, and max scores among all features]
-
-			[float]: [Average score among all features]
-		"""
-		score_list = list()
-
-		# if self.clf_type == "classifier":
-		# 	df_filled = df_filled.astype("Int8")
-		# 	df_imp = df_imp.astype("Int8")
-		# 	print(df_filled.dtypes)
-
-		# else:
-		# 	df_filled = df_filled.round(0).astype("Int32")
-		# 	df_imp[df_imp < 0] = 0
-		# 	df_imp = df_imp.round(0)
-		# 	df_imp = df_imp.astype("Int32")
-
-		# print(f"df_filled: {df_filled.shape}")
-		# print(f"df_imp: {df_imp.shape}")
-		# for i in range(len(df_filled.columns)):
-		# 	if self.clf_type == "classifier":
-		# 		score_list.append(accuracy_score(
-		# 			df_filled[df_filled.columns[i]], df_imp[df_imp.columns[i]]))
-			
-		# 	else:
-		# 		# Regressor
-		# 		score_list.append(mean_squared_error(
-		# 			df_filled[df_filled.columns[i]], df_imp[df_imp.columns[i]]))
-
-		avg_score = mean(score_list)
-		median_score = median(score_list)
-		min_score = min(score_list)
-		max_score = max(score_list)
-
-		best_score_outfile = f"{self.prefix}_imputed_best_score.csv"
-
-		df_scores = pd.DataFrame({
-			"Mean": avg_score,
-			"Median": median_score,
-			"Min": min_score,
-			"Max": max_score})
-					
-		df_scores.to_csv(
-			best_score_outfile, 
-			header=True, index=False, float_format="%.2f")
-
-		return df_scores, abs(avg_score)
-
+		return score_list
 
 	def _define_iterative_imputer(
-		self, clf, logfilepath, chunk_size=1.0, clf_kwargs=None, 
+		self, clf, logfilepath, clf_kwargs=None, 
 		ga_kwargs=None, prefix="out", n_jobs=None, n_iter=None, cv=None, 
 		clf_type=None, ga=False, search_space=None, disable_progressbar=False, 
 		progress_update_percent=None, scoring_metric=None, early_stop_gen=None):
@@ -848,8 +893,6 @@ class Impute:
 			clf ([sklearn Classifier]): [Classifier to use with IterativeImputer]
 
 			logfilepath [str]: [Path to progress log file]
-
-			chunk_size (int or float, optional): [Size of chunks to impute. If type is integer, then impute in chunks of ``int(chunk_size)``. If type is float, then imputes in chunks of ``chunk_size * n_features``]
 
 			clf_kwargs (dict, optional): [Keyword arguments for classifier]. Defaults to None.
 
@@ -886,7 +929,7 @@ class Impute:
 				logfilepath, clf_kwargs, prefix, estimator=clf, 
 				disable_progressbar=disable_progressbar, 
 				progress_update_percent=progress_update_percent, 
-				chunk_size=chunk_size, **self.imp_kwargs)
+				**self.imp_kwargs)
 		
 		else:
 			# Create iterative imputer
@@ -924,7 +967,7 @@ class ImputeKNN:
 
 		cv (int, optional): [Number of folds for cross-validation during randomized grid search]. Defaults to 5.
 
-		accuracy_only (float, optional): [Calculates the accuracy of the imputation using a subset of columns equal to ``n_features * accuracy_only``. Does not do a grid search, and only works if ``gridparams`` is None. Calculating accuracy can be turned off altogether by setting ``accuracy_only`` to None]. Defaults to 0.4.
+		validation_only (float, optional): [Validates the imputation without doing a grid search. The validation method randomly replaces 15% to 50% of the known, non-missing genotypes in ``n_features * validation_only`` of the features. It then imputes the newly missing genotypes for which we know the true values and calculates validation scores. This procedure is replicated ``cv`` times and a mean, median, minimum, maximum, lower 95% confidence interval (CI) of the mean, and the upper 95% CI are calculated and saved to a CSV file. ``gridparams`` must be set to None (default) for ``validation_only`` to work. Calculating a validation score can be turned off altogether by setting ``validation_only`` to None]. Defaults to 0.4.
 
 		ga (bool, optional): [Whether to use a genetic algorithm for the grid search. If False, a RandomizedSearchCV is done instead]. Defaults to False.
 
@@ -990,7 +1033,7 @@ class ImputeKNN:
 		gridparams=None,
 		grid_iter=50,
 		cv=5,
-		accuracy_only=0.4,
+		validation_only=0.4,
 		ga=False,
 		population_size=10,
 		tournament_size=3,
@@ -1029,7 +1072,6 @@ class ImputeKNN:
 		imputer = Impute(self.clf, self.clf_type, kwargs)
 
 		(self.imputed, 
-			self.best_score, 
 			self.best_params) = imputer.fit_predict(genotype_data.genotypes_df)
 
 		imputer.write_imputed(self.imputed)
@@ -1048,7 +1090,7 @@ class ImputeRandomForest:
 
 		cv (int, optional): [Number of folds for cross-validation during randomized grid search]. Defaults to 5.
 
-		accuracy_only (float, optional): [Calculates the accuracy of the imputation using a subset of columns equal to ``n_features * accuracy_only``. Does not do a grid search, and only works if ``gridparams`` is None. Calculating accuracy can be turned off altogether by setting ``accuracy_only`` to None]. Defaults to 0.4.
+		validation_only (float, optional): [Validates the imputation without doing a grid search. The validation method randomly replaces 15% to 50% of the known, non-missing genotypes in ``n_features * validation_only`` of the features. It then imputes the newly missing genotypes for which we know the true values and calculates validation scores. This procedure is replicated ``cv`` times and a mean, median, minimum, maximum, lower 95% confidence interval (CI) of the mean, and the upper 95% CI are calculated and saved to a CSV file. ``gridparams`` must be set to None (default) for ``validation_only`` to work. Calculating a validation score can be turned off altogether by setting ``validation_only`` to None]. Defaults to 0.4.
 
 		ga (bool, optional): [Whether to use a genetic algorithm for the grid search. If False, a RandomizedSearchCV is done instead]. Defaults to False.
 
@@ -1130,7 +1172,7 @@ class ImputeRandomForest:
 		gridparams=None,
 		grid_iter=50,
 		cv=5,
-		accuracy_only=0.4,
+		validation_only=0.4,
 		ga=False,
 		population_size=10,
 		tournament_size=3,
@@ -1191,7 +1233,6 @@ class ImputeRandomForest:
 		imputer = Impute(self.clf, self.clf_type, kwargs)
 
 		(self.imputed, 
-			self.best_score, 
 			self.best_params) = imputer.fit_predict(genotype_data.genotypes_df)
 
 		imputer.write_imputed(self.imputed)
@@ -1210,7 +1251,7 @@ class ImputeGradientBoosting:
 
 		cv (int, optional): [Number of folds for cross-validation during randomized grid search]. Defaults to 5.
 
-		accuracy_only (float, optional): [Calculates the accuracy of the imputation using a subset of columns equal to ``n_features * accuracy_only``. Does not do a grid search, and only works if ``gridparams`` is None. Calculating accuracy can be turned off altogether by setting ``accuracy_only`` to None]. Defaults to 0.4.
+		validation_only (float, optional): [Validates the imputation without doing a grid search. The validation method randomly replaces 15% to 50% of the known, non-missing genotypes in ``n_features * validation_only`` of the features. It then imputes the newly missing genotypes for which we know the true values and calculates validation scores. This procedure is replicated ``cv`` times and a mean, median, minimum, maximum, lower 95% confidence interval (CI) of the mean, and the upper 95% CI are calculated and saved to a CSV file. ``gridparams`` must be set to None (default) for ``validation_only`` to work. Calculating a validation score can be turned off altogether by setting ``validation_only`` to None]. Defaults to 0.4.
 
 		ga (bool, optional): [Whether to use a genetic algorithm for the grid search. If False, a RandomizedSearchCV is done instead]. Defaults to False.
 
@@ -1290,7 +1331,7 @@ class ImputeGradientBoosting:
 		gridparams=None,
 		grid_iter=50,
 		cv=5,
-		accuracy_only=0.4,
+		validation_only=0.4,
 		ga=False,
 		population_size=10,
 		tournament_size=3,
@@ -1336,7 +1377,6 @@ class ImputeGradientBoosting:
 		imputer = Impute(self.clf, self.clf_type, kwargs)
 
 		(self.imputed, 
-			self.best_score, 
 			self.best_params) = imputer.fit_predict(genotype_data.genotypes_df)
 
 		imputer.write_imputed(self.imputed)
@@ -1355,7 +1395,7 @@ class ImputeBayesianRidge:
 
 		cv (int, optional): [Number of folds for cross-validation during randomized grid search]. Defaults to 5.
 
-		accuracy_only (float, optional): [Calculates the accuracy of the imputation using a subset of columns equal to ``n_features * accuracy_only``. Does not do a grid search, and only works if ``gridparams`` is None. Calculating accuracy can be turned off altogether by setting ``accuracy_only`` to None]. Defaults to 0.4.
+		validation_only (float, optional): [Validates the imputation without doing a grid search. The validation method randomly replaces 15% to 50% of the known, non-missing genotypes in ``n_features * validation_only`` of the features. It then imputes the newly missing genotypes for which we know the true values and calculates validation scores. This procedure is replicated ``cv`` times and a mean, median, minimum, maximum, lower 95% confidence interval (CI) of the mean, and the upper 95% CI are calculated and saved to a CSV file. ``gridparams`` must be set to None (default) for ``validation_only`` to work. Calculating a validation score can be turned off altogether by setting ``validation_only`` to None]. Defaults to 0.4.
 
 		ga (bool, optional): [Whether to use a genetic algorithm for the grid search. If False, a RandomizedSearchCV is done instead]. Defaults to False.
 
@@ -1425,7 +1465,7 @@ class ImputeBayesianRidge:
 		gridparams=None,
 		grid_iter=50,
 		cv=5,
-		accuracy_only=0.4,
+		validation_only=0.4,
 		ga=False,
 		population_size=10,
 		tournament_size=3,
@@ -1468,7 +1508,6 @@ class ImputeBayesianRidge:
 		imputer = Impute(self.clf, self.clf_type, kwargs)
 
 		(self.imputed, 
-			self.best_score, 
 			self.best_params) = imputer.fit_predict(genotype_data.genotypes_df)
 
 		imputer.write_imputed(self.imputed)
