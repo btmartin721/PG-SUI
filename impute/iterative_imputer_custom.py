@@ -1,10 +1,11 @@
 # Standard library imports
+import gc
 import math
 import os
 import shutil
 import sys
 import warnings
-from collections import namedtuple
+#from collections import namedtuple
 from contextlib import redirect_stdout
 from time import time
 
@@ -29,8 +30,7 @@ from sklearn.exceptions import ConvergenceWarning
 from sklearn.utils._testing import ignore_warnings
 
 ## Required for IterativeImputer.fit_transform()
-from sklearn.utils import (
-	check_array, check_random_state, _safe_indexing, is_scalar_nan)
+from sklearn.utils import check_random_state, _safe_indexing
 
 # Grid search imports
 from sklearn.model_selection import RandomizedSearchCV
@@ -40,7 +40,7 @@ from sklearn.model_selection import StratifiedKFold
 from sklearn_genetic import GASearchCV
 from sklearn_genetic.callbacks import ConsecutiveStopping, DeltaThreshold
 from sklearn_genetic.plots import plot_fitness_evolution
-from sklearn_genetic.space import Continuous, Categorical, Integer
+#from sklearn_genetic.space import Continuous, Categorical, Integer
 from sklearn_genetic.utils import logbook_to_pandas
 
 # Custom function imports
@@ -69,14 +69,12 @@ else:
 	else:
 		from tqdm import tqdm as progressbar
 
-_ImputerTripletAll = namedtuple(
-	'_ImputerTripletAll', ['feat_idx', 'neighbor_feat_idx', 'estimator'])
+# _ImputerTripletAll = namedtuple(
+# 	'_ImputerTripletAll', ['feat_idx', 'neighbor_feat_idx', 'estimator'])
 
-_ImputerTripletGrid = namedtuple(
-	'_ImputerTripletGrid', ['feat_idx', 'neighbor_feat_idx', 'estimator'])
+# _ImputerTripletGrid = namedtuple(
+# 	'_ImputerTripletGrid', ['feat_idx', 'neighbor_feat_idx', 'estimator'])
 
-_ImputerDoubletChunker = namedtuple(
-	'_ImputerDoubletChunker', ['feat_idx', 'neighbor_feat_idx'])
 
 class IterativeImputerAllData(IterativeImputer):
 	"""[Overridden IterativeImputer methods. Herein, progress status updates and several other improvements have been added. IterativeImputer is a multivariate imputer that estimates each feature from all the others. A strategy for imputing missing values by modeling each feature with missing values as a function of other features in a round-robin fashion.Read more in the scikit-learn :ref:`User Guide <iterative_imputer>`. scikit-learn versionadded:: 0.21...note::This estimator is still **experimental** for now: the predictions and the API might change without any deprecation cycle. To use it, you need to explicitly import ``enable_iterative_imputer``:: >>> # explicitly require this experimental feature >>> from sklearn.experimental import enable_iterative_imputer >>> # now you can import normally from sklearn.impute >>> from sklearn.impute import IterativeImputer]
@@ -96,8 +94,6 @@ class IterativeImputerAllData(IterativeImputer):
 
 		progress_update_frequency (int, optional): [How often to display progress updates (as a percentage) if ``disable_progressbar`` is True. If ``progress_update_frequency=10``, then it displays progress updates every 10%]. Defaults to 10.
 
-		chunk_size (int or float, optional): [Break up dataset into ``chunk_size`` chunks to reduce memory usage if type is integer, then uses ``chunk_size`` chunks. If type is float, then uses ``chunk_size * n_features`` chunks]. Defaults to 1.0.
-
 		missing_values (int or np.nan, optional): [The placeholder for the missing values. All occurrences of `missing_values` will be imputed. For pandas' dataframes with	nullable integer dtypes with missing values, `missing_values` should be set to `np.nan`, since `pd.NA` will be converted to `np.nan`]. Defaults to np.nan.
 
 		Sample_posterior (bool, optional): [Whether to sample from the (Gaussian) predictive posterior of the fitted estimator for each imputation. Estimator must support ``return_std`` in its ``predict`` method if set to ``True``. Set to ``True`` if using ``IterativeImputer`` for multiple imputations]. Defaults to False.
@@ -109,7 +105,7 @@ class IterativeImputerAllData(IterativeImputer):
 		n_nearest_features (int, optional): [Number of other features to use to estimate the missing values of each feature column. Nearness between features is measured using the absolute correlation coefficient between each feature pair (after initial imputation). To ensure coverage of features throughout the imputation process, the neighbor features are not necessarily nearest,	but are drawn with probability proportional to correlation for each	imputed target feature. Can provide significant speed-up when the number of features is huge. If ``None``, all features will be used]. Defaults to None.
 
 		initial_strategy (str, optional): [Which strategy to use to initialize the missing values. Same as the ``strategy`` parameter in :class:`~sklearn.impute.SimpleImputer`	Valid values: {"mean", "median", "most_frequent", or "constant"}]. Defaults to 'mean'.
-		
+
 		imputation_order (str, optional): [The order in which the features will be imputed. Possible values: "ascending" (From features with fewest missing values to most), "descending" (From features with most missing values to fewest, "roman" (Left to right), "arabic" (Right to left),  random" (A random order for each round)]. Defaults to 'ascending'.
 
 		skip_complete (bool, optional): [If ``True`` then features with missing values during ``transform`` that did not have any missing values during ``fit`` will be imputed with the initial imputation method only. Set to ``True`` if you have	many features with no missing values at both ``fit`` and ``transform`` time to save compute]. Defaults to False.
@@ -127,8 +123,6 @@ class IterativeImputerAllData(IterativeImputer):
 
 	Attributes:
 		initial_imputer_: ([:class:`~sklearn.impute.SimpleImputer`):  [Imputer used to initialize the missing values]
-
-		imputation_sequence_ [list of tuples)]: [Each tuple has ``(feat_idx, neighbor_feat_idx, estimator)``, where ``feat_idx`` is the current feature to be imputed, ``neighbor_feat_idx`` is the array of other features used to impute the current feature, and ``estimator`` is the trained estimator used for the imputation. Length is ``self.n_features_with_missing_ *	self.n_iter_``]
 
 		n_iter_ ([int]): [Number of iteration rounds that occurred. Will be less than ``self.max_iter`` if early stopping criterion was reached]
 
@@ -170,7 +164,6 @@ class IterativeImputerAllData(IterativeImputer):
 				clf_type="classifier",
 				disable_progressbar=False,
 				progress_update_percent=None,
-				chunk_size=1.0,
 				missing_values=np.nan,
 				sample_posterior=False,
 				max_iter=10,
@@ -185,11 +178,21 @@ class IterativeImputerAllData(IterativeImputer):
 				random_state=None,
 				add_indicator=False
 	):
-		super().__init__(estimator=estimator, missing_values=missing_values, sample_posterior=sample_posterior, max_iter=max_iter, tol=tol, n_nearest_features=n_nearest_features, initial_strategy=initial_strategy, imputation_order=imputation_order, skip_complete=skip_complete, min_value=min_value, max_value=max_value, verbose=verbose, random_state=random_state, add_indicator=add_indicator)
+		super().__init__(
+			estimator=estimator, missing_values=missing_values, 
+			sample_posterior=sample_posterior, max_iter=max_iter, tol=tol,
+			n_nearest_features=n_nearest_features, 
+			initial_strategy=initial_strategy, 
+			imputation_order=imputation_order, skip_complete=skip_complete, 
+			min_value=min_value, max_value=max_value, verbose=verbose, 
+			random_state=random_state, add_indicator=add_indicator)
 
 		self.logfilepath = logfilepath
 		self.clf_kwargs = clf_kwargs
 		self.prefix = prefix
+		self.clf_type = clf_type
+		self.disable_progressbar = disable_progressbar
+		self.progress_update_percent = progress_update_percent
 		self.estimator = estimator
 		self.sample_posterior = sample_posterior
 		self.max_iter = max_iter
@@ -202,10 +205,6 @@ class IterativeImputerAllData(IterativeImputer):
 		self.max_value = max_value
 		self.verbose = verbose
 		self.random_state = random_state
-		self.clf_type = clf_type
-		self.disable_progressbar = disable_progressbar
-		self.progress_update_percent = progress_update_percent
-		self.chunk_size = chunk_size
 
 	@ignore_warnings(category=UserWarning)
 	def _impute_one_feature(self,
@@ -256,7 +255,7 @@ class IterativeImputerAllData(IterativeImputer):
 		
 		# if no missing values, don't predict
 		if np.sum(missing_row_mask) == 0:
-			return X_filled, estimator
+			return X_filled
 
 		# get posterior samples if there is at least one missing value
 		X_test = _safe_indexing(
@@ -298,7 +297,13 @@ class IterativeImputerAllData(IterativeImputer):
 		# update the feature
 		X_filled[missing_row_mask, feat_idx] = imputed_values
 
-		return X_filled, estimator
+		del estimator
+		del X_train
+		del y_train
+		del X_test
+		gc.collect()
+
+		return X_filled
 
 	@ignore_warnings(category=UserWarning)
 	def fit_transform(self, X, y=None):
@@ -331,7 +336,7 @@ class IterativeImputerAllData(IterativeImputer):
 		else:
 			self._estimator = clone(self.estimator)
 
-		self.imputation_sequence_ = []
+		# self.imputation_sequence_ = []
 
 		self.initial_imputer_ = None
 
@@ -396,7 +401,6 @@ class IterativeImputerAllData(IterativeImputer):
 				ordered_idx = self._get_ordered_idx(mask_missing_values)
 
 			if self.disable_progressbar:
-				#chunk_perc = math.ceil((current_chunk / total_chunks) * 100)
 				with open(self.logfilepath, "a") as fout:
 					# Redirect to progress logfile
 					with redirect_stdout(fout):
@@ -413,33 +417,6 @@ class IterativeImputerAllData(IterativeImputer):
 			##########################
 			### Feature Start
 			##########################
-			# imputation_features = list()
-			# for i, feature_tup in self._get_nearest_features(
-			# 	ordered_idx, n_features, abs_corr_mat):
-
-			# 	imputation_features.append(feature_tup)
-
-			# for current_chunk, chunk in enumerate(
-			# 	self.chunks(imputation_features, self.chunk_size)):
-
-			# if self.disable_progressbar:
-			# 	with open(self.logfilepath, "a") as fout:
-			# 		with redirect_stdout(fout):
-			# 			print(f"\nChunk {current_chunk}")
-
-			# filter_indices = list()
-			# for item in chunk:
-			# 	current_feat = item[0]
-			# 	neighbor = item[1].tolist()
-
-			# 	filter_indices.append(current_feat)
-			# 	filter_indices.extend(neighbor)
-
-			# filter_indices = list(set(filter_indices))
-
-			#Xt_chunks = pd.DataFrame(Xt)
-			#Xt_chunks = Xt_chunks.iloc[:, filter_indices]
-
 			for i, feat_idx in enumerate(
 				progressbar(
 					ordered_idx, 
@@ -454,10 +431,7 @@ class IterativeImputerAllData(IterativeImputer):
 					feat_idx,
 					abs_corr_mat)
 
-				# feat_idx = feature_tup[0]
-				# neighbor_feat_idx = feature_tup[1]
-
-				Xt, estimator = self._impute_one_feature(
+				Xt = self._impute_one_feature(
 					Xt, 
 					mask_missing_values, 
 					feat_idx, 
@@ -465,17 +439,18 @@ class IterativeImputerAllData(IterativeImputer):
 					estimator=None, 
 					fit_mode=True)
 
-				estimator_triplet = _ImputerTripletAll(
-					feat_idx, 
-					neighbor_feat_idx, 
-					estimator)
+				# estimator_triplet = _ImputerTripletAll(
+				# 	feat_idx, 
+				# 	neighbor_feat_idx, 
+				# 	estimator)
 
-				self.imputation_sequence_.append(estimator_triplet)
+				# self.imputation_sequence_.append(estimator_triplet)
 
 				# Only print feature updates at each progress_update_percent
 				# interval
 				if (self.progress_update_percent is not None and 
 						self.disable_progressbar):
+
 					current_perc = math.ceil((i / total_features) * 100)
 
 					if current_perc >= print_perc_interval:
@@ -524,41 +499,6 @@ class IterativeImputerAllData(IterativeImputer):
 		Xt[~mask_missing_values] = X[~mask_missing_values]
 
 		return super(IterativeImputer, self)._concatenate_indicator(Xt, X_indicator)
-
-	def chunks(self, l, n):
-		"""[Yield successive n-sized chunks from list l]
-
-		Args:
-			l ([list]): [List from which to get chunks of n-size]
-
-			n ([int]): [Chunk size]
-		"""
-		if isinstance(n, (int, float)):
-			if isinstance(n, float):
-				if n > 1.0:
-					raise ValueError(
-						f"If chunk_size is of type float, must be "
-						f"between 0.0 and 1.0; Value supplied was {n}")
-
-				elif n == 1.0:
-					# All data in one chunk
-					print(
-						"Imputing all features at once since chunk_size is "
-						"set to 1.0")
-
-					yield l
-
-				tmp = n
-				n = None
-				n = math.ceil(len(l) * tmp)
-
-		else:
-			raise ValueError(
-				f"chunk_size must be of type float or integer, "
-				f"but type {type(chunk_size)} was passed")
-
-		for i in range(0, len(l), n):
-			yield l[i:i + n]
 
 	def _get_nearest_features(self, ordered_idx, n_features, abs_corr_mat):
 		"""[Generator function that gets a namedtuple with the current feature being imputed (``feat_idx``) and the nearest neighbors (``neighbor_feat_idx``) of the current feature]
@@ -710,7 +650,14 @@ class IterativeImputerGridSearch(IterativeImputer):
 				add_indicator=False
 	):
 
-		super().__init__(estimator=estimator, missing_values=missing_values, sample_posterior=sample_posterior, max_iter=max_iter, tol=tol, n_nearest_features=n_nearest_features, initial_strategy=initial_strategy, imputation_order=imputation_order, skip_complete=skip_complete, min_value=min_value, max_value=max_value, verbose=verbose, random_state=random_state, add_indicator=add_indicator)
+		super().__init__(
+			estimator=estimator, missing_values=missing_values, 
+			sample_posterior=sample_posterior, max_iter=max_iter, tol=tol, 
+			n_nearest_features=n_nearest_features, 
+			initial_strategy=initial_strategy, 
+			imputation_order=imputation_order, skip_complete=skip_complete, 
+			min_value=min_value, max_value=max_value, verbose=verbose, 
+			random_state=random_state, add_indicator=add_indicator)
 
 		self.logfilepath = logfilepath
 		self.search_space = search_space
@@ -776,7 +723,7 @@ class IterativeImputerGridSearch(IterativeImputer):
 			estimator = clone(self._estimator)
 
 		# Modified code
-		cross_val = StratifiedKFold(n_splits=self.grid_cv, shuffle=True)
+		cross_val = StratifiedKFold(n_splits=self.grid_cv, shuffle=False)
 
 		# Modified code
 		# If regressor
@@ -832,7 +779,7 @@ class IterativeImputerGridSearch(IterativeImputer):
 			
 		# if no missing values, don't predict
 		if np.sum(missing_row_mask) == 0:
-			return X_filled, estimator, None
+			return X_filled, None
 
 		# get posterior samples if there is at least one missing value
 		X_test = _safe_indexing(
@@ -873,7 +820,7 @@ class IterativeImputerGridSearch(IterativeImputer):
 		# update the feature
 		X_filled[missing_row_mask, feat_idx] = imputed_values
 
-		return X_filled, estimator, search
+		return X_filled, search
 
 	@ignore_warnings(category=UserWarning)
 	def fit_transform(self, X, y=None):
@@ -906,7 +853,7 @@ class IterativeImputerGridSearch(IterativeImputer):
 		else:
 			self._estimator = clone(self.estimator)
 
-		self.imputation_sequence_ = []
+		# self.imputation_sequence_ = []
 
 		self.initial_imputer_ = None
 
@@ -969,8 +916,7 @@ class IterativeImputerGridSearch(IterativeImputer):
 
 		for self.n_iter_ in progressbar(
 			range(1, total_iter+1), 
-			desc="Iteration: ", disable=self.disable_progressbar
-		):
+			desc="Iteration: ", disable=self.disable_progressbar):
 
 			if self.ga:
 				iter_list.append(self.n_iter_)
@@ -1015,7 +961,7 @@ class IterativeImputerGridSearch(IterativeImputer):
 																feat_idx,
 																abs_corr_mat)
 
-				Xt, estimator, search = self._impute_one_feature(
+				Xt, search = self._impute_one_feature(
 					Xt, 
 					mask_missing_values, 
 					feat_idx, 
@@ -1026,11 +972,11 @@ class IterativeImputerGridSearch(IterativeImputer):
 
 				searches.append(search)
 
-				estimator_triplet = _ImputerTripletGrid(feat_idx,
-													neighbor_feat_idx,
-													estimator)
+				# estimator_triplet = _ImputerTripletGrid(feat_idx,
+				# 									neighbor_feat_idx,
+				# 									estimator)
 
-				self.imputation_sequence_.append(estimator_triplet)
+				#self.imputation_sequence_.append(estimator_triplet)
 
 				if search is not None:
 					# There was missing data in the feature
@@ -1148,7 +1094,7 @@ class IterativeImputerGridSearch(IterativeImputer):
 			if not self.sample_posterior:
 				warnings.warn("[IterativeImputer] Early stopping criterion not"
 							" reached.", ConvergenceWarning)
-
+		
 		Xt[~mask_missing_values] = X[~mask_missing_values]
 
 		if self.ga:
@@ -1176,65 +1122,6 @@ class IterativeImputerGridSearch(IterativeImputer):
 
 		return super(IterativeImputer, self)._concatenate_indicator(Xt, X_indicator), params_list, score_list
 
-	def transform(self, X):
-		"""[Imputes all missing values in X. Note that this is stochastic, and that if random_state is not fixed, repeated calls, or permuted input, will yield different results]
-
-		Args:
-			X [(array-like of shape (n_samples, n_features)]: [The input data to complete]
-
-		Returns:
-			Xt [(array-like, shape (n_samples, n_features)]: [The imputed input data]
-		"""
-		check_is_fitted(self)
-
-		X, Xt, mask_missing_values, complete_mask = self._initial_imputation(X)
-
-		X_indicator = super(IterativeImputer, self)._transform_indicator(complete_mask)
-
-		if self.n_iter_ == 0 or np.all(mask_missing_values):
-			return super(IterativeImputer, self)._concatenate_indicator(Xt, X_indicator)
-
-		imputations_per_round = len(self.imputation_sequence_) // self.n_iter_
-		i_rnd = 0
-		if self.verbose > 0:
-			print("[IterativeImputer] Completing matrix with shape %s"
-				% (X.shape,))
-		start_t = time()
-
-		params_list = list()
-		score_list = list()
-		for it, estimator_triplet in enumerate(self.imputation_sequence_):
-			Xt, _, search = self._impute_one_feature(
-				Xt,
-				mask_missing_values,
-				estimator_triplet.feat_idx,
-				estimator_triplet.neighbor_feat_idx,
-				estimator=estimator_triplet.estimator,
-				fit_mode=False
-			)
-
-			if search is not None:
-				params_list.append(search.best_params_)
-				score_list.append(search.best_score_)
-			else:
-				tmp_dict = dict()
-				for k in search_space.keys():
-					tmp_dict[k] = -9
-				params_list.append(tmp_dict)
-
-				score_list.append(-9)
-
-			if not (it + 1) % imputations_per_round:
-				if self.verbose > 1:
-					print('[IterativeImputer] Ending imputation round '
-							'%d/%d, elapsed time %0.2f'
-							% (i_rnd + 1, self.n_iter_, time() - start_t))
-				i_rnd += 1
-
-		Xt[~mask_missing_values] = X[~mask_missing_values]
-
-		return super(IterativeImputer, self)._concatenate_indicator(Xt, X_indicator), params_list, score_list
-
 	def plot_search_space(self, estimator, height=2, s=25, features: list=None):
 		"""[Make density and contour plots for showing search space during grid search. Modified from sklearn-genetic-opt function to implement exception handling]
 
@@ -1254,12 +1141,12 @@ class IterativeImputerGridSearch(IterativeImputer):
 
 		df = logbook_to_pandas(estimator.logbook)
 		if features:
-			stats = df[features]
+			_stats = df[features]
 		else:
 			variables = [*estimator.space.parameters, "score"]
-			stats = df[variables]
+			_stats = df[variables]
 
-		g = sns.PairGrid(stats, diag_sharey=False, height=height)
+		g = sns.PairGrid(_stats, diag_sharey=False, height=height)
 
 		g = g.map_upper(sns.scatterplot, s=s, color="r", alpha=0.2)
 
@@ -1295,5 +1182,65 @@ class IterativeImputerGridSearch(IterativeImputer):
 				)
 						
 		return g
+
+	# def transform(self, X):
+	# 	"""[Imputes all missing values in X. Note that this is stochastic, and that if random_state is not fixed, repeated calls, or permuted input, will yield different results]
+
+	# 	Args:
+	# 		X [(array-like of shape (n_samples, n_features)]: [The input data to complete]
+
+	# 	Returns:
+	# 		Xt [(array-like, shape (n_samples, n_features)]: [The imputed input data]
+	# 	"""
+	# 	check_is_fitted(self)
+
+	# 	X, Xt, mask_missing_values, complete_mask = self._initial_imputation(X)
+
+	# 	X_indicator = super(IterativeImputer, self)._transform_indicator(complete_mask)
+
+	# 	if self.n_iter_ == 0 or np.all(mask_missing_values):
+	# 		return super(IterativeImputer, self)._concatenate_indicator(Xt, X_indicator)
+
+	# 	imputations_per_round = len(self.imputation_sequence_) // self.n_iter_
+	# 	i_rnd = 0
+	# 	if self.verbose > 0:
+	# 		print("[IterativeImputer] Completing matrix with shape %s"
+	# 			% (X.shape,))
+	# 	start_t = time()
+
+	# 	params_list = list()
+	# 	score_list = list()
+	# 	for it, estimator_triplet in enumerate(self.imputation_sequence_):
+	# 		Xt, _, search = self._impute_one_feature(
+	# 			Xt,
+	# 			mask_missing_values,
+	# 			estimator_triplet.feat_idx,
+	# 			estimator_triplet.neighbor_feat_idx,
+	# 			estimator=estimator_triplet.estimator,
+	# 			fit_mode=False
+	# 		)
+
+	# 		if search is not None:
+	# 			params_list.append(search.best_params_)
+	# 			score_list.append(search.best_score_)
+	# 		else:
+	# 			tmp_dict = dict()
+	# 			for k in search_space.keys():
+	# 				tmp_dict[k] = -9
+	# 			params_list.append(tmp_dict)
+
+	# 			score_list.append(-9)
+
+	# 		if not (it + 1) % imputations_per_round:
+	# 			if self.verbose > 1:
+	# 				print('[IterativeImputer] Ending imputation round '
+	# 						'%d/%d, elapsed time %0.2f'
+	# 						% (i_rnd + 1, self.n_iter_, time() - start_t))
+	# 			i_rnd += 1
+
+	# 	Xt[~mask_missing_values] = X[~mask_missing_values]
+
+	# 	return super(IterativeImputer, self)._concatenate_indicator(Xt, X_indicator), params_list, score_list
+
 
 
