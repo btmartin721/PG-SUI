@@ -185,20 +185,21 @@ def main():
 		# )
 
 		rf_imp = ImputeRandomForest(
-				data, 
-				prefix=args.prefix, 
-				n_estimators=10,
-				n_nearest_features=3, 
-				n_jobs=4, 
-				max_iter=2, 
+				data,
+				prefix=args.prefix,
+				n_estimators=100,
+				n_nearest_features=10,
+				n_jobs=48,
+				max_iter=50,
 				disable_progressbar=True,
 				extratrees=False, 
-				progress_update_percent=20,
 				max_features="log2",
 				min_samples_split=6,
 				min_samples_leaf=4,
 				max_depth=6,
-				cv=3
+				cv=5,
+				validation_only=0.2,
+				chunk_size=0.15
 		)
 
 		# br_imp = ImputeBayesianRidge(data, prefix=args.prefix, n_iter=100, gridparams=grid_params, grid_iter=3, cv=3, n_jobs=4, max_iter=5, n_nearest_features=3, column_subset=4, ga=False, disable_progressbar=True, progress_update_percent=20, chunk_size=1.0)
