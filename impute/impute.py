@@ -2106,7 +2106,7 @@ class ImputeAlleleFreq(GenotypeData):
 		super().__init__()
 
 		if self.bypopulations:
-			self.imputed = self.fit_predict_bypop(genotype_data.genotypes_df, genotype_data.populations)
+			self.imputed = self.fit_predict_simimp(genotype_data.genotypes_df, genotype_data.populations)
 		else:
 			self.imputed = self.fit_predict(genotype_data.genotypes_list)
 			print(self.imputed)
@@ -2287,5 +2287,19 @@ class ImputeAlleleFreq(GenotypeData):
 		return df
 
 	def write2file(self, df):
-		outfile = f"{prefix}_imputed_012.csv"
+		outfile = f"{self.prefix}_imputed_012.csv"
 		df.to_csv(outfile, header=False, index=False)
+
+	@timer
+	def fit_predict_simimp(self, df, pops):
+		simimp = SimpleImputerCustom(
+			strategy="groups",
+			pops=pops
+		)
+
+		#df = df.apply(lambda x: x.astype(object))
+
+		simimp.fit(df)
+		df_imp = pd.DataFrame(simimp.transform(df))
+		print(df_imp)
+
