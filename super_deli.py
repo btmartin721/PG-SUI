@@ -201,7 +201,7 @@ def main():
 		# )
 
 
-		afpops = ImputeAlleleFreq(data, prefix=args.prefix, bypopulations=True)
+		afpops = ImputeAlleleFreq(data, prefix=args.prefix, by_populations=True)
 
 
 		# br_imp = ImputeBayesianRidge(data, prefix=args.prefix, n_iter=100, gridparams=grid_params, grid_iter=3, cv=3, n_jobs=4, max_iter=5, n_nearest_features=3, column_subset=4, ga=False, disable_progressbar=True, progress_update_percent=20, chunk_size=1.0)

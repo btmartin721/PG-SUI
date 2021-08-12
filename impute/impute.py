@@ -39,7 +39,7 @@ from impute.iterative_imputer_custom import (
 	IterativeImputerAllData,
 )
 
-from impute.simple_imputer_custom import SimpleImputerCustom
+from impute.group_imputer import ImputeByGroup
 
 from read_input.read_input import GenotypeData
 
@@ -2068,21 +2068,21 @@ class ImputeAlleleFreq(GenotypeData):
 	[Impute missing data by global allele frequency. Population IDs can be sepcified with the pops argument. if pops is None, then imputation is by global allele frequency. If pops is not None, then imputation is by population-wise allele frequency. A list of population IDs in the appropriate format can be obtained from the GenotypeData object as GenotypeData.populations]
 
 	Args:
-									genotype_data ([GenotypeData]): [GenotypeData instance. If ``genotype_data`` is not defined, then ``genotypes`` must be defined instead, and they cannot both be defined]. Defaults to None.
+		genotype_data ([GenotypeData]): [GenotypeData instance. If ``genotype_data`` is not defined, then ``genotypes`` must be defined instead, and they cannot both be defined]. Defaults to None.
 
-									genotypes ([pandas.DataFrame], optional): [012-encoded genotypes to be imputed. If ``genotypes`` is None, then uses ``genotype_data`` of type GenotypeData. One of ``genotypes`` or ``genotype_data`` must be defined]. Defaults to None.
+		genotypes ([pandas.DataFrame], optional): [012-encoded genotypes to be imputed. If ``genotypes`` is None, then uses ``genotype_data`` of type GenotypeData. One of ``genotypes`` or ``genotype_data`` must be defined]. Defaults to None.
 
-									pops ([list(str)], optional): [If None, then imputes by global allele frequency. If not None, then imputes population-wise and pops should be a list of population assignments. The list of population assignments can be obtained from the GenotypeData object as GenotypeData.populations]. Defaults to None.
+		pops ([list(str)], optional): [If None, then imputes by global allele frequency. If not None, then imputes population-wise and pops should be a list of population assignments. The list of population assignments can be obtained from the GenotypeData object as GenotypeData.populations]. Defaults to None.
 
-									diploid (bool, optional): [When diploid=True, function assumes 0=homozygous ref; 1=heterozygous; 2=homozygous alt. 0-1-2 genotypes are decomposed to compute p (=frequency of ref) and q (=frequency of alt). In this case, p and q alleles are sampled to generate either 0 (hom-p), 1 (het), or 2 (hom-q) genotypes. When diploid=FALSE, 0-1-2 are sampled according to their observed frequency]. Defaults to True.
+		diploid (bool, optional): [When diploid=True, function assumes 0=homozygous ref; 1=heterozygous; 2=homozygous alt. 0-1-2 genotypes are decomposed to compute p (=frequency of ref) and q (=frequency of alt). In this case, p and q alleles are sampled to generate either 0 (hom-p), 1 (het), or 2 (hom-q) genotypes. When diploid=FALSE, 0-1-2 are sampled according to their observed frequency]. Defaults to True.
 
-									default (int, optional): [Value to set if no alleles sampled at a locus]. Defaults to 0.
+		default (int, optional): [Value to set if no alleles sampled at a locus]. Defaults to 0.
 
-									missing (int, optional): [Missing data value]. Defaults to -9.
+		missing (int, optional): [Missing data value]. Defaults to -9.
 
-									prefix (str, optional): [Prefix for writing output files]
+		prefix (str, optional): [Prefix for writing output files]
 
-									write_output (bool, optional): [Whether to save imputed output to a file. If ``write_output`` is False, then just returns the imputed values. If ``write_output`` is True, then it saves the imputed data as a CSV file called ``<prefix>_imputed_012.csv``]
+		write_output (bool, optional): [Whether to save imputed output to a file. If ``write_output`` is False, then just returns the imputed values. If ``write_output`` is True, then it saves the imputed data as a CSV file called ``<prefix>_imputed_012.csv``]
 	"""
 
 	def __init__(
@@ -2094,35 +2094,39 @@ class ImputeAlleleFreq(GenotypeData):
 		missing=-9,
 		prefix="out",
 		write_output=False,
-		bypopulations=False
+		by_populations=False,
+		metric="most_frequent"
 	):
 		self.pops = None # temporary fix
 		self.diploid = diploid
 		self.default = default
 		self.missing = missing
 		self.prefix = prefix
-		self.bypopulations = bypopulations
+		self.by_populations = by_populations
+		self.metric = metric
 
 		super().__init__()
 
-		if self.bypopulations:
-			self.imputed = self.fit_predict_simimp(genotype_data.genotypes_df, genotype_data.populations)
+		if self.by_populations:
+			self.imputed = self.fit_predict_pops(
+				genotype_data.genotypes_df, genotype_data.populations)
+			print(self.imputed)
 		else:
-			self.imputed = self.fit_predict(genotype_data.genotypes_list)
+			self.imputed = self.fit_predict_global(genotype_data.genotypes_list)
 			print(self.imputed)
 
 		if write_output:
 			self.write2file(self.imputed)
 
 	@timer
-	def fit_predict(self, X):
-		"""[Impute missing genotypes using allele frequencies, with missing alleles coded as negative; usually -9]
+	def fit_predict_global(self, X):
+		"""[Impute missing genotypes using global allele frequencies, with missing alleles coded as negative; usually -9]
 
 		Args:
-										X ([list(list(int))]): [012-encoded genotypes obtained from the GenotypeData object as GenotypeData.genotypes_list]
+			X ([list(list(int))]): [012-encoded genotypes obtained from the GenotypeData object as GenotypeData.genotypes_list]
 
 		Returns:
-										[pandas.DataFrame]: [Imputed genotypes of same dimensions as data]
+			[pandas.DataFrame]: [Imputed genotypes of same dimensions as data]
 		"""
 		if self.pops is not None:
 			print("\nImputing by population allele frequencies...")
@@ -2204,6 +2208,22 @@ class ImputeAlleleFreq(GenotypeData):
 		print("Done!")
 		return df
 
+	# @timer
+	# def fit_predict_pops(self, X, pops):
+	# 	df = pd.DataFrame(X, dtype="float32")
+	# 	df["pops"] = pops
+
+	# 	df.columns = df.columns.map(str)
+
+	# 	df_imp = df.copy()
+	# 	for col in df.columns:
+	# 		imp = GroupImputer(
+	# 			group_cols=["pops"], target=col, metric=self.metric)
+
+	# 		df_imp = pd.DataFrame(imp.fit_transform(df), columns=df.columns)
+
+	# 	return df_imp
+
 	def _sample_allele(self, allele_probs, diploid=True):
 		if diploid:
 			alleles = misc.weighted_draw(allele_probs, 2)
@@ -2273,33 +2293,38 @@ class ImputeAlleleFreq(GenotypeData):
 		"""[Getter for the imputed genotypes]
 
 		Returns:
-										[pandas.DataFrame]: [Imputed 012-encoded genotypes as DataFrame]
+			[pandas.DataFrame]: [Imputed 012-encoded genotypes as DataFrame]
 		"""
 		return self.imputed
 
-	def fit_predict_bypop(self, df, pops):
+	def fit_predict_pops(self, df, pops):
 		df["pops"] = pops
 		
-		for col in df.columns:
-			df[col] = df.groupby("pops")[col].apply(lambda x: x.fillna(x.mode().iloc[0]))
+		# for col in df.columns:
+		# 	df[col] = df.groupby("pops")[col].apply(lambda x: x.fillna(x.mode().iloc[0]))
 
-		df.drop("pops", axis=1, inplace=True)
-		return df
+		# df.drop("pops", axis=1, inplace=True)
+		# return df
+
+		imp = ImputeByGroup(group_var="pops")
+		imp.fit(df)
+		Xt = imp.transform(df)
+		return Xt
 
 	def write2file(self, df):
 		outfile = f"{self.prefix}_imputed_012.csv"
 		df.to_csv(outfile, header=False, index=False)
 
-	@timer
-	def fit_predict_simimp(self, df, pops):
-		simimp = SimpleImputerCustom(
-			strategy="groups",
-			pops=pops
-		)
+	#@timer
+	# def fit_predict_simimp(self, df, pops):
+	# 	simimp = SimpleImputerCustom(
+	# 		strategy="groups",
+	# 		pops=pops
+	# 	)
 
-		#df = df.apply(lambda x: x.astype(object))
+	# 	#df = df.apply(lambda x: x.astype(object))
 
-		simimp.fit(df)
-		df_imp = pd.DataFrame(simimp.transform(df))
-		print(df_imp)
+	# 	simimp.fit(df)
+	# 	df_imp = pd.DataFrame(simimp.transform(df))
+	# 	print(df_imp)
 
