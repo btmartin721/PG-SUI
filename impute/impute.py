@@ -39,7 +39,7 @@ from impute.iterative_imputer_custom import (
 	IterativeImputerAllData,
 )
 
-from impute.group_imputer import ImputeByGroup
+from impute.simple_imputer_custom import SimpleImputerCustom
 
 from read_input.read_input import GenotypeData
 
@@ -2089,37 +2089,36 @@ class ImputeAlleleFreq(GenotypeData):
 		self,
 		genotype_data=None,
 		*,
+		by_populations=False,
 		diploid=True,
 		default=0,
 		missing=-9,
 		prefix="out",
-		write_output=False,
-		by_populations=False,
-		metric="most_frequent"
+		write_output=False
 	):
-		self.pops = None # temporary fix
+
+		super().__init__()
+
+		if by_populations:
+			self.pops = genotype_data.populations
+		else:
+			self.pops = None
+
 		self.diploid = diploid
 		self.default = default
 		self.missing = missing
 		self.prefix = prefix
-		self.by_populations = by_populations
-		self.metric = metric
 
-		super().__init__()
-
-		if self.by_populations:
-			self.imputed = self.fit_predict_pops(
-				genotype_data.genotypes_df, genotype_data.populations)
-			print(self.imputed)
-		else:
-			self.imputed = self.fit_predict_global(genotype_data.genotypes_list)
-			print(self.imputed)
+		if by_populations:
+			self.imputed = self.fit_predict_pops(genotype_data.genotypes_df)
+		else:	
+			self.imputed = self.fit_predict(genotype_data.genotypes_list)
 
 		if write_output:
 			self.write2file(self.imputed)
 
 	@timer
-	def fit_predict_global(self, X):
+	def fit_predict(self, X):
 		"""[Impute missing genotypes using global allele frequencies, with missing alleles coded as negative; usually -9]
 
 		Args:
@@ -2208,21 +2207,16 @@ class ImputeAlleleFreq(GenotypeData):
 		print("Done!")
 		return df
 
-	# @timer
-	# def fit_predict_pops(self, X, pops):
-	# 	df = pd.DataFrame(X, dtype="float32")
-	# 	df["pops"] = pops
+	@timer
+	def fit_predict_pops(self, X):
+		imp = SimpleImputerCustom(
+			pops=self.pops, strategy="most_frequent_groups")
 
-	# 	df.columns = df.columns.map(str)
-
-	# 	df_imp = df.copy()
-	# 	for col in df.columns:
-	# 		imp = GroupImputer(
-	# 			group_cols=["pops"], target=col, metric=self.metric)
-
-	# 		df_imp = pd.DataFrame(imp.fit_transform(df), columns=df.columns)
-
-	# 	return df_imp
+		imp.fit(X)
+		Xt = imp.transform(X)
+		print(pd.DataFrame(Xt))
+		print(X)
+		return Xt
 
 	def _sample_allele(self, allele_probs, diploid=True):
 		if diploid:
@@ -2297,34 +2291,6 @@ class ImputeAlleleFreq(GenotypeData):
 		"""
 		return self.imputed
 
-	def fit_predict_pops(self, df, pops):
-		df["pops"] = pops
-		
-		# for col in df.columns:
-		# 	df[col] = df.groupby("pops")[col].apply(lambda x: x.fillna(x.mode().iloc[0]))
-
-		# df.drop("pops", axis=1, inplace=True)
-		# return df
-
-		imp = ImputeByGroup(group_var="pops")
-		imp.fit(df)
-		Xt = imp.transform(df)
-		return Xt
-
 	def write2file(self, df):
 		outfile = f"{self.prefix}_imputed_012.csv"
 		df.to_csv(outfile, header=False, index=False)
-
-	#@timer
-	# def fit_predict_simimp(self, df, pops):
-	# 	simimp = SimpleImputerCustom(
-	# 		strategy="groups",
-	# 		pops=pops
-	# 	)
-
-	# 	#df = df.apply(lambda x: x.astype(object))
-
-	# 	simimp.fit(df)
-	# 	df_imp = pd.DataFrame(simimp.transform(df))
-	# 	print(df_imp)
-

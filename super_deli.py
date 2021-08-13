@@ -14,7 +14,6 @@ from utils.misc import get_processor_name
 # Custom module imports
 from read_input.read_input import GenotypeData
 from impute.impute import *
-from impute.simple_imputer_custom import SimpleImputerCustom
 
 from dim_reduction.dim_reduction import DimReduction
 from dim_reduction.embed import *
@@ -200,8 +199,8 @@ def main():
 		#     initial_strategy="groups",
 		# )
 
-
-		afpops = ImputeAlleleFreq(data, prefix=args.prefix, by_populations=True)
+		afpops = ImputeAlleleFreq(
+			data, by_populations=True, prefix=args.prefix)
 
 
 		# br_imp = ImputeBayesianRidge(data, prefix=args.prefix, n_iter=100, gridparams=grid_params, grid_iter=3, cv=3, n_jobs=4, max_iter=5, n_nearest_features=3, column_subset=4, ga=False, disable_progressbar=True, progress_update_percent=20, chunk_size=1.0)

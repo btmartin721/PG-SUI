@@ -19,6 +19,8 @@ from sklearn.utils import is_scalar_nan
 from sklearn.utils._mask import _get_mask
 from sklearn.utils.validation import _deprecate_positional_args
 from sklearn.utils.validation import check_is_fitted
+from sklearn.utils.validation import FLOAT_DTYPES
+
 
 from utils.misc import get_processor_name
 
@@ -105,7 +107,7 @@ class SimpleImputerCustom(SimpleImputer):
 				row_mask = np.logical_not(row_mask).astype(bool)
 				row = row[row_mask]
 				most_frequent[i] = self._most_frequent(row, np.nan, 0)
-			
+
 			return most_frequent
 
 		# Constant
@@ -114,9 +116,9 @@ class SimpleImputerCustom(SimpleImputer):
 			# fill_value in each column
 			return np.full(X.shape[1], fill_value, dtype=X.dtype)
 
-		elif strategy == "groups":
+		elif strategy == "most_frequent_groups":
 			if self.pops is None:
-				raise TypeError("pops argument cannot be NoneType if initial_strategy='groups'")
+				raise TypeError("pops argument cannot be NoneType if initial_strategy='most_frequent_groups'")
 
 			# Avoid use of scipy.stats.mstats.mode due to the required
 			# additional overhead and slow benchmarking performance.
@@ -147,8 +149,6 @@ class SimpleImputerCustom(SimpleImputer):
 		"""[Compute the most frequent value in a 1d array extended with
 		``extra_value * n_repeat``, where ``extra_value`` is assumed to be not part of the array]"""
 
-		most_frequent_values = list()
-		most_frequent_counts = list()
 		most_frequent = dict()
 		if grps is not None:
 			if array.size > 0:
@@ -208,7 +208,7 @@ class SimpleImputerCustom(SimpleImputer):
 			"median",
 			"most_frequent",
 			"constant",
-			"groups",
+			"most_frequent_groups",
 		]
 
 		if self.strategy not in allowed_strategies:
@@ -218,7 +218,7 @@ class SimpleImputerCustom(SimpleImputer):
 				f" got strategy={self.strategy}"
 			)
 
-		if self.strategy in ("most_frequent", "groups", "constant"):
+		if self.strategy in ("most_frequent", "most_frequent_groups", "constant"):
 			# If input is a list of strings, dtype = object.
 			# Otherwise ValueError is raised in SimpleImputer
 			# with strategy='most_frequent' or 'constant'
@@ -271,17 +271,54 @@ class SimpleImputerCustom(SimpleImputer):
 		statistics = self.statistics_
 
 		if isinstance(statistics[0], dict):
+
 			if X.shape[1] != len(statistics):
-				raise ValueError(f"X has {X.shape[1]} features per sample, "
-								f"expected {len(self.statistics)}")
+				raise ValueError(
+					f"X has {X.shape[1]} features per sample, "
+					f"expected {len(self.statistics)}")
 
 			missing_mask = _get_mask(X, self.missing_values)
 
-			# same as np.isnan but also works for object dtypes
-			invalid_mask = _get_mask(statistics, np.nan)
-			valid_mask = np.logical_not(invalid_mask)
-			valid_statistics = statistics[valid_mask]
-			valid_statistics_indexes = np.flatnonzero(valid_mask)
+			groups = np.array(self.pops, dtype=object)
+			uniq_grps = np.unique(groups)
+
+			for key in uniq_grps:
+				statistics_grp = np.array(
+					[mydict[key] for mydict in statistics])
+
+				grp_mask = groups == key
+					
+				# same as np.isnan but also works for object dtypes
+				invalid_mask = _get_mask(statistics_grp, np.nan)
+				valid_mask = np.logical_not(invalid_mask)
+				valid_statistics = statistics_grp[valid_mask]
+				valid_statistics_indexes = np.flatnonzero(valid_mask)
+
+				if invalid_mask.any():
+					missing = np.arange(X.shape[1])[invalid_mask]
+
+					if self.verbose:
+						warnings.warn(
+							f"Deleting features without "
+							f"observed values: {missing}")
+
+					X = X[:, valid_statistics_indexes]
+
+				# use mask computed before eliminating invalid mask
+				if valid_statistics_indexes is None:
+					mask_valid_features = missing_mask[grp_mask, :]
+				else:
+					mask_valid_features = missing_mask[grp_mask][:, valid_statistics_indexes]
+
+				n_missing = np.sum(mask_valid_features, axis=0)
+				values = np.repeat(valid_statistics, n_missing)
+				coordinates = np.where(mask_valid_features.transpose())[::-1]
+
+				X[coordinates] = values
+
+			X_indicator = super()._transform_indicator(missing_mask)
+
+			return super()._concatenate_indicator(X, X_indicator)
 
 		else:
 				
@@ -308,6 +345,7 @@ class SimpleImputerCustom(SimpleImputer):
 					if self.verbose:
 						warnings.warn("Deleting features without "
 									"observed values: %s" % missing)
+
 					X = X[:, valid_statistics_indexes]
 
 			# Do actual imputation
