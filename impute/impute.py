@@ -32,14 +32,13 @@ from sklearn.metrics import accuracy_score
 from sklearn.metrics import mean_squared_error
 from sklearn.neighbors import KNeighborsClassifier
 
-# Custom module imports
+import xgboost as xgb
 
+# Custom module imports
 from impute.iterative_imputer_custom import (
 	IterativeImputerGridSearch,
 	IterativeImputerAllData,
 )
-
-from impute.simple_imputer_custom import SimpleImputerCustom
 
 from read_input.read_input import GenotypeData
 
@@ -1651,57 +1650,72 @@ class ImputeBayesianRidge:
 
 
 # DEPRECATED
-# class ImputeXGBoost:
+class ImputeXGBoost:
 
-# 	def __init__(
-# 		self,
-# 		genotype_data,
-# 		*,
-# 		prefix=None,
-# 		gridparams=None,
-# 		grid_iter=50,
-# 		cv=5,
+	def __init__(
+		self,
+		genotype_data,
+		*,
+		prefix=None,
+		gridparams=None,
+		grid_iter=50,
+		cv=5,
+		validation_only=0.4,
+		ga=False,
+		population_size=10,
+		tournament_size=3,
+		elitism=True,
+		crossover_probability=0.8,
+		mutation_probability=0.1,
+		ga_algorithm="eaMuPlusLambda",
+		early_stop_gen=5,
+		scoring_metric="accuracy",
+		column_subset=0.1,
+		chunk_size=1.0,
+		disable_progressbar=False,
+		progress_update_percent=None,
+		n_jobs=1,
+		n_estimators=100,
+		max_depth=3,
+		learning_rate=0.1,
+		booster="gbtree",
+		#tree_method="auto",
+		gamma=0,
+		min_child_weight=1,
+		max_delta_step=0,
+		subsample=1,
+		colsample_bytree=1,
+		reg_lambda=1,
+		reg_alpha=0,
+		#objective="multi:softmax",
+		#eval_metric="error",
+		clf_random_state=None,
+		n_nearest_features=10,
+		max_iter=10,
+		tol=1e-3,
+		initial_strategy="most_frequent",
+		imputation_order="ascending",
+		skip_complete=False,
+		random_state=None,
+		verbose=0
+	):
 
-# 		n_jobs=1,
-# 		n_estimators=100,
-# 		max_depth=6,
-# 		learning_rate=0.1,
-# 		booster="gbtree",
-# 		tree_method="auto",
-# 		gamma=0,
-# 		min_child_weight=1,
-# 		max_delta_step=0,
-# 		subsample=1,
-# 		colsample_bytree=1,
-# 		reg_lambda=1,
-# 		reg_alpha=0,
-# 		objective="multi:softmax",
-# 		eval_metric="error",
-# 		clf_random_state=None,
-# 		n_nearest_features=10,
-# 		max_iter=10,
-# 		tol=1e-3,
-# 		initial_strategy="most_frequent",
-# 		imputation_order="ascending",
-# 		skip_complete=False,
-# 		random_state=None,
-# 		verbose=0
-# 	):
+		# Get local variables into dictionary object
+		kwargs = locals()
+		#kwargs["num_class"] = 3
+		#kwargs["use_label_encoder"] = True
 
-# 		# Get local variables into dictionary object
-# 		kwargs = locals()
-# 		kwargs["num_class"] = 3
-# 		kwargs["use_label_encoder"] = True
+		self.clf_type = "classifier"
+		self.clf = xgb.XGBClassifier
+		kwargs["verbosity"] = verbose
 
-# 		self.clf_type = "classifier"
-# 		self.clf = XGBClassifier
+		imputer = Impute(self.clf, self.clf_type, kwargs)
 
-# 		imputer = Impute(self.clf, self.clf_type, kwargs)
+		self.imputed, self.best_params = imputer.fit_predict(
+			genotype_data.genotypes_df
+		)
 
-# 		self.imputed, self.best_score, self.best_params = \
-# 			imputer.fit_predict(genotype_data.genotypes_df)
-
-# 		imputer.write_imputed(self.imputed)
+		imputer.write_imputed(self.imputed)
 
 
 class ImputePhylo(GenotypeData):
@@ -2094,7 +2108,7 @@ class ImputeAlleleFreq(GenotypeData):
 		default=0,
 		missing=-9,
 		prefix="out",
-		write_output=False
+		write_output=True
 	):
 
 		super().__init__()
@@ -2109,10 +2123,7 @@ class ImputeAlleleFreq(GenotypeData):
 		self.missing = missing
 		self.prefix = prefix
 
-		if by_populations:
-			self.imputed = self.fit_predict_pops(genotype_data.genotypes_df)
-		else:	
-			self.imputed = self.fit_predict(genotype_data.genotypes_list)
+		self.imputed = self.fit_predict(genotype_data.genotypes_list)
 
 		if write_output:
 			self.write2file(self.imputed)
@@ -2206,17 +2217,6 @@ class ImputeAlleleFreq(GenotypeData):
 
 		print("Done!")
 		return df
-
-	@timer
-	def fit_predict_pops(self, X):
-		imp = SimpleImputerCustom(
-			pops=self.pops, strategy="most_frequent_groups")
-
-		imp.fit(X)
-		Xt = imp.transform(X)
-		print(pd.DataFrame(Xt))
-		print(X)
-		return Xt
 
 	def _sample_allele(self, allele_probs, diploid=True):
 		if diploid:

@@ -149,24 +149,44 @@ class SimpleImputerCustom(SimpleImputer):
 		"""[Compute the most frequent value in a 1d array extended with
 		``extra_value * n_repeat``, where ``extra_value`` is assumed to be not part of the array]"""
 
-		most_frequent = dict()
+		most_frequent_value = dict()
+		most_frequent_count = dict()
 		if grps is not None:
 			if array.size > 0:
 				uniq_groups = np.unique(grps)
 	
 				# Get mode per group
 				group_modes = [
-					(j, stats.mode(array[grps == j])[0]) for j in uniq_groups
+					(j, stats.mode(array[grps == j])) for j in uniq_groups
 				]
 
 				for cnt, g in enumerate(group_modes):
-					most_frequent[group_modes[cnt][0]] = group_modes[cnt][1][0]
+					most_frequent_value[
+						group_modes[cnt][0]
+					] = group_modes[cnt][1][0][0]
+
+					most_frequent_count[
+						group_modes[cnt][0]
+					] = group_modes[cnt][1][1][0]
 
 			else:
 				for cnt, g in enumerate(group_modes):
-					most_frequent[group_modes[cnt][0]] = 0
-			
-			return most_frequent
+					most_frequent_value[group_modes[cnt][0]] = 0
+					most_frequent_count[group_modes[cnt][0]] = 0
+
+			values_dict = dict()
+			for k, v in most_frequent_value.items():
+				if most_frequent_count[k] == 0 and n_repeat == 0:
+					values_dict[k] = np.nan
+				elif most_frequent_count[k] < n_repeat:
+					values_dict[k] = extra_value
+				elif most_frequent_count[k] > n_repeat:
+					values_dict[k] = v
+				elif most_frequent_count[k] == n_repeat:
+					# tie breaking similarly to scipy.stats.mode
+					values_dict[k] = min(v, extra_value)
+
+			return values_dict
 
 		else:
 			# Compute the most frequent value in array only

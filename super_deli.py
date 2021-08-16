@@ -119,12 +119,12 @@ def main():
 		# 	"max_samples": max_samples
 		# }
 
-		# grid_params = {
-		# 	"max_features": Categorical(["sqrt", "log2"]),
-		# 	"min_samples_split": Integer(2, 10),
-		# 	"min_samples_leaf": Integer(1, 10),
-		# 	"max_depth": Integer(2, 110)
-		# }
+		grid_params = {
+			"max_features": Categorical(["sqrt", "log2"]),
+			"min_samples_split": Integer(2, 10),
+			"min_samples_leaf": Integer(1, 10),
+			"max_depth": Integer(2, 110)
+		}
 
 		# Bayesian Ridge gridparams - RandomizedSearchCV
 		# grid_params = {
@@ -134,7 +134,7 @@ def main():
 		# 	"lambda_2": stats.loguniform(1e-6, 0.01),
 		# }
 
-		# # # Bayesian Ridge gridparams - Genetic algorithm
+		# # Bayesian Ridge gridparams - Genetic algorithm
 		# grid_params = {
 		# 	"alpha_1": Continuous(1e-6, 1e-3, distribution="log-uniform"),
 		# 	"alpha_2": Continuous(1e-6, 1e-3, distribution="log-uniform"),
@@ -180,6 +180,9 @@ def main():
 		# 		progress_update_percent=20,
 		# 		chunk_size=0.2
 		# )
+
+
+		xgb_imp = ImputeXGBoost(data, prefix=args.prefix, cv=3, n_jobs=4, n_estimators=50, max_iter=2, disable_progressbar=True, chunk_size=0.2, validation_only=0.1)
 		# rf_imp = ImputeRandomForest(
 		#     data,
 		#     prefix=args.prefix,
@@ -195,12 +198,11 @@ def main():
 		#     max_depth=6,
 		#     cv=3,
 		#     validation_only=0.1,
-		#     chunk_size=0.2,
-		#     initial_strategy="groups",
+		#     chunk_size=0.2
 		# )
 
-		afpops = ImputeAlleleFreq(
-			data, by_populations=True, prefix=args.prefix)
+		# afpops = ImputeAlleleFreq(
+		# 	data, by_populations=True, prefix=args.prefix)
 
 
 		# br_imp = ImputeBayesianRidge(data, prefix=args.prefix, n_iter=100, gridparams=grid_params, grid_iter=3, cv=3, n_jobs=4, max_iter=5, n_nearest_features=3, column_subset=4, ga=False, disable_progressbar=True, progress_update_percent=20, chunk_size=1.0)
