@@ -8,17 +8,17 @@ A comprehensive machine learning species delimitation package
 
 + python == 3.7
 + pandas == 1.2.5
-+ numpy >= 1.20
++ numpy == 1.20
 + matplotlib
 + seaborn
 + kneed
 + tqdm
 + jupyterlab
-+ scikit-learn >= 0.24
++ scikit-learn == 0.24
 + scikit-learn-extra
 + sklearn-genetic-opt >= 0.6.0
 + toytree
-+ scipy >= 1.6.2 and <= 1.7.0
++ scipy >= 1.6.2 and < 1.7.0
 
 Python versions other than 3.7 are not currently supported.  
 
