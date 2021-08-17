@@ -181,7 +181,7 @@ def main():
         # 		chunk_size=0.2
         # )
 
-        xgb_imp = ImputeXGBoost(
+        lgbm_imp = ImputeLightGBM(
             data,
             prefix=args.prefix,
             cv=3,

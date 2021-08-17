@@ -33,6 +33,7 @@ from sklearn.metrics import mean_squared_error
 from sklearn.neighbors import KNeighborsClassifier
 
 import xgboost as xgb
+import lightgbm as lgbm
 
 # Custom module imports
 from impute.iterative_imputer_custom import (
@@ -1797,6 +1798,158 @@ class ImputeXGBoost:
         imputer.write_imputed(self.imputed)
 
 
+class ImputeLightGBM:
+    """[Does LightGBM (Light Gradient Boosting) Iterative imputation of missing data. LightGBM is an alternative to XGBoost that is around 7X faster and uses less memory, while still maintaining high accuracy. Iterative imputation uses the n_nearest_features to inform the imputation at each feature (i.e., SNP site), using the N most correlated features per site. The N most correlated features are drawn with probability proportional to correlation for each imputed target feature to ensure coverage of features throughout the imputation process]
+
+    Args:
+        genotype_data ([GenotypeData]): [GenotypeData instance that was used to read in the sequence data]
+
+        prefix ([str]): [Prefix for imputed data's output filename]
+
+        gridparams (dict, optional): [Dictionary with lists as values or distributions of parameters. Distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). ```gridparams``` will be used for a randomized grid search. The grid search will determine the optimal parameters as those that maximize accuracy (or minimize root mean squared error for BayesianRidge regressor). **NOTE: Takes a long time, so run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. The full imputation can be performed by setting ```gridparams=None``` (default)]. Defaults to None.
+
+        grid_iter (int, optional): [Number of iterations for randomized grid search]. Defaults to 50.
+
+        cv (int, optional): [Number of folds for cross-validation during randomized grid search]. Defaults to 5.
+
+        validation_only (float, optional): [Validates the imputation without doing a grid search. The validation method randomly replaces 15% to 50% of the known, non-missing genotypes in ``n_features * validation_only`` of the features. It then imputes the newly missing genotypes for which we know the true values and calculates validation scores. This procedure is replicated ``cv`` times and a mean, median, minimum, maximum, lower 95% confidence interval (CI) of the mean, and the upper 95% CI are calculated and saved to a CSV file. ``gridparams`` must be set to None (default) for ``validation_only`` to work. Calculating a validation score can be turned off altogether by setting ``validation_only`` to None]. Defaults to 0.4.
+
+        ga (bool, optional): [Whether to use a genetic algorithm for the grid search. If False, a RandomizedSearchCV is done instead]. Defaults to False.
+
+        population_size (int, optional): [For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. See GASearchCV documentation]. Defaults to 10.
+
+        tournament_size (int, optional): [For genetic algorithm grid search: Number of individuals to perform tournament selection. See GASearchCV documentation]. Defaults to 3.
+
+        elitism (bool, optional): [For genetic algorithm grid search: If True takes the tournament_size best solution to the next generation. See GASearchCV documentation]. Defaults to True.
+
+        crossover_probability (float, optional): [For genetic algorithm grid search: Probability of crossover operation between two individuals. See GASearchCV documentation]. Defaults to 0.8.
+
+        mutation_probability (float, optional): [For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation]. Defaults to 0.1.
+
+        ga_algorithm (str, optional): [For genetic algorithm grid search: Evolutionary algorithm to use. See more details in the deap algorithms documentation]. Defaults to "eaMuPlusLambda".
+
+        early_stop_gen (int, optional): [If the genetic algorithm sees ```early_stop_gen``` consecutive generations without improvement in the scoring metric, an early stopping callback is implemented. This saves time by reducing the number of generations the genetic algorithm has to perform]. Defaults to 5.
+
+        scoring_metric (str, optional): [Scoring metric to use for randomized or genetic algorithm grid searches. See sklearn.metrics documentation for options]. Defaults to "accuracy".
+
+        column_subset (int or float, optional): [If float, proportion of the dataset to randomly subset for the grid search. Should be between 0 and 1, and should also be small, because the grid search takes a long time. If int, subset ```column_subset``` columns]. Defaults to 0.1.
+
+        chunk_size (int or float, optional): [Number of loci for which to perform IterativeImputer at one time. Useful for reducing the memory usage if you are running out of RAM. If integer is specified, selects ```chunk_size``` loci at a time. If a float is specified, selects ```total_loci * chunk_size``` loci at a time]. Defaults to 1.0 (all features).
+
+        disable_progressbar (bool, optional): [Whether or not to disable the tqdm progress bar when doing the imputation. If True, progress bar is disabled, which is useful when running the imputation on e.g. an HPC cluster. If the bar is disabled, a status update will be printed to standard output for each iteration and feature instead. If False, the tqdm progress bar will be used]. Defaults to False.
+
+        progress_update_percent (int, optional): [Print status updates for features every ```progress_update_percent```%. IterativeImputer iterations will always be printed, but ```progress_update_percent``` involves iteration progress through the features of each IterativeImputer iteration. If None, then does not print progress through features]. Defaults to None.
+
+        n_jobs (int, optional): [Number of parallel jobs to use. If ```gridparams``` is not None, n_jobs is used for the grid search. Otherwise it is used for the classifier. -1 means using all available processors]. Defaults to 1.
+
+        n_estimators (int, optional): [The number of boosting rounds. Increasing this value can improve the fit, but at the cost of compute time and RAM usage]. Defaults to 100.
+
+        max_depth (int, optional): [Maximum tree depth for base learners]. Defaults to 3.
+
+        learning_rate (float, optional): [Boosting learning rate (eta). Basically, it serves as a weighting factor for correcting new trees when they are added to the model. Typical values are between 0.1 and 0.3. Lower learning rates generally find the best optimum at the cost of requiring far more compute time and resources]. Defaults to 0.1.
+
+        num_leaves (int, optional): [Maximum tree leaves for base learners]. Defaults to 31.
+
+        subsample_for_bin (int, optional): [Number of samples for constructing bins]. Defaults to 200000.
+
+        min_split_gain (float, optional): [Minimum loss reduction required to make a further partition on a leaf node of the tree]. Defaults to 0.0.
+
+        min_child_weight (float, optional): [Minimum sum of instance weight (hessian) needed in a child (leaf)]. Defaults to 1e-3.
+
+        min_child_samples (int, optional): [Minimum number of data needed in a child (leaf)]. Defaults to 20.
+
+        subsample (float, optional): [Subsample ratio of the training instance]. Defaults to 1.0.
+
+        subsample_freq (int, optional): [Frequency of subsample, <=0 means no enable]. Defaults to 0.
+
+        colsample_bytree (float, optional): [Subsample ratio of columns when constructing each tree]. Defaults to 1.0.
+
+        reg_lambda (float, optional): [L2 regularization term on weights]. Defaults to 0.
+
+        reg_alpha (float, optional): [L1 regularization term on weights]. Defaults to 0.
+
+        clf_random_state (int, numpy.random.RandomState object, or None): [Random number seed. If int, this number is used to seed the C++ code. If RandomState object (numpy), a random integer is picked based on its state to seed the C++ code. If None, default seeds in C++ code are used]. Defaults to None.
+
+        silent (bool, optional): [Whether to print messages while running boosting]. Defaults to True.
+
+        max_iter (int, optional): [Maximum number of imputation rounds to perform before returning the imputations computed during the final round. A round is a single imputation of each feature with missing values]. Defaults to 10.
+
+        tol ([type], optional): [Tolerance of the stopping condition]. Defaults to 1e-3.
+
+        n_nearest_features (int, optional): [Number of other features to use to estimate the missing values of eacah feature column. If None, then all features will be used, but this can consume an  intractable amount of computing resources. Nearness between features is measured using the absolute correlation coefficient between each feature pair (after initial imputation). To ensure coverage of features throughout the imputation process, the neighbor features are not necessarily nearest, but are drawn with probability proportional to correlation for each imputed target feature. Can provide significant speed-up when the number of features is huge]. Defaults to 10.
+
+        initial_strategy (str, optional): [Which strategy to use to initialize the missing values. Same as the strategy parameter in sklearn.impute.SimpleImputer Valid values: {“mean”, “median”, or “most_frequent”}]. Defaults to "most_frequent".
+
+        imputation_order (str, optional): [The order in which the features will be imputed. Possible values: 'ascending' (from features with fewest missing values to most), 'descending' (from features with most missing values to fewest), 'roman' (left to right), 'arabic' (right to left), 'random' (a random order for each round). ]. Defaults to "ascending".
+
+        skip_complete (bool, optional): [If True, then features with missing values during transform that did not have any missing values during fit will be imputed with the initial imputation method only. Set to True if you have many features with no missing values at both fit and transform time to save compute time]. Defaults to False.
+
+        random_state (int, optional): [The seed of the pseudo random number generator to use for the iterative imputer. Randomizes selection of etimator features if n_nearest_features is not None or the imputation_order is 'random'. Use an integer for determinism. If None, then uses a different random seed each time]. Defaults to None.
+
+        verbose (int, optional): [Verbosity flag, controls the debug messages that are issues as functions are evaluated. The higher, the more verbose. Possible values are 0, 1, or 2]. Defaults to 0.
+    """
+
+    def __init__(
+        self,
+        genotype_data,
+        *,
+        prefix=None,
+        gridparams=None,
+        grid_iter=50,
+        cv=5,
+        validation_only=0.4,
+        ga=False,
+        population_size=10,
+        tournament_size=3,
+        elitism=True,
+        crossover_probability=0.8,
+        mutation_probability=0.1,
+        ga_algorithm="eaMuPlusLambda",
+        early_stop_gen=5,
+        scoring_metric="accuracy",
+        column_subset=0.1,
+        chunk_size=1.0,
+        disable_progressbar=False,
+        progress_update_percent=None,
+        n_jobs=1,
+        n_estimators=100,
+        max_depth=3,
+        learning_rate=0.1,
+        num_leaves=31,
+        subsample_for_bin=200000,
+        min_split_gain=0.0,
+        min_child_weight=1e-3,
+        min_child_samples=20,
+        subsample=1.0,
+        subsample_freq=0,
+        colsample_bytree=1.0,
+        reg_lambda=0,
+        reg_alpha=0,
+        clf_random_state=None,
+        silent=True,
+        n_nearest_features=10,
+        max_iter=10,
+        tol=1e-3,
+        initial_strategy="most_frequent",
+        imputation_order="ascending",
+        skip_complete=False,
+        random_state=None,
+        verbose=0,
+    ):
+
+        # Get local variables into dictionary object
+        kwargs = locals()
+
+        self.clf_type = "classifier"
+        self.clf = lgbm.LGBMClassifier
+
+        imputer = Impute(self.clf, self.clf_type, kwargs)
+
+        self.imputed, self.best_params = imputer.fit_predict(
+            genotype_data.genotypes_df
+        )
+
+        imputer.write_imputed(self.imputed)
 
 
 class ImputePhylo(GenotypeData):
