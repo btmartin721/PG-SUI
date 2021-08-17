@@ -6,8 +6,8 @@ A comprehensive machine learning species delimitation package
 
 ## Requirements
 
-+ python >= 3.7
-+ pandas >= 1.2.5
++ python == 3.7
++ pandas == 1.2.5
 + numpy >= 1.20
 + matplotlib
 + seaborn
@@ -27,7 +27,7 @@ The requirements can mostly be installed with conda. The only module that isn't 
 ```
 create -n super_deli python=3.7
 conda activate super_deli
-conda install matplotlib seaborn jupyterlab scikit-learn tqdm pandas=1.2.5 numpy=1.20.2 scipy=1.6.2
+conda install matplotlib seaborn jupyterlab scikit-learn tqdm pandas=1.2.5 numpy=1.20.2 scipy=1.6.2 xgboost lightgbm
 conda install scikit-learn-intelex # Only if using Intel CPUs; speeds up processing
 conda install -c conda-forge toytree scikit-learn-extra kneed
 pip install sklearn-genetic-opt[all] # For genetic algorithm plotting functions
