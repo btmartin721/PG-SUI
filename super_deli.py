@@ -181,17 +181,19 @@ def main():
         # 		chunk_size=0.2
         # )
 
-        lgbm_imp = ImputeLightGBM(
+        xgb_imp = ImputeXGBoost(
             data,
             prefix=args.prefix,
             cv=3,
             n_jobs=4,
             n_estimators=50,
-            max_iter=2,
             disable_progressbar=True,
             chunk_size=0.2,
             validation_only=0.1,
+            n_nearest_features=3,
+            max_iter=2,
         )
+
         # rf_imp = ImputeRandomForest(
         #     data,
         #     prefix=args.prefix,

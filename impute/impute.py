@@ -28,8 +28,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.experimental import enable_iterative_imputer
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import BayesianRidge
-from sklearn.metrics import accuracy_score
-from sklearn.metrics import mean_squared_error
+from sklearn import metrics
 from sklearn.neighbors import KNeighborsClassifier
 
 import xgboost as xgb
@@ -737,7 +736,7 @@ class Impute:
         df_cp.drop(bad_cols, axis=1, inplace=True)
 
         print(
-            f"{len(bad_cols)} columns removed for being non-biallelic or having genotype counts < number of cross-validation folds\nSubsetting from {len(df_removed.columns)} remaining columns\n"
+            f"{len(bad_cols)} columns removed for being non-biallelic or having genotype counts < number of cross-validation folds\nSubsetting from {len(df_cp.columns)} remaining columns\n"
         )
 
         return df_cp
@@ -958,13 +957,35 @@ class Impute:
             # Adapted from: https://medium.com/analytics-vidhya/using-scikit-learns-iterative-imputer-694c3cca34de
             if self.clf_type == "classifier":
                 score_list.append(
-                    accuracy_score(
+                    
+                    if self.scoring_metric == "accuracy":
+                        score_func = metrics.accuracy_score
+                    elif self.scoring_metric == "balanced_accuracy":
+                        score_func = metrics.balanced_accuracy_score
+                    elif self.scoring_metric == "top_k_accuracy":
+                        score_func = metrics.top_k_accuracy
+                    elif self.scoring_metric == "average_precision":
+                        score_func = metrics.average_precision_score
+                    elif self.scoring_metric == "neg_brier_score":
+                        score_func = metrics.brier_score_loss
+                    elif self.scoring_metric == "f1":
+                        score_func = metrics.f1_score
+                    elif self.scoring_metric == "precision":
+                        score_func = metrics.precision_score
+                    elif self.scoring_metric == "recall":
+                        score_func = metrics.recall_score
+                    elif self.scoring_metric == "jaccard":
+                        score_func = metrics.jaccard_score
+                    elif self.scoring_metric == "roc_auc":
+                        score_func = metrics.roc_auc_score
+
+                    score_func(
                         df_known[df_known.columns[i]], df_imp[df_imp.columns[i]]
                     )
                 )
             else:
                 score_list.append(
-                    mean_squared_error(
+                    metrics.mean_squared_error(
                         df_known[df_known.columns[i]], df_imp[df_imp.columns[i]]
                     )
                 )
@@ -1107,7 +1128,7 @@ class ImputeKNN:
 
         early_stop_gen (int, optional): [If the genetic algorithm sees ```early_stop_gen``` consecutive generations without improvement in the scoring metric, an early stopping callback is implemented. This saves time by reducing the number of generations the genetic algorithm has to perform]. Defaults to 5.
 
-        scoring_metric (str, optional): [Scoring metric to use for randomized or genetic algorithm grid searches. See sklearn.metrics documentation for options]. Defaults to "accuracy".
+        scoring_metric (str, optional): [Scoring metric to use for randomized or genetic algorithm grid searches. See https://scikit-learn.org/stable/modules/model_evaluation.html for supported options]. Defaults to "accuracy".
 
         column_subset (int or float, optional): [If float, proportion of the dataset to randomly subset for the grid search. Should be between 0 and 1, and should also be small, because the grid search takes a long time. If int, subset ```column_subset``` columns]. Defaults to 0.1.
 
@@ -1233,7 +1254,7 @@ class ImputeRandomForest:
 
         early_stop_gen (int, optional): [If the genetic algorithm sees ```early_stop_gen``` consecutive generations without improvement in the scoring metric, an early stopping callback is implemented. This saves time by reducing the number of generations the genetic algorithm has to perform]. Defaults to 5.
 
-        scoring_metric (str, optional): [Scoring metric to use for randomized or genetic algorithm grid searches. See sklearn.metrics documentation for options]. Defaults to "accuracy".
+        scoring_metric (str, optional): [Scoring metric to use for randomized or genetic algorithm grid searches. See https://scikit-learn.org/stable/modules/model_evaluation.html for supported options]. Defaults to "accuracy".
 
         column_subset (int or float, optional): [If float, proportion of the dataset to randomly subset for the grid search. Should be between 0 and 1, and should also be small, because the grid search takes a long time. If int, subset ```column_subset``` columns]. Defaults to 0.1.
 
@@ -1401,7 +1422,7 @@ class ImputeGradientBoosting:
 
         early_stop_gen (int, optional): [If the genetic algorithm sees ```early_stop_gen``` consecutive generations without improvement in the scoring metric, an early stopping callback is implemented. This saves time by reducing the number of generations the genetic algorithm has to perform]. Defaults to 5.
 
-        scoring_metric (str, optional): [Scoring metric to use for randomized or genetic algorithm grid searches. See sklearn.metrics documentation for options]. Defaults to "accuracy".
+        scoring_metric (str, optional): [Scoring metric to use for randomized or genetic algorithm grid searches. See https://scikit-learn.org/stable/modules/model_evaluation.html for supported options]. Defaults to "accuracy".
 
         column_subset (int or float, optional): [If float, proportion of the dataset to randomly subset for the grid search. Should be between 0 and 1, and should also be small, because the grid search takes a long time. If int, subset ```column_subset``` columns]. Defaults to 0.1.
 
@@ -1548,7 +1569,7 @@ class ImputeBayesianRidge:
 
         early_stop_gen (int, optional): [If the genetic algorithm sees ```early_stop_gen``` consecutive generations without improvement in the scoring metric, an early stopping callback is implemented. This saves time by reducing the number of generations the genetic algorithm has to perform]. Defaults to 5.
 
-        scoring_metric (str, optional): [Scoring metric to use for randomized or genetic algorithm grid searches. See sklearn.metrics documentation for options]. Defaults to "accuracy".
+        scoring_metric (str, optional): [Scoring metric to use for randomized or genetic algorithm grid searches. See https://scikit-learn.org/stable/modules/model_evaluation.html for supported options]. Defaults to "accuracy".
 
         column_subset (int or float, optional): [If float, proportion of the dataset to randomly subset for the grid search. Should be between 0 and 1, and should also be small, because the grid search takes a long time. If int, subset ```column_subset``` columns]. Defaults to 0.1.
 
@@ -1651,40 +1672,18 @@ class ImputeBayesianRidge:
 
 
 class ImputeXGBoost:
-    """[Does XGBoost (Extreme Gradient Boosting) Iterative imputation of missing data. Iterative imputation uses the n_nearest_features to inform the imputation at each feature (i.e., SNP site), using the N most correlated features per site. The N most correlated features are drawn with probability proportional to correlation for each imputed target feature to ensure coverage of features throughout the imputation process]
+    """[Does XGBoost (Extreme Gradient Boosting) Iterative imputation of missing data. Iterative imputation uses the n_nearest_features to inform the imputation at each feature (i.e., SNP site), using the N most correlated features per site. The N most correlated features are drawn with probability proportional to correlation for each imputed target feature to ensure coverage of features throughout the imputation process. The grid searches are not compatible with XGBoost, but validation scores can still be calculated without a grid search. In addition, ImputeLightGBM is a similar algorithm and is compatible with grid searches, so use ImputeLightGBM if you want a grid search]
 
     Args:
         genotype_data ([GenotypeData]): [GenotypeData instance that was used to read in the sequence data]
 
         prefix ([str]): [Prefix for imputed data's output filename]
 
-        gridparams (dict, optional): [Dictionary with lists as values or distributions of parameters. Distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). ```gridparams``` will be used for a randomized grid search. The grid search will determine the optimal parameters as those that maximize accuracy (or minimize root mean squared error for BayesianRidge regressor). **NOTE: Takes a long time, so run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. The full imputation can be performed by setting ```gridparams=None``` (default)]. Defaults to None.
-
-        grid_iter (int, optional): [Number of iterations for randomized grid search]. Defaults to 50.
-
         cv (int, optional): [Number of folds for cross-validation during randomized grid search]. Defaults to 5.
 
         validation_only (float, optional): [Validates the imputation without doing a grid search. The validation method randomly replaces 15% to 50% of the known, non-missing genotypes in ``n_features * validation_only`` of the features. It then imputes the newly missing genotypes for which we know the true values and calculates validation scores. This procedure is replicated ``cv`` times and a mean, median, minimum, maximum, lower 95% confidence interval (CI) of the mean, and the upper 95% CI are calculated and saved to a CSV file. ``gridparams`` must be set to None (default) for ``validation_only`` to work. Calculating a validation score can be turned off altogether by setting ``validation_only`` to None]. Defaults to 0.4.
 
-        ga (bool, optional): [Whether to use a genetic algorithm for the grid search. If False, a RandomizedSearchCV is done instead]. Defaults to False.
-
-        population_size (int, optional): [For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. See GASearchCV documentation]. Defaults to 10.
-
-        tournament_size (int, optional): [For genetic algorithm grid search: Number of individuals to perform tournament selection. See GASearchCV documentation]. Defaults to 3.
-
-        elitism (bool, optional): [For genetic algorithm grid search:     If True takes the tournament_size best solution to the next generation. See GASearchCV documentation]. Defaults to True.
-
-        crossover_probability (float, optional): [For genetic algorithm grid search: Probability of crossover operation between two individuals. See GASearchCV documentation]. Defaults to 0.8.
-
-        mutation_probability (float, optional): [For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation]. Defaults to 0.1.
-
-        ga_algorithm (str, optional): [For genetic algorithm grid search: Evolutionary algorithm to use. See more details in the deap algorithms documentation]. Defaults to "eaMuPlusLambda".
-
-        early_stop_gen (int, optional): [If the genetic algorithm sees ```early_stop_gen``` consecutive generations without improvement in the scoring metric, an early stopping callback is implemented. This saves time by reducing the number of generations the genetic algorithm has to perform]. Defaults to 5.
-
-        scoring_metric (str, optional): [Scoring metric to use for randomized or genetic algorithm grid searches. See sklearn.metrics documentation for options]. Defaults to "accuracy".
-
-        column_subset (int or float, optional): [If float, proportion of the dataset to randomly subset for the grid search. Should be between 0 and 1, and should also be small, because the grid search takes a long time. If int, subset ```column_subset``` columns]. Defaults to 0.1.
+        scoring_metric (str, optional): [Scoring metric to use for randomized or genetic algorithm grid searches. See https://scikit-learn.org/stable/modules/model_evaluation.html for supported options]. Defaults to "accuracy".
 
         chunk_size (int or float, optional): [Number of loci for which to perform IterativeImputer at one time. Useful for reducing the memory usage if you are running out of RAM. If integer is specified, selects ```chunk_size``` loci at a time. If a float is specified, selects ```total_loci * chunk_size``` loci at a time]. Defaults to 1.0 (all features).
 
@@ -1740,20 +1739,9 @@ class ImputeXGBoost:
         genotype_data,
         *,
         prefix=None,
-        gridparams=None,
-        grid_iter=50,
         cv=5,
         validation_only=0.4,
-        ga=False,
-        population_size=10,
-        tournament_size=3,
-        elitism=True,
-        crossover_probability=0.8,
-        mutation_probability=0.1,
-        ga_algorithm="eaMuPlusLambda",
-        early_stop_gen=5,
         scoring_metric="accuracy",
-        column_subset=0.1,
         chunk_size=1.0,
         disable_progressbar=False,
         progress_update_percent=None,
@@ -1779,11 +1767,11 @@ class ImputeXGBoost:
         random_state=None,
         verbose=0,
     ):
-
         # Get local variables into dictionary object
         kwargs = locals()
+        kwargs["gridparams"] = None
         # kwargs["num_class"] = 3
-        # kwargs["use_label_encoder"] = True
+        # kwargs["use_label_encoder"] = False
 
         self.clf_type = "classifier"
         self.clf = xgb.XGBClassifier
@@ -1830,7 +1818,7 @@ class ImputeLightGBM:
 
         early_stop_gen (int, optional): [If the genetic algorithm sees ```early_stop_gen``` consecutive generations without improvement in the scoring metric, an early stopping callback is implemented. This saves time by reducing the number of generations the genetic algorithm has to perform]. Defaults to 5.
 
-        scoring_metric (str, optional): [Scoring metric to use for randomized or genetic algorithm grid searches. See sklearn.metrics documentation for options]. Defaults to "accuracy".
+        scoring_metric (str, optional): [Scoring metric to use for randomized or genetic algorithm grid searches. See https://scikit-learn.org/stable/modules/model_evaluation.html for supported options]. Defaults to "accuracy".
 
         column_subset (int or float, optional): [If float, proportion of the dataset to randomly subset for the grid search. Should be between 0 and 1, and should also be small, because the grid search takes a long time. If int, subset ```column_subset``` columns]. Defaults to 0.1.
 
@@ -1847,6 +1835,8 @@ class ImputeLightGBM:
         max_depth (int, optional): [Maximum tree depth for base learners]. Defaults to 3.
 
         learning_rate (float, optional): [Boosting learning rate (eta). Basically, it serves as a weighting factor for correcting new trees when they are added to the model. Typical values are between 0.1 and 0.3. Lower learning rates generally find the best optimum at the cost of requiring far more compute time and resources]. Defaults to 0.1.
+
+        boosting_type (str, optional): [Possible values: "gbdt", traditional Gradient Boosting Decision Tree. "dart", Dropouts meet Multiple Additive Regression Trees. "goss", Gradient-based One-Side Sampling. The "rf" option is not currently supported]. Defaults to "gbdt".
 
         num_leaves (int, optional): [Maximum tree leaves for base learners]. Defaults to 31.
 
@@ -1915,6 +1905,7 @@ class ImputeLightGBM:
         n_estimators=100,
         max_depth=3,
         learning_rate=0.1,
+        boosting_type="gbdt",
         num_leaves=31,
         subsample_for_bin=200000,
         min_split_gain=0.0,
@@ -1939,6 +1930,9 @@ class ImputeLightGBM:
 
         # Get local variables into dictionary object
         kwargs = locals()
+
+        if kwargs["boosting_type"] == "rf":
+            raise ValueError("boosting_type 'rf' is not supported!")
 
         self.clf_type = "classifier"
         self.clf = lgbm.LGBMClassifier
