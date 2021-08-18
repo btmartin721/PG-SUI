@@ -25,7 +25,7 @@ Python versions other than 3.7 are not currently supported.
 The requirements can mostly be installed with conda. The only module that isn't available on conda is sklearn-genetic-opt, which can be installed via pip.
 
 ```
-create -n super_deli python=3.7
+conda create -n super_deli python=3.7
 conda activate super_deli
 conda install matplotlib seaborn jupyterlab scikit-learn tqdm pandas=1.2.5 numpy=1.20.2 scipy=1.6.2 xgboost lightgbm
 conda install scikit-learn-intelex # Only if using Intel CPUs; speeds up processing
