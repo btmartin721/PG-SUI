@@ -5,6 +5,7 @@ import math
 import os
 import sys
 from collections import Counter
+from collections import defaultdict
 from operator import itemgetter
 from pathlib import Path
 from statistics import mean, median
@@ -319,9 +320,8 @@ class Impute:
         Args:
             df ([pandas.DataFrame]): [DataFrame with score statistics]
         """
-        print("Validation scores:")
-        for col in df_scores.columns:
-            print(f"{col}: {df_scores[col].iloc[0]}")
+        print("Validation scores")
+        print(df_scores)
 
     def _write_imputed_params_score(self, df_scores, best_params):
         """[Save best_score and best_params to files]
@@ -507,7 +507,7 @@ class Impute:
         return imputed_df, df_scores, best_params
 
     def _imputer_validation(self, df, clf):
-        reps = list()
+        reps = dict()
         for cnt, rep in enumerate(
             progressbar(
                 range(self.cv),
@@ -522,62 +522,69 @@ class Impute:
                 perc = int((cnt / self.cv) * 100)
                 print(f"Validation replicate {cnt}/{self.cv} ({perc}%)")
 
-            score_list = self._impute_eval(df, clf)
+            scores = self._impute_eval(df, clf)
 
-            score_list_filtered = filter(lambda x: x != -9, score_list)
+            for k, score_list in scores.items():
+                score_list_filtered = filter(lambda x: x != -9, score_list)
 
-            if score_list_filtered:
-                reps.append(score_list_filtered)
-            else:
-                continue
+                if score_list_filtered:
+                    reps[k].append(score_list_filtered)
+                else:
+                    continue
 
         if not reps:
             raise ValueError("None of the features could be validated!")
 
-        reps_t = np.array(reps).T.tolist()
-        cis = list()
-        if len(reps_t) > 1:
-            for rep in reps_t:
-                rep = [abs(x) for x in rep]
+        df_scores = pd.DataFrame()
+        for k, v in reps.items():
+            reps_t = np.array(v).T.tolist()
+            cis = list()
+            if len(reps_t) > 1:
+                for rep in reps_t:
+                    rep = [abs(x) for x in rep]
 
-                cis.append(
-                    st.t.interval(
-                        alpha=0.95,
-                        df=len(rep) - 1,
-                        loc=np.mean(rep),
-                        scale=st.sem(rep),
+                    cis.append(
+                        st.t.interval(
+                            alpha=0.95,
+                            df=len(rep) - 1,
+                            loc=np.mean(rep),
+                            scale=st.sem(rep),
+                        )
                     )
+
+                ci_lower = mean(x[0] for x in cis)
+                ci_upper = mean(x[1] for x in cis)
+            else:
+                print(
+                    "Warning: Only one replicate was useful; skipping "
+                    "calculation of 95% CI"
                 )
 
-            ci_lower = mean(x[0] for x in cis)
-            ci_upper = mean(x[1] for x in cis)
-        else:
-            print(
-                "Warning: Only one replicate was useful; skipping "
-                "calculation of 95% CI"
+                ci_lower = np.nan
+                ci_upper = np.nan
+
+            avg_score = mean(abs(x) for x in score_list if x != -9)
+            median_score = median(abs(x) for x in score_list if x != -9)
+            max_score = max(abs(x) for x in score_list if x != -9)
+            min_score = min(abs(x) for x in score_list if x != -9)
+
+            df_scores.append(
+                {
+                    "Metric": [k],
+                    "Mean": [avg_score],
+                    "Median": [median_score],
+                    "Min": [min_score],
+                    "Max": [max_score],
+                    "Lower 95% CI": [ci_lower],
+                    "Upper 95% CI": [ci_upper],
+                },
+                ignore_index=True,
             )
 
-            ci_lower = np.nan
-            ci_upper = np.nan
-
-        avg_score = mean(abs(x) for x in score_list if x != -9)
-        median_score = median(abs(x) for x in score_list if x != -9)
-        max_score = max(abs(x) for x in score_list if x != -9)
-        min_score = min(abs(x) for x in score_list if x != -9)
-
-        df_scores = pd.DataFrame(
-            {
-                "Mean": [avg_score],
-                "Median": [median_score],
-                "Min": [min_score],
-                "Max": [max_score],
-                "Lower 95% CI": [ci_lower],
-                "Upper 95% CI": [ci_upper],
-            }
-        )
-
         if self.clf_type == "classifier":
-            df_scores = df_scores.apply(lambda x: x * 100)
+            df_scores = df_scores[df_scores["Metric"] == "accuracy"].apply(
+                lambda x: x * 100
+            )
 
         df_scores = df_scores.round(2)
 
@@ -952,42 +959,42 @@ class Impute:
         )
 
         # Get score of each column
-        score_list = list()
+        scores = defaultdict(list)
         for i in range(len(df_known_slice.columns)):
             # Adapted from: https://medium.com/analytics-vidhya/using-scikit-learns-iterative-imputer-694c3cca34de
-            if self.clf_type == "classifier":
-                score_list.append(
-                    
-                    if self.scoring_metric == "accuracy":
-                        score_func = metrics.accuracy_score
-                    elif self.scoring_metric == "balanced_accuracy":
-                        score_func = metrics.balanced_accuracy_score
-                    elif self.scoring_metric == "top_k_accuracy":
-                        score_func = metrics.top_k_accuracy
-                    elif self.scoring_metric == "average_precision":
-                        score_func = metrics.average_precision_score
-                    elif self.scoring_metric == "neg_brier_score":
-                        score_func = metrics.brier_score_loss
-                    elif self.scoring_metric == "f1":
-                        score_func = metrics.f1_score
-                    elif self.scoring_metric == "precision":
-                        score_func = metrics.precision_score
-                    elif self.scoring_metric == "recall":
-                        score_func = metrics.recall_score
-                    elif self.scoring_metric == "jaccard":
-                        score_func = metrics.jaccard_score
-                    elif self.scoring_metric == "roc_auc":
-                        score_func = metrics.roc_auc_score
 
-                    score_func(
-                        df_known[df_known.columns[i]], df_imp[df_imp.columns[i]]
-                    )
+            y_true = df_known[df_known.columns[i]]
+            y_pred = df_imp[df_imp.columns[i]]
+
+            if self.clf_type == "classifier":
+
+                scores["accuracy"].append(
+                    metrics.accuracy_score(y_true, y_pred)
                 )
+
+                scores["precision"].append(
+                    metrics.precision_score(y_true, y_pred, average="micro")
+                )
+
+                scores["f1"].append(
+                    metrics.f1_score(y_true, y_pred, average="micro")
+                )
+
+                scores["recall"].append(
+                    metrics.recall_score(y_true, y_pred, average="micro")
+                )
+
+                scores["jaccard"].append(
+                    metrics.jaccard_score(y_true, y_pred, average="micro")
+                )
+
             else:
-                score_list.append(
-                    metrics.mean_squared_error(
-                        df_known[df_known.columns[i]], df_imp[df_imp.columns[i]]
-                    )
+                scores["explained_var"].append(
+                    metrics.explained_variance_score(y_true, y_pred)
+                )
+
+                scores["rmse"].append(
+                    mean_squared_error(y_true, y_pred, squared=False)
                 )
 
         lst2del = [
@@ -1004,7 +1011,7 @@ class Impute:
         del cols
         gc.collect()
 
-        return score_list
+        return scores
 
     def _define_iterative_imputer(
         self,
