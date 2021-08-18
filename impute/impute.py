@@ -507,7 +507,7 @@ class Impute:
         return imputed_df, df_scores, best_params
 
     def _imputer_validation(self, df, clf):
-        reps = dict()
+        reps = defaultdict(list)
         for cnt, rep in enumerate(
             progressbar(
                 range(self.cv),
@@ -535,9 +535,11 @@ class Impute:
         if not reps:
             raise ValueError("None of the features could be validated!")
 
-        df_scores = pd.DataFrame()
+        ci_lower = dict()
+        ci_upper = dict()
         for k, v in reps.items():
             reps_t = np.array(v).T.tolist()
+
             cis = list()
             if len(reps_t) > 1:
                 for rep in reps_t:
@@ -552,39 +554,58 @@ class Impute:
                         )
                     )
 
-                ci_lower = mean(x[0] for x in cis)
-                ci_upper = mean(x[1] for x in cis)
+                ci_lower[k] = mean(x[0] for x in cis)
+                ci_upper[k] = mean(x[1] for x in cis)
             else:
                 print(
                     "Warning: Only one replicate was useful; skipping "
                     "calculation of 95% CI"
                 )
 
-                ci_lower = np.nan
-                ci_upper = np.nan
+                ci_lower[k] = np.nan
+                ci_upper[k] = np.nan
 
+        results_list = list()
+        for k, score_list in scores.items():
             avg_score = mean(abs(x) for x in score_list if x != -9)
             median_score = median(abs(x) for x in score_list if x != -9)
             max_score = max(abs(x) for x in score_list if x != -9)
             min_score = min(abs(x) for x in score_list if x != -9)
 
-            df_scores.append(
+            results_list.append(
                 {
-                    "Metric": [k],
-                    "Mean": [avg_score],
-                    "Median": [median_score],
-                    "Min": [min_score],
-                    "Max": [max_score],
-                    "Lower 95% CI": [ci_lower],
-                    "Upper 95% CI": [ci_upper],
-                },
-                ignore_index=True,
+                    "Metric": k,
+                    "Mean": avg_score,
+                    "Median": median_score,
+                    "Min": min_score,
+                    "Max": max_score,
+                    "Lower 95% CI": ci_lower[k],
+                    "Upper 95% CI": ci_upper[k],
+                }
             )
 
+        df_scores = pd.DataFrame(results_list)
+        print(df_scores)
+        sys.exit()
+
         if self.clf_type == "classifier":
-            df_scores = df_scores[df_scores["Metric"] == "accuracy"].apply(
-                lambda x: x * 100
-            )
+            columns_list = [
+                "Mean",
+                "Median",
+                "Min",
+                "Max",
+                "Lower 95% CI",
+                "Upper 95% CI",
+            ]
+
+            for col in columns_list:
+                df[col] = np.where(
+                    df["Metric"] == "accuracy", df[col] * 100, df[col]
+                )
+
+            # df_scores = df_scores.loc[df.Metric == "accuracy", "".apply(
+            #     lambda x: x * 100
+            # )
 
         df_scores = df_scores.round(2)
 
@@ -932,7 +953,7 @@ class Impute:
                 clf ([sklearn Classifier]): [Classifier instance to use with IterativeImputer]
 
         Returns:
-                [list]: [List of validation scores for the current imputation]
+                [dict(list)]: [Validation scores for the current imputation]
         """
         # Subset the DataFrame randomly and replace known values with np.nan
         df_known, df_valid, cols = self._defile_dataset(df)
@@ -973,19 +994,27 @@ class Impute:
                 )
 
                 scores["precision"].append(
-                    metrics.precision_score(y_true, y_pred, average="micro")
+                    metrics.precision_score(
+                        y_true, y_pred, average="macro", zero_division=0
+                    )
                 )
 
                 scores["f1"].append(
-                    metrics.f1_score(y_true, y_pred, average="micro")
+                    metrics.f1_score(
+                        y_true, y_pred, average="macro", zero_division=0
+                    )
                 )
 
                 scores["recall"].append(
-                    metrics.recall_score(y_true, y_pred, average="micro")
+                    metrics.recall_score(
+                        y_true, y_pred, average="macro", zero_division=0
+                    )
                 )
 
                 scores["jaccard"].append(
-                    metrics.jaccard_score(y_true, y_pred, average="micro")
+                    metrics.jaccard_score(
+                        y_true, y_pred, average="macro", zero_division=0
+                    )
                 )
 
             else:
@@ -994,7 +1023,7 @@ class Impute:
                 )
 
                 scores["rmse"].append(
-                    mean_squared_error(y_true, y_pred, squared=False)
+                    metrics.mean_squared_error(y_true, y_pred, squared=False)
                 )
 
         lst2del = [
