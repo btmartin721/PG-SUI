@@ -25,14 +25,10 @@ from scipy import stats
 from sklearn.base import clone
 from sklearn.experimental import enable_iterative_imputer
 from sklearn.impute import IterativeImputer
-from sklearn.impute._base import _check_inputs_dtype
 
 ## For warnings
 from sklearn.exceptions import ConvergenceWarning
-from sklearn.utils import is_scalar_nan
-from sklearn.utils._mask import _get_mask
 from sklearn.utils._testing import ignore_warnings
-from sklearn.utils.validation import FLOAT_DTYPES
 
 ## Required for IterativeImputer.fit_transform()
 from sklearn.utils import check_random_state, _safe_indexing
@@ -145,6 +141,40 @@ class IterativeImputerAllData(IterativeImputer):
 
         random_state_ [(RandomState instance)]: [RandomState instance that is generated either from a seed, the random number generator or by `np.random`]
 
+        logfilepath [(str)]: [Path to status logfile]
+
+        clf_kwargs [(dict)]: [Keyword arguments for estimator]
+
+        prefix [(str)]: [Prefix for output files]
+
+        clf_type [(str)]: [Type of estimator, either 'classifier' or 'regressor']
+
+        disable_progressbar [(bool)]: [Whether to disable the tqdm progress bar. If True, writes status updates to file instead of tqdm progress bar]
+
+        progress_update_percent [(float or None)]: [Print feature progress update every ``progress_update_percent`` percent]
+
+        estimator [(estimator object)]: [Estimator to impute data with]
+
+        sample_posterior [(bool)]: [Whether to use the sample_posterior option. This overridden class does not currently support sample_posterior]
+
+        max_iter [(int)]: [The maximum number of iterations to run]
+
+        tol [(float)]: [Convergence criteria]
+
+        n_nearest_features [(int)]: [Number of nearest features to impute target with]
+
+        initial_strategy [(str)]: [Strategy to use with SimpleImputer for training data]
+
+        imputation_order [(str)]: [Order to impute]
+
+        skip_complete [(bool)]: [Whether to skip features with no missing data]
+
+        min_value [(int or float)]: [Minimum value of imputed data]
+
+        max_value [(int or float)]: [Maximum value of imputed data]
+
+        verbose [(int)]: [Verbosity level]
+
     See Also:
             SimpleImputer : Univariate imputation of missing values.
 
@@ -162,6 +192,8 @@ class IterativeImputerAllData(IterativeImputer):
 
     Notes:
         To support imputation in inductive mode we store each feature's estimator during the ``fit`` phase, and predict without refitting (in order) during	the ``transform`` phase. Features which contain all missing values at ``fit`` are discarded upon ``transform``.
+
+        **NOTE: Inductive mode support was removed herein.
 
     References:
         .. [1] `Stef van Buuren, Karin Groothuis-Oudshoorn (2011). "mice: Multivariate Imputation by Chained Equations in R". Journal of Statistical Software 45: 1-67.
@@ -329,6 +361,7 @@ class IterativeImputerAllData(IterativeImputer):
         del X_train
         del y_train
         del X_test
+        del imputed_values
         gc.collect()
 
         return X_filled
@@ -874,6 +907,12 @@ class IterativeImputerGridSearch(IterativeImputer):
         # update the feature
         X_filled[missing_row_mask, feat_idx] = imputed_values
 
+        del X_train
+        del y_train
+        del X_test
+        del imputed_values
+        gc.collect()
+
         return X_filled, search
 
     @ignore_warnings(category=UserWarning)
@@ -1274,6 +1313,7 @@ class IterativeImputerGridSearch(IterativeImputer):
 
         return g
 
+    # DEPRECATED CODE
     # def transform(self, X):
     # 	"""[Imputes all missing values in X. Note that this is stochastic, and that if random_state is not fixed, repeated calls, or permuted input, will yield different results]
 

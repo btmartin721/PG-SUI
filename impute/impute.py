@@ -9,6 +9,7 @@ from collections import defaultdict
 from operator import itemgetter
 from pathlib import Path
 from statistics import mean, median
+from timeit import default_timer
 
 # Third party imports
 import numpy as np
@@ -34,6 +35,10 @@ from sklearn.neighbors import KNeighborsClassifier
 
 import xgboost as xgb
 import lightgbm as lgbm
+
+import theano
+import theano.tensor as T
+import theano.tensor.nnet as nnet
 
 # Custom module imports
 from impute.iterative_imputer_custom import (
@@ -507,6 +512,19 @@ class Impute:
         return imputed_df, df_scores, best_params
 
     def _imputer_validation(self, df, clf):
+        """[Validate imputation by running it on a validation test set ``cv`` times. Actual missing values are imputed with sklearn.impute.SimpleImputer, and then missing values are randomly introduced to known genotypes. The dataset with no missing data is compared to the dataset with known missing data to obtain validation scores]
+
+        Args:
+            df ([pandas.DataFrame]): [012-encoded genotypes to impute]
+
+            clf ([sklearn classifier instance]): [sklearn classifier instance with which to run the imputation]
+
+        Raises:
+            ValueError: [If none of the scores were able to be estimated and reps is empty]
+
+        Returns:
+            [pandas.DataFrame]: [Validation scores in a pandas DataFrame object. Contains the scoring metric, mean, median, minimum, and maximum validation scores among all features, and the lower and upper 95% confidence interval among the replicates]
+        """
         reps = defaultdict(list)
         for cnt, rep in enumerate(
             progressbar(
@@ -585,8 +603,6 @@ class Impute:
             )
 
         df_scores = pd.DataFrame(results_list)
-        print(df_scores)
-        sys.exit()
 
         if self.clf_type == "classifier":
             columns_list = [
@@ -598,24 +614,18 @@ class Impute:
                 "Upper 95% CI",
             ]
 
-            for col in columns_list:
-                df[col] = np.where(
-                    df["Metric"] == "accuracy", df[col] * 100, df[col]
-                )
-
-            # df_scores = df_scores.loc[df.Metric == "accuracy", "".apply(
-            #     lambda x: x * 100
-            # )
-
         df_scores = df_scores.round(2)
 
         outfile = f"{self.prefix}_imputed_best_score.csv"
         df_scores.to_csv(outfile, header=True, index=False)
 
+        del results_list
+        gc.collect()
+
         return df_scores
 
     def _impute_df(self, df_chunks, imputer, original_num_cols):
-        """[Impute list of pandas.DataFrame objects using IterativeImputer]
+        """[Impute list of pandas.DataFrame objects using IterativeImputer. The DataFrames correspond to each chunk of features]
 
         Args:
             df_chunks ([list(pandas.DataFrame)]): [Dataframe with 012-encoded genotypes]
@@ -655,11 +665,24 @@ class Impute:
         return concat_df
 
     def _validate_imputed(self, df):
+        """[Asserts that there is no missing data left in the imputed DataFrame]
+
+        Args:
+            df ([pandas.DataFrame]): [DataFrame with imputed 012-encoded genotypes]
+        """
         assert (
             not df.isnull().values.any()
         ), "Imputation failed...Missing values found in the imputed dataset"
 
     def _get_best_params(self, params_list):
+        """[Gets the best parameters from the grid search. Determines the parameter types and either gets the mean or mode if the type is numeric or string/ boolean]
+
+        Args:
+            params_list ([list(dict)]): [List of grid search parameter values]
+
+        Returns:
+            [dict]: [Dictionary with parameters as keys and their best values]
+        """
         best_params = dict()
         keys = list(params_list[0].keys())
         first_key = keys[0]
@@ -776,19 +799,21 @@ class Impute:
             kwargs ([dict]): [Dictionary with keys as the keyword arguments and their corresponding values]
 
         Returns:
-            [dict]: [Parameters to run with grid search]
-            [dict]: [IterativeImputer kwargs]
-            [dict]: [Classifier kwargs]
-            [dict]: [Genetic algorithm arguments]
+            [dict]: [Parameters distributions to run with grid search]
+            [dict]: [IterativeImputer keyword arguments]
+            [dict]: [Classifier keyword arguments]
+            [dict]: [Genetic algorithm keyword arguments]
             [int]: [Number of iterations to run with grid search]
             [int]: [Number of cross-validation folds to use]
             [int]: [Number of processors to use with grid search]
             [str]: [Prefix for output files]
             [int or float]: [Proportion of dataset to use for grid search]
-            [bool]: [Whether to disable the tqdm progress bar (If True)]
+            [bool]: [If True, disables the tqdm progress bar and just prints status updates to a file]
             [int]: [Percent in which to print progress updates for features]
-            [str]: [Scoring metric to use with grid search]
-
+            [str]: [Scoring metric to use with grid search. Can be any of the sklearn classifier metrics in string format]
+            [int]: [Number of generations without improvement before Early Stopping criterion is called]
+            [int or float]: [Chunk sizes for doing full imputation following grid search. If int, then splits into chunks of ``chunk_size``. If float, then splits into chunks of ``n_features * chunk_size``]
+            [float or None]: [Proportion of loci to use for validation if grid search is not used. If None, then doesn't do validation]
         """
         gridparams = kwargs.pop("gridparams")
         cv = kwargs.pop("cv")
@@ -955,6 +980,9 @@ class Impute:
         Returns:
                 [dict(list)]: [Validation scores for the current imputation]
         """
+        # Code adapted from:
+        # https://medium.com/analytics-vidhya/using-scikit-learns-iterative-imputer-694c3cca34de
+
         # Subset the DataFrame randomly and replace known values with np.nan
         df_known, df_valid, cols = self._defile_dataset(df)
         df_known_slice = df_known[cols]
@@ -1096,7 +1124,6 @@ class Impute:
         Returns:
                 [sklearn.impute.IterativeImputer]: [IterativeImputer instance]
         """
-
         if search_space is None:
             imp = IterativeImputerAllData(
                 logfilepath,
@@ -1251,7 +1278,7 @@ class ImputeKNN:
 
         imputer = Impute(self.clf, self.clf_type, kwargs)
 
-        (self.imputed, self.best_params) = imputer.fit_predict(
+        self.imputed, self.best_params = imputer.fit_predict(
             genotype_data.genotypes_df
         )
 
@@ -1419,7 +1446,7 @@ class ImputeRandomForest:
 
         imputer = Impute(self.clf, self.clf_type, kwargs)
 
-        (self.imputed, self.best_params) = imputer.fit_predict(
+        self.imputed, self.best_params = imputer.fit_predict(
             genotype_data.genotypes_df
         )
 
@@ -1566,7 +1593,7 @@ class ImputeGradientBoosting:
 
         imputer = Impute(self.clf, self.clf_type, kwargs)
 
-        (self.imputed, self.best_params) = imputer.fit_predict(
+        self.imputed, self.best_params = imputer.fit_predict(
             genotype_data.genotypes_df
         )
 
@@ -1574,7 +1601,7 @@ class ImputeGradientBoosting:
 
 
 class ImputeBayesianRidge:
-    """[Does Bayesian Ridge Iterative Imputation of missing data. Iterative imputation uses the n_nearest_features to inform the imputation at each feature (i.e., SNP site), using the N most correlated features per site. The N most correlated features are drawn with probability proportional to correlation for each imputed target feature to ensure coverage of features throughout the imputation process]
+    """[NOTE: This is a regressor estimator and is only intended for testing purposes, as it is faster than the classifiers. Does Bayesian Ridge Iterative Imputation of missing data. Iterative imputation uses the n_nearest_features to inform the imputation at each feature (i.e., SNP site), using the N most correlated features per site. The N most correlated features are drawn with probability proportional to correlation for each imputed target feature to ensure coverage of features throughout the imputation process]
 
     Args:
         genotype_data ([GenotypeData]): [GenotypeData instance that was used to read in the sequence data]
@@ -1700,7 +1727,7 @@ class ImputeBayesianRidge:
 
         imputer = Impute(self.clf, self.clf_type, kwargs)
 
-        (self.imputed, self.best_params) = imputer.fit_predict(
+        self.imputed, self.best_params = imputer.fit_predict(
             genotype_data.genotypes_df
         )
 
@@ -2341,6 +2368,266 @@ class ImputePhylo(GenotypeData):
         return ret
 
 
+class ImputeBackPropogation:
+    
+    def __init__(
+        self, 
+        genotype_data, 
+        dimension_subset, 
+        hidden_layers, 
+        hidden_layer_sizes=list()
+    ):
+
+        self.X = genotype_data.genotypes_nparray
+
+        assert(
+            hidden_layers == len(hidden_layer_sizes) and hidden_layers > 0
+        ),  f"Hidden layers must be greater than 0 and of the same length as "
+            f"hidden_layer_sizes, but got hidden_layers={hidden_layers} and "
+            f"len(hidden_layer_sizes) == {len(hidden_layer_sizes)}"
+
+
+        self.Xt = None
+        self.invalid_mask = np.isnan(self.X)
+        self.valid_mask = np.where(~self.invalid_mask)
+        self.l = hidden_layers
+        self.V = np.random.randn(X.shape[0], dimension_subset)
+        self.total_epochs = 0
+        self.x_r = T.vector()
+        self.learning_rate = T.scalar('eta')
+        self.c = T.iscalar()
+        self.r = T.iscalar()
+        
+        self.V = theano.shared(
+            np.array(
+                np.random.rand(X.shape[0], dimension_subset), 
+                dtype=theano.config.floatX
+            )
+        )
+
+        self.weights = list()
+                
+        self.U = theano.shared(
+            np.array(np.random.rand(dimension_subset, X.shape[1]), 
+            dtype=theano.config.floatX
+            )
+        )
+
+        self.single_layer = nnet.sigmoid(T.dot(self.U.T, self.V[self.r, :]))
+        
+        self.layers = list()
+
+        for i in range(hidden_layers):
+            if i == 0:
+                self.weights.append(
+                    self.initialize_weights(
+                        (dimension_subset, hidden_layer_sizes[0])
+                    )
+                )
+
+            else:
+                self.weights.append(
+                    self.initialize_weights(
+                        (hidden_layer_sizes[i - 1], hidden_layer_sizes[i])
+                    )
+                )
+
+        self.weights.append(
+            self.initialize_weights(
+                (hidden_layer_sizes[-1], self.X.shape[1])
+            )
+        )
+                
+        for i in range(hidden_layers):
+            if i == 0:
+                self.layers.append(
+                    nnet.sigmoid(
+                        T.dot(self.weights[i].T, self.V[self.r, :])
+                    )
+                )
+
+            else:
+                self.layers.append(
+                    nnet.sigmoid(
+                        T.dot(self.weights[i].T, self.layers[-1])
+                    )
+                )
+        
+        self.layers.append(
+            nnet.sigmoid(
+                T.dot(self.weights[-1].T, self.layers[-1])
+            )
+        )
+            
+        self.fc1 = ((self.single_layer - self.x_r) ** 2)[self.c]
+        self.fc = ((self.layers[-1] - self.x_r) ** 2)[self.c]
+        
+        self.phases = list()
+        
+        self.phases.append(
+            theano.function(
+                inputs=[
+                    self.x_r, self.r, self.c, theano.In(
+                        self.learning_rate, value=0.1)
+                ], 
+                outputs = self.fc1, 
+                updates = [
+                    (
+                        self.U, self.loss_func(
+                            self.fc1, self.U, self.learning_rate
+                        )
+                    ), 
+                    (
+                        self.V, self.loss_func(
+                            self.fc1, self.V,  self.learning_rate
+                        )
+                    )         
+                ]
+                
+            )
+        )
+
+        self.phases.append(
+            theano.function(
+                inputs = [
+                    self.x_r, self.r, self.c, theano.In(
+                        self.learning_rate, value=0.1
+                    )
+                ], 
+                outputs = self.fc, 
+                updates = [
+                    (theta, self.loss_func(
+                        self.fc, theta, self.learning_rate
+                        )
+                    ) for theta in self.weights 
+                ]
+            )
+        )
+        
+        self.phases.append(
+            theano.function(
+                inputs = [
+                    self.x_r, self.r, self.c, theano.In(
+                        self.learning_rate, value=0.1
+                    )
+                ],
+                outputs = self.fc, updates = [
+                    (theta, self.loss_func(
+                        self.fc, theta, self.learning_rate
+                        )
+                    ) for theta in self.weights
+                ] + [
+                        (
+                            self.V, self.loss_func(
+                                self.fc, self.V,  self.learning_rate
+                            )
+                        )
+                    ]
+            )
+        )
+        
+        self.run_phase1 = theano.function(
+            inputs=[self.r], outputs=self.single_layer
+        )
+
+        self.run = theano.function(
+            inputs=[self.r], outputs=self.layers[-1]
+        )
+
+    def fit_predict(self):        
+        print("Doing Unsupervised Back-Propogation Imputation...")
+
+        self.fit_transform(phase=2)
+
+        print(f"Initial RMSE: {self.get_rmse()}")
+
+        for i in range(1):
+            print(f"Phase {(i + 1)}")
+
+            self.initialize_params()
+
+            while self.current_eta > self.target_eta:
+                self.s = self.train_epoch(phase=i)
+
+                if 1 - self.s / self.s_ < self.gamma:
+                    self.current_eta = self.current_eta / 2
+                    print(f"Reduced eta to {self.current_eta}")
+
+                self.s_ = self.s
+                self.num_epochs += 1
+                self.total_epochs += 1
+                self.print_num_epochs()
+        
+    def train_epoch(self, phase=1):
+        start = default_timer()
+
+        arr_rand = np.random.choice(
+            len(self.valid_mask[0]), len(self.valid_mask[0]), replace=False
+        )
+
+        for r,c in zip(
+            self.valid_mask[0][arr_rand], self.valid_mask[1][arr_rand]
+        ):
+            self.phases[phase](self.X[r, :], r, c, self.current_eta)
+
+        end = default_timer()
+
+        print(f"Epoch Training Time: {str((end-start) / 60)} minutes")
+
+        self.fit_transform()
+
+        return self.get_rmse()     
+        
+    def print_num_epochs(self, interval=10):
+        if self.num_epochs % interval == 0:
+            print(f"Epochs: {self.num_epochs}\tRMSE: {self.s}")
+    
+    def fit_transform(self, phase=2):
+        self.Xt = np.zeros(self.X.shape)
+
+        if phase == 2 or phase == 3:
+            for r in range(self.X.shape[0]):
+                self.Xt[r, :] = self.run(r)
+
+        elif phase == 1:
+            for r in range(self.X.shape[0]):
+                self.Xt[r, :] = self.run_phase1(r)
+
+        else:
+            raise Exception("Wrong phase provided!")
+            
+    def initialize_params(self):
+        self.initial_eta = 0.1
+        self.target_eta =  0.0001
+        self.s = 0
+        self.s_ = np.inf
+        self.current_eta = self.initial_eta
+        self.gamma = 0.00001
+        self.lambd = 0.0001
+        self.num_epochs = 0
+            
+    def get_rmse(self):
+        return np.sqrt(
+            np.mean(
+                (
+                    self.Xt[~self.invalid_mask] - self.X[~self.invalid_mask]
+                ) ** 2
+            )
+        )
+
+    def initialize_weights(self, sz):
+        theta = theano.shared(
+            np.array(np.random.rand(sz[0], sz[1]), dtype=theano.config.floatX)
+        )
+
+        return theta
+            
+    def loss_func(self, cost, theta, alpha):
+        """[Loss function for neural network. Uses gradient descent]
+        """
+        return theta - (alpha * T.grad(cost, wrt=theta))
+
+
 class ImputeAlleleFreq(GenotypeData):
     """
     [Impute missing data by global allele frequency. Population IDs can be sepcified with the pops argument. if pops is None, then imputation is by global allele frequency. If pops is not None, then imputation is by population-wise allele frequency. A list of population IDs in the appropriate format can be obtained from the GenotypeData object as GenotypeData.populations]
@@ -2348,9 +2635,7 @@ class ImputeAlleleFreq(GenotypeData):
     Args:
         genotype_data ([GenotypeData]): [GenotypeData instance. If ``genotype_data`` is not defined, then ``genotypes`` must be defined instead, and they cannot both be defined]. Defaults to None.
 
-        genotypes ([pandas.DataFrame], optional): [012-encoded genotypes to be imputed. If ``genotypes`` is None, then uses ``genotype_data`` of type GenotypeData. One of ``genotypes`` or ``genotype_data`` must be defined]. Defaults to None.
-
-        pops ([list(str)], optional): [If None, then imputes by global allele frequency. If not None, then imputes population-wise and pops should be a list of population assignments. The list of population assignments can be obtained from the GenotypeData object as GenotypeData.populations]. Defaults to None.
+        by_populations (bool, optional): [Whether or not to impute by population or globally]. Defaults to False (globally).
 
         diploid (bool, optional): [When diploid=True, function assumes 0=homozygous ref; 1=heterozygous; 2=homozygous alt. 0-1-2 genotypes are decomposed to compute p (=frequency of ref) and q (=frequency of alt). In this case, p and q alleles are sampled to generate either 0 (hom-p), 1 (het), or 2 (hom-q) genotypes. When diploid=FALSE, 0-1-2 are sampled according to their observed frequency]. Defaults to True.
 
@@ -2360,12 +2645,12 @@ class ImputeAlleleFreq(GenotypeData):
 
         prefix (str, optional): [Prefix for writing output files]
 
-        write_output (bool, optional): [Whether to save imputed output to a file. If ``write_output`` is False, then just returns the imputed values. If ``write_output`` is True, then it saves the imputed data as a CSV file called ``<prefix>_imputed_012.csv``]
+        write_output (bool, optional): [Whether to save imputed output to a file. If ``write_output`` is False, then just returns the imputed values as a pandas.DataFrame object. If ``write_output`` is True, then it saves the imputed data as a CSV file called ``<prefix>_imputed_012.csv``]
     """
 
     def __init__(
         self,
-        genotype_data=None,
+        genotype_data,
         *,
         by_populations=False,
         diploid=True,
