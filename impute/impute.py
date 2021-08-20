@@ -2369,59 +2369,59 @@ class ImputePhylo(GenotypeData):
 
 
 class ImputeBackPropogation:
-    
     def __init__(
-        self, 
-        genotype_data, 
-        dimension_subset, 
-        hidden_layers, 
-        hidden_layer_sizes=list()
+        self,
+        genotype_data,
+        *,
+        num_reduced_dims=3,
+        hidden_layers=3,
+        hidden_layer_sizes=list(),
     ):
 
         self.X = genotype_data.genotypes_nparray
 
-        assert(
-            hidden_layers == len(hidden_layer_sizes) and hidden_layers > 0
-        ),  f"Hidden layers must be greater than 0 and of the same length as "
+        assert hidden_layers == len(hidden_layer_sizes) and hidden_layers > 0, (
+            f"Hidden layers must be greater than 0 and of the same length as "
             f"hidden_layer_sizes, but got hidden_layers={hidden_layers} and "
             f"len(hidden_layer_sizes) == {len(hidden_layer_sizes)}"
-
+        )
 
         self.Xt = None
         self.invalid_mask = np.isnan(self.X)
         self.valid_mask = np.where(~self.invalid_mask)
         self.l = hidden_layers
-        self.V = np.random.randn(X.shape[0], dimension_subset)
+        self.V = np.random.randn(X.shape[0], num_reduced_dims)
         self.total_epochs = 0
         self.x_r = T.vector()
-        self.learning_rate = T.scalar('eta')
+        self.learning_rate = T.scalar("eta")
         self.c = T.iscalar()
         self.r = T.iscalar()
-        
+
         self.V = theano.shared(
             np.array(
-                np.random.rand(X.shape[0], dimension_subset), 
-                dtype=theano.config.floatX
+                np.random.rand(X.shape[0], num_reduced_dims),
+                dtype=theano.config.floatX,
             )
         )
 
         self.weights = list()
-                
+
         self.U = theano.shared(
-            np.array(np.random.rand(dimension_subset, X.shape[1]), 
-            dtype=theano.config.floatX
+            np.array(
+                np.random.rand(num_reduced_dims, X.shape[1]),
+                dtype=theano.config.floatX,
             )
         )
 
         self.single_layer = nnet.sigmoid(T.dot(self.U.T, self.V[self.r, :]))
-        
+
         self.layers = list()
 
         for i in range(hidden_layers):
             if i == 0:
                 self.weights.append(
                     self.initialize_weights(
-                        (dimension_subset, hidden_layer_sizes[0])
+                        (num_reduced_dims, hidden_layer_sizes[0])
                     )
                 )
 
@@ -2433,111 +2433,100 @@ class ImputeBackPropogation:
                 )
 
         self.weights.append(
-            self.initialize_weights(
-                (hidden_layer_sizes[-1], self.X.shape[1])
-            )
+            self.initialize_weights((hidden_layer_sizes[-1], self.X.shape[1]))
         )
-                
+
         for i in range(hidden_layers):
             if i == 0:
                 self.layers.append(
-                    nnet.sigmoid(
-                        T.dot(self.weights[i].T, self.V[self.r, :])
-                    )
+                    nnet.sigmoid(T.dot(self.weights[i].T, self.V[self.r, :]))
                 )
 
             else:
                 self.layers.append(
-                    nnet.sigmoid(
-                        T.dot(self.weights[i].T, self.layers[-1])
-                    )
+                    nnet.sigmoid(T.dot(self.weights[i].T, self.layers[-1]))
                 )
-        
+
         self.layers.append(
-            nnet.sigmoid(
-                T.dot(self.weights[-1].T, self.layers[-1])
-            )
+            nnet.sigmoid(T.dot(self.weights[-1].T, self.layers[-1]))
         )
-            
+
         self.fc1 = ((self.single_layer - self.x_r) ** 2)[self.c]
         self.fc = ((self.layers[-1] - self.x_r) ** 2)[self.c]
-        
+
         self.phases = list()
-        
+
         self.phases.append(
             theano.function(
                 inputs=[
-                    self.x_r, self.r, self.c, theano.In(
-                        self.learning_rate, value=0.1)
-                ], 
-                outputs = self.fc1, 
-                updates = [
+                    self.x_r,
+                    self.r,
+                    self.c,
+                    theano.In(self.learning_rate, value=0.1),
+                ],
+                outputs=self.fc1,
+                updates=[
                     (
-                        self.U, self.loss_func(
-                            self.fc1, self.U, self.learning_rate
-                        )
-                    ), 
+                        self.U,
+                        self.loss_func(self.fc1, self.U, self.learning_rate),
+                    ),
                     (
-                        self.V, self.loss_func(
-                            self.fc1, self.V,  self.learning_rate
-                        )
-                    )         
-                ]
-                
+                        self.V,
+                        self.loss_func(self.fc1, self.V, self.learning_rate),
+                    ),
+                ],
             )
         )
 
         self.phases.append(
             theano.function(
-                inputs = [
-                    self.x_r, self.r, self.c, theano.In(
-                        self.learning_rate, value=0.1
-                    )
-                ], 
-                outputs = self.fc, 
-                updates = [
-                    (theta, self.loss_func(
-                        self.fc, theta, self.learning_rate
-                        )
-                    ) for theta in self.weights 
-                ]
+                inputs=[
+                    self.x_r,
+                    self.r,
+                    self.c,
+                    theano.In(self.learning_rate, value=0.1),
+                ],
+                outputs=self.fc,
+                updates=[
+                    (theta, self.loss_func(self.fc, theta, self.learning_rate))
+                    for theta in self.weights
+                ],
             )
         )
-        
+
         self.phases.append(
             theano.function(
-                inputs = [
-                    self.x_r, self.r, self.c, theano.In(
-                        self.learning_rate, value=0.1
+                inputs=[
+                    self.x_r,
+                    self.r,
+                    self.c,
+                    theano.In(self.learning_rate, value=0.1),
+                ],
+                outputs=self.fc,
+                updates=[
+                    (theta, self.loss_func(self.fc, theta, self.learning_rate))
+                    for theta in self.weights
+                ]
+                + [
+                    (
+                        self.V,
+                        self.loss_func(self.fc, self.V, self.learning_rate),
                     )
                 ],
-                outputs = self.fc, updates = [
-                    (theta, self.loss_func(
-                        self.fc, theta, self.learning_rate
-                        )
-                    ) for theta in self.weights
-                ] + [
-                        (
-                            self.V, self.loss_func(
-                                self.fc, self.V,  self.learning_rate
-                            )
-                        )
-                    ]
             )
         )
-        
+
         self.run_phase1 = theano.function(
             inputs=[self.r], outputs=self.single_layer
         )
 
-        self.run = theano.function(
-            inputs=[self.r], outputs=self.layers[-1]
-        )
+        self.run = theano.function(inputs=[self.r], outputs=self.layers[-1])
 
-    def fit_predict(self):        
+    @timer
+    def fit_predict(self):
         print("Doing Unsupervised Back-Propogation Imputation...")
 
-        self.fit_transform(phase=2)
+        self.fit(phase=2)
 
         print(f"Initial RMSE: {self.get_rmse()}")
 
@@ -2557,7 +2546,7 @@ class ImputeBackPropogation:
                 self.num_epochs += 1
                 self.total_epochs += 1
                 self.print_num_epochs()
-        
+
     def train_epoch(self, phase=1):
         start = default_timer()
 
@@ -2565,7 +2554,7 @@ class ImputeBackPropogation:
             len(self.valid_mask[0]), len(self.valid_mask[0]), replace=False
         )
 
-        for r,c in zip(
+        for r, c in zip(
             self.valid_mask[0][arr_rand], self.valid_mask[1][arr_rand]
         ):
             self.phases[phase](self.X[r, :], r, c, self.current_eta)
@@ -2574,15 +2563,15 @@ class ImputeBackPropogation:
 
         print(f"Epoch Training Time: {str((end-start) / 60)} minutes")
 
-        self.fit_transform()
+        self.fit()
 
-        return self.get_rmse()     
-        
+        return self.get_rmse()
+
     def print_num_epochs(self, interval=10):
         if self.num_epochs % interval == 0:
             print(f"Epochs: {self.num_epochs}\tRMSE: {self.s}")
-    
-    def fit_transform(self, phase=2):
+
+    def fit(self, phase=2):
         self.Xt = np.zeros(self.X.shape)
 
         if phase == 2 or phase == 3:
@@ -2595,23 +2584,21 @@ class ImputeBackPropogation:
 
         else:
             raise Exception("Wrong phase provided!")
-            
+
     def initialize_params(self):
         self.initial_eta = 0.1
-        self.target_eta =  0.0001
+        self.target_eta = 0.0001
         self.s = 0
         self.s_ = np.inf
         self.current_eta = self.initial_eta
         self.gamma = 0.00001
         self.lambd = 0.0001
         self.num_epochs = 0
-            
+
     def get_rmse(self):
         return np.sqrt(
             np.mean(
-                (
-                    self.Xt[~self.invalid_mask] - self.X[~self.invalid_mask]
-                ) ** 2
+                (self.Xt[~self.invalid_mask] - self.X[~self.invalid_mask]) ** 2
             )
         )
 
@@ -2621,11 +2608,13 @@ class ImputeBackPropogation:
         )
 
         return theta
-            
+
     def loss_func(self, cost, theta, alpha):
-        """[Loss function for neural network. Uses gradient descent]
-        """
+        """[Loss function for neural network. Uses gradient descent]"""
         return theta - (alpha * T.grad(cost, wrt=theta))
+
+    def get_Xt(self):
+        return self.Xt
 
 
 class ImputeAlleleFreq(GenotypeData):

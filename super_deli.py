@@ -194,7 +194,12 @@ def main():
         #     max_iter=2,
         # )
 
-        bp = ImputeBackPropogation(data, )
+        nnbp = ImputeBackPropogation(
+            data,
+            num_reduced_dims=3,
+            hidden_layers=3,
+            hidden_layer_sizes=[100, 100, 100],
+        )
 
         # rf_imp = ImputeRandomForest(
         #     data,
