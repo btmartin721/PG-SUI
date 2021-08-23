@@ -2587,12 +2587,12 @@ class ImputeBackPropogation:
 
     def initialize_params(self):
         self.initial_eta = 0.1
-        self.target_eta = 0.0001
+        self.target_eta = 1e-4
         self.s = 0
         self.s_ = np.inf
         self.current_eta = self.initial_eta
-        self.gamma = 0.00001
-        self.lambd = 0.0001
+        self.gamma = 1e-5
+        self.lambd = 1e-4
         self.num_epochs = 0
 
     def get_rmse(self):
