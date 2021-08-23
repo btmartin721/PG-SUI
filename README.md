@@ -28,7 +28,7 @@ The requirements can mostly be installed with conda. The only module that isn't 
 conda create -n super_deli python=3.7
 conda activate super_deli
 
-conda install matplotlib seaborn jupyterlab scikit-learn tqdm pandas=1.2.5 numpy=1.20.2 scipy=1.6.2 xgboost lightgbm
+conda install matplotlib seaborn jupyterlab scikit-learn tqdm pandas=1.2.5 numpy=1.20.2 scipy=1.6.2 xgboost lightgbm tensorflow keras theano
 
 # Only works if using Intel CPUs; speeds up processing
 conda install scikit-learn-intelex
