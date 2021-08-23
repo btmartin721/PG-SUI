@@ -2390,7 +2390,7 @@ class ImputeBackPropogation:
         self.invalid_mask = np.isnan(self.X)
         self.valid_mask = np.where(~self.invalid_mask)
         self.l = hidden_layers
-        self.V = np.random.randn(X.shape[0], num_reduced_dims)
+        self.V = np.random.randn(self.X.shape[0], num_reduced_dims)
         self.total_epochs = 0
         self.x_r = T.vector()
         self.learning_rate = T.scalar("eta")
@@ -2399,7 +2399,7 @@ class ImputeBackPropogation:
 
         self.V = theano.shared(
             np.array(
-                np.random.rand(X.shape[0], num_reduced_dims),
+                np.random.rand(self.X.shape[0], num_reduced_dims),
                 dtype=theano.config.floatX,
             )
         )
@@ -2408,7 +2408,7 @@ class ImputeBackPropogation:
 
         self.U = theano.shared(
             np.array(
-                np.random.rand(num_reduced_dims, X.shape[1]),
+                np.random.rand(num_reduced_dims, self.X.shape[1]),
                 dtype=theano.config.floatX,
             )
         )
@@ -2522,6 +2522,10 @@ class ImputeBackPropogation:
 
         self.run = theano.function(inputs=[self.r], outputs=self.layers[-1])
 
+        self.fit_predict()
+        imputed = self.get_Xt()
+        print(imputed)
+
     @timer
     def fit_predict(self):
         print("Doing Unsupervised Back-Propogation Imputation...")
@@ -2547,6 +2551,21 @@ class ImputeBackPropogation:
                 self.total_epochs += 1
                 self.print_num_epochs()
 
+    def fit(self, phase=2):
+        # Initialize numpy array
+        self.Xt = np.zeros(self.X.shape)
+
+        if phase == 2 or phase == 3:
+            for r in range(self.X.shape[0]):
+                self.Xt[r, :] = self.run(r)
+
+        elif phase == 1:
+            for r in range(self.X.shape[0]):
+                self.Xt[r, :] = self.run_phase1(r)
+
+        else:
+            raise Exception("Wrong phase provided!")
+
     def train_epoch(self, phase=1):
         start = default_timer()
 
@@ -2570,20 +2589,6 @@ class ImputeBackPropogation:
     def print_num_epochs(self, interval=10):
         if self.num_epochs % interval == 0:
             print(f"Epochs: {self.num_epochs}\tRMSE: {self.s}")
-
-    def fit(self, phase=2):
-        self.Xt = np.zeros(self.X.shape)
-
-        if phase == 2 or phase == 3:
-            for r in range(self.X.shape[0]):
-                self.Xt[r, :] = self.run(r)
-
-        elif phase == 1:
-            for r in range(self.X.shape[0]):
-                self.Xt[r, :] = self.run_phase1(r)
-
-        else:
-            raise Exception("Wrong phase provided!")
 
     def initialize_params(self):
         self.initial_eta = 0.1
