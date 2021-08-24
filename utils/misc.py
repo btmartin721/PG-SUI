@@ -9,181 +9,213 @@ import re
 import logging
 
 from tqdm import tqdm
-from tqdm.utils import disp_len, _unicode # for overriding status_print
+from tqdm.utils import disp_len, _unicode  # for overriding status_print
 from numpy.random import choice
-#from skopt import BayesSearchCV
+
+# from skopt import BayesSearchCV
+
 
 def get_indices(l):
-	"""
-	[Takes a list and returns dict giving indices matching each possible 
-	list member]
-	Example:
-		Input [0, 1, 1, 0, 0]
-		Output {0:[0,3,4], 1:[1,2]}
-	"""
-	ret=dict()
-	for member in set(l):
-		ret[member] = list()
-	i=0
-	for el in l:
-		ret[el].append(i)
-		i+=1
-	return(ret)
+    """
+    [Takes a list and returns dict giving indices matching each possible
+    list member]
+    Example:
+            Input [0, 1, 1, 0, 0]
+            Output {0:[0,3,4], 1:[1,2]}
+    """
+    ret = dict()
+    for member in set(l):
+        ret[member] = list()
+    i = 0
+    for el in l:
+        ret[el].append(i)
+        i += 1
+    return ret
+
 
 def all_zero(l):
-	"""
-	[Returns TRUE if supplied list contains all zeros
-	Returns FALSE if list contains ANY non-zero values
-	Returns FALSE if list is empty]
-	"""
-	values=set(l)
-	if len(values) > 1:
-		return(False)
-	elif len(values)==1 and l[0] in [0, 0.0, "0", "0.0"]:
-		return(True)
-	else:
-		return(False)
+    """
+    [Returns TRUE if supplied list contains all zeros
+    Returns FALSE if list contains ANY non-zero values
+    Returns FALSE if list is empty]
+    """
+    values = set(l)
+    if len(values) > 1:
+        return False
+    elif len(values) == 1 and l[0] in [0, 0.0, "0", "0.0"]:
+        return True
+    else:
+        return False
+
 
 def weighted_draw(d, num_samples=1):
-	choices = list(d.keys())
-	weights = list(d.values())
-	return(choice(choices, num_samples, p=weights))
+    choices = list(d.keys())
+    weights = list(d.values())
+    return choice(choices, num_samples, p=weights)
+
 
 def timer(func):
-	"""[print the runtime of the decorated function in the format HH:MM:SS]"""
-	@functools.wraps(func)
-	def wrapper_timer(*args, **kwargs):
-		start_time = time.perf_counter()
-		value = func(*args, **kwargs)
-		end_time = time.perf_counter()
-		run_time = end_time - start_time
-		final_runtime = str(datetime.timedelta(seconds=run_time))
-		print(f"Finshed {func.__name__!r} in {final_runtime}\n")
-		return value
-	return wrapper_timer
+    """[print the runtime of the decorated function in the format HH:MM:SS]"""
+
+    @functools.wraps(func)
+    def wrapper_timer(*args, **kwargs):
+        start_time = time.perf_counter()
+        value = func(*args, **kwargs)
+        end_time = time.perf_counter()
+        run_time = end_time - start_time
+        final_runtime = str(datetime.timedelta(seconds=run_time))
+        print(f"Finshed {func.__name__!r} in {final_runtime}\n")
+        return value
+
+    return wrapper_timer
+
 
 def progressbar(it, prefix="", size=60, file=sys.stdout):
-	count = len(it)
-	def show(j):
-		x = int(size*j/count)
-		file.write("%s[%s%s] %i/%i\r" % (prefix, "#"*x, "."*(size-x), j, count))
-		file.flush()
-	show(0)
-	for i, item in enumerate(it):
-		yield item
-		show(i+1)
-	file.write("\n")
-	file.flush()
+    count = len(it)
+
+    def show(j):
+        x = int(size * j / count)
+        file.write(
+            "%s[%s%s] %i/%i\r" % (prefix, "#" * x, "." * (size - x), j, count)
+        )
+        file.flush()
+
+    show(0)
+    for i, item in enumerate(it):
+        yield item
+        show(i + 1)
+    file.write("\n")
+    file.flush()
+
 
 def isnotebook():
-	"""[Checks whether in Jupyter notebook]
+    """[Checks whether in Jupyter notebook]
 
-	Returns:
-		[bool]: [True if in Jupyter notebook, False otherwise]
-	"""
-	try:
-		shell = get_ipython().__class__.__name__
-		if shell == 'ZMQInteractiveShell':
-			# Jupyter notebook or qtconsole
-			return True
-		elif shell == 'TerminalInteractiveShell':
-			# Terminal running IPython
-			return False
-		else:
-			# Other type (?)
-			return False  
-	except NameError:
-		# Probably standard Python interpreter
-		return False
+    Returns:
+            [bool]: [True if in Jupyter notebook, False otherwise]
+    """
+    try:
+        shell = get_ipython().__class__.__name__
+        if shell == "ZMQInteractiveShell":
+            # Jupyter notebook or qtconsole
+            return True
+        elif shell == "TerminalInteractiveShell":
+            # Terminal running IPython
+            return False
+        else:
+            # Other type (?)
+            return False
+    except NameError:
+        # Probably standard Python interpreter
+        return False
+
 
 def get_processor_name():
-	if platform.system() == "Windows":
-		return platform.processor()
-	elif platform.system() == "Darwin":
-		os.environ['PATH'] = os.environ['PATH'] + os.pathsep + '/usr/sbin'
-		command ="sysctl -n machdep.cpu.brand_string"
-		return subprocess.check_output(command).strip()
-	elif platform.system() == "Linux":
-		command = "cat /proc/cpuinfo"
-		all_info = subprocess.check_output(command, shell=True).strip()
-		all_info = all_info.decode("utf-8")
-		for line in all_info.split("\n"):
-			if "model name" in line:
-				return re.sub( ".*model name.*:", "", line,1)
-	return ""
+    if platform.system() == "Windows":
+        return platform.processor()
+    elif platform.system() == "Darwin":
+        os.environ["PATH"] = os.environ["PATH"] + os.pathsep + "/usr/sbin"
+        command = "sysctl -n machdep.cpu.brand_string"
+        return subprocess.check_output(command).strip()
+    elif platform.system() == "Linux":
+        command = "cat /proc/cpuinfo"
+        all_info = subprocess.check_output(command, shell=True).strip()
+        all_info = all_info.decode("utf-8")
+        for line in all_info.split("\n"):
+            if "model name" in line:
+                return re.sub(".*model name.*:", "", line, 1)
+    return ""
+
 
 class tqdm_linux(tqdm):
-	"""
-	Decorate an iterable object, returning an iterator which acts exactly
-	like the original iterable, but prints a dynamically updating
-	progressbar every time a value is requested.
-	"""
-	@staticmethod
-	def status_printer(self, file):
-		"""
-		Manage the printing and in-place updating of a line of characters.
-		Note that if the string is longer than a line, then in-place
-		updating may not work (it will print a new line at each refresh).
+    """
+    Decorate an iterable object, returning an iterator which acts exactly
+    like the original iterable, but prints a dynamically updating
+    progressbar every time a value is requested.
+    """
 
-		Overridden to work with linux HPC clusters. Replaced '\r' with '\n' in fp_write() function.
-		"""
-		fp = file
-		fp_flush = getattr(fp, 'flush', lambda: None)  # pragma: no cover
+    @staticmethod
+    def status_printer(self, file):
+        """
+        Manage the printing and in-place updating of a line of characters.
+        Note that if the string is longer than a line, then in-place
+        updating may not work (it will print a new line at each refresh).
 
-		def fp_write(s):
-			fp.write(_unicode(s))
-			fp_flush()
+        Overridden to work with linux HPC clusters. Replaced '\r' with '\n' in fp_write() function.
+        """
+        fp = file
+        fp_flush = getattr(fp, "flush", lambda: None)  # pragma: no cover
 
-		last_len = [0]
+        def fp_write(s):
+            fp.write(_unicode(s))
+            fp_flush()
 
-		def print_status(s):
-			len_s = disp_len(s)
-			fp_write('\n' + s + (' ' * max(last_len[0] - len_s, 0)))
-			last_len[0] = len_s
+        last_len = [0]
 
-		return print_status
+        def print_status(s):
+            len_s = disp_len(s)
+            fp_write("\n" + s + (" " * max(last_len[0] - len_s, 0)))
+            last_len[0] = len_s
+
+        return print_status
+
 
 class HiddenPrints:
-	"""[Class to supress printing within a with statement]
-	"""
-	def __enter__(self):
-		self._original_stdout = sys.stdout
-		sys.stdout = open(os.devnull, 'w')
+    """[Class to supress printing within a with statement]"""
 
-	def __exit__(self, exc_type, exc_val, exc_tb):
-		sys.stdout.close()
-		sys.stdout = self._original_stdout
+    def __enter__(self):
+        self._original_stdout = sys.stdout
+        sys.stdout = open(os.devnull, "w")
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        sys.stdout.close()
+        sys.stdout = self._original_stdout
+
 
 class StreamToLogger(object):
-	"""
-	Fake file-like stream object that redirects writes to a logger instance.
-	"""
-	def __init__(self, logger, log_level=logging.INFO):
-		self.logger = logger
-		self.log_level = log_level
-		self.linebuf = ''
+    """
+    Fake file-like stream object that redirects writes to a logger instance.
+    """
 
-	def write(self, buf):
-		temp_linebuf = self.linebuf + buf
-		self.linebuf = ''
-		for line in temp_linebuf.splitlines(True):
-			# From the io.TextIOWrapper docs:
-			#   On output, if newline is None, any '\n' characters written
-			#   are translated to the system default line separator.
-			# By default sys.stdout.write() expects '\n' newlines and then
-			# translates them so this is still cross platform.
-			if line[-1] == '\n':
-				self.logger.log(self.log_level, line.rstrip())
-			else:
-				self.linebuf += line
+    def __init__(self, logger, log_level=logging.INFO):
+        self.logger = logger
+        self.log_level = log_level
+        self.linebuf = ""
 
-	def flush(self):
-		if self.linebuf != '':
-			self.logger.log(self.log_level, self.linebuf.rstrip())
-		self.linebuf = ''
+    def write(self, buf):
+        temp_linebuf = self.linebuf + buf
+        self.linebuf = ""
+        for line in temp_linebuf.splitlines(True):
+            # From the io.TextIOWrapper docs:
+            #   On output, if newline is None, any '\n' characters written
+            #   are translated to the system default line separator.
+            # By default sys.stdout.write() expects '\n' newlines and then
+            # translates them so this is still cross platform.
+            if line[-1] == "\n":
+                self.logger.log(self.log_level, line.rstrip())
+            else:
+                self.linebuf += line
+
+    def flush(self):
+        if self.linebuf != "":
+            self.logger.log(self.log_level, self.linebuf.rstrip())
+        self.linebuf = ""
+
+
+def initialize_weights(sz):
+    theta = theano.shared(
+        np.array(np.random.rand(sz[0], sz[1]), dtype=theano.config.floatX)
+    )
+
+    return theta
+
+
+def gradient_descent(cost, theta, alpha):
+    return theta - (alpha * T.grad(cost, wrt=theta))
+
 
 # def bayes_search_CV_init(self, estimator, search_spaces, optimizer_kwargs=None,	n_iter=50, scoring=None, fit_params=None, n_jobs=1,	n_points=1, iid=True, refit=True, cv=None, verbose=0,
-# 	pre_dispatch='2*n_jobs', random_state=None,	error_score='raise', 
+# 	pre_dispatch='2*n_jobs', random_state=None,	error_score='raise',
 # 	return_train_score=False
 # ):
 
@@ -201,4 +233,3 @@ class StreamToLogger(object):
 # 		pre_dispatch=pre_dispatch, error_score=error_score,
 # 		return_train_score=return_train_score
 # 	)
-

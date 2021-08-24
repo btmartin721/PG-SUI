@@ -54,6 +54,8 @@ from utils.misc import get_processor_name
 from utils.misc import isnotebook
 from utils.misc import StreamToLogger
 from utils.misc import timer
+from utils.misc import gradient_descent
+from utils.misc import initialize_weights
 
 is_notebook = isnotebook()
 
@@ -2468,11 +2470,15 @@ class ImputeBackPropogation:
                 updates=[
                     (
                         self.U,
-                        self.loss_func(self.fc1, self.U, self.learning_rate),
+                        self.gradient_descent(
+                            self.fc1, self.U, self.learning_rate
+                        ),
                     ),
                     (
                         self.V,
-                        self.loss_func(self.fc1, self.V, self.learning_rate),
+                        self.gradient_descent(
+                            self.fc1, self.V, self.learning_rate
+                        ),
                     ),
                 ],
             )
@@ -2488,7 +2494,12 @@ class ImputeBackPropogation:
                 ],
                 outputs=self.fc,
                 updates=[
-                    (theta, self.loss_func(self.fc, theta, self.learning_rate))
+                    (
+                        theta,
+                        self.gradient_descent(
+                            self.fc, theta, self.learning_rate
+                        ),
+                    )
                     for theta in self.weights
                 ],
             )
@@ -2504,13 +2515,20 @@ class ImputeBackPropogation:
                 ],
                 outputs=self.fc,
                 updates=[
-                    (theta, self.loss_func(self.fc, theta, self.learning_rate))
+                    (
+                        theta,
+                        self.gradient_descent(
+                            self.fc, theta, self.learning_rate
+                        ),
+                    )
                     for theta in self.weights
                 ]
                 + [
                     (
                         self.V,
-                        self.loss_func(self.fc, self.V, self.learning_rate),
+                        self.gradient_descent(
+                            self.fc, self.V, self.learning_rate
+                        ),
                     )
                 ],
             )
@@ -2586,6 +2604,12 @@ class ImputeBackPropogation:
 
         return self.get_rmse()
 
+    def compile_theano_1_of_k_4():
+        seq = T.bvector()
+        num_classes = T.bscalar()
+        one_hot = T.eq(seq.reshape((-1, 1)), T.arange(num_classes))
+        return theano.function([seq, num_classes], outputs=one_hot)
+
     def print_num_epochs(self, interval=10):
         if self.num_epochs % interval == 0:
             print(f"Epochs: {self.num_epochs}\tRMSE: {self.s}")
@@ -2606,17 +2630,6 @@ class ImputeBackPropogation:
                 (self.Xt[~self.invalid_mask] - self.X[~self.invalid_mask]) ** 2
             )
         )
-
-    def initialize_weights(self, sz):
-        theta = theano.shared(
-            np.array(np.random.rand(sz[0], sz[1]), dtype=theano.config.floatX)
-        )
-
-        return theta
-
-    def loss_func(self, cost, theta, alpha):
-        """[Loss function for neural network. Uses gradient descent]"""
-        return theta - (alpha * T.grad(cost, wrt=theta))
 
     def get_Xt(self):
         return self.Xt
