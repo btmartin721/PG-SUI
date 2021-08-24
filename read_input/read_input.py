@@ -441,9 +441,9 @@ class GenotypeData:
         if impute_mode:
             return imp_snps
 
-    def convert_onehot(self, snp_data):
+    def convert_onehot(self, snp_data, encodings_dict=None):
 
-        if self.filetype == "phylip":
+        if self.filetype == "phylip" and encodings_dict is None:
             onehot_dict = {
                 "A": [1.0, 0.0, 0.0, 0.0],
                 "T": [0.0, 1.0, 0.0, 0.0],
@@ -460,7 +460,9 @@ class GenotypeData:
             }
 
         elif (
-            self.filetype == "structure1row" or self.filetype == "structure2row"
+            self.filetype == "structure1row"
+            or self.filetype == "structure2row"
+            and encodings_dict is None
         ):
             onehot_dict = {
                 "1/1": [1.0, 0.0, 0.0, 0.0],
@@ -482,13 +484,31 @@ class GenotypeData:
                 "4/3": [0.0, 0.0, 0.5, 0.5],
             }
 
+        else:
+            if isinstance(snp_data, np.ndarray):
+                snp_data = snp_data.tolist()
+
+            onehot_dict = encodings_dict
+
         onehot_outer_list = list()
-        for i in range(len(self.samples)):
-            onehot_list = list()
-            for j in range(len(snp_data[0])):
-                onehot_list.append(onehot_dict[snp_data[i][j]])
-            onehot_outer_list.append(onehot_list)
-        self.onehot = np.array(onehot_outer_list)
+
+        if encodings_dict is None:
+            for i in range(len(self.samples)):
+                onehot_list = list()
+                for j in range(len(snp_data[0])):
+                    onehot_list.append(onehot_dict[snp_data[i][j]])
+                onehot_outer_list.append(onehot_list)
+
+            self.onehot = np.array(onehot_outer_list)
+
+        else:
+            for i in range(len(snp_data)):
+                onehot_list = list()
+                for j in range(len(snp_data[0])):
+                    onehot_list.append(onehot_dict[snp_data[i][j]])
+                onehot_outer_list.append(onehot_list)
+
+            return np.array(onehot_outer_list)
 
     def read_popmap(self, popmapfile):
         self.popmapfile = popmapfile

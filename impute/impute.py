@@ -38,6 +38,7 @@ import lightgbm as lgbm
 
 import theano
 import theano.tensor as T
+import theano.tensor.extra_ops
 import theano.tensor.nnet as nnet
 
 # Custom module imports
@@ -2370,7 +2371,7 @@ class ImputePhylo(GenotypeData):
         return ret
 
 
-class ImputeBackPropogation:
+class ImputeBackPropogation(GenotypeData):
     def __init__(
         self,
         genotype_data,
@@ -2380,7 +2381,18 @@ class ImputeBackPropogation:
         hidden_layer_sizes=list(),
     ):
 
-        self.X = genotype_data.genotypes_nparray
+        super().__init__()
+
+        encodings = {0: [1, 0, 0], 1: [0, 1, 0], 2: [0, 0, 1], -9: [0, 0, 0]}
+
+        self.X = self.convert_onehot(
+            genotype_data.genotypes_nparray, encodings_dict=encodings
+        )
+
+        # One for each one-hot encoded genotype
+        self.Xref = self.X[:, :, 0]
+        self.Xhet = self.X[:, :, 1]
+        self.Xalt = self.X[:, :, 2]
 
         assert hidden_layers == len(hidden_layer_sizes) and hidden_layers > 0, (
             f"Hidden layers must be greater than 0 and of the same length as "
@@ -2388,16 +2400,30 @@ class ImputeBackPropogation:
             f"len(hidden_layer_sizes) == {len(hidden_layer_sizes)}"
         )
 
+        # a = np.zeros((117, 2024))
+        # b = np.ones((117, 2024))
+        # c = np.full((117, 2024), 2)
+        # test = np.stack((a, b, c), axis=2)
+        # print(test)
+        # print(test.shape)
+        # sys.exit()
+
         self.Xt = None
-        self.invalid_mask = np.isnan(self.X)
+        # self.invalid_mask = np.isnan(self.X)
+
+        self.invalid_mask = np.where(
+            genotype_data.genotypes_nparray == -9, True, False
+        )
+
         self.valid_mask = np.where(~self.invalid_mask)
         self.l = hidden_layers
         self.V = np.random.randn(self.X.shape[0], num_reduced_dims)
-        self.total_epochs = 0
+        self.total_epochs = [0, 0, 0]
         self.x_r = T.vector()
         self.learning_rate = T.scalar("eta")
         self.c = T.iscalar()
         self.r = T.iscalar()
+        self.gt = T.bscalar()
 
         self.V = theano.shared(
             np.array(
@@ -2422,20 +2448,20 @@ class ImputeBackPropogation:
         for i in range(hidden_layers):
             if i == 0:
                 self.weights.append(
-                    self.initialize_weights(
+                    initialize_weights(
                         (num_reduced_dims, hidden_layer_sizes[0])
                     )
                 )
 
             else:
                 self.weights.append(
-                    self.initialize_weights(
+                    initialize_weights(
                         (hidden_layer_sizes[i - 1], hidden_layer_sizes[i])
                     )
                 )
 
         self.weights.append(
-            self.initialize_weights((hidden_layer_sizes[-1], self.X.shape[1]))
+            initialize_weights((hidden_layer_sizes[-1], self.X.shape[1]))
         )
 
         for i in range(hidden_layers):
@@ -2470,15 +2496,11 @@ class ImputeBackPropogation:
                 updates=[
                     (
                         self.U,
-                        self.gradient_descent(
-                            self.fc1, self.U, self.learning_rate
-                        ),
+                        gradient_descent(self.fc1, self.U, self.learning_rate),
                     ),
                     (
                         self.V,
-                        self.gradient_descent(
-                            self.fc1, self.V, self.learning_rate
-                        ),
+                        gradient_descent(self.fc1, self.V, self.learning_rate),
                     ),
                 ],
             )
@@ -2496,9 +2518,7 @@ class ImputeBackPropogation:
                 updates=[
                     (
                         theta,
-                        self.gradient_descent(
-                            self.fc, theta, self.learning_rate
-                        ),
+                        gradient_descent(self.fc, theta, self.learning_rate),
                     )
                     for theta in self.weights
                 ],
@@ -2517,18 +2537,14 @@ class ImputeBackPropogation:
                 updates=[
                     (
                         theta,
-                        self.gradient_descent(
-                            self.fc, theta, self.learning_rate
-                        ),
+                        gradient_descent(self.fc, theta, self.learning_rate),
                     )
                     for theta in self.weights
                 ]
                 + [
                     (
                         self.V,
-                        self.gradient_descent(
-                            self.fc, self.V, self.learning_rate
-                        ),
+                        gradient_descent(self.fc, self.V, self.learning_rate),
                     )
                 ],
             )
@@ -2541,8 +2557,9 @@ class ImputeBackPropogation:
         self.run = theano.function(inputs=[self.r], outputs=self.layers[-1])
 
         self.fit_predict()
-        imputed = self.get_Xt()
+        imputed = self.predict()
         print(imputed)
+        print(imputed.shape)
 
     @timer
     def fit_predict(self):
@@ -2550,36 +2567,52 @@ class ImputeBackPropogation:
 
         self.fit(phase=2)
 
-        print(f"Initial RMSE: {self.get_rmse()}")
+        print(f"Initial REF RMSE: {self.get_rmse(self.Xt_ref, self.Xref)}")
+        print(f"Initial HET RMSE: {self.get_rmse(self.Xt_het, self.Xhet)}")
+        print(f"Initial ALT RMSE: {self.get_rmse(self.Xt_alt, self.Xalt)}")
 
         for i in range(1):
             print(f"Phase {(i + 1)}")
 
             self.initialize_params()
 
-            while self.current_eta > self.target_eta:
-                self.s = self.train_epoch(phase=i)
+            for j in range(self.X.shape[2]):
+                if j == 0:
+                    dataset = "REF"
+                elif j == 1:
+                    dataset = "HET"
+                elif j == 2:
+                    dataset = "ALT"
+                print(f"Predicting {dataset} dataset...")
+                while self.current_eta[j] > self.target_eta:
+                    self.s = self.train_epoch(phase=i)
 
-                if 1 - self.s / self.s_ < self.gamma:
-                    self.current_eta = self.current_eta / 2
-                    print(f"Reduced eta to {self.current_eta}")
+                    if 1 - self.s[j] / self.s_[j] < self.gamma:
+                        self.current_eta[j] = self.current_eta[j] / 2
+                        print(f"Reduced eta to {self.current_eta[j]}")
 
-                self.s_ = self.s
-                self.num_epochs += 1
-                self.total_epochs += 1
-                self.print_num_epochs()
+                    self.s_[j] = self.s[j]
+                    self.num_epochs[j] += 1
+                    self.total_epochs[j] += 1
+                    self.print_num_epochs(j)
 
     def fit(self, phase=2):
         # Initialize numpy array
-        self.Xt = np.zeros(self.X.shape)
+        self.Xt_ref = np.zeros(self.Xref.shape)
+        self.Xt_het = np.zeros(self.Xhet.shape)
+        self.Xt_alt = np.zeros(self.Xalt.shape)
 
         if phase == 2 or phase == 3:
-            for r in range(self.X.shape[0]):
-                self.Xt[r, :] = self.run(r)
+            for r in range(self.Xref.shape[0]):
+                self.Xt_ref[r, :] = self.run(r)
+                self.Xt_het[r, :] = self.run(r)
+                self.Xt_alt[r, :] = self.run(r)
 
         elif phase == 1:
-            for r in range(self.X.shape[0]):
-                self.Xt[r, :] = self.run_phase1(r)
+            for r in range(self.Xref.shape[0]):
+                self.Xt_ref[r, :] = self.run_phase1(r)
+                self.Xt_het[r, :] = self.run_phase1(r)
+                self.Xt_alt[r, :] = self.run_phase1(r)
 
         else:
             raise Exception("Wrong phase provided!")
@@ -2594,7 +2627,9 @@ class ImputeBackPropogation:
         for r, c in zip(
             self.valid_mask[0][arr_rand], self.valid_mask[1][arr_rand]
         ):
-            self.phases[phase](self.X[r, :], r, c, self.current_eta)
+            self.phases[phase](self.Xref[r, :], r, c, self.current_eta[0])
+            self.phases[phase](self.Xhet[r, :], r, c, self.current_eta[1])
+            self.phases[phase](self.Xalt[r, :], r, c, self.current_eta[2])
 
         end = default_timer()
 
@@ -2602,37 +2637,42 @@ class ImputeBackPropogation:
 
         self.fit()
 
-        return self.get_rmse()
+        return [
+            self.get_rmse(self.Xt_ref, self.Xref),
+            self.get_rmse(self.Xt_het, self.Xhet),
+            self.get_rmse(self.Xt_alt, self.Xalt),
+        ]
 
-    def compile_theano_1_of_k_4():
-        seq = T.bvector()
-        num_classes = T.bscalar()
-        one_hot = T.eq(seq.reshape((-1, 1)), T.arange(num_classes))
-        return theano.function([seq, num_classes], outputs=one_hot)
+    def print_num_epochs(self, idx, interval=10):
+        if idx == 0:
+            x = "REF"
+        elif idx == 1:
+            x = "HET"
+        elif idx == 2:
+            x = "ALT"
 
-    def print_num_epochs(self, interval=10):
-        if self.num_epochs % interval == 0:
-            print(f"Epochs: {self.num_epochs}\tRMSE: {self.s}")
+        if self.num_epochs[idx] % interval == 0:
+            print(
+                f"Epochs for Dataset {x}: {self.num_epochs[idx]}\tRMSE: {self.s[idx]}"
+            )
 
     def initialize_params(self):
-        self.initial_eta = 0.1
+        self.initial_eta = [0.1, 0.1, 0.1]
         self.target_eta = 1e-4
-        self.s = 0
-        self.s_ = np.inf
+        self.s = [0, 0, 0]
+        self.s_ = [np.inf, np.inf, np.inf]
         self.current_eta = self.initial_eta
         self.gamma = 1e-5
         self.lambd = 1e-4
-        self.num_epochs = 0
+        self.num_epochs = [0, 0, 0]
 
-    def get_rmse(self):
+    def get_rmse(self, arr_t, arr):
         return np.sqrt(
-            np.mean(
-                (self.Xt[~self.invalid_mask] - self.X[~self.invalid_mask]) ** 2
-            )
+            np.mean((arr_t[~self.invalid_mask] - arr[~self.invalid_mask]) ** 2)
         )
 
-    def get_Xt(self):
-        return self.Xt
+    def predict(self):
+        return np.stack((self.Xt_ref, self.Xt_het, self.Xt_alt), axis=2)
 
 
 class ImputeAlleleFreq(GenotypeData):

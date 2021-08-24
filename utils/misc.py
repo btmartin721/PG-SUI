@@ -8,9 +8,13 @@ import subprocess
 import re
 import logging
 
+import numpy as np
+import theano
+import theano.tensor as T
 from tqdm import tqdm
 from tqdm.utils import disp_len, _unicode  # for overriding status_print
 from numpy.random import choice
+
 
 # from skopt import BayesSearchCV
 
