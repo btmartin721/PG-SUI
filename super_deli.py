@@ -10,10 +10,12 @@ import scipy.stats as stats
 from sklearn_genetic.space import Continuous, Categorical, Integer
 
 from utils.misc import get_processor_name
+from utils.misc import generate_012_genotypes
 
 # Custom module imports
 from read_input.read_input import GenotypeData
 from impute.impute import *
+from impute.neural_network_imputers import ImputeVAE
 
 from dim_reduction.dim_reduction import DimReduction
 from dim_reduction.embed import *
@@ -194,12 +196,16 @@ def main():
         #     max_iter=2,
         # )
 
-        nnbp = ImputeBackPropogation(
-            data,
-            num_reduced_dims=3,
-            hidden_layers=3,
-            hidden_layer_sizes=[100, 100, 100],
+        vae_imp = ImputeVAE(
+            gt=np.array([[0.0, 2.0], [np.nan, 2.0], [1.0, np.nan]])
         )
+
+        # nnbp = ImputeBackPropogation(
+        #     data,
+        #     num_reduced_dims=3,
+        #     hidden_layers=3,
+        #     hidden_layer_sizes=[100, 100, 100],
+        # )
 
         # rf_imp = ImputeRandomForest(
         #     data,

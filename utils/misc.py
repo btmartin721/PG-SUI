@@ -19,6 +19,155 @@ from numpy.random import choice
 # from skopt import BayesSearchCV
 
 
+def generate_random_dataset(
+    min_value=0,
+    max_value=2,
+    nrows=35,
+    ncols=20,
+    min_missing_rate=0.15,
+    max_missing_rate=0.5,
+):
+
+    assert (
+        min_missing_rate >= 0 and min_missing_rate < 1.0
+    ), f"min_missing_rate must be >= 0 and < 1.0, but got {min_missing_rate}"
+
+    assert (
+        max_missing_rate > 0 and max_missing_rate < 1.0
+    ), f"max_missing_rate must be > 0 and < 1.0, but got {max_missing_rate}"
+
+    assert nrows > 1, f"nrows must be > 1, but got {nrows}"
+    assert ncols > 1, f"ncols must be > 1, but got {ncols}"
+
+    try:
+        min_missing_rate = float(min_missing_rate)
+        max_missing_rate = float(max_missing_rate)
+    except TypeError:
+        sys.exit(
+            "min_missing_rate and max_missing_rate must be of type float or "
+            "must be cast-able to type float"
+        )
+
+    X = np.random.randint(min_value, max_value + 1, size=(nrows, ncols)).astype(
+        float
+    )
+    for i in range(X.shape[1]):
+        drop_rate = int(
+            np.random.choice(
+                np.arange(min_missing_rate, max_missing_rate, 0.02), 1
+            )[0]
+            * X.shape[0]
+        )
+
+        rows = np.random.choice(np.arange(0, X.shape[0]), size=drop_rate)
+        X[rows, i] = np.nan
+
+    return X
+
+
+def generate_012_genotypes(
+    nrows=35,
+    ncols=20,
+    max_missing_rate=0.5,
+    min_het_rate=0.001,
+    max_het_rate=0.3,
+    min_alt_rate=0.001,
+    max_alt_rate=0.3,
+):
+
+    assert (
+        min_het_rate > 0 and min_het_rate <= 1.0
+    ), f"min_het_rate must be > 0 and <= 1.0, but got {min_het_rate}"
+
+    assert (
+        max_het_rate > 0 and max_het_rate <= 1.0
+    ), f"max_het_rate must be > 0 and <= 1.0, but got {max_het_rate}"
+
+    assert (
+        min_alt_rate > 0 and min_alt_rate <= 1.0
+    ), f"min_alt_rate must be > 0 and <= 1.0, but got {min_alt_rate}"
+
+    assert (
+        max_alt_rate > 0 and max_alt_rate <= 1.0
+    ), f"max_alt_rate must be > 0 and <= 1.0, but got {max_alt_rate}"
+
+    assert nrows > 1, f"The number of rows must be > 1, but got {nrows}"
+
+    assert ncols > 1, f"The number of columns must be > 1, but got {ncols}"
+
+    assert (
+        max_missing_rate > 0 and max_missing_rate < 1.0
+    ), f"max_missing rate must be > 0 and < 1.0, but got {max_missing_rate}"
+
+    try:
+        min_het_rate = float(min_het_rate)
+        max_het_rate = float(max_het_rate)
+        min_alt_rate = float(min_alt_rate)
+        max_alt_rate = float(max_alt_rate)
+        max_missing_rate = float(max_missing_rate)
+    except TypeError:
+        sys.exit(
+            "max_missing_rate, min_het_rate, max_het_rate, min_alt_rate, and "
+            "max_alt_rate must be of type float, or must be cast-able to type "
+            "float"
+        )
+
+    X = np.zeros((nrows, ncols))
+    for i in range(X.shape[1]):
+        het_rate = int(
+            np.ceil(
+                np.random.choice(
+                    np.arange(min_het_rate, max_het_rate, 0.02), 1
+                )[0]
+                * X.shape[0]
+            )
+        )
+
+        alt_rate = int(
+            np.ceil(
+                np.random.choice(
+                    np.arange(min_alt_rate, max_alt_rate, 0.02), 1
+                )[0]
+                * X.shape[0]
+            )
+        )
+
+        het = np.sort(
+            np.random.choice(
+                np.arange(0, X.shape[0]), size=het_rate, replace=False
+            )
+        )
+
+        alt = np.sort(
+            np.random.choice(
+                np.arange(0, X.shape[0]), size=alt_rate, replace=False
+            )
+        )
+
+        sidx = alt.argsort()
+        idx = np.searchsorted(alt, het, sorter=sidx)
+        idx[idx == len(alt)] = 0
+        het_unique = het[alt[sidx[idx]] != het]
+
+        X[alt, i] = 2
+        X[het_unique, i] = 1
+
+        drop_rate = int(
+            np.random.choice(np.arange(0.15, max_missing_rate, 0.02), 1)[0]
+            * X.shape[0]
+        )
+
+        missing = np.random.choice(np.arange(0, X.shape[0]), size=drop_rate)
+
+        X[missing, i] = np.nan
+
+    print(
+        f"Created a dataset of shape {X.shape} with {np.isnan(X).sum()} total missing values"
+    )
+
+    return X
+
+
 def get_indices(l):
     """
     [Takes a list and returns dict giving indices matching each possible

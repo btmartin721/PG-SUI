@@ -2556,10 +2556,6 @@ class ImputeBackPropogation(GenotypeData):
 
         self.run = theano.function(inputs=[self.r], outputs=self.layers[-1])
 
-        self.fit_predict()
-        imputed = self.predict()
-        print(imputed)
-        print(imputed.shape)
 
     @timer
     def fit_predict(self):
