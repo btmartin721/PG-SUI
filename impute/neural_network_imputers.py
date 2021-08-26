@@ -35,17 +35,33 @@ class ImputeVAE(GenotypeData):
         print(self.X_enc)
 
     def encode_onehot(self, X):
-        print(X)
         ohe = OneHotEncoder()
         Xenc = ohe.fit_transform(X).toarray()
+
+        ncat = np.array([len(x) for x in ohe.categories_])
+
         missing_mask = np.where(X == "none", 1.0, 0.0)
 
         Xmiss = np.zeros(Xenc.shape)
-        for col in range(missing_mask.shape[1]):
-            ncat = ohe.categories_[col]
-            
+        Xmiss_cat = np.split(Xmiss, ncat, axis=1)
+        print(Xmiss_cat)
+        sys.exit()
+        for col in range(X.shape[1]):
+            # invalid = np.where(X[:, col] == "none")[0]
+            # valid = np.where(X[:, col] != "none")[0]
+            for row in range(X.shape[0]):
 
-        print(test)
+                miss_ohe = np.repeat(1.0, ncat[col])
+                nonmiss_ohe = np.repeat(0.0, ncat[col])
+
+            # Xmiss[
+
+            # Xmiss = np.concatenate(Xmiss)
+
+        # Xmiss[idx, col] = 1.0
+        # Xmiss[~idx, col] = 0.0
+
+        # print(Xmiss)
 
         sys.exit()
         return missing_enc
