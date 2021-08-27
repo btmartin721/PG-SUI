@@ -3,12 +3,14 @@
 import os
 import random
 import sys
+import gc
 
 from collections import defaultdict
 
 # Third-party Imports
 import numpy as np
 import pandas as pd
+from scipy import stats as st
 
 import matplotlib.pylab as plt
 import seaborn as sns
@@ -19,11 +21,23 @@ from keras.models import Sequential
 from keras.layers.core import Dropout, Dense
 from keras.regularizers import l1_l2 as l1l2
 
+from sklearn import metrics
+from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import OneHotEncoder
 
 # Custom Modules
+from impute.impute import Impute
 from read_input.read_input import GenotypeData
 from utils.misc import generate_012_genotypes
+from utils.misc import timer
+from utils.misc import isnotebook
+
+is_notebook = isnotebook()
+
+if is_notebook:
+    from tqdm.notebook import tqdm as progressbar
+else:
+    from tqdm import tqdm as progressbar
 
 
 def make_reconstruction_loss(n_features):
@@ -46,12 +60,13 @@ def masked_mae(X_true, X_pred, mask):
     return np.mean(np.abs(masked_diff))
 
 
-class ImputeVAE(GenotypeData):
+class ImputeVAE(GenotypeData, Impute):
     def __init__(
         self,
         *,
         genotype_data=None,
         gt=None,
+        prefix="imputed_VAE",
         recurrent_weight=0.5,
         optimizer="adam",
         dropout_probability=0.5,
@@ -60,9 +75,18 @@ class ImputeVAE(GenotypeData):
         kernel_initializer="glorot_normal",
         l1_penalty=0,
         l2_penalty=0,
+        cv=5,
+        validation_only=0.4,
+        scoring_metric="accuracy",
+        disable_progressbar=False,
     ):
 
         super().__init__()
+
+        self.clf = "VAE"
+        self.clf_type = "classifier"
+
+        self.prefix = prefix
 
         self.recurrent_weight = recurrent_weight
         self.optimizer = optimizer
@@ -72,6 +96,14 @@ class ImputeVAE(GenotypeData):
         self.kernel_initializer = kernel_initializer
         self.l1_penalty = l1_penalty
         self.l2_penalty = l2_penalty
+
+        self.cv = cv
+        self.validation_only = validation_only
+        self.scoring_metric = scoring_metric
+        self.disable_progressbar = disable_progressbar
+
+        self.df = None
+        self.data = None
 
         if genotype_data is None and gt is None:
             raise TypeError("genotype_data and gt cannot both be NoneType")
@@ -85,37 +117,61 @@ class ImputeVAE(GenotypeData):
         elif gt is not None:
             X = gt
 
-        # imputed = self._read_example_data()
+        if self.validation_only is not None:
+            print("Estimating validation scores...")
+            self.df_scores = self._imputer_validation(pd.DataFrame(X))
+            print("\nDone!\n")
 
-        self.data = self._encode_onehot(X).values
+        else:
+            self.df_scores = None
 
-        imputed = self.train(train_epochs=300, batch_size=256)
-        imputed = self._eval_predictions(X, imputed)
+        print("Imputing full dataset...")
+        self.imputed_df = self.fit_predict(X)
+        print("Done!")
 
-        print(imputed)
+        self.write_imputed(imputed_df)
 
-    def _get_imputed_data(self):
-        return self.imputed
+        if df_scores is not None:
+            print(df_scores)
+
+    @timer
+    def fit_predict(self, X):
+        self.df = self._encode_onehot(X)
+        self.data = self.df.copy().values
+
+        imputed_enc = self.train(train_epochs=300, batch_size=2)
+        imputed_enc, dummy_df = self._eval_predictions(X, imputed_enc)
+
+        imputed_df = self._decode_onehot(
+            pd.DataFrame(data=imputed_enc, columns=dummy_df.columns)
+        )
+
+        return imputed_df
+
+    @property
+    def imputed(self):
+        return self.imputed_df
 
     def _read_example_data(self):
-        df = pd.read_csv("mushrooms.csv", header=None)
+        df = pd.read_csv("mushrooms_test_2.csv", header=None)
 
-        prob_missing = 0.1
+        # prob_missing = 0.1
+        # df_incomplete = df.copy()
+        # ix = [
+        #     (row, col)
+        #     for row in range(df.shape[0])
+        #     for col in range(df.shape[1])
+        # ]
+
+        # for row, col in random.sample(ix, int(round(prob_missing * len(ix)))):
+        #     df_incomplete.iat[row, col] = np.nan
+
         df_incomplete = df.copy()
-        ix = [
-            (row, col)
-            for row in range(df.shape[0])
-            for col in range(df.shape[1])
-        ]
 
-        for row, col in random.sample(ix, int(round(prob_missing * len(ix)))):
-            df_incomplete.iat[row, col] = np.nan
-
-        print(df_incomplete)
+        df_incomplete.iat[1, 0] = np.nan
+        df_incomplete.iat[2, 1] = np.nan
 
         missing_encoded = pd.get_dummies(df_incomplete)
-
-        print(missing_encoded)
 
         for col in df.columns:
             missing_cols = missing_encoded.columns.str.startswith(
@@ -126,26 +182,28 @@ class ImputeVAE(GenotypeData):
                 df_incomplete[col].isnull(), missing_cols
             ] = np.nan
 
-        print(missing_encoded)
-
         return missing_encoded
 
     def _encode_categorical(self, X):
         np.nan_to_num(X, copy=False, nan=-9.0)
         X = X.astype(str)
         X[X == "-9.0"] = "none"
-        return X
 
-    def _encode_onehot(self, X):
-
-        df = pd.DataFrame(self._encode_categorical(X))
-
+        df = pd.DataFrame(X)
         df_incomplete = df.copy()
 
+        # Replace 'none' with np.nan
         for row in df.index:
             for col in df.columns:
                 if df_incomplete.iat[row, col] == "none":
                     df_incomplete.iat[row, col] = np.nan
+
+        return df_incomplete
+
+    def _encode_onehot(self, X):
+
+        df = self._encode_categorical(X)
+        df_incomplete = df.copy()
 
         missing_encoded = pd.get_dummies(df_incomplete)
 
@@ -181,6 +239,244 @@ class ImputeVAE(GenotypeData):
 
         return np.concatenate((Xt, np.array(Xmiss)), axis=1)
 
+    def _imputer_validation(self, df):
+
+        reps = defaultdict(list)
+        for cnt, rep in enumerate(
+            progressbar(
+                range(self.cv),
+                desc="Validation replicates: ",
+                leave=True,
+                disable=self.disable_progressbar,
+            ),
+            start=1,
+        ):
+
+            if self.disable_progressbar:
+                perc = int((cnt / self.cv) * 100)
+                print(f"Validation replicate {cnt}/{self.cv} ({perc}%)")
+
+            df_known, df_valid, cols = self._defile_dataset(
+                df, col_selection_rate=self.validation_only
+            )
+
+            df_known_slice = df_known[cols]
+            df_valid_slice = df_valid[cols]
+
+            df_stg = df_valid.copy()
+            df_imp = self.fit_predict(df_stg.to_numpy())
+            df_imp = df_imp.astype(np.float)
+
+            # Get score of each column
+            scores = defaultdict(list)
+            for i in range(len(df_known_slice.columns)):
+                # Adapted from: https://medium.com/analytics-vidhya/using-scikit-learns-iterative-imputer-694c3cca34de
+
+                y_true = df_known[df_known.columns[i]]
+                y_pred = df_imp[df_imp.columns[i]]
+
+                scores["accuracy"].append(
+                    metrics.accuracy_score(y_true, y_pred)
+                )
+
+                scores["precision"].append(
+                    metrics.precision_score(
+                        y_true, y_pred, average="macro", zero_division=0
+                    )
+                )
+
+                scores["f1"].append(
+                    metrics.f1_score(
+                        y_true, y_pred, average="macro", zero_division=0
+                    )
+                )
+
+                scores["recall"].append(
+                    metrics.recall_score(
+                        y_true, y_pred, average="macro", zero_division=0
+                    )
+                )
+
+                scores["jaccard"].append(
+                    metrics.jaccard_score(
+                        y_true, y_pred, average="macro", zero_division=0
+                    )
+                )
+
+            lst2del = [
+                df_stg,
+                df_imp,
+                df_known,
+                df_known_slice,
+                df_valid_slice,
+                df_valid,
+            ]
+            del lst2del
+            del cols
+            gc.collect()
+
+            for k, score_list in scores.items():
+                score_list_filtered = filter(lambda x: x != -9, score_list)
+
+                if score_list_filtered:
+                    reps[k].append(score_list_filtered)
+                else:
+                    continue
+
+        if not reps:
+            raise ValueError("None of the features could be validated!")
+
+        ci_lower = dict()
+        ci_upper = dict()
+        for k, v in reps.items():
+            reps_t = np.array(v).T.tolist()
+
+            cis = list()
+            if len(reps_t) > 1:
+                for rep in reps_t:
+                    rep = [abs(x) for x in rep]
+
+                    cis.append(
+                        st.t.interval(
+                            alpha=0.95,
+                            df=len(rep) - 1,
+                            loc=np.mean(rep),
+                            scale=st.sem(rep),
+                        )
+                    )
+
+                ci_lower[k] = mean(x[0] for x in cis)
+                ci_upper[k] = mean(x[1] for x in cis)
+            else:
+                print(
+                    "Warning: Only one replicate was useful; skipping "
+                    "calculation of 95% CI"
+                )
+
+                ci_lower[k] = np.nan
+                ci_upper[k] = np.nan
+
+        results_list = list()
+        for k, score_list in scores.items():
+            avg_score = mean(abs(x) for x in score_list if x != -9)
+            median_score = median(abs(x) for x in score_list if x != -9)
+            max_score = max(abs(x) for x in score_list if x != -9)
+            min_score = min(abs(x) for x in score_list if x != -9)
+
+            results_list.append(
+                {
+                    "Metric": k,
+                    "Mean": avg_score,
+                    "Median": median_score,
+                    "Min": min_score,
+                    "Max": max_score,
+                    "Lower 95% CI": ci_lower[k],
+                    "Upper 95% CI": ci_upper[k],
+                }
+            )
+
+        df_scores = pd.DataFrame(results_list)
+
+        columns_list = [
+            "Mean",
+            "Median",
+            "Min",
+            "Max",
+            "Lower 95% CI",
+            "Upper 95% CI",
+        ]
+
+        df_scores = df_scores.round(2)
+
+        outfile = f"{self.prefix}_imputed_best_score.csv"
+        df_scores.to_csv(outfile, header=True, index=False)
+
+        del results_list
+        gc.collect()
+
+        return df_scores
+
+    def _defile_dataset(self, df, col_selection_rate=0.5):
+        """[Function to select ``col_selection_rate * columns`` columns in a pandas DataFrame and change anywhere from 15% to 50% of the values in each of those columns to np.nan (missing data). Since we know the true values of the ones changed to np.nan, we can assess the accuracy of the classifier and do a grid search]
+
+        Args:
+            df ([pandas.DataFrame]): [012-encoded genotypes to extract columns from.]
+
+            col_selection_rate (float, optional): [Proportion of the DataFrame to extract]. Defaults to 0.40.
+
+        Returns:
+            [pandas.DataFrame]: [DataFrame with newly missing values]
+            [numpy.ndarray]: [Columns that were extracted via random sampling]
+        """
+        # Code adapted from:
+        # https://medium.com/analytics-vidhya/using-scikit-learns-iterative-imputer-694c3cca34de
+
+        cols = np.random.choice(
+            df.columns, int(len(df.columns) * col_selection_rate)
+        )
+
+        # Fill in unknown values with simple imputations
+        simple_imputer = SimpleImputer(strategy="most_frequent")
+
+        df_validation = pd.DataFrame(simple_imputer.fit_transform(df))
+        df_filled = df_validation.copy()
+
+        del simple_imputer
+        gc.collect()
+
+        for col in cols:
+            data_drop_rate = np.random.choice(np.arange(0.15, 0.5, 0.02), 1)[0]
+
+            drop_ind = np.random.choice(
+                np.arange(len(df_validation[col])),
+                size=int(len(df_validation[col]) * data_drop_rate),
+                replace=False,
+            )
+
+            # Introduce random np.nan values
+            df_validation[col].iloc[drop_ind] = np.nan
+
+        return df_filled, df_validation, cols
+
+        prob_missing = n
+        df_incomplete = df.copy()
+        ix = [
+            (row, col)
+            for row in range(df.shape[0])
+            for col in range(df.shape[1])
+        ]
+
+        for row, col in random.sample(ix, int(round(prob_missing * len(ix)))):
+            df_incomplete.iat[row, col] = np.nan
+
+    def write_imputed(self, data):
+        """[Save imputed data to a CSV file]
+
+        Args:
+            data ([pandas.DataFrame, numpy.array, or list(list)]): [Object returned from impute_missing()]
+
+        Raises:
+            TypeError: [Must be of type pandas.DataFrame, numpy.array, or list]
+        """
+        outfile = f"{self.prefix}_imputed_012.csv"
+
+        if isinstance(data, pd.DataFrame):
+            data.to_csv(outfile, header=False, index=False)
+
+        elif isinstance(data, np.ndarray):
+            np.savetxt(outfile, data, delimiter=",")
+
+        elif isinstance(data, list):
+            with open(outfile, "w") as fout:
+                fout.writelines(
+                    ",".join(str(j) for j in i) + "\n" for i in data
+                )
+        else:
+            raise TypeError(
+                "'write_imputed()' takes either a pandas.DataFrame,"
+                " numpy.ndarray, or 2-dimensional list"
+            )
+
     def _get_hidden_layer_sizes(self):
         n_dims = self.data.shape[1]
         return [
@@ -196,22 +492,20 @@ class ImputeVAE(GenotypeData):
 
     def _eval_predictions(self, X, complete_encoded):
 
-        df = pd.DataFrame(self._encode_categorical(X))
+        df = self._encode_categorical(X)
 
-        dummy_df = pd.get_dummies(df)
+        # Had to add dropna() to count unique classes while ignoring np.nan
+        col_classes = [len(df[c].dropna().unique()) for c in df.columns]
 
-        col_classes = [len(df[c].unique()) for c in df.columns]
+        df_dummies = pd.get_dummies(df)
 
         mle_complete = None
 
         for i, cnt in enumerate(col_classes):
             start_idx = int(sum(col_classes[0:i]))
-            col_true = dummy_df.values[:, start_idx : start_idx + cnt]
-            print(f"col_true: {col_true}")
+            # col_true = dummy_df.values[:, start_idx : start_idx + cnt]
             col_completed = complete_encoded[:, start_idx : start_idx + cnt]
-            print(f"col_completed: {col_completed}")
-            if i == 1:
-                sys.exit()
+
             mle_completed = np.apply_along_axis(
                 self._mle, axis=1, arr=col_completed
             )
@@ -222,7 +516,35 @@ class ImputeVAE(GenotypeData):
             else:
                 mle_complete = np.hstack([mle_complete, mle_completed])
 
-        return mle_complete
+        return mle_complete, df_dummies
+
+    def _decode_onehot(self, df_dummies):
+
+        pos = defaultdict(list)
+        vals = defaultdict(list)
+
+        for i, c in enumerate(df_dummies.columns):
+            if "_" in c:
+                k, v = c.split("_", 1)
+                pos[k].append(i)
+                vals[k].append(v)
+
+            else:
+                pos["_"].append(i)
+
+        df = pd.DataFrame(
+            {
+                k: pd.Categorical.from_codes(
+                    np.argmax(df_dummies.iloc[:, pos[k]].values, axis=1),
+                    vals[k],
+                )
+                for k in vals
+            }
+        )
+
+        df[df_dummies.columns[pos["_"]]] = df_dummies.iloc[:, pos["_"]]
+
+        return df
 
     def _create_model(self):
 
@@ -284,6 +606,7 @@ class ImputeVAE(GenotypeData):
 
         input_with_mask = np.hstack([self.data, missing_mask])
         n_samples = len(input_with_mask)
+
         n_batches = int(np.ceil(n_samples / batch_size))
         indices = np.arange(n_samples)
         np.random.shuffle(indices)

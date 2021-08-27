@@ -987,7 +987,10 @@ class Impute:
         # https://medium.com/analytics-vidhya/using-scikit-learns-iterative-imputer-694c3cca34de
 
         # Subset the DataFrame randomly and replace known values with np.nan
-        df_known, df_valid, cols = self._defile_dataset(df)
+        df_known, df_valid, cols = self._defile_dataset(
+            df, col_selection_rate=self.validation_only
+        )
+
         df_known_slice = df_known[cols]
         df_valid_slice = df_valid[cols]
 
@@ -2555,7 +2558,6 @@ class ImputeBackPropogation(GenotypeData):
         )
 
         self.run = theano.function(inputs=[self.r], outputs=self.layers[-1])
-
 
     @timer
     def fit_predict(self):
