@@ -200,6 +200,10 @@ def main():
             gt=np.array([[0.0, 2.0], [np.nan, 2.0], [1.0, np.nan]])
         )
 
+
+        # complete_encoded = imputer.train(train_epochs=300, batch_size=256)
+        # print(complete_encoded)
+
         # nnbp = ImputeBackPropogation(
         #     data,
         #     num_reduced_dims=3,
