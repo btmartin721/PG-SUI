@@ -968,7 +968,7 @@ class Impute:
             )
 
             # Introduce random np.nan values
-            df_validation[col].iloc[drop_ind] = np.nan
+            df_validation.iloc[drop_ind, col] = np.nan
 
         return df_filled, df_validation, cols
 

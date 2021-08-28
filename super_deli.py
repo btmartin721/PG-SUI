@@ -197,11 +197,12 @@ def main():
         # )
 
         vae_imp = ImputeVAE(
-            gt=np.array([[0.0, 2.0], [np.nan, 2.0], [1.0, np.nan]]),
+            # gt=np.array([[0.0, 2.0], [np.nan, 2.0], [1.0, np.nan]]),
+            genotype_data=data,
             cv=3,
             prefix=args.prefix,
             disable_progressbar=True,
-            validation_only=1.0,
+            validation_only=0.2,
         )
 
         # complete_encoded = imputer.train(train_epochs=300, batch_size=256)

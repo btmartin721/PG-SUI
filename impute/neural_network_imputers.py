@@ -1,16 +1,20 @@
 # Standard Library Imports
 
+import gc
 import os
 import random
 import sys
-import gc
 
 from collections import defaultdict
+from statistics import mean, median
 
 # Third-party Imports
 import numpy as np
 import pandas as pd
+
 from scipy import stats as st
+
+from memory_profiler import memory_usage
 
 import matplotlib.pylab as plt
 import seaborn as sns
@@ -67,18 +71,19 @@ class ImputeVAE(GenotypeData, Impute):
         genotype_data=None,
         gt=None,
         prefix="imputed_VAE",
+        cv=5,
+        validation_only=0.2,
+        disable_progressbar=False,
+        train_epochs=100,
+        batch_size=64,
         recurrent_weight=0.5,
         optimizer="adam",
-        dropout_probability=0.5,
+        dropout_probability=0.2,
         hidden_activation="relu",
         output_activation="sigmoid",
         kernel_initializer="glorot_normal",
         l1_penalty=0,
         l2_penalty=0,
-        cv=5,
-        validation_only=0.4,
-        scoring_metric="accuracy",
-        disable_progressbar=False,
     ):
 
         super().__init__()
@@ -88,6 +93,7 @@ class ImputeVAE(GenotypeData, Impute):
 
         self.prefix = prefix
 
+        self.train_epochs = train_epochs
         self.recurrent_weight = recurrent_weight
         self.optimizer = optimizer
         self.dropout_probability = dropout_probability
@@ -99,7 +105,6 @@ class ImputeVAE(GenotypeData, Impute):
 
         self.cv = cv
         self.validation_only = validation_only
-        self.scoring_metric = scoring_metric
         self.disable_progressbar = disable_progressbar
 
         self.df = None
@@ -117,29 +122,53 @@ class ImputeVAE(GenotypeData, Impute):
         elif gt is not None:
             X = gt
 
+        if batch_size > X.shape[0]:
+            while batch_size > X.shape[0]:
+                print(
+                    "Batch size is larger than the number of samples. "
+                    "Dividing batch_size by 2."
+                )
+                batch_size = batch_size // 2
+
+        self.batch_size = batch_size
+
         if self.validation_only is not None:
-            print("Estimating validation scores...")
+            print("\nEstimating validation scores...")
             self.df_scores = self._imputer_validation(pd.DataFrame(X))
             print("\nDone!\n")
 
         else:
             self.df_scores = None
 
-        print("Imputing full dataset...")
+        print("\nImputing full dataset...")
+
+        # mem_usage = memory_usage((self._impute_single, (X,)))
+        # with open(f"profiling_results/memUsage_{self.prefix}.txt", "w") as fout:
+        # fout.write(f"{max(mem_usage)}")
+        # sys.exit()
+
         self.imputed_df = self.fit_predict(X)
-        print("Done!")
+        print("\nDone!\n")
 
-        self.write_imputed(imputed_df)
+        self.imputed_df = self.imputed_df.astype(np.float)
+        self.imputed_df = self.imputed_df.astype("Int8")
 
-        if df_scores is not None:
-            print(df_scores)
+        self._validate_imputed(self.imputed_df)
+
+        self.write_imputed(self.imputed_df)
+
+        if self.df_scores is not None:
+            print(self.df_scores)
 
     @timer
     def fit_predict(self, X):
         self.df = self._encode_onehot(X)
         self.data = self.df.copy().values
 
-        imputed_enc = self.train(train_epochs=300, batch_size=2)
+        imputed_enc = self.train(
+            train_epochs=self.train_epochs, batch_size=self.batch_size
+        )
+
         imputed_enc, dummy_df = self._eval_predictions(X, imputed_enc)
 
         imputed_df = self._decode_onehot(
@@ -254,7 +283,7 @@ class ImputeVAE(GenotypeData, Impute):
 
             if self.disable_progressbar:
                 perc = int((cnt / self.cv) * 100)
-                print(f"Validation replicate {cnt}/{self.cv} ({perc}%)")
+                print(f"\nValidation replicate {cnt}/{self.cv} ({perc}%)")
 
             df_known, df_valid, cols = self._defile_dataset(
                 df, col_selection_rate=self.validation_only
@@ -349,8 +378,8 @@ class ImputeVAE(GenotypeData, Impute):
                 ci_upper[k] = mean(x[1] for x in cis)
             else:
                 print(
-                    "Warning: Only one replicate was useful; skipping "
-                    "calculation of 95% CI"
+                    "Warning: There was no variance among replicates; "
+                    "the 95% CI could not be calculated"
                 )
 
                 ci_lower[k] = np.nan
@@ -434,7 +463,7 @@ class ImputeVAE(GenotypeData, Impute):
             )
 
             # Introduce random np.nan values
-            df_validation[col].iloc[drop_ind] = np.nan
+            df_validation.iloc[drop_ind, col] = np.nan
 
         return df_filled, df_validation, cols
 
@@ -477,13 +506,15 @@ class ImputeVAE(GenotypeData, Impute):
                 " numpy.ndarray, or 2-dimensional list"
             )
 
-    def _get_hidden_layer_sizes(self):
-        n_dims = self.data.shape[1]
-        return [
-            min(2000, 8 * n_dims),
-            min(500, 2 * n_dims),
-            int(np.ceil(0.5 * n_dims)),
-        ]
+    def _validate_imputed(self, df):
+        """[Asserts that there is no missing data left in the imputed DataFrame]
+
+        Args:
+            df ([pandas.DataFrame]): [DataFrame with imputed 012-encoded genotypes]
+        """
+        assert (
+            not df.isnull().values.any()
+        ), "Imputation failed...Missing values found in the imputed dataset"
 
     def _mle(self, row):
         res = np.zeros(row.shape[0])
@@ -545,6 +576,14 @@ class ImputeVAE(GenotypeData, Impute):
         df[df_dummies.columns[pos["_"]]] = df_dummies.iloc[:, pos["_"]]
 
         return df
+
+    def _get_hidden_layer_sizes(self):
+        n_dims = self.data.shape[1]
+        return [
+            min(2000, 8 * n_dims),
+            min(500, 2 * n_dims),
+            int(np.ceil(0.5 * n_dims)),
+        ]
 
     def _create_model(self):
 
@@ -634,8 +673,14 @@ class ImputeVAE(GenotypeData, Impute):
                 X_true=self.data, X_pred=X_pred, mask=observed_mask
             )
 
-            if epoch % 50 == 0:
-                print(f"Observed MAE: {observed_mae}")
+            if epoch == 0:
+                print(f"Initial MAE: {observed_mae}")
+
+            elif epoch % 50 == 0:
+                print(
+                    f"Observed MAE ({epoch}/{train_epochs} epochs): "
+                    f"{observed_mae}"
+                )
 
             old_weight = 1.0 - self.recurrent_weight
             self.data[missing_mask] *= old_weight
