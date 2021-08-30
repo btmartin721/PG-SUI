@@ -579,8 +579,8 @@ class Impute:
                 ci_upper[k] = mean(x[1] for x in cis)
             else:
                 print(
-                    "Warning: Only one replicate was useful; skipping "
-                    "calculation of 95% CI"
+                    "Warning: There was no variance among replicates; "
+                    "the 95% CI could not be calculated"
                 )
 
                 ci_lower[k] = np.nan
@@ -818,20 +818,20 @@ class Impute:
             [int or float]: [Chunk sizes for doing full imputation following grid search. If int, then splits into chunks of ``chunk_size``. If float, then splits into chunks of ``n_features * chunk_size``]
             [float or None]: [Proportion of loci to use for validation if grid search is not used. If None, then doesn't do validation]
         """
-        gridparams = kwargs.pop("gridparams")
-        cv = kwargs.pop("cv")
-        n_jobs = kwargs.pop("n_jobs")
-        prefix = kwargs.pop("prefix")
-        grid_iter = kwargs.pop("grid_iter")
-        column_subset = kwargs.pop("column_subset")
-        ga = kwargs.pop("ga")
-        disable_progressbar = kwargs.pop("disable_progressbar")
-        scoring_metric = kwargs.pop("scoring_metric")
-        early_stop_gen = kwargs.pop("early_stop_gen")
-        chunk_size = kwargs.pop("chunk_size")
-        validation_only = kwargs.pop("validation_only")
+        gridparams = kwargs.pop("gridparams", None)
+        cv = kwargs.pop("cv", None)
+        n_jobs = kwargs.pop("n_jobs", None)
+        prefix = kwargs.pop("prefix", None)
+        grid_iter = kwargs.pop("grid_iter", None)
+        column_subset = kwargs.pop("column_subset", None)
+        ga = kwargs.pop("ga", None)
+        disable_progressbar = kwargs.pop("disable_progressbar", None)
+        scoring_metric = kwargs.pop("scoring_metric", None)
+        early_stop_gen = kwargs.pop("early_stop_gen", None)
+        chunk_size = kwargs.pop("chunk_size", None)
+        validation_only = kwargs.pop("validation_only", None)
 
-        progress_update_percent = kwargs.pop("progress_update_percent")
+        progress_update_percent = kwargs.pop("progress_update_percent", None)
 
         if prefix is None:
             prefix = "output"
