@@ -994,24 +994,28 @@ class Impute:
         df_known_slice = df_known[cols]
         df_valid_slice = df_valid[cols]
 
-        # Slice the original DataFrame to the same columns as df_miss
-        # df_orig_slice = df_orig[cols]
-
-        imputer = self._define_iterative_imputer(
-            clf,
-            self.logfilepath,
-            clf_kwargs=self.clf_kwargs,
-            prefix=self.prefix,
-            disable_progressbar=self.disable_progressbar,
-            progress_update_percent=self.progress_update_percent,
-        )
-
         df_stg = df_valid.copy()
-        imp_arr = imputer.fit_transform(df_stg)
 
-        df_imp = pd.DataFrame(
-            imp_arr[:, [df_known.columns.get_loc(i) for i in cols]]
-        )
+        # Variational Autoencoder Neural Network
+        if self.clf == "VAE":
+            df_imp = self.fit_predict(df_stg.to_numpy())
+            df_imp = df_imp.astype(np.float)
+
+        else:
+            imputer = self._define_iterative_imputer(
+                clf,
+                self.logfilepath,
+                clf_kwargs=self.clf_kwargs,
+                prefix=self.prefix,
+                disable_progressbar=self.disable_progressbar,
+                progress_update_percent=self.progress_update_percent,
+            )
+
+            imp_arr = imputer.fit_transform(df_stg)
+
+            df_imp = pd.DataFrame(
+                imp_arr[:, [df_known.columns.get_loc(i) for i in cols]]
+            )
 
         # Get score of each column
         scores = defaultdict(list)
@@ -1068,10 +1072,16 @@ class Impute:
             df_valid_slice,
             df_valid,
         ]
-        del lst2del
-        del imp_arr
-        del imputer
-        del cols
+
+        if self.clf == "VAE":
+            del lst2del
+            del cols
+        else:
+            del lst2del
+            del imp_arr
+            del imputer
+            del cols
+
         gc.collect()
 
         return scores

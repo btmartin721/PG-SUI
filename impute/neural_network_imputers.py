@@ -255,67 +255,6 @@ class ImputeVAE(Impute):
 
         return missing_encoded
 
-    def _impute_eval(self, df, clf):
-
-        df_known, df_valid, cols = self._defile_dataset(
-            df, col_selection_rate=self.validation_only
-        )
-
-        df_known_slice = df_known[cols]
-        df_valid_slice = df_valid[cols]
-
-        df_stg = df_valid.copy()
-        df_imp = self.fit_predict(df_stg.to_numpy())
-        df_imp = df_imp.astype(np.float)
-
-        # Get score of each column
-        scores = defaultdict(list)
-        for i in range(len(df_known_slice.columns)):
-            # Adapted from: https://medium.com/analytics-vidhya/using-scikit-learns-iterative-imputer-694c3cca34de
-
-            y_true = df_known[df_known.columns[i]]
-            y_pred = df_imp[df_imp.columns[i]]
-
-            scores["accuracy"].append(metrics.accuracy_score(y_true, y_pred))
-
-            scores["precision"].append(
-                metrics.precision_score(
-                    y_true, y_pred, average="macro", zero_division=0
-                )
-            )
-
-            scores["f1"].append(
-                metrics.f1_score(
-                    y_true, y_pred, average="macro", zero_division=0
-                )
-            )
-
-            scores["recall"].append(
-                metrics.recall_score(
-                    y_true, y_pred, average="macro", zero_division=0
-                )
-            )
-
-            scores["jaccard"].append(
-                metrics.jaccard_score(
-                    y_true, y_pred, average="macro", zero_division=0
-                )
-            )
-
-        lst2del = [
-            df_stg,
-            df_imp,
-            df_known,
-            df_known_slice,
-            df_valid_slice,
-            df_valid,
-        ]
-        del lst2del
-        del cols
-        gc.collect()
-
-        return scores
-
     def _mle(self, row):
         """[Get the Maximum Likelihood Estimation for the best prediction. Basically, it sets the index of the maxiumum value in a vector (row) to 1.0, since it is one-hot encoded]
 
