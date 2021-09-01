@@ -24,6 +24,12 @@ class GenotypeData:
 
             popmapfile ([str]): [Path to population map file. If ``popmapfile`` is supplied and ``filetype`` is one of the STRUCTURE formats, then the structure file is assumed to have NO popID column]
 
+            guidetree ([str]): [Path to input treefile]. Defaults to None.
+
+            qmatrix_iqtree ([str]): [Path to iqtree output file containing q matrix]. Defaults to None.
+
+            qmatrix ([str]): [Path to file containing only q matrix]. Defaults to None.
+
     Attributes:
             samples ([list(str)]): [List containing sample IDs of shape (n_samples,)]
 
@@ -54,23 +60,50 @@ class GenotypeData:
             genotypes_onehot ([numpy.ndarray(numpy.ndarray(numpy.ndarray)))]): [One-hot encoded numpy array (n_samples, n_sites, 4). The inner-most array consists of one-hot encoded values for the four nucleotides in the order of 'A', 'T', 'G', 'C'. Values of 0.5 indicate heterozygotes, and missing values contain 0.0 for all four nucleotides]
     """
 
-    def __init__(self, filename=None, filetype=None, popmapfile=None):
+    def __init__(
+        self,
+        filename=None,
+        filetype=None,
+        popmapfile=None,
+        guidetree=None,
+        qmatrix_iqtree=None,
+        qmatrix=None,
+    ):
         self.filename = filename
         self.filetype = filetype
         self.popmapfile = popmapfile
+        self.guidetree = guidetree
+        self.qmatrix_iqtree = qmatrix_iqtree
+        self.qmatrix = qmatrix
+
+        self.snpsdict = dict()
         self.samples = list()
         self.snps = list()
         self.pops = list()
         self.onehot = list()
-        self.guidetree = None
         self.num_snps = 0
         self.num_inds = 0
+
+        if self.qmatrix_iqtree is not None and self.qmatrix is not None:
+            raise TypeError("qmatrix_iqtree and qmatrix cannot both be defined")
 
         if self.filetype is not None:
             self.parse_filetype(filetype, popmapfile)
 
         if self.popmapfile is not None:
             self.read_popmap(popmapfile)
+
+        if self.guidetree is not None:
+            self.tree = self.read_tree(self.guidetree)
+        elif self.guidetree is None:
+            self.tree = None
+
+        if self.qmatrix_iqtree is not None:
+            self.q = self.q_from_iqtree(self.qmatrix_iqtree)
+        elif self.qmatrix_iqtree is None and self.qmatrix is not None:
+            self.q = self.q_from_file(self.qmatrix)
+        elif self.qmatrix is None and self.qmatrix_iqtree is None:
+            self.q = None
 
     def parse_filetype(self, filetype=None, popmapfile=None):
         if filetype is None:
@@ -122,6 +155,38 @@ class GenotypeData:
 
         return tt.tree(treefile, tree_format=0)
 
+    def q_from_file(self, fname, label=True):
+        q = self.blank_q_matrix()
+
+        if not label:
+            print(
+                "Warning: Assuming the following nucleotide order: A, C, G, T"
+            )
+
+        with open(fname, "r") as fin:
+            header = True
+            qlines = list()
+            for line in fin:
+                line = line.strip()
+                if not line:
+                    continue
+                if header:
+                    if label:
+                        order = line.split()
+                        header = False
+                    else:
+                        order = ["A", "C", "G", "T"]
+                    continue
+                else:
+                    qlines.append(line.split())
+        fin.close()
+
+        for l in qlines:
+            for index in range(0, 4):
+                q[l[0]][order[index]] = float(l[index + 1])
+        qdf = pd.DataFrame(q)
+        return qdf.T
+
     def q_from_iqtree(self, iqfile):
         """[Read in q-matrix from *.iqtree file. The *.iqtree file is output when running IQ-TREE and contains the standard output of the IQ-TREE run]
 
@@ -168,6 +233,14 @@ class GenotypeData:
         qdf = pd.DataFrame(q)
         return qdf.T
 
+    def blank_q_matrix(self, default=0.0):
+        q = dict()
+        for nuc1 in ["A", "C", "G", "T"]:
+            q[nuc1] = dict()
+            for nuc2 in ["A", "C", "G", "T"]:
+                q[nuc1][nuc2] = default
+        return q
+
     def read_structure(self, onerow=False, popids=True):
         """[Read a structure file with two rows per individual]"""
         print(f"\nReading structure file {self.filename}...")
@@ -211,6 +284,7 @@ class GenotypeData:
                         self.samples.append(ind)
                         genotypes = merge_alleles(firstline, secondline)
                         snp_data.append(genotypes)
+                        self.snpsdict[ind] = genotypes
                         firstline = None
             else:  # If onerow:
                 for line in fin:
@@ -232,7 +306,9 @@ class GenotypeData:
                         self.samples.append(ind)
                         genotypes = merge_alleles(firstline, second=None)
                         snp_data.append(genotypes)
+                        self.snpsdict[ind] = genotypes
                         firstline = None
+
         print("Done!")
 
         print("\nConverting genotypes to one-hot encoding...")
@@ -302,9 +378,13 @@ class GenotypeData:
                         "at least one sequence differs from the header line\n"
                     )
 
+                self.snpsdict[inds] = snps
                 snp_data.append(snps)
 
                 self.samples.append(inds)
+
+        print(self.snpsdict)
+        sys.exit()
 
         print("Done!")
 
@@ -328,17 +408,23 @@ class GenotypeData:
                 "Incorrect number of individuals listed in header\n"
             )
 
-    def read_phylip_tree_imputation(self, phy):
-        """[Function to read a phylip file. Returns dict (key=sample) of lists (sequences divided by site; i.e., all sites for one sample across all columns)]
+    def read_phylip_tree_imputation(self, aln):
+        """[Function to read a alignment file. Returns dict (key=sample) of lists (sequences divided by site; i.e., all sites for one sample across all columns)]
 
         Args:
-                phy ([str]): [Path to PHYLIP file]
+                aln ([str]): [Path to alignment file]
 
         Raises:
-                IOError: [Raise exception if PHYLIP file could not be read from]
-                FileNotFoundError: [Raise exception if PHYLIP file not found]
+                IOError: [Raise exception if alignment file could not be read from]
+                FileNotFoundError: [Raise exception if alignment file not found]
         """
-        if os.path.exists(phy):
+        if phy is None:
+            raise TypeError(
+                "alignment file must be specified if using PHYLIP input format, "
+                "but got NoneType"
+            )
+
+        elif os.path.exists(phy):
             with open(phy, "r") as fh:
                 try:
                     num = 0
@@ -609,6 +695,10 @@ class GenotypeData:
                 [2D numpy.array]: [One-hot encoded numpy array (n_samples, n_variants)]
         """
         return self.onehot
+
+    def set_tree(self):
+        pass
+        # self.
 
 
 def merge_alleles(first, second=None):

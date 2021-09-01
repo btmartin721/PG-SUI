@@ -927,68 +927,133 @@ class ImputePhylo(GenotypeData):
     """[Impute missing data using a phylogenetic tree to inform the imputation]
 
     Args:
-        phylipfile ([str]): [Path to PHYLIP-formatted file to impute]
+        genotype_data (GenotypeData object, optional): [GenotypeData object. If defined, some or all of the below optional are not required. If not defined, all the below options are required]. Defaults to None.
 
-        treefile ([str]): [Path to Newick-formatted phylogenetic tree file]
+        alnfile (str, optional): [Path to PHYLIP or STRUCTURE-formatted file to impute]. Defaults to None.
 
-        qmatrix ([str]): [Path to *.iqtree file containing Rate Matrix Q table]
+        filetype (str, optional): [Filetype for the input alignment. Valid options include: "phylip", "structure1row", "structure1rowPopID", "structure2row", "structure2rowPopId". Not required if genotype_data is defined]. Defaults to "phylip".
+
+        popmapfile (str, optional): [Path to population map file. Required if filetype is "phylip", "structure1row", or "structure2row". If filetype is "structure1rowPopID" or "structure2rowPopID", then the population IDs must be the second column of the STRUCTURE file. Not required if genotype_data is defined]. Defaults to None.
+
+        treefile (str, optional): [Path to Newick-formatted phylogenetic tree file. Not required if genotype_data is defined with the guidetree option]. Defaults to None.
+
+        qmatrix (str, optional): [Path to *.iqtree file containing Rate Matrix Q table. Not required if genotype_data is defined with the qmatrix or qmatrix_iqtree option]. Defaults to None.
 
         prefix (str, optional): [Prefix to use with output files]
 
-        save_plots (str, optional): [Whether to save PDF files with genotype imputations for each site. It makes one PDF file per locus, so if you have a lot of loci it will make a lot of PDF files]. Defaults to False.
+        save_plots (bool, optional): [Whether to save PDF files with genotype imputations for each site. It makes one PDF file per locus, so if you have a lot of loci it will make a lot of PDF files]. Defaults to False.
     """
 
     def __init__(
-        self, phylipfile, treefile, qmatrix, prefix="phylo", save_plots=False
+        self,
+        *,
+        genotype_data=None,
+        alnfile=None,
+        filetype=None,
+        popmapfile=None,
+        treefile=None,
+        qmatrix_iqtree=None,
+        qmatrix=None,
+        prefix="imputed_phylo",
+        save_plots=False,
+        write_output=True,
     ):
-        self.phylipfile = phylipfile
+        super().__init__()
+
+        self.alnfile = alnfile
+        self.filetype = filetype
+        self.popmapfile = popmapfile
         self.treefile = treefile
+        self.qmatrix_iqtree = qmatrix_iqtree
         self.qmatrix = qmatrix
         self.prefix = prefix
         self.save_plots = save_plots
 
-        super().__init__()
+        self.validate_arguments(genotype_data)
+        data, tree, q = self.parse_arguments(genotype_data)
 
-        data = self.read_phylip_tree_imputation(self.phylipfile)
-        tree = self.read_tree(self.treefile)
-        q = self.q_from_iqtree(self.qmatrix)
+        self.imputed = self.impute_phylo(tree, data, q)
 
-        imputed = self.impute_phylo(tree, data, q)
+        if write_output:
+            outfile = f"{prefix}_imputed_012.csv"
+            self.imputed.to_csv(outfile, header=False, index=False)
 
-        outfile = f"{prefix}_imputed_012.csv"
-        imputed.to_csv(outfile, header=False, index=False)
+    def parse_arguments(self, genotype_data):
+        if genotype_data is not None:
+            data = genotype_data.snpsdict
+            self.filetype = genotype_data.filetype
 
-    def q_from_file(self, fname, label=True):
-        q = self.blank_q_matrix()
+        elif self.alnfile is not None:
+            self.parse_filetype(self.filetype, self.popmapfile)
 
-        if not label:
+        if genotype_data.tree is not None and self.treefile is None:
+            tree = genotype_data.tree
+
+        elif genotype_data.tree is not None and self.treefile is not None:
             print(
-                "Warning: Assuming the following nucleotide order: A, C, G, T"
+                "WARNING: Both genotype_data.tree and treefile are defined; using local definition"
+            )
+            tree = self.read_tree(self.treefile)
+
+        elif genotype_data.tree is None and self.treefile is not None:
+            tree = self.read_tree(self.treefile)
+
+        if (
+            genotype_data.q is not None
+            and self.qmatrix is None
+            and self.qmatrix_iqtree is None
+        ):
+            q = genotype_data.q
+
+        elif genotype_data.q is None:
+            if self.qmatrix is not None:
+                q = self.q_from_file(self.qmatrix)
+            elif self.qmatrix_iqtree is not None:
+                q = self.q_from_iqtree(self.qmatrix_iqtree)
+
+        elif genotype_data.q is not None:
+            if self.qmatrix is not None:
+                print(
+                    "WARNING: Both genotype_data.q and qmatrix are defined; "
+                    "using local definition"
+                )
+                q = self.q_from_file(self.qmatrix)
+            if self.qmatrix_iqtree is not None:
+                print(
+                    "WARNING: Both genotype_data.q and qmatrix are defined; "
+                    "using local definition"
+                )
+                q = self.q_from_iqtree(self.qmatrix_iqtree)
+
+        return data, tree, q
+
+    def validate_arguments(self, genotype_data):
+        if genotype_data is not None and self.alnfile is not None:
+            raise TypeError("genotype_data and alnfile cannot both be defined")
+
+        if genotype_data is None and self.alnfile is None:
+            raise TypeError("Either genotype_data or phylipfle must be defined")
+
+        if genotype_data.tree is None and self.treefile is None:
+            raise TypeError(
+                "Either genotype_data.tree or treefile must be defined"
             )
 
-        with open(fname, "r") as fin:
-            header = True
-            qlines = list()
-            for line in fin:
-                line = line.strip()
-                if not line:
-                    continue
-                if header:
-                    if label:
-                        order = line.split()
-                        header = False
-                    else:
-                        order = ["A", "C", "G", "T"]
-                    continue
-                else:
-                    qlines.append(line.split())
-        fin.close()
+        if genotype_data is None and self.filetype is None:
+            raise TypeError("filetype must be defined if genotype_data is None")
 
-        for l in qlines:
-            for index in range(0, 4):
-                q[l[0]][order[index]] = float(l[index + 1])
-        qdf = pd.DataFrame(q)
-        return qdf.T
+        if (
+            genotype_data is None
+            and self.qmatrix is None
+            and self.qmatrix_iqtree is None
+        ):
+            raise TypeError(
+                "q matrix must be defined in either genotype_data, "
+                "qmatrix_iqtree, or qmatrix"
+            )
+
+        if self.qmatrix is not None and self.qmatrix_iqtree is not None:
+            raise TypeError("qmatrix and qmatrix_iqtree cannot both be defined")
 
     def print_q(self, q):
         print("Rate matrix Q:")
@@ -998,14 +1063,6 @@ class ImputePhylo(GenotypeData):
             for nuc2 in ["A", "C", "G", "T"]:
                 print(q[nuc1][nuc2], end="\t")
             print("")
-
-    def blank_q_matrix(self, default=0.0):
-        q = dict()
-        for nuc1 in ["A", "C", "G", "T"]:
-            q[nuc1] = dict()
-            for nuc2 in ["A", "C", "G", "T"]:
-                q[nuc1][nuc2] = default
-        return q
 
     def impute_phylo(
         self, tree, genotypes, Q, site_rates=None, exclude_N=False
@@ -1277,7 +1334,25 @@ class ImputePhylo(GenotypeData):
             "D": ["A", "G", "T"],
             "H": ["A", "C", "T"],
             "V": ["A", "C", "G"],
+            "0/0": ["A"],
+            "1/1": ["G"],
+            "2/2": ["C"],
+            "3/3": ["T"],
+            "-9/-9": ["A", "C", "T", "G"],
+            "0/1": ["A", "G"],
+            "1/0": ["A", "G"],
+            "2/3": ["C", "T"],
+            "3/2": ["C", "T"],
+            "1/2": ["G", "C"],
+            "2/1": ["G", "C"],
+            "0/3": ["A", "T"],
+            "3/0": ["A", "T"],
+            "1/3": ["G", "T"],
+            "3/1": ["G", "T"],
+            "0/2": ["A", "C"],
+            "2/0": ["A", "C"],
         }
+
         ret = iupac[char]
         return ret
 

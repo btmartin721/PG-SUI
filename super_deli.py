@@ -54,12 +54,16 @@ def main():
                 filename=args.str,
                 filetype="structure1row",
                 popmapfile=args.popmap,
+                guidetree=args.treefile,
+                qmatrix_iqtree=args.iqtree,
             )
         else:
             data = GenotypeData(
                 filename=args.str,
                 filetype="structure2row",
                 popmapfile=args.popmap,
+                guidetree=args.treefile,
+                qmatrix_iqtree=args.iqtree,
             )
 
     if args.phylip:
@@ -74,7 +78,11 @@ def main():
             raise TypeError("No popmap file supplied with PHYLIP file\n")
 
         data = GenotypeData(
-            filename=args.phylip, filetype="phylip", popmapfile=args.popmap
+            filename=args.phylip,
+            filetype="phylip",
+            popmapfile=args.popmap,
+            guidetree=args.treefile,
+            qmatrix_iqtree=args.iqtree,
         )
 
     if args.resume_imputed:
@@ -183,19 +191,19 @@ def main():
         # 		chunk_size=0.2
         # )
 
-        lgbm = ImputeLightGBM(
-            data,
-            prefix=args.prefix,
-            cv=3,
-            n_jobs=4,
-            n_estimators=50,
-            disable_progressbar=True,
-            chunk_size=0.2,
-            validation_only=0.1,
-            n_nearest_features=3,
-            max_iter=2,
-            initial_strategy="most_frequent_groups",
-        )
+        # lgbm = ImputeLightGBM(
+        #     data,
+        #     prefix=args.prefix,
+        #     cv=3,
+        #     n_jobs=4,
+        #     n_estimators=50,
+        #     disable_progressbar=True,
+        #     chunk_size=0.2,
+        #     validation_only=0.1,
+        #     n_nearest_features=3,
+        #     max_iter=2,
+        #     initial_strategy="most_frequent_groups",
+        # )
 
         # vae_imp = ImputeVAE(
         #     # gt=np.array([[0.0, 2.0], [np.nan, 2.0], [1.0, np.nan]]),
@@ -256,7 +264,7 @@ def main():
         #     initial_strategy="group_mode",
         # )
 
-        # ImputePhylo(args.phylip, args.treefile, args.iqtree, save_plots=True)
+        ImputePhylo(genotype_data=data, save_plots=False)
 
     # colors = {
     # 	"GU": "#FF00FF",

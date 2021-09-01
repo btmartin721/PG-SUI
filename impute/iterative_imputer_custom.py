@@ -330,29 +330,9 @@ class IterativeImputerAllData(IterativeImputer):
         )
 
         if self.sample_posterior:
-            mus, sigmas = estimator.predict(X_test, return_std=True)
-            imputed_values = np.zeros(mus.shape, dtype=X_filled.dtype)
-            # two types of problems: (1) non-positive sigmas
-            # (2) mus outside legal range of min_value and max_value
-            # (results in inf sample)
-            positive_sigmas = sigmas > 0
-            imputed_values[~positive_sigmas] = mus[~positive_sigmas]
-            mus_too_low = mus < self._min_value[feat_idx]
-            imputed_values[mus_too_low] = self._min_value[feat_idx]
-            mus_too_high = mus > self._max_value[feat_idx]
-            imputed_values[mus_too_high] = self._max_value[feat_idx]
-
-            # the rest can be sampled without statistical issues
-            inrange_mask = positive_sigmas & ~mus_too_low & ~mus_too_high
-            mus = mus[inrange_mask]
-            sigmas = sigmas[inrange_mask]
-            a = (self._min_value[feat_idx] - mus) / sigmas
-            b = (self._max_value[feat_idx] - mus) / sigmas
-
-            truncated_normal = stats.truncnorm(a=a, b=b, loc=mus, scale=sigmas)
-
-            imputed_values[inrange_mask] = truncated_normal.rvs(
-                random_state=self.random_state_
+            sys.exit(
+                "sample_posterior is not currently supported. "
+                "Please set sample_posterior to False"
             )
 
         else:
@@ -417,7 +397,7 @@ class IterativeImputerAllData(IterativeImputer):
         X_missing_mask = _get_mask(X, self.missing_values)
         mask_missing_values = X_missing_mask.copy()
 
-        if self.initial_strategy == "most_frequent_groups":
+        if self.initial_strategy == "most_frequent_populations":
             self.initial_imputer_ = impute.estimators.ImputeAlleleFreq(
                 gt=np.nan_to_num(X, nan=-9).tolist(),
                 pops=self.pops,
@@ -427,6 +407,9 @@ class IterativeImputerAllData(IterativeImputer):
                 output_format="array",
                 verbose=False,
             )
+
+        elif self.initial_strategy == "phylogeny":
+            self.initial_imputer_ = impute.estimators.ImputePhylo()
 
             X_filled = self.initial_imputer_.imputed
             Xt = X.copy()

@@ -967,13 +967,15 @@ class Impute:
             df.columns, int(len(df.columns) * col_selection_rate)
         )
 
-        simple_imputer = impute.estimators.ImputeAlleleFreq(
-            gt=df.fillna(-9).values.tolist(),
-            pops=self.pops,
-            by_populations=True,
-            missing=-9,
-            write_output=False,
-        )
+        if self.imp_kwargs["initial_strategy"] == "most_frequent_populations":
+            simple_imputer = impute.estimators.ImputeAlleleFreq(
+                gt=df.fillna(-9).values.tolist(),
+                pops=self.pops,
+                by_populations=True,
+                missing=-9,
+                write_output=False,
+                verbose=False,
+            )
 
         df_defiled = simple_imputer.imputed
         df_filled = df_defiled.copy()
@@ -1008,7 +1010,7 @@ class Impute:
 
         # Subset the DataFrame randomly and replace known values with np.nan
 
-        if self.imp_kwargs["initial_strategy"] == "most_frequent_groups":
+        if self.imp_kwargs["initial_strategy"] == "most_frequent_populations":
             df_known, df_unknown, cols = self._defile_dataset_groups(
                 df, col_selection_rate=self.validation_only
             )
