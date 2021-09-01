@@ -14,7 +14,7 @@ from utils.misc import generate_012_genotypes
 
 # Custom module imports
 from read_input.read_input import GenotypeData
-from impute.impute import *
+from impute.estimators import *
 from impute.neural_network_imputers import ImputeVAE
 
 from dim_reduction.dim_reduction import DimReduction
@@ -183,27 +183,29 @@ def main():
         # 		chunk_size=0.2
         # )
 
-        # lgbm = ImputeLightGBM(
-        #     data,
-        #     prefix=args.prefix,
-        #     cv=3,
-        #     n_jobs=4,
-        #     n_estimators=50,
-        #     disable_progressbar=True,
-        #     chunk_size=0.2,
-        #     validation_only=0.1,
-        #     n_nearest_features=3,
-        #     max_iter=2,
-        # )
-
-        vae_imp = ImputeVAE(
-            # gt=np.array([[0.0, 2.0], [np.nan, 2.0], [1.0, np.nan]]),
-            genotype_data=data,
-            cv=3,
+        lgbm = ImputeLightGBM(
+            data,
             prefix=args.prefix,
+            cv=3,
+            n_jobs=4,
+            n_estimators=50,
             disable_progressbar=True,
-            validation_only=0.2,
+            chunk_size=0.2,
+            validation_only=0.1,
+            n_nearest_features=3,
+            max_iter=2,
+            initial_strategy="most_frequent_groups",
         )
+
+        # vae_imp = ImputeVAE(
+        #     # gt=np.array([[0.0, 2.0], [np.nan, 2.0], [1.0, np.nan]]),
+        #     genotype_data=data,
+        #     cv=3,
+        #     prefix=args.prefix,
+        #     disable_progressbar=True,
+        #     validation_only=0.2,
+        #     initial_strategy="group_mode",
+        # )
 
         # complete_encoded = imputer.train(train_epochs=300, batch_size=256)
         # print(complete_encoded)
@@ -251,6 +253,7 @@ def main():
         #     disable_progressbar=True,
         #     max_iter=2,
         #     cv=3,
+        #     initial_strategy="group_mode",
         # )
 
         # ImputePhylo(args.phylip, args.treefile, args.iqtree, save_plots=True)

@@ -72,6 +72,7 @@ class ImputeVAE(Impute):
         gt=None,
         prefix="imputed_VAE",
         cv=5,
+        initial_strategy="group_mode",
         validation_only=0.2,
         disable_progressbar=False,
         train_epochs=100,

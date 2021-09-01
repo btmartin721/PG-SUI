@@ -25,13 +25,16 @@ from scipy import stats
 from sklearn.base import clone
 from sklearn.experimental import enable_iterative_imputer
 from sklearn.impute import IterativeImputer
+from sklearn.impute._base import _check_inputs_dtype
 
 ## For warnings
 from sklearn.exceptions import ConvergenceWarning
 from sklearn.utils._testing import ignore_warnings
 
 ## Required for IterativeImputer.fit_transform()
-from sklearn.utils import check_random_state, _safe_indexing
+from sklearn.utils import check_random_state, _safe_indexing, is_scalar_nan
+from sklearn.utils._mask import _get_mask
+from sklearn.utils.validation import FLOAT_DTYPES
 
 # Grid search imports
 from sklearn.model_selection import RandomizedSearchCV
@@ -46,6 +49,8 @@ from sklearn_genetic.plots import plot_fitness_evolution
 from sklearn_genetic.utils import logbook_to_pandas
 
 # Custom function imports
+import impute.estimators
+
 from utils.misc import get_processor_name
 from utils.misc import HiddenPrints
 from utils.misc import isnotebook
@@ -153,6 +158,8 @@ class IterativeImputerAllData(IterativeImputer):
 
         progress_update_percent [(float or None)]: [Print feature progress update every ``progress_update_percent`` percent]
 
+        pops [(list)]: [List of population IDs of shape (n_samples,)]
+
         estimator [(estimator object)]: [Estimator to impute data with]
 
         sample_posterior [(bool)]: [Whether to use the sample_posterior option. This overridden class does not currently support sample_posterior]
@@ -211,6 +218,7 @@ class IterativeImputerAllData(IterativeImputer):
         clf_type="classifier",
         disable_progressbar=False,
         progress_update_percent=None,
+        pops=None,
         missing_values=np.nan,
         sample_posterior=False,
         max_iter=10,
@@ -248,6 +256,7 @@ class IterativeImputerAllData(IterativeImputer):
         self.clf_type = clf_type
         self.disable_progressbar = disable_progressbar
         self.progress_update_percent = progress_update_percent
+        self.pops = pops
         self.estimator = estimator
         self.sample_posterior = sample_posterior
         self.max_iter = max_iter
@@ -348,6 +357,7 @@ class IterativeImputerAllData(IterativeImputer):
 
         else:
             imputed_values = estimator.predict(X_test)
+
             imputed_values = np.clip(
                 imputed_values,
                 self._min_value[feat_idx],
@@ -365,6 +375,81 @@ class IterativeImputerAllData(IterativeImputer):
         gc.collect()
 
         return X_filled
+
+    def _initial_imputation(self, X, in_fit=False):
+        """Perform initial imputation for input X.
+        Parameters
+        ----------
+        X : ndarray, shape (n_samples, n_features)
+            Input data, where "n_samples" is the number of samples and
+            "n_features" is the number of features.
+        in_fit : bool, default=False
+            Whether function is called in fit.
+        Returns
+        -------
+        Xt : ndarray, shape (n_samples, n_features)
+            Input data, where "n_samples" is the number of samples and
+            "n_features" is the number of features.
+        X_filled : ndarray, shape (n_samples, n_features)
+            Input data with the most recent imputations.
+        mask_missing_values : ndarray, shape (n_samples, n_features)
+            Input data's missing indicator matrix, where "n_samples" is the
+            number of samples and "n_features" is the number of features.
+        X_missing_mask : ndarray, shape (n_samples, n_features)
+            Input data's mask matrix indicating missing datapoints, where
+            "n_samples" is the number of samples and "n_features" is the
+            number of features.
+        """
+        if is_scalar_nan(self.missing_values):
+            force_all_finite = "allow-nan"
+        else:
+            force_all_finite = True
+
+        X = self._validate_data(
+            X,
+            dtype=FLOAT_DTYPES,
+            order="F",
+            reset=in_fit,
+            force_all_finite=force_all_finite,
+        )
+        _check_inputs_dtype(X, self.missing_values)
+
+        X_missing_mask = _get_mask(X, self.missing_values)
+        mask_missing_values = X_missing_mask.copy()
+
+        if self.initial_strategy == "most_frequent_groups":
+            self.initial_imputer_ = impute.estimators.ImputeAlleleFreq(
+                gt=np.nan_to_num(X, nan=-9).tolist(),
+                pops=self.pops,
+                by_populations=True,
+                missing=-9,
+                write_output=False,
+                output_format="array",
+                verbose=False,
+            )
+
+            X_filled = self.initial_imputer_.imputed
+            Xt = X.copy()
+
+        else:
+            if self.initial_imputer_ is None:
+                self.initial_imputer_ = SimpleImputer(
+                    missing_values=self.missing_values,
+                    strategy=self.initial_strategy,
+                )
+                X_filled = self.initial_imputer_.fit_transform(X)
+
+            else:
+                X_filled = self.initial_imputer_.transform(X)
+
+            valid_mask = np.flatnonzero(
+                np.logical_not(np.isnan(self.initial_imputer_.statistics_))
+            )
+
+            Xt = X[:, valid_mask]
+            mask_missing_values = mask_missing_values[:, valid_mask]
+
+        return Xt, X_filled, mask_missing_values, X_missing_mask
 
     @ignore_warnings(category=UserWarning)
     def fit_transform(self, X, y=None):
@@ -403,6 +488,10 @@ class IterativeImputerAllData(IterativeImputer):
 
         self.initial_imputer_ = None
 
+        # X is the input data subset to only valid features (not nan)
+        # Xt is the data imputed with SimpleImputer
+        # mask_missing_values is the missing indicator matrix
+        # complete_mask is the input data's mask matrix
         X, Xt, mask_missing_values, complete_mask = self._initial_imputation(
             X, in_fit=True
         )
@@ -624,9 +713,12 @@ class IterativeImputerGridSearch(IterativeImputer):
 
         progress_update_frequency (int, optional) : [How often to display progress updates (as a percentage) if ``disable_progressbar`` is True. If ``progress_update_frequency=10``, then it displays progress updates every 10%]. Defaults to 10.
 
+        pops [(list)]: [List of population IDs of shape (n_samples,)]
+
         scoring_metric (str, optional): [Scoring metric to use for the grid search]. Defaults to 'accuracy'.
 
         early_stop_gen (int, optional): [Number of consecutive generations lacking improvement for which to implement the early stopping callback]. Defaults to 5.
+
         missing_values (int or np.nan, optional): [The placeholder for the missing values. All occurrences of `missing_values` will be imputed. For pandas' dataframes with	nullable integer dtypes with missing values, `missing_values` should be set to `np.nan`, since `pd.NA` will be converted to `np.nan`]. Defaults to np.nan.
 
         Sample_posterior (bool, optional): [Whether to sample from the (Gaussian) predictive posterior of the fitted estimator for each imputation. Estimator must support ``return_std`` in its ``predict`` method if set to ``True``. Set to ``True`` if using ``IterativeImputer`` for multiple imputations]. Defaults to False.
@@ -707,6 +799,7 @@ class IterativeImputerGridSearch(IterativeImputer):
         ga=False,
         disable_progressbar=False,
         progress_update_percent=None,
+        pops=None,
         scoring_metric="accuracy",
         early_stop_gen=5,
         missing_values=np.nan,
@@ -765,6 +858,7 @@ class IterativeImputerGridSearch(IterativeImputer):
         self.ga = ga
         self.disable_progressbar = disable_progressbar
         self.progress_update_percent = progress_update_percent
+        self.pops = pops
         self.scoring_metric = scoring_metric
         self.early_stop_gen = early_stop_gen
 
