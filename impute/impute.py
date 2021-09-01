@@ -952,8 +952,8 @@ class Impute:
             strategy=self.imp_kwargs["initial_strategy"]
         )
 
-        df_validation = pd.DataFrame(simple_imputer.fit_transform(df))
-        df_filled = df_validation.copy()
+        df_defiled = pd.DataFrame(simple_imputer.fit_transform(df))
+        df_filled = df_defiled.copy()
 
         del simple_imputer
         gc.collect()
@@ -962,15 +962,15 @@ class Impute:
             data_drop_rate = np.random.choice(np.arange(0.15, 0.5, 0.02), 1)[0]
 
             drop_ind = np.random.choice(
-                np.arange(len(df_validation[col])),
-                size=int(len(df_validation[col]) * data_drop_rate),
+                np.arange(len(df_defiled[col])),
+                size=int(len(df_defiled[col]) * data_drop_rate),
                 replace=False,
             )
 
             # Introduce random np.nan values
-            df_validation.iloc[drop_ind, col] = np.nan
+            df_defiled.iloc[drop_ind, col] = np.nan
 
-        return df_filled, df_validation, cols
+        return df_filled, df_defiled, cols
 
     def _impute_eval(self, df, clf):
         """[Function to run IterativeImputer on a DataFrame. The dataframe columns will be randomly subset and a fraction of the known, true values are converted to missing data to allow evalutation of the model with either accuracy or mean_squared_error scores]
@@ -987,14 +987,14 @@ class Impute:
         # https://medium.com/analytics-vidhya/using-scikit-learns-iterative-imputer-694c3cca34de
 
         # Subset the DataFrame randomly and replace known values with np.nan
-        df_known, df_valid, cols = self._defile_dataset(
+        df_known, df_unknown, cols = self._defile_dataset(
             df, col_selection_rate=self.validation_only
         )
 
         df_known_slice = df_known[cols]
-        df_valid_slice = df_valid[cols]
+        df_unknown_slice = df_unknown[cols]
 
-        df_stg = df_valid.copy()
+        df_stg = df_unknown.copy()
 
         # Variational Autoencoder Neural Network
         if self.clf == "VAE":
@@ -1069,8 +1069,8 @@ class Impute:
             df_imp,
             df_known,
             df_known_slice,
-            df_valid_slice,
-            df_valid,
+            df_unknown_slice,
+            df_unknown,
         ]
 
         if self.clf == "VAE":
