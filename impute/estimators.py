@@ -937,7 +937,11 @@ class ImputePhylo(GenotypeData):
 
         treefile (str, optional): [Path to Newick-formatted phylogenetic tree file. Not required if genotype_data is defined with the guidetree option]. Defaults to None.
 
-        qmatrix (str, optional): [Path to *.iqtree file containing Rate Matrix Q table. Not required if genotype_data is defined with the qmatrix or qmatrix_iqtree option]. Defaults to None.
+        qmatrix_iqtree (str, optional): [Path to *.iqtree file containing Rate Matrix Q table. If specified, ``ImputePhylo`` will read the Q matrix from the IQ-TREE output file. Cannot be used in conjunction with ``qmatrix`` argument. Not required if the ``qmatrix`` or ``qmatrix_iqtree`` options were used with the ``GenotypeData`` object]. Defaults to None.
+
+        qmatrix (str, optional): [Path to file containing only a Rate Matrix Q table. Not required if genotype_data is defined with the qmatrix or qmatrix_iqtree option]. Defaults to None.
+
+        str_encodings (dict(str: int), optional): [Integer encodings used in STRUCTURE-formatted file. Should be a dictionary with keys=nucleotides and values=integer encodings. The missing data encoding should also be included. Argument is ignored if using a PHYLIP-formatted file]. Defaults to {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}
 
         prefix (str, optional): [Prefix to use with output files]
 
@@ -954,6 +958,7 @@ class ImputePhylo(GenotypeData):
         treefile=None,
         qmatrix_iqtree=None,
         qmatrix=None,
+        str_encodings={"A": 1, "C": 2, "G": 3, "T": 4, "N": -9},
         prefix="imputed_phylo",
         save_plots=False,
         write_output=True,
@@ -966,6 +971,7 @@ class ImputePhylo(GenotypeData):
         self.treefile = treefile
         self.qmatrix_iqtree = qmatrix_iqtree
         self.qmatrix = qmatrix
+        self.str_encodings = str_encodings
         self.prefix = prefix
         self.save_plots = save_plots
 
@@ -1092,6 +1098,8 @@ class ImputePhylo(GenotypeData):
         nsites = list(set([len(v) for v in genotypes.values()]))
         assert len(nsites) == 1, "Some sites have different lengths!"
 
+        genotypes = self.str2iupac(genotypes, self.str_encodings)
+
         outdir = f"{self.prefix}_imputation_plots"
 
         if self.save_plots:
@@ -1126,7 +1134,8 @@ class ImputePhylo(GenotypeData):
                             sum = None
 
                             for allele in self.get_iupac_full(
-                                genotypes[child.name][snp_index]
+                                genotypes[child.name][snp_index],
+                                self.str_encodings,
                             ):
                                 if sum is None:
                                     sum = list(pt[allele])
@@ -1315,7 +1324,35 @@ class ImputePhylo(GenotypeData):
         ret[:] = pt
         return ret
 
-    def get_iupac_full(self, char):
+    def str2iupac(self, genotypes, str_encodings):
+
+        nuc = {
+            f'{str_encodings["A"]}/{str_encodings["A"]}': "A",
+            f'{str_encodings["C"]}/{str_encodings["C"]}': "C",
+            f'{str_encodings["G"]}/{str_encodings["G"]}': "G",
+            f'{str_encodings["T"]}/{str_encodings["T"]}': "T",
+            f'{str_encodings["N"]}/{str_encodings["N"]}': "N",
+            f'{str_encodings["A"]}/{str_encodings["C"]}': "M",
+            f'{str_encodings["C"]}/{str_encodings["A"]}': "M",
+            f'{str_encodings["A"]}/{str_encodings["G"]}': "R",
+            f'{str_encodings["G"]}/{str_encodings["A"]}': "R",
+            f'{str_encodings["A"]}/{str_encodings["T"]}': "W",
+            f'{str_encodings["T"]}/{str_encodings["A"]}': "W",
+            f'{str_encodings["C"]}/{str_encodings["G"]}': "S",
+            f'{str_encodings["G"]}/{str_encodings["C"]}': "S",
+            f'{str_encodings["C"]}/{str_encodings["T"]}': "Y",
+            f'{str_encodings["T"]}/{str_encodings["C"]}': "Y",
+            f'{str_encodings["G"]}/{str_encodings["T"]}': "K",
+            f'{str_encodings["T"]}/{str_encodings["G"]}': "K",
+        }
+
+        for k, v in genotypes.items():
+            for i, gt in enumerate(v):
+                v[i] = nuc[gt]
+
+        return genotypes
+
+    def get_iupac_full(self, char, str_encodings):
         char = char.upper()
         iupac = {
             "A": ["A"],
@@ -1334,23 +1371,6 @@ class ImputePhylo(GenotypeData):
             "D": ["A", "G", "T"],
             "H": ["A", "C", "T"],
             "V": ["A", "C", "G"],
-            "0/0": ["A"],
-            "1/1": ["G"],
-            "2/2": ["C"],
-            "3/3": ["T"],
-            "-9/-9": ["A", "C", "T", "G"],
-            "0/1": ["A", "G"],
-            "1/0": ["A", "G"],
-            "2/3": ["C", "T"],
-            "3/2": ["C", "T"],
-            "1/2": ["G", "C"],
-            "2/1": ["G", "C"],
-            "0/3": ["A", "T"],
-            "3/0": ["A", "T"],
-            "1/3": ["G", "T"],
-            "3/1": ["G", "T"],
-            "0/2": ["A", "C"],
-            "2/0": ["A", "C"],
         }
 
         ret = iupac[char]
