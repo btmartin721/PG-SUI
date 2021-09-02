@@ -10,10 +10,12 @@ import scipy.stats as stats
 from sklearn_genetic.space import Continuous, Categorical, Integer
 
 from utils.misc import get_processor_name
+from utils.misc import generate_012_genotypes
 
 # Custom module imports
 from read_input.read_input import GenotypeData
-from impute.impute import *
+from impute.estimators import *
+from impute.neural_network_imputers import ImputeVAE
 
 from dim_reduction.dim_reduction import DimReduction
 from dim_reduction.embed import *
@@ -52,12 +54,16 @@ def main():
                 filename=args.str,
                 filetype="structure1row",
                 popmapfile=args.popmap,
+                guidetree=args.treefile,
+                qmatrix_iqtree=args.iqtree,
             )
         else:
             data = GenotypeData(
                 filename=args.str,
                 filetype="structure2row",
                 popmapfile=args.popmap,
+                guidetree=args.treefile,
+                qmatrix_iqtree=args.iqtree,
             )
 
     if args.phylip:
@@ -72,7 +78,11 @@ def main():
             raise TypeError("No popmap file supplied with PHYLIP file\n")
 
         data = GenotypeData(
-            filename=args.phylip, filetype="phylip", popmapfile=args.popmap
+            filename=args.phylip,
+            filetype="phylip",
+            popmapfile=args.popmap,
+            guidetree=args.treefile,
+            qmatrix_iqtree=args.iqtree,
         )
 
     if args.resume_imputed:
@@ -119,12 +129,12 @@ def main():
         # 	"max_samples": max_samples
         # }
 
-        # grid_params = {
-        # 	"max_features": Categorical(["sqrt", "log2"]),
-        # 	"min_samples_split": Integer(2, 10),
-        # 	"min_samples_leaf": Integer(1, 10),
-        # 	"max_depth": Integer(2, 110)
-        # }
+        grid_params = {
+            "max_features": Categorical(["sqrt", "log2"]),
+            "min_samples_split": Integer(2, 10),
+            "min_samples_leaf": Integer(1, 10),
+            "max_depth": Integer(2, 110),
+        }
 
         # Bayesian Ridge gridparams - RandomizedSearchCV
         # grid_params = {
@@ -134,7 +144,7 @@ def main():
         # 	"lambda_2": stats.loguniform(1e-6, 0.01),
         # }
 
-        # # # Bayesian Ridge gridparams - Genetic algorithm
+        # # Bayesian Ridge gridparams - Genetic algorithm
         # grid_params = {
         # 	"alpha_1": Continuous(1e-6, 1e-3, distribution="log-uniform"),
         # 	"alpha_2": Continuous(1e-6, 1e-3, distribution="log-uniform"),
@@ -181,29 +191,80 @@ def main():
         # 		chunk_size=0.2
         # )
 
-        rf_imp = ImputeRandomForest(
-            data,
-            prefix=args.prefix,
-            n_estimators=100,
-            n_nearest_features=10,
-            n_jobs=48,
-            max_iter=50,
-            disable_progressbar=True,
-            extratrees=False,
-            max_features="log2",
-            min_samples_split=6,
-            min_samples_leaf=4,
-            max_depth=6,
-            cv=5,
-            validation_only=0.2,
-            chunk_size=0.15,
-        )
+        # lgbm = ImputeLightGBM(
+        #     data,
+        #     prefix=args.prefix,
+        #     cv=3,
+        #     n_jobs=4,
+        #     n_estimators=50,
+        #     disable_progressbar=True,
+        #     chunk_size=0.2,
+        #     validation_only=0.1,
+        #     n_nearest_features=3,
+        #     max_iter=2,
+        #     initial_strategy="most_frequent_groups",
+        # )
+
+        # vae_imp = ImputeVAE(
+        #     # gt=np.array([[0.0, 2.0], [np.nan, 2.0], [1.0, np.nan]]),
+        #     genotype_data=data,
+        #     cv=3,
+        #     prefix=args.prefix,
+        #     disable_progressbar=True,
+        #     validation_only=0.2,
+        #     initial_strategy="group_mode",
+        # )
+
+        # complete_encoded = imputer.train(train_epochs=300, batch_size=256)
+        # print(complete_encoded)
+
+        # nnbp = ImputeBackPropogation(
+        #     data,
+        #     num_reduced_dims=3,
+        #     hidden_layers=3,
+        #     hidden_layer_sizes=[100, 100, 100],
+        # )
+
+        # rf_imp = ImputeRandomForest(
+        #     data,
+        #     prefix=args.prefix,
+        #     n_estimators=100,
+        #     n_nearest_features=3,
+        #     n_jobs=4,
+        #     max_iter=2,
+        #     disable_progressbar=True,
+        #     extratrees=False,
+        #     max_features="log2",
+        #     min_samples_split=6,
+        #     min_samples_leaf=4,
+        #     max_depth=6,
+        #     cv=3,
+        #     validation_only=0.1,
+        #     chunk_size=0.2
+        # )
+
+        # afpops = ImputeAlleleFreq(
+        # 	data, by_populations=True, prefix=args.prefix)
 
         # br_imp = ImputeBayesianRidge(data, prefix=args.prefix, n_iter=100, gridparams=grid_params, grid_iter=3, cv=3, n_jobs=4, max_iter=5, n_nearest_features=3, column_subset=4, ga=False, disable_progressbar=True, progress_update_percent=20, chunk_size=1.0)
 
-        # br_imp = ImputeBayesianRidge(data, prefix=args.prefix, alpha_1=0.0002689638465560243, alpha_2=0.0001473822173361299, lambda_1=0.0003281735206234651, lambda_2=0.00020767920087590963, n_iter=100, n_nearest_features=3, progress_update_percent=20, disable_progressbar=True, max_iter=2)
+        # br_imp = ImputeBayesianRidge(
+        #     data,
+        #     prefix=args.prefix,
+        #     alpha_1=0.0002689638465560243,
+        #     alpha_2=0.0001473822173361299,
+        #     lambda_1=0.0003281735206234651,
+        #     lambda_2=0.00020767920087590963,
+        #     n_iter=100,
+        #     n_nearest_features=3,
+        #     progress_update_percent=20,
+        #     disable_progressbar=True,
+        #     max_iter=2,
+        #     cv=3,
+        #     initial_strategy="group_mode",
+        # )
 
-        # ImputePhylo(args.phylip, args.treefile, args.iqtree, save_plots=True)
+        ImputePhylo(genotype_data=data, save_plots=False)
 
     # colors = {
     # 	"GU": "#FF00FF",
@@ -281,7 +342,7 @@ def get_arguments():
     """[Parse command-line arguments. Imported with argparse]
 
     Returns:
-            [argparse object]: [contains command-line arguments; accessed as method]
+        [argparse object]: [contains command-line arguments; accessed as method]
     """
 
     parser = argparse.ArgumentParser(
