@@ -23,7 +23,7 @@ from keras.utils import np_utils
 from keras.objectives import mse
 from keras.models import Sequential
 from keras.layers.core import Dropout, Dense
-from keras.regularizers import l1_l2 as l1l2
+from keras.regularizers import l1_l2
 
 from sklearn import metrics
 from sklearn.impute import SimpleImputer
@@ -372,7 +372,7 @@ class ImputeVAE(Impute):
                 first_layer_size,
                 input_dim=2 * n_dims,
                 activation=self.hidden_activation,
-                kernel_regularizer=l1l2(self.l1_penalty, self.l2_penalty),
+                kernel_regularizer=l1_l2(self.l1_penalty, self.l2_penalty),
                 kernel_initializer=self.kernel_initializer,
             )
         )
@@ -384,7 +384,7 @@ class ImputeVAE(Impute):
                 Dense(
                     layer_size,
                     activation=self.hidden_activation,
-                    kernel_regularizer=l1l2(self.l1_penalty, self.l2_penalty),
+                    kernel_regularizer=l1_l2(self.l1_penalty, self.l2_penalty),
                     kernel_initializer=self.kernel_initializer,
                 )
             )
@@ -395,7 +395,7 @@ class ImputeVAE(Impute):
             Dense(
                 n_dims,
                 activation=self.output_activation,
-                kernel_regularizer=l1l2(self.l1_penalty, self.l2_penalty),
+                kernel_regularizer=l1_l2(self.l1_penalty, self.l2_penalty),
                 kernel_initializer=self.kernel_initializer,
             )
         )
