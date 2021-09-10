@@ -134,8 +134,9 @@ class IterativeImputerAllData(IterativeImputer):
 
         add_indicator (bool, optional): [If True, a :class:`MissingIndicator` transform will stack onto output of the imputer's transform. This allows a predictive estimator to account for missingness despite imputation. If a feature has no missing values at fit/train time, the feature won't appear on the missing indicator even if there are missing values at transform/test time]. Defaults to False.
 
-        initial_data (dict(list(str)), optional): [Dictionary with keys=sampleIds and values=list of genotypes for the corresponding key]. Defaults to None.
+        genotype_data (dict(list(str)), optional): [Dictionary with keys=sampleIds and values=list of genotypes for the corresponding key]. Defaults to None.
 
+        str_encodings (dict(str: int), optional): [Integer encodings used in STRUCTURE-formatted file. Should be a dictionary with keys=nucleotides and values=integer encodings. The missing data encoding should also be included. Argument is ignored if using a PHYLIP-formatted file]. Defaults to {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}
 
     Attributes:
         initial_imputer_: ([:class:`~sklearn.impute.SimpleImputer`):  [Imputer used to initialize the missing values]
@@ -183,6 +184,10 @@ class IterativeImputerAllData(IterativeImputer):
         max_value [(int or float)]: [Maximum value of imputed data]
 
         verbose [(int)]: [Verbosity level]
+
+        genotype_data [(GenotypeData object)]: [GenotypeData object]
+
+        str_encodings ([dict(str: int)]): [Dictionary with integer encodings for converting from STRUCTURE-formatted file to IUPAC nucleotides]
 
     See Also:
             SimpleImputer : Univariate imputation of missing values.
@@ -234,7 +239,7 @@ class IterativeImputerAllData(IterativeImputer):
         verbose=0,
         random_state=None,
         add_indicator=False,
-        initial_data=None,
+        genotype_data=None,
         str_encodings=None,
     ):
         super().__init__(
@@ -273,7 +278,7 @@ class IterativeImputerAllData(IterativeImputer):
         self.max_value = max_value
         self.verbose = verbose
         self.random_state = random_state
-        self.initial_data = initial_data
+        self.genotype_data = genotype_data
         self.str_encodings = str_encodings
 
     @ignore_warnings(category=UserWarning)
@@ -418,11 +423,23 @@ class IterativeImputerAllData(IterativeImputer):
             Xt = X.copy()
 
         elif self.initial_strategy == "phylogeny":
-            self.initial_imputer_ = impute.estimators.ImputePhylo(
-                initial_data=self.initial_data,
-                str_encodings=self.str_encodings,
-                write_output=False,
-            )
+            if (
+                self.genotype_data.qmatrix is None
+                or self.genotype_data.qmatrix_iqtree is None
+                or self.genotype_data.guidetree is None
+            ):
+                raise AttributeError(
+                    "GenotypeData object was not initialized with "
+                    "qmatrix/ qmatrix_iqtree or guidetree arguments, "
+                    "but initial_strategy == 'phylogeny'"
+                )
+
+            else:
+                self.initial_imputer_ = impute.estimators.ImputePhylo(
+                    genotype_data=self.genotype_data,
+                    str_encodings=self.str_encodings,
+                    write_output=False,
+                )
 
         else:
             if self.initial_imputer_ is None:
@@ -738,8 +755,9 @@ class IterativeImputerGridSearch(IterativeImputer):
 
         add_indicator (bool, optional): [If True, a :class:`MissingIndicator` transform will stack onto output of the imputer's transform. This allows a predictive estimator to account for missingness despite imputation. If a feature has no missing values at fit/train time, the feature won't appear on the missing indicator even if there are missing values at transform/test time]. Defaults to False.
 
-        initial_data (dict(list(str)), optional): [Dictionary with keys=sampleIds and values=list of genotypes for the corresponding key]. Defaults to None.
+        genotype_data (dict(list(str)), optional): [Dictionary with keys=sampleIds and values=list of genotypes for the corresponding key]. Defaults to None.
 
+        str_encodings (dict(str: int), optional): [Integer encodings used in STRUCTURE-formatted file. Should be a dictionary with keys=nucleotides and values=integer encodings. The missing data encoding should also be included. Argument is ignored if using a PHYLIP-formatted file]. Defaults to {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}
 
     Attributes:
         initial_imputer_: ([:class:`~sklearn.impute.SimpleImputer`):  [Imputer used to initialize the missing values]
@@ -753,6 +771,10 @@ class IterativeImputerGridSearch(IterativeImputer):
         indicator_ ([:class:`~sklearn.impute.MissingIndicator`)]: [Indicator used to add binary indicators for missing values ``None`` if add_indicator is False]
 
         random_state_ [(RandomState instance)]: [RandomState instance that is generated either from a seed, the random number generator or by `np.random`]
+
+        genotype_data [(GenotypeData object)]: [GenotypeData object]
+
+        str_encodings ([dict(str: int)]): [Dictionary with integer encodings for converting from STRUCTURE-formatted file to IUPAC nucleotides]
 
     See Also:
         SimpleImputer : Univariate imputation of missing values.
@@ -810,7 +832,7 @@ class IterativeImputerGridSearch(IterativeImputer):
         verbose=0,
         random_state=None,
         add_indicator=False,
-        initial_data=None,
+        genotype_data=None,
         str_encodings=None,
     ):
 
@@ -848,7 +870,7 @@ class IterativeImputerGridSearch(IterativeImputer):
         self.max_value = max_value
         self.verbose = verbose
         self.random_state = random_state
-        self.initial_data = initial_data
+        self.genotype_data = genotype_data
         self.str_encodings = str_encodings
         self.grid_cv = grid_cv
         self.grid_n_jobs = grid_n_jobs
@@ -860,6 +882,100 @@ class IterativeImputerGridSearch(IterativeImputer):
         self.pops = pops
         self.scoring_metric = scoring_metric
         self.early_stop_gen = early_stop_gen
+
+    def _initial_imputation(self, X, in_fit=False):
+        """Perform initial imputation for input X.
+        Parameters
+        ----------
+        X : ndarray, shape (n_samples, n_features)
+            Input data, where "n_samples" is the number of samples and
+            "n_features" is the number of features.
+        in_fit : bool, default=False
+            Whether function is called in fit.
+        Returns
+        -------
+        Xt : ndarray, shape (n_samples, n_features)
+            Input data, where "n_samples" is the number of samples and
+            "n_features" is the number of features.
+        X_filled : ndarray, shape (n_samples, n_features)
+            Input data with the most recent imputations.
+        mask_missing_values : ndarray, shape (n_samples, n_features)
+            Input data's missing indicator matrix, where "n_samples" is the
+            number of samples and "n_features" is the number of features.
+        X_missing_mask : ndarray, shape (n_samples, n_features)
+            Input data's mask matrix indicating missing datapoints, where
+            "n_samples" is the number of samples and "n_features" is the
+            number of features.
+        """
+        if is_scalar_nan(self.missing_values):
+            force_all_finite = "allow-nan"
+        else:
+            force_all_finite = True
+
+        X = self._validate_data(
+            X,
+            dtype=FLOAT_DTYPES,
+            order="F",
+            reset=in_fit,
+            force_all_finite=force_all_finite,
+        )
+        _check_inputs_dtype(X, self.missing_values)
+
+        X_missing_mask = _get_mask(X, self.missing_values)
+        mask_missing_values = X_missing_mask.copy()
+
+        if self.initial_strategy == "most_frequent_populations":
+            self.initial_imputer_ = impute.estimators.ImputeAlleleFreq(
+                gt=np.nan_to_num(X, nan=-9).tolist(),
+                pops=self.pops,
+                by_populations=True,
+                missing=-9,
+                write_output=False,
+                output_format="array",
+                verbose=False,
+            )
+
+            X_filled = self.initial_imputer_.imputed
+            Xt = X.copy()
+
+        elif self.initial_strategy == "phylogeny":
+            if (
+                self.genotype_data.qmatrix is None
+                or self.genotype_data.qmatrix_iqtree is None
+                or self.genotype_data.guidetree is None
+            ):
+                raise AttributeError(
+                    "GenotypeData object was not initialized with "
+                    "qmatrix/ qmatrix_iqtree or guidetree arguments, "
+                    "but initial_strategy == 'phylogeny'"
+                )
+
+            else:
+                self.initial_imputer_ = impute.estimators.ImputePhylo(
+                    genotype_data=self.genotype_data,
+                    str_encodings=self.str_encodings,
+                    write_output=False,
+                )
+
+        else:
+            if self.initial_imputer_ is None:
+                self.initial_imputer_ = SimpleImputer(
+                    missing_values=self.missing_values,
+                    strategy=self.initial_strategy,
+                )
+                X_filled = self.initial_imputer_.fit_transform(X)
+
+            else:
+                X_filled = self.initial_imputer_.transform(X)
+
+            valid_mask = np.flatnonzero(
+                np.logical_not(np.isnan(self.initial_imputer_.statistics_))
+            )
+
+            Xt = X[:, valid_mask]
+            mask_missing_values = mask_missing_values[:, valid_mask]
+
+        return Xt, X_filled, mask_missing_values, X_missing_mask
 
     @ignore_warnings(category=UserWarning)
     def _impute_one_feature(

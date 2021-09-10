@@ -125,6 +125,8 @@ class ImputeKNN:
 
         initial_strategy (str, optional): [Which strategy to use to initialize the missing values. Same as the strategy parameter in sklearn.impute.SimpleImputer Valid values: {“mean”, “median”, or “most_frequent”}. Defaults to "most_frequent".
 
+        str_encodings (dict(str: int), optional): [Integer encodings for nucleotides if input file was in STRUCTURE format. Only used if ``initial_strategy="phylogeny"``]. Defaults to {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}.
+
         imputation_order (str, optional): [The order in which the features will be imputed. Possible values: 'ascending' (from features with fewest missing values to most), 'descending' (from features with most missing values to fewest), 'roman' (left to right), 'arabic' (right to left), 'random' (a random order for each round). ]. Defaults to "ascending".
 
         skip_complete (bool, optional): [If True, then features with missing values during transform that did not have any missing values during fit will be imputed with the initial imputation method only. Set to True if you have many features with no missing values at both fit and transform time to save compute time]. Defaults to False.
@@ -133,7 +135,6 @@ class ImputeKNN:
 
         verbose (int, optional): [Verbosity flag, controls the debug messages that are issues as functions are evaluated. The higher, the more verbose. Possible values are 0, 1, or 2]. Defaults to 0.
 
-        other_kwargs (dict, optional): [Other keyword arguments. Valid options include: ``str_encodings`` (see ImputePhylo class)]
     """
 
     def __init__(
@@ -169,11 +170,11 @@ class ImputeKNN:
         tol=1e-3,
         n_nearest_features=10,
         initial_strategy="most_frequent",
+        str_encodings={"A": 1, "C": 2, "G": 3, "T": 4, "N": -9},
         imputation_order="ascending",
         skip_complete=False,
         random_state=None,
         verbose=0,
-        **other_kwargs,
     ):
         # Get local variables into dictionary object
         kwargs = locals()
@@ -181,15 +182,7 @@ class ImputeKNN:
         self.clf_type = "classifier"
         self.clf = KNeighborsClassifier
 
-        if initial_strategy == "phylogeny":
-            kwargs["initial_data"] = genotype_data.snpsdict
-            kwargs["str_encodings"] = other_kwargs.get(
-                "str_encodings", {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}
-            )
-
-        imputer = Impute(
-            self.clf, self.clf_type, genotype_data.populations, kwargs
-        )
+        imputer = Impute(self.clf, self.clf_type, kwargs)
 
         self.imputed, self.best_params = imputer.fit_predict(
             genotype_data.genotypes_df
@@ -278,6 +271,8 @@ class ImputeRandomForest:
 
         initial_strategy (str, optional): [Which strategy to use to initialize the missing values. Same as the strategy parameter in sklearn.impute.SimpleImputer Valid values: {“mean”, “median”, or “most_frequent”}]. Defaults to "most_frequent".
 
+        str_encodings (dict(str: int), optional): [Integer encodings for nucleotides if input file was in STRUCTURE format. Only used if ``initial_strategy="phylogeny"``]. Defaults to {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}.
+
         imputation_order (str, optional): [The order in which the features will be imputed. Possible values: 'ascending' (from features with fewest missing values to most), 'descending' (from features with most missing values to fewest), 'roman' (left to right), 'arabic' (right to left), 'random' (a random order for each round). ]. Defaults to "ascending".
 
         skip_complete (bool, optional): [If True, then features with missing values during transform that did not have any missing values during fit will be imputed with the initial imputation method only. Set to True if you have many features with no missing values at both fit and transform time to save compute time]. Defaults to False.
@@ -285,8 +280,6 @@ class ImputeRandomForest:
         random_state (int, optional): [The seed of the pseudo random number generator to use for the iterative imputer. Randomizes selection of etimator features if n_nearest_features is not None or the imputation_order is 'random'. Use an integer for determinism. If None, then uses a different random seed each time]. Defaults to None.
 
         verbose (int, optional): [Verbosity flag, controls the debug messages that are issues as functions are evaluated. The higher, the more verbose. Possible values are 0, 1, or 2]. Defaults to 0.
-
-        other_kwargs (dict, optional): [Other keyword arguments. Valid options include: ``str_encodings`` (see ImputePhylo class)]
     """
 
     def __init__(
@@ -330,11 +323,11 @@ class ImputeRandomForest:
         tol=1e-3,
         n_nearest_features=10,
         initial_strategy="most_frequent",
+        str_encodings={"A": 1, "C": 2, "G": 3, "T": 4, "N": -9},
         imputation_order="ascending",
         skip_complete=False,
         random_state=None,
         verbose=0,
-        **other_kwargs,
     ):
         # Get local variables into dictionary object
         kwargs = locals()
@@ -360,15 +353,7 @@ class ImputeRandomForest:
 
         self.clf_type = "classifier"
 
-        if initial_strategy == "phylogeny":
-            kwargs["initial_data"] = genotype_data.snpsdict
-            kwargs["str_encodings"] = other_kwargs.get(
-                "str_encodings", {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}
-            )
-
-        imputer = Impute(
-            self.clf, self.clf_type, genotype_data.populations, kwargs
-        )
+        imputer = Impute(self.clf, self.clf_type, kwargs)
 
         self.imputed, self.best_params = imputer.fit_predict(
             genotype_data.genotypes_df
@@ -455,6 +440,8 @@ class ImputeGradientBoosting:
 
         initial_strategy (str, optional): [Which strategy to use to initialize the missing values. Same as the strategy parameter in sklearn.impute.SimpleImputer Valid values: {“mean”, “median”, or “most_frequent”}]. Defaults to "populations".
 
+        str_encodings (dict(str: int), optional): [Integer encodings for nucleotides if input file was in STRUCTURE format. Only used if ``initial_strategy="phylogeny"``]. Defaults to {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}.
+
         imputation_order (str, optional): [The order in which the features will be imputed. Possible values: 'ascending' (from features with fewest missing values to most), 'descending' (from features with most missing values to fewest), 'roman' (left to right), 'arabic' (right to left), 'random' (a random order for each round). ]. Defaults to "ascending".
 
         skip_complete (bool, optional): [If True, then features with missing values during transform that did not have any missing values during fit will be imputed with the initial imputation method only. Set to True if you have many features with no missing values at both fit and transform time to save compute time]. Defaults to False.
@@ -462,8 +449,6 @@ class ImputeGradientBoosting:
         random_state (int, optional): [The seed of the pseudo random number generator to use for the iterative imputer. Randomizes selection of etimator features if n_nearest_features is not None or the imputation_order is 'random'. Use an integer for determinism. If None, then uses a different random seed each time]. Defaults to None.
 
         verbose (int, optional): [Verbosity flag, controls the debug messages that are issues as functions are evaluated. The higher, the more verbose. Possible values are 0, 1, or 2]. Defaults to 0.
-
-        other_kwargs (dict, optional): [Other keyword arguments. Valid options include: ``str_encodings`` (see ImputePhylo class)]
     """
 
     def __init__(
@@ -506,11 +491,11 @@ class ImputeGradientBoosting:
         tol=1e-3,
         n_nearest_features=10,
         initial_strategy="most_frequent",
+        str_encodings={"A": 1, "C": 2, "G": 3, "T": 4, "N": -9},
         imputation_order="ascending",
         skip_complete=False,
         random_state=None,
         verbose=0,
-        **other_kwargs,
     ):
         # Get local variables into dictionary object
         kwargs = locals()
@@ -518,15 +503,7 @@ class ImputeGradientBoosting:
         self.clf_type = "classifier"
         self.clf = GradientBoostingClassifier
 
-        if initial_strategy == "phylogeny":
-            kwargs["initial_data"] = genotype_data.snpsdict
-            kwargs["str_encodings"] = other_kwargs.get(
-                "str_encodings", {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}
-            )
-
-        imputer = Impute(
-            self.clf, self.clf_type, genotype_data.populations, kwargs
-        )
+        imputer = Impute(self.clf, self.clf_type, kwargs)
 
         self.imputed, self.best_params = imputer.fit_predict(
             genotype_data.genotypes_df
@@ -603,6 +580,8 @@ class ImputeBayesianRidge:
 
         initial_strategy (str, optional): [Which strategy to use to initialize the missing values. Same as the strategy parameter in sklearn.impute.SimpleImputer Valid values: {“mean”, “median”, or “most_frequent”}]. Defaults to "most_frequent".
 
+        str_encodings (dict(str: int), optional): [Integer encodings for nucleotides if input file was in STRUCTURE format. Only used if ``initial_strategy="phylogeny"``]. Defaults to {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}.
+
         imputation_order (str, optional): [The order in which the features will be imputed. Possible values: 'ascending' (from features with fewest missing values to most), 'descending' (from features with most missing values to fewest), 'roman' (left to right), 'arabic' (right to left), 'random' (a random order for each round). ]. Defaults to "ascending".
 
         skip_complete (bool, optional): [If True, then features with missing values during transform that did not have any missing values during fit will be imputed with the initial imputation method only. Set to True if you have many features with no missing values at both fit and transform time to save compute time]. Defaults to False.
@@ -610,8 +589,6 @@ class ImputeBayesianRidge:
         random_state (int, optional): [The seed of the pseudo random number generator to use for the iterative imputer. Randomizes selection of etimator features if n_nearest_features is not None or the imputation_order is 'random'. Use an integer for determinism. If None, then uses a different random seed each time]. Defaults to None.
 
         verbose (int, optional): [Verbosity flag, controls the debug messages that are issues as functions are evaluated. The higher, the more verbose. Possible values are 0, 1, or 2]. Defaults to 0.
-
-        other_kwargs (dict, optional): [Other keyword arguments. Valid options include: ``str_encodings`` (see ImputePhylo class)]
     """
 
     def __init__(
@@ -649,11 +626,11 @@ class ImputeBayesianRidge:
         tol=1e-3,
         n_nearest_features=10,
         initial_strategy="most_frequent",
+        str_encodings={"A": 1, "C": 2, "G": 3, "T": 4, "N": -9},
         imputation_order="ascending",
         skip_complete=False,
         random_state=None,
         verbose=0,
-        **other_kwargs,
     ):
         # Get local variables into dictionary object
         kwargs = locals()
@@ -663,15 +640,7 @@ class ImputeBayesianRidge:
         self.clf_type = "regressor"
         self.clf = BayesianRidge
 
-        if initial_strategy == "phylogeny":
-            kwargs["initial_data"] = genotype_data.snpsdict
-            kwargs["str_encodings"] = other_kwargs.get(
-                "str_encodings", {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}
-            )
-
-        imputer = Impute(
-            self.clf, self.clf_type, genotype_data.populations, kwargs
-        )
+        imputer = Impute(self.clf, self.clf_type, kwargs)
 
         self.imputed, self.best_params = imputer.fit_predict(
             genotype_data.genotypes_df
@@ -734,6 +703,8 @@ class ImputeXGBoost:
 
         initial_strategy (str, optional): [Which strategy to use to initialize the missing values. Same as the strategy parameter in sklearn.impute.SimpleImputer Valid values: {“mean”, “median”, or “most_frequent”}]. Defaults to "most_frequent".
 
+        str_encodings (dict(str: int), optional): [Integer encodings for nucleotides if input file was in STRUCTURE format. Only used if ``initial_strategy="phylogeny"``]. Defaults to {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}.
+
         imputation_order (str, optional): [The order in which the features will be imputed. Possible values: 'ascending' (from features with fewest missing values to most), 'descending' (from features with most missing values to fewest), 'roman' (left to right), 'arabic' (right to left), 'random' (a random order for each round). ]. Defaults to "ascending".
 
         skip_complete (bool, optional): [If True, then features with missing values during transform that did not have any missing values during fit will be imputed with the initial imputation method only. Set to True if you have many features with no missing values at both fit and transform time to save compute time]. Defaults to False.
@@ -741,8 +712,6 @@ class ImputeXGBoost:
         random_state (int, optional): [The seed of the pseudo random number generator to use for the iterative imputer. Randomizes selection of etimator features if n_nearest_features is not None or the imputation_order is 'random'. Use an integer for determinism. If None, then uses a different random seed each time]. Defaults to None.
 
         verbose (int, optional): [Verbosity flag, controls the debug messages that are issues as functions are evaluated. The higher, the more verbose. Possible values are 0, 1, or 2]. Defaults to 0.
-
-        other_kwargs (dict, optional): [Other keyword arguments. Valid options include: ``str_encodings`` (see ImputePhylo class)]
     """
 
     def __init__(
@@ -773,11 +742,11 @@ class ImputeXGBoost:
         max_iter=10,
         tol=1e-3,
         initial_strategy="most_frequent",
+        str_encodings={"A": 1, "C": 2, "G": 3, "T": 4, "N": -9},
         imputation_order="ascending",
         skip_complete=False,
         random_state=None,
         verbose=0,
-        **other_kwargs,
     ):
         # Get local variables into dictionary object
         kwargs = locals()
@@ -789,15 +758,7 @@ class ImputeXGBoost:
         self.clf = xgb.XGBClassifier
         kwargs["verbosity"] = verbose
 
-        if initial_strategy == "phylogeny":
-            kwargs["initial_data"] = genotype_data.snpsdict
-            kwargs["str_encodings"] = other_kwargs.get(
-                "str_encodings", {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}
-            )
-
-        imputer = Impute(
-            self.clf, self.clf_type, genotype_data.populations, kwargs
-        )
+        imputer = Impute(self.clf, self.clf_type, kwargs)
 
         self.imputed, self.best_params = imputer.fit_predict(
             genotype_data.genotypes_df
@@ -890,6 +851,8 @@ class ImputeLightGBM:
 
         initial_strategy (str, optional): [Which strategy to use to initialize the missing values. Same as the strategy parameter in sklearn.impute.SimpleImputer Valid values: {“mean”, “median”, or “most_frequent”}]. Defaults to "most_frequent".
 
+        str_encodings (dict(str: int), optional): [Integer encodings for nucleotides if input file was in STRUCTURE format. Only used if ``initial_strategy="phylogeny"``]. Defaults to {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}.
+
         imputation_order (str, optional): [The order in which the features will be imputed. Possible values: 'ascending' (from features with fewest missing values to most), 'descending' (from features with most missing values to fewest), 'roman' (left to right), 'arabic' (right to left), 'random' (a random order for each round). ]. Defaults to "ascending".
 
         skip_complete (bool, optional): [If True, then features with missing values during transform that did not have any missing values during fit will be imputed with the initial imputation method only. Set to True if you have many features with no missing values at both fit and transform time to save compute time]. Defaults to False.
@@ -897,8 +860,6 @@ class ImputeLightGBM:
         random_state (int, optional): [The seed of the pseudo random number generator to use for the iterative imputer. Randomizes selection of etimator features if n_nearest_features is not None or the imputation_order is 'random'. Use an integer for determinism. If None, then uses a different random seed each time]. Defaults to None.
 
         verbose (int, optional): [Verbosity flag, controls the debug messages that are issues as functions are evaluated. The higher, the more verbose. Possible values are 0, 1, or 2]. Defaults to 0.
-
-        other_kwargs (dict, optional): [Other keyword arguments. Valid options include: ``str_encodings`` (see ImputePhylo class)]
     """
 
     def __init__(
@@ -944,11 +905,11 @@ class ImputeLightGBM:
         max_iter=10,
         tol=1e-3,
         initial_strategy="most_frequent",
+        str_encodings={"A": 1, "C": 2, "G": 3, "T": 4, "N": -9},
         imputation_order="ascending",
         skip_complete=False,
         random_state=None,
         verbose=0,
-        **other_kwargs,
     ):
 
         # Get local variables into dictionary object
@@ -960,15 +921,7 @@ class ImputeLightGBM:
         self.clf_type = "classifier"
         self.clf = lgbm.LGBMClassifier
 
-        if initial_strategy == "phylogeny":
-            kwargs["initial_data"] = genotype_data.snpsdict
-            kwargs["str_encodings"] = other_kwargs.get(
-                "str_encodings", {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}
-            )
-
-        imputer = Impute(
-            self.clf, self.clf_type, genotype_data.populations, kwargs
-        )
+        imputer = Impute(self.clf, self.clf_type, kwargs)
 
         self.imputed, self.best_params = imputer.fit_predict(
             genotype_data.genotypes_df
@@ -1000,8 +953,6 @@ class ImputePhylo(GenotypeData):
         prefix (str, optional): [Prefix to use with output files]
 
         save_plots (bool, optional): [Whether to save PDF files with genotype imputations for each site. It makes one PDF file per locus, so if you have a lot of loci it will make a lot of PDF files]. Defaults to False.
-
-        kwargs (optional): [Keyword arguments for private use with IterativeImputer. Valid options include: ``initial_data``]
     """
 
     def __init__(
@@ -1018,7 +969,6 @@ class ImputePhylo(GenotypeData):
         prefix="imputed_phylo",
         save_plots=False,
         write_output=True,
-        **kwargs,
     ):
         super().__init__()
 
@@ -1031,7 +981,6 @@ class ImputePhylo(GenotypeData):
         self.str_encodings = str_encodings
         self.prefix = prefix
         self.save_plots = save_plots
-        self.initial_data = kwargs.get("initial_data", None)
 
         self.validate_arguments(genotype_data)
         data, tree, q = self.parse_arguments(genotype_data)
@@ -1096,10 +1045,7 @@ class ImputePhylo(GenotypeData):
             raise TypeError("genotype_data and alnfile cannot both be defined")
 
         if genotype_data is None and self.alnfile is None:
-            if self.initial_data is None:
-                raise TypeError(
-                    "Either genotype_data or phylipfle must be defined"
-                )
+            raise TypeError("Either genotype_data or phylipfle must be defined")
 
         if genotype_data.tree is None and self.treefile is None:
             raise TypeError(
@@ -1107,15 +1053,7 @@ class ImputePhylo(GenotypeData):
             )
 
         if genotype_data is None and self.filetype is None:
-            if self.initial_data is None:
-                raise TypeError(
-                    "filetype must be defined if genotype_data is None"
-                )
-            else:
-                if list(self.initial_data.values())[0][0][1] == "/":
-                    self.filetype = "structure2row"
-                else:
-                    self.filetype = "phylip"
+            raise TypeError("filetype must be defined if genotype_data is None")
 
         if (
             genotype_data is None
