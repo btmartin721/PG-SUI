@@ -91,6 +91,8 @@ class Impute:
             self.early_stop_gen,
             self.chunk_size,
             self.validation_only,
+            self.initial_data,
+            self.str_encodings,
         ) = self._gather_impute_settings(kwargs)
 
         self.logfilepath = f"{self.prefix}_imputer_progress_log.txt"
@@ -369,6 +371,8 @@ class Impute:
             disable_progressbar=self.disable_progressbar,
             progress_update_percent=self.progress_update_percent,
             pops=self.pops,
+            initial_data=self.initial_data,
+            str_encodings=self.str_encodings,
         )
 
         df_chunks = self.df2chunks(df, self.chunk_size)
@@ -428,6 +432,8 @@ class Impute:
             scoring_metric=self.scoring_metric,
             early_stop_gen=self.early_stop_gen,
             pops=self.pops,
+            initial_data=self.initial_data,
+            str_encodings=self.str_encodings,
         )
 
         Xt, params_list, score_list = imputer.fit_transform(df_subset)
@@ -490,6 +496,8 @@ class Impute:
             disable_progressbar=self.disable_progressbar,
             progress_update_percent=self.progress_update_percent,
             pops=self.pops,
+            intial_data=self.initial_data,
+            str_encodings=self.str_encodings,
         )
 
         df_chunks = self.df2chunks(df, self.chunk_size)
@@ -807,6 +815,8 @@ class Impute:
             [int]: [Number of generations without improvement before Early Stopping criterion is called]
             [int or float]: [Chunk sizes for doing full imputation following grid search. If int, then splits into chunks of ``chunk_size``. If float, then splits into chunks of ``n_features * chunk_size``]
             [float or None]: [Proportion of loci to use for validation if grid search is not used. If None, then doesn't do validation]
+            [dict(list(str)) or None]: [Dictionary with keys=sampleIDs and values=list of genotypes]
+            [dict]: [Encodings to convert structure to PHYLIP format]
         """
         gridparams = kwargs.pop("gridparams", None)
         cv = kwargs.pop("cv", None)
@@ -820,6 +830,8 @@ class Impute:
         early_stop_gen = kwargs.pop("early_stop_gen", None)
         chunk_size = kwargs.pop("chunk_size", None)
         validation_only = kwargs.pop("validation_only", None)
+        initial_data = kwargs.pop("initial_data", None)
+        str_encodings = kwargs.pop("str_encodings", None)
 
         progress_update_percent = kwargs.pop("progress_update_percent", None)
 
@@ -901,6 +913,8 @@ class Impute:
             early_stop_gen,
             chunk_size,
             validation_only,
+            initial_data,
+            str_encodings,
         )
 
     def _format_features(self, df, missing_val=-9):
@@ -1040,6 +1054,8 @@ class Impute:
                 disable_progressbar=self.disable_progressbar,
                 progress_update_percent=self.progress_update_percent,
                 pops=self.pops,
+                initial_data=self.initial_data,
+                str_encodings=self.str_encodings,
             )
 
             imp_arr = imputer.fit_transform(df_stg)
@@ -1135,6 +1151,8 @@ class Impute:
         scoring_metric=None,
         early_stop_gen=None,
         pops=None,
+        initial_data=None,
+        str_encodings=None,
     ):
         """[Define an IterativeImputer instance]
 
@@ -1171,7 +1189,10 @@ class Impute:
 
                 pops [list]: [Population IDs as 1d-list in order of sampleID]
 
+                initial_data [(dict(list(str)))]: [Dictionary object with keys=sampleIds and values=list of genotypes for that sample]
 
+                str_encodings (dict, optional): [Encodings to convert structure to PHYLIP format]. Defaults to None.
+\
         Returns:
                 [sklearn.impute.IterativeImputer]: [IterativeImputer instance]
         """
@@ -1184,6 +1205,8 @@ class Impute:
                 disable_progressbar=disable_progressbar,
                 progress_update_percent=progress_update_percent,
                 pops=pops,
+                initial_data=initial_data,
+                str_encodings=str_encodings,
                 **self.imp_kwargs,
             )
 
@@ -1206,6 +1229,8 @@ class Impute:
                 scoring_metric=scoring_metric,
                 early_stop_gen=early_stop_gen,
                 pops=pops,
+                initial_data=initial_data,
+                str_encodings=str_encodings,
                 **self.imp_kwargs,
             )
 

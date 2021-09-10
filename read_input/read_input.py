@@ -383,9 +383,6 @@ class GenotypeData:
 
                 self.samples.append(inds)
 
-        print(self.snpsdict)
-        sys.exit()
-
         print("Done!")
 
         print("\nConverting genotypes to one-hot encoding...")

@@ -134,6 +134,8 @@ class IterativeImputerAllData(IterativeImputer):
 
         add_indicator (bool, optional): [If True, a :class:`MissingIndicator` transform will stack onto output of the imputer's transform. This allows a predictive estimator to account for missingness despite imputation. If a feature has no missing values at fit/train time, the feature won't appear on the missing indicator even if there are missing values at transform/test time]. Defaults to False.
 
+        initial_data (dict(list(str)), optional): [Dictionary with keys=sampleIds and values=list of genotypes for the corresponding key]. Defaults to None.
+
 
     Attributes:
         initial_imputer_: ([:class:`~sklearn.impute.SimpleImputer`):  [Imputer used to initialize the missing values]
@@ -232,6 +234,8 @@ class IterativeImputerAllData(IterativeImputer):
         verbose=0,
         random_state=None,
         add_indicator=False,
+        initial_data=None,
+        str_encodings=None,
     ):
         super().__init__(
             estimator=estimator,
@@ -269,6 +273,8 @@ class IterativeImputerAllData(IterativeImputer):
         self.max_value = max_value
         self.verbose = verbose
         self.random_state = random_state
+        self.initial_data = initial_data
+        self.str_encodings = str_encodings
 
     @ignore_warnings(category=UserWarning)
     def _impute_one_feature(
@@ -408,11 +414,15 @@ class IterativeImputerAllData(IterativeImputer):
                 verbose=False,
             )
 
-        elif self.initial_strategy == "phylogeny":
-            self.initial_imputer_ = impute.estimators.ImputePhylo()
-
             X_filled = self.initial_imputer_.imputed
             Xt = X.copy()
+
+        elif self.initial_strategy == "phylogeny":
+            self.initial_imputer_ = impute.estimators.ImputePhylo(
+                initial_data=self.initial_data,
+                str_encodings=self.str_encodings,
+                write_output=False,
+            )
 
         else:
             if self.initial_imputer_ is None:
@@ -728,6 +738,8 @@ class IterativeImputerGridSearch(IterativeImputer):
 
         add_indicator (bool, optional): [If True, a :class:`MissingIndicator` transform will stack onto output of the imputer's transform. This allows a predictive estimator to account for missingness despite imputation. If a feature has no missing values at fit/train time, the feature won't appear on the missing indicator even if there are missing values at transform/test time]. Defaults to False.
 
+        initial_data (dict(list(str)), optional): [Dictionary with keys=sampleIds and values=list of genotypes for the corresponding key]. Defaults to None.
+
 
     Attributes:
         initial_imputer_: ([:class:`~sklearn.impute.SimpleImputer`):  [Imputer used to initialize the missing values]
@@ -798,6 +810,8 @@ class IterativeImputerGridSearch(IterativeImputer):
         verbose=0,
         random_state=None,
         add_indicator=False,
+        initial_data=None,
+        str_encodings=None,
     ):
 
         super().__init__(
@@ -834,6 +848,8 @@ class IterativeImputerGridSearch(IterativeImputer):
         self.max_value = max_value
         self.verbose = verbose
         self.random_state = random_state
+        self.initial_data = initial_data
+        self.str_encodings = str_encodings
         self.grid_cv = grid_cv
         self.grid_n_jobs = grid_n_jobs
         self.grid_n_iter = grid_n_iter

@@ -132,6 +132,8 @@ class ImputeKNN:
         random_state (int, optional): [The seed of the pseudo random number generator to use for the iterative imputer. Randomizes selection of etimator features if n_nearest_features is not None or the imputation_order is 'random'. Use an integer for determinism. If None, then uses a different random seed each time]. Defaults to None.
 
         verbose (int, optional): [Verbosity flag, controls the debug messages that are issues as functions are evaluated. The higher, the more verbose. Possible values are 0, 1, or 2]. Defaults to 0.
+
+        other_kwargs (dict, optional): [Other keyword arguments. Valid options include: ``str_encodings`` (see ImputePhylo class)]
     """
 
     def __init__(
@@ -171,12 +173,19 @@ class ImputeKNN:
         skip_complete=False,
         random_state=None,
         verbose=0,
+        **other_kwargs,
     ):
         # Get local variables into dictionary object
         kwargs = locals()
 
         self.clf_type = "classifier"
         self.clf = KNeighborsClassifier
+
+        if initial_strategy == "phylogeny":
+            kwargs["initial_data"] = genotype_data.snpsdict
+            kwargs["str_encodings"] = other_kwargs.get(
+                "str_encodings", {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}
+            )
 
         imputer = Impute(
             self.clf, self.clf_type, genotype_data.populations, kwargs
@@ -276,6 +285,8 @@ class ImputeRandomForest:
         random_state (int, optional): [The seed of the pseudo random number generator to use for the iterative imputer. Randomizes selection of etimator features if n_nearest_features is not None or the imputation_order is 'random'. Use an integer for determinism. If None, then uses a different random seed each time]. Defaults to None.
 
         verbose (int, optional): [Verbosity flag, controls the debug messages that are issues as functions are evaluated. The higher, the more verbose. Possible values are 0, 1, or 2]. Defaults to 0.
+
+        other_kwargs (dict, optional): [Other keyword arguments. Valid options include: ``str_encodings`` (see ImputePhylo class)]
     """
 
     def __init__(
@@ -323,6 +334,7 @@ class ImputeRandomForest:
         skip_complete=False,
         random_state=None,
         verbose=0,
+        **other_kwargs,
     ):
         # Get local variables into dictionary object
         kwargs = locals()
@@ -347,6 +359,12 @@ class ImputeRandomForest:
             self.clf = RandomForestClassifier
 
         self.clf_type = "classifier"
+
+        if initial_strategy == "phylogeny":
+            kwargs["initial_data"] = genotype_data.snpsdict
+            kwargs["str_encodings"] = other_kwargs.get(
+                "str_encodings", {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}
+            )
 
         imputer = Impute(
             self.clf, self.clf_type, genotype_data.populations, kwargs
@@ -444,6 +462,8 @@ class ImputeGradientBoosting:
         random_state (int, optional): [The seed of the pseudo random number generator to use for the iterative imputer. Randomizes selection of etimator features if n_nearest_features is not None or the imputation_order is 'random'. Use an integer for determinism. If None, then uses a different random seed each time]. Defaults to None.
 
         verbose (int, optional): [Verbosity flag, controls the debug messages that are issues as functions are evaluated. The higher, the more verbose. Possible values are 0, 1, or 2]. Defaults to 0.
+
+        other_kwargs (dict, optional): [Other keyword arguments. Valid options include: ``str_encodings`` (see ImputePhylo class)]
     """
 
     def __init__(
@@ -490,12 +510,19 @@ class ImputeGradientBoosting:
         skip_complete=False,
         random_state=None,
         verbose=0,
+        **other_kwargs,
     ):
         # Get local variables into dictionary object
         kwargs = locals()
 
         self.clf_type = "classifier"
         self.clf = GradientBoostingClassifier
+
+        if initial_strategy == "phylogeny":
+            kwargs["initial_data"] = genotype_data.snpsdict
+            kwargs["str_encodings"] = other_kwargs.get(
+                "str_encodings", {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}
+            )
 
         imputer = Impute(
             self.clf, self.clf_type, genotype_data.populations, kwargs
@@ -583,6 +610,8 @@ class ImputeBayesianRidge:
         random_state (int, optional): [The seed of the pseudo random number generator to use for the iterative imputer. Randomizes selection of etimator features if n_nearest_features is not None or the imputation_order is 'random'. Use an integer for determinism. If None, then uses a different random seed each time]. Defaults to None.
 
         verbose (int, optional): [Verbosity flag, controls the debug messages that are issues as functions are evaluated. The higher, the more verbose. Possible values are 0, 1, or 2]. Defaults to 0.
+
+        other_kwargs (dict, optional): [Other keyword arguments. Valid options include: ``str_encodings`` (see ImputePhylo class)]
     """
 
     def __init__(
@@ -624,6 +653,7 @@ class ImputeBayesianRidge:
         skip_complete=False,
         random_state=None,
         verbose=0,
+        **other_kwargs,
     ):
         # Get local variables into dictionary object
         kwargs = locals()
@@ -632,6 +662,12 @@ class ImputeBayesianRidge:
 
         self.clf_type = "regressor"
         self.clf = BayesianRidge
+
+        if initial_strategy == "phylogeny":
+            kwargs["initial_data"] = genotype_data.snpsdict
+            kwargs["str_encodings"] = other_kwargs.get(
+                "str_encodings", {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}
+            )
 
         imputer = Impute(
             self.clf, self.clf_type, genotype_data.populations, kwargs
@@ -705,6 +741,8 @@ class ImputeXGBoost:
         random_state (int, optional): [The seed of the pseudo random number generator to use for the iterative imputer. Randomizes selection of etimator features if n_nearest_features is not None or the imputation_order is 'random'. Use an integer for determinism. If None, then uses a different random seed each time]. Defaults to None.
 
         verbose (int, optional): [Verbosity flag, controls the debug messages that are issues as functions are evaluated. The higher, the more verbose. Possible values are 0, 1, or 2]. Defaults to 0.
+
+        other_kwargs (dict, optional): [Other keyword arguments. Valid options include: ``str_encodings`` (see ImputePhylo class)]
     """
 
     def __init__(
@@ -739,6 +777,7 @@ class ImputeXGBoost:
         skip_complete=False,
         random_state=None,
         verbose=0,
+        **other_kwargs,
     ):
         # Get local variables into dictionary object
         kwargs = locals()
@@ -749,6 +788,12 @@ class ImputeXGBoost:
         self.clf_type = "classifier"
         self.clf = xgb.XGBClassifier
         kwargs["verbosity"] = verbose
+
+        if initial_strategy == "phylogeny":
+            kwargs["initial_data"] = genotype_data.snpsdict
+            kwargs["str_encodings"] = other_kwargs.get(
+                "str_encodings", {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}
+            )
 
         imputer = Impute(
             self.clf, self.clf_type, genotype_data.populations, kwargs
@@ -852,6 +897,8 @@ class ImputeLightGBM:
         random_state (int, optional): [The seed of the pseudo random number generator to use for the iterative imputer. Randomizes selection of etimator features if n_nearest_features is not None or the imputation_order is 'random'. Use an integer for determinism. If None, then uses a different random seed each time]. Defaults to None.
 
         verbose (int, optional): [Verbosity flag, controls the debug messages that are issues as functions are evaluated. The higher, the more verbose. Possible values are 0, 1, or 2]. Defaults to 0.
+
+        other_kwargs (dict, optional): [Other keyword arguments. Valid options include: ``str_encodings`` (see ImputePhylo class)]
     """
 
     def __init__(
@@ -901,6 +948,7 @@ class ImputeLightGBM:
         skip_complete=False,
         random_state=None,
         verbose=0,
+        **other_kwargs,
     ):
 
         # Get local variables into dictionary object
@@ -911,6 +959,12 @@ class ImputeLightGBM:
 
         self.clf_type = "classifier"
         self.clf = lgbm.LGBMClassifier
+
+        if initial_strategy == "phylogeny":
+            kwargs["initial_data"] = genotype_data.snpsdict
+            kwargs["str_encodings"] = other_kwargs.get(
+                "str_encodings", {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}
+            )
 
         imputer = Impute(
             self.clf, self.clf_type, genotype_data.populations, kwargs
@@ -946,6 +1000,8 @@ class ImputePhylo(GenotypeData):
         prefix (str, optional): [Prefix to use with output files]
 
         save_plots (bool, optional): [Whether to save PDF files with genotype imputations for each site. It makes one PDF file per locus, so if you have a lot of loci it will make a lot of PDF files]. Defaults to False.
+
+        kwargs (optional): [Keyword arguments for private use with IterativeImputer. Valid options include: ``initial_data``]
     """
 
     def __init__(
@@ -962,6 +1018,7 @@ class ImputePhylo(GenotypeData):
         prefix="imputed_phylo",
         save_plots=False,
         write_output=True,
+        **kwargs,
     ):
         super().__init__()
 
@@ -974,6 +1031,7 @@ class ImputePhylo(GenotypeData):
         self.str_encodings = str_encodings
         self.prefix = prefix
         self.save_plots = save_plots
+        self.initial_data = kwargs.get("initial_data", None)
 
         self.validate_arguments(genotype_data)
         data, tree, q = self.parse_arguments(genotype_data)
@@ -1038,7 +1096,10 @@ class ImputePhylo(GenotypeData):
             raise TypeError("genotype_data and alnfile cannot both be defined")
 
         if genotype_data is None and self.alnfile is None:
-            raise TypeError("Either genotype_data or phylipfle must be defined")
+            if self.initial_data is None:
+                raise TypeError(
+                    "Either genotype_data or phylipfle must be defined"
+                )
 
         if genotype_data.tree is None and self.treefile is None:
             raise TypeError(
@@ -1046,7 +1107,15 @@ class ImputePhylo(GenotypeData):
             )
 
         if genotype_data is None and self.filetype is None:
-            raise TypeError("filetype must be defined if genotype_data is None")
+            if self.initial_data is None:
+                raise TypeError(
+                    "filetype must be defined if genotype_data is None"
+                )
+            else:
+                if list(self.initial_data.values())[0][0][1] == "/":
+                    self.filetype = "structure2row"
+                else:
+                    self.filetype = "phylip"
 
         if (
             genotype_data is None
@@ -1098,7 +1167,8 @@ class ImputePhylo(GenotypeData):
         nsites = list(set([len(v) for v in genotypes.values()]))
         assert len(nsites) == 1, "Some sites have different lengths!"
 
-        genotypes = self.str2iupac(genotypes, self.str_encodings)
+        if list(genotypes.values())[0][0][1] == "/":
+            genotypes = self.str2iupac(genotypes, self.str_encodings)
 
         outdir = f"{self.prefix}_imputation_plots"
 
@@ -1231,8 +1301,9 @@ class ImputePhylo(GenotypeData):
             not df.isin([-9]).any().any()
         ), "Imputation failed...Missing values found in the imputed dataset"
 
-        gt = df.to_numpy().tolist()
-        return pd.DataFrame.from_records(self.convert_012(gt, impute_mode=True))
+        return pd.DataFrame.from_records(
+            self.convert_012(df.to_numpy().tolist(), impute_mode=True)
+        )
 
     def get_nuc_colors(self, nucs):
         ret = list()
@@ -1325,25 +1396,29 @@ class ImputePhylo(GenotypeData):
         return ret
 
     def str2iupac(self, genotypes, str_encodings):
-
+        a = str_encodings["A"]
+        c = str_encodings["C"]
+        g = str_encodings["G"]
+        t = str_encodings["T"]
+        n = str_encodings["N"]
         nuc = {
-            f'{str_encodings["A"]}/{str_encodings["A"]}': "A",
-            f'{str_encodings["C"]}/{str_encodings["C"]}': "C",
-            f'{str_encodings["G"]}/{str_encodings["G"]}': "G",
-            f'{str_encodings["T"]}/{str_encodings["T"]}': "T",
-            f'{str_encodings["N"]}/{str_encodings["N"]}': "N",
-            f'{str_encodings["A"]}/{str_encodings["C"]}': "M",
-            f'{str_encodings["C"]}/{str_encodings["A"]}': "M",
-            f'{str_encodings["A"]}/{str_encodings["G"]}': "R",
-            f'{str_encodings["G"]}/{str_encodings["A"]}': "R",
-            f'{str_encodings["A"]}/{str_encodings["T"]}': "W",
-            f'{str_encodings["T"]}/{str_encodings["A"]}': "W",
-            f'{str_encodings["C"]}/{str_encodings["G"]}': "S",
-            f'{str_encodings["G"]}/{str_encodings["C"]}': "S",
-            f'{str_encodings["C"]}/{str_encodings["T"]}': "Y",
-            f'{str_encodings["T"]}/{str_encodings["C"]}': "Y",
-            f'{str_encodings["G"]}/{str_encodings["T"]}': "K",
-            f'{str_encodings["T"]}/{str_encodings["G"]}': "K",
+            f"{a}/{a}": "A",
+            f"{c}/{c}": "C",
+            f"{g}/{g}": "G",
+            f"{t}/{t}": "T",
+            f"{n}/{n}": "N",
+            f"{a}/{c}": "M",
+            f"{c}/{a}": "M",
+            f"{a}/{g}": "R",
+            f"{g}/{a}": "R",
+            f"{a}/{t}": "W",
+            f"{t}/{a}": "W",
+            f"{c}/{g}": "S",
+            f"{g}/{c}": "S",
+            f"{c}/{t}": "Y",
+            f"{t}/{c}": "Y",
+            f"{g}/{t}": "K",
+            f"{t}/{g}": "K",
         }
 
         for k, v in genotypes.items():
