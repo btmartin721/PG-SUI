@@ -969,7 +969,11 @@ class Impute:
             df.columns, int(len(df.columns) * col_selection_rate)
         )
 
-        if self.imp_kwargs["initial_strategy"] == "most_frequent_populations":
+        initial_strategy = self.imp_kwargs["initial_strategy"]
+        gt_data = self.imp_kwargs["genotype_data"]
+        str_enc = self.imp_kwargs["str_encodings"]
+
+        if initial_strategy == "most_frequent_populations":
             simple_imputer = impute.estimators.ImputeAlleleFreq(
                 gt=df.fillna(-9).values.tolist(),
                 pops=self.pops,
@@ -979,22 +983,31 @@ class Impute:
                 verbose=False,
             )
 
+        elif initial_strategy == "phylogeny":
+            simple_imputer = impute.estimators.ImputePhylo(
+                genotype_data=gt_data, str_encodings=str_enc, write_output=False
+            )
+
         df_defiled = simple_imputer.imputed
         df_filled = df_defiled.copy()
 
+        bad_cols = list()
         for col in cols:
             data_drop_rate = np.random.choice(np.arange(0.15, 0.5, 0.02), 1)[0]
 
-            drop_ind = np.random.choice(
-                np.arange(len(df_defiled[col])),
-                size=int(len(df_defiled[col]) * data_drop_rate),
-                replace=False,
-            )
+            if col in df_defiled.columns:
+                drop_ind = np.random.choice(
+                    np.arange(len(df_defiled[col])),
+                    size=int(len(df_defiled[col]) * data_drop_rate),
+                    replace=False,
+                )
 
-            # Introduce random np.nan values
-            df_defiled.iloc[drop_ind, col] = np.nan
+                # Introduce random np.nan values
+                df_defiled.iloc[drop_ind, col] = np.nan
+            else:
+                bad_cols.append(col)
 
-        return df_filled, df_defiled, cols
+        return df_filled, df_defiled, cols, bad_cols
 
     def _impute_eval(self, df, clf):
         """[Function to run IterativeImputer on a DataFrame. The dataframe columns will be randomly subset and a fraction of the known, true values are converted to missing data to allow evalutation of the model with either accuracy or mean_squared_error scores]
@@ -1011,20 +1024,29 @@ class Impute:
         # https://medium.com/analytics-vidhya/using-scikit-learns-iterative-imputer-694c3cca34de
 
         # Subset the DataFrame randomly and replace known values with np.nan
+        initial_strategy = self.imp_kwargs["initial_strategy"]
 
-        if self.imp_kwargs["initial_strategy"] == "most_frequent_populations":
-            df_known, df_unknown, cols = self._defile_dataset_groups(
+        supported_simple_imp = [
+            "most_frequent_populations",
+            "phylogeny",
+        ]
+
+        bad_cols = None
+        if initial_strategy in supported_simple_imp:
+            df_known, df_unknown, cols, bad_cols = self._defile_dataset_groups(
                 df, col_selection_rate=self.validation_only
             )
 
         else:
-
-            df_known, df_unknown, cols = self._defile_dataset(
+            df_known, df_unknown, cols, _ = self._defile_dataset(
                 df, col_selection_rate=self.validation_only
             )
 
-        df_known_slice = df_known[cols]
-        df_unknown_slice = df_unknown[cols]
+        if bad_cols is not None:
+            final_cols = np.delete(cols, bad_cols)
+
+        df_known_slice = df_known[final_cols]
+        df_unknown_slice = df_unknown[final_cols]
 
         df_stg = df_unknown.copy()
 
@@ -1047,7 +1069,7 @@ class Impute:
             imp_arr = imputer.fit_transform(df_stg)
 
             df_imp = pd.DataFrame(
-                imp_arr[:, [df_known.columns.get_loc(i) for i in cols]]
+                imp_arr[:, [df_known.columns.get_loc(i) for i in final_cols]]
             )
 
         # Get score of each column
@@ -1114,6 +1136,7 @@ class Impute:
             del imp_arr
             del imputer
             del cols
+            del final_cols
 
         gc.collect()
 

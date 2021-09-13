@@ -25,6 +25,7 @@ from scipy import stats
 from sklearn.base import clone
 from sklearn.experimental import enable_iterative_imputer
 from sklearn.impute import IterativeImputer
+from sklearn.impute import SimpleImputer
 from sklearn.impute._base import _check_inputs_dtype
 
 ## For warnings
@@ -425,9 +426,8 @@ class IterativeImputerAllData(IterativeImputer):
         elif self.initial_strategy == "phylogeny":
             if (
                 self.genotype_data.qmatrix is None
-                or self.genotype_data.qmatrix_iqtree is None
-                or self.genotype_data.guidetree is None
-            ):
+                and self.genotype_data.qmatrix_iqtree is None
+            ) or self.genotype_data.guidetree is None:
                 raise AttributeError(
                     "GenotypeData object was not initialized with "
                     "qmatrix/ qmatrix_iqtree or guidetree arguments, "
@@ -440,6 +440,19 @@ class IterativeImputerAllData(IterativeImputer):
                     str_encodings=self.str_encodings,
                     write_output=False,
                 )
+
+                X_filled = self.initial_imputer_.imputed.to_numpy()
+
+                print(X_filled.shape)
+
+                valid_mask = np.flatnonzero(
+                    np.logical_not(np.isnan(self.initial_imputer_.valid_sites))
+                )
+
+                print(valid_mask.shape)
+
+                Xt = X[:, valid_mask]
+                mask_missing_values = mask_missing_values[:, valid_mask]
 
         else:
             if self.initial_imputer_ is None:
@@ -941,9 +954,8 @@ class IterativeImputerGridSearch(IterativeImputer):
         elif self.initial_strategy == "phylogeny":
             if (
                 self.genotype_data.qmatrix is None
-                or self.genotype_data.qmatrix_iqtree is None
-                or self.genotype_data.guidetree is None
-            ):
+                and self.genotype_data.qmatrix_iqtree is None
+            ) or self.genotype_data.guidetree is None:
                 raise AttributeError(
                     "GenotypeData object was not initialized with "
                     "qmatrix/ qmatrix_iqtree or guidetree arguments, "

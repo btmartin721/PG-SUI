@@ -457,6 +457,8 @@ class GenotypeData:
 
         Returns:
                 (list(list(int)), optional): [012-encoded genotypes as a 2D list of shape (n_samples, n_sites). Only returns value if ``impute_mode`` is True]
+
+                (list(int)), optional): [List of integers indicating bi-allelic site indexes]
         """
         skip = 0
         new_snps = list()
@@ -466,6 +468,8 @@ class GenotypeData:
 
         for i in range(0, len(snps)):
             new_snps.append([])
+
+        valid_sites = np.ones(len(snps[0]))
         for j in range(0, len(snps[0])):
             loc = list()
             for i in range(0, len(snps)):
@@ -476,6 +480,7 @@ class GenotypeData:
 
             if sequence_tools.count_alleles(loc, vcf=vcf) != 2:
                 skip += 1
+                valid_sites[j] = np.nan
                 continue
             else:
                 ref, alt = sequence_tools.get_major_allele(loc, vcf=vcf)
@@ -513,7 +518,13 @@ class GenotypeData:
                         else:
                             new_snps[i].append(1)
         if skip > 0:
-            print(f"\nWarning: Skipping {skip} non-biallelic sites\n")
+            if impute_mode:
+                print(
+                    f"\nWarning: Skipping {skip} non-biallelic sites following "
+                    "imputation\n"
+                )
+            else:
+                print(f"\nWarning: Skipping {skip} non-biallelic sites\n")
 
         for s in new_snps:
             if impute_mode:
@@ -522,7 +533,7 @@ class GenotypeData:
                 self.snps.append(s)
 
         if impute_mode:
-            return imp_snps
+            return imp_snps, valid_sites
 
     def convert_onehot(self, snp_data, encodings_dict=None):
 

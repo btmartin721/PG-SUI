@@ -225,23 +225,24 @@ def main():
         #     hidden_layer_sizes=[100, 100, 100],
         # )
 
-        # rf_imp = ImputeRandomForest(
-        #     data,
-        #     prefix=args.prefix,
-        #     n_estimators=100,
-        #     n_nearest_features=3,
-        #     n_jobs=4,
-        #     max_iter=2,
-        #     disable_progressbar=True,
-        #     extratrees=False,
-        #     max_features="log2",
-        #     min_samples_split=6,
-        #     min_samples_leaf=4,
-        #     max_depth=6,
-        #     cv=3,
-        #     validation_only=0.1,
-        #     chunk_size=0.2
-        # )
+        rf_imp = ImputeRandomForest(
+            data,
+            prefix=args.prefix,
+            n_estimators=100,
+            n_nearest_features=3,
+            n_jobs=4,
+            max_iter=2,
+            disable_progressbar=True,
+            extratrees=False,
+            max_features="log2",
+            min_samples_split=6,
+            min_samples_leaf=4,
+            max_depth=6,
+            cv=3,
+            validation_only=0.1,
+            chunk_size=0.2,
+            initial_strategy="phylogeny",
+        )
 
         # afpops = ImputeAlleleFreq(
         # 	data, by_populations=True, prefix=args.prefix)
@@ -264,7 +265,7 @@ def main():
         #     initial_strategy="group_mode",
         # )
 
-        ImputePhylo(genotype_data=data, save_plots=False)
+        # ImputePhylo(genotype_data=data, save_plots=False)
 
     # colors = {
     # 	"GU": "#FF00FF",

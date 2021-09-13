@@ -982,6 +982,8 @@ class ImputePhylo(GenotypeData):
         self.prefix = prefix
         self.save_plots = save_plots
 
+        self.valid_sites = None
+
         self.validate_arguments(genotype_data)
         data, tree, q = self.parse_arguments(genotype_data)
 
@@ -1077,6 +1079,13 @@ class ImputePhylo(GenotypeData):
                 print(q[nuc1][nuc2], end="\t")
             print("")
 
+    def is_int(self, val):
+        try:
+            num = int(val)
+        except ValueError:
+            return False
+        return True
+
     def impute_phylo(
         self, tree, genotypes, Q, site_rates=None, exclude_N=False
     ):
@@ -1105,8 +1114,12 @@ class ImputePhylo(GenotypeData):
         nsites = list(set([len(v) for v in genotypes.values()]))
         assert len(nsites) == 1, "Some sites have different lengths!"
 
-        if list(genotypes.values())[0][0][1] == "/":
-            genotypes = self.str2iupac(genotypes, self.str_encodings)
+        try:
+            if list(genotypes.values())[0][0][1] == "/":
+                genotypes = self.str2iupac(genotypes, self.str_encodings)
+        except IndexError:
+            if self.is_int(list(genotypes.values())[0][0][0]):
+                raise
 
         outdir = f"{self.prefix}_imputation_plots"
 
@@ -1239,9 +1252,13 @@ class ImputePhylo(GenotypeData):
             not df.isin([-9]).any().any()
         ), "Imputation failed...Missing values found in the imputed dataset"
 
-        return pd.DataFrame.from_records(
-            self.convert_012(df.to_numpy().tolist(), impute_mode=True)
+        imp_snps, self.valid_sites = self.convert_012(
+            df.to_numpy().tolist(), impute_mode=True
         )
+
+        df_imp = pd.DataFrame.from_records(imp_snps)
+
+        return df_imp
 
     def get_nuc_colors(self, nucs):
         ret = list()
