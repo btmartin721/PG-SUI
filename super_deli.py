@@ -239,8 +239,8 @@ def main():
             min_samples_leaf=4,
             max_depth=6,
             cv=3,
-            validation_only=0.1,
-            chunk_size=0.2,
+            validation_only=0.5,
+            chunk_size=1.0,
             initial_strategy="phylogeny",
         )
 

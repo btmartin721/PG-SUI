@@ -969,6 +969,7 @@ class ImputePhylo(GenotypeData):
         prefix="imputed_phylo",
         save_plots=False,
         write_output=True,
+        disable_progressbar=False,
     ):
         super().__init__()
 
@@ -981,6 +982,7 @@ class ImputePhylo(GenotypeData):
         self.str_encodings = str_encodings
         self.prefix = prefix
         self.save_plots = save_plots
+        self.disable_progressbar = disable_progressbar
 
         self.valid_sites = None
 
@@ -1127,7 +1129,10 @@ class ImputePhylo(GenotypeData):
             Path(outdir).mkdir(parents=True, exist_ok=True)
 
         for snp_index in progressbar(
-            range(nsites[0]), desc="Feature Progress: ", leave=True
+            range(nsites[0]),
+            desc="Feature Progress: ",
+            leave=True,
+            disable=self.disable_progressbar,
         ):
             node_lik = dict()
 

@@ -216,8 +216,19 @@ class Impute:
         Raises:
             [ValueError]: [chunk_size must be of type int or float]
         """
-        if isinstance(chunk_size, (int, float)):
+        if (
+            self.imp_kwargs["initial_strategy"] == "phylogeny"
+            and chunk_size != 1.0
+        ):
+            print(
+                "WARNING: Chunking is not supported with initial_strategy == "
+                "'phylogeny'; Setting chunk_size to 1.0 and imputing entire "
+                "dataset"
+            )
 
+            chunk_size = 1.0
+
+        if isinstance(chunk_size, (int, float)):
             chunks = list()
             df_cp = df.copy()
 
@@ -984,8 +995,15 @@ class Impute:
             )
 
         elif initial_strategy == "phylogeny":
+            print(
+                "Doing initial imputation with initial_strategy == "
+                "'phylogeny'..."
+            )
             simple_imputer = impute.estimators.ImputePhylo(
-                genotype_data=gt_data, str_encodings=str_enc, write_output=False
+                genotype_data=gt_data,
+                str_encodings=str_enc,
+                write_output=False,
+                disable_progressbar=True,
             )
 
         df_defiled = simple_imputer.imputed

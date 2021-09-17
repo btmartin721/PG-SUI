@@ -439,17 +439,14 @@ class IterativeImputerAllData(IterativeImputer):
                     genotype_data=self.genotype_data,
                     str_encodings=self.str_encodings,
                     write_output=False,
+                    disable_progressbar=True,
                 )
 
                 X_filled = self.initial_imputer_.imputed.to_numpy()
 
-                print(X_filled.shape)
-
                 valid_mask = np.flatnonzero(
                     np.logical_not(np.isnan(self.initial_imputer_.valid_sites))
                 )
-
-                print(valid_mask.shape)
 
                 Xt = X[:, valid_mask]
                 mask_missing_values = mask_missing_values[:, valid_mask]
