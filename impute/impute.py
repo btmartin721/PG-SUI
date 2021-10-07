@@ -32,10 +32,8 @@ import xgboost as xgb
 import lightgbm as lgbm
 
 # Custom module imports
-from impute.iterative_imputer_custom import (
-    IterativeImputerGridSearch,
-    IterativeImputerAllData,
-)
+from impute.iterative_imputer_gridsearch import IterativeImputerGridSearch
+from impute.iterative_imputer_fixedparams import IterativeImputerFixedParams
 
 import impute.estimators
 
@@ -71,6 +69,7 @@ class Impute:
     def __init__(self, clf, clf_type, kwargs):
         self.clf = clf
         self.clf_type = clf_type
+        self.original_num_cols = None
 
         self.pops = kwargs["genotype_data"].populations
 
@@ -211,7 +210,7 @@ class Impute:
             chunk_size ([int or float]): [If integer, then breaks DataFrame into ```chunk_size``` chunks. If float, breaks DataFrame up into ```chunk_size * len(df.columns)``` chunks]
 
         Returns:
-            [list(pandas.DataFrame)]: [List of pandas DataFrames (one element per chunk)]
+            [list(pandas.DataFrame)]: [List of pandas DataFrames (one element per chunk, each with ```chunk_size``` columns)]
 
         Raises:
             [ValueError]: [chunk_size must be of type int or float]
@@ -272,7 +271,7 @@ class Impute:
         return chunks
 
     def subset_data_for_gridsearch(
-        self, df, columns_to_subset, original_num_cols
+        self, df, columns_to_subset, original_num_cols, bad_cols
     ):
         """[Randomly subsets pandas.DataFrame with ```column_percent``` fraction of the data. Allows faster testing]
 
@@ -283,15 +282,21 @@ class Impute:
 
             original_num_cols ([int]): [Number of columns in original DataFrame]
 
+            bad_cols ([list(int)]): [List of columns that should not be sampled]
+
         Returns:
             [pandas.DataFrame]: [Randomly subset DataFrame]
+            [numpy.ndarray]: [Sorted numpy array of column indices to keep]
         """
+        if bad_cols:
+            bad_col_arr = np.array(bad_cols)
+
         # Get a random numpy arrray of column names to select
         if isinstance(columns_to_subset, float):
             n = int(original_num_cols * columns_to_subset)
             if n > len(df.columns):
                 print(
-                    "Warning: column_subset is greater than remaining columns following filtering. Using all columns"
+                    "Warning: Column_subset is greater than remaining columns following filtering. Using all columns"
                 )
                 all_cols = True
             else:
@@ -299,8 +304,21 @@ class Impute:
 
             if all_cols:
                 df_sub = df.copy()
+                cols = np.array(df.columns)
             else:
-                df_sub = df.sample(n=n, axis="columns", replace=False)
+                arrA = np.array(df.columns)
+
+                if bad_cols:
+                    arrB = np.sort(bad_col_arr)
+                    remaining_cols = arrA[
+                        arrB[np.searchsorted(arrB, arrA)] != arrA
+                    ]
+                else:
+                    remaining_cols = arrA
+
+                cols = np.random.choice(remaining_cols, n, replace=False)
+                df_sub = df.loc[:, np.sort(cols)]
+                # df_sub = df.sample(n=n, axis="columns", replace=False)
 
         elif isinstance(columns_to_subset, int):
             if columns_to_subset > len(df.columns):
@@ -313,13 +331,28 @@ class Impute:
 
             if all_cols:
                 df_sub = df.copy()
+                cols = np.array(df.columns)
             else:
-                sub = columns_to_subset
-                df_sub = df.sample(n=sub, axis="columns", replace=False)
+                arrA = np.array(df.columns)
+
+                if bad_cols:
+                    arrB = np.sort(bad_col_arr)
+                    remaining_cols = arrA[
+                        arrB[np.searchsorted(arrB, arrA)] != arrA
+                    ]
+                else:
+                    remaining_cols = arrA
+
+                cols = np.random.choice(
+                    remaining_cols, columns_to_subset, replace=False
+                )
+                df_sub = df.loc[:, np.sort(cols)]
+                # sub = columns_to_subset
+                # df_sub = df.sample(n=sub, axis="columns", replace=False)
 
         df_sub.columns = df_sub.columns.astype(str)
 
-        return df_sub
+        return df_sub, np.sort(cols)
 
     def _print_scores(self, df_scores):
         """[Print pandas Dataframe with validation scores]
@@ -383,8 +416,11 @@ class Impute:
             pops=self.pops,
         )
 
+        if self.original_num_cols is None:
+            self.original_num_cols = len(df.columns)
+
         df_chunks = self.df2chunks(df, self.chunk_size)
-        imputed_df = self._impute_df(df_chunks, imputer, len(df.columns))
+        imputed_df = self._impute_df(df_chunks, imputer, self.original_num_cols)
 
         lst2del = [df_chunks]
         del lst2del
@@ -409,9 +445,9 @@ class Impute:
             [dict]: [Best parameters found during the grid search]
         """
         original_num_cols = len(df.columns)
-        df_tmp = self._remove_nonbiallelic(df)
-        df_subset = self.subset_data_for_gridsearch(
-            df_tmp, self.column_subset, original_num_cols
+        df_tmp, bad_cols = self._remove_nonbiallelic(df)
+        df_subset, cols_to_keep = self.subset_data_for_gridsearch(
+            df_tmp, self.column_subset, original_num_cols, bad_cols
         )
 
         lst2del = [df_tmp]
@@ -442,7 +478,9 @@ class Impute:
             pops=self.pops,
         )
 
-        Xt, params_list, score_list = imputer.fit_transform(df_subset)
+        Xt, params_list, score_list = imputer.fit_transform(
+            df_subset, cols_to_keep
+        )
 
         print("\nDone!")
 
@@ -635,7 +673,7 @@ class Impute:
         Args:
             df_chunks ([list(pandas.DataFrame)]): [Dataframe with 012-encoded genotypes]
 
-            imputer ([IterativeImputerAllData instance]): [Defined IterativeImputerAllData instance to perform the imputation]
+            imputer ([IterativeImputerFixedParams instance]): [Defined IterativeImputerFixedParams instance to perform the imputation]
 
             original_num_cols ([int]): [Number of columns in original dataset]
 
@@ -763,14 +801,14 @@ class Impute:
                 ):
                     bad_cols.append(col)
 
-                if len(df_cp[df_cp[col] == 0.0]) < cv2:
+                elif len(df_cp[df_cp[col] == 0.0]) < cv2:
                     bad_cols.append(col)
 
-                if df_cp[col].isin([1.0]).any():
+                elif df_cp[col].isin([1.0]).any():
                     if len(df_cp[df_cp[col] == 1]) < cv2:
                         bad_cols.append(col)
 
-                if len(df_cp[df_cp[col] == 2.0]) < cv2:
+                elif len(df_cp[df_cp[col] == 2.0]) < cv2:
                     bad_cols.append(col)
 
         # pandas 1.X.X
@@ -795,7 +833,7 @@ class Impute:
             f"{len(bad_cols)} columns removed for being non-biallelic or having genotype counts < number of cross-validation folds\nSubsetting from {len(df_cp.columns)} remaining columns\n"
         )
 
-        return df_cp
+        return df_cp, bad_cols
 
     def _gather_impute_settings(self, kwargs):
         """[Gather impute settings from the various imputation classes and IterativeImputer. Gathers them for use with the Impute() class. Returns dictionary with keys as keyword arguments and the values as the settings. The imputation can then be run by specifying e.g. IterativeImputer(**imp_kwargs)]
@@ -999,6 +1037,7 @@ class Impute:
                 "Doing initial imputation with initial_strategy == "
                 "'phylogeny'..."
             )
+
             simple_imputer = impute.estimators.ImputePhylo(
                 genotype_data=gt_data,
                 str_encodings=str_enc,
@@ -1009,11 +1048,14 @@ class Impute:
         df_defiled = simple_imputer.imputed
         df_filled = df_defiled.copy()
 
+        self.original_num_cols = len(df_defiled.columns)
+
         bad_cols = list()
         for col in cols:
             data_drop_rate = np.random.choice(np.arange(0.15, 0.5, 0.02), 1)[0]
 
             if col in df_defiled.columns:
+                # Randomly choose rows (samples) to introduce missing data to
                 drop_ind = np.random.choice(
                     np.arange(len(df_defiled[col])),
                     size=int(len(df_defiled[col]) * data_drop_rate),
@@ -1023,6 +1065,7 @@ class Impute:
                 # Introduce random np.nan values
                 df_defiled.iloc[drop_ind, col] = np.nan
             else:
+                # If site was not biallelic using ImputePhylo method
                 bad_cols.append(col)
 
         return df_filled, df_defiled, cols, bad_cols
@@ -1061,7 +1104,9 @@ class Impute:
             )
 
         if bad_cols is not None:
-            final_cols = np.delete(cols, bad_cols)
+            final_cols = np.delete(
+                cols, np.argwhere(np.isin(cols, bad_cols)).ravel()
+            )
 
         df_known_slice = df_known[final_cols]
         df_unknown_slice = df_unknown[final_cols]
@@ -1218,7 +1263,7 @@ class Impute:
                 [sklearn.impute.IterativeImputer]: [IterativeImputer instance]
         """
         if search_space is None:
-            imp = IterativeImputerAllData(
+            imp = IterativeImputerFixedParams(
                 logfilepath,
                 clf_kwargs,
                 prefix,

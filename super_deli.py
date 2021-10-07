@@ -153,24 +153,25 @@ def main():
         # }
 
         # # Random forest imputation with genetic algorithm grid search
-        # rf_imp = ImputeRandomForest(
-        # 		data,
-        # 		prefix=args.prefix,
-        # 		n_estimators=1000,
-        # 		n_nearest_features=10,
-        # 		gridparams=grid_params,
-        # 		cv=3,
-        # 		grid_iter=40,
-        # 		n_jobs=48,
-        # 		max_iter=30,
-        # 		column_subset=100,
-        # 		ga=True,
-        # 		disable_progressbar=True,
-        # 		extratrees=False,
-        # 		mutation_probability=0.1,
-        # 		progress_update_percent=20,
-        # 		chunk_size=0.2
-        # )
+        rf_imp = ImputeRandomForest(
+            data,
+            prefix=args.prefix,
+            n_estimators=100,
+            n_nearest_features=5,
+            gridparams=grid_params,
+            cv=3,
+            grid_iter=40,
+            n_jobs=4,
+            max_iter=3,
+            column_subset=0.2,
+            ga=True,
+            disable_progressbar=True,
+            extratrees=False,
+            mutation_probability=0.1,
+            progress_update_percent=20,
+            chunk_size=1.0,
+            initial_strategy="phylogeny",
+        )
 
         # RandomizedSearchCV Test
         # rf_imp = ImputeRandomForest(
@@ -225,24 +226,24 @@ def main():
         #     hidden_layer_sizes=[100, 100, 100],
         # )
 
-        rf_imp = ImputeRandomForest(
-            data,
-            prefix=args.prefix,
-            n_estimators=100,
-            n_nearest_features=3,
-            n_jobs=4,
-            max_iter=2,
-            disable_progressbar=True,
-            extratrees=False,
-            max_features="log2",
-            min_samples_split=6,
-            min_samples_leaf=4,
-            max_depth=6,
-            cv=3,
-            validation_only=0.5,
-            chunk_size=1.0,
-            initial_strategy="phylogeny",
-        )
+        # rf_imp = ImputeRandomForest(
+        #     data,
+        #     prefix=args.prefix,
+        #     n_estimators=100,
+        #     n_nearest_features=3,
+        #     n_jobs=4,
+        #     max_iter=2,
+        #     disable_progressbar=True,
+        #     extratrees=False,
+        #     max_features="log2",
+        #     min_samples_split=6,
+        #     min_samples_leaf=4,
+        #     max_depth=6,
+        #     cv=3,
+        #     validation_only=0.5,
+        #     chunk_size=1.0,
+        #     initial_strategy="phylogeny",
+        # )
 
         # afpops = ImputeAlleleFreq(
         # 	data, by_populations=True, prefix=args.prefix)

@@ -953,6 +953,12 @@ class ImputePhylo(GenotypeData):
         prefix (str, optional): [Prefix to use with output files]
 
         save_plots (bool, optional): [Whether to save PDF files with genotype imputations for each site. It makes one PDF file per locus, so if you have a lot of loci it will make a lot of PDF files]. Defaults to False.
+
+        write_output (bool, optional): [Whether to save the imputed data to disk]. Defaults to True.
+
+        disable_progressbar (bool, optional): [Whether to disable the progress bar during the imputation]. Defaults to False.
+
+        kwargs (dict, optional): [Additional keyword arguments intended for internal purposes only. Possible arguments: {'column_subset': list(int) or np.ndarray(int)}; Subset SNPs by a list of indices]. Defauls to None.
     """
 
     def __init__(
@@ -970,6 +976,7 @@ class ImputePhylo(GenotypeData):
         save_plots=False,
         write_output=True,
         disable_progressbar=False,
+        **kwargs,
     ):
         super().__init__()
 
@@ -983,6 +990,7 @@ class ImputePhylo(GenotypeData):
         self.prefix = prefix
         self.save_plots = save_plots
         self.disable_progressbar = disable_progressbar
+        self.column_subset = kwargs.get("column_subset", None)
 
         self.valid_sites = None
 
@@ -994,6 +1002,14 @@ class ImputePhylo(GenotypeData):
         if write_output:
             outfile = f"{prefix}_imputed_012.csv"
             self.imputed.to_csv(outfile, header=False, index=False)
+
+    def nbiallelic(self):
+        """[Get the number of remaining bi-allelic sites after imputation]
+
+        Returns:
+            [int]: [Number of bi-allelic sites remaining after imputation]
+        """
+        return len(self.imputed.columns)
 
     def parse_arguments(self, genotype_data):
         if genotype_data is not None:
@@ -1112,16 +1128,25 @@ class ImputePhylo(GenotypeData):
 
             Q ([pandas.DataFrame]): [Rate Matrix Q from .iqtree file]
         """
-        # For each SNP:
-        nsites = list(set([len(v) for v in genotypes.values()]))
-        assert len(nsites) == 1, "Some sites have different lengths!"
-
         try:
             if list(genotypes.values())[0][0][1] == "/":
                 genotypes = self.str2iupac(genotypes, self.str_encodings)
         except IndexError:
             if self.is_int(list(genotypes.values())[0][0][0]):
                 raise
+
+        if self.column_subset is not None:
+            if isinstance(self.column_subset, np.ndarray):
+                self.column_subset = self.column_subset.tolist()
+
+            genotypes = {
+                k: [v[i] for i in self.column_subset]
+                for k, v in genotypes.items()
+            }
+
+        # For each SNP:
+        nsites = list(set([len(v) for v in genotypes.values()]))
+        assert len(nsites) == 1, "Some sites have different lengths!"
 
         outdir = f"{self.prefix}_imputation_plots"
 
