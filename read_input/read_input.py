@@ -459,6 +459,8 @@ class GenotypeData:
                 (list(list(int)), optional): [012-encoded genotypes as a 2D list of shape (n_samples, n_sites). Only returns value if ``impute_mode`` is True]
 
                 (list(int)), optional): [List of integers indicating bi-allelic site indexes]
+
+                (int, optional): [Number of remaining valid sites]
         """
         skip = 0
         new_snps = list()
@@ -533,7 +535,11 @@ class GenotypeData:
                 self.snps.append(s)
 
         if impute_mode:
-            return imp_snps, valid_sites
+            return (
+                imp_snps,
+                valid_sites,
+                np.count_nonzero(~np.isnan(valid_sites)),
+            )
 
     def convert_onehot(self, snp_data, encodings_dict=None):
 

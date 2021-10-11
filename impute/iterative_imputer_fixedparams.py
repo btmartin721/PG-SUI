@@ -260,11 +260,13 @@ class IterativeImputerFixedParams(IterativeImputer):
         self.genotype_data = genotype_data
         self.str_encodings = str_encodings
 
-    def _initial_imputation(self, X, in_fit=False):
+    def _initial_imputation(self, X, cols_to_keep, in_fit=False):
         """[Perform initial imputation for input X]
 
         Args:
             X ([ndarray, shape (n_samples, n_features)]): [Input data, where "n_samples" is the number of samples and "n_features" is the number of features].
+
+            cols_to_keep ([numpy.ndarray, shape (n_features,)]): [Column indices to keep. Only used if initial_strategy == 'phylogeny']
 
             in_fit (bool, optional): [Whether function is called in fit]. Defaults to False.
 
@@ -328,6 +330,7 @@ class IterativeImputerFixedParams(IterativeImputer):
                     str_encodings=self.str_encodings,
                     write_output=False,
                     disable_progressbar=True,
+                    column_subset=cols_to_keep,
                 )
 
                 X_filled = self.initial_imputer_.imputed.to_numpy()
@@ -446,11 +449,13 @@ class IterativeImputerFixedParams(IterativeImputer):
         return X_filled
 
     @ignore_warnings(category=UserWarning)
-    def fit_transform(self, X, y=None):
+    def fit_transform(self, X, valid_cols, y=None):
         """[Fits the imputer on X and return the transformed X]
 
         Args:
             X [(array-like, shape (n_samples, n_features))]: [Input data, where "n_samples" is the number of samples and "n_features" is the number of features]
+
+            valid_cols ([numpy.ndarray]): [Array with column indices to keep]
 
             y ([None]) [Ignored. Here for compatibility with other sklearn classes]
 
@@ -487,7 +492,7 @@ class IterativeImputerFixedParams(IterativeImputer):
         # mask_missing_values is the missing indicator matrix
         # complete_mask is the input data's mask matrix
         X, Xt, mask_missing_values, complete_mask = self._initial_imputation(
-            X, in_fit=True
+            X, valid_cols, in_fit=True
         )
 
         super(IterativeImputer, self)._fit_indicator(complete_mask)

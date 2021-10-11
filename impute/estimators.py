@@ -993,6 +993,7 @@ class ImputePhylo(GenotypeData):
         self.column_subset = kwargs.get("column_subset", None)
 
         self.valid_sites = None
+        self.valid_sites_count = None
 
         self.validate_arguments(genotype_data)
         data, tree, q = self.parse_arguments(genotype_data)
@@ -1282,7 +1283,7 @@ class ImputePhylo(GenotypeData):
             not df.isin([-9]).any().any()
         ), "Imputation failed...Missing values found in the imputed dataset"
 
-        imp_snps, self.valid_sites = self.convert_012(
+        imp_snps, self.valid_sites, self.valid_sites_count = self.convert_012(
             df.to_numpy().tolist(), impute_mode=True
         )
 

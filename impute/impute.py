@@ -9,6 +9,7 @@ from collections import defaultdict
 from operator import itemgetter
 from pathlib import Path
 from statistics import mean, median
+from contextlib import redirect_stdout
 
 # Third party imports
 import numpy as np
@@ -212,6 +213,8 @@ class Impute:
         Returns:
             [list(pandas.DataFrame)]: [List of pandas DataFrames (one element per chunk, each with ```chunk_size``` columns)]
 
+            [list(int)]: [List of lengths for each chunk]
+
         Raises:
             [ValueError]: [chunk_size must be of type int or float]
         """
@@ -268,7 +271,7 @@ class Impute:
 
         print(f"Data split into {num_chunks} chunks with {chunk_len} features")
 
-        return chunks
+        return chunks, chunk_len_list
 
     def subset_data_for_gridsearch(
         self, df, columns_to_subset, original_num_cols, bad_cols
@@ -397,11 +400,31 @@ class Impute:
         clf = self.clf(**self.clf_kwargs)
 
         if self.validation_only is not None:
-            print("Estimating validation scores...")
+            print(f"Estimating {self.clf.__name__} validation scores...")
+
+            if self.disable_progressbar:
+                with open(self.logfilepath, "a") as fout:
+                    # Redirect to progress logfile
+                    with redirect_stdout(fout):
+                        print(
+                            f"Doing {self.clf.__name__} imputation "
+                            f"without grid search...\n"
+                        )
+
+                        print(
+                            f"Estimating {self.clf.__name__} "
+                            f"validation scores...\n"
+                        )
 
             df_scores = self._imputer_validation(df, clf)
 
-            print("\nDone!\n")
+            print(f"\nDone with {self.clf.__name__} validation!\n")
+
+            if self.disable_progressbar:
+                with open(self.logfilepath, "a") as fout:
+                    # Redirect to progress logfile
+                    with redirect_stdout(fout):
+                        print(f"\nDone with {self.clf.__name__} validation!\n")
 
         else:
             df_scores = None
@@ -419,8 +442,20 @@ class Impute:
         if self.original_num_cols is None:
             self.original_num_cols = len(df.columns)
 
-        df_chunks = self.df2chunks(df, self.chunk_size)
-        imputed_df = self._impute_df(df_chunks, imputer, self.original_num_cols)
+        if self.disable_progressbar:
+            with open(self.logfilepath, "a") as fout:
+                # Redirect to progress logfile
+                with redirect_stdout(fout):
+                    print(f"Doing {self.clf.__name__} imputation...\n")
+
+        df_chunks, chunk_len_list = self.df2chunks(df, self.chunk_size)
+        imputed_df = self._impute_df(df_chunks, imputer, chunk_len_list)
+
+        if self.disable_progressbar:
+            with open(self.logfilepath, "a") as fout:
+                # Redirect to progress logfile
+                with redirect_stdout(fout):
+                    print(f"\nDone with {self.clf.__name__} imputation!\n")
 
         lst2del = [df_chunks]
         del lst2del
@@ -455,9 +490,16 @@ class Impute:
         gc.collect()
 
         print(f"Validation dataset size: {len(df_subset.columns)}\n")
-        print("Doing grid search...")
 
         clf = self.clf()
+
+        print(f"Doing {self.clf.__name__} grid search...")
+
+        if self.disable_progressbar:
+            with open(self.logfilepath, "a") as fout:
+                # Redirect to progress logfile
+                with redirect_stdout(fout):
+                    print(f"Doing {self.clf.__name__} grid search...\n")
 
         imputer = self._define_iterative_imputer(
             clf,
@@ -482,7 +524,13 @@ class Impute:
             df_subset, cols_to_keep
         )
 
-        print("\nDone!")
+        print(f"\nDone with {self.clf.__name__} grid search!")
+
+        if self.disable_progressbar:
+            with open(self.logfilepath, "a") as fout:
+                # Redirect to progress logfile
+                with redirect_stdout(fout):
+                    print(f"\nDone with {self.clf.__name__} grid search!")
 
         del imputer
         del Xt
@@ -530,7 +578,19 @@ class Impute:
         del test
         gc.collect()
 
-        print("\nDoing imputation with best found parameters...")
+        print(
+            f"\nDoing {self.clf.__name__} imputation "
+            f"with best found parameters...\n"
+        )
+
+        if self.disable_progressbar:
+            with open(self.logfilepath, "a") as fout:
+                # Redirect to progress logfile
+                with redirect_stdout(fout):
+                    print(
+                        f"\nDoing {self.clf.__name__} imputation "
+                        f"with best found parameters...\n"
+                    )
 
         best_imputer = self._define_iterative_imputer(
             best_clf,
@@ -542,8 +602,8 @@ class Impute:
             pops=self.pops,
         )
 
-        df_chunks = self.df2chunks(df, self.chunk_size)
-        imputed_df = self._impute_df(df_chunks, best_imputer, original_num_cols)
+        df_chunks, chunk_len_list = self.df2chunks(df, self.chunk_size)
+        imputed_df = self._impute_df(df_chunks, best_imputer, chunk_len_list)
 
         lst2del = [df_chunks]
         del df_chunks
@@ -551,7 +611,14 @@ class Impute:
 
         self._validate_imputed(imputed_df)
 
-        print(f"\nDone with {self.clf.__name__} imputation!\n")
+        print(f"Done with {self.clf.__name__} imputation!\n")
+
+        if self.disable_progressbar:
+            with open(self.logfilepath, "a") as fout:
+                # Redirect to progress logfile
+                with redirect_stdout(fout):
+                    print(f"Done with {self.clf.__name__} imputation!\n")
+
         return imputed_df, df_scores, best_params
 
     def _imputer_validation(self, df, clf):
@@ -582,6 +649,11 @@ class Impute:
             if self.disable_progressbar:
                 perc = int((cnt / self.cv) * 100)
                 print(f"Validation replicate {cnt}/{self.cv} ({perc}%)")
+
+                with open(self.logfilepath, "a") as fout:
+                    # Redirect to progress logfile
+                    with redirect_stdout(fout):
+                        print(f"Validation replicate {cnt}/{self.cv} ({perc}%)")
 
             scores = self._impute_eval(df, clf)
 
@@ -667,7 +739,7 @@ class Impute:
 
         return df_scores
 
-    def _impute_df(self, df_chunks, imputer, original_num_cols):
+    def _impute_df(self, df_chunks, imputer, chunk_len_list):
         """[Impute list of pandas.DataFrame objects using IterativeImputer. The DataFrames correspond to each chunk of features]
 
         Args:
@@ -675,32 +747,35 @@ class Impute:
 
             imputer ([IterativeImputerFixedParams instance]): [Defined IterativeImputerFixedParams instance to perform the imputation]
 
-            original_num_cols ([int]): [Number of columns in original dataset]
+            chunk_len_list ([list(int)]): [List of lengths for each chunk]
 
         Returns:
             [pandas.DataFrame]: [Single DataFrame object, with all the imputed chunks concatenated together]
         """
         imputed_chunks = list()
         num_chunks = len(df_chunks)
+        idx_current = 0
         for i, Xchunk in enumerate(df_chunks, start=1):
+            cols_to_keep = np.arange(idx_current, chunk_len_list[i])
             if self.clf_type == "classifier":
                 df_imp = pd.DataFrame(
-                    imputer.fit_transform(Xchunk), dtype="Int8"
+                    imputer.fit_transform(Xchunk, cols_to_keep), dtype="Int8"
                 )
 
                 imputed_chunks.append(df_imp)
 
             else:
                 # Regressor. Needs to be rounded to integer first.
-                df_imp = pd.DataFrame(imputer.fit_transform(Xchunk))
+                df_imp = pd.DataFrame(
+                    imputer.fit_transform(Xchunk, cols_to_keep)
+                )
                 df_imp = df_imp.round(0).astype("Int8")
 
                 imputed_chunks.append(df_imp)
 
+            idx_current += chunk_len_list[i]
+
         concat_df = pd.concat(imputed_chunks, axis=1)
-        assert (
-            len(concat_df.columns) == original_num_cols
-        ), "Failed merge operation: Could not merge chunks back together"
 
         del imputed_chunks
         gc.collect()
@@ -1015,7 +1090,7 @@ class Impute:
 
     def _defile_dataset_groups(self, df, col_selection_rate=0.40):
         cols = np.random.choice(
-            df.columns, int(len(df.columns) * col_selection_rate)
+            df.columns, int(len(df.columns) * col_selection_rate), replace=False
         )
 
         initial_strategy = self.imp_kwargs["initial_strategy"]
@@ -1107,11 +1182,13 @@ class Impute:
             final_cols = np.delete(
                 cols, np.argwhere(np.isin(cols, bad_cols)).ravel()
             )
+        else:
+            final_cols = cols.copy()
 
         df_known_slice = df_known[final_cols]
         df_unknown_slice = df_unknown[final_cols]
 
-        df_stg = df_unknown.copy()
+        df_stg = df_unknown_slice.copy()
 
         # Variational Autoencoder Neural Network
         if self.clf == "VAE":
@@ -1129,19 +1206,26 @@ class Impute:
                 pops=self.pops,
             )
 
-            imp_arr = imputer.fit_transform(df_stg)
+            imp_arr = imputer.fit_transform(df_stg, final_cols)
 
-            df_imp = pd.DataFrame(
-                imp_arr[:, [df_known.columns.get_loc(i) for i in final_cols]]
-            )
+            df_imp = pd.DataFrame(imp_arr)
 
         # Get score of each column
         scores = defaultdict(list)
+
         for i in range(len(df_known_slice.columns)):
             # Adapted from: https://medium.com/analytics-vidhya/using-scikit-learns-iterative-imputer-694c3cca34de
 
-            y_true = df_known[df_known.columns[i]]
-            y_pred = df_imp[df_imp.columns[i]]
+            try:
+                y_true = df_known_slice[df_known_slice.columns[i]]
+                y_pred = df_imp[df_imp.columns[i]]
+            except IndexError:
+                print(i)
+                print(df_known_slice.columns)
+                print(df_imp.columns)
+                print(len(df_known_slice.columns))
+                print(len(df_imp.columns))
+                sys.exit()
 
             if self.clf_type == "classifier":
 
