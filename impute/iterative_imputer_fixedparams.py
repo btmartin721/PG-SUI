@@ -449,13 +449,13 @@ class IterativeImputerFixedParams(IterativeImputer):
         return X_filled
 
     @ignore_warnings(category=UserWarning)
-    def fit_transform(self, X, valid_cols, y=None):
+    def fit_transform(self, X, valid_cols=None, y=None):
         """[Fits the imputer on X and return the transformed X]
 
         Args:
             X [(array-like, shape (n_samples, n_features))]: [Input data, where "n_samples" is the number of samples and "n_features" is the number of features]
 
-            valid_cols ([numpy.ndarray]): [Array with column indices to keep]
+            valid_cols (numpy.ndarray, optional): [Array with column indices to keep]. Defaults to None.
 
             y ([None]) [Ignored. Here for compatibility with other sklearn classes]
 

@@ -213,8 +213,6 @@ class Impute:
         Returns:
             [list(pandas.DataFrame)]: [List of pandas DataFrames (one element per chunk, each with ```chunk_size``` columns)]
 
-            [list(int)]: [List of lengths for each chunk]
-
         Raises:
             [ValueError]: [chunk_size must be of type int or float]
         """
@@ -271,7 +269,7 @@ class Impute:
 
         print(f"Data split into {num_chunks} chunks with {chunk_len} features")
 
-        return chunks, chunk_len_list
+        return chunks
 
     def subset_data_for_gridsearch(
         self, df, columns_to_subset, original_num_cols, bad_cols
@@ -448,8 +446,8 @@ class Impute:
                 with redirect_stdout(fout):
                     print(f"Doing {self.clf.__name__} imputation...\n")
 
-        df_chunks, chunk_len_list = self.df2chunks(df, self.chunk_size)
-        imputed_df = self._impute_df(df_chunks, imputer, chunk_len_list)
+        df_chunks = self.df2chunks(df, self.chunk_size)
+        imputed_df = self._impute_df(df_chunks, imputer)
 
         if self.disable_progressbar:
             with open(self.logfilepath, "a") as fout:
@@ -602,8 +600,8 @@ class Impute:
             pops=self.pops,
         )
 
-        df_chunks, chunk_len_list = self.df2chunks(df, self.chunk_size)
-        imputed_df = self._impute_df(df_chunks, best_imputer, chunk_len_list)
+        df_chunks = self.df2chunks(df, self.chunk_size)
+        imputed_df = self._impute_df(df_chunks, best_imputer)
 
         lst2del = [df_chunks]
         del df_chunks
@@ -739,7 +737,7 @@ class Impute:
 
         return df_scores
 
-    def _impute_df(self, df_chunks, imputer, chunk_len_list):
+    def _impute_df(self, df_chunks, imputer):
         """[Impute list of pandas.DataFrame objects using IterativeImputer. The DataFrames correspond to each chunk of features]
 
         Args:
@@ -747,33 +745,25 @@ class Impute:
 
             imputer ([IterativeImputerFixedParams instance]): [Defined IterativeImputerFixedParams instance to perform the imputation]
 
-            chunk_len_list ([list(int)]): [List of lengths for each chunk]
-
         Returns:
             [pandas.DataFrame]: [Single DataFrame object, with all the imputed chunks concatenated together]
         """
         imputed_chunks = list()
         num_chunks = len(df_chunks)
-        idx_current = 0
         for i, Xchunk in enumerate(df_chunks, start=1):
-            cols_to_keep = np.arange(idx_current, chunk_len_list[i])
             if self.clf_type == "classifier":
                 df_imp = pd.DataFrame(
-                    imputer.fit_transform(Xchunk, cols_to_keep), dtype="Int8"
+                    imputer.fit_transform(Xchunk), dtype="Int8"
                 )
 
                 imputed_chunks.append(df_imp)
 
             else:
                 # Regressor. Needs to be rounded to integer first.
-                df_imp = pd.DataFrame(
-                    imputer.fit_transform(Xchunk, cols_to_keep)
-                )
+                df_imp = pd.DataFrame(imputer.fit_transform(Xchunk))
                 df_imp = df_imp.round(0).astype("Int8")
 
                 imputed_chunks.append(df_imp)
-
-            idx_current += chunk_len_list[i]
 
         concat_df = pd.concat(imputed_chunks, axis=1)
 
@@ -1090,7 +1080,9 @@ class Impute:
 
     def _defile_dataset_groups(self, df, col_selection_rate=0.40):
         cols = np.random.choice(
-            df.columns, int(len(df.columns) * col_selection_rate), replace=False
+            df.columns,
+            int(len(df.columns) * col_selection_rate),
+            replace=False,
         )
 
         initial_strategy = self.imp_kwargs["initial_strategy"]
@@ -1107,12 +1099,15 @@ class Impute:
                 verbose=False,
             )
 
+            df_defiled = simple_imputer.imputed
+
         elif initial_strategy == "phylogeny":
             print(
                 "Doing initial imputation with initial_strategy == "
                 "'phylogeny'..."
             )
 
+            # NOTE: non-biallelic sites are removed with ImputePhylo
             simple_imputer = impute.estimators.ImputePhylo(
                 genotype_data=gt_data,
                 str_encodings=str_enc,
@@ -1120,30 +1115,72 @@ class Impute:
                 disable_progressbar=True,
             )
 
-        df_defiled = simple_imputer.imputed
-        df_filled = df_defiled.copy()
+            valid_mask = np.flatnonzero(
+                np.logical_not(np.isnan(simple_imputer.valid_sites))
+            )
+
+            # ImputePhylo resets the column names
+            # So here I switch them back
+            # and remove any columns that were non-biallelic
+            # valid_cols = np.sort(self._remove_setdiff_cols(cols, valid_mask))
+            # new_colnames = self._remove_setdiff_cols(df.columns, valid_mask)
+
+            bad_idx = list()
+            for i, col in enumerate(cols):
+                if not np.any(valid_mask == col):
+                    bad_idx.append(i)
+                    print(f"bad: {i}")
+
+            print(bad_idx)
+            for i in bad_idx:
+                print(cols[i])
+
+            valid_cols = np.delete(cols, bad_idx)
+            print(valid_cols)
+            sys.exit()
+
+            df_defiled = simple_imputer.imputed
+            old_colnames = list(df_defiled.columns)
+            df_defiled.rename(
+                columns={i: j for i, j in zip(old_colnames, new_colnames)},
+                inplace=True,
+            )
 
         self.original_num_cols = len(df_defiled.columns)
 
-        bad_cols = list()
-        for col in cols:
+        df_filled = df_defiled.copy()
+
+        # Randomly choose rows (samples) to introduce missing data to
+        for col in valid_cols:
             data_drop_rate = np.random.choice(np.arange(0.15, 0.5, 0.02), 1)[0]
 
-            if col in df_defiled.columns:
-                # Randomly choose rows (samples) to introduce missing data to
-                drop_ind = np.random.choice(
-                    np.arange(len(df_defiled[col])),
-                    size=int(len(df_defiled[col]) * data_drop_rate),
-                    replace=False,
-                )
+            drop_ind = np.random.choice(
+                np.arange(len(df_defiled[col])),
+                size=int(len(df_defiled[col]) * data_drop_rate),
+                replace=False,
+            )
 
-                # Introduce random np.nan values
-                df_defiled.iloc[drop_ind, col] = np.nan
-            else:
-                # If site was not biallelic using ImputePhylo method
-                bad_cols.append(col)
+            # Introduce random np.nan values
+            df_defiled.loc[drop_ind, col] = np.nan
 
-        return df_filled, df_defiled, cols, bad_cols
+        return df_filled, df_defiled, valid_cols
+
+    def _remove_setdiff_cols(self, arr1, arr2):
+        """[Finds set difference between two numpy arrays and returns the values unique to arr1 that are not found in arr2]
+
+        Args:
+            arr1 ([1D numpy.ndarray]): [Array that contains input values]
+            arr2 ([1D numpy.ndarray]): [Comparison array]
+
+        Returns:
+            [numpy.ndarray]: [Numpy array with columns removed]
+        """
+        to_remove = np.setdiff1d(arr1, arr2)
+        if np.any(to_remove):
+            idx = np.searchsorted(arr1, to_remove)
+            return np.delete(arr1, idx)
+        else:
+            return arr1.copy()
 
     def _impute_eval(self, df, clf):
         """[Function to run IterativeImputer on a DataFrame. The dataframe columns will be randomly subset and a fraction of the known, true values are converted to missing data to allow evalutation of the model with either accuracy or mean_squared_error scores]
@@ -1167,28 +1204,17 @@ class Impute:
             "phylogeny",
         ]
 
-        bad_cols = None
         if initial_strategy in supported_simple_imp:
-            df_known, df_unknown, cols, bad_cols = self._defile_dataset_groups(
+            df_known, df_unknown, cols = self._defile_dataset_groups(
                 df, col_selection_rate=self.validation_only
             )
 
         else:
-            df_known, df_unknown, cols, _ = self._defile_dataset(
+            df_known, df_unknown, cols = self._defile_dataset(
                 df, col_selection_rate=self.validation_only
             )
 
-        if bad_cols is not None:
-            final_cols = np.delete(
-                cols, np.argwhere(np.isin(cols, bad_cols)).ravel()
-            )
-        else:
-            final_cols = cols.copy()
-
-        df_known_slice = df_known[final_cols]
-        df_unknown_slice = df_unknown[final_cols]
-
-        df_stg = df_unknown_slice.copy()
+        df_stg = df_unknown.copy()
 
         # Variational Autoencoder Neural Network
         if self.clf == "VAE":
@@ -1206,26 +1232,22 @@ class Impute:
                 pops=self.pops,
             )
 
-            imp_arr = imputer.fit_transform(df_stg, final_cols)
+            imp_arr = imputer.fit_transform(df_stg, valid_cols=cols)
 
-            df_imp = pd.DataFrame(imp_arr)
+            print([df_known.columns.get_loc(i) for i in cols])
+            sys.exit()
+
+            df_imp = pd.DataFrame(
+                imp_arr[:, [df_known.columns.get_loc(i) for i in cols]]
+            )
 
         # Get score of each column
         scores = defaultdict(list)
-
-        for i in range(len(df_known_slice.columns)):
+        for i in range(len(df_known.columns)):
             # Adapted from: https://medium.com/analytics-vidhya/using-scikit-learns-iterative-imputer-694c3cca34de
 
-            try:
-                y_true = df_known_slice[df_known_slice.columns[i]]
-                y_pred = df_imp[df_imp.columns[i]]
-            except IndexError:
-                print(i)
-                print(df_known_slice.columns)
-                print(df_imp.columns)
-                print(len(df_known_slice.columns))
-                print(len(df_imp.columns))
-                sys.exit()
+            y_true = df_known[df_known.columns[i]]
+            y_pred = df_imp[df_imp.columns[i]]
 
             if self.clf_type == "classifier":
 
