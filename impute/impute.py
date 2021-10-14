@@ -96,6 +96,8 @@ class Impute:
 
         self.logfilepath = f"{self.prefix}_imputer_progress_log.txt"
 
+        self.invalid_indexes = None
+
         # Remove logfile if exists
         try:
             os.remove(self.logfilepath)
@@ -439,6 +441,15 @@ class Impute:
 
         if self.original_num_cols is None:
             self.original_num_cols = len(df.columns)
+
+        # Remove non-biallelic loci
+        # Only used if initial_strategy == 'phylogeny'
+        if self.invalid_indexes is not None:
+            df.drop(
+                labels=self.invalid_indexes,
+                axis=1,
+                inplace=True,
+            )
 
         if self.disable_progressbar:
             with open(self.logfilepath, "a") as fout:
@@ -1122,22 +1133,14 @@ class Impute:
             # ImputePhylo resets the column names
             # So here I switch them back
             # and remove any columns that were non-biallelic
-            # valid_cols = np.sort(self._remove_setdiff_cols(cols, valid_mask))
-            # new_colnames = self._remove_setdiff_cols(df.columns, valid_mask)
+            valid_cols = np.sort(self._remove_invalid_cols(cols, valid_mask))
+            new_colnames = self._remove_invalid_cols(
+                np.array(df.columns), valid_mask
+            )
 
-            bad_idx = list()
-            for i, col in enumerate(cols):
-                if not np.any(valid_mask == col):
-                    bad_idx.append(i)
-                    print(f"bad: {i}")
-
-            print(bad_idx)
-            for i in bad_idx:
-                print(cols[i])
-
-            valid_cols = np.delete(cols, bad_idx)
-            print(valid_cols)
-            sys.exit()
+            self.invalid_indexes = self._remove_invalid_cols(
+                np.array(df.columns), valid_mask, validation_mode=False
+            )
 
             df_defiled = simple_imputer.imputed
             old_colnames = list(df_defiled.columns)
@@ -1165,7 +1168,7 @@ class Impute:
 
         return df_filled, df_defiled, valid_cols
 
-    def _remove_setdiff_cols(self, arr1, arr2):
+    def _remove_invalid_cols(self, arr1, arr2, validation_mode=True):
         """[Finds set difference between two numpy arrays and returns the values unique to arr1 that are not found in arr2]
 
         Args:
@@ -1173,12 +1176,22 @@ class Impute:
             arr2 ([1D numpy.ndarray]): [Comparison array]
 
         Returns:
-            [numpy.ndarray]: [Numpy array with columns removed]
+            [numpy.ndarray]: [Numpy array with invalid columns removed] or
+            [list(int)]: [Bad indexes to remove]
         """
-        to_remove = np.setdiff1d(arr1, arr2)
-        if np.any(to_remove):
-            idx = np.searchsorted(arr1, to_remove)
-            return np.delete(arr1, idx)
+        bad_idx = list()
+        for i, item in enumerate(arr1):
+            if not np.any(arr2 == item):
+                bad_idx.append(i)
+
+        if not validation_mode:
+            if bad_idx:
+                return bad_idx
+            else:
+                return None
+
+        if bad_idx:
+            return np.delete(arr1, bad_idx)
         else:
             return arr1.copy()
 
@@ -1214,6 +1227,8 @@ class Impute:
                 df, col_selection_rate=self.validation_only
             )
 
+        df_known_slice = df_known[cols]
+
         df_stg = df_unknown.copy()
 
         # Variational Autoencoder Neural Network
@@ -1232,21 +1247,21 @@ class Impute:
                 pops=self.pops,
             )
 
-            imp_arr = imputer.fit_transform(df_stg, valid_cols=cols)
+            imp_arr = imputer.fit_transform(df_stg)
 
-            print([df_known.columns.get_loc(i) for i in cols])
-            sys.exit()
-
+            # Get only subset of validation columns
+            # get_loc returns the index of the value
             df_imp = pd.DataFrame(
-                imp_arr[:, [df_known.columns.get_loc(i) for i in cols]]
+                imp_arr[:, [df_unknown.columns.get_loc(i) for i in cols]],
+                columns=cols,
             )
 
         # Get score of each column
         scores = defaultdict(list)
-        for i in range(len(df_known.columns)):
+        for i in range(len(df_known_slice.columns)):
             # Adapted from: https://medium.com/analytics-vidhya/using-scikit-learns-iterative-imputer-694c3cca34de
 
-            y_true = df_known[df_known.columns[i]]
+            y_true = df_known[df_known_slice.columns[i]]
             y_pred = df_imp[df_imp.columns[i]]
 
             if self.clf_type == "classifier":
@@ -1293,7 +1308,6 @@ class Impute:
             df_imp,
             df_known,
             df_known_slice,
-            df_unknown_slice,
             df_unknown,
         ]
 
@@ -1305,7 +1319,6 @@ class Impute:
             del imp_arr
             del imputer
             del cols
-            del final_cols
 
         gc.collect()
 

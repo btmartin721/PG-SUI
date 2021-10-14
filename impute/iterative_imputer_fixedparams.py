@@ -306,11 +306,10 @@ class IterativeImputerFixedParams(IterativeImputer):
                 by_populations=True,
                 missing=-9,
                 write_output=False,
-                output_format="array",
                 verbose=False,
             )
 
-            X_filled = self.initial_imputer_.imputed
+            X_filled = self.initial_imputer_.imputed.to_numpy()
             Xt = X.copy()
 
         elif self.initial_strategy == "phylogeny":
@@ -333,14 +332,8 @@ class IterativeImputerFixedParams(IterativeImputer):
                     column_subset=cols_to_keep,
                 )
 
-                X_filled = self.initial_imputer_.imputed.to_numpy()
-
-                valid_mask = np.flatnonzero(
-                    np.logical_not(np.isnan(self.initial_imputer_.valid_sites))
-                )
-
-                Xt = X[:, valid_mask]
-                mask_missing_values = mask_missing_values[:, valid_mask]
+            X_filled = self.initial_imputer_.imputed.to_numpy()
+            Xt = X.copy()
 
         else:
             if self.initial_imputer_ is None:
