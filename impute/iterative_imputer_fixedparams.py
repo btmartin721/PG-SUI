@@ -8,6 +8,7 @@ import warnings
 # from collections import namedtuple
 from contextlib import redirect_stdout
 from time import time
+from typing import Optional, Union, List, Dict, Tuple, Any, Callable
 
 # Third-party imports
 ## For stats and numeric operations
@@ -70,103 +71,103 @@ else:
 
 
 class IterativeImputerFixedParams(IterativeImputer):
-    """[Overridden IterativeImputer methods. Herein, progress status updates, optimizations to save RAM, and several other improvements have been added. IterativeImputer is a multivariate imputer that estimates each feature from all the others. A strategy for imputing missing values by modeling each feature with missing values as a function of other features in a round-robin fashion.Read more in the scikit-learn :ref:`User Guide <iterative_imputer>`. scikit-learn versionadded:: 0.21...note::This estimator is still **experimental** for now: the predictions and the API might change without any deprecation cycle. To use it, you need to explicitly import ``enable_iterative_imputer``:: >>> # explicitly require this experimental feature >>> from sklearn.experimental import enable_iterative_imputer >>> # now you can import normally from sklearn.impute >>> from sklearn.impute import IterativeImputer]
+    """Overridden IterativeImputer methods. Herein, progress status updates, optimizations to save RAM, and several other improvements have been added. IterativeImputer is a multivariate imputer that estimates each feature from all the others. A strategy for imputing missing values by modeling each feature with missing values as a function of other features in a round-robin fashion.Read more in the scikit-learn :ref:`User Guide <iterative_imputer>`. scikit-learn versionadded:: 0.21...note::This estimator is still **experimental** for now: the predictions and the API might change without any deprecation cycle. To use it, you need to explicitly import ``enable_iterative_imputer``:: >>> # explicitly require this experimental feature >>> from sklearn.experimental import enable_iterative_imputer >>> # now you can import normally from sklearn.impute >>> from sklearn.impute import IterativeImputer.
 
     Args:
-        logfilepath ([str]): [Path to the progress log file]
+        logfilepath (str): Path to the progress log file.
 
-        clf_kwargs ([dict]): [A dictionary with the classifier keyword arguments]
+        clf_kwargs (Dict[str, Any]): A dictionary with the classifier keyword arguments.
 
-        prefix ([str]): [Prefix for output files]
+        prefix (str): Prefix for output files.
 
-        estimator (estimator object, optional): [The estimator to use at each step of the round-robin imputation. If ``sample_posterior`` is True, the estimator must support ``return_std`` in its ``predict`` method]. Defaults to BayesianRidge().
+        estimator (estimator object, optional): The estimator to use at each step of the round-robin imputation. If ``sample_posterior`` is True, the estimator must support ``return_std`` in its ``predict`` method. Defaults to BayesianRidge().
 
-        clf_type (str, optional): [Whether to run ```'classifier'``` or ``'regression'`` based imputation]. Defaults to 'classifier'
+        clf_type (str, optional): Whether to run ```'classifier'``` or ``'regression'`` based imputation. Defaults to 'classifier'
 
-        disable_progressbar (bool, optional): [Whether or not to disable the tqdm progress bar. If True, disables the progress bar. If False, tqdm is used for the progress bar. This can be useful if you are running the imputation on an HPC cluster or are saving the standard output to a file. If True, progress updates will be printed to the screen every ```progress_update_frequency``` iterations]. Defaults to False.
+        disable_progressbar (bool, optional): Whether or not to disable the tqdm progress bar. If True, disables the progress bar. If False, tqdm is used for the progress bar. This can be useful if you are running the imputation on an HPC cluster or are saving the standard output to a file. If True, progress updates will be printed to the screen every ``progress_update_percent`` iterations. Defaults to False.
 
-        progress_update_frequency (int, optional): [How often to display progress updates (as a percentage) if ``disable_progressbar`` is True. If ``progress_update_frequency=10``, then it displays progress updates every 10%]. Defaults to 10.
+        progress_update_percent (int, optional): How often to display progress updates (as a percentage) if ``disable_progressbar`` is True. If ``progress_update_frequency=10``, then it displays progress updates every 10%. Defaults to 10.
 
-        missing_values (int or np.nan, optional): [The placeholder for the missing values. All occurrences of `missing_values` will be imputed. For pandas' dataframes with	nullable integer dtypes with missing values, `missing_values` should be set to `np.nan`, since `pd.NA` will be converted to `np.nan`]. Defaults to np.nan.
+        missing_values (int or np.nan, optional): The placeholder for the missing values. All occurrences of ``missing_values`` will be imputed. For pandas dataframes with	nullable integer dtypes with missing values, ``missing_values`` should be set to ``np.nan``, since ``pd.NA`` will be converted to ``np.nan``. Defaults to np.nan.
 
-        Sample_posterior (bool, optional): [Whether to sample from the (Gaussian) predictive posterior of the fitted estimator for each imputation. Estimator must support ``return_std`` in its ``predict`` method if set to ``True``. Set to ``True`` if using ``IterativeImputer`` for multiple imputations]. Defaults to False.
+        Sample_posterior (bool, optional): Whether to sample from the (Gaussian) predictive posterior of the fitted estimator for each imputation. Estimator must support ``return_std`` in its ``predict`` method if set to ``True``. Set to ``True`` if using ``IterativeImputer`` for multiple imputations. Defaults to False.
 
-        max_iter (int, optional): [Maximum number of imputation rounds to perform before returning the imputations computed during the final round. A round is a single	imputation of each feature with missing values. The stopping criterion is met once `max(abs(X_t - X_{t-1}))/max(abs(X[known_vals])) < tol`,	where `X_t` is `X` at iteration `t`. Note that early stopping is only applied if ``sample_posterior=False``]. Defaults to 10.
+        max_iter (int, optional): Maximum number of imputation rounds to perform before returning the imputations computed during the final round. A round is a single	imputation of each feature with missing values. The stopping criterion is met once ``max(abs(X_t - X_{t-1}))/max(abs(X[known_vals])) < tol``,	where ``X_t`` is ``X`` at iteration ``t``. Note that early stopping is only applied if ``sample_posterior=False``. Defaults to 10.
 
-        tol (float, optional): [Tolerance of the stopping condition]. Defaults to 1e-3.
+        tol (float, optional): Tolerance of the stopping condition. Defaults to 1e-3.
 
-        n_nearest_features (int, optional): [Number of other features to use to estimate the missing values of each feature column. Nearness between features is measured using the absolute correlation coefficient between each feature pair (after initial imputation). To ensure coverage of features throughout the imputation process, the neighbor features are not necessarily nearest,	but are drawn with probability proportional to correlation for each	imputed target feature. Can provide significant speed-up when the number of features is huge. If ``None``, all features will be used]. Defaults to None.
+        n_nearest_features (int, optional): Number of other features to use to estimate the missing values of each feature column. Nearness between features is measured using the absolute correlation coefficient between each feature pair (after initial imputation). To ensure coverage of features throughout the imputation process, the neighbor features are not necessarily nearest,	but are drawn with probability proportional to correlation for each	imputed target feature. Can provide significant speed-up when the number of features is huge. If ``None``, all features will be used. Defaults to None.
 
-        initial_strategy (str, optional): [Which strategy to use to initialize the missing values. Same as the ``strategy`` parameter in :class:`~sklearn.impute.SimpleImputer`	Valid values: {"mean", "median", "most_frequent", or "constant"}]. Defaults to 'mean'.
+        initial_strategy (str, optional): Which strategy to use to initialize the missing values. Same as the ``strategy`` parameter in :class:`~sklearn.impute.SimpleImputer`	Valid values: "mean", "median", "most_frequent", "populations", "phylogeny", or "constant". Defaults to "mean".
 
-        imputation_order (str, optional): [The order in which the features will be imputed. Possible values: "ascending" (From features with fewest missing values to most), "descending" (From features with most missing values to fewest, "roman" (Left to right), "arabic" (Right to left),  random" (A random order for each round)]. Defaults to 'ascending'.
+        imputation_order (str, optional): The order in which the features will be imputed. Possible values: "ascending" (From features with fewest missing values to most), "descending" (From features with most missing values to fewest, "roman" (Left to right), "arabic" (Right to left),  random" (A random order for each round). Defaults to "ascending".
 
-        skip_complete (bool, optional): [If ``True`` then features with missing values during ``transform`` that did not have any missing values during ``fit`` will be imputed with the initial imputation method only. Set to ``True`` if you have	many features with no missing values at both ``fit`` and ``transform`` time to save compute]. Defaults to False.
+        skip_complete (bool, optional): If ``True`` then features with missing values during ``transform`` that did not have any missing values during ``fit`` will be imputed with the initial imputation method only. Set to ``True`` if you have	many features with no missing values at both ``fit`` and ``transform`` time to save compute. Defaults to False.
 
-        min_value (float or array-like of shape (n_features,), optional): [Minimum possible imputed value. Broadcast to shape (n_features,) if scalar. If array-like, expects shape (n_features,), one min value for each feature. The default is `-np.inf`...versionchanged:: 0.23 (Added support for array-like)]. Defaults to -np.inf.
+        min_value (float or array-like of shape (n_features,), optional): Minimum possible imputed value. Broadcast to shape (n_features,) if scalar. If array-like, expects shape (n_features,), one min value for each feature. The default is `-np.inf`...sklearn versionchanged:: 0.23 (Added support for array-like). Defaults to -np.inf.
 
-        max_value (float or array-like of shape (n_features,), optional): [Maximum possible imputed value. Broadcast to shape (n_features,) if scalar. If array-like, expects shape (n_features,), one max value for each feature..versionchanged:: 0.23 (Added support for array-like)]. Defaults to np.inf.
+        max_value (float or array-like of shape (n_features,), optional): Maximum possible imputed value. Broadcast to shape (n_features,) if scalar. If array-like, expects shape (n_features,), one max value for each feature..sklearn versionchanged:: 0.23 (Added support for array-like). Defaults to np.inf.
 
-        verbose (int, optional): [Verbosity flag, controls the debug messages that are issued as functions are evaluated. The higher, the more verbose. Can be 0, 1, or 2]. Defaults to 0.
+        verbose (int, optional): Verbosity flag, controls the debug messages that are issued as functions are evaluated. The higher, the more verbose. Can be 0, 1, or 2. Defaults to 0.
 
-        random_state (int or RandomState instance, optional): [The seed of the pseudo random number generator to use. Randomizes selection of estimator features if n_nearest_features is not None, the ``imputation_order`` if ``random``, and the sampling from posterior if ``sample_posterior`` is True. Use an integer for determinism. See :term:`the Glossary <random_state>`]. Defaults to None.
+        random_state (int or RandomState instance, optional): The seed of the pseudo random number generator to use. Randomizes selection of estimator features if n_nearest_features is not None, the ``imputation_order`` if ``random``, and the sampling from posterior if ``sample_posterior`` is True. Use an integer for determinism. See :term:`the Glossary <random_state>`. Defaults to None.
 
-        add_indicator (bool, optional): [If True, a :class:`MissingIndicator` transform will stack onto output of the imputer's transform. This allows a predictive estimator to account for missingness despite imputation. If a feature has no missing values at fit/train time, the feature won't appear on the missing indicator even if there are missing values at transform/test time]. Defaults to False.
+        add_indicator (bool, optional): If True, a :class:`MissingIndicator` transform will stack onto output of the imputer's transform. This allows a predictive estimator to account for missingness despite imputation. If a feature has no missing values at fit/train time, the feature won't appear on the missing indicator even if there are missing values at transform/test time. Defaults to False.
 
-        genotype_data (dict(list(str)), optional): [Dictionary with keys=sampleIds and values=list of genotypes for the corresponding key]. Defaults to None.
+        genotype_data (GenotypeData object, optional): GenotypeData object containing dictionary with keys=sampleIds and values=list of genotypes for the corresponding key. If using ``initial_strategy="phylogeny``, then this object also needs contain the treefile and qmatrix objects. Defaults to None.
 
-        str_encodings (dict(str: int), optional): [Integer encodings used in STRUCTURE-formatted file. Should be a dictionary with keys=nucleotides and values=integer encodings. The missing data encoding should also be included. Argument is ignored if using a PHYLIP-formatted file]. Defaults to {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}
+        str_encodings (dict(str: int), optional): Integer encodings used in STRUCTURE-formatted file. Should be a dictionary with keys=nucleotides and values=integer encodings. The missing data encoding should also be included. Argument is ignored if using a PHYLIP-formatted file. Defaults to {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}
 
     Attributes:
-        initial_imputer_: ([:class:`~sklearn.impute.SimpleImputer`):  [Imputer used to initialize the missing values]
+        initial_imputer_: (:class:`~sklearn.impute.SimpleImputer`):  Imputer used to initialize the missing values.
 
-        n_iter_ ([int]): [Number of iteration rounds that occurred. Will be less than ``self.max_iter`` if early stopping criterion was reached]
+        n_iter_ (int): Number of iteration rounds that occurred. Will be less than ``self.max_iter`` if early stopping criterion was reached.
 
-        n_features_with_missing_ ([int]): [Number of features with missing values]
+        n_features_with_missing_ (int): Number of features with missing values.
 
-        indicator_ ([:class:`~sklearn.impute.MissingIndicator`)]: [Indicator used to add binary indicators for missing values ``None`` if add_indicator is False]
+        indicator_ (:class:`~sklearn.impute.MissingIndicator`): Indicator used to add binary indicators for missing values ``None`` if add_indicator is False.
 
-        random_state_ [(RandomState instance)]: [RandomState instance that is generated either from a seed, the random number generator or by `np.random`]
+        random_state_ (RandomState instance): RandomState instance that is generated either from a seed, the random number generator or by ``np.random``.
 
-        logfilepath [(str)]: [Path to status logfile]
+        logfilepath (str): Path to status logfile.
 
-        clf_kwargs [(dict)]: [Keyword arguments for estimator]
+        clf_kwargs (Dict[str, Any]): Keyword arguments for estimator.
 
-        prefix [(str)]: [Prefix for output files]
+        prefix (str): Prefix for output files.
 
-        clf_type [(str)]: [Type of estimator, either 'classifier' or 'regressor']
+        clf_type (str): Type of estimator, either "classifier" or "regressor".
 
-        disable_progressbar [(bool)]: [Whether to disable the tqdm progress bar. If True, writes status updates to file instead of tqdm progress bar]
+        disable_progressbar (bool): Whether to disable the tqdm progress bar. If True, writes status updates to file instead of tqdm progress bar.
 
-        progress_update_percent [(float or None)]: [Print feature progress update every ``progress_update_percent`` percent]
+        progress_update_percent (float or None): Print feature progress update every ``progress_update_percent`` percent.
 
-        pops [(list)]: [List of population IDs of shape (n_samples,)]
+        pops (List[Union[str, int]]): List of population IDs of shape (n_samples,).
 
-        estimator [(estimator object)]: [Estimator to impute data with]
+        estimator (estimator object): Estimator to impute data with.
 
-        sample_posterior [(bool)]: [Whether to use the sample_posterior option. This overridden class does not currently support sample_posterior]
+        sample_posterior (bool): Whether to use the sample_posterior option. This overridden class does not currently support sample_posterior.
 
-        max_iter [(int)]: [The maximum number of iterations to run]
+        max_iter (int): The maximum number of iterations to run.
 
-        tol [(float)]: [Convergence criteria]
+        tol (float): Convergence criteria.
 
-        n_nearest_features [(int)]: [Number of nearest features to impute target with]
+        n_nearest_features (int): Number of nearest features to impute target with.
 
-        initial_strategy [(str)]: [Strategy to use with SimpleImputer for training data]
+        initial_strategy (str): Strategy to use with SimpleImputer for training data.
 
-        imputation_order [(str)]: [Order to impute]
+        imputation_order (str): Order to impute.
 
-        skip_complete [(bool)]: [Whether to skip features with no missing data]
+        skip_complete (bool): Whether to skip features with no missing data.
 
-        min_value [(int or float)]: [Minimum value of imputed data]
+        min_value (int or float): Minimum value of imputed data.
 
-        max_value [(int or float)]: [Maximum value of imputed data]
+        max_value (int or float): Maximum value of imputed data.
 
-        verbose [(int)]: [Verbosity level]
+        verbose (int): Verbosity level.
 
-        genotype_data [(GenotypeData object)]: [GenotypeData object]
+        genotype_data (GenotypeData object): GenotypeData object.
 
-        str_encodings ([dict(str: int)]): [Dictionary with integer encodings for converting from STRUCTURE-formatted file to IUPAC nucleotides]
+        str_encodings (Dict[str, int]): Dictionary with integer encodings for converting from STRUCTURE-formatted file to IUPAC nucleotides.
 
     See Also:
             SimpleImputer : Univariate imputation of missing values.
@@ -260,27 +261,34 @@ class IterativeImputerFixedParams(IterativeImputer):
         self.genotype_data = genotype_data
         self.str_encodings = str_encodings
 
-    def _initial_imputation(self, X, cols_to_keep, in_fit=False):
-        """[Perform initial imputation for input X]
+    def _initial_imputation(
+        self, X: np.ndarray, cols_to_keep: np.ndarray, in_fit: bool = False
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Perform initial imputation for input X.
+
+        Performs initial imputation on training data (neighbors).
 
         Args:
-            X ([ndarray, shape (n_samples, n_features)]): [Input data, where "n_samples" is the number of samples and "n_features" is the number of features].
+            X (ndarray, shape (n_samples, n_features)): Input data, where "n_samples" is the number of samples and "n_features" is the number of features.
 
-            cols_to_keep ([numpy.ndarray, shape (n_features,)]): [Column indices to keep. Only used if initial_strategy == 'phylogeny']
+            cols_to_keep (numpy.ndarray, shape (n_features,)): Column indices to keep. Only used if ``initial_strategy=="phylogeny"``.
 
-            in_fit (bool, optional): [Whether function is called in fit]. Defaults to False.
+            in_fit (bool, optional): True if function is called in fit, otherwise False. Defaults to False.
 
         Returns:
-            Xt ([ndarray, shape (n_samples, n_features)]: [Input data, where "n_samples" is the number of samples and "n_features" is the number of features]
+            Xt (numpy.ndarray, shape (n_samples, n_features)): Input data, where "n_samples" is the number of samples and "n_features" is the number of features.
 
-            X_filled ([ndarray, shape (n_samples, n_features)]): [Input data with the most recent imputations]
+            X_filled (numpy.ndarray, shape (n_samples, n_features)): Input data with the most recent imputations.
 
-            mask_missing_values ([ndarray, shape (n_samples, n_features)]): [Input data's missing indicator matrix, where "n_samples" is the
+            mask_missing_values (numpy.ndarray, shape (n_samples, n_features)): Input data's missing indicator matrix, where "n_samples" is the
                 number of samples and "n_features" is the number of features.
 
-            X_missing_mask ([ndarray, shape (n_samples, n_features)]): [Input data's mask matrix indicating missing datapoints, where
+            X_missing_mask (numpy.ndarray, shape (n_samples, n_features)): Input data's mask matrix indicating missing datapoints, where
                 "n_samples" is the number of samples and "n_features" is the
                 number of features.
+
+        Raises:
+            AttributeError: GenotypeData object must be initialized with guidetree and qmatrix if using ``initial_strategy="phylogeny"``.
         """
         if is_scalar_nan(self.missing_values):
             force_all_finite = "allow-nan"
@@ -358,32 +366,32 @@ class IterativeImputerFixedParams(IterativeImputer):
     @ignore_warnings(category=UserWarning)
     def _impute_one_feature(
         self,
-        X_filled,
-        mask_missing_values,
-        feat_idx,
-        neighbor_feat_idx,
-        estimator=None,
-        fit_mode=True,
-    ):
-        """[Impute a single feature from the others provided. This function predicts the missing values of one of the features using the current estimates of all the other features. The ``estimator`` must support ``return_std=True`` in its ``predict`` method for this function to work]
+        X_filled: np.ndarray,
+        mask_missing_values: np.ndarray,
+        feat_idx: int,
+        neighbor_feat_idx: np.ndarray,
+        estimator: Optional[Any] = None,
+        fit_mode: bool = True,
+    ) -> np.ndarray:
+        """Impute a single feature from the others provided.
+
+        This function predicts the missing values of one of the features using the current estimates of all the other features. The ``estimator`` must support ``return_std=True`` in its ``predict`` method for this function to work.
 
         Args:
-            X_filled [(ndarray)]: [Input data with the most recent imputations]
+            X_filled (numpy.ndarray): Input data with the most recent imputations.
 
-            mask_missing_values [(ndarray)]: [Input data's missing indicator matrix]
+            mask_missing_values (numpy.ndarray): Input data's missing indicator matrix.
 
-            feat_idx [(int)]: [Index of the feature currently being imputed]
+            feat_idx (int): Index of the feature currently being imputed.
 
-            neighbor_feat_idx [(ndarray)]: [Indices of the features to be used in imputing ``feat_idx``]
+            neighbor_feat_idx (numpy.ndarray): Indices of the features to be used in imputing ``feat_idx``.
 
-            estimator [(object)]: [The estimator to use at this step of the round-robin imputation If ``sample_posterior`` is True, the estimator must support ``return_std`` in its ``predict`` method.If None, it will be cloned from self._estimator]
+            estimator (object): The estimator to use at this step of the round-robin imputation If ``sample_posterior`` is True, the estimator must support ``return_std`` in its ``predict`` method.If None, it will be cloned from self._estimator.
 
-            fit_mode (bool, optional): [Whether to fit and predict with the estimator or just predict]. Defaults to True.
+            fit_mode (bool, optional): Whether to fit and predict with the estimator or just predict. Defaults to True.
 
         Returns:
-            X_filled [(ndarray)]: [Input data with ``X_filled[missing_row_mask, feat_idx]`` updated]
-
-            estimator [(estimator with sklearn API)]: [The fitted estimator used to impute ``X_filled[missing_row_mask, feat_idx]``]
+            X_filled (numpy.ndarray)]: Input data with ``X_filled[missing_row_mask, feat_idx]`` updated.
         """
         if estimator is None and fit_mode is False:
             raise ValueError(
@@ -442,18 +450,29 @@ class IterativeImputerFixedParams(IterativeImputer):
         return X_filled
 
     @ignore_warnings(category=UserWarning)
-    def fit_transform(self, X, valid_cols=None, y=None):
-        """[Fits the imputer on X and return the transformed X]
+    def fit_transform(
+        self,
+        X: np.ndarray,
+        valid_cols: Optional[np.ndarray] = None,
+        y: None = None,
+    ) -> np.ndarray:
+        """Fits the imputer on X and return the transformed X.
 
         Args:
-            X [(array-like, shape (n_samples, n_features))]: [Input data, where "n_samples" is the number of samples and "n_features" is the number of features]
+            X (array-like, shape (n_samples, n_features)): Input data, where "n_samples" is the number of samples and "n_features" is the number of features.
 
-            valid_cols (numpy.ndarray, optional): [Array with column indices to keep]. Defaults to None.
+            valid_cols (numpy.ndarray, optional): Array with column indices to keep. Defaults to None.
 
-            y ([None]) [Ignored. Here for compatibility with other sklearn classes]
+            y (None): Ignored. Here for compatibility with other sklearn classes.
 
         Returns:
-            Xt [(array-like, shape (n_samples, n_features))]: [The imputed input data]
+            Xt (array-like, shape (n_samples, n_features)): The imputed input data.
+
+        Raises:
+            ValueError: "max_iter" must be a positive integer.
+            ValueError: "tol" should be non-negative float.
+            ValueError: One or more features has min_value >= max_value.
+            ConvergenceWarning: Early stopping criterion not reached.
         """
         self.random_state_ = getattr(
             self, "random_state_", check_random_state(self.random_state)

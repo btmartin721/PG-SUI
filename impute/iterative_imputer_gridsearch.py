@@ -156,7 +156,7 @@ class IterativeImputerGridSearch(IterativeImputer):
 
         add_indicator (bool, optional): If True, a :class:`MissingIndicator` transform will stack onto output of the imputer's transform. This allows a predictive estimator to account for missingness despite imputation. If a feature has no missing values at fit/train time, the feature won't appear on the missing indicator even if there are missing values at transform/test time. Defaults to False.
 
-        genotype_data (Dict[List[str]], optional): Dictionary with keys=sampleIds and values=list of genotypes for the corresponding key. Defaults to None.
+        genotype_data (GenotypeData object, optional): GenotypeData object containing dictionary with keys=sampleIds and values=list of genotypes for the corresponding key. If using ``initial_strategy="phylogeny``, then this object also needs contain the treefile and qmatrix objects. Defaults to None.
 
         str_encodings (Dict[str, int], optional): Integer encodings used in STRUCTURE-formatted file. Should be a dictionary with keys=nucleotides and values=integer encodings. The missing data encoding should also be included. Argument is ignored if using a PHYLIP-formatted file. Defaults to {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}
 
@@ -543,11 +543,13 @@ class IterativeImputerGridSearch(IterativeImputer):
         self,
         X: np.ndarray,
         valid_cols: Optional[np.ndarray] = None,
-        y: None,
+        y: None = None,
     ) -> Tuple[np.ndarray, Optional[List[Any]], Optional[List[Any]]]:
         """Fits the imputer on X and return the transformed X.
 
-        Functionality has been added to perform grid searches using two methods (genetic algorithm and RandomSearchCV). It also makes several useful plots if using the genetic algorithm, and a progress bar has been added.
+        The basic functionality is to get the nearest neightbors for each feature (column) and loop through all the features and their correlated neighbors to predict missing values.
+
+        Functionality has been added to perform grid searches using two methods (genetic algorithm and RandomSearchCV). It also makes several useful plots if using the genetic algorithm, and a tqdm progress bar and status updates have been added.
 
         Args:
             X (array-like, shape (n_samples, n_features)): Input data, where "n_samples" is the number of samples and "n_features" is the number of features.
@@ -597,16 +599,24 @@ class IterativeImputerGridSearch(IterativeImputer):
 
         if self.max_iter == 0 or np.all(mask_missing_values):
             self.n_iter_ = 0
-            return super(IterativeImputer, self)._concatenate_indicator(
-                Xt, X_indicator
-            ), None, None
+            return (
+                super(IterativeImputer, self)._concatenate_indicator(
+                    Xt, X_indicator
+                ),
+                None,
+                None,
+            )
 
         # Edge case: a single feature. We return the initial ...
         if Xt.shape[1] == 1:
             self.n_iter_ = 0
-            return super(IterativeImputer, self)._concatenate_indicator(
-                Xt, X_indicator
-            ), None, None
+            return (
+                super(IterativeImputer, self)._concatenate_indicator(
+                    Xt, X_indicator
+                ),
+                None,
+                None,
+            )
 
         self._min_value = self._validate_limit(
             self.min_value, "min", X.shape[1]
@@ -905,7 +915,11 @@ class IterativeImputerGridSearch(IterativeImputer):
         )
 
     def plot_search_space(
-        self, estimator: Any, height: Union[int, float] = 2, s: Union[int, float] = 25, features: Optional[List[Any]] = None
+        self,
+        estimator: Any,
+        height: Union[int, float] = 2,
+        s: Union[int, float] = 25,
+        features: Optional[List[Any]] = None,
     ) -> sns.PairGrid:
         """Make density and contour plots for showing search space during grid search.
 
