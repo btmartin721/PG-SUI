@@ -91,33 +91,35 @@ def main():
         # data.write_imputed(data.imputed_rf_df, args.prefix)
 
     else:
-        # For randmizedsearchcv
+        # For randomizedsearchcv
         # Number of trees in random forest
-        # n_estimators = [int(x) for x in np.linspace(
-        # 	start=100, stop=1000, num=10)]
+        n_estimators = [
+            int(x) for x in np.linspace(start=100, stop=1000, num=10)
+        ]
 
         # Number of features to consider at every split
-        # max_features = ["sqrt", "log2"]
+        max_features = ["sqrt", "log2"]
 
-        # # Maximum number of levels in the tree
-        # max_depth = [int(x) for x in np.linspace(10, 110, num=11)]
-        # max_depth.append(None)
+        # Maximum number of levels in the tree
+        max_depth = [int(x) for x in np.linspace(10, 110, num=11)]
+        max_depth.append(None)
 
-        # # Minimmum number of samples required to split a node
-        # min_samples_split = [int(x) for x in np.linspace(2, 10, num=5)]
+        # Minimmum number of samples required to split a node
+        min_samples_split = [int(x) for x in np.linspace(2, 10, num=5)]
 
-        # # Minimum number of samples required at each leaf node
-        # min_samples_leaf = [int(x) for x in np.linspace(1, 5, num=5)]
+        # Minimum number of samples required at each leaf node
+        min_samples_leaf = [int(x) for x in np.linspace(1, 5, num=5)]
 
-        # # Proportion of dataset to use with bootstrapping
-        # #max_samples = [x for x in np.linspace(0.5, 1.0, num=6)]
+        # Proportion of dataset to use with bootstrapping
+        # max_samples = [x for x in np.linspace(0.5, 1.0, num=6)]
 
-        # # # Random Forest gridparams - RandomizedSearchCV
-        # grid_params = {
-        # 	"max_features": max_features,
-        # 	"max_depth": max_depth,
-        # 	"min_samples_split": min_samples_split,
-        # 	"min_samples_leaf": min_samples_leaf}
+        # # Random Forest gridparams - RandomizedSearchCV
+        grid_params = {
+            "max_features": max_features,
+            "max_depth": max_depth,
+            "min_samples_split": min_samples_split,
+            "min_samples_leaf": min_samples_leaf,
+        }
 
         # Random Forest gridparams - Genetic Algorithms
         # grid_params = {
@@ -129,12 +131,13 @@ def main():
         # 	"max_samples": max_samples
         # }
 
-        grid_params = {
-            "max_features": Categorical(["sqrt", "log2"]),
-            "min_samples_split": Integer(2, 10),
-            "min_samples_leaf": Integer(1, 10),
-            "max_depth": Integer(2, 110),
-        }
+        # # Genetic Algorithm grid_params
+        # grid_params = {
+        #     "max_features": Categorical(["sqrt", "log2"]),
+        #     "min_samples_split": Integer(2, 10),
+        #     "min_samples_leaf": Integer(1, 10),
+        #     "max_depth": Integer(2, 110),
+        # }
 
         # Bayesian Ridge gridparams - RandomizedSearchCV
         # grid_params = {
@@ -152,11 +155,11 @@ def main():
         # 	"lambda_2": Continuous(1e-6, 1e-3, distribution="log-uniform")
         # }
 
-        # # # Random forest imputation with genetic algorithm grid search
+        # # Random forest imputation with genetic algorithm grid search
         # rf_imp = ImputeRandomForest(
         #     data,
         #     prefix=args.prefix,
-        #     n_estimators=100,
+        #     n_estimators=50,
         #     n_nearest_features=3,
         #     gridparams=grid_params,
         #     cv=3,
@@ -169,28 +172,29 @@ def main():
         #     extratrees=False,
         #     mutation_probability=0.1,
         #     progress_update_percent=20,
-        #     chunk_size=1.0,
+        #     chunk_size=0.5,
         #     initial_strategy="phylogeny",
         # )
 
-        # RandomizedSearchCV Test
-        # rf_imp = ImputeRandomForest(
-        # 		data,
-        # 		prefix=args.prefix,
-        # 		n_estimators=50,
-        # 		n_nearest_features=3,
-        # 		gridparams=grid_params,
-        # 		cv=3,
-        # 		grid_iter=40,
-        # 		n_jobs=4,
-        # 		max_iter=2,
-        # 		column_subset=3,
-        # 		ga=False,
-        # 		disable_progressbar=True,
-        # 		extratrees=False,
-        # 		progress_update_percent=20,
-        # 		chunk_size=0.2
-        # )
+        # # RandomizedSearchCV Test
+        rf_imp = ImputeRandomForest(
+            data,
+            prefix=args.prefix,
+            n_estimators=50,
+            n_nearest_features=3,
+            gridparams=grid_params,
+            cv=3,
+            grid_iter=40,
+            n_jobs=4,
+            max_iter=2,
+            column_subset=5,
+            ga=False,
+            disable_progressbar=True,
+            extratrees=False,
+            progress_update_percent=20,
+            chunk_size=0.2,
+            initial_strategy="phylogeny",
+        )
 
         # lgbm = ImputeLightGBM(
         #     data,
@@ -226,24 +230,24 @@ def main():
         #     hidden_layer_sizes=[100, 100, 100],
         # )
 
-        rf_imp = ImputeRandomForest(
-            data,
-            prefix=args.prefix,
-            n_estimators=100,
-            n_nearest_features=3,
-            n_jobs=4,
-            max_iter=2,
-            disable_progressbar=True,
-            extratrees=False,
-            max_features="log2",
-            min_samples_split=6,
-            min_samples_leaf=4,
-            max_depth=6,
-            cv=3,
-            validation_only=0.5,
-            chunk_size=1.0,
-            initial_strategy="phylogeny",
-        )
+        # rf_imp = ImputeRandomForest(
+        #     data,
+        #     prefix=args.prefix,
+        #     n_estimators=50,
+        #     n_nearest_features=3,
+        #     n_jobs=4,
+        #     max_iter=2,
+        #     disable_progressbar=True,
+        #     extratrees=False,
+        #     max_features="sqrt",
+        #     min_samples_split=5,
+        #     min_samples_leaf=2,
+        #     max_depth=30,
+        #     cv=3,
+        #     validation_only=0.5,
+        #     chunk_size=1.0,
+        #     initial_strategy="phylogeny",
+        # )
 
         # afpops = ImputeAlleleFreq(
         # 	data, by_populations=True, prefix=args.prefix)

@@ -651,7 +651,16 @@ class IterativeImputerFixedParams(IterativeImputer):
                     )
 
                 if inf_norm < normalized_tol:
-                    if self.verbose > 0:
+                    if self.disable_progressbar:
+                        # Early stopping criteria has been reached
+                        with open(self.logfilepath, "a") as fout:
+                            # Redirect to progress logfile
+                            with redirect_stdout(fout):
+                                print(
+                                    "[IterativeImputer] Early stopping "
+                                    "criterion reached."
+                                )
+                    else:
                         print(
                             "[IterativeImputer] Early stopping criterion "
                             "reached."

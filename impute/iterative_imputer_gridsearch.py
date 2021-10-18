@@ -9,6 +9,7 @@ import warnings
 # from collections import namedtuple
 from contextlib import redirect_stdout
 from time import time
+from typing import Optional, Union, List, Dict, Tuple, Any, Callable
 
 # Third-party imports
 ## For plotting
@@ -89,87 +90,92 @@ else:
 
 
 class IterativeImputerGridSearch(IterativeImputer):
-    """[Overridden IterativeImputer methods. Herein, two types of grid searches (RandomizedSearchCV and GASearchCV), progress status updates, and several other improvements have been added. IterativeImputer is a multivariate imputer that estimates each feature from all the others. A strategy for imputing missing values by modeling each feature with missing values as a function of other features in a round-robin fashion.Read more in the scikit-learn :ref:`User Guide <iterative_imputer>`. scikit-learn versionadded:: 0.21...note::This estimator is still **experimental** for now: the predictions and the API might change without any deprecation cycle. To use it, you need to explicitly import ``enable_iterative_imputer``:: >>> # explicitly require this experimental feature >>> from sklearn.experimental import enable_iterative_imputer >>> # now you can import normally from sklearn.impute >>> from sklearn.impute import IterativeImputer]
+    """Overridden IterativeImputer methods. Herein, two types of grid searches (RandomizedSearchCV and GASearchCV), progress status updates, and several other improvements have been added. IterativeImputer is a multivariate imputer that estimates each feature from all the others. A strategy for imputing missing values by modeling each feature with missing values as a function of other features in a round-robin fashion.Read more in the scikit-learn :ref:`User Guide <iterative_imputer>`. scikit-learn versionadded:: 0.21...note::This estimator is still **experimental** for now: the predictions and the API might change without any deprecation cycle. To use it, you need to explicitly import ``enable_iterative_imputer``.
+
+    >>> # explicitly require this experimental feature
+    >>> from sklearn.experimental import enable_iterative_imputer
+    >>> # now you can import normally from sklearn.impute
+    >>> from sklearn.impute import IterativeImputer
 
     Args:
-        logfilepath ([str]): [Path to the progress log file]
+        logfilepath (str): Path to the progress log file.
 
-        search_space [(sklearn_genetic.space object or dict)]: [The parameter distributions or values to use for the grid search]
+        search_space (sklearn_genetic.space object or Dict[str, Any]): The parameter distributions or values to use for the grid search.
 
-        clf_kwargs ([dict]): [A dictionary with the classifier keyword arguments]
+        clf_kwargs (Dict[str, Any]): A dictionary with the classifier keyword arguments.
 
-        ga_kwargs [(dict)]: [A dictionary with the genetic alrgorithm arguments]
+        ga_kwargs (Dict[str, Any]): A dictionary with the genetic algorithm arguments.
 
-        prefix ([str]): [Prefix for output files]
+        prefix (str): Prefix for output files.
 
-        estimator (estimator object, optional): [The estimator to use at each step of the round-robin imputation. If ``sample_posterior`` is True, the estimator must support ``return_std`` in its ``predict`` method]. Defaults to BayesianRidge().
+        estimator (estimator object, optional): The estimator to use at each step of the round-robin imputation. Defaults to BayesianRidge().
 
-        grid_cv (int, optional): [The number of cross-validation folds to use with the grid search. CV folds will be stratified, and it will attempt to balance the genotypes in each fold. IMPORTANT: Sites with fewer than ```2 * grid_cv``` of each genotypes will be removed prior to doing the random subsetting because otherwise the imputation would fail. At least two of each gentoype are required to be present in each fold]. Defaults to 5.
+        grid_cv (int, optional): The number of cross-validation folds to use with the grid search. CV folds will be stratified, and it will attempt to balance the genotypes in each fold. IMPORTANT: Sites with fewer than ``2 * grid_cv`` of each genotypes will be removed prior to doing the random subsetting because otherwise the imputation would fail. At least two of each gentoype are required to be present in each fold. Defaults to 5.
 
         grid_n_jobs (int, optional): [The number of processors to use with the grid search. Set ``grid_n_jobs`` to -1 to use all available processors]. Defaults to 1.
 
-        grid_n_iter (int, optional): [The number of iterations (for RandomizedSearchCV) or generations (for the genetic algorithm) to run with the grid search. For the genetic algorithm, an early stopping callback method is implemented that will stop if the accuracy does not improve for more than 5 consecutive generations]. Defaults to 10.
+        grid_n_iter (int, optional): The number of iterations (for RandomizedSearchCV) or generations (for the genetic algorithm) to run with the grid search. For the genetic algorithm, an early stopping callback method is implemented that will stop if the accuracy does not improve for more than 5 consecutive generations. Defaults to 10.
 
-        clf_type (str, optional): [Whether to run ```'classifier'``` or ``'regression'`` based imputation]. Defaults to 'classifier'
+        clf_type (str, optional): Whether to run ``"classifier"`` or ``"regression"`` based imputation. Defaults to "classifier".
 
-        ga (bool, optional): [Whether or not to use the genetic algorithm. If False, it does RandomizedSearchCV instead. If True, it uses the genetic algorithm]. Defaults to False.
+        ga (bool, optional): Whether or not to use the genetic algorithm. If True, does genetic algorithm, otherwise does RandomizedSearchCV. Defaults to False.
 
-        disable_progressbar (bool, optional): [Whether or not to disable the tqdm progress bar. If True, disables the progress bar. If False, tqdm is used for the progress bar. This can be useful if you are running the imputation on an HPC cluster or are saving the standard output to a file. If True, progress updates will be printed to the screen every ```progress_update_frequency``` iterations]. Defaults to False.
+        disable_progressbar (bool, optional): Whether or not to disable the tqdm progress bar. If True, disables the progress bar. If False, tqdm is used for the progress bar. This can be useful if you are running the imputation on an HPC cluster or are saving the standard output to a file. If True, progress updates will be printed to the screen every ``progress_update_percent`` iterations. Defaults to False.
 
-        progress_update_frequency (int, optional) : [How often to display progress updates (as a percentage) if ``disable_progressbar`` is True. If ``progress_update_frequency=10``, then it displays progress updates every 10%]. Defaults to 10.
+        progress_update_percent (int, optional) : How often to display progress updates (as a percentage) if ``disable_progressbar`` is True. If ``progress_update_percent=10``, then it displays progress updates every 10%. Defaults to 10.
 
-        pops [(list)]: [List of population IDs of shape (n_samples,)]
+        pops (List[Union[int, str]]): List of population IDs of shape (n_samples,).
 
-        scoring_metric (str, optional): [Scoring metric to use for the grid search]. Defaults to 'accuracy'.
+        scoring_metric (str, optional): Scoring metric to use for the grid search. Defaults to "accuracy".
 
-        early_stop_gen (int, optional): [Number of consecutive generations lacking improvement for which to implement the early stopping callback]. Defaults to 5.
+        early_stop_gen (int, optional): Number of consecutive generations lacking improvement for which to implement the early stopping callback. Defaults to 5.
 
-        missing_values (int or np.nan, optional): [The placeholder for the missing values. All occurrences of `missing_values` will be imputed. For pandas' dataframes with	nullable integer dtypes with missing values, `missing_values` should be set to `np.nan`, since `pd.NA` will be converted to `np.nan`]. Defaults to np.nan.
+        missing_values (int or np.nan, optional): The placeholder for the missing values. All occurrences of ``missing_values`` will be imputed. For pandas dataframes with	nullable integer dtypes with missing values, ``missing_values`` should be set to ``np.nan``, since ``pd.NA`` will be converted to ``np.nan``. Defaults to np.nan.
 
-        Sample_posterior (bool, optional): [Whether to sample from the (Gaussian) predictive posterior of the fitted estimator for each imputation. Estimator must support ``return_std`` in its ``predict`` method if set to ``True``. Set to ``True`` if using ``IterativeImputer`` for multiple imputations]. Defaults to False.
+        Sample_posterior (bool, optional): CURRENTLY NOT SUPPORTED. Whether to sample from the (Gaussian) predictive posterior of the fitted estimator for each imputation. Estimator must support ``return_std`` in its ``predict`` method if set to ``True``. Set to ``True`` if using ``IterativeImputer`` for multiple imputations. Defaults to False.
 
-        max_iter (int, optional): [Maximum number of imputation rounds to perform before returning the imputations computed during the final round. A round is a single	imputation of each feature with missing values. The stopping criterion is met once `max(abs(X_t - X_{t-1}))/max(abs(X[known_vals])) < tol`,	where `X_t` is `X` at iteration `t`. Note that early stopping is only applied if ``sample_posterior=False``]. Defaults to 10.
+        max_iter (int, optional): Maximum number of imputation rounds to perform before returning the imputations computed during the final round. A round is a single	imputation of each feature with missing values. The stopping criterion is met once ``max(abs(X_t - X_{t-1}))/max(abs(X[known_vals])) < tol``,	where ``X_t`` is ``X`` at iteration `t`. Note that early stopping is only applied if ``sample_posterior=False``. Defaults to 10.
 
-        tol (float, optional): [Tolerance of the stopping condition]. Defaults to 1e-3.
+        tol (float, optional): Tolerance of the stopping condition. Defaults to 1e-3.
 
-        n_nearest_features (int, optional): [Number of other features to use to estimate the missing values of each feature column. Nearness between features is measured using the absolute correlation coefficient between each feature pair (after initial imputation). To ensure coverage of features throughout the imputation process, the neighbor features are not necessarily nearest,	but are drawn with probability proportional to correlation for each	imputed target feature. Can provide significant speed-up when the number of features is huge. If ``None``, all features will be used]. Defaults to None.
+        n_nearest_features (int, optional): Number of other features to use to estimate the missing values of each feature column. Nearness between features is measured using the absolute correlation coefficient between each feature pair (after initial imputation). To ensure coverage of features throughout the imputation process, the neighbor features are not necessarily nearest,	but are drawn with probability proportional to correlation for each	imputed target feature. Can provide significant speed-up when the number of features is huge. If ``None``, all features will be used. Defaults to None.
 
-        initial_strategy (str, optional): [Which strategy to use to initialize the missing values. Same as the ``strategy`` parameter in :class:`~sklearn.impute.SimpleImputer`	Valid values: {"mean", "median", "most_frequent", or "constant"}]. Defaults to 'mean'.
+        initial_strategy (str, optional): Which strategy to use to initialize the missing values. Same as the ``strategy`` parameter in :class:`~sklearn.impute.SimpleImputer`	Valid values: "most_frequent", "populations", or "phylogeny". Defaults to "populations".
 
-        imputation_order (str, optional): [The order in which the features will be imputed. Possible values: "ascending" (From features with fewest missing values to most), "descending" (From features with most missing values to fewest, "roman" (Left to right), "arabic" (Right to left),  random" (A random order for each round)]. Defaults to 'ascending'.
+        imputation_order (str, optional): The order in which the features will be imputed. Possible values: "ascending" (From features with fewest missing values to most), "descending" (From features with most missing values to fewest, "roman" (Left to right), "arabic" (Right to left),  random" (A random order for each round). Defaults to 'ascending'.
 
-        skip_complete (bool, optional): [If ``True`` then features with missing values during ``transform`` that did not have any missing values during ``fit`` will be imputed with the initial imputation method only. Set to ``True`` if you have	many features with no missing values at both ``fit`` and ``transform`` time to save compute]. Defaults to False.
+        skip_complete (bool, optional): If True then features with missing values during ``transform`` that did not have any missing values during ``fit`` will be imputed with the initial imputation method only. Set to ``True`` if you have	many features with no missing values at both ``fit`` and ``transform`` time to save compute. Defaults to False.
 
-        min_value (float or array-like of shape (n_features,), optional): [Minimum possible imputed value. Broadcast to shape (n_features,) if scalar. If array-like, expects shape (n_features,), one min value for each feature. The default is `-np.inf`...versionchanged:: 0.23 (Added support for array-like)]. Defaults to -np.inf.
+        min_value (float or array-like of shape (n_features,), optional): Minimum possible imputed value. Broadcast to shape (n_features,) if scalar. If array-like, expects shape (n_features,), one min value for each feature. The default is `-np.inf`...versionchanged:: 0.23 (Added support for array-like). Defaults to -np.inf.
 
-        max_value (float or array-like of shape (n_features,), optional): [Maximum possible imputed value. Broadcast to shape (n_features,) if scalar. If array-like, expects shape (n_features,), one max value for each feature..versionchanged:: 0.23 (Added support for array-like)]. Defaults to np.inf.
+        max_value (float or array-like of shape (n_features,), optional): Maximum possible imputed value. Broadcast to shape (n_features,) if scalar. If array-like, expects shape (n_features,), one max value for each feature..versionchanged:: 0.23 (Added support for array-like). Defaults to np.inf.
 
-        verbose (int, optional): [Verbosity flag, controls the debug messages that are issued as functions are evaluated. The higher, the more verbose. Can be 0, 1, or 2]. Defaults to 0.
+        verbose (int, optional): Verbosity flag, controls the debug messages that are issued as functions are evaluated. The higher, the more verbose. Can be 0, 1, or 2. Defaults to 0.
 
-        random_state (int or RandomState instance, optional): [The seed of the pseudo random number generator to use. Randomizes selection of estimator features if n_nearest_features is not None, the ``imputation_order`` if ``random``, and the sampling from posterior if ``sample_posterior`` is True. Use an integer for determinism. See :term:`the Glossary <random_state>`]. Defaults to None.
+        random_state (int or RandomState instance, optional): The seed of the pseudo random number generator to use. Randomizes selection of estimator features if n_nearest_features is not None, the ``imputation_order`` if ``random``, and the sampling from posterior if ``sample_posterior`` is True. Use an integer for determinism. See :term:`the Glossary <random_state>`. Defaults to None.
 
-        add_indicator (bool, optional): [If True, a :class:`MissingIndicator` transform will stack onto output of the imputer's transform. This allows a predictive estimator to account for missingness despite imputation. If a feature has no missing values at fit/train time, the feature won't appear on the missing indicator even if there are missing values at transform/test time]. Defaults to False.
+        add_indicator (bool, optional): If True, a :class:`MissingIndicator` transform will stack onto output of the imputer's transform. This allows a predictive estimator to account for missingness despite imputation. If a feature has no missing values at fit/train time, the feature won't appear on the missing indicator even if there are missing values at transform/test time. Defaults to False.
 
-        genotype_data (dict(list(str)), optional): [Dictionary with keys=sampleIds and values=list of genotypes for the corresponding key]. Defaults to None.
+        genotype_data (Dict[List[str]], optional): Dictionary with keys=sampleIds and values=list of genotypes for the corresponding key. Defaults to None.
 
-        str_encodings (dict(str: int), optional): [Integer encodings used in STRUCTURE-formatted file. Should be a dictionary with keys=nucleotides and values=integer encodings. The missing data encoding should also be included. Argument is ignored if using a PHYLIP-formatted file]. Defaults to {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}
+        str_encodings (Dict[str, int], optional): Integer encodings used in STRUCTURE-formatted file. Should be a dictionary with keys=nucleotides and values=integer encodings. The missing data encoding should also be included. Argument is ignored if using a PHYLIP-formatted file. Defaults to {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}
 
     Attributes:
-        initial_imputer_: ([:class:`~sklearn.impute.SimpleImputer`):  [Imputer used to initialize the missing values]
+        initial_imputer_: (:class:`~sklearn.impute.SimpleImputer`):  Imputer used to initialize the missing values.
 
-        imputation_sequence_ [list of tuples)]: [Each tuple has ``(feat_idx, neighbor_feat_idx, estimator)``, where ``feat_idx`` is the current feature to be imputed, ``neighbor_feat_idx`` is the array of other features used to impute the current feature, and ``estimator`` is the trained estimator used for the imputation. Length is ``self.n_features_with_missing_ *	self.n_iter_``]
+        imputation_sequence_ (List[Tuple[numpy.ndarray]]): Each tuple has ``(feat_idx, neighbor_feat_idx, estimator)``, where ``feat_idx`` is the current feature to be imputed, ``neighbor_feat_idx`` is the array of other features used to impute the current feature, and ``estimator`` is the trained estimator used for the imputation. Length is ``self.n_features_with_missing_ *	self.n_iter_``.
 
-        n_iter_ ([int]): [Number of iteration rounds that occurred. Will be less than ``self.max_iter`` if early stopping criterion was reached]
+        n_iter_ (int): Number of iteration rounds that occurred. Will be less than ``self.max_iter`` if early stopping criterion was reached.
 
-        n_features_with_missing_ ([int]): [Number of features with missing values]
+        n_features_with_missing_ (int): Number of features with missing values.
 
-        indicator_ ([:class:`~sklearn.impute.MissingIndicator`)]: [Indicator used to add binary indicators for missing values ``None`` if add_indicator is False]
+        indicator_ (:class:`~sklearn.impute.MissingIndicator`): Indicator used to add binary indicators for missing values ``None`` if add_indicator is False.
 
-        random_state_ [(RandomState instance)]: [RandomState instance that is generated either from a seed, the random number generator or by `np.random`]
+        random_state_ (RandomState instance): RandomState instance that is generated either from a seed, the random number generator or by ``np.random``.
 
-        genotype_data [(GenotypeData object)]: [GenotypeData object]
+        genotype_data (GenotypeData object): GenotypeData object.
 
-        str_encodings ([dict(str: int)]): [Dictionary with integer encodings for converting from STRUCTURE-formatted file to IUPAC nucleotides]
+        str_encodings (Dict[str, int]): Dictionary with integer encodings for converting from STRUCTURE-formatted file to IUPAC nucleotides.
 
     See Also:
         SimpleImputer : Univariate imputation of missing values.
@@ -197,39 +203,39 @@ class IterativeImputerGridSearch(IterativeImputer):
 
     def __init__(
         self,
-        logfilepath,
-        search_space,
-        clf_kwargs,
-        ga_kwargs,
-        prefix,
-        estimator=None,
+        logfilepath: str,
+        search_space: Dict[str, Any],
+        clf_kwargs: Dict[str, Any],
+        ga_kwargs: Dict[str, Any],
+        prefix: str,
+        estimator: Callable = None,
         *,
-        grid_cv=5,
-        grid_n_jobs=1,
-        grid_n_iter=10,
-        clf_type="classifier",
-        ga=False,
-        disable_progressbar=False,
-        progress_update_percent=None,
-        pops=None,
-        scoring_metric="accuracy",
-        early_stop_gen=5,
-        missing_values=np.nan,
-        sample_posterior=False,
-        max_iter=10,
-        tol=1e-3,
-        n_nearest_features=None,
-        initial_strategy="mean",
-        imputation_order="ascending",
-        skip_complete=False,
-        min_value=-np.inf,
-        max_value=np.inf,
-        verbose=0,
-        random_state=None,
-        add_indicator=False,
-        genotype_data=None,
-        str_encodings=None,
-    ):
+        grid_cv: int = 5,
+        grid_n_jobs: int = 1,
+        grid_n_iter: int = 10,
+        clf_type: str = "classifier",
+        ga: bool = False,
+        disable_progressbar: bool = False,
+        progress_update_percent: Optional[int] = None,
+        pops: Optional[List[Union[str, int]]] = None,
+        scoring_metric: str = "accuracy",
+        early_stop_gen: int = 5,
+        missing_values: Union[int, np.float] = np.nan,
+        sample_posterior: bool = False,
+        max_iter: int = 10,
+        tol: float = 1e-3,
+        n_nearest_features: Optional[int] = None,
+        initial_strategy: str = "populations",
+        imputation_order: str = "ascending",
+        skip_complete: bool = False,
+        min_value: Union[np.float, int, float] = -np.inf,
+        max_value: Union[np.float, int, float] = np.inf,
+        verbose: int = 0,
+        random_state: Optional[int] = None,
+        add_indicator: bool = False,
+        genotype_data: Optional[Any] = None,
+        str_encodings: Optional[Dict[str, int]] = None,
+    ) -> None:
 
         super().__init__(
             estimator=estimator,
@@ -278,26 +284,29 @@ class IterativeImputerGridSearch(IterativeImputer):
         self.scoring_metric = scoring_metric
         self.early_stop_gen = early_stop_gen
 
-    def _initial_imputation(self, X, cols_to_keep, in_fit=False):
-        """[Perform initial imputation for input X]
+    def _initial_imputation(
+        self, X: np.ndarray, cols_to_keep: np.ndarray, in_fit: bool = False
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Perform initial imputation for input X.
+
+        Initially imputes training data using a simple imputation method.
 
         Args:
-            X ([ndarray, shape (n_samples, n_features)]): [Input data, where "n_samples" is the number of samples and "n_features" is the number of features].
+            X (numpy.ndarray, shape (n_samples, n_features)): Input data, where ``n_samples`` is the number of samples and ``n_features`` is the number of features.
 
-            cols_to_keep ([numpy.ndarray, shape (n_features,)]): [Column indices to keep. Only used if initial_strategy == 'phylogeny']
+            cols_to_keep (numpy.ndarray, shape (n_features,)): Column indices to keep. Only used if ``initial_strategy="phylogeny"``.
 
-            in_fit (bool, optional): [Whether function is called in fit]. Defaults to False.
+            in_fit (bool, optional): Whether function is called in fit. Defaults to False.
 
         Returns:
-            Xt ([ndarray, shape (n_samples, n_features)]: [Input data, where "n_samples" is the number of samples and "n_features" is the number of features]
+            Xt (numpy.ndarray, shape (n_samples, n_features): Input data, where ``n_samples`` is the number of samples and ``n_features`` is the number of features.
 
-            X_filled ([ndarray, shape (n_samples, n_features)]): [Input data with the most recent imputations]
+            X_filled (numpy.ndarray, shape (n_samples, n_features)): [Input data with the most recent imputations.
 
-            mask_missing_values ([ndarray, shape (n_samples, n_features)]): [Input data's missing indicator matrix, where "n_samples" is the
-                number of samples and "n_features" is the number of features.
+            mask_missing_values (numpy.ndarray, shape (n_samples, n_features)): Input data's missing indicator matrix, where ``n_samples`` is the number of samples and ``n_features`` is the number of features.
 
-            X_missing_mask ([ndarray, shape (n_samples, n_features)]): [Input data's mask matrix indicating missing datapoints, where
-                "n_samples" is the number of samples and "n_features" is the
+            X_missing_mask (numpy.ndarray, shape (n_samples, n_features)): Input data's mask matrix indicating missing datapoints, where
+                ``n_samples`` is the number of samples and ``n_features`` is the
                 number of features.
         """
         if is_scalar_nan(self.missing_values):
@@ -383,32 +392,34 @@ class IterativeImputerGridSearch(IterativeImputer):
     @ignore_warnings(category=UserWarning)
     def _impute_one_feature(
         self,
-        X_filled,
-        mask_missing_values,
-        feat_idx,
-        neighbor_feat_idx,
-        estimator=None,
-        fit_mode=True,
-    ):
-        """[Impute a single feature from the others provided. This function predicts the missing values of one of the features using the current estimates of all the other features. The ``estimator`` must support ``return_std=True`` in its ``predict`` method for this function to work]
+        X_filled: np.ndarray,
+        mask_missing_values: np.ndarray,
+        feat_idx: int,
+        neighbor_feat_idx: np.ndarray,
+        estimator: Optional[Any] = None,
+        fit_mode: bool = True,
+    ) -> Tuple[np.ndarray, Optional[Any]]:
+        """Impute a single feature from the others provided.
+
+        This function predicts the missing values of one of the features using the current estimates of all the other features. The ``estimator`` must support ``return_std=True`` in its ``predict`` method for this function to work.
 
         Args:
-            X_filled [(ndarray)]: [Input data with the most recent imputations]
+            X_filled (numpy.ndarray): Input data with the most recent imputations.
 
-            mask_missing_values [(ndarray)]: [Input data's missing indicator matrix]
+            mask_missing_values (numpy.ndarray): Input data's missing indicator matrix.
 
-            feat_idx [(int)]: [Index of the feature currently being imputed]
+            feat_idx (int): Index of the feature currently being imputed.
 
-            neighbor_feat_idx [(ndarray)]: [Indices of the features to be used in imputing ``feat_idx``]
+            neighbor_feat_idx (numpy.ndarray): Indices of the features to be used in imputing ``feat_idx``.
 
-            estimator [(object)]: [The estimator to use at this step of the round-robin imputation If ``sample_posterior`` is True, the estimator must support ``return_std`` in its ``predict`` method.If None, it will be cloned from self._estimator]
+            estimator (sklearn estimator object, optional): The estimator to use at this step of the round-robin imputation If ``sample_posterior`` is True, the estimator must support ``return_std`` in its ``predict`` method. If None, it will be cloned from self._estimator. Defaults to None.
 
-            fit_mode (bool, optional): [Whether to fit and predict with the estimator or just predict]. Defaults to True.
+            fit_mode (bool, optional): Whether to fit and predict with the estimator or just predict. Defaults to True.
 
         Returns:
-            X_filled [(ndarray)]: [Input data with ``X_filled[missing_row_mask, feat_idx]`` updated]
+            X_filled (ndarray): Input data with ``X_filled[missing_row_mask, feat_idx]`` updated.
 
-            estimator [(estimator with sklearn API)]: [The fitted estimator used to impute ``X_filled[missing_row_mask, feat_idx]``]
+            estimator (estimator with sklearn API): The fitted estimator used to impute ``X_filled[missing_row_mask, feat_idx]``.
         """
         if estimator is None and fit_mode is False:
             raise ValueError(
@@ -528,18 +539,27 @@ class IterativeImputerGridSearch(IterativeImputer):
         return X_filled, search
 
     @ignore_warnings(category=UserWarning)
-    def fit_transform(self, X, valid_cols, y=None):
-        """[Fits the imputer on X and return the transformed X]
+    def fit_transform(
+        self,
+        X: np.ndarray,
+        valid_cols: Optional[np.ndarray] = None,
+        y: None,
+    ) -> Tuple[np.ndarray, Optional[List[Any]], Optional[List[Any]]]:
+        """Fits the imputer on X and return the transformed X.
+
+        Functionality has been added to perform grid searches using two methods (genetic algorithm and RandomSearchCV). It also makes several useful plots if using the genetic algorithm, and a progress bar has been added.
 
         Args:
-            X [(array-like, shape (n_samples, n_features))]: [Input data, where "n_samples" is the number of samples and "n_features" is the number of features]
+            X (array-like, shape (n_samples, n_features)): Input data, where "n_samples" is the number of samples and "n_features" is the number of features.
 
-            valid_cols ([numpy.ndarray]): [Array with column indices to keep]
+            valid_cols (numpy.ndarray, optional): Array with column indices to keep. Defaults to None.
 
-            y ([None]) [Ignored. Here for compatibility with other sklearn classes]
+            y (None, optional): Ignored. Here for compatibility with other sklearn classes. Defaults to None.
 
         Returns:
-            Xt [(array-like, shape (n_samples, n_features))]: [The imputed input data]
+            array-like, shape (n_samples, n_features)): The imputed input data.
+            List[Union[str, int, float]]: List of parameter settings found.
+            List[Union[int, float]]: List of scores.
         """
         self.random_state_ = getattr(
             self, "random_state_", check_random_state(self.random_state)
@@ -579,14 +599,14 @@ class IterativeImputerGridSearch(IterativeImputer):
             self.n_iter_ = 0
             return super(IterativeImputer, self)._concatenate_indicator(
                 Xt, X_indicator
-            )
+            ), None, None
 
         # Edge case: a single feature. We return the initial ...
         if Xt.shape[1] == 1:
             self.n_iter_ = 0
             return super(IterativeImputer, self)._concatenate_indicator(
                 Xt, X_indicator
-            )
+            ), None, None
 
         self._min_value = self._validate_limit(
             self.min_value, "min", X.shape[1]
@@ -789,7 +809,16 @@ class IterativeImputerGridSearch(IterativeImputer):
                     )
 
                 if inf_norm < normalized_tol:
-                    if self.verbose > 0:
+                    if self.disable_progressbar:
+                        # Early stopping criteria has been reached
+                        with open(self.logfilepath, "a") as fout:
+                            # Redirect to progress logfile
+                            with redirect_stdout(fout):
+                                print(
+                                    "[IterativeImputer] Early stopping "
+                                    "criterion reached."
+                                )
+                    else:
                         print(
                             "[IterativeImputer] Early stopping criterion "
                             "reached."
@@ -876,21 +905,23 @@ class IterativeImputerGridSearch(IterativeImputer):
         )
 
     def plot_search_space(
-        self, estimator, height=2, s=25, features: list = None
-    ):
-        """[Make density and contour plots for showing search space during grid search. Modified from sklearn-genetic-opt function to implement exception handling]
+        self, estimator: Any, height: Union[int, float] = 2, s: Union[int, float] = 25, features: Optional[List[Any]] = None
+    ) -> sns.PairGrid:
+        """Make density and contour plots for showing search space during grid search.
+
+        Modified from sklearn-genetic-opt function to implement exception handling.
 
         Args:
-            estimator [(sklearn estimator object)]: [A fitted estimator from :class:`~sklearn_genetic.GASearchCV`]
+            estimator (sklearn estimator object): A fitted estimator from :class:`~sklearn_genetic.GASearchCV`.
 
-            height (float, optional): [Height of each facet]. Defaults to 2.
+            height (float, optional): Height of each facet. Defaults to 2.
 
-            s (float, optional): [Size of the markers in scatter plot]. Defaults to 5.
+            s (float, optional): Size of the markers in scatter plot. Defaults to 5.
 
-            features (list, optional): [Subset of features to plot, if ``None`` it plots all the features by default]. Defaults to None.
+            features (list, optional): Subset of features to plot, if ``None`` it plots all the features by default. Defaults to None.
 
         Returns:
-            g [(seaborn.PairGrid)]: [Pair plot of the used hyperparameters during the search]
+            g (seaborn.PairGrid): Pair plot of the used hyperparameters during the search.
         """
         sns.set_style("white")
 
