@@ -80,13 +80,15 @@ class IterativeImputerFixedParams(IterativeImputer):
 
         prefix (str): Prefix for output files.
 
-        estimator (estimator object, optional): The estimator to use at each step of the round-robin imputation. If ``sample_posterior`` is True, the estimator must support ``return_std`` in its ``predict`` method. Defaults to BayesianRidge().
+        estimator (callable estimator object, optional): The estimator to use at each step of the round-robin imputation. If ``sample_posterior`` is True, the estimator must support ``return_std`` in its ``predict`` method. Defaults to BayesianRidge().
 
         clf_type (str, optional): Whether to run ```'classifier'``` or ``'regression'`` based imputation. Defaults to 'classifier'
 
         disable_progressbar (bool, optional): Whether or not to disable the tqdm progress bar. If True, disables the progress bar. If False, tqdm is used for the progress bar. This can be useful if you are running the imputation on an HPC cluster or are saving the standard output to a file. If True, progress updates will be printed to the screen every ``progress_update_percent`` iterations. Defaults to False.
 
         progress_update_percent (int, optional): How often to display progress updates (as a percentage) if ``disable_progressbar`` is True. If ``progress_update_frequency=10``, then it displays progress updates every 10%. Defaults to 10.
+
+        pops (List[Union[str, int]] or None): List of population IDs to be used with ImputeAlleleFreq if ``initial_strategy="populations"``.
 
         missing_values (int or np.nan, optional): The placeholder for the missing values. All occurrences of ``missing_values`` will be imputed. For pandas dataframes with	nullable integer dtypes with missing values, ``missing_values`` should be set to ``np.nan``, since ``pd.NA`` will be converted to ``np.nan``. Defaults to np.nan.
 
@@ -197,31 +199,31 @@ class IterativeImputerFixedParams(IterativeImputer):
 
     def __init__(
         self,
-        logfilepath,
-        clf_kwargs,
-        prefix,
-        estimator=None,
+        logfilepath: str,
+        clf_kwargs: Dict[str, Any],
+        prefix: str,
+        estimator: Callable = None,
         *,
-        clf_type="classifier",
-        disable_progressbar=False,
-        progress_update_percent=None,
-        pops=None,
-        missing_values=np.nan,
-        sample_posterior=False,
-        max_iter=10,
-        tol=1e-3,
-        n_nearest_features=None,
-        initial_strategy="mean",
-        imputation_order="ascending",
-        skip_complete=False,
-        min_value=-np.inf,
-        max_value=np.inf,
-        verbose=0,
-        random_state=None,
-        add_indicator=False,
-        genotype_data=None,
-        str_encodings=None,
-    ):
+        clf_type: str = "classifier",
+        disable_progressbar: bool = False,
+        progress_update_percent: Optional[int] = None,
+        pops: Optional[List[Union[str, int]]] = None,
+        missing_values: Union[np.float, int] = np.nan,
+        sample_posterior: bool = False,
+        max_iter: int = 10,
+        tol: float = 1e-3,
+        n_nearest_features: Optional[int] = None,
+        initial_strategy: str = "mean",
+        imputation_order: str = "ascending",
+        skip_complete: bool = False,
+        min_value: Union[np.float, int, float] = -np.inf,
+        max_value: Union[np.float, int, float] = np.inf,
+        verbose: int = 0,
+        random_state: Optional[int] = None,
+        add_indicator: bool = False,
+        genotype_data: Optional[Any] = None,
+        str_encodings: Optional[Dict[str, int]] = None,
+    ) -> None:
         super().__init__(
             estimator=estimator,
             missing_values=missing_values,
