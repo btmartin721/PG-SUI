@@ -751,7 +751,7 @@ class GenotypeData:
         """Population Ids.
 
         Returns:
-            List[Union[str, int]]: Poulation IDs.
+            List[Union[str, int]]: Population IDs.
         """
         return self.pops
 
