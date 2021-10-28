@@ -1018,7 +1018,7 @@ class ImputePhylo(GenotypeData):
         save_plots: bool = False,
         write_output: bool = True,
         disable_progressbar: bool = False,
-        **kwargs: Dict[str, Any],
+        **kwargs: Optional[Any],
     ) -> None:
         super().__init__()
 
@@ -1046,15 +1046,29 @@ class ImputePhylo(GenotypeData):
             outfile = f"{prefix}_imputed_012.csv"
             self.imputed.to_csv(outfile, header=False, index=False)
 
-    def nbiallelic(self):
-        """[Get the number of remaining bi-allelic sites after imputation]
+    def nbiallelic(self) -> int:
+        """Get the number of remaining bi-allelic sites after imputation.
 
         Returns:
-            [int]: [Number of bi-allelic sites remaining after imputation]
+            int: Number of bi-allelic sites remaining after imputation.
         """
         return len(self.imputed.columns)
 
-    def parse_arguments(self, genotype_data):
+    def parse_arguments(
+        self, genotype_data: Any
+    ) -> Tuple[Dict[str, List[Union[int, str]]], tt.tree, pd.DataFrame]:
+        """Determine which arguments were specified and set appropriate values.
+
+        Args:
+            genotype_data (GenotypeData object): Initialized GenotypeData object.
+
+        Returns:
+            Dict[str, List[Union[int, str]]]: GenotypeData.snpsdict object. If genotype_data is not None, then this value gets set from the GenotypeData.snpsdict object. If alnfile is not None, then the alignment file gets read and the snpsdict object gets set from the alnfile.
+
+            toytree.tree: Input phylogeny, either read from GenotypeData object or supplied with treefile.
+
+            pandas.DataFrame: Q Rate Matrix, either from IQ-TREE file or from its own supplied file.
+        """
         if genotype_data is not None:
             data = genotype_data.snpsdict
             self.filetype = genotype_data.filetype
@@ -1103,7 +1117,20 @@ class ImputePhylo(GenotypeData):
 
         return data, tree, q
 
-    def validate_arguments(self, genotype_data):
+    def validate_arguments(self, genotype_data: Any) -> None:
+        """Validate that the correct arguments were supplied.
+
+        Args:
+            genotype_data (GenotypeData object): Input GenotypeData object.
+
+        Raises:
+            TypeError: Cannot define both genotype_data and alnfile.
+            TypeError: Must define either genotype_data or phylipfile.
+            TypeError: Must define either genotype_data.tree or treefile.
+            TypeError: filetype must be defined if genotype_data is None.
+            TypeError: Q rate matrix must be defined.
+            TypeError: qmatrix and qmatrix_iqtree cannot both be defined.
+        """
         if genotype_data is not None and self.alnfile is not None:
             raise TypeError("genotype_data and alnfile cannot both be defined")
 
@@ -1131,7 +1158,12 @@ class ImputePhylo(GenotypeData):
         if self.qmatrix is not None and self.qmatrix_iqtree is not None:
             raise TypeError("qmatrix and qmatrix_iqtree cannot both be defined")
 
-    def print_q(self, q):
+    def print_q(self, q: pd.DataFrame) -> None:
+        """Print Rate Matrix Q.
+
+        Args:
+            q (pandas.DataFrame): Rate Matrix Q.
+        """
         print("Rate matrix Q:")
         print("\tA\tC\tG\tT\t")
         for nuc1 in ["A", "C", "G", "T"]:
@@ -1140,7 +1172,15 @@ class ImputePhylo(GenotypeData):
                 print(q[nuc1][nuc2], end="\t")
             print("")
 
-    def is_int(self, val):
+    def is_int(self, val: Union[str, int]) -> bool:
+        """Check if value is integer.
+
+        Args:
+            val (int or str): Value to check.
+
+        Returns:
+            bool: True if integer, False if string.
+        """
         try:
             num = int(val)
         except ValueError:
@@ -1148,10 +1188,15 @@ class ImputePhylo(GenotypeData):
         return True
 
     def impute_phylo(
-        self, tree, genotypes, Q, site_rates=None, exclude_N=False
-    ):
-        """[Imputes genotype values by using a provided guide
-        tree to inform the imputation, assuming maximum parsimony]
+        self,
+        tree: tt.tree,
+        genotypes: Dict[str, List[Union[str, int]]],
+        Q: pd.DataFrame,
+    ) -> pd.DataFrame:
+        """Imputes genotype values with a guide tree.
+
+        Imputes genotype values by using a provided guide
+        tree to inform the imputation, assuming maximum parsimony.
 
         Sketch:
             For each SNP:
@@ -1165,11 +1210,19 @@ class ImputePhylo(GenotypeData):
             with the maximum likelihood state (root -> tips)
 
         Args:
-            tree ([toytree object]): [Toytree object]
+            tree (toytree.tree object): Input tree.
 
-            genotypes ([dict(list)]): [Dictionary with key=sampleids, value=sequences]
+            genotypes (Dict[str, List[Union[str, int]]]): Dictionary with key=sampleids, value=sequences.
 
-            Q ([pandas.DataFrame]): [Rate Matrix Q from .iqtree file]
+            Q (pandas.DataFrame): Rate Matrix Q from .iqtree or separate file.
+
+        Returns:
+            pandas.DataFrame: Imputed genotypes.
+
+        Raises:
+            IndexError: If index does not exist when trying to read genotypes.
+            AssertionError: Sites must have same lengths.
+            AssertionError: Missing data still found after imputation.
         """
         try:
             if list(genotypes.values())[0][0][1] == "/":
@@ -1333,7 +1386,15 @@ class ImputePhylo(GenotypeData):
 
         return df_imp
 
-    def get_nuc_colors(self, nucs):
+    def get_nuc_colors(self, nucs: List[str]) -> List[str]:
+        """Get colors for each nucleotide when plotting.
+
+        Args:
+            nucs (List[str]): Nucleotides at current site.
+
+        Returns:
+            List[str]: Hex-code color values for each IUPAC nucleotide.
+        """
         ret = list()
         for nuc in nucs:
             nuc = nuc.upper()
@@ -1361,13 +1422,44 @@ class ImputePhylo(GenotypeData):
                 ret.append("#000000")
         return ret
 
-    def label_bads(self, tips, labels, bads):
+    def label_bads(
+        self, tips: List[str], labels: List[str], bads: List[str]
+    ) -> List[str]:
+        """Insert asterisks around bad nucleotides.
+
+        Args:
+            tips (List[str]): Tip labels (sample IDs).
+            labels (List[str]): List of nucleotides at current site.
+            bads (List[str]): List of tips that have missing data at current site.
+
+        Returns:
+            List[str]: IUPAC Nucleotides with "*" inserted around tips that had missing data.
+        """
         for i, t in enumerate(tips):
             if t in bads:
                 labels[i] = "*" + str(labels[i]) + "*"
         return labels
 
-    def draw_imputed_position(self, tree, bads, genotypes, pos, out="tree.pdf"):
+    def draw_imputed_position(
+        self,
+        tree: tt.tree,
+        bads: List[str],
+        genotypes: Dict[str, List[str]],
+        pos: int,
+        out: str = "tree.pdf",
+    ) -> None:
+        """Draw nucleotides at phylogeny tip and saves to file on disk.
+
+        Draws nucleotides as tip labels for the current SNP site. Imputed values have asterisk surrounding the nucleotide label. The tree is converted to a toyplot object and saved to file.
+
+        Args:
+            tree (toytree.tree): Input tree object.
+            bads (List[str]): List of sampleIDs that have missing data at the current SNP site.
+            genotypes (Dict[str, List[str]]): Genotypes at all SNP sites.
+            pos (int): Current SNP index.
+            out (str, optional): Output filename for toyplot object.
+        """
+
         # print(tree.get_tip_labels())
         sizes = [8 if i in bads else 0 for i in tree.get_tip_labels()]
         colors = [genotypes[i][pos] for i in tree.get_tip_labels()]
@@ -1390,7 +1482,6 @@ class ImputePhylo(GenotypeData):
 
         canvas, axes, mark = tree.draw(
             tip_labels_colors=colors,
-            # node_sizes = sizes,
             tip_labels=labels,
             width=400,
             height=600,
@@ -1399,7 +1490,27 @@ class ImputePhylo(GenotypeData):
 
         toyplot.pdf.render(canvas, out)
 
-    def allMissing(self, tree, node_index, snp_index, genotypes):
+    def allMissing(
+        self,
+        tree: tt.tree,
+        node_index: int,
+        snp_index: int,
+        genotypes: Dict[str, List[str]],
+    ) -> bool:
+        """Check if all descendants of a clade have missing data at SNP site.
+
+        Args:
+            tree (toytree.tree): Input guide tree object.
+
+            node_index (int): Parent node to determine if all desendants have missing data.
+
+            snp_index (int): Index of current SNP site.
+
+            genotypes (Dict[str, List[str]]): Genotypes at all SNP sites.
+
+        Returns:
+            bool: True if all descendants have missing data, otherwise False.
+        """
         for des in tree.get_tip_labels(idx=node_index):
             if genotypes[des][snp_index].upper() not in ["N", "-"]:
                 return False
@@ -1423,7 +1534,18 @@ class ImputePhylo(GenotypeData):
         ret[:] = pt
         return ret
 
-    def str2iupac(self, genotypes, str_encodings):
+    def str2iupac(
+        self, genotypes: Dict[str, List[str]], str_encodings: Dict[str, int]
+    ) -> Dict[str, List[str]]:
+        """Convert STRUCTURE-format encodings to IUPAC bases.
+
+        Args:
+            genotypes (Dict[str, List[str]]): Genotypes at all sites.
+            str_encodings (Dict[str, int]): Dictionary that maps IUPAC bases (keys) to integer encodings (values).
+
+        Returns:
+            Dict[str, List[str]]: Genotypes converted to IUPAC format.
+        """
         a = str_encodings["A"]
         c = str_encodings["C"]
         g = str_encodings["G"]
@@ -1455,7 +1577,15 @@ class ImputePhylo(GenotypeData):
 
         return genotypes
 
-    def get_iupac_full(self, char, str_encodings):
+    def get_iupac_full(self, char: str) -> List[str]:
+        """Map nucleotide to list of expanded IUPAC encodings.
+
+        Args:
+            char (str): Current nucleotide.
+
+        Returns:
+            List[str]: List of nucleotides in ``char`` expanded IUPAC.
+        """
         char = char.upper()
         iupac = {
             "A": ["A"],
