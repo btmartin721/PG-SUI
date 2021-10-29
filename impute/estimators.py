@@ -1,5 +1,6 @@
 # Standard library imports
 import sys
+from pathlib import Path
 from timeit import default_timer
 from typing import Optional, Union, List, Dict, Tuple, Any, Callable
 
@@ -1198,16 +1199,16 @@ class ImputePhylo(GenotypeData):
         Imputes genotype values by using a provided guide
         tree to inform the imputation, assuming maximum parsimony.
 
-        Sketch:
+        Process Outline:
             For each SNP:
-            1) if site_rates, get site-transformated Q matrix
+            1) if site_rates, get site-transformated Q matrix.
 
             2) Postorder traversal of tree to compute ancestral
-            state likelihoods for internal nodes (tips -> root)
-            If exclude_N==True, then ignore N tips for this step
+            state likelihoods for internal nodes (tips -> root).
+            If exclude_N==True, then ignore N tips for this step.
 
             3) Preorder traversal of tree to populate missing genotypes
-            with the maximum likelihood state (root -> tips)
+            with the maximum likelihood state (root -> tips).
 
         Args:
             tree (toytree.tree object): Input tree.
@@ -1281,8 +1282,7 @@ class ImputePhylo(GenotypeData):
                             sum = None
 
                             for allele in self.get_iupac_full(
-                                genotypes[child.name][snp_index],
-                                self.str_encodings,
+                                genotypes[child.name][snp_index]
                             ):
                                 if sum is None:
                                     sum = list(pt[allele])
@@ -1516,18 +1516,42 @@ class ImputePhylo(GenotypeData):
                 return False
         return True
 
-    def get_internal_lik(self, pt, lik_arr):
-        ret = list()
-        for i, val in enumerate(lik_arr):
+    def get_internal_lik(
+        self, pt: pd.DataFrame, lik_arr: List[float]
+    ) -> List[float]:
+        """Get ancestral state likelihoods for internal nodes of the tree.
 
+        Postorder traversal to calculate internal ancestral state likelihoods (tips -> root).
+
+        Args:
+            pt (pandas.DataFrame): Transition probabilities calculated from Rate Matrix Q.
+            lik_arr (List[float]): Likelihoods for nodes or leaves.
+
+        Returns:
+            List[float]: Internal likelihoods.
+        """
+        ret = list()
+        print(lik_arr)
+        for i, val in enumerate(lik_arr):
             col = list(pt.iloc[:, i])
             sum = 0.0
             for v in col:
                 sum += v * val
             ret.append(sum)
+        print(ret)
+        sys.exit()
         return ret
 
-    def transition_probs(self, Q, t):
+    def transition_probs(self, Q: pd.DataFrame, t: float) -> pd.DataFrame:
+        """Get transition probabilities for tree.
+
+        Args:
+            Q (pd.DataFrame): Rate Matrix Q.
+            t (float): Tree distance of child.
+
+        Returns:
+            pd.DataFrame: Transition probabilities.
+        """
         ret = Q.copy(deep=True)
         m = Q.to_numpy()
         pt = scipy.linalg.expm(m * t)
@@ -1910,47 +1934,46 @@ class ImputeBackPropogation(GenotypeData):
 
 
 class ImputeAlleleFreq(GenotypeData):
-    """
-    [Impute missing data by global allele frequency. Population IDs can be sepcified with the pops argument. if pops is None, then imputation is by global allele frequency. If pops is not None, then imputation is by population-wise allele frequency. A list of population IDs in the appropriate format can be obtained from the GenotypeData object as GenotypeData.populations]
+    """Impute missing data by global allele frequency. Population IDs can be sepcified with the pops argument. if pops is None, then imputation is by global allele frequency. If pops is not None, then imputation is by population-wise allele frequency. A list of population IDs in the appropriate format can be obtained from the GenotypeData object as GenotypeData.populations.
 
     Args:
-        genotype_data ([GenotypeData]): [GenotypeData instance. If ``genotype_data`` is not defined, then ``gt`` must be defined instead, and they cannot both be defined]. Defaults to None.
+        genotype_data (GenotypeData object or None, optional): GenotypeData instance. If ``genotype_data`` is not defined, then ``gt`` must be defined instead, and they cannot both be defined. Defaults to None.
 
-        gt (List[int], optional): List of 012-encoded genotypes to be imputed. Either ``gt`` or ``genotype_data`` must be defined, and they cannot both be defined. Defaults to None.
+        gt (List[int] or None, optional): List of 012-encoded genotypes to be imputed. Either ``gt`` or ``genotype_data`` must be defined, and they cannot both be defined. Defaults to None.
 
-        by_populations (bool, optional): [Whether or not to impute by population or globally]. Defaults to False (globally).
+        by_populations (bool, optional): Whether or not to impute by population or globally. Defaults to False (global allele frequency).
 
-        pops (List[Union[str, int]], optional): Population IDs in the same order as the samples. If ``by_populations=True``, then either ``pops`` or ``genotype_data`` must be defined. If both are defined, the ``pops`` argument will take priority. Defaults to None.
+        pops (List[Union[str, int]] or None, optional): Population IDs in the same order as the samples. If ``by_populations=True``, then either ``pops`` or ``genotype_data`` must be defined. If both are defined, the ``pops`` argument will take priority. Defaults to None.
 
-        diploid (bool, optional): [When diploid=True, function assumes 0=homozygous ref; 1=heterozygous; 2=homozygous alt. 0-1-2 genotypes are decomposed to compute p (=frequency of ref) and q (=frequency of alt). In this case, p and q alleles are sampled to generate either 0 (hom-p), 1 (het), or 2 (hom-q) genotypes. When diploid=FALSE, 0-1-2 are sampled according to their observed frequency]. Defaults to True.
+        diploid (bool, optional): When diploid=True, function assumes 0=homozygous ref; 1=heterozygous; 2=homozygous alt. 0-1-2 genotypes are decomposed to compute p (=frequency of ref) and q (=frequency of alt). In this case, p and q alleles are sampled to generate either 0 (hom-p), 1 (het), or 2 (hom-q) genotypes. When diploid=FALSE, 0-1-2 are sampled according to their observed frequency. Defaults to True.
 
-        default (int, optional): [Value to set if no alleles sampled at a locus]. Defaults to 0.
+        default (int, optional): Value to set if no alleles sampled at a locus. Defaults to 0.
 
-        missing (int, optional): [Missing data value]. Defaults to -9.
+        missing (int, optional): Missing data value. Defaults to -9.
 
-        prefix (str, optional): [Prefix for writing output files]
+        prefix (str, optional): Prefix for writing output files. Defaults to "output".
 
-        write_output (bool, optional): [Whether to save imputed output to a file. If ``write_output`` is False, then just returns the imputed values as a pandas.DataFrame object. If ``write_output`` is True, then it saves the imputed data as a CSV file called ``<prefix>_imputed_012.csv``]
+        write_output (bool, optional): Whether to save imputed output to a file. If ``write_output`` is False, then just returns the imputed values as a pandas.DataFrame object. If ``write_output`` is True, then it saves the imputed data as a CSV file called ``<prefix>_imputed_012.csv``.
 
-        output_format (str, optional): [Format of output imputed matrix. Possible values include: "df" for a pandas.DataFrame object, "array" for a numpy.ndarray object, and "list" for a 2D list]. Defaults to "df".
+        output_format (str, optional): Format of output imputed matrix. Possible values include: "df" for a pandas.DataFrame object, "array" for a numpy.ndarray object, and "list" for a 2D list. Defaults to "df".
 
-        verbose (bool, optional): [Whether to print status updates. Set to False for no status updates]. Defaults to True.
+        verbose (bool, optional): Whether to print status updates. Set to False for no status updates. Defaults to True.
     """
 
     def __init__(
         self,
         *,
-        genotype_data=None,
-        gt=None,
-        by_populations=False,
-        pops=None,
-        diploid=True,
-        default=0,
-        missing=-9,
-        prefix="output",
-        write_output=True,
-        output_format="df",
-        verbose=True,
+        genotype_data: Optional[Any] = None,
+        gt: Optional[List[int]] = None,
+        by_populations: bool = False,
+        pops: Optional[List[Union[str, int]]] = None,
+        diploid: bool = True,
+        default: int = 0,
+        missing: int = -9,
+        prefix: str = "output",
+        write_output: bool = True,
+        output_format: str = "df",
+        verbose: bool = True,
     ):
 
         super().__init__()

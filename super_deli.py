@@ -176,25 +176,25 @@ def main():
         #     initial_strategy="phylogeny",
         # )
 
-        # # RandomizedSearchCV Test
-        rf_imp = ImputeRandomForest(
-            data,
-            prefix=args.prefix,
-            n_estimators=50,
-            n_nearest_features=3,
-            gridparams=grid_params,
-            cv=3,
-            grid_iter=40,
-            n_jobs=4,
-            max_iter=2,
-            column_subset=5,
-            ga=False,
-            disable_progressbar=True,
-            extratrees=False,
-            progress_update_percent=20,
-            chunk_size=0.2,
-            initial_strategy="phylogeny",
-        )
+        # # # RandomizedSearchCV Test
+        # rf_imp = ImputeRandomForest(
+        #     data,
+        #     prefix=args.prefix,
+        #     n_estimators=50,
+        #     n_nearest_features=3,
+        #     gridparams=grid_params,
+        #     cv=3,
+        #     grid_iter=40,
+        #     n_jobs=4,
+        #     max_iter=2,
+        #     column_subset=5,
+        #     ga=False,
+        #     disable_progressbar=True,
+        #     extratrees=False,
+        #     progress_update_percent=20,
+        #     chunk_size=0.2,
+        #     initial_strategy="phylogeny",
+        # )
 
         # lgbm = ImputeLightGBM(
         #     data,
@@ -230,24 +230,24 @@ def main():
         #     hidden_layer_sizes=[100, 100, 100],
         # )
 
-        rf_imp = ImputeRandomForest(
-            data,
-            prefix=args.prefix,
-            n_estimators=50,
-            n_nearest_features=3,
-            n_jobs=4,
-            max_iter=2,
-            disable_progressbar=True,
-            extratrees=False,
-            max_features="sqrt",
-            min_samples_split=5,
-            min_samples_leaf=2,
-            max_depth=30,
-            cv=3,
-            validation_only=0.5,
-            chunk_size=1.0,
-            initial_strategy="phylogeny",
-        )
+        # rf_imp = ImputeRandomForest(
+        #     data,
+        #     prefix=args.prefix,
+        #     n_estimators=50,
+        #     n_nearest_features=3,
+        #     n_jobs=4,
+        #     max_iter=2,
+        #     disable_progressbar=True,
+        #     extratrees=False,
+        #     max_features="sqrt",
+        #     min_samples_split=5,
+        #     min_samples_leaf=2,
+        #     max_depth=30,
+        #     cv=3,
+        #     validation_only=0.5,
+        #     chunk_size=1.0,
+        #     initial_strategy="phylogeny",
+        # )
 
         # afpops = ImputeAlleleFreq(
         # 	data, by_populations=True, prefix=args.prefix)
@@ -270,7 +270,7 @@ def main():
         #     initial_strategy="group_mode",
         # )
 
-        # ImputePhylo(genotype_data=data, save_plots=False)
+        ImputePhylo(genotype_data=data, save_plots=False)
 
     # colors = {
     # 	"GU": "#FF00FF",
