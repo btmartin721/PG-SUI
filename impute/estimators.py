@@ -1958,6 +1958,11 @@ class ImputeAlleleFreq(GenotypeData):
         output_format (str, optional): Format of output imputed matrix. Possible values include: "df" for a pandas.DataFrame object, "array" for a numpy.ndarray object, and "list" for a 2D list. Defaults to "df".
 
         verbose (bool, optional): Whether to print status updates. Set to False for no status updates. Defaults to True.
+
+    Raises:
+        TypeError: genotype_data and gt cannot both be NoneType.
+        TypeError: genotype_data and gt cannot both be provided.
+        TypeError: Either pops or genotype_data must be defined if by_populations is True.
     """
 
     def __init__(
@@ -2028,88 +2033,139 @@ class ImputeAlleleFreq(GenotypeData):
             self.write2file(self.imputed)
 
     def fit_predict(self, X):
-        """[Impute missing genotypes using global allele frequencies, with missing alleles coded as negative; usually -9]
+        """Impute missing genotypes using allele frequencies.
+
+        Impute using global or by_population allele frequencies. Missing alleles are primarily coded as negative; usually -9.
 
         Args:
-            X ([list(list(int))]): [012-encoded genotypes obtained from the GenotypeData object as GenotypeData.genotypes_list]
+            X (List[List[int]], numpy.ndarray, or pandas.DataFrame): 012-encoded genotypes obtained from the GenotypeData object.
 
         Returns:
-            [pandas.DataFrame]: [Imputed genotypes of same dimensions as data]
+            pandas.DataFrame: Imputed genotypes of same shape as data.
+
+        Raises:
+            TypeError: X must be either 2D list, numpy.ndarray, or pandas.DataFrame.
+
+            ValueError: Unknown output_format type specified.
         """
         if self.pops is not None and self.verbose:
             print("\nImputing by population allele frequencies...")
         elif self.pops is None and self.verbose:
             print("\nImputing by global allele frequency...")
 
-        data = [item[:] for item in X]
+        if isinstance(X, (list, np.ndarray)):
+            df = pd.DataFrame(X)
+        elif isinstance(X, pd.DataFrame):
+            df = X.copy()
+        else:
+            raise TypeError(
+                "X must be either a 2D list, numpy.ndarray, "
+                "or pandas.DataFrame!"
+            )
+
+        df.replace(self.missing, np.nan, inplace=True)
 
         if self.pops is not None:
-            pop_indices = misc.get_indices(self.pops)
+            df["pops"] = self.pops
+        else:
+            df["pops"] = "same"
 
-        loc_index = 0
-        for locus in data:
-            if self.pops is None:
-                allele_probs = self._get_allele_probs(locus, self.diploid)
-                # print(allele_probs)
-                if (
-                    misc.all_zero(list(allele_probs.values()))
-                    or not allele_probs
-                ):
-                    print(
-                        "\nWarning: No alleles sampled at locus",
-                        str(loc_index),
-                        "setting all values to:",
-                        str(self.default),
-                    )
-                    gen_index = 0
-                    for geno in locus:
-                        data[loc_index][gen_index] = self.default
-                        gen_index += 1
+        func = lambda x: x.mode().iloc[0]
 
-                else:
-                    gen_index = 0
-                    for geno in locus:
-                        if geno == self.missing:
-                            data[loc_index][gen_index] = self._sample_allele(
-                                allele_probs, diploid=True
-                            )
-                        gen_index += 1
+        testpop = pd.DataFrame()
+        testglobal = pd.DataFrame()
+        for col in df.columns:
+            testpop[col] = df.groupby(["pops"], sort=False)[col].apply(
+                lambda x: x.fillna(x.mode()[0])
+            )
 
-            else:
-                for pop in pop_indices.keys():
-                    allele_probs = self._get_allele_probs(
-                        locus,
-                        self.diploid,
-                        missing=self.missing,
-                        indices=pop_indices[pop],
-                    )
+            testglobal[col] = df[col].fillna(df[col].mode()[0])
 
-                    if (
-                        misc.all_zero(list(allele_probs.values()))
-                        or not allele_probs
-                    ):
-                        print(
-                            "\nWarning: No alleles sampled at locus",
-                            str(loc_index),
-                            "setting all values to:",
-                            str(self.default),
-                        )
-                        gen_index = 0
-                        for geno in locus:
-                            data[loc_index][gen_index] = self.default
-                            gen_index += 1
-                    else:
-                        gen_index = 0
-                        for geno in locus:
-                            if geno == self.missing:
-                                data[loc_index][
-                                    gen_index
-                                ] = self._sample_allele(
-                                    allele_probs, diploid=True
-                                )
-                            gen_index += 1
+        # testpop = df.fillna(df.groupby("pops").transform(func))
+        testpop.drop("pops", axis=1, inplace=True)
+        testglobal.drop("pops", axis=1, inplace=True)
 
-            loc_index += 1
+        # for col in df.columns:
+        #     testglobal[col] = fillna(df[col].mode()[0])
+
+        # testglobal.drop("pops", axis=1, inplace=True)
+
+        testcompare = testpop.compare(testglobal)
+        print(testcompare)
+
+        # df.drop("pops", axis=1, inplace=True)
+        # print(df)
+        sys.exit()
+
+        # data = [item[:] for item in X]
+
+        # if self.pops is not None:
+        #     pop_indices = misc.get_indices(self.pops)
+
+        # loc_index = 0
+        # for locus in data:
+        #     if self.pops is None:
+        #         allele_probs = self._get_allele_probs(locus, self.diploid)
+        #         print(allele_probs)
+        #         if (
+        #             misc.all_zero(list(allele_probs.values()))
+        #             or not allele_probs
+        #         ):
+        #             print(
+        #                 f"\nWarning: No alleles sampled at locus "
+        #                 f"{loc_index}; setting all values to: "
+        #                 f"{self.default}"
+        #             )
+
+        #             gen_index = 0
+        #             for geno in locus:
+        #                 data[loc_index][gen_index] = self.default
+        #                 gen_index += 1
+
+        #         else:
+        #             gen_index = 0
+        #             for geno in locus:
+        #                 if geno == self.missing:
+        #                     data[loc_index][gen_index] = self._sample_allele(
+        #                         allele_probs, diploid=True
+        #                     )
+        #                 gen_index += 1
+
+        #     else:
+        #         for pop in pop_indices.keys():
+        #             allele_probs = self._get_allele_probs(
+        #                 locus,
+        #                 self.diploid,
+        #                 missing=self.missing,
+        #                 indices=pop_indices[pop],
+        #             )
+
+        #             if (
+        #                 misc.all_zero(list(allele_probs.values()))
+        #                 or not allele_probs
+        #             ):
+        #                 print(
+        #                     f"\nWarning: No alleles sampled at locus "
+        #                     f"{loc_index}; setting all values to: "
+        #                     f"{self.default}"
+        #                 )
+
+        #                 gen_index = 0
+        #                 for geno in locus:
+        #                     data[loc_index][gen_index] = self.default
+        #                     gen_index += 1
+        #             else:
+        #                 gen_index = 0
+        #                 for geno in locus:
+        #                     if geno == self.missing:
+        #                         data[loc_index][
+        #                             gen_index
+        #                         ] = self._sample_allele(
+        #                             allele_probs, diploid=True
+        #                         )
+        #                     gen_index += 1
+
+        #     loc_index += 1
 
         if self.verbose:
             print("Done!")
@@ -2124,9 +2180,10 @@ class ImputeAlleleFreq(GenotypeData):
             return data
 
         else:
-            raise ValueError("Unknown output output_format specified")
+            raise ValueError("Unknown output_format type specified!")
 
     def _sample_allele(self, allele_probs, diploid=True):
+        """Randomly sample alleles"""
         if diploid:
             alleles = misc.weighted_draw(allele_probs, 2)
             if alleles[0] == alleles[1]:
@@ -2170,10 +2227,10 @@ class ImputeAlleleFreq(GenotypeData):
                     length -= 2
                 else:
                     print(
-                        "\nWarning: Ignoring unrecognized allele",
-                        str(g),
-                        "in get_allele_probs\n",
+                        f"\nWARNING: Ignoring unrecognized allele {g} in "
+                        f"get_allele_probs\n"
                     )
+
             for allele in ret.keys():
                 ret[allele] = ret[allele] / float(length)
             return ret

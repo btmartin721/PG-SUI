@@ -249,8 +249,9 @@ def main():
         #     initial_strategy="phylogeny",
         # )
 
-        # afpops = ImputeAlleleFreq(
-        # 	data, by_populations=True, prefix=args.prefix)
+        afpops = ImputeAlleleFreq(
+            genotype_data=data, by_populations=True, prefix=args.prefix
+        )
 
         # br_imp = ImputeBayesianRidge(data, prefix=args.prefix, n_iter=100, gridparams=grid_params, grid_iter=3, cv=3, n_jobs=4, max_iter=5, n_nearest_features=3, column_subset=4, ga=False, disable_progressbar=True, progress_update_percent=20, chunk_size=1.0)
 
@@ -270,7 +271,7 @@ def main():
         #     initial_strategy="group_mode",
         # )
 
-        ImputePhylo(genotype_data=data, save_plots=False)
+        # ImputePhylo(genotype_data=data, save_plots=False)
 
     # colors = {
     # 	"GU": "#FF00FF",
