@@ -177,24 +177,24 @@ def main():
         # )
 
         # # RandomizedSearchCV Test
-        rf_imp = ImputeRandomForest(
-            data,
-            prefix=args.prefix,
-            n_estimators=50,
-            n_nearest_features=3,
-            gridparams=grid_params,
-            cv=3,
-            grid_iter=40,
-            n_jobs=4,
-            max_iter=2,
-            column_subset=5,
-            ga=False,
-            disable_progressbar=True,
-            extratrees=False,
-            progress_update_percent=20,
-            chunk_size=0.2,
-            initial_strategy="populations",
-        )
+        # rf_imp = ImputeRandomForest(
+        #     data,
+        #     prefix=args.prefix,
+        #     n_estimators=50,
+        #     n_nearest_features=3,
+        #     gridparams=grid_params,
+        #     cv=3,
+        #     grid_iter=40,
+        #     n_jobs=4,
+        #     max_iter=2,
+        #     column_subset=5,
+        #     ga=False,
+        #     disable_progressbar=True,
+        #     extratrees=False,
+        #     progress_update_percent=20,
+        #     chunk_size=0.2,
+        #     initial_strategy="populations",
+        # )
 
         # lgbm = ImputeLightGBM(
         #     data,
@@ -249,12 +249,12 @@ def main():
         #     initial_strategy="phylogeny",
         # )
 
-        # afpops = ImputeAlleleFreq(
-        #     genotype_data=data,
-        #     by_populations=False,
-        #     prefix=args.prefix,
-        #     write_output=True,
-        # )
+        afpops = ImputeAlleleFreq(
+            genotype_data=data,
+            by_populations=True,
+            prefix=args.prefix,
+            write_output=False,
+        )
 
         # br_imp = ImputeBayesianRidge(data, prefix=args.prefix, n_iter=100, gridparams=grid_params, grid_iter=3, cv=3, n_jobs=4, max_iter=5, n_nearest_features=3, column_subset=4, ga=False, disable_progressbar=True, progress_update_percent=20, chunk_size=1.0)
 

@@ -35,3 +35,4 @@ training_data/collated/
 .ipynb_checkpoints/*
 .mypy_cache/
 .mypy_cache/*
+mypy.ini

@@ -83,13 +83,13 @@ class GenotypeData:
         self.qmatrix_iqtree = qmatrix_iqtree
         self.qmatrix = qmatrix
 
-        self.snpsdict = dict()
-        self.samples = list()
-        self.snps = list()
-        self.pops = list()
-        self.onehot = list()
-        self.num_snps = 0
-        self.num_inds = 0
+        self.snpsdict: Dict[str, List[Union[str, int]]] = dict()
+        self.samples: List[str] = list()
+        self.snps: List[List[int]] = list()
+        self.pops: List[Union[str, int]] = list()
+        self.onehot: Union[np.ndarray, List[List[List[float]]]] = list()
+        self.num_snps: int = 0
+        self.num_inds: int = 0
 
         if self.qmatrix_iqtree is not None and self.qmatrix is not None:
             raise TypeError("qmatrix_iqtree and qmatrix cannot both be defined")
@@ -278,7 +278,7 @@ class GenotypeData:
     def blank_q_matrix(
         self, default: float = 0.0
     ) -> Dict[str, Dict[str, float]]:
-        q = dict()
+        q: Dict[str, Dict[str, float]] = dict()
         for nuc1 in ["A", "C", "G", "T"]:
             q[nuc1] = dict()
             for nuc2 in ["A", "C", "G", "T"]:
@@ -690,7 +690,7 @@ class GenotypeData:
 
             return np.array(onehot_outer_list)
 
-    def read_popmap(self, popmapfile: str) -> None:
+    def read_popmap(self, popmapfile: Optional[str]) -> None:
         """Read population map from file.
 
         Args:
@@ -794,7 +794,7 @@ class GenotypeData:
         return df.astype(np.float32)
 
     @property
-    def genotypes_onehot(self) -> np.ndarray:
+    def genotypes_onehot(self) -> Union[np.ndarray, List[List[List[float]]]]:
         """One-hot encoded snps format.
 
         Returns:

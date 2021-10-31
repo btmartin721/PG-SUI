@@ -2074,14 +2074,14 @@ class ImputeAlleleFreq(GenotypeData):
         data = pd.DataFrame()
         if self.pops is not None:
             df["pops"] = self.pops
+            # Loop method is faster than no-loop apply and transform methods.
             for col in df.columns:
                 data[col] = df.groupby(["pops"], sort=False)[col].transform(
                     lambda x: x.fillna(x.mode().iloc[0])
                 )
             data.drop("pops", axis=1, inplace=True)
         else:
-            for col in df.columns:
-                data[col] = df[col].fillna(df[col].mode().iloc[0])
+            data = df.apply(lambda x: x.fillna(x.mode().iloc[0]), axis=1)
 
         if self.iterative_mode:
             data = data.astype(dtype="float32")
