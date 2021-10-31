@@ -943,7 +943,6 @@ class Impute:
         Returns:
             pandas.DataFrame: DataFrame with non-biallelic sites dropped.
         """
-        cv2 = self.cv * 2
         df_cp = df.copy()
         bad_cols = list()
         if pd.__version__[0] == 0:
@@ -954,14 +953,14 @@ class Impute:
                 ):
                     bad_cols.append(col)
 
-                elif len(df_cp[df_cp[col] == 0.0]) < cv2:
+                elif len(df_cp[df_cp[col] == 0.0]) < self.cv:
                     bad_cols.append(col)
 
                 elif df_cp[col].isin([1.0]).any():
-                    if len(df_cp[df_cp[col] == 1]) < cv2:
+                    if len(df_cp[df_cp[col] == 1]) < self.cv:
                         bad_cols.append(col)
 
-                elif len(df_cp[df_cp[col] == 2.0]) < cv2:
+                elif len(df_cp[df_cp[col] == 2.0]) < self.cv:
                     bad_cols.append(col)
 
         # pandas 1.X.X
@@ -970,21 +969,24 @@ class Impute:
                 if 0.0 not in df[col].unique() and 2.0 not in df[col].unique():
                     bad_cols.append(col)
 
-                elif len(df_cp[df_cp[col] == 0.0]) < cv2:
+                elif len(df_cp[df_cp[col] == 0.0]) < self.cv:
                     bad_cols.append(col)
 
                 elif 1.0 in df_cp[col].unique():
-                    if len(df_cp[df_cp[col] == 1.0]) < cv2:
+                    if len(df_cp[df_cp[col] == 1.0]) < self.cv:
                         bad_cols.append(col)
 
-                elif len(df_cp[df_cp[col] == 2.0]) < cv2:
+                elif len(df_cp[df_cp[col] == 2.0]) < self.cv:
                     bad_cols.append(col)
 
-        df_cp.drop(bad_cols, axis=1, inplace=True)
+        if bad_cols:
+            df_cp.drop(bad_cols, axis=1, inplace=True)
 
-        print(
-            f"{len(bad_cols)} columns removed for being non-biallelic or having genotype counts < number of cross-validation folds\nSubsetting from {len(df_cp.columns)} remaining columns\n"
-        )
+            print(
+                f"{len(bad_cols)} columns removed for being non-biallelic or "
+                f"having genotype counts < number of cross-validation "
+                f"folds\nSubsetting from {len(df_cp.columns)} remaining columns\n"
+            )
 
         return df_cp
 

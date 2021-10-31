@@ -309,7 +309,7 @@ class IterativeImputerFixedParams(IterativeImputer):
         X_missing_mask = _get_mask(X, self.missing_values)
         mask_missing_values = X_missing_mask.copy()
 
-        if self.initial_strategy == "most_frequent_populations":
+        if self.initial_strategy == "populations":
             self.initial_imputer_ = impute.estimators.ImputeAlleleFreq(
                 gt=np.nan_to_num(X, nan=-9).tolist(),
                 pops=self.pops,
@@ -317,6 +317,7 @@ class IterativeImputerFixedParams(IterativeImputer):
                 missing=-9,
                 write_output=False,
                 verbose=False,
+                iterative_mode=True,
             )
 
             X_filled = self.initial_imputer_.imputed.to_numpy()

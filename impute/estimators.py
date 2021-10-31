@@ -1959,6 +1959,8 @@ class ImputeAlleleFreq(GenotypeData):
 
         verbose (bool, optional): Whether to print status updates. Set to False for no status updates. Defaults to True.
 
+        **kwargs (Dict[str, Any]): Additional keyword arguments to supply. Primarily for internal purposes. Options include: {"iterative_mode": bool}. "iterative_mode" determines whether ``ImputeAlleleFreq`` is being used as the initial imputer in ``IterativeImputer``.
+
     Raises:
         TypeError: genotype_data and gt cannot both be NoneType.
         TypeError: genotype_data and gt cannot both be provided.
@@ -1979,7 +1981,8 @@ class ImputeAlleleFreq(GenotypeData):
         write_output: bool = True,
         output_format: str = "df",
         verbose: bool = True,
-    ):
+        **kwargs: Dict[str, Any],
+    ) -> None:
 
         super().__init__()
 
@@ -2026,13 +2029,16 @@ class ImputeAlleleFreq(GenotypeData):
         self.prefix = prefix
         self.output_format = output_format
         self.verbose = verbose
+        self.iterative_mode = kwargs.get("iterative_mode", False)
 
         self.imputed = self.fit_predict(gt_list)
 
         if write_output:
             self.write2file(self.imputed)
 
-    def fit_predict(self, X):
+    def fit_predict(
+        self, X: List[List[int]]
+    ) -> Union[pd.DataFrame, np.ndarray, List[List[Union[int, float]]]]:
         """Impute missing genotypes using allele frequencies.
 
         Impute using global or by_population allele frequencies. Missing alleles are primarily coded as negative; usually -9.
@@ -2041,7 +2047,7 @@ class ImputeAlleleFreq(GenotypeData):
             X (List[List[int]], numpy.ndarray, or pandas.DataFrame): 012-encoded genotypes obtained from the GenotypeData object.
 
         Returns:
-            pandas.DataFrame: Imputed genotypes of same shape as data.
+            pandas.DataFrame, numpy.ndarray, or List[List[Union[int, float]]]: Imputed genotypes of same shape as data.
 
         Raises:
             TypeError: X must be either 2D list, numpy.ndarray, or pandas.DataFrame.
@@ -2059,203 +2065,65 @@ class ImputeAlleleFreq(GenotypeData):
             df = X.copy()
         else:
             raise TypeError(
-                "X must be either a 2D list, numpy.ndarray, "
-                "or pandas.DataFrame!"
+                f"X must be of type list(list(int)), numpy.ndarray, "
+                f"or pandas.DataFrame, but got {type(X)}"
             )
 
         df.replace(self.missing, np.nan, inplace=True)
 
+        data = pd.DataFrame()
         if self.pops is not None:
             df["pops"] = self.pops
+            for col in df.columns:
+                data[col] = df.groupby(["pops"], sort=False)[col].transform(
+                    lambda x: x.fillna(x.mode().iloc[0])
+                )
+            data.drop("pops", axis=1, inplace=True)
         else:
-            df["pops"] = "same"
+            for col in df.columns:
+                data[col] = df[col].fillna(df[col].mode().iloc[0])
 
-        func = lambda x: x.mode().iloc[0]
-
-        testpop = pd.DataFrame()
-        testglobal = pd.DataFrame()
-        for col in df.columns:
-            testpop[col] = df.groupby(["pops"], sort=False)[col].apply(
-                lambda x: x.fillna(x.mode()[0])
-            )
-
-            testglobal[col] = df[col].fillna(df[col].mode()[0])
-
-        # testpop = df.fillna(df.groupby("pops").transform(func))
-        testpop.drop("pops", axis=1, inplace=True)
-        testglobal.drop("pops", axis=1, inplace=True)
-
-        # for col in df.columns:
-        #     testglobal[col] = fillna(df[col].mode()[0])
-
-        # testglobal.drop("pops", axis=1, inplace=True)
-
-        testcompare = testpop.compare(testglobal)
-        print(testcompare)
-
-        # df.drop("pops", axis=1, inplace=True)
-        # print(df)
-        sys.exit()
-
-        # data = [item[:] for item in X]
-
-        # if self.pops is not None:
-        #     pop_indices = misc.get_indices(self.pops)
-
-        # loc_index = 0
-        # for locus in data:
-        #     if self.pops is None:
-        #         allele_probs = self._get_allele_probs(locus, self.diploid)
-        #         print(allele_probs)
-        #         if (
-        #             misc.all_zero(list(allele_probs.values()))
-        #             or not allele_probs
-        #         ):
-        #             print(
-        #                 f"\nWarning: No alleles sampled at locus "
-        #                 f"{loc_index}; setting all values to: "
-        #                 f"{self.default}"
-        #             )
-
-        #             gen_index = 0
-        #             for geno in locus:
-        #                 data[loc_index][gen_index] = self.default
-        #                 gen_index += 1
-
-        #         else:
-        #             gen_index = 0
-        #             for geno in locus:
-        #                 if geno == self.missing:
-        #                     data[loc_index][gen_index] = self._sample_allele(
-        #                         allele_probs, diploid=True
-        #                     )
-        #                 gen_index += 1
-
-        #     else:
-        #         for pop in pop_indices.keys():
-        #             allele_probs = self._get_allele_probs(
-        #                 locus,
-        #                 self.diploid,
-        #                 missing=self.missing,
-        #                 indices=pop_indices[pop],
-        #             )
-
-        #             if (
-        #                 misc.all_zero(list(allele_probs.values()))
-        #                 or not allele_probs
-        #             ):
-        #                 print(
-        #                     f"\nWarning: No alleles sampled at locus "
-        #                     f"{loc_index}; setting all values to: "
-        #                     f"{self.default}"
-        #                 )
-
-        #                 gen_index = 0
-        #                 for geno in locus:
-        #                     data[loc_index][gen_index] = self.default
-        #                     gen_index += 1
-        #             else:
-        #                 gen_index = 0
-        #                 for geno in locus:
-        #                     if geno == self.missing:
-        #                         data[loc_index][
-        #                             gen_index
-        #                         ] = self._sample_allele(
-        #                             allele_probs, diploid=True
-        #                         )
-        #                     gen_index += 1
-
-        #     loc_index += 1
+        if self.iterative_mode:
+            data = data.astype(dtype="float32")
+        else:
+            data = data.astype(dtype="Int8")
 
         if self.verbose:
             print("Done!")
 
         if self.output_format == "df":
-            return pd.DataFrame(data)
+            return data
 
         elif self.output_format == "array":
-            return np.array(data)
+            return data.to_numpy()
 
         elif self.output_format == "list":
-            return data
+            return data.values.tolist()
 
         else:
             raise ValueError("Unknown output_format type specified!")
 
-    def _sample_allele(self, allele_probs, diploid=True):
-        """Randomly sample alleles"""
-        if diploid:
-            alleles = misc.weighted_draw(allele_probs, 2)
-            if alleles[0] == alleles[1]:
-                return alleles[0]
-            else:
-                return 1
-        else:
-            return misc.weighted_draw(allele_probs, 1)[0]
+    def write2file(
+        self, X: Union[pd.DataFrame, np.ndarray, List[List[Union[int, float]]]]
+    ) -> None:
+        """Write imputed data to file on disk.
 
-    def _get_allele_probs(
-        self, genotypes, diploid=True, missing=-9, indices=None
-    ):
-        data = genotypes
-        length = len(genotypes)
+        Args:
+            X (pandas.DataFrame, numpy.ndarray, List[List[Union[int, float]]]): Imputed data to write to file.
 
-        if indices is not None:
-            data = [genotypes[index] for index in indices]
-            length = len(data)
-
-        if len(set(data)) == 1:
-            if data[0] == missing:
-                ret = dict()
-                return ret
-            else:
-                ret = dict()
-                ret[data[0]] = 1.0
-                return ret
-
-        if diploid:
-            length = length * 2
-            ret = {0: 0.0, 2: 0.0}
-            for g in data:
-                if g == 0:
-                    ret[0] += 2
-                elif g == 2:
-                    ret[2] += 2
-                elif g == 1:
-                    ret[0] += 1
-                    ret[2] += 1
-                elif g == missing:
-                    length -= 2
-                else:
-                    print(
-                        f"\nWARNING: Ignoring unrecognized allele {g} in "
-                        f"get_allele_probs\n"
-                    )
-
-            for allele in ret.keys():
-                ret[allele] = ret[allele] / float(length)
-            return ret
-        else:
-            ret = dict()
-            for key in set(data):
-                if key != missing:
-                    ret[key] = 0.0
-            for g in data:
-                if g == missing:
-                    length -= 1
-                else:
-                    ret[g] += 1
-            for allele in ret.keys():
-                ret[allele] = ret[allele] / float(length)
-            return ret
-
-    def get_imputed_genotypes(self):
-        """[Getter for the imputed genotypes]
-
-        Returns:
-            [pandas.DataFrame]: [Imputed 012-encoded genotypes as DataFrame]
+        Raises:
+            TypeError: If X is of unsupported type.
         """
-        return self.imputed
-
-    def write2file(self, df):
         outfile = f"{self.prefix}_imputed_012.csv"
+
+        if isinstance(X, pd.DataFrame):
+            df = X
+        elif isinstance(X, (np.ndarray, list)):
+            df = pd.DataFrame(X)
+        else:
+            raise TypeError(
+                f"Could not write imputed data because it is of incorrect "
+                f"type. Got {type(X)}"
+            )
+
         df.to_csv(outfile, header=False, index=False)
