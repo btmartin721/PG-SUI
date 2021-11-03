@@ -115,7 +115,10 @@ class Impute:
         self.clf_type = clf_type
         self.original_num_cols = None
 
-        self.pops = kwargs["genotype_data"].populations
+        try:
+            self.pops = kwargs["genotype_data"].populations
+        except AttributeError:
+            self.pops = None
 
         # Separate local variables into settings objects
         (
@@ -1176,7 +1179,7 @@ class Impute:
         gt_data = self.imp_kwargs["genotype_data"]
         str_enc = self.imp_kwargs["str_encodings"]
 
-        if initial_strategy == "most_frequent_populations":
+        if initial_strategy == "populations":
             simple_imputer = impute.estimators.ImputeAlleleFreq(
                 gt=df.fillna(-9).values.tolist(),
                 pops=self.pops,

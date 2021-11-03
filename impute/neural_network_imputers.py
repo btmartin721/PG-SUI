@@ -19,12 +19,13 @@ from memory_profiler import memory_usage
 import matplotlib.pylab as plt
 import seaborn as sns
 
-import theano
-import theano.tensor as T
-import theano.tensor.extra_ops
-import theano.tensor.nnet as nnet
+# import theano
+# import theano.tensor as T
+# import theano.tensor.extra_ops
+# import theano.tensor.nnet as nnet
 from timeit import default_timer
 
+import tensorflow as tf
 from keras.utils import np_utils
 from keras.objectives import mse
 from keras.models import Sequential
@@ -77,8 +78,8 @@ def create_weights(sz):
     return theta
 
 
-def grad_desc(cost, theta, alpha):
-    return theta - (alpha * T.grad(cost, wrt=theta))
+# def grad_desc(cost, theta, alpha):
+#     return theta - (alpha * T.grad(cost, wrt=theta))
 
 
 class ImputeVAE(Impute):
@@ -106,7 +107,11 @@ class ImputeVAE(Impute):
 
         self.clf = "VAE"
         self.clf_type = "classifier"
-        self.imp_kwargs = {"initial_strategy": initial_strategy}
+        self.imp_kwargs = {
+            "initial_strategy": initial_strategy,
+            "genotype_data": genotype_data,
+            "str_encodings": {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9},
+        }
 
         super().__init__(self.clf, self.clf_type, self.imp_kwargs)
 
@@ -185,6 +190,8 @@ class ImputeVAE(Impute):
     def fit_predict(self, X):
         self.df = self._encode_onehot(X)
         self.data = self.df.copy().values
+        print(self.data)
+        sys.exit()
 
         imputed_enc = self.train(
             train_epochs=self.train_epochs, batch_size=self.batch_size
@@ -388,32 +395,10 @@ class ImputeVAE(Impute):
             Dense(
                 first_layer_size,
                 input_dim=2 * n_dims,
-                activation=self.hidden_activation,
+                activation="sigmoid",
+                use_bias=False,
                 kernel_regularizer=l1_l2(self.l1_penalty, self.l2_penalty),
-                kernel_initializer=self.kernel_initializer,
-            )
-        )
-
-        model.add(Dropout(self.dropout_probability))
-
-        for layer_size in hidden_layer_sizes[1:]:
-            model.add(
-                Dense(
-                    layer_size,
-                    activation=self.hidden_activation,
-                    kernel_regularizer=l1_l2(self.l1_penalty, self.l2_penalty),
-                    kernel_initializer=self.kernel_initializer,
-                )
-            )
-
-            model.add(Dropout(self.dropout_probability))
-
-        model.add(
-            Dense(
-                n_dims,
-                activation=self.output_activation,
-                kernel_regularizer=l1_l2(self.l1_penalty, self.l2_penalty),
-                kernel_initializer=self.kernel_initializer,
+                kernel_initializer=self.V[],
             )
         )
 
@@ -517,7 +502,6 @@ class ImputeUBP(Impute):
         self,
         *,
         genotype_data=None,
-        gt=None,
         prefix="output",
         cv=5,
         initial_strategy="populations",
@@ -525,7 +509,12 @@ class ImputeUBP(Impute):
         disable_progressbar=False,
         reduced_dimensions=2,
         num_hidden_layers=3,
+        hidden_layer_sizes=100,
+        **kwargs,
     ):
+        if isinstance(hidden_layer_sizes, int):
+            hidden_layer_sizes = [hidden_layer_sizes] * num_hidden_layers
+
         assert (
             num_hidden_layers == len(hidden_layer_sizes)
             and num_hidden_layers > 0
@@ -533,7 +522,12 @@ class ImputeUBP(Impute):
 
         self.clf = "UBP"
         self.clf_type = "classifier"
-        self.imp_kwargs = {"initial_strategy": initial_strategy}
+        self.imp_kwargs = {
+            "initial_strategy": initial_strategy,
+            "genotype_data": genotype_data,
+        }
+
+        test_cat = kwargs.get("test_categorical", None)
 
         super().__init__(self.clf, self.clf_type, self.imp_kwargs)
 
@@ -546,17 +540,15 @@ class ImputeUBP(Impute):
         self.df = None
         self.data = None
 
-        if genotype_data is None and gt is None:
-            raise TypeError("genotype_data and gt cannot both be NoneType")
+        if genotype_data is None:
+            raise TypeError(
+                "genotype_data was not supplied and is a required argument"
+            )
 
-        if genotype_data is not None and gt is not None:
-            raise TypeError("genotype_data and gt cannot both be used")
-
-        if genotype_data is not None:
+        if test_cat is not None:
+            X = test_cat.copy()
+        else:
             X = genotype_data.genotypes_nparray
-
-        elif gt is not None:
-            X = gt
 
         self.Xt = None
 
@@ -572,8 +564,8 @@ class ImputeUBP(Impute):
         # Get reduced-dimension dataset.
         self.V = np.random.randn(X.shape[0], reduced_dimensions)
 
-        print(self.V)
-        sys.exit()
+        # Random initial weights of single layer perceptron
+        self.U = np.random.rand(reduced_dimensions, X.shape[1])
 
         self.num_total_epochs = 0
 
@@ -743,3 +735,159 @@ class ImputeUBP(Impute):
         df[df_dummies.columns[pos["_"]]] = df_dummies.iloc[:, pos["_"]]
 
         return df
+
+    def _get_hidden_layer_sizes(self):
+        """[Get dimensions of hidden layers]
+
+        Returns:
+            [int, int, int]: [Number of dimensions in hidden layers]
+        """
+        n_dims = self.data.shape[1]
+        return [
+            min(2000, 8 * n_dims),
+            min(500, 2 * n_dims),
+            int(np.ceil(0.5 * n_dims)),
+        ]
+
+    def _model_phase1(self):
+        """Create a single layer perceptron for UBP model.
+
+        Creates a network with the following structure:
+
+        InputLayer -> DenseLayer1 -> ActivationFunction -> OutputLayer
+
+        Returns:
+            keras model object: Compiled Keras model.
+        """
+        hidden_layer_sizes = self._get_hidden_layer_sizes()
+        first_layer_size = hidden_layer_sizes[0]
+        n_dims = self.data.shape[1]
+
+        model = Sequential()
+
+        model.add(
+            Dense(
+                first_layer_size,
+                input_dim=2 * n_dims,
+                activation=self.hidden_activation,
+                kernel_regularizer=l1_l2(self.l1_penalty, self.l2_penalty),
+                kernel_initializer=self.kernel_initializer,
+            )
+        )
+
+        # model.add(Dropout(self.dropout_probability))
+
+        # for layer_size in hidden_layer_sizes[1:]:
+        #     model.add(
+        #         Dense(
+        #             layer_size,
+        #             activation=self.hidden_activation,
+        #             kernel_regularizer=l1_l2(self.l1_penalty, self.l2_penalty),
+        #             kernel_initializer=self.kernel_initializer,
+        #         )
+        #     )
+
+        #     model.add(Dropout(self.dropout_probability))
+
+        # model.add(
+        #     Dense(
+        #         n_dims,
+        #         activation=self.output_activation,
+        #         kernel_regularizer=l1_l2(self.l1_penalty, self.l2_penalty),
+        #         kernel_initializer=self.kernel_initializer,
+        #     )
+        # )
+
+        # loss_function = make_reconstruction_loss(n_dims)
+
+        model.compile(optimizer=self.optimizer, loss=loss_function)
+
+        return model
+
+    def fill(self, missing_mask):
+        """[Mask missing data as -1]
+
+        Args:
+            missing_mask ([np.ndarray(bool)]): [Missing data mask with True corresponding to a missing value]
+        """
+        self.data[missing_mask] = -1
+
+    def _create_missing_mask(self):
+        """[Creates a missing data mask with boolean values]
+
+        Returns:
+            [numpy.ndarray(bool)]: [Boolean mask of missing values, with True corresponding to a missing data point]
+        """
+        if self.data.dtype != "f" and self.data.dtype != "d":
+            self.data = self.data.astype(float)
+        return np.isnan(self.data)
+
+    # def _train_epoch(self, model, missing_mask, batch_size):
+    #     """[Train one cycle (epoch) of a variational autoencoder model]
+
+    #     Args:
+    #         model ([Keras model object]): [VAE model object implemented in Keras]
+
+    #         missing_mask ([numpy.ndarray(bool)]): [Missing data boolean mask, with True corresponding to a missing value]
+
+    #         batch_size ([int]): [Batch size for one epoch]
+
+    #     Returns:
+    #         [numpy.ndarray]: [VAE model predictions of the current epoch]
+    #     """
+
+    #     input_with_mask = np.hstack([self.data, missing_mask])
+    #     n_samples = len(input_with_mask)
+
+    #     n_batches = int(np.ceil(n_samples / batch_size))
+    #     indices = np.arange(n_samples)
+    #     np.random.shuffle(indices)
+    #     X_shuffled = input_with_mask[indices]
+
+    #     for batch_idx in range(n_batches):
+    #         batch_start = batch_idx * batch_size
+    #         batch_end = (batch_idx + 1) * batch_size
+    #         batch_data = X_shuffled[batch_start:batch_end, :]
+    #         model.train_on_batch(batch_data, batch_data)
+
+    #     return model.predict(input_with_mask)
+
+    # def train(self, batch_size=256, train_epochs=100):
+    #     """[Train a variational autoencoder model]
+
+    #     Args:
+    #         batch_size (int, optional): [Number of data splits to train on per epoch]. Defaults to 256.
+
+    #         train_epochs (int, optional): [Number of epochs (cycles through the data) to use]. Defaults to 100.
+
+    #     Returns:
+    #         [numpy.ndarray(float)]: [Predicted values as numpy array]
+    #     """
+
+    #     missing_mask = self._create_missing_mask()
+    #     self.fill(missing_mask)
+    #     self.model = self._create_model()
+
+    #     observed_mask = ~missing_mask
+
+    #     for epoch in range(train_epochs):
+    #         X_pred = self._train_epoch(self.model, missing_mask, batch_size)
+    #         observed_mae = masked_mae(
+    #             X_true=self.data, X_pred=X_pred, mask=observed_mask
+    #         )
+
+    #         if epoch == 0:
+    #             print(f"Initial MAE: {observed_mae}")
+
+    #         elif epoch % 50 == 0:
+    #             print(
+    #                 f"Observed MAE ({epoch}/{train_epochs} epochs): "
+    #                 f"{observed_mae}"
+    #             )
+
+    #         old_weight = 1.0 - self.recurrent_weight
+    #         self.data[missing_mask] *= old_weight
+    #         pred_missing = X_pred[missing_mask]
+    #         self.data[missing_mask] += self.recurrent_weight * pred_missing
+
+    #     return self.data.copy()

@@ -259,7 +259,17 @@ def main():
 
         # br_imp = ImputeBayesianRidge(data, prefix=args.prefix, n_iter=100, gridparams=grid_params, grid_iter=3, cv=3, n_jobs=4, max_iter=5, n_nearest_features=3, column_subset=4, ga=False, disable_progressbar=True, progress_update_percent=20, chunk_size=1.0)
 
-        ubp = ImputeUBP(genotype_data=data)
+        ubp = ImputeUBP(
+            genotype_data=data,
+            test_categorical=np.array(
+                [[0, 1, 2, 0], [-9, 1, 0, 0], [2, -9, 2, 0]]
+            ),
+        )
+
+        # ubp = ImputeVAE(
+        #     gt=np.array([[0, 1], [-9, 1], [2, -9]]),
+        #     initial_strategy="most_frequent",
+        # )
 
         # br_imp = ImputeBayesianRidge(
         #     data,
