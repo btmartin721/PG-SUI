@@ -16,6 +16,7 @@ from utils.misc import generate_012_genotypes
 from read_input.read_input import GenotypeData
 from impute.estimators import *
 from impute.neural_network_imputers import ImputeVAE
+from impute.neural_network_imputers import ImputeUBP
 
 from dim_reduction.dim_reduction import DimReduction
 from dim_reduction.embed import *
@@ -249,14 +250,16 @@ def main():
         #     initial_strategy="phylogeny",
         # )
 
-        afpops = ImputeAlleleFreq(
-            genotype_data=data,
-            by_populations=True,
-            prefix=args.prefix,
-            write_output=False,
-        )
+        # afpops = ImputeAlleleFreq(
+        #     genotype_data=data,
+        #     by_populations=True,
+        #     prefix=args.prefix,
+        #     write_output=False,
+        # )
 
         # br_imp = ImputeBayesianRidge(data, prefix=args.prefix, n_iter=100, gridparams=grid_params, grid_iter=3, cv=3, n_jobs=4, max_iter=5, n_nearest_features=3, column_subset=4, ga=False, disable_progressbar=True, progress_update_percent=20, chunk_size=1.0)
+
+        ubp = ImputeUBP(genotype_data=data)
 
         # br_imp = ImputeBayesianRidge(
         #     data,

@@ -24,11 +24,6 @@ from sklearn.neighbors import KNeighborsClassifier
 import xgboost as xgb
 import lightgbm as lgbm
 
-import theano
-import theano.tensor as T
-import theano.tensor.extra_ops
-import theano.tensor.nnet as nnet
-
 # Custom imports
 from read_input.read_input import GenotypeData
 from impute.impute import Impute
@@ -2073,14 +2068,17 @@ class ImputeAlleleFreq(GenotypeData):
 
         data = pd.DataFrame()
         if self.pops is not None:
+            # Impute per-population mode.
+            # Loop method is faster (by 2X) than no-loop transform.
             df["pops"] = self.pops
-            # Loop method is faster than no-loop apply and transform methods.
             for col in df.columns:
                 data[col] = df.groupby(["pops"], sort=False)[col].transform(
                     lambda x: x.fillna(x.mode().iloc[0])
                 )
             data.drop("pops", axis=1, inplace=True)
         else:
+            # Impute global mode.
+            # No-loop method was faster for global.
             data = df.apply(lambda x: x.fillna(x.mode().iloc[0]), axis=1)
 
         if self.iterative_mode:

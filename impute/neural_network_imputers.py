@@ -19,6 +19,12 @@ from memory_profiler import memory_usage
 import matplotlib.pylab as plt
 import seaborn as sns
 
+import theano
+import theano.tensor as T
+import theano.tensor.extra_ops
+import theano.tensor.nnet as nnet
+from timeit import default_timer
+
 from keras.utils import np_utils
 from keras.objectives import mse
 from keras.models import Sequential
@@ -64,15 +70,26 @@ def masked_mae(X_true, X_pred, mask):
     return np.mean(np.abs(masked_diff))
 
 
+def create_weights(sz):
+    theta = theano.shared(
+        np.array(np.random.rand(sz[0], sz[1]), dtype=theano.config.floatX)
+    )
+    return theta
+
+
+def grad_desc(cost, theta, alpha):
+    return theta - (alpha * T.grad(cost, wrt=theta))
+
+
 class ImputeVAE(Impute):
     def __init__(
         self,
         *,
         genotype_data=None,
         gt=None,
-        prefix="imputed_VAE",
+        prefix="output",
         cv=5,
-        initial_strategy="group_mode",
+        initial_strategy="populations",
         validation_only=0.2,
         disable_progressbar=False,
         train_epochs=100,
@@ -89,7 +106,7 @@ class ImputeVAE(Impute):
 
         self.clf = "VAE"
         self.clf_type = "classifier"
-        self.imp_kwargs = {"initial_strategy": "most_frequent"}
+        self.imp_kwargs = {"initial_strategy": initial_strategy}
 
         super().__init__(self.clf, self.clf_type, self.imp_kwargs)
 
@@ -493,3 +510,236 @@ class ImputeVAE(Impute):
             self.data[missing_mask] += self.recurrent_weight * pred_missing
 
         return self.data.copy()
+
+
+class ImputeUBP(Impute):
+    def __init__(
+        self,
+        *,
+        genotype_data=None,
+        gt=None,
+        prefix="output",
+        cv=5,
+        initial_strategy="populations",
+        validation_only=0.2,
+        disable_progressbar=False,
+        reduced_dimensions=2,
+        num_hidden_layers=3,
+    ):
+        assert (
+            num_hidden_layers == len(hidden_layer_sizes)
+            and num_hidden_layers > 0
+        )
+
+        self.clf = "UBP"
+        self.clf_type = "classifier"
+        self.imp_kwargs = {"initial_strategy": initial_strategy}
+
+        super().__init__(self.clf, self.clf_type, self.imp_kwargs)
+
+        self.prefix = prefix
+
+        self.cv = cv
+        self.validation_only = validation_only
+        self.disable_progressbar = disable_progressbar
+
+        self.df = None
+        self.data = None
+
+        if genotype_data is None and gt is None:
+            raise TypeError("genotype_data and gt cannot both be NoneType")
+
+        if genotype_data is not None and gt is not None:
+            raise TypeError("genotype_data and gt cannot both be used")
+
+        if genotype_data is not None:
+            X = genotype_data.genotypes_nparray
+
+        elif gt is not None:
+            X = gt
+
+        self.Xt = None
+
+        # Get missing data mask
+        self.mask = np.isnan(X)
+
+        # Get indices where data is not missing.
+        self.valid = np.where(~self.mask)
+
+        # Get number of hidden layers
+        self.l = num_hidden_layers
+
+        # Get reduced-dimension dataset.
+        self.V = np.random.randn(X.shape[0], reduced_dimensions)
+
+        print(self.V)
+        sys.exit()
+
+        self.num_total_epochs = 0
+
+        self.weights = list()
+
+        # if self.validation_only is not None:
+        #     print("\nEstimating validation scores...")
+
+        #     self.df_scores = self._imputer_validation(pd.DataFrame(X), self.clf)
+
+        #     print("\nDone!\n")
+
+        # else:
+        #     self.df_scores = None
+
+        print("\nImputing full dataset...")
+
+        # mem_usage = memory_usage((self._impute_single, (X,)))
+        # with open(f"profiling_results/memUsage_{self.prefix}.txt", "w") as fout:
+        # fout.write(f"{max(mem_usage)}")
+        # sys.exit()
+
+        self.imputed_df = self.fit_predict(X)
+        print("\nDone!\n")
+
+        self.imputed_df = self.imputed_df.astype(np.float)
+        self.imputed_df = self.imputed_df.astype("Int8")
+
+        self._validate_imputed(self.imputed_df)
+
+        self.write_imputed(self.imputed_df)
+
+        if self.df_scores is not None:
+            print(self.df_scores)
+
+    @timer
+    def fit_predict(self, X):
+        self.df = self._encode_onehot(X)
+        self.data = self.df.copy().values
+
+        imputed_enc = self.train(
+            train_epochs=self.train_epochs, batch_size=self.batch_size
+        )
+
+        imputed_enc, dummy_df = self._eval_predictions(X, imputed_enc)
+
+        imputed_df = self._decode_onehot(
+            pd.DataFrame(data=imputed_enc, columns=dummy_df.columns)
+        )
+
+        return imputed_df
+
+    def _train(self, batch_size=256, train_epochs=100):
+        pass
+
+    def _train_epoch(
+        self, X, weights, reg_lambda, phase, num_hidden_layers, learning_rate
+    ):
+        pass
+
+    @property
+    def imputed(self):
+        return self.imputed_df
+
+    def _read_example_data(self):
+        df = pd.read_csv("mushrooms_test_2.csv", header=None)
+
+        df_incomplete = df.copy()
+
+        df_incomplete.iat[1, 0] = np.nan
+        df_incomplete.iat[2, 1] = np.nan
+
+        missing_encoded = pd.get_dummies(df_incomplete)
+
+        for col in df.columns:
+            missing_cols = missing_encoded.columns.str.startswith(
+                str(col) + "_"
+            )
+
+            missing_encoded.loc[
+                df_incomplete[col].isnull(), missing_cols
+            ] = np.nan
+
+        return missing_encoded
+
+    def _encode_categorical(self, X):
+        """[Encode -9 encoded missing values as np.nan]
+
+        Args:
+            X ([numpy.ndarray]): [012-encoded genotypes with -9 as missing values]
+
+        Returns:
+            [pandas.DataFrame]: [DataFrame with missing values encoded as np.nan]
+        """
+        np.nan_to_num(X, copy=False, nan=-9.0)
+        X = X.astype(str)
+        X[X == "-9.0"] = "none"
+
+        df = pd.DataFrame(X)
+        df_incomplete = df.copy()
+
+        # Replace 'none' with np.nan
+        for row in df.index:
+            for col in df.columns:
+                if df_incomplete.iat[row, col] == "none":
+                    df_incomplete.iat[row, col] = np.nan
+
+        return df_incomplete
+
+    def _encode_onehot(self, X):
+        """[Convert 012-encoded data to one-hot encodings]
+
+        Args:
+            X ([numpy.ndarray]): [Input array with 012-encoded data and -9 as the missing data value]
+
+        Returns:
+            [pandas.DataFrame]: [One-hot encoded data, ignoring missing values (np.nan)]
+        """
+
+        df = self._encode_categorical(X)
+        df_incomplete = df.copy()
+
+        missing_encoded = pd.get_dummies(df_incomplete)
+
+        for col in df.columns:
+            missing_cols = missing_encoded.columns.str.startswith(
+                str(col) + "_"
+            )
+
+            missing_encoded.loc[
+                df_incomplete[col].isnull(), missing_cols
+            ] = np.nan
+
+        return missing_encoded
+
+    def _decode_onehot(self, df_dummies):
+        """[Decode one-hot format to 012-encoded genotypes]
+
+        Args:
+            df_dummies ([pandas.DataFrame]): [One-hot encoded imputed data]
+
+        Returns:
+            [pandas.DataFrame]: [012-encoded imputed data]
+        """
+        pos = defaultdict(list)
+        vals = defaultdict(list)
+
+        for i, c in enumerate(df_dummies.columns):
+            if "_" in c:
+                k, v = c.split("_", 1)
+                pos[k].append(i)
+                vals[k].append(v)
+
+            else:
+                pos["_"].append(i)
+
+        df = pd.DataFrame(
+            {
+                k: pd.Categorical.from_codes(
+                    np.argmax(df_dummies.iloc[:, pos[k]].values, axis=1),
+                    vals[k],
+                )
+                for k in vals
+            }
+        )
+
+        df[df_dummies.columns[pos["_"]]] = df_dummies.iloc[:, pos["_"]]
+
+        return df
