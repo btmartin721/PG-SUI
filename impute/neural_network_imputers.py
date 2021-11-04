@@ -195,8 +195,6 @@ class ImputeVAE(Impute):
     def fit_predict(self, X):
         self.df = self._encode_onehot(X)
         self.data = self.df.copy().values
-        print(self.data)
-        sys.exit()
 
         imputed_enc = self.train(
             train_epochs=self.train_epochs, batch_size=self.batch_size
@@ -246,7 +244,7 @@ class ImputeVAE(Impute):
         """
         np.nan_to_num(X, copy=False, nan=-9.0)
         X = X.astype(str)
-        X[X == "-9.0"] = "none"
+        X[(X == "-9.0") | (X == "-9")] = "none"
 
         df = pd.DataFrame(X)
         df_incomplete = df.copy()
@@ -731,7 +729,7 @@ class ImputeUBP(Impute):
         """
         np.nan_to_num(X, copy=False, nan=-9.0)
         X = X.astype(str)
-        X[X == "-9.0"] = "none"
+        X[(X == "-9.0") | (X == "-9")] = "none"
 
         df = pd.DataFrame(X)
         df_incomplete = df.copy()
