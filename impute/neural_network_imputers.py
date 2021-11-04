@@ -71,6 +71,11 @@ def masked_mae(X_true, X_pred, mask):
     return np.mean(np.abs(masked_diff))
 
 
+def masked_rmse(X_true, X_pred, mask):
+    masked_diff = X_true[mask] - X_pred[mask]
+    return np.sqrt(np.mean(masked_diff ** 2))
+
+
 def create_weights(sz):
     theta = theano.shared(
         np.array(np.random.rand(sz[0], sz[1]), dtype=theano.config.floatX)
@@ -395,10 +400,32 @@ class ImputeVAE(Impute):
             Dense(
                 first_layer_size,
                 input_dim=2 * n_dims,
-                activation="sigmoid",
-                use_bias=False,
+                activation=self.hidden_activation,
                 kernel_regularizer=l1_l2(self.l1_penalty, self.l2_penalty),
-                kernel_initializer=self.V[],
+                kernel_initializer=self.kernel_initializer,
+            )
+        )
+
+        model.add(Dropout(self.dropout_probability))
+
+        for layer_size in hidden_layer_sizes[1:]:
+            model.add(
+                Dense(
+                    layer_size,
+                    activation=self.hidden_activation,
+                    kernel_regularizer=l1_l2(self.l1_penalty, self.l2_penalty),
+                    kernel_initializer=self.kernel_initializer,
+                )
+            )
+
+            model.add(Dropout(self.dropout_probability))
+
+        model.add(
+            Dense(
+                n_dims,
+                activation=self.output_activation,
+                kernel_regularizer=l1_l2(self.l1_penalty, self.l2_penalty),
+                kernel_initializer=self.kernel_initializer,
             )
         )
 
@@ -564,12 +591,9 @@ class ImputeUBP(Impute):
         # Get reduced-dimension dataset.
         self.V = np.random.randn(X.shape[0], reduced_dimensions)
 
-        # Random initial weights of single layer perceptron
-        self.U = np.random.rand(reduced_dimensions, X.shape[1])
-
         self.num_total_epochs = 0
 
-        self.weights = list()
+        self.single_layer = None
 
         # if self.validation_only is not None:
         #     print("\nEstimating validation scores...")
@@ -606,9 +630,7 @@ class ImputeUBP(Impute):
         self.df = self._encode_onehot(X)
         self.data = self.df.copy().values
 
-        imputed_enc = self.train(
-            train_epochs=self.train_epochs, batch_size=self.batch_size
-        )
+        imputed_enc = self.train()
 
         imputed_enc, dummy_df = self._eval_predictions(X, imputed_enc)
 
@@ -618,13 +640,60 @@ class ImputeUBP(Impute):
 
         return imputed_df
 
-    def _train(self, batch_size=256, train_epochs=100):
-        pass
+    def _train(self):
+        """Train an unsupervised backpropagation model.
+
+        Returns:
+            [numpy.ndarray(float)]: [Predicted values as numpy array]
+        """
+
+        missing_mask = self._create_missing_mask()
+        self.fill(missing_mask)
+        self.single_layer = self.create_single_layer()
+
+        observed_mask = ~missing_mask
+
+        self.initialise_parameters()
+
+        while self.current_eta > self.target_eta:
+            s = self._train_epoch()
+            # X_pred = self._train_epoch(self.model, missing_mask, batch_size)
+            # observed_rmse = masked_mae(
+            #     X_true=self.data, X_pred=X_pred, mask=observed_mask
+            # )
+
+            # if epoch == 0:
+            #     print(f"Initial MAE: {observed_mae}")
+
+            # elif epoch % 50 == 0:
+            #     print(
+            #         f"Observed MAE ({epoch}/{train_epochs} epochs): "
+            #         f"{observed_mae}"
+            #     )
+
+            # old_weight = 1.0 - self.recurrent_weight
+            # self.data[missing_mask] *= old_weight
+            # pred_missing = X_pred[missing_mask]
+            # self.data[missing_mask] += self.recurrent_weight * pred_missing
 
     def _train_epoch(
-        self, X, weights, reg_lambda, phase, num_hidden_layers, learning_rate
+        self,
+        X,
+        weights,
+        reg_lambda,
+        phase,
+        num_hidden_layers,
+        learning_rate,
+        model,
+        missing_mask,
     ):
-        pass
+        input_with_mask = np.hstack([self.data, missing_mask])
+        n_samples = len(input_with_mask)
+
+        n_batches = int(np.ceil(n_samples / batch_size))
+        indices = np.arange(n_samples)
+        np.random.shuffle(indices)
+        X_shuffled = input_with_mask[indices]
 
     @property
     def imputed(self):
@@ -749,7 +818,7 @@ class ImputeUBP(Impute):
             int(np.ceil(0.5 * n_dims)),
         ]
 
-    def _model_phase1(self):
+    def _create_single_layer(self):
         """Create a single layer perceptron for UBP model.
 
         Creates a network with the following structure:
@@ -775,30 +844,7 @@ class ImputeUBP(Impute):
             )
         )
 
-        # model.add(Dropout(self.dropout_probability))
-
-        # for layer_size in hidden_layer_sizes[1:]:
-        #     model.add(
-        #         Dense(
-        #             layer_size,
-        #             activation=self.hidden_activation,
-        #             kernel_regularizer=l1_l2(self.l1_penalty, self.l2_penalty),
-        #             kernel_initializer=self.kernel_initializer,
-        #         )
-        #     )
-
-        #     model.add(Dropout(self.dropout_probability))
-
-        # model.add(
-        #     Dense(
-        #         n_dims,
-        #         activation=self.output_activation,
-        #         kernel_regularizer=l1_l2(self.l1_penalty, self.l2_penalty),
-        #         kernel_initializer=self.kernel_initializer,
-        #     )
-        # )
-
-        # loss_function = make_reconstruction_loss(n_dims)
+        loss_function = make_reconstruction_loss(n_dims)
 
         model.compile(optimizer=self.optimizer, loss=loss_function)
 
@@ -821,6 +867,16 @@ class ImputeUBP(Impute):
         if self.data.dtype != "f" and self.data.dtype != "d":
             self.data = self.data.astype(float)
         return np.isnan(self.data)
+
+    def initialise_parameters(self):
+        self.initial_eta = 0.1
+        self.current_eta = self.initial_eta
+        self.target_eta = 0.0001
+        self.gamma = 0.00001
+        self.lmda = 0.0001
+        self.s = 0
+        self.s_prime = np.inf
+        self.num_epochs = 0
 
     # def _train_epoch(self, model, missing_mask, batch_size):
     #     """[Train one cycle (epoch) of a variational autoencoder model]
