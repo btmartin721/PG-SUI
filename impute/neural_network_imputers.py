@@ -535,6 +535,13 @@ class ImputeUBP(Impute):
         reduced_dimensions=2,
         num_hidden_layers=3,
         hidden_layer_sizes=100,
+        recurrent_weight=0.5,
+        optimizer="adam",
+        hidden_activation="relu",
+        output_activation="sigmoid",
+        kernel_initializer="glorot_normal",
+        l1_penalty=0,
+        l2_penalty=0,
         **kwargs,
     ):
         if isinstance(hidden_layer_sizes, int):
@@ -561,6 +568,13 @@ class ImputeUBP(Impute):
         self.cv = cv
         self.validation_only = validation_only
         self.disable_progressbar = disable_progressbar
+        self.recurrent_weight = recurrent_weight
+        self.optimizer = optimizer
+        self.kernel_initializer = kernel_initializer
+        self.hidden_activation = hidden_activation
+        self.output_activation = output_activation
+        self.l1_penalty = l1_penalty
+        self.l2_penalty = l2_penalty
 
         self.df = None
         self.data = None
@@ -586,8 +600,11 @@ class ImputeUBP(Impute):
         # Get number of hidden layers
         self.l = num_hidden_layers
 
-        # Get reduced-dimension dataset.
-        self.V = np.random.randn(X.shape[0], reduced_dimensions)
+        # Get reduced-dimension weights.
+        self.V = self._init_weights(X.shape[0], reduced_dimensions)
+
+        # Get weights for single layer perceptron.
+        self.U = self._init_weights(reduced_dimensions, X.shape[1])
 
         self.num_total_epochs = 0
 
@@ -628,15 +645,15 @@ class ImputeUBP(Impute):
         self.df = self._encode_onehot(X)
         self.data = self.df.copy().values
 
-        imputed_enc = self.train()
+        imputed_enc = self._train()
 
-        imputed_enc, dummy_df = self._eval_predictions(X, imputed_enc)
+        # imputed_enc, dummy_df = self._eval_predictions(X, imputed_enc)
 
-        imputed_df = self._decode_onehot(
-            pd.DataFrame(data=imputed_enc, columns=dummy_df.columns)
-        )
+        # imputed_df = self._decode_onehot(
+        #     pd.DataFrame(data=imputed_enc, columns=dummy_df.columns)
+        # )
 
-        return imputed_df
+        # return imputed_df
 
     def _train(self):
         """Train an unsupervised backpropagation model.
@@ -647,32 +664,36 @@ class ImputeUBP(Impute):
 
         missing_mask = self._create_missing_mask()
         self.fill(missing_mask)
-        self.single_layer = self.create_single_layer()
+        self.single_layer = self._model_phase1()
+        sys.exit()
 
         observed_mask = ~missing_mask
 
         self.initialise_parameters()
 
-        while self.current_eta > self.target_eta:
-            s = self._train_epoch()
-            # X_pred = self._train_epoch(self.model, missing_mask, batch_size)
-            # observed_rmse = masked_mae(
-            #     X_true=self.data, X_pred=X_pred, mask=observed_mask
-            # )
+        # self._model_phase1(v)
+        # sys.exit()
 
-            # if epoch == 0:
-            #     print(f"Initial MAE: {observed_mae}")
+        # while self.current_eta > self.target_eta:
+        #     s = self._train_epoch()
+        # X_pred = self._train_epoch(self.model, missing_mask, batch_size)
+        # observed_rmse = masked_mae(
+        #     X_true=self.data, X_pred=X_pred, mask=observed_mask
+        # )
 
-            # elif epoch % 50 == 0:
-            #     print(
-            #         f"Observed MAE ({epoch}/{train_epochs} epochs): "
-            #         f"{observed_mae}"
-            #     )
+        # if epoch == 0:
+        #     print(f"Initial MAE: {observed_mae}")
 
-            # old_weight = 1.0 - self.recurrent_weight
-            # self.data[missing_mask] *= old_weight
-            # pred_missing = X_pred[missing_mask]
-            # self.data[missing_mask] += self.recurrent_weight * pred_missing
+        # elif epoch % 50 == 0:
+        #     print(
+        #         f"Observed MAE ({epoch}/{train_epochs} epochs): "
+        #         f"{observed_mae}"
+        #     )
+
+        # old_weight = 1.0 - self.recurrent_weight
+        # self.data[missing_mask] *= old_weight
+        # pred_missing = X_pred[missing_mask]
+        # self.data[missing_mask] += self.recurrent_weight * pred_missing
 
     def _train_epoch(
         self,
@@ -696,6 +717,10 @@ class ImputeUBP(Impute):
     @property
     def imputed(self):
         return self.imputed_df
+
+    def _init_weights(self, dim1, dim2, w_mean=0, w_stddev=0.01):
+        # Get reduced-dimension dataset.
+        return np.random.normal(loc=w_mean, scale=w_stddev, size=(dim1, dim2))
 
     def _read_example_data(self):
         df = pd.read_csv("mushrooms_test_2.csv", header=None)
@@ -803,20 +828,20 @@ class ImputeUBP(Impute):
 
         return df
 
-    def _get_hidden_layer_sizes(self):
+    def _get_hidden_layer_sizes(self, X):
         """[Get dimensions of hidden layers]
 
         Returns:
             [int, int, int]: [Number of dimensions in hidden layers]
         """
-        n_dims = self.data.shape[1]
+        n_dims = X.shape[1]
         return [
             min(2000, 8 * n_dims),
             min(500, 2 * n_dims),
             int(np.ceil(0.5 * n_dims)),
         ]
 
-    def _create_single_layer(self):
+    def _model_phase1(self):
         """Create a single layer perceptron for UBP model.
 
         Creates a network with the following structure:
@@ -826,7 +851,7 @@ class ImputeUBP(Impute):
         Returns:
             keras model object: Compiled Keras model.
         """
-        hidden_layer_sizes = self._get_hidden_layer_sizes()
+        hidden_layer_sizes = self._get_hidden_layer_sizes(self.V)
         first_layer_size = hidden_layer_sizes[0]
         n_dims = self.data.shape[1]
 
@@ -845,6 +870,11 @@ class ImputeUBP(Impute):
         loss_function = make_reconstruction_loss(n_dims)
 
         model.compile(optimizer=self.optimizer, loss=loss_function)
+
+        stringlist = list()
+        model.summary(print_fn=lambda x: stringlist.append(x))
+        short_model_summary = "\n".join(stringlist)
+        print(short_model_summary)
 
         return model
 

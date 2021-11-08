@@ -190,7 +190,7 @@ def main():
         #     max_iter=2,
         #     column_subset=5,
         #     ga=False,
-        #     disable_progressbar=True,
+        #     disable_progressbar=False,
         #     extratrees=False,
         #     progress_update_percent=20,
         #     chunk_size=0.2,
@@ -208,7 +208,7 @@ def main():
         #     validation_only=0.1,
         #     n_nearest_features=3,
         #     max_iter=2,
-        #     initial_strategy="most_frequent_groups",
+        #     initial_strategy="populations",
         # )
 
         # vae_imp = ImputeVAE(
@@ -247,7 +247,7 @@ def main():
         #     cv=3,
         #     validation_only=0.5,
         #     chunk_size=1.0,
-        #     initial_strategy="phylogeny",
+        #     initial_strategy="populations",
         # )
 
         # afpops = ImputeAlleleFreq(
@@ -259,17 +259,17 @@ def main():
 
         # br_imp = ImputeBayesianRidge(data, prefix=args.prefix, n_iter=100, gridparams=grid_params, grid_iter=3, cv=3, n_jobs=4, max_iter=5, n_nearest_features=3, column_subset=4, ga=False, disable_progressbar=True, progress_update_percent=20, chunk_size=1.0)
 
-        vae = ImputeVAE(
-            gt=np.array([[0, 1], [-9, 1], [2, -9]]),
-            initial_strategy="most_frequent",
-            cv=3,
-            validation_only=None,
-        )
-
-        # ubp = ImputeUBP(
-        #     genotype_data=data,
-        #     test_categorical=np.array([[0, 1], [-9, 1], [2, -9]]),
+        # vae = ImputeVAE(
+        #     gt=np.array([[0, 1], [-9, 1], [2, -9]]),
+        #     initial_strategy="most_frequent",
+        #     cv=3,
+        #     validation_only=None,
         # )
+
+        ubp = ImputeUBP(
+            genotype_data=data,
+            test_categorical=np.array([[0, 1], [-9, 1], [2, -9]]),
+        )
 
         # ubp = ImputeVAE(
         #     gt=np.array([[0, 1], [-9, 1], [2, -9]]),
