@@ -1349,6 +1349,13 @@ class Impute:
 
             if self.clf_type == "classifier":
 
+                # Had to do this because get incompatible type error if using
+                # initial_imputation="populations"
+                if y_true.dtypes != "int64":
+                    y_true = y_true.astype("int64")
+                if y_pred.dtypes != "int64":
+                    y_pred = y_pred.astype("int64")
+
                 scores["accuracy"].append(
                     metrics.accuracy_score(y_true, y_pred)
                 )

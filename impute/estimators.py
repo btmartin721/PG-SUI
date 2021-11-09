@@ -1524,7 +1524,6 @@ class ImputePhylo(GenotypeData):
             List[float]: Internal likelihoods.
         """
         ret = list()
-        print(lik_arr)
         for i, val in enumerate(lik_arr):
             col = list(pt.iloc[:, i])
             sum = 0.0
@@ -1723,14 +1722,17 @@ class ImputeAlleleFreq(GenotypeData):
         self.verbose = verbose
         self.iterative_mode = kwargs.get("iterative_mode", False)
 
-        self.imputed = self.fit_predict(gt_list)
+        self.imputed, self.valid_cols = self.fit_predict(gt_list)
 
         if write_output:
             self.write2file(self.imputed)
 
     def fit_predict(
         self, X: List[List[int]]
-    ) -> Union[pd.DataFrame, np.ndarray, List[List[Union[int, float]]]]:
+    ) -> Tuple[
+        Union[pd.DataFrame, np.ndarray, List[List[Union[int, float]]]],
+        List[int],
+    ]:
         """Impute missing genotypes using allele frequencies.
 
         Impute using global or by_population allele frequencies. Missing alleles are primarily coded as negative; usually -9.
@@ -1740,6 +1742,8 @@ class ImputeAlleleFreq(GenotypeData):
 
         Returns:
             pandas.DataFrame, numpy.ndarray, or List[List[Union[int, float]]]: Imputed genotypes of same shape as data.
+
+            List[int]: Column indexes that were retained.
 
         Raises:
             TypeError: X must be either 2D list, numpy.ndarray, or pandas.DataFrame.
@@ -1764,14 +1768,37 @@ class ImputeAlleleFreq(GenotypeData):
         df.replace(self.missing, np.nan, inplace=True)
 
         data = pd.DataFrame()
+        valid_cols = list()
+        bad_cnt = 0
         if self.pops is not None:
             # Impute per-population mode.
             # Loop method is faster (by 2X) than no-loop transform.
             df["pops"] = self.pops
             for col in df.columns:
-                data[col] = df.groupby(["pops"], sort=False)[col].transform(
-                    lambda x: x.fillna(x.mode().iloc[0])
+                try:
+                    data[col] = df.groupby(["pops"], sort=False)[col].transform(
+                        lambda x: x.fillna(x.mode().iloc[0])
+                    )
+
+                    # If all populations contained at least one non-NaN value.
+                    if col != "pops":
+                        valid_cols.append(col)
+
+                except IndexError as e:
+                    if str(e).lower().startswith("single positional indexer"):
+                        bad_cnt += 1
+                        # Impute with global mode
+                        data[col] = df[col].fillna(df[col].mode().iloc[0])
+                    else:
+                        raise
+
+            if bad_cnt > 0:
+                print(
+                    f"Warning: {bad_cnt} columns were imputed with the global "
+                    f"mode because some of the populations "
+                    f"contained only missing data"
                 )
+
             data.drop("pops", axis=1, inplace=True)
         else:
             # Impute global mode.
@@ -1787,13 +1814,13 @@ class ImputeAlleleFreq(GenotypeData):
             print("Done!")
 
         if self.output_format == "df":
-            return data
+            return data, valid_cols
 
         elif self.output_format == "array":
-            return data.to_numpy()
+            return data.to_numpy(), valid_cols
 
         elif self.output_format == "list":
-            return data.values.tolist()
+            return data.values.tolist(), valid_cols
 
         else:
             raise ValueError("Unknown output_format type specified!")
