@@ -611,6 +611,13 @@ class ImputeUBP(Impute):
 
         self.single_layer = None
 
+        from keras.datasets import mnist
+
+        (train_X, train_y), (test_X, test_y) = mnist.load_data()
+
+        print(train_X.shape)
+        sys.exit()
+
         # if self.validation_only is not None:
         #     print("\nEstimating validation scores...")
 
@@ -852,7 +859,7 @@ class ImputeUBP(Impute):
         Returns:
             keras model object: Compiled Keras model.
         """
-        hidden_layer_sizes = self._get_hidden_layer_sizes(self.V)
+        hidden_layer_sizes = self._get_hidden_layer_sizes()
         first_layer_size = hidden_layer_sizes[0]
         n_dims = self.data.shape[1]
 
@@ -868,17 +875,9 @@ class ImputeUBP(Impute):
             )
         )
 
-        print(model.summary)
-        sys.exit()
-
         loss_function = make_reconstruction_loss(n_dims)
 
         model.compile(optimizer=self.optimizer, loss=loss_function)
-
-        stringlist = list()
-        model.summary(print_fn=lambda x: stringlist.append(x))
-        short_model_summary = "\n".join(stringlist)
-        print(short_model_summary)
 
         return model
 
