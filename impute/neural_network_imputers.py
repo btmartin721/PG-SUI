@@ -26,6 +26,7 @@ import seaborn as sns
 from timeit import default_timer
 
 import tensorflow as tf
+from tensorflow.keras import initializers
 from keras.utils import np_utils
 from keras.objectives import mse
 from keras.models import Sequential
@@ -535,6 +536,7 @@ class ImputeUBP(Impute):
         reduced_dimensions=2,
         num_hidden_layers=3,
         hidden_layer_sizes=100,
+        kernel_initializer="glorot_normal",
         **kwargs,
     ):
         if isinstance(hidden_layer_sizes, int):
@@ -561,6 +563,7 @@ class ImputeUBP(Impute):
         self.cv = cv
         self.validation_only = validation_only
         self.disable_progressbar = disable_progressbar
+        self.kernel_initializer = kernel_initializer
 
         self.df = None
         self.data = None
@@ -587,7 +590,13 @@ class ImputeUBP(Impute):
         self.l = num_hidden_layers
 
         # Get reduced-dimension dataset.
-        self.V = np.random.randn(X.shape[0], reduced_dimensions)
+        # self.V = np.random.normal(
+        #     loc=0.0, scale=0.05, size=(X.shape[0], reduced_dimensions)
+        # )
+
+        # self.U = np.random.normal(
+        #     loc=0.0, scale=0.05, size=(reduced_dimensions, X.shape[1])
+        # )
 
         self.num_total_epochs = 0
 
@@ -642,7 +651,7 @@ class ImputeUBP(Impute):
         """Train an unsupervised backpropagation model.
 
         Returns:
-            [numpy.ndarray(float)]: [Predicted values as numpy array]
+            numpy.ndarray(float): Predicted values as numpy array.
         """
 
         missing_mask = self._create_missing_mask()
@@ -841,6 +850,9 @@ class ImputeUBP(Impute):
                 kernel_initializer=self.kernel_initializer,
             )
         )
+
+        print(model.summary)
+        sys.exit()
 
         loss_function = make_reconstruction_loss(n_dims)
 
