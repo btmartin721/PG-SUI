@@ -9,11 +9,9 @@ import re
 import logging
 
 import numpy as np
-import theano
-import theano.tensor as T
+from numpy.random import choice
 from tqdm import tqdm
 from tqdm.utils import disp_len, _unicode  # for overriding status_print
-from numpy.random import choice
 
 
 # from skopt import BayesSearchCV
@@ -353,18 +351,6 @@ class StreamToLogger(object):
         if self.linebuf != "":
             self.logger.log(self.log_level, self.linebuf.rstrip())
         self.linebuf = ""
-
-
-def initialize_weights(sz):
-    theta = theano.shared(
-        np.array(np.random.rand(sz[0], sz[1]), dtype=theano.config.floatX)
-    )
-
-    return theta
-
-
-def gradient_descent(cost, theta, alpha):
-    return theta - (alpha * T.grad(cost, wrt=theta))
 
 
 # def bayes_search_CV_init(self, estimator, search_spaces, optimizer_kwargs=None,	n_iter=50, scoring=None, fit_params=None, n_jobs=1,	n_points=1, iid=True, refit=True, cv=None, verbose=0,
