@@ -273,6 +273,11 @@ def main():
             ),
         )
 
+        # ubp = ImputeUBP(
+        #     genotype_data=data,
+        #     test_categorical=np.array([[0, 1], [-9, 1], [2, -9]]),
+        # )
+
         # ubp = ImputeVAE(
         #     gt=np.array([[0, 1], [-9, 1], [2, -9]]),
         #     initial_strategy="most_frequent",

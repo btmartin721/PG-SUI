@@ -194,8 +194,10 @@ class ImputeVAE(Impute):
 
     @timer
     def fit_predict(self, X):
-        self.df = self._encode_onehot(X)
-        self.data = self.df.copy().values
+        self.data = self._encode_onehot(X)
+        # self.data = self.df.copy().values
+        print(self.data.shape)
+        sys.exit()
 
         imputed_enc = self.train(
             train_epochs=self.train_epochs, batch_size=self.batch_size
@@ -569,6 +571,7 @@ class ImputeUBP(Impute):
         self.cv = cv
         self.validation_only = validation_only
         self.disable_progressbar = disable_progressbar
+        self.reduced_dimensions = reduced_dimensions
         self.recurrent_weight = recurrent_weight
         self.optimizer = optimizer
         self.kernel_initializer = kernel_initializer
@@ -611,13 +614,6 @@ class ImputeUBP(Impute):
 
         self.single_layer = None
 
-        from keras.datasets import mnist
-
-        (train_X, train_y), (test_X, test_y) = mnist.load_data()
-
-        print(train_X.shape)
-        sys.exit()
-
         # if self.validation_only is not None:
         #     print("\nEstimating validation scores...")
 
@@ -650,8 +646,8 @@ class ImputeUBP(Impute):
 
     @timer
     def fit_predict(self, X):
-        self.df = self._encode_onehot(X)
-        self.data = self.df.copy().values
+        self.data = self._encode_onehot(X)
+        # self.data = self.df.copy().values
 
         imputed_enc = self._train()
 
@@ -671,11 +667,13 @@ class ImputeUBP(Impute):
         """
 
         missing_mask = self._create_missing_mask()
-        self.fill(missing_mask)
+        self._fill(missing_mask)
+
+        # Define single layer perceptron model.
         self.single_layer = self._model_phase1()
-        sys.exit()
 
         observed_mask = ~missing_mask
+        sys.exit()
 
         self.initialise_parameters()
 
@@ -784,22 +782,32 @@ class ImputeUBP(Impute):
         Returns:
             [pandas.DataFrame]: [One-hot encoded data, ignoring missing values (np.nan)]
         """
+        Xt = np.zeros(shape=(X.shape[0], X.shape[1], 3))
+        mappings = {
+            0: np.array([1, 0, 0]),
+            1: np.array([0, 1, 0]),
+            2: np.array([0, 0, 1]),
+            -9: np.array([np.nan, np.nan, np.nan]),
+        }
+        for row in np.arange(X.shape[0]):
+            Xt[row] = [mappings[enc] for enc in X[row]]
+        return Xt
 
-        df = self._encode_categorical(X)
-        df_incomplete = df.copy()
+        # df = self._encode_categorical(X)
+        # df_incomplete = df.copy()
 
-        missing_encoded = pd.get_dummies(df_incomplete)
+        # missing_encoded = pd.get_dummies(df_incomplete)
 
-        for col in df.columns:
-            missing_cols = missing_encoded.columns.str.startswith(
-                str(col) + "_"
-            )
+        # for col in df.columns:
+        #     missing_cols = missing_encoded.columns.str.startswith(
+        #         str(col) + "_"
+        #     )
 
-            missing_encoded.loc[
-                df_incomplete[col].isnull(), missing_cols
-            ] = np.nan
+        #     missing_encoded.loc[
+        #         df_incomplete[col].isnull(), missing_cols
+        #     ] = np.nan
 
-        return missing_encoded
+        # return missing_encoded
 
     def _decode_onehot(self, df_dummies):
         """[Decode one-hot format to 012-encoded genotypes]
@@ -836,13 +844,15 @@ class ImputeUBP(Impute):
 
         return df
 
-    def _get_hidden_layer_sizes(self, X):
+    def _get_hidden_layer_sizes(self, n_dims):
         """[Get dimensions of hidden layers]
+
+        Args:
+            n_dims (int): The number of feature dimensions (columns).
 
         Returns:
             [int, int, int]: [Number of dimensions in hidden layers]
         """
-        n_dims = X.shape[1]
         return [
             min(2000, 8 * n_dims),
             min(500, 2 * n_dims),
@@ -859,35 +869,39 @@ class ImputeUBP(Impute):
         Returns:
             keras model object: Compiled Keras model.
         """
-        hidden_layer_sizes = self._get_hidden_layer_sizes()
-        first_layer_size = hidden_layer_sizes[0]
-        n_dims = self.data.shape[1]
+        input_shape = (self.data.shape[0], self.reduced_dimensions)
+        output_dim = self.reduced_dimensions
 
         model = Sequential()
 
         model.add(
             Dense(
-                first_layer_size,
-                input_dim=2 * n_dims,
-                activation=self.hidden_activation,
-                kernel_regularizer=l1_l2(self.l1_penalty, self.l2_penalty),
+                output_dim,
+                input_shape=input_shape,
+                activation="sigmoid",
                 kernel_initializer=self.kernel_initializer,
+                use_bias=False,
             )
         )
 
-        loss_function = make_reconstruction_loss(n_dims)
+        self.V = model.get_weights()[0].T
+        print(self.V)
+
+        loss_function = make_reconstruction_loss(input_shape[0])
 
         model.compile(optimizer=self.optimizer, loss=loss_function)
 
+        model.summary()
+
         return model
 
-    def fill(self, missing_mask):
-        """[Mask missing data as -1]
+    def _fill(self, missing_mask):
+        """Mask missing data as [0, 0, 0].
 
         Args:
             missing_mask ([np.ndarray(bool)]): [Missing data mask with True corresponding to a missing value]
         """
-        self.data[missing_mask] = -1
+        self.data[missing_mask] = [0, 0, 0]
 
     def _create_missing_mask(self):
         """[Creates a missing data mask with boolean values]
@@ -895,9 +909,7 @@ class ImputeUBP(Impute):
         Returns:
             [numpy.ndarray(bool)]: [Boolean mask of missing values, with True corresponding to a missing data point]
         """
-        if self.data.dtype != "f" and self.data.dtype != "d":
-            self.data = self.data.astype(float)
-        return np.isnan(self.data)
+        return np.isnan(self.data).all(axis=2)
 
     def initialise_parameters(self):
         self.initial_eta = 0.1
