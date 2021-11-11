@@ -269,7 +269,7 @@ def main():
         ubp = ImputeUBP(
             genotype_data=data,
             test_categorical=np.array(
-                [[0, 1, 1, 0], [-9, 1, 2, 2], [2, -9, 2, -9]]
+                [[0, 1, 1, -9], [-9, 1, 2, 2], [2, -9, 2, 0]]
             ),
         )
 

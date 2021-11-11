@@ -28,6 +28,7 @@ from timeit import default_timer
 import tensorflow as tf
 from tensorflow.keras import initializers
 from keras.utils import np_utils
+from keras.utils import to_categorical
 from keras.objectives import mse
 from keras.models import Sequential
 from keras.layers.core import Dropout, Dense
@@ -604,11 +605,11 @@ class ImputeUBP(Impute):
         # Get number of hidden layers
         self.l = num_hidden_layers
 
-        # Get reduced-dimension weights.
+        # Get initial reduced-dimension weights.
         self.V = self._init_weights(X.shape[0], reduced_dimensions)
 
-        # Get weights for single layer perceptron.
-        self.U = self._init_weights(reduced_dimensions, X.shape[1])
+        # # Get initial weights for single layer perceptron.
+        # self.T = self._init_weights(X.shape[0], reduced_dimensions)
 
         self.num_total_epochs = 0
 
@@ -667,15 +668,18 @@ class ImputeUBP(Impute):
         """
 
         missing_mask = self._create_missing_mask()
+        observed_mask = ~missing_mask
         self._fill(missing_mask)
 
         # Define single layer perceptron model.
         self.single_layer = self._model_phase1()
-
-        observed_mask = ~missing_mask
-        sys.exit()
-
         self.initialise_parameters()
+
+        for r in self.V:
+            while self.current_eta > self.target_eta:
+                self._train_epoch(self.V[r, :])
+
+        # self.single_layer.fit()
 
         # self._model_phase1(v)
         # sys.exit()
@@ -701,24 +705,8 @@ class ImputeUBP(Impute):
         # pred_missing = X_pred[missing_mask]
         # self.data[missing_mask] += self.recurrent_weight * pred_missing
 
-    def _train_epoch(
-        self,
-        X,
-        weights,
-        reg_lambda,
-        phase,
-        num_hidden_layers,
-        learning_rate,
-        model,
-        missing_mask,
-    ):
-        input_with_mask = np.hstack([self.data, missing_mask])
-        n_samples = len(input_with_mask)
-
-        n_batches = int(np.ceil(n_samples / batch_size))
-        indices = np.arange(n_samples)
-        np.random.shuffle(indices)
-        X_shuffled = input_with_mask[indices]
+    def _train_epoch(self, vrow):
+        self.single_layer.fit(vrow)
 
     @property
     def imputed(self):
@@ -749,29 +737,29 @@ class ImputeUBP(Impute):
 
         return missing_encoded
 
-    def _encode_categorical(self, X):
-        """[Encode -9 encoded missing values as np.nan]
+    # def _encode_categorical(self, X):
+    #     """[Encode -9 encoded missing values as np.nan]
 
-        Args:
-            X ([numpy.ndarray]): [012-encoded genotypes with -9 as missing values]
+    #     Args:
+    #         X ([numpy.ndarray]): [012-encoded genotypes with -9 as missing values]
 
-        Returns:
-            [pandas.DataFrame]: [DataFrame with missing values encoded as np.nan]
-        """
-        np.nan_to_num(X, copy=False, nan=-9.0)
-        X = X.astype(str)
-        X[(X == "-9.0") | (X == "-9")] = "none"
+    #     Returns:
+    #         [pandas.DataFrame]: [DataFrame with missing values encoded as np.nan]
+    #     """
+    #     np.nan_to_num(X, copy=False, nan=-9.0)
+    #     X = X.astype(str)
+    #     X[(X == "-9.0") | (X == "-9")] = "none"
 
-        df = pd.DataFrame(X)
-        df_incomplete = df.copy()
+    #     df = pd.DataFrame(X)
+    #     df_incomplete = df.copy()
 
-        # Replace 'none' with np.nan
-        for row in df.index:
-            for col in df.columns:
-                if df_incomplete.iat[row, col] == "none":
-                    df_incomplete.iat[row, col] = np.nan
+    #     # Replace 'none' with np.nan
+    #     for row in df.index:
+    #         for col in df.columns:
+    #             if df_incomplete.iat[row, col] == "none":
+    #                 df_incomplete.iat[row, col] = np.nan
 
-        return df_incomplete
+    #     return df_incomplete
 
     def _encode_onehot(self, X):
         """[Convert 012-encoded data to one-hot encodings]
@@ -869,7 +857,8 @@ class ImputeUBP(Impute):
         Returns:
             keras model object: Compiled Keras model.
         """
-        input_shape = (self.data.shape[0], self.reduced_dimensions)
+        num_classes = 3
+        input_shape = (self.reduced_dimensions,)
         output_dim = self.reduced_dimensions
 
         model = Sequential()
@@ -884,15 +873,8 @@ class ImputeUBP(Impute):
             )
         )
 
-        self.V = model.get_weights()[0].T
-        print(self.V)
-
-        loss_function = make_reconstruction_loss(input_shape[0])
-
-        model.compile(optimizer=self.optimizer, loss=loss_function)
-
+        model.compile(optimizer=self.optimizer, loss="root_mean_squared_error")
         model.summary()
-
         return model
 
     def _fill(self, missing_mask):
