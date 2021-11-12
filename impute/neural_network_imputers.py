@@ -78,6 +78,15 @@ def masked_rmse(X_true, X_pred, mask):
     return np.sqrt(np.mean(masked_diff ** 2))
 
 
+def masked_rmse(X_true, X_pred, mask):
+    masked_diff = X_true[mask] - X_pred[mask]
+    return np.sqrt(np.mean(masked_diff ** 2))
+
+
+def get_rmse(y_true, y_pred):
+    return np.sqrt(np.mean((y_pred - y_true) ** 2))
+
+
 def create_weights(sz):
     theta = theano.shared(
         np.array(np.random.rand(sz[0], sz[1]), dtype=theano.config.floatX)
@@ -606,9 +615,12 @@ class ImputeUBP(Impute):
         self.l = num_hidden_layers
 
         # Get initial reduced-dimension weights.
+        # num_classes = 3
+        # self.V = np.zeros((X.shape[0], reduced_dimensions, num_classes))
+        # for r in range(X.shape[0]):
         self.V = self._init_weights(X.shape[0], reduced_dimensions)
 
-        # # Get initial weights for single layer perceptron.
+        # Get initial weights for single layer perceptron.
         # self.T = self._init_weights(X.shape[0], reduced_dimensions)
 
         self.num_total_epochs = 0
@@ -647,9 +659,9 @@ class ImputeUBP(Impute):
 
     @timer
     def fit_predict(self, X):
-        self.data = self._encode_onehot(X)
+        # self.data = self._encode_onehot(X)
         # self.data = self.df.copy().values
-
+        self.data = X.copy()
         imputed_enc = self._train()
 
         # imputed_enc, dummy_df = self._eval_predictions(X, imputed_enc)
@@ -667,17 +679,100 @@ class ImputeUBP(Impute):
             numpy.ndarray(float): Predicted values as numpy array.
         """
 
-        missing_mask = self._create_missing_mask()
+        # from sklearn.datasets import make_blobs
+
+        # # Configuration options
+        # num_samples_total = 1000
+        # training_split = 250
+        # cluster_centers = [(15, 0), (15, 15), (0, 15), (30, 15)]
+        # num_classes = len(cluster_centers)
+        # loss_function_used = "categorical_crossentropy"
+
+        # # Generate data
+        # X, targets = make_blobs(
+        #     n_samples=num_samples_total,
+        #     centers=cluster_centers,
+        #     n_features=num_classes,
+        #     center_box=(0, 1),
+        #     cluster_std=1.5,
+        # )
+
+        # categorical_targets = to_categorical(targets)
+        # X_training = X[training_split:, :]
+        # X_testing = X[:training_split, :]
+        # Targets_training = categorical_targets[training_split:]
+        # Targets_testing = categorical_targets[:training_split].astype(
+        #     np.integer
+        # )
+
+        # # Set shape based on data
+        # feature_vector_length = len(X_training[0])
+        # input_shape = (feature_vector_length,)
+        # print(f"Feature shape: {input_shape}")
+
+        # # Create the model
+        # model = Sequential()
+        # model.add(
+        #     Dense(
+        #         12,
+        #         input_shape=input_shape,
+        #         activation="relu",
+        #         kernel_initializer="he_uniform",
+        #     )
+        # )
+        # model.add(Dense(8, activation="relu", kernel_initializer="he_uniform"))
+        # model.add(Dense(num_classes, activation="softmax"))
+
+        # # Configure the model and start training
+        # model.compile(
+        #     loss=loss_function_used,
+        #     optimizer="adam",
+        #     metrics=["accuracy"],
+        # )
+        # history = model.fit(
+        #     X_training,
+        #     Targets_training,
+        #     epochs=30,
+        #     batch_size=5,
+        #     verbose=1,
+        #     validation_split=0.2,
+        # )
+
+        # test = model.predict(X_testing)
+        # print(test)
+        # print(test.shape)
+        # print(X_testing.shape)
+        # sys.exit()
+
+        # X, y = make_blobs(
+        #     n_samples=1000,
+        #     centers=3,
+        #     n_features=2,
+        #     cluster_std=2,
+        #     random_state=2,
+        # )
+        # y = to_categorical(y)
+        # n_train = 500
+
+        # trainX, testX = X[:n_train, :], X[n_train:, :]
+        # trainy, testy = y[:n_train], y[n_train:]
+
+        # print(trainX.shape)
+        # print(trainy.shape)
+        # sys.exit()
+
+        missing_mask = self._create_missing_mask_row()
         observed_mask = ~missing_mask
         self._fill(missing_mask)
 
         # Define single layer perceptron model.
-        self.single_layer = self._model_phase1()
+        single_layer_model = self._model_phase1()
         self.initialise_parameters()
 
-        for r in self.V:
-            while self.current_eta > self.target_eta:
-                self._train_epoch(self.V[r, :])
+        while self.current_eta > self.target_eta:
+            self._train_epoch(
+                self.data, self.V, observed_mask, single_layer_model, phase=1
+            )
 
         # self.single_layer.fit()
 
@@ -705,8 +800,55 @@ class ImputeUBP(Impute):
         # pred_missing = X_pred[missing_mask]
         # self.data[missing_mask] += self.recurrent_weight * pred_missing
 
-    def _train_epoch(self, vrow):
-        self.single_layer.fit(vrow)
+    def _train_epoch(self, X, V, valid_mask, model, phase=1, num_classes=3):
+        rows = np.random.choice(X.shape[0], X.shape[0], replace=False)
+
+        V_pred = np.zeros((X.shape[0], self.reduced_dimensions, num_classes))
+        for r in rows:
+            print(r)
+            # Loop through each row in random order,
+            # then slice the indexes in the row where
+            # the data is not missing.
+            # The shape of Xknown should be (X.shape[1], X.shape[2])
+            X_train = V[r, :]
+            target = self.data[r, np.where(valid_mask[r, :])][0]
+            y_train = to_categorical(target)
+            print(X_train)
+            print(y_train)
+            print(X_train.shape)
+            print(y_train.shape)
+            sys.exit()
+        # for r in rows:
+        #     # Loop through each row in random order,
+        #     # then slice the indexes in the row where
+        #     # the data is not missing.
+        #     # The shape of Xknown should be (X.shape[1], X.shape[2])
+        #     y_true = X[r, np.where(valid_mask[r, :])]
+
+        #     for vc, xc in zip(
+        #         np.arange(V.shape[1]), np.arange(y_true.shape[1])
+        #     ):
+        #         x_train = V[r, vc].reshape(-1, num_classes)
+        #         y_train = y_true[0][xc, :].reshape(-1, num_classes)
+
+        #         model.fit(
+        #             x=x_train,
+        #             y=y_train,
+        #             epochs=50,
+        #         )
+
+        #         y_pred = model.predict(x_train)
+
+        #         # error = get_rmse(y_true, y_pred)
+
+        #         # V_pred[r] = y_pred
+        #         print(y_pred)
+        #         sys.exit()
+        # print(error)
+
+        # for c in X.shape[1]:
+        #     if phase == 1:
+        #         self.single_layer.fit(self.V[r, :], X[r, c])
 
     @property
     def imputed(self):
@@ -715,51 +857,6 @@ class ImputeUBP(Impute):
     def _init_weights(self, dim1, dim2, w_mean=0, w_stddev=0.01):
         # Get reduced-dimension dataset.
         return np.random.normal(loc=w_mean, scale=w_stddev, size=(dim1, dim2))
-
-    def _read_example_data(self):
-        df = pd.read_csv("mushrooms_test_2.csv", header=None)
-
-        df_incomplete = df.copy()
-
-        df_incomplete.iat[1, 0] = np.nan
-        df_incomplete.iat[2, 1] = np.nan
-
-        missing_encoded = pd.get_dummies(df_incomplete)
-
-        for col in df.columns:
-            missing_cols = missing_encoded.columns.str.startswith(
-                str(col) + "_"
-            )
-
-            missing_encoded.loc[
-                df_incomplete[col].isnull(), missing_cols
-            ] = np.nan
-
-        return missing_encoded
-
-    # def _encode_categorical(self, X):
-    #     """[Encode -9 encoded missing values as np.nan]
-
-    #     Args:
-    #         X ([numpy.ndarray]): [012-encoded genotypes with -9 as missing values]
-
-    #     Returns:
-    #         [pandas.DataFrame]: [DataFrame with missing values encoded as np.nan]
-    #     """
-    #     np.nan_to_num(X, copy=False, nan=-9.0)
-    #     X = X.astype(str)
-    #     X[(X == "-9.0") | (X == "-9")] = "none"
-
-    #     df = pd.DataFrame(X)
-    #     df_incomplete = df.copy()
-
-    #     # Replace 'none' with np.nan
-    #     for row in df.index:
-    #         for col in df.columns:
-    #             if df_incomplete.iat[row, col] == "none":
-    #                 df_incomplete.iat[row, col] = np.nan
-
-    #     return df_incomplete
 
     def _encode_onehot(self, X):
         """[Convert 012-encoded data to one-hot encodings]
@@ -847,19 +944,23 @@ class ImputeUBP(Impute):
             int(np.ceil(0.5 * n_dims)),
         ]
 
-    def _model_phase1(self):
+    def _model_phase1(self, num_classes=3):
         """Create a single layer perceptron for UBP model.
 
         Creates a network with the following structure:
 
         InputLayer -> DenseLayer1 -> ActivationFunction -> OutputLayer
 
+        This layer is temporary and is only used to refine the intrinsic vector, V.
+
+        Args:
+            num_classes: The number of classes in the vector.
+
         Returns:
             keras model object: Compiled Keras model.
         """
-        num_classes = 3
-        input_shape = (self.reduced_dimensions,)
-        output_dim = self.reduced_dimensions
+        input_shape = (num_classes,)
+        output_dim = num_classes
 
         model = Sequential()
 
@@ -867,14 +968,13 @@ class ImputeUBP(Impute):
             Dense(
                 output_dim,
                 input_shape=input_shape,
-                activation="sigmoid",
+                activation="softmax",
                 kernel_initializer=self.kernel_initializer,
                 use_bias=False,
             )
         )
 
-        model.compile(optimizer=self.optimizer, loss="root_mean_squared_error")
-        model.summary()
+        model.compile(optimizer=self.optimizer, loss="categorical_crossentropy")
         return model
 
     def _fill(self, missing_mask):
@@ -883,7 +983,7 @@ class ImputeUBP(Impute):
         Args:
             missing_mask ([np.ndarray(bool)]): [Missing data mask with True corresponding to a missing value]
         """
-        self.data[missing_mask] = [0, 0, 0]
+        self.data[missing_mask] = -1
 
     def _create_missing_mask(self):
         """[Creates a missing data mask with boolean values]
@@ -892,6 +992,17 @@ class ImputeUBP(Impute):
             [numpy.ndarray(bool)]: [Boolean mask of missing values, with True corresponding to a missing data point]
         """
         return np.isnan(self.data).all(axis=2)
+
+    def _create_missing_mask_row(self):
+        """[Creates a missing data mask with boolean values]
+
+        Returns:
+            [numpy.ndarray(bool)]: [Boolean mask of missing values, with True corresponding to a missing data point]
+        """
+        a = self.data.copy()
+        a = a.astype("float32")
+        a[(self.data == -9) | (self.data == -9.0)] = np.nan
+        return np.isnan(a)
 
     def initialise_parameters(self):
         self.initial_eta = 0.1
