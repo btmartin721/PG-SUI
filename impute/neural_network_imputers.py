@@ -619,6 +619,7 @@ class ImputeUBP(Impute):
         # self.V = np.zeros((X.shape[0], reduced_dimensions, num_classes))
         # for r in range(X.shape[0]):
         self.V = self._init_weights(X.shape[0], reduced_dimensions)
+        self.U = self._init_weights(reduced_dimensions, X.shape[1])
 
         # Get initial weights for single layer perceptron.
         # self.T = self._init_weights(X.shape[0], reduced_dimensions)
@@ -805,13 +806,19 @@ class ImputeUBP(Impute):
 
         V_pred = np.zeros((X.shape[0], self.reduced_dimensions, num_classes))
         for r in rows:
-            print(r)
+            
+            model.fit(self.U)
+            # model.fit(self.U, v_train, batch_size=1)
+            sys.exit()
+            # print(r)
             # Loop through each row in random order,
             # then slice the indexes in the row where
             # the data is not missing.
-            # The shape of Xknown should be (X.shape[1], X.shape[2])
-            X_train = V[r, :]
-            target = self.data[r, np.where(valid_mask[r, :])][0]
+            # The shape of X_train should be (X.shape[1], X.shape[2])
+            X_train = X[r, np.where(valid_mask[r, :])][0]
+            X_train = to_categorical(X_train)
+
+            # target = self.data[r, np.where(valid_mask[r, :])][0]
             y_train = to_categorical(target)
             print(X_train)
             print(y_train)
@@ -959,8 +966,8 @@ class ImputeUBP(Impute):
         Returns:
             keras model object: Compiled Keras model.
         """
-        input_shape = (num_classes,)
-        output_dim = num_classes
+        input_shape = (self.data.shape[1],)
+        output_dim = self.reduced_dimensions
 
         model = Sequential()
 
@@ -968,13 +975,13 @@ class ImputeUBP(Impute):
             Dense(
                 output_dim,
                 input_shape=input_shape,
-                activation="softmax",
+                activation="sigmoid",
                 kernel_initializer=self.kernel_initializer,
                 use_bias=False,
             )
         )
 
-        model.compile(optimizer=self.optimizer, loss="categorical_crossentropy")
+        model.compile(optimizer=self.optimizer, loss="mse")
         return model
 
     def _fill(self, missing_mask):
