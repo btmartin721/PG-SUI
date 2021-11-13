@@ -660,9 +660,9 @@ class ImputeUBP(Impute):
 
     @timer
     def fit_predict(self, X):
-        # self.data = self._encode_onehot(X)
+        self.data = self._encode_onehot(X)
         # self.data = self.df.copy().values
-        self.data = X.copy()
+        # self.data = X.copy()
         imputed_enc = self._train()
 
         # imputed_enc, dummy_df = self._eval_predictions(X, imputed_enc)
@@ -762,7 +762,7 @@ class ImputeUBP(Impute):
         # print(trainy.shape)
         # sys.exit()
 
-        missing_mask = self._create_missing_mask_row()
+        missing_mask = self._create_missing_mask()
         observed_mask = ~missing_mask
         self._fill(missing_mask)
 
@@ -806,8 +806,22 @@ class ImputeUBP(Impute):
 
         V_pred = np.zeros((X.shape[0], self.reduced_dimensions, num_classes))
         for r in rows:
-            
-            model.fit(self.U)
+
+            print(X)
+            print(X.shape)
+            sys.exit()
+
+            X_train = self.U.T.copy()
+
+            # valid_idx = np.nonzero(valid_mask.T[:, r])[0]
+            # y_train = to_categorical(X[r, :])
+
+            print(X_train)
+            print(X_train.shape)
+            print(y_train)
+            print(y_train.shape)
+            sys.exit()
+            model.fit(self.V[r, :], y_train)
             # model.fit(self.U, v_train, batch_size=1)
             sys.exit()
             # print(r)
@@ -815,8 +829,6 @@ class ImputeUBP(Impute):
             # then slice the indexes in the row where
             # the data is not missing.
             # The shape of X_train should be (X.shape[1], X.shape[2])
-            X_train = X[r, np.where(valid_mask[r, :])][0]
-            X_train = to_categorical(X_train)
 
             # target = self.data[r, np.where(valid_mask[r, :])][0]
             y_train = to_categorical(target)
@@ -990,7 +1002,7 @@ class ImputeUBP(Impute):
         Args:
             missing_mask ([np.ndarray(bool)]): [Missing data mask with True corresponding to a missing value]
         """
-        self.data[missing_mask] = -1
+        self.data[missing_mask] = [0, 0, 0]
 
     def _create_missing_mask(self):
         """[Creates a missing data mask with boolean values]
