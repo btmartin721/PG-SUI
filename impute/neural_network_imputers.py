@@ -806,20 +806,6 @@ class ImputeUBP(Impute):
 
         V_pred = np.zeros((X.shape[0], self.reduced_dimensions, num_classes))
         for r in rows:
-
-            print(X)
-            print(X.shape)
-            sys.exit()
-
-            X_train = self.U.T.copy()
-
-            # valid_idx = np.nonzero(valid_mask.T[:, r])[0]
-            # y_train = to_categorical(X[r, :])
-
-            print(X_train)
-            print(X_train.shape)
-            print(y_train)
-            print(y_train.shape)
             sys.exit()
             model.fit(self.V[r, :], y_train)
             # model.fit(self.U, v_train, batch_size=1)
@@ -978,8 +964,8 @@ class ImputeUBP(Impute):
         Returns:
             keras model object: Compiled Keras model.
         """
-        input_shape = (self.data.shape[1],)
-        output_dim = self.reduced_dimensions
+        input_shape = (self.data.shape[0],)
+        output_dim = self.data.shape[1]
 
         model = Sequential()
 
