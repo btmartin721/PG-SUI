@@ -4,6 +4,7 @@ import gc
 import os
 import random
 import sys
+import math
 
 from collections import defaultdict
 from statistics import mean, median
@@ -87,6 +88,17 @@ def get_rmse(y_true, y_pred):
     return np.sqrt(np.mean((y_pred - y_true) ** 2))
 
 
+def validate_batch_size(X, batch_size):
+    if batch_size > X.shape[0]:
+        while batch_size > X.shape[0]:
+            print(
+                "Batch size is larger than the number of samples. "
+                "Dividing batch_size by 2."
+            )
+            batch_size //= 2
+    return batch_size
+
+
 def create_weights(sz):
     theta = theano.shared(
         np.array(np.random.rand(sz[0], sz[1]), dtype=theano.config.floatX)
@@ -162,15 +174,7 @@ class ImputeVAE(Impute):
         elif gt is not None:
             X = gt
 
-        if batch_size > X.shape[0]:
-            while batch_size > X.shape[0]:
-                print(
-                    "Batch size is larger than the number of samples. "
-                    "Dividing batch_size by 2."
-                )
-                batch_size = batch_size // 2
-
-        self.batch_size = batch_size
+        self.batch_size = validate_batch_size(X, batch_size)
 
         if self.validation_only is not None:
             print("\nEstimating validation scores...")
@@ -545,25 +549,15 @@ class ImputeUBP(Impute):
         initial_strategy="populations",
         validation_only=0.2,
         disable_progressbar=False,
-        reduced_dimensions=2,
+        batch_size=32,
+        n_components=3,
         num_hidden_layers=3,
-        hidden_layer_sizes=100,
-        recurrent_weight=0.5,
+        hidden_layer_sizes="midpoint",
         optimizer="adam",
-        hidden_activation="relu",
-        output_activation="sigmoid",
+        hidden_activation="elu",
         kernel_initializer="glorot_normal",
-        l1_penalty=0,
-        l2_penalty=0,
         **kwargs,
     ):
-        if isinstance(hidden_layer_sizes, int):
-            hidden_layer_sizes = [hidden_layer_sizes] * num_hidden_layers
-
-        assert (
-            num_hidden_layers == len(hidden_layer_sizes)
-            and num_hidden_layers > 0
-        )
 
         self.clf = "UBP"
         self.clf_type = "classifier"
@@ -581,45 +575,39 @@ class ImputeUBP(Impute):
         self.cv = cv
         self.validation_only = validation_only
         self.disable_progressbar = disable_progressbar
-        self.reduced_dimensions = reduced_dimensions
-        self.recurrent_weight = recurrent_weight
+        self.n_components = n_components
+        self.hidden_layer_sizes = hidden_layer_sizes
         self.optimizer = optimizer
-        self.kernel_initializer = kernel_initializer
         self.hidden_activation = hidden_activation
-        self.output_activation = output_activation
-        self.l1_penalty = l1_penalty
-        self.l2_penalty = l2_penalty
+        self.kernel_initializer = kernel_initializer
 
+        # Get number of hidden layers
         self.df = None
         self.data = None
 
         if genotype_data is None:
             raise TypeError(
-                "genotype_data was not supplied and is a required argument"
+                "genotype_data is a required argument, but was not supplied"
             )
 
         if test_cat is not None:
-            X = test_cat.copy()
+            self.X = test_cat.copy()
         else:
-            X = genotype_data.genotypes_nparray
+            self.X = genotype_data.genotypes_nparray
 
-        self.Xt = None
+        (
+            self.hidden_layer_sizes,
+            num_hidden_layers,
+        ) = self._validate_hidden_layers(hidden_layer_sizes, num_hidden_layers)
 
-        # Get missing data mask
-        self.mask = np.isnan(X)
+        self.hidden_layer_sizes = self._get_hidden_layer_sizes(
+            self.X.shape[1], self.n_components, self.hidden_layer_sizes
+        )
 
-        # Get indices where data is not missing.
-        self.valid = np.where(~self.mask)
+        self.batch_size = validate_batch_size(self.X, batch_size)
 
-        # Get number of hidden layers
-        self.l = num_hidden_layers
-
-        # Get initial reduced-dimension weights.
-        # num_classes = 3
-        # self.V = np.zeros((X.shape[0], reduced_dimensions, num_classes))
-        # for r in range(X.shape[0]):
-        self.V = self._init_weights(X.shape[0], reduced_dimensions)
-        self.U = self._init_weights(reduced_dimensions, X.shape[1])
+        self.V_latent = self._init_weights(self.X.shape[0], self.n_components)
+        # self.U = self._init_weights(reduced_dimensions, X.shape[1])
 
         # Get initial weights for single layer perceptron.
         # self.T = self._init_weights(X.shape[0], reduced_dimensions)
@@ -645,7 +633,7 @@ class ImputeUBP(Impute):
         # fout.write(f"{max(mem_usage)}")
         # sys.exit()
 
-        self.imputed_df = self.fit_predict(X)
+        self.imputed_df = self.fit_predict(self.X)
         print("\nDone!\n")
 
         self.imputed_df = self.imputed_df.astype(np.float)
@@ -767,8 +755,8 @@ class ImputeUBP(Impute):
         self._fill(missing_mask)
 
         # Define single layer perceptron model.
-        single_layer_model = self._model_phase1()
-        self.initialise_parameters()
+        model = self._create_ubp_model()
+        sys.exit()
 
         while self.current_eta > self.target_eta:
             self._train_epoch(
@@ -804,7 +792,7 @@ class ImputeUBP(Impute):
     def _train_epoch(self, X, V, valid_mask, model, phase=1, num_classes=3):
         rows = np.random.choice(X.shape[0], X.shape[0], replace=False)
 
-        V_pred = np.zeros((X.shape[0], self.reduced_dimensions, num_classes))
+        V_pred = np.zeros((X.shape[0], self.n_components, num_classes))
         for r in rows:
             sys.exit()
             model.fit(self.V[r, :], y_train)
@@ -858,6 +846,34 @@ class ImputeUBP(Impute):
     @property
     def imputed(self):
         return self.imputed_df
+
+    def _validate_hidden_layers(self, hidden_layer_sizes, num_hidden_layers):
+        if isinstance(hidden_layer_sizes, (str, int)):
+            hidden_layer_sizes = [hidden_layer_sizes] * num_hidden_layers
+
+        # If not all integers
+        elif isinstance(hidden_layer_sizes, list):
+            if not all([isinstance(x, (str, int)) for x in hidden_layer_sizes]):
+                ls = list(set([type(item) for item in hidden_layer_sizes]))
+                raise TypeError(
+                    f"Variable hidden_layer_sizes must either be None, "
+                    f"an integer or string, or a list of integers or "
+                    f"strings, but got the following type(s): {ls}"
+                )
+
+        else:
+            raise TypeError(
+                f"Variable hidden_layer_sizes must either be, "
+                f"an integer, a string, or a list of integers or strings, "
+                f"but got the following type: {type(hidden_layer_sizes)}"
+            )
+
+        assert (
+            num_hidden_layers == len(hidden_layer_sizes)
+            and num_hidden_layers > 0
+        ), "num_hidden_layers must be of the same length as hidden_layer_sizes."
+
+        return hidden_layer_sizes, num_hidden_layers
 
     def _init_weights(self, dim1, dim2, w_mean=0, w_stddev=0.01):
         # Get reduced-dimension dataset.
@@ -934,53 +950,112 @@ class ImputeUBP(Impute):
 
         return df
 
-    def _get_hidden_layer_sizes(self, n_dims):
-        """[Get dimensions of hidden layers]
+    def _get_hidden_layer_sizes(self, n_dims, n_components, hl_func):
+        """Get dimensions of hidden layers.
 
         Args:
-            n_dims (int): The number of feature dimensions (columns).
+            n_dims (int): The number of feature dimensions (columns) (d).
+            n_components (int): The number of reduced dimensions (t).
+            hl_func (str): The function to use to calculate the hidden layer sizes. Possible options: "midpoint", "sqrt", "log2".
 
         Returns:
             [int, int, int]: [Number of dimensions in hidden layers]
         """
-        return [
-            min(2000, 8 * n_dims),
-            min(500, 2 * n_dims),
-            int(np.ceil(0.5 * n_dims)),
-        ]
+        layers = list()
+        if not isinstance(hl_func, list):
+            raise TypeError("hl_func must be of type list.")
 
-    def _model_phase1(self, num_classes=3):
-        """Create a single layer perceptron for UBP model.
+        for func in hl_func:
+            if func == "midpoint":
+                units = round((n_dims + n_components) / 2)
+            elif func == "sqrt":
+                units = round(math.sqrt(n_dims))
+            elif func == "log2":
+                units = round(math.log(n_dims, 2))
+            elif isinstance(func, int):
+                units = func
+            else:
+                raise ValueError(
+                    f"hidden_layer_sizes must be either integers or any of "
+                    f"the following strings: 'midpoint', "
+                    f"'sqrt', or 'log2', but got {func} of type {type(func)}"
+                )
+
+            assert units > 0 and units < n_dims, (
+                f"The hidden layer sizes must be > 0 and < the number of "
+                f"features (i.e., columns) in the dataset, but size was {units}"
+            )
+
+            layers.append(units)
+        return layers
+
+    def _create_ubp_model(self, num_classes=3):
+        """Create and train a UBP neural network model.
 
         Creates a network with the following structure:
 
-        InputLayer -> DenseLayer1 -> ActivationFunction -> OutputLayer
-
-        This layer is temporary and is only used to refine the intrinsic vector, V.
+        InputLayer -> DenseLayer1 -> ActivationFunction1 -> ... -> DenseLayerN -> SoftmaxActivation -> OutputLayer
 
         Args:
-            num_classes: The number of classes in the vector.
+            num_classes (int, optional): The number of classes in the vector. Defaults to 3.
 
         Returns:
             keras model object: Compiled Keras model.
         """
-        input_shape = (self.data.shape[0],)
-        output_dim = self.data.shape[1]
+        batch_size = self.batch_size
+        t = self.n_components
 
-        model = Sequential()
+        # Usually, a Keras model begins with an "input", but
+        # from the perspective of Keras this model really has no input.
+        # "v" is like an input, but it is somewhat more like a variable
+        # since we are going to refine it with gradient descent.
+        # Should be of shape (batch_size, n_components)
+        # v is the intrinsic vector, and it gets refined based on target output.
+        v = tf.Variable(tf.zeros([batch_size, t]))
 
-        model.add(
-            Dense(
-                output_dim,
-                input_shape=input_shape,
-                activation="sigmoid",
-                kernel_initializer=self.kernel_initializer,
-                use_bias=False,
-            )
-        )
+        # Next, we need some layers. If we are implementing matrix
+        # factorization, we want exactly one dense layer.
+        # So in that case, X_hat = v * w, where w is the weights of that one
+        # dense layer. If we are implementing NLPCA or UBP, then we should add
+        # more layers.
 
-        model.compile(optimizer=self.optimizer, loss="mse")
-        return model
+        # Here we loop through and dynamicall add hidden layers.
+        # This allows users to set a varying number of hidden layers
+        # for tuning.
+        # for hidden_units in self.hidden_layer_sizes:
+        h1 = tf.keras.layers.Dense(self.hidden_layer_sizes[0])(v)
+        h2 = tf.keras.layers.Activation(self.hidden_activation)(h1)
+        x_hat = tf.keras.layers.Dense(num_classes, activation="softmax")(h2)
+
+        model = tf.keras.Model(inputs=v, outputs=x_hat)
+        sys.exit(0)
+
+        # In this case, x = f(v, w), where f is the multi-layer perceptron
+        # with weights "w". "hidden_units" is some value I picked arbitrarily.
+        # Will need to do some experimenting with this value. As a general rule
+        # of thumb, it should probably be about halfway between t and d.
+
+        # Number of batches based on rows in X and V_latent.
+        n_batches = int(np.ceil(self.X.shape[0] / batch_size))
+
+        # While stopping criterion not met.
+        while self.current_eta > self.target_eta:
+            self.num_epochs += 1
+
+            # Randomize the order the of the samples in the batches.
+            indices = np.arange(self.X.shape[0])
+            np.random.shuffle(indices)
+            x_batch = self.X[indices]
+            v_batch = self.V_latent[indices]
+
+            # Load values from v_batch into v.
+            v.assign(v_batch)
+
+            for batch_idx in range(n_batches):
+                batch_start = batch_idx * batch_size
+                batch_end = (batch_idx + 1) * batch_size
+                batch_data = x_batch[batch_start:batch_end, :]
+                train_on_batch(x_batch)
 
     def _fill(self, missing_mask):
         """Mask missing data as [0, 0, 0].
