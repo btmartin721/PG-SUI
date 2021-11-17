@@ -755,13 +755,23 @@ class ImputeUBP(Impute):
         self._fill(missing_mask)
 
         # Define single layer perceptron model.
-        model = self._create_ubp_model()
+        ubp_model = self._create_ubp_model()
         sys.exit()
 
+        # Number of batches based on rows in X and V_latent.
+        n_batches = int(np.ceil(self.data.shape[0] / batch_size))
+
         while self.current_eta > self.target_eta:
-            self._train_epoch(
-                self.data, self.V, observed_mask, single_layer_model, phase=1
-            )
+            # While stopping criterion not met.
+            self.num_epochs += 1
+
+            if self.num_epochs == 1:
+                print(f"Beginning UBP training...\n")
+
+            if self.num_epochs % 50 == 0:
+                print(f"Epoch {self.num_epochs}...")
+
+            self._train_epoch(ubp_model, observed_mask, n_batches)
 
         # self.single_layer.fit()
 
@@ -789,59 +799,22 @@ class ImputeUBP(Impute):
         # pred_missing = X_pred[missing_mask]
         # self.data[missing_mask] += self.recurrent_weight * pred_missing
 
-    def _train_epoch(self, X, V, valid_mask, model, phase=1, num_classes=3):
-        rows = np.random.choice(X.shape[0], X.shape[0], replace=False)
+    def _train_epoch(self, model, valid_mask, n_batches, num_classes=3):
 
-        V_pred = np.zeros((X.shape[0], self.n_components, num_classes))
-        for r in rows:
-            sys.exit()
-            model.fit(self.V[r, :], y_train)
-            # model.fit(self.U, v_train, batch_size=1)
-            sys.exit()
-            # print(r)
-            # Loop through each row in random order,
-            # then slice the indexes in the row where
-            # the data is not missing.
-            # The shape of X_train should be (X.shape[1], X.shape[2])
+        # Randomize the order the of the samples in the batches.
+        indices = np.arange(self.data.shape[0])
+        np.random.shuffle(indices)
+        x_batch = self.data[indices]
+        v_batch = self.V_latent[indices]
 
-            # target = self.data[r, np.where(valid_mask[r, :])][0]
-            y_train = to_categorical(target)
-            print(X_train)
-            print(y_train)
-            print(X_train.shape)
-            print(y_train.shape)
-            sys.exit()
-        # for r in rows:
-        #     # Loop through each row in random order,
-        #     # then slice the indexes in the row where
-        #     # the data is not missing.
-        #     # The shape of Xknown should be (X.shape[1], X.shape[2])
-        #     y_true = X[r, np.where(valid_mask[r, :])]
+        # Load values from v_batch into v.
+        v.assign(v_batch)
 
-        #     for vc, xc in zip(
-        #         np.arange(V.shape[1]), np.arange(y_true.shape[1])
-        #     ):
-        #         x_train = V[r, vc].reshape(-1, num_classes)
-        #         y_train = y_true[0][xc, :].reshape(-1, num_classes)
-
-        #         model.fit(
-        #             x=x_train,
-        #             y=y_train,
-        #             epochs=50,
-        #         )
-
-        #         y_pred = model.predict(x_train)
-
-        #         # error = get_rmse(y_true, y_pred)
-
-        #         # V_pred[r] = y_pred
-        #         print(y_pred)
-        #         sys.exit()
-        # print(error)
-
-        # for c in X.shape[1]:
-        #     if phase == 1:
-        #         self.single_layer.fit(self.V[r, :], X[r, c])
+        for batch_idx in range(n_batches):
+            batch_start = batch_idx * batch_size
+            batch_end = (batch_idx + 1) * batch_size
+            batch_data = x_batch[batch_start:batch_end, :]
+            train_on_batch(x_batch)
 
     @property
     def imputed(self):
@@ -989,7 +962,7 @@ class ImputeUBP(Impute):
             layers.append(units)
         return layers
 
-    def _create_ubp_model(self, num_classes=3):
+    def _create_ubp_model(self, v, num_classes=3):
         """Create and train a UBP neural network model.
 
         Creates a network with the following structure:
@@ -1002,60 +975,31 @@ class ImputeUBP(Impute):
         Returns:
             keras model object: Compiled Keras model.
         """
-        batch_size = self.batch_size
-        t = self.n_components
-
-        # Usually, a Keras model begins with an "input", but
-        # from the perspective of Keras this model really has no input.
-        # "v" is like an input, but it is somewhat more like a variable
-        # since we are going to refine it with gradient descent.
-        # Should be of shape (batch_size, n_components)
-        # v is the intrinsic vector, and it gets refined based on target output.
-        v = tf.Variable(tf.zeros([batch_size, t]))
-
-        # Next, we need some layers. If we are implementing matrix
+        # We need some layers. If we are implementing matrix
         # factorization, we want exactly one dense layer.
         # So in that case, X_hat = v * w, where w is the weights of that one
         # dense layer. If we are implementing NLPCA or UBP, then we should add
         # more layers.
 
-        # Here we loop through and dynamicall add hidden layers.
+        # Specify the input layer.
+        v_in = tf.keras.Input((self.V_latent.shape[1],))
+
+        # Here we loop through and dynamically add hidden layers.
         # This allows users to set a varying number of hidden layers
         # for tuning.
-        # for hidden_units in self.hidden_layer_sizes:
-        h1 = tf.keras.layers.Dense(self.hidden_layer_sizes[0])(v)
-        h2 = tf.keras.layers.Activation(self.hidden_activation)(h1)
+        for hidden_units in self.hidden_layer_sizes:
+            hl = tf.keras.layers.Dense(self.hidden_layer_sizes[0])(v)
+            hl = tf.keras.layers.Activation(self.hidden_activation)(hl)
         x_hat = tf.keras.layers.Dense(num_classes, activation="softmax")(h2)
 
-        model = tf.keras.Model(inputs=v, outputs=x_hat)
-        sys.exit(0)
+        model = tf.keras.Model(inputs=v_in, outputs=x_hat)
+        model.compile(optimizer=self.optimizer, loss="mse")
+        return model
 
         # In this case, x = f(v, w), where f is the multi-layer perceptron
         # with weights "w". "hidden_units" is some value I picked arbitrarily.
         # Will need to do some experimenting with this value. As a general rule
         # of thumb, it should probably be about halfway between t and d.
-
-        # Number of batches based on rows in X and V_latent.
-        n_batches = int(np.ceil(self.X.shape[0] / batch_size))
-
-        # While stopping criterion not met.
-        while self.current_eta > self.target_eta:
-            self.num_epochs += 1
-
-            # Randomize the order the of the samples in the batches.
-            indices = np.arange(self.X.shape[0])
-            np.random.shuffle(indices)
-            x_batch = self.X[indices]
-            v_batch = self.V_latent[indices]
-
-            # Load values from v_batch into v.
-            v.assign(v_batch)
-
-            for batch_idx in range(n_batches):
-                batch_start = batch_idx * batch_size
-                batch_end = (batch_idx + 1) * batch_size
-                batch_data = x_batch[batch_start:batch_end, :]
-                train_on_batch(x_batch)
 
     def _fill(self, missing_mask):
         """Mask missing data as [0, 0, 0].
