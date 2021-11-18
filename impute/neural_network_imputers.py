@@ -68,13 +68,6 @@ def make_reconstruction_loss(n_features):
     return reconstruction_loss
 
 
-def make_ubp_loss(observed_mask):
-    def masked_mse(y_true, y_pred):
-        y_true_observed = y_true[:, np.nonzero(valid_mask)]
-        y_pred_observed = y_pred[:, np.nonzero(valid_mask)]
-        return mse(y_true=y_true_observed, y_pred=y_pred_observed)
-
-
 def masked_mae(X_true, X_pred, mask):
 
     masked_diff = X_true[mask] - X_pred[mask]
@@ -607,11 +600,13 @@ class ImputeUBP(Impute):
         )
 
         self.batch_size = validate_batch_size(self.X, batch_size)
+
         self.V_latent = self._init_weights(self.X.shape[0], self.n_components)
+
         self.v = tf.Variable(
             tf.random.normal([self.batch_size, self.n_components], stddev=0.01),
-            name="v",
         )
+        self.v_bias = tf.Variable(tf.zeros([1, self.n_components]))
 
         self.vb = tf.Variable(tf.zeros([1, self.n_components]))
 
@@ -826,8 +821,9 @@ class ImputeUBP(Impute):
         self.observed_mask = ~missing_mask
         self._fill(missing_mask)
 
-        # Define single layer perceptron model.
-        # ubp_model = self._create_ubp_model()
+        model = self._build_ubp()
+        # Define neural network model.
+        # model = self._create_ubp_model()
 
         self.initialise_parameters()
 
@@ -839,7 +835,7 @@ class ImputeUBP(Impute):
 
             epoch_train_loss = 0
 
-            s = self._train_epoch(n_batches, epoch_train_loss)
+            s = self._train_epoch(model, n_batches, epoch_train_loss)
 
             self.num_epochs += 1
 
@@ -881,7 +877,7 @@ class ImputeUBP(Impute):
         # pred_missing = X_pred[missing_mask]
         # self.data[missing_mask] += self.recurrent_weight * pred_missing
 
-    def _train_epoch(self, n_batches, epoch_train_loss, num_classes=3):
+    def _train_epoch(self, model, n_batches, epoch_train_loss, num_classes=3):
 
         # Randomize the order the of the samples in the batches.
         indices = np.arange(self.data.shape[0])
@@ -893,15 +889,86 @@ class ImputeUBP(Impute):
             x_batch = self.data[batch_start:batch_end, :]
             v_batch = self.V_latent[batch_start:batch_end, :]
 
-            (
-                self.V_latent[batch_start:batch_end, :],
-                batch_loss,
-            ) = self.backpropagate(v_batch, x_batch, self.current_eta)
+            self.v.assign(v_batch)
+
+            opt = tf.keras.optimizers.Adam(learning_rate=self.current_eta)
+            with tf.GradientTape() as tape:
+                pred = model(self.v)
+                loss = tf.keras.losses.categorical_crossentropy(x_batch, pred)
+
+            # calculate the gradients using our tape and then update the
+            # model weights
+            grads = tape.gradient(loss, model.trainable_variables)
+            opt.apply_gradients(zip(grads, model.trainable_variables))
+
+            self.V_latent[batch_start:batch_end, :] = model.layers[
+                0
+            ].get_weights()[0]
+            sys.exit()
+
+            # if batch_idx == 0:
+            #     model.get_layer("v").set_weights([v_batch, self.v_bias])
 
             # self.v.assign(v_batch)
-            # model.trainable_variables[0] = self.v
+
+            # v_tmp = model.get_layer("v").get_weights()[0]
+            # print(v_tmp)
+            # print(v_tmp.shape)
+            # sys.exit()
+
             # model.train_on_batch(x_batch, x_batch)
-            # self.v.assign(model.layers[0].get_weights()[0])
+
+            # self.V_latent[batch_start:batch_end, :] = np.reshape(
+            #     v_tmp, (self.batch_size, self.n_components)
+            # )
+
+        x_pred = model.predict(self.data)
+        x_true = self.data
+
+        s = mse(y_true=x_true, y_pred=x_pred)
+        return s
+
+        # (
+        #     self.V_latent[batch_start:batch_end, :],
+        #     batch_loss,
+        # ) = self.backpropagate(v_batch, x_batch, self.current_eta)
+
+        # self.v.assign(v_batch)
+        # model.trainable_variables[0] = self.v
+        # model.train_on_batch(x_batch, x_batch)
+        # self.v.assign(model.layers[0].get_weights()[0])
+
+    def _build_ubp(self, num_classes=3):
+        """Create and train a UBP neural network model.
+
+        Creates a network with the following structure:
+
+        InputLayer -> DenseLayer1 -> ActivationFunction1 -> ... -> DenseLayerN -> SoftmaxActivation -> OutputLayer
+
+        Args:
+            num_classes (int, optional): The number of classes in the vector. Defaults to 3.
+
+        Returns:
+            keras model object: Compiled Keras model.
+        """
+        # Build the model
+        model = Sequential(
+            [
+                tf.keras.layers.Dense(self.hidden_layer_sizes[0]),
+                tf.keras.layers.Activation("elu"),
+                tf.keras.layers.Dense(self.data.shape[1]),
+                tf.keras.layers.Softmax(axis=1),
+            ]
+        )
+        return model
+        # We need some layers. If we are implementing matrix
+        # factorization, we want exactly one dense layer.
+        # So in that case, X_hat = v * w, where w is the weights of that one
+        # dense layer. If we are implementing NLPCA or UBP, then we should add
+        # more layers.
+
+    def _convert_tensor(self, outputs):
+        return outputs
 
     def _create_ubp_model(self, num_classes=3):
         """Create and train a UBP neural network model.
@@ -922,29 +989,40 @@ class ImputeUBP(Impute):
         # dense layer. If we are implementing NLPCA or UBP, then we should add
         # more layers.
 
-        # Specify the input layer.
-        x = tf.keras.Input((self.data.shape[1], num_classes))
-        v1 = tf.keras.layers.Dense(self.V_latent.shape[1], name="v")(x)
-        v2 = tf.keras.layers.Activation(self.hidden_activation)(v1)
-
-        # Here we loop through and dynamically add hidden layers.
-        # This allows users to set a varying number of hidden layers
-        # for tuning.
-        h1 = tf.keras.layers.Dense(self.hidden_layer_sizes[0], name="Hidden2")(
-            v2
-        )
-
-        h2 = tf.keras.layers.Activation(self.hidden_activation)(h1)
+        # # Specify the input layer.
+        # v_in = tf.keras.Input((self.V_latent.shape[1],))
+        inp = tf.keras.Input(shape=(self.data.shape[1], num_classes))
+        flat = tf.keras.layers.Flatten()(inp)
+        v = tf.keras.layers.Dense(self.n_components, name="v")(flat)
+        v1 = tf.keras.layers.Activation(self.hidden_activation)(v)
+        h1 = tf.keras.layers.Dense(self.data.shape[1], name="h1")(v1)
+        h2 = tf.keras.layers.Lambda(lambda x: tf.expand_dims(x, -1))(h1)
         x_hat = tf.keras.layers.Dense(num_classes, name="x_hat")(h2)
-        output = tf.keras.layers.Activation("softmax")(h2)
+        out = tf.keras.layers.Softmax(axis=1)(x_hat)
 
-        model = tf.keras.Model(inputs=x, outputs=x_hat)
-
-        loss_func = make_ubp_loss(self.observed_mask)
-
-        model.compile(optimizer=self.optimizer, loss=loss_func)
-
+        model = tf.keras.Model(inputs=inp, outputs=out)
+        model.compile(loss="categorical_crossentropy", optimizer=self.optimizer)
         return model
+
+        # v1 = tf.keras.layers.Dense(self.V_latent.shape[1], name="v")(v_in)
+        # v2 = tf.keras.layers.Activation(self.hidden_activation)(v1)
+
+        # # Here we loop through and dynamically add hidden layers.
+        # # This allows users to set a varying number of hidden layers
+        # # for tuning.
+        # h1 = tf.keras.layers.Dense(self.hidden_layer_sizes[0], name="Hidden2")(
+        #     v2
+        # )
+
+        # h2 = tf.keras.layers.Activation(self.hidden_activation)(h1)
+        # x_hat = tf.keras.layers.Dense(num_classes, name="x_hat")(h2)
+        # output = tf.keras.layers.Softmax(axis=1)(x_hat)
+
+        # model = tf.keras.Model(inputs=v_in, outputs=output)
+
+        # model.compile(optimizer=self.optimizer, loss="categorical_crossentropy")
+
+        # return model
 
         # In this case, x = f(v, w), where f is the multi-layer perceptron
         # with weights "w". "hidden_units" is some value I picked arbitrarily.
@@ -1205,22 +1283,23 @@ class ImputeUBP(Impute):
     #     return self.data.copy()
 
 
-# class UBPModel(Layer):
-#     def __init__(self, output_dim, **kwargs):
-#         self.output_dim = output_dim
-#         super(UBPModel, self).__init__(**kwargs)
+class VLayer(tf.keras.layers.Layer):
+    def __init__(self, batch_size, n_dims):
+        self.batch_size = batch_size
+        self.n_dims = n_dims
+        w_init = tf.random_normal_initializer()
+        self.w = tf.Variable(
+            initial_value=w_init(shape=(batch_size, n_dims), dtype="float32"),
+            trainable=True,
+        )
+        b_init = tf.zeros.initializer()
+        self.b = tf.Variable(
+            initial_value=b_init(shape=(n_dims,), dtype="float32"),
+            trainable=True,
+        )
 
-#     def build(self, input_shapes):
-#         self.kernel = self.add_weight(
-#             name="kernel",
-#             shape=self.output_dim,
-#             initializer="uniform",
-#             trainable=True,
-#         )
-#         super(UBPModel, self).build(input_shapes)
+    def call(self, inputs):
+        return tf.matmul(inputs, self.w) + self.b
 
-#     def call(self, inputs):
-#         return self.kernel
-
-#     def compute_output_shape(self):
-#         return self.output_dim
+    def compute_output_shape(self):
+        return self.output_dim
