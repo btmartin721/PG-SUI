@@ -268,11 +268,12 @@ def main():
 
         ubp = ImputeUBP(
             genotype_data=data,
-            test_categorical=np.array(
-                [[0, 1, 1, -9], [-9, 1, 2, 2], [2, -9, 2, 0]]
-            ),
             n_components=3,
-            hidden_layer_sizes=[3, 3, 3],
+            initial_strategy="populations",
+            disable_progressbar=True,
+            cv=3,
+            hidden_activation="elu",
+            hidden_layer_sizes="sqrt",
         )
 
         # ubp = ImputeUBP(

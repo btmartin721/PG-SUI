@@ -1235,7 +1235,9 @@ class Impute:
                 strategy=self.imp_kwargs["initial_strategy"]
             )
 
-            df_defiled = pd.DataFrame(simple_imputer.fit_transform(df))
+            df_defiled = pd.DataFrame(
+                simple_imputer.fit_transform(df.fillna(-9).values)
+            )
             valid_cols = cols.copy()
 
         del simple_imputer
@@ -1315,7 +1317,12 @@ class Impute:
         df_stg = df_unknown.copy()
 
         # Variational Autoencoder Neural Network
-        if self.clf == "VAE":
+        if self.clf == "VAE" or self.clf == "UBP":
+            if self.clf == "UBP":
+                for col in df_stg.columns:
+                    df_stg[col] = df_stg[col].replace({pd.NA: np.nan})
+                df_stg.fillna(-9, inplace=True)
+
             df_imp = self.fit_predict(df_stg.to_numpy())
             df_imp = df_imp.astype(np.float)
 
@@ -1401,7 +1408,7 @@ class Impute:
             df_unknown,
         ]
 
-        if self.clf == "VAE":
+        if self.clf == "VAE" or self.clf == "UBP":
             del lst2del
             del cols
         else:

@@ -101,10 +101,6 @@ def create_weights(sz):
     return theta
 
 
-# def grad_desc(cost, theta, alpha):
-#     return theta - (alpha * T.grad(cost, wrt=theta))
-
-
 class ImputeVAE(Impute):
     def __init__(
         self,
@@ -542,7 +538,7 @@ class ImputeUBP(Impute):
         prefix="output",
         cv=5,
         initial_strategy="populations",
-        validation_only=0.2,
+        validation_only=0.3,
         disable_progressbar=False,
         batch_size=32,
         n_components=3,
@@ -550,7 +546,9 @@ class ImputeUBP(Impute):
         hidden_layer_sizes="midpoint",
         optimizer="adam",
         hidden_activation="elu",
-        kernel_initializer="glorot_normal",
+        learning_rate=0.1,
+        max_epochs=1000,
+        tol=1e-6,
         **kwargs,
     ):
 
@@ -559,7 +557,14 @@ class ImputeUBP(Impute):
         self.imp_kwargs = {
             "initial_strategy": initial_strategy,
             "genotype_data": genotype_data,
+            "str_encodings": {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9},
         }
+
+        supported_kwargs = ["test_categorical"]
+        if kwargs is not None:
+            for k in kwargs.keys():
+                if k not in supported_kwargs:
+                    raise ValueError(f"{k} is not a valid argument.")
 
         test_cat = kwargs.get("test_categorical", None)
 
@@ -574,7 +579,9 @@ class ImputeUBP(Impute):
         self.hidden_layer_sizes = hidden_layer_sizes
         self.optimizer = optimizer
         self.hidden_activation = hidden_activation
-        self.kernel_initializer = kernel_initializer
+        self.initial_eta = learning_rate
+        self.max_epochs = max_epochs
+        self.tol = tol
 
         # Get number of hidden layers
         self.df = None
@@ -600,54 +607,24 @@ class ImputeUBP(Impute):
         )
 
         self.batch_size = validate_batch_size(self.X, batch_size)
-
         self.V_latent = self._init_weights(self.X.shape[0], self.n_components)
-
-        self.v = tf.Variable(
-            tf.random.normal([self.batch_size, self.n_components], stddev=0.01),
-        )
-        self.v_bias = tf.Variable(tf.zeros([1, self.n_components]))
-
-        self.vb = tf.Variable(tf.zeros([1, self.n_components]))
-
-        self.w2 = tf.Variable(
-            tf.random.normal(
-                [self.n_components, self.hidden_layer_sizes[0]],
-                stddev=0.01,
-            ),
-            name="w2",
-        )
-
-        self.b2 = tf.Variable(tf.zeros([1, self.hidden_layer_sizes[0]]))
-
-        self.w3 = tf.Variable(
-            tf.random.normal([self.hidden_layer_sizes[0], 3], stddev=0.01),
-            name="w3",
-        )
-
-        self.b3 = tf.Variable(tf.zeros([1, 3]))
-
-        # Collect all initialized weights and biases in self.params
-        self.params = [self.v, self.vb, self.w2, self.b2, self.w3, self.b3]
-
+        self.loss_fn = tf.keras.losses.CategoricalCrossentropy()
         self.observed_mask = None
-
-        # self.U = self._init_weights(reduced_dimensions, X.shape[1])
-
-        # Get initial weights for single layer perceptron.
-        # self.T = self._init_weights(X.shape[0], reduced_dimensions)
-
         self.num_total_epochs = 0
+        self.model = None
+        self.opt = self.set_optimizer()
 
-        # if self.validation_only is not None:
-        #     print("\nEstimating validation scores...")
+        if self.validation_only is not None:
+            print("\nEstimating validation scores...")
 
-        #     self.df_scores = self._imputer_validation(pd.DataFrame(X), self.clf)
+            self.df_scores = self._imputer_validation(
+                pd.DataFrame(self.X), self.clf
+            )
 
-        #     print("\nDone!\n")
+            print("\nDone!\n")
 
-        # else:
-        #     self.df_scores = None
+        else:
+            self.df_scores = None
 
         print("\nImputing full dataset...")
 
@@ -657,7 +634,6 @@ class ImputeUBP(Impute):
         # sys.exit()
 
         self.imputed_df = self.fit_predict(self.X)
-        print("\nDone!\n")
 
         self.imputed_df = self.imputed_df.astype(np.float)
         self.imputed_df = self.imputed_df.astype("Int8")
@@ -669,64 +645,65 @@ class ImputeUBP(Impute):
         if self.df_scores is not None:
             print(self.df_scores)
 
+    def set_optimizer(self):
+        if self.optimizer == "adam":
+            return tf.keras.optimizers.Adam(learning_rate=self.initial_eta)
+        elif self.optimizer == "sgd":
+            return tf.keras.optimizers.SGD(learning_rate=self.initial_eta)
+        elif self.optimizer == "adagrad":
+            return tf.keras.optimizers.Adagrad(learning_rate=self.initial_eta)
+        else:
+            raise ValueError(
+                f"Only 'adam', 'sgd', and 'adagrad' optimizers are supported, "
+                f"but got {self.optimizer}."
+            )
+
     @timer
-    def fit_predict(self, X):
+    def fit_predict(self, input_data):
+        if isinstance(input_data, pd.DataFrame):
+            X = input_data.to_numpy()
+        elif isinstance(input_data, list):
+            X = np.array(input_data)
+        elif isinstance(input_data, np.ndarray):
+            X = input_data.copy()
+        else:
+            raise TypeError(
+                f"input_data must be of type pd.DataFrame, np.ndarray, or "
+                f"list(list(int)), but got {type(input_data)}"
+            )
+
         self.data = self._encode_onehot(X)
-        # self.data = self.df.copy().values
-        # self.data = X.copy()
-        imputed_enc = self._train()
+        self._train()
+        Xpred = self.predict(self.V_latent)
+        return pd.DataFrame(Xpred)
 
-        # imputed_enc, dummy_df = self._eval_predictions(X, imputed_enc)
+    def predict(self, V):
+        pred = self.model(self.V_latent)
+        Xprob = pred.numpy()
+        Xt = np.apply_along_axis(self._mle, axis=2, arr=Xprob)
+        Xdecoded = np.argmax(Xt, axis=2)
+        Xpred = np.zeros((Xdecoded.shape[0], Xdecoded.shape[1]))
+        for idx, row in enumerate(Xpred):
+            imputed_vals = np.zeros(len(row))
+            known_vals = np.zeros(len(row))
+            imputed_idx = np.where(self.observed_mask[idx] == 0)
+            known_idx = np.nonzero(self.observed_mask[idx])
+            Xpred[idx, imputed_idx] = Xdecoded[idx, imputed_idx]
+            Xpred[idx, known_idx] = self.X[idx, known_idx]
+        return Xpred
 
-        # imputed_df = self._decode_onehot(
-        #     pd.DataFrame(data=imputed_enc, columns=dummy_df.columns)
-        # )
-
-        # return imputed_df
-
-    def forward(self, X):
-        """Forward pass of the network
+    def _mle(self, a):
+        """[Get the Maximum Likelihood Estimation for the best prediction. Basically, it sets the index of the maxiumum value in a vector (row) to 1.0, since it is one-hot encoded]
 
         Args:
-            X (np.ndarray): Input data.
+            a ([numpy.ndarray(float)]): [Row vector with predicted values as floating points]
 
         Returns:
-            (np.ndarray): Predicted labels.
+            [numpy.ndarray(float)]: [Row vector with the highest prediction set to 1.0 and the others set to 0.0]
         """
-        X_tf = tf.cast(X, dtype=tf.float32)
-        Z1 = tf.matmul(X_tf, self.v) + self.vb
-        Z1 = tf.nn.relu(Z1)
-        Z2 = tf.matmul(Z1, self.w2) + self.b2
-        Z2 = tf.nn.relu(Z2)
-        Z3 = tf.matmul(Z2, self.w3) + self.b3
-        return Z3
-
-    def loss(self, y_true, logits):
-        """Calculate loss during gradient descent.
-
-        Args:
-            y_true (tf.Tensor): Tensor of shape (batch_size, size_output).
-            logits ([tf.Tensor]): Tensor of shape (batch_size, size_output).
-        """
-        y_true_tf = tf.cast(tf.reshape(y_true, (-1, 1)), dtype=tf.float32)
-        logits_tf = tf.cast(tf.reshape(y_pred, (-1, 1)), dtype=tf.float32)
-        return tf.compat.v1.losses.softmax_cross_entropy(y_true_tf, logits_tf)
-        # return tf.reduce_mean(loss)
-
-    def backpropagate(self, x, y, eta):
-        optimizer = tf.compat.v1.train.GradientDescentOptimizer(
-            learning_rate=eta
-        )
-        with tf.GradientTape() as tape:
-            predicted = self.forward(x)
-            current_loss = self.loss(y, predicted)
-        grads = tape.gradient(current_loss, self.params)
-        optimizer.apply_gradients(
-            zip(grads, self.params),
-            global_step=tf.compat.v1.train.get_or_create_global_step(),
-        )
-
-        return self.v.assign(grads[0]), current_loss.numpy()
+        res = np.zeros(a.shape[0])
+        res[np.argmax(a)] = 1
+        return res
 
     def _train(self):
         """Train an unsupervised backpropagation model.
@@ -734,103 +711,23 @@ class ImputeUBP(Impute):
         Returns:
             numpy.ndarray(float): Predicted values as numpy array.
         """
-
-        # from sklearn.datasets import make_blobs
-
-        # # Configuration options
-        # num_samples_total = 1000
-        # training_split = 250
-        # cluster_centers = [(15, 0), (15, 15), (0, 15), (30, 15)]
-        # num_classes = len(cluster_centers)
-        # loss_function_used = "categorical_crossentropy"
-
-        # # Generate data
-        # X, targets = make_blobs(
-        #     n_samples=num_samples_total,
-        #     centers=cluster_centers,
-        #     n_features=num_classes,
-        #     center_box=(0, 1),
-        #     cluster_std=1.5,
-        # )
-
-        # categorical_targets = to_categorical(targets)
-        # X_training = X[training_split:, :]
-        # X_testing = X[:training_split, :]
-        # Targets_training = categorical_targets[training_split:]
-        # Targets_testing = categorical_targets[:training_split].astype(
-        #     np.integer
-        # )
-
-        # # Set shape based on data
-        # feature_vector_length = len(X_training[0])
-        # input_shape = (feature_vector_length,)
-        # print(f"Feature shape: {input_shape}")
-
-        # # Create the model
-        # model = Sequential()
-        # model.add(
-        #     Dense(
-        #         12,
-        #         input_shape=input_shape,
-        #         activation="relu",
-        #         kernel_initializer="he_uniform",
-        #     )
-        # )
-        # model.add(Dense(8, activation="relu", kernel_initializer="he_uniform"))
-        # model.add(Dense(num_classes, activation="softmax"))
-
-        # # Configure the model and start training
-        # model.compile(
-        #     loss=loss_function_used,
-        #     optimizer="adam",
-        #     metrics=["accuracy"],
-        # )
-        # history = model.fit(
-        #     X_training,
-        #     Targets_training,
-        #     epochs=30,
-        #     batch_size=5,
-        #     verbose=1,
-        #     validation_split=0.2,
-        # )
-
-        # test = model.predict(X_testing)
-        # print(test)
-        # print(test.shape)
-        # print(X_testing.shape)
-        # sys.exit()
-
-        # X, y = make_blobs(
-        #     n_samples=1000,
-        #     centers=3,
-        #     n_features=2,
-        #     cluster_std=2,
-        #     random_state=2,
-        # )
-        # y = to_categorical(y)
-        # n_train = 500
-
-        # trainX, testX = X[:n_train, :], X[n_train:, :]
-        # trainy, testy = y[:n_train], y[n_train:]
-
-        # print(trainX.shape)
-        # print(trainy.shape)
-        # sys.exit()
-
         missing_mask = self._create_missing_mask()
         self.observed_mask = ~missing_mask
         self._fill(missing_mask)
 
-        model = self._build_ubp()
         # Define neural network model.
-        # model = self._create_ubp_model()
+        model = self._build_ubp()
 
         self.initialise_parameters()
 
         # Number of batches based on rows in X and V_latent.
         n_batches = int(np.ceil(self.data.shape[0] / self.batch_size))
 
-        while self.current_eta > self.target_eta:
+        counter = 0
+        criterion_met = False
+        s_delta = None
+
+        while counter < 5 and self.num_epochs <= self.max_epochs:
             # While stopping criterion not met.
 
             epoch_train_loss = 0
@@ -845,37 +742,33 @@ class ImputeUBP(Impute):
                 print(f"Current Learning Rate: {self.current_eta}")
 
             if self.num_epochs == 1:
+                self.s_prime = s
                 print(f"Beginning UBP training...\n")
                 print(f"Initial MSE: {s}")
                 print(f"Initial Learning Rate: {self.current_eta}")
 
-            self.current_eta /= 2
+            if not criterion_met and self.num_epochs > 1:
+                if s < self.s_prime:
+                    s_delta = abs(self.s_prime - s)
+                    if s_delta < self.tol:
+                        criterion_met = True
+                    else:
+                        self.s_prime = s
+                        criterion_met = False
+                        counter = 0
+                else:
+                    criterion_met = True
 
-        # self.single_layer.fit()
+            if criterion_met:
+                counter += 1
+                if counter == 4:
+                    self.s = s
 
-        # self._model_phase1(v)
-        # sys.exit()
+        print(f"Number of epochs used to train: {self.num_epochs}")
+        print(f"Final MSE: {self.s}")
+        print(f"s_delta: {s_delta}")
 
-        # while self.current_eta > self.target_eta:
-        #     s = self._train_epoch()
-        # X_pred = self._train_epoch(self.model, missing_mask, batch_size)
-        # observed_rmse = masked_mae(
-        #     X_true=self.data, X_pred=X_pred, mask=observed_mask
-        # )
-
-        # if epoch == 0:
-        #     print(f"Initial MAE: {observed_mae}")
-
-        # elif epoch % 50 == 0:
-        #     print(
-        #         f"Observed MAE ({epoch}/{train_epochs} epochs): "
-        #         f"{observed_mae}"
-        #     )
-
-        # old_weight = 1.0 - self.recurrent_weight
-        # self.data[missing_mask] *= old_weight
-        # pred_missing = X_pred[missing_mask]
-        # self.data[missing_mask] += self.recurrent_weight * pred_missing
+        self.model = model
 
     def _train_epoch(self, model, n_batches, epoch_train_loss, num_classes=3):
 
@@ -883,67 +776,47 @@ class ImputeUBP(Impute):
         indices = np.arange(self.data.shape[0])
         np.random.shuffle(indices)
 
+        losses = list()
         for batch_idx in range(n_batches):
             batch_start = batch_idx * self.batch_size
             batch_end = (batch_idx + 1) * self.batch_size
             x_batch = self.data[batch_start:batch_end, :]
             v_batch = self.V_latent[batch_start:batch_end, :]
 
+            self.v = tf.Variable(
+                tf.zeros([x_batch.shape[0], self.n_components]),
+            )
+
             self.v.assign(v_batch)
 
-            opt = tf.keras.optimizers.Adam(learning_rate=self.current_eta)
-            with tf.GradientTape() as tape:
-                pred = model(self.v)
-                loss = tf.keras.losses.categorical_crossentropy(x_batch, pred)
+            loss, v_adjust = self.train_on_batch(self.v, x_batch, model)
+            losses.append(loss)
 
-            # calculate the gradients using our tape and then update the
-            # model weights
-            grads = tape.gradient(loss, model.trainable_variables)
-            opt.apply_gradients(zip(grads, model.trainable_variables))
+            self.V_latent[batch_start:batch_end, :] = v_adjust.numpy()
+        return tf.reduce_sum(losses)
 
-            self.V_latent[batch_start:batch_end, :] = model.layers[
-                0
-            ].get_weights()[0]
-            sys.exit()
-
-            # if batch_idx == 0:
-            #     model.get_layer("v").set_weights([v_batch, self.v_bias])
-
-            # self.v.assign(v_batch)
-
-            # v_tmp = model.get_layer("v").get_weights()[0]
-            # print(v_tmp)
-            # print(v_tmp.shape)
-            # sys.exit()
-
-            # model.train_on_batch(x_batch, x_batch)
-
-            # self.V_latent[batch_start:batch_end, :] = np.reshape(
-            #     v_tmp, (self.batch_size, self.n_components)
-            # )
-
-        x_pred = model.predict(self.data)
-        x_true = self.data
-
-        s = mse(y_true=x_true, y_pred=x_pred)
-        return s
-
-        # (
-        #     self.V_latent[batch_start:batch_end, :],
-        #     batch_loss,
-        # ) = self.backpropagate(v_batch, x_batch, self.current_eta)
-
-        # self.v.assign(v_batch)
-        # model.trainable_variables[0] = self.v
-        # model.train_on_batch(x_batch, x_batch)
-        # self.v.assign(model.layers[0].get_weights()[0])
+    def train_on_batch(self, x, y, model):
+        src = [x]
+        with tf.GradientTape() as tape:
+            tape.watch(x)
+            pred = model(x)
+            loss = self.loss_fn(y, pred)
+        gradients = tape.gradient(loss, src)
+        self.opt.apply_gradients(zip(gradients, src))
+        return loss, x
 
     def _build_ubp(self, num_classes=3):
         """Create and train a UBP neural network model.
 
+        If we are implementing matrix
+        factorization, we want exactly one dense layer.
+        So in that case, X_hat = v * w, where w is the weights of that one
+        dense layer. If we are implementing NLPCA or UBP, then we should add
+        more layers and x = f(v, w) in a multi-layer perceptron (MLP).
+
         Creates a network with the following structure:
 
-        InputLayer -> DenseLayer1 -> ActivationFunction1 -> ... -> DenseLayerN -> SoftmaxActivation -> OutputLayer
+        InputLayer (V) -> DenseLayer1 -> ActivationFunction1 -> DenseLayer2 -> Lambda (to expand shape) -> DenseLayer3 -> Softmax
 
         Args:
             num_classes (int, optional): The number of classes in the vector. Defaults to 3.
@@ -951,83 +824,18 @@ class ImputeUBP(Impute):
         Returns:
             keras model object: Compiled Keras model.
         """
-        # Build the model
+
         model = Sequential(
             [
                 tf.keras.layers.Dense(self.hidden_layer_sizes[0]),
                 tf.keras.layers.Activation("elu"),
                 tf.keras.layers.Dense(self.data.shape[1]),
-                tf.keras.layers.Softmax(axis=1),
+                tf.keras.layers.Lambda(lambda x: tf.expand_dims(x, -1)),
+                tf.keras.layers.Dense(num_classes),
+                tf.keras.layers.Softmax(axis=-1),
             ]
         )
         return model
-        # We need some layers. If we are implementing matrix
-        # factorization, we want exactly one dense layer.
-        # So in that case, X_hat = v * w, where w is the weights of that one
-        # dense layer. If we are implementing NLPCA or UBP, then we should add
-        # more layers.
-
-    def _convert_tensor(self, outputs):
-        return outputs
-
-    def _create_ubp_model(self, num_classes=3):
-        """Create and train a UBP neural network model.
-
-        Creates a network with the following structure:
-
-        InputLayer -> DenseLayer1 -> ActivationFunction1 -> ... -> DenseLayerN -> SoftmaxActivation -> OutputLayer
-
-        Args:
-            num_classes (int, optional): The number of classes in the vector. Defaults to 3.
-
-        Returns:
-            keras model object: Compiled Keras model.
-        """
-        # We need some layers. If we are implementing matrix
-        # factorization, we want exactly one dense layer.
-        # So in that case, X_hat = v * w, where w is the weights of that one
-        # dense layer. If we are implementing NLPCA or UBP, then we should add
-        # more layers.
-
-        # # Specify the input layer.
-        # v_in = tf.keras.Input((self.V_latent.shape[1],))
-        inp = tf.keras.Input(shape=(self.data.shape[1], num_classes))
-        flat = tf.keras.layers.Flatten()(inp)
-        v = tf.keras.layers.Dense(self.n_components, name="v")(flat)
-        v1 = tf.keras.layers.Activation(self.hidden_activation)(v)
-        h1 = tf.keras.layers.Dense(self.data.shape[1], name="h1")(v1)
-        h2 = tf.keras.layers.Lambda(lambda x: tf.expand_dims(x, -1))(h1)
-        x_hat = tf.keras.layers.Dense(num_classes, name="x_hat")(h2)
-        out = tf.keras.layers.Softmax(axis=1)(x_hat)
-
-        model = tf.keras.Model(inputs=inp, outputs=out)
-        model.compile(loss="categorical_crossentropy", optimizer=self.optimizer)
-        return model
-
-        # v1 = tf.keras.layers.Dense(self.V_latent.shape[1], name="v")(v_in)
-        # v2 = tf.keras.layers.Activation(self.hidden_activation)(v1)
-
-        # # Here we loop through and dynamically add hidden layers.
-        # # This allows users to set a varying number of hidden layers
-        # # for tuning.
-        # h1 = tf.keras.layers.Dense(self.hidden_layer_sizes[0], name="Hidden2")(
-        #     v2
-        # )
-
-        # h2 = tf.keras.layers.Activation(self.hidden_activation)(h1)
-        # x_hat = tf.keras.layers.Dense(num_classes, name="x_hat")(h2)
-        # output = tf.keras.layers.Softmax(axis=1)(x_hat)
-
-        # model = tf.keras.Model(inputs=v_in, outputs=output)
-
-        # model.compile(optimizer=self.optimizer, loss="categorical_crossentropy")
-
-        # return model
-
-        # In this case, x = f(v, w), where f is the multi-layer perceptron
-        # with weights "w". "hidden_units" is some value I picked arbitrarily.
-        # Will need to do some experimenting with this value. As a general rule
-        # of thumb, it should probably be about halfway between t and d.
 
     @property
     def imputed(self):
@@ -1084,22 +892,6 @@ class ImputeUBP(Impute):
         for row in np.arange(X.shape[0]):
             Xt[row] = [mappings[enc] for enc in X[row]]
         return Xt
-
-        # df = self._encode_categorical(X)
-        # df_incomplete = df.copy()
-
-        # missing_encoded = pd.get_dummies(df_incomplete)
-
-        # for col in df.columns:
-        #     missing_cols = missing_encoded.columns.str.startswith(
-        #         str(col) + "_"
-        #     )
-
-        #     missing_encoded.loc[
-        #         df_incomplete[col].isnull(), missing_cols
-        #     ] = np.nan
-
-        # return missing_encoded
 
     def _decode_onehot(self, df_dummies):
         """[Decode one-hot format to 012-encoded genotypes]
@@ -1203,103 +995,9 @@ class ImputeUBP(Impute):
         return np.isnan(a)
 
     def initialise_parameters(self):
-        self.initial_eta = 0.1
         self.current_eta = self.initial_eta
-        self.target_eta = 0.0001
         self.gamma = 0.00001
         self.lmda = 0.0001
         self.s = 0
         self.s_prime = np.inf
         self.num_epochs = 0
-
-    # def _train_epoch(self, model, missing_mask, batch_size):
-    #     """[Train one cycle (epoch) of a variational autoencoder model]
-
-    #     Args:
-    #         model ([Keras model object]): [VAE model object implemented in Keras]
-
-    #         missing_mask ([numpy.ndarray(bool)]): [Missing data boolean mask, with True corresponding to a missing value]
-
-    #         batch_size ([int]): [Batch size for one epoch]
-
-    #     Returns:
-    #         [numpy.ndarray]: [VAE model predictions of the current epoch]
-    #     """
-
-    #     input_with_mask = np.hstack([self.data, missing_mask])
-    #     n_samples = len(input_with_mask)
-
-    #     n_batches = int(np.ceil(n_samples / batch_size))
-    #     indices = np.arange(n_samples)
-    #     np.random.shuffle(indices)
-    #     X_shuffled = input_with_mask[indices]
-
-    #     for batch_idx in range(n_batches):
-    #         batch_start = batch_idx * batch_size
-    #         batch_end = (batch_idx + 1) * batch_size
-    #         batch_data = X_shuffled[batch_start:batch_end, :]
-    #         model.train_on_batch(batch_data, batch_data)
-
-    #     return model.predict(input_with_mask)
-
-    # def train(self, batch_size=256, train_epochs=100):
-    #     """[Train a variational autoencoder model]
-
-    #     Args:
-    #         batch_size (int, optional): [Number of data splits to train on per epoch]. Defaults to 256.
-
-    #         train_epochs (int, optional): [Number of epochs (cycles through the data) to use]. Defaults to 100.
-
-    #     Returns:
-    #         [numpy.ndarray(float)]: [Predicted values as numpy array]
-    #     """
-
-    #     missing_mask = self._create_missing_mask()
-    #     self.fill(missing_mask)
-    #     self.model = self._create_model()
-
-    #     observed_mask = ~missing_mask
-
-    #     for epoch in range(train_epochs):
-    #         X_pred = self._train_epoch(self.model, missing_mask, batch_size)
-    #         observed_mae = masked_mae(
-    #             X_true=self.data, X_pred=X_pred, mask=observed_mask
-    #         )
-
-    #         if epoch == 0:
-    #             print(f"Initial MAE: {observed_mae}")
-
-    #         elif epoch % 50 == 0:
-    #             print(
-    #                 f"Observed MAE ({epoch}/{train_epochs} epochs): "
-    #                 f"{observed_mae}"
-    #             )
-
-    #         old_weight = 1.0 - self.recurrent_weight
-    #         self.data[missing_mask] *= old_weight
-    #         pred_missing = X_pred[missing_mask]
-    #         self.data[missing_mask] += self.recurrent_weight * pred_missing
-
-    #     return self.data.copy()
-
-
-class VLayer(tf.keras.layers.Layer):
-    def __init__(self, batch_size, n_dims):
-        self.batch_size = batch_size
-        self.n_dims = n_dims
-        w_init = tf.random_normal_initializer()
-        self.w = tf.Variable(
-            initial_value=w_init(shape=(batch_size, n_dims), dtype="float32"),
-            trainable=True,
-        )
-        b_init = tf.zeros.initializer()
-        self.b = tf.Variable(
-            initial_value=b_init(shape=(n_dims,), dtype="float32"),
-            trainable=True,
-        )
-
-    def call(self, inputs):
-        return tf.matmul(inputs, self.w) + self.b
-
-    def compute_output_shape(self):
-        return self.output_dim
