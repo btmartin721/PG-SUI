@@ -274,6 +274,7 @@ def main():
             cv=3,
             hidden_activation="elu",
             hidden_layer_sizes="sqrt",
+            validation_only=0.3,
         )
 
         # ubp = ImputeUBP(

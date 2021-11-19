@@ -1,48 +1,30 @@
 # Standard Library Imports
-
-import gc
-import os
-import random
 import sys
 import math
-
 from collections import defaultdict
-from statistics import mean, median
 
 # Third-party Imports
 import numpy as np
 import pandas as pd
 
-from scipy import stats as st
-
+# For development purposes
 from memory_profiler import memory_usage
 
+# Plotting modules
 import matplotlib.pylab as plt
 import seaborn as sns
 
-# import theano
-# import theano.tensor as T
-# import theano.tensor.extra_ops
-# import theano.tensor.nnet as nnet
-from timeit import default_timer
-
+# Neural network imports
 import tensorflow as tf
-from tensorflow.keras import initializers
-from keras.utils import np_utils
 from keras.utils import to_categorical
 from keras.objectives import mse
 from keras.models import Sequential
-from keras.layers.core import Dropout, Dense
+from keras.layers.core import Dropout, Dense, Lambda
 from keras.regularizers import l1_l2
-
-from sklearn import metrics
-from sklearn.impute import SimpleImputer
-from sklearn.preprocessing import OneHotEncoder
 
 # Custom Modules
 from impute.impute import Impute
 from read_input.read_input import GenotypeData
-from utils.misc import generate_012_genotypes
 from utils.misc import timer
 from utils.misc import isnotebook
 
@@ -74,15 +56,6 @@ def masked_mae(X_true, X_pred, mask):
     return np.mean(np.abs(masked_diff))
 
 
-def masked_rmse(X_true, X_pred, mask):
-    masked_diff = X_true[mask] - X_pred[mask]
-    return np.sqrt(np.mean(masked_diff ** 2))
-
-
-def get_rmse(y_true, y_pred):
-    return np.sqrt(np.mean((y_pred - y_true) ** 2))
-
-
 def validate_batch_size(X, batch_size):
     if batch_size > X.shape[0]:
         while batch_size > X.shape[0]:
@@ -94,11 +67,18 @@ def validate_batch_size(X, batch_size):
     return batch_size
 
 
-def create_weights(sz):
-    theta = theano.shared(
-        np.array(np.random.rand(sz[0], sz[1]), dtype=theano.config.floatX)
-    )
-    return theta
+def _mle(row):
+    """Get the Maximum Likelihood Estimation for the best prediction. Basically, it sets the index of the maxiumum value in a vector (row) to 1.0, since it is one-hot encoded.
+
+    Args:
+        row (numpy.ndarray(float)): Row vector with predicted values as floating points.
+
+    Returns:
+        numpy.ndarray(float): Row vector with the highest prediction set to 1.0 and the others set to 0.0.
+    """
+    res = np.zeros(row.shape[0])
+    res[np.argmax(row)] = 1
+    return res
 
 
 class ImputeVAE(Impute):
@@ -201,8 +181,6 @@ class ImputeVAE(Impute):
     def fit_predict(self, X):
         self.data = self._encode_onehot(X)
         # self.data = self.df.copy().values
-        print(self.data.shape)
-        sys.exit()
 
         imputed_enc = self.train(
             train_epochs=self.train_epochs, batch_size=self.batch_size
@@ -291,19 +269,6 @@ class ImputeVAE(Impute):
 
         return missing_encoded
 
-    def _mle(self, row):
-        """[Get the Maximum Likelihood Estimation for the best prediction. Basically, it sets the index of the maxiumum value in a vector (row) to 1.0, since it is one-hot encoded]
-
-        Args:
-            row ([numpy.ndarray(float)]): [Row vector with predicted values as floating points]
-
-        Returns:
-            [numpy.ndarray(float)]: [Row vector with the highest prediction set to 1.0 and the others set to 0.0]
-        """
-        res = np.zeros(row.shape[0])
-        res[np.argmax(row)] = 1
-        return res
-
     def _eval_predictions(self, X, complete_encoded):
         """[Evaluate VAE predictions by calculating the highest predicted value for each row vector for each class and setting it to 1.0]
 
@@ -330,9 +295,7 @@ class ImputeVAE(Impute):
             # col_true = dummy_df.values[:, start_idx : start_idx + cnt]
             col_completed = complete_encoded[:, start_idx : start_idx + cnt]
 
-            mle_completed = np.apply_along_axis(
-                self._mle, axis=1, arr=col_completed
-            )
+            mle_completed = np.apply_along_axis(_mle, axis=1, arr=col_completed)
 
             if mle_complete is None:
                 mle_complete = mle_completed
@@ -542,13 +505,18 @@ class ImputeUBP(Impute):
         disable_progressbar=False,
         batch_size=32,
         n_components=3,
+        early_stopping_gen=50,
         num_hidden_layers=3,
         hidden_layer_sizes="midpoint",
         optimizer="adam",
         hidden_activation="elu",
         learning_rate=0.1,
         max_epochs=1000,
-        tol=1e-6,
+        tol=1e-3,
+        weights_initializer="glorot_normal",
+        l1_penalty=0.01,
+        l2_penalty=0.01,
+        dropout_probability=0.2,
         **kwargs,
     ):
 
@@ -576,12 +544,17 @@ class ImputeUBP(Impute):
         self.validation_only = validation_only
         self.disable_progressbar = disable_progressbar
         self.n_components = n_components
+        self.early_stopping_gen = early_stopping_gen
         self.hidden_layer_sizes = hidden_layer_sizes
         self.optimizer = optimizer
         self.hidden_activation = hidden_activation
         self.initial_eta = learning_rate
         self.max_epochs = max_epochs
         self.tol = tol
+        self.weights_initializer = weights_initializer
+        self.l1_penalty = l1_penalty
+        self.l2_penalty = l2_penalty
+        self.dropout_probability = dropout_probability
 
         # Get number of hidden layers
         self.df = None
@@ -608,6 +581,7 @@ class ImputeUBP(Impute):
 
         self.batch_size = validate_batch_size(self.X, batch_size)
         self.V_latent = self._init_weights(self.X.shape[0], self.n_components)
+        self.phase2_weights = dict()
         self.loss_fn = tf.keras.losses.CategoricalCrossentropy()
         self.observed_mask = None
         self.num_total_epochs = 0
@@ -678,9 +652,9 @@ class ImputeUBP(Impute):
         return pd.DataFrame(Xpred)
 
     def predict(self, V):
-        pred = self.model(self.V_latent)
+        pred = self.model(self.V_latent, training=False)
         Xprob = pred.numpy()
-        Xt = np.apply_along_axis(self._mle, axis=2, arr=Xprob)
+        Xt = np.apply_along_axis(_mle, axis=2, arr=Xprob)
         Xdecoded = np.argmax(Xt, axis=2)
         Xpred = np.zeros((Xdecoded.shape[0], Xdecoded.shape[1]))
         for idx, row in enumerate(Xpred):
@@ -692,19 +666,6 @@ class ImputeUBP(Impute):
             Xpred[idx, known_idx] = self.X[idx, known_idx]
         return Xpred
 
-    def _mle(self, a):
-        """[Get the Maximum Likelihood Estimation for the best prediction. Basically, it sets the index of the maxiumum value in a vector (row) to 1.0, since it is one-hot encoded]
-
-        Args:
-            a ([numpy.ndarray(float)]): [Row vector with predicted values as floating points]
-
-        Returns:
-            [numpy.ndarray(float)]: [Row vector with the highest prediction set to 1.0 and the others set to 0.0]
-        """
-        res = np.zeros(a.shape[0])
-        res[np.argmax(a)] = 1
-        return res
-
     def _train(self):
         """Train an unsupervised backpropagation model.
 
@@ -715,8 +676,12 @@ class ImputeUBP(Impute):
         self.observed_mask = ~missing_mask
         self._fill(missing_mask)
 
-        # Define neural network model.
-        model = self._build_ubp()
+        # Define neural network models.
+        model_single_layer = self._build_ubp(phase=1)
+        model_mlp_phase2 = self._build_ubp(phase=2)
+        model_mlp_phase3 = self._build_ubp(phase=3)
+
+        models = [model_single_layer, model_mlp_phase2, model_mlp_phase3]
 
         self.initialise_parameters()
 
@@ -727,85 +692,139 @@ class ImputeUBP(Impute):
         criterion_met = False
         s_delta = None
 
-        while counter < 5 and self.num_epochs <= self.max_epochs:
-            # While stopping criterion not met.
+        for phase in range(1, 4):
+            self.num_epochs = 0
+            while (
+                counter < self.early_stopping_gen
+                and self.num_epochs <= self.max_epochs
+            ):
+                # While stopping criterion not met.
 
-            epoch_train_loss = 0
+                epoch_train_loss = 0
 
-            s = self._train_epoch(model, n_batches, epoch_train_loss)
+                s = self._train_epoch(
+                    models, n_batches, epoch_train_loss, phase=phase
+                )
 
-            self.num_epochs += 1
+                self.num_epochs += 1
 
-            if self.num_epochs % 50 == 0:
-                print(f"Epoch {self.num_epochs}...")
-                print(f"Current MSE: {s}")
-                print(f"Current Learning Rate: {self.current_eta}")
+                if self.num_epochs % 50 == 0:
+                    print(f"Epoch {self.num_epochs}...")
+                    print(f"Current MSE: {s}")
+                    print(f"Current Learning Rate: {self.current_eta}")
 
-            if self.num_epochs == 1:
-                self.s_prime = s
-                print(f"Beginning UBP training...\n")
-                print(f"Initial MSE: {s}")
-                print(f"Initial Learning Rate: {self.current_eta}")
+                if self.num_epochs == 1:
+                    self.s_prime = s
+                    print(f"\nBeginning UBP Phase {phase} training...\n")
+                    print(f"Initial MSE: {s}")
+                    print(f"Initial Learning Rate: {self.current_eta}")
 
-            if not criterion_met and self.num_epochs > 1:
-                if s < self.s_prime:
-                    s_delta = abs(self.s_prime - s)
-                    if s_delta < self.tol:
-                        criterion_met = True
+                if not criterion_met and self.num_epochs > 1:
+                    if s < self.s_prime:
+                        s_delta = abs(self.s_prime - s)
+                        if s_delta <= self.tol:
+                            criterion_met = True
+                        else:
+                            counter = 0
+                            self.s_prime = s
+
                     else:
-                        self.s_prime = s
-                        criterion_met = False
-                        counter = 0
-                else:
-                    criterion_met = True
+                        criterion_met = True
 
-            if criterion_met:
-                counter += 1
-                if counter == 4:
-                    self.s = s
+                elif criterion_met and self.num_epochs > 1:
+                    if s < self.s_prime:
+                        s_delta = abs(self.s_prime - s)
+                        if s_delta > self.tol:
+                            criterion_met = False
+                            self.s_prime = s
+                            counter = 0
+                        else:
+                            counter += 1
+                            if counter == self.early_stopping_gen:
+                                counter = 0
+                                self.s = s
+                                break
+                    else:
+                        counter += 1
+                        if counter == self.early_stopping_gen:
+                            counter = 0
+                            self.s = s
+                            break
 
-        print(f"Number of epochs used to train: {self.num_epochs}")
-        print(f"Final MSE: {self.s}")
-        print(f"s_delta: {s_delta}")
+            print(f"Number of epochs used to train: {self.num_epochs}")
+            print(f"Final MSE: {self.s}")
+            print(f"s_delta: {s_delta}")
 
-        self.model = model
+        self.model = models[2]
 
-    def _train_epoch(self, model, n_batches, epoch_train_loss, num_classes=3):
+    def _train_epoch(
+        self, models, n_batches, epoch_train_loss, phase=3, num_classes=3
+    ):
 
         # Randomize the order the of the samples in the batches.
         indices = np.arange(self.data.shape[0])
         np.random.shuffle(indices)
 
+        model = models[phase - 1]
+
         losses = list()
         for batch_idx in range(n_batches):
+            if phase == 3:
+                for i in range(len(model.layers)):
+                    if "dense" in model.layers[i].name:
+                        model.layers[i].set_weights(
+                            self.phase2_weights[batch_idx][i]
+                        )
+
             batch_start = batch_idx * self.batch_size
             batch_end = (batch_idx + 1) * self.batch_size
             x_batch = self.data[batch_start:batch_end, :]
             v_batch = self.V_latent[batch_start:batch_end, :]
 
             self.v = tf.Variable(
-                tf.zeros([x_batch.shape[0], self.n_components]),
+                tf.zeros([x_batch.shape[0], self.n_components]), tf.float32
             )
 
             self.v.assign(v_batch)
 
-            loss, v_adjust = self.train_on_batch(self.v, x_batch, model)
+            loss, refined = self.train_on_batch(self.v, x_batch, model, phase)
             losses.append(loss)
 
-            self.V_latent[batch_start:batch_end, :] = v_adjust.numpy()
-        return tf.reduce_sum(losses)
+            if phase != 2:
+                self.V_latent[batch_start:batch_end, :] = refined.numpy()
+            else:
+                phase2_batch_weights = dict()
+                for i in range(len(refined.layers)):
+                    tmp = list()
+                    if "dense" in refined.layers[i].name:
+                        tmp.append(refined.layers[i].kernel)
+                        tmp.append(refined.layers[i].bias)
+                        phase2_batch_weights[i] = refined.layers[
+                            i
+                        ].get_weights()
+                self.phase2_weights[batch_idx] = phase2_batch_weights
 
-    def train_on_batch(self, x, y, model):
-        src = [x]
+        return np.mean(losses)
+
+    def train_on_batch(self, x, y, model, phase):
+        if phase != 2:
+            src = [x]
         with tf.GradientTape() as tape:
             tape.watch(x)
-            pred = model(x)
+            pred = model(x, training=True)
             loss = self.loss_fn(y, pred)
+        if phase != 2:
+            src.extend(model.trainable_weights)
+        else:
+            src = model.trainable_weights
         gradients = tape.gradient(loss, src)
         self.opt.apply_gradients(zip(gradients, src))
-        return loss, x
+        if phase != 2:
+            return loss, x
+        else:
+            return loss, model
 
-    def _build_ubp(self, num_classes=3):
+    def _build_ubp(self, phase=3, num_classes=3):
         """Create and train a UBP neural network model.
 
         If we are implementing matrix
@@ -825,16 +844,62 @@ class ImputeUBP(Impute):
             keras model object: Compiled Keras model.
         """
 
-        model = Sequential(
-            [
-                tf.keras.layers.Dense(self.hidden_layer_sizes[0]),
-                tf.keras.layers.Activation("elu"),
-                tf.keras.layers.Dense(self.data.shape[1]),
-                tf.keras.layers.Lambda(lambda x: tf.expand_dims(x, -1)),
-                tf.keras.layers.Dense(num_classes),
-                tf.keras.layers.Softmax(axis=-1),
-            ]
-        )
+        if phase == 1 or phase == 2:
+            kernel_regularizer = l1_l2(self.l1_penalty, self.l2_penalty)
+        elif phase == 3:
+            kernel_regularizer = None
+        else:
+            raise ValueError(f"Phase must equal 1, 2, or 3, but got {phase}")
+
+        if phase == 3:
+            kernel_initializer = None
+        else:
+            kernel_initializer = self.weights_initializer
+
+        model = Sequential()
+
+        if phase > 1:
+            # Construct multi-layer perceptron.
+            # Add hidden layers dynamically.
+            for layer_size in self.hidden_layer_sizes:
+                model.add(
+                    Dense(
+                        layer_size,
+                        input_shape=(self.n_components,),
+                        activation=self.hidden_activation,
+                        kernel_initializer=kernel_initializer,
+                        kernel_regularizer=kernel_regularizer,
+                    )
+                )
+
+                # if phase == 2:
+                #     # Phase 3 doesn't use regularization.
+                #     model.add(Dropout(self.dropout_probability))
+
+            model.add(
+                Dense(
+                    self.data.shape[1],
+                    kernel_initializer=kernel_initializer,
+                    kernel_regularizer=kernel_regularizer,
+                )
+            )
+
+            model.add(Lambda(lambda x: tf.expand_dims(x, -1)))
+            model.add(Dense(num_classes, activation="softmax"))
+
+        else:
+            # phase == 1.
+            # Construct single-layer perceptron.
+            model.add(
+                Dense(
+                    self.data.shape[1],
+                    kernel_initializer=kernel_initializer,
+                    kernel_regularizer=kernel_regularizer,
+                )
+            )
+            model.add(Lambda(lambda x: tf.expand_dims(x, -1)))
+            model.add(Dense(num_classes, activation="softmax"))
+
         return model
 
     @property
