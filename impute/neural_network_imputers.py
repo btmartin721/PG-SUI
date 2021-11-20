@@ -16,6 +16,7 @@ import seaborn as sns
 
 # Neural network imports
 import tensorflow as tf
+from keras import backend as K
 from keras.utils import to_categorical
 from keras.objectives import mse
 from keras.models import Sequential
@@ -54,6 +55,17 @@ def masked_mae(X_true, X_pred, mask):
 
     masked_diff = X_true[mask] - X_pred[mask]
     return np.mean(np.abs(masked_diff))
+
+
+def categorical_crossentropy_masked(y_true, y_pred):
+    y_true_masked = tf.boolean_mask(
+        y_true, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
+    )
+    y_pred_masked = tf.boolean_mask(
+        y_pred, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
+    )
+    loss_fn = tf.keras.losses.CategoricalCrossentropy()
+    return loss_fn(y_true_masked, y_pred_masked)
 
 
 def validate_batch_size(X, batch_size):
@@ -581,12 +593,12 @@ class ImputeUBP(Impute):
 
         self.batch_size = validate_batch_size(self.X, batch_size)
         self.V_latent = self._init_weights(self.X.shape[0], self.n_components)
-        self.phase2_weights = dict()
-        self.loss_fn = tf.keras.losses.CategoricalCrossentropy()
+        self.phase2_model = list()
         self.observed_mask = None
         self.num_total_epochs = 0
         self.model = None
         self.opt = self.set_optimizer()
+        self.loss_fn = tf.keras.losses.CategoricalCrossentropy()
 
         if self.validation_only is not None:
             print("\nEstimating validation scores...")
@@ -770,59 +782,107 @@ class ImputeUBP(Impute):
         losses = list()
         for batch_idx in range(n_batches):
             if phase == 3:
-                for i in range(len(model.layers)):
-                    if "dense" in model.layers[i].name:
-                        model.layers[i].set_weights(
-                            self.phase2_weights[batch_idx][i]
-                        )
+                # for i in range(len(model.layers)):
+                #     if "dense" in model.layers[i].name:
+                #         model.layers[i].set_weights(
+                #             self.phase2_weights[batch_idx][i]
+                #         )
+                model.set_weights(self.phase2_model[batch_idx])
 
             batch_start = batch_idx * self.batch_size
             batch_end = (batch_idx + 1) * self.batch_size
             x_batch = self.data[batch_start:batch_end, :]
             v_batch = self.V_latent[batch_start:batch_end, :]
 
-            self.v = tf.Variable(
-                tf.zeros([x_batch.shape[0], self.n_components]), tf.float32
-            )
+            if phase != 2:
+                self.v = tf.Variable(
+                    tf.zeros([x_batch.shape[0], self.n_components]),
+                    trainable=True,
+                    dtype=tf.float32,
+                )
+
+            elif phase == 2:
+                self.v = tf.Variable(
+                    tf.zeros([x_batch.shape[0], self.n_components]),
+                    trainable=False,
+                    dtype=tf.float32,
+                )
 
             self.v.assign(v_batch)
 
             loss, refined = self.train_on_batch(self.v, x_batch, model, phase)
-            losses.append(loss)
+            losses.append(loss.numpy())
 
             if phase != 2:
                 self.V_latent[batch_start:batch_end, :] = refined.numpy()
             else:
-                phase2_batch_weights = dict()
-                for i in range(len(refined.layers)):
-                    tmp = list()
-                    if "dense" in refined.layers[i].name:
-                        tmp.append(refined.layers[i].kernel)
-                        tmp.append(refined.layers[i].bias)
-                        phase2_batch_weights[i] = refined.layers[
-                            i
-                        ].get_weights()
-                self.phase2_weights[batch_idx] = phase2_batch_weights
+                self.phase2_model.append(refined)
+
+                # phase2_batch_weights = dict()
+                # for i in range(len(refined.layers)):
+                #     if "dense" in refined.layers[i].name:
+                #         phase2_batch_weights[i] = refined.layers[
+                #             i
+                #         ].get_weights()
+                # self.phase2_weights[batch_idx] = phase2_batch_weights
 
         return np.mean(losses)
 
     def train_on_batch(self, x, y, model, phase):
+        """Custom training loop for neural network.
+
+        GradientTape records the weights and watched
+        variables (usually tf.Variable objects), which
+        in this case are the weights and the input (x)
+        (if not phase 2), during the forward pass.
+        This allows us to run gradient descent during
+        backpropagation to refine the watched variables.
+
+        This function will train on a batch of samples (rows).
+
+        Args:
+            x (tf.Variable): Input tensorflow variable of shape (batch_size, n_features).
+
+            y (tf.Variable): Target variable to calculate loss.
+
+            model (keras.models.Sequential): Keras model to use.
+
+            phase (int): UBP phase to run.
+
+        Returns:
+            tf.Tensor: Calculated loss of current batch.
+            tf.Variable, conditional: Input refined by gradient descent. Only returned if phase != 2.
+            keras.models.Sequential, conditional: Keras model with refined weights. Only returned if phase == 2.
+
+        """
         if phase != 2:
             src = [x]
+
         with tf.GradientTape() as tape:
-            tape.watch(x)
+            # Forward pass
+            if phase != 2:
+                tape.watch(x)
             pred = model(x, training=True)
-            loss = self.loss_fn(y, pred)
+            loss = categorical_crossentropy_masked(
+                tf.convert_to_tensor(y, dtype=tf.float32), pred
+            )
+
         if phase != 2:
-            src.extend(model.trainable_weights)
-        else:
-            src = model.trainable_weights
+            # Phase == 1 or 3.
+            src.extend(model.trainable_variables)
+        elif phase == 2:
+            # Phase == 2.
+            src = model.trainable_variables
+
+        # Refine the watched variables with
+        # gradient descent backpropagation
         gradients = tape.gradient(loss, src)
         self.opt.apply_gradients(zip(gradients, src))
+
         if phase != 2:
             return loss, x
-        else:
-            return loss, model
+        elif phase == 2:
+            return loss, model.get_weights()
 
     def _build_ubp(self, phase=3, num_classes=3):
         """Create and train a UBP neural network model.
@@ -852,6 +912,7 @@ class ImputeUBP(Impute):
             raise ValueError(f"Phase must equal 1, 2, or 3, but got {phase}")
 
         if phase == 3:
+            # Phase 3 uses weights from phase 2.
             kernel_initializer = None
         else:
             kernel_initializer = self.weights_initializer
@@ -872,10 +933,6 @@ class ImputeUBP(Impute):
                     )
                 )
 
-                # if phase == 2:
-                #     # Phase 3 doesn't use regularization.
-                #     model.add(Dropout(self.dropout_probability))
-
             model.add(
                 Dense(
                     self.data.shape[1],
@@ -893,6 +950,7 @@ class ImputeUBP(Impute):
             model.add(
                 Dense(
                     self.data.shape[1],
+                    input_shape=(self.n_components,),
                     kernel_initializer=kernel_initializer,
                     kernel_regularizer=kernel_regularizer,
                 )
@@ -1038,7 +1096,7 @@ class ImputeUBP(Impute):
         Args:
             missing_mask ([np.ndarray(bool)]): [Missing data mask with True corresponding to a missing value]
         """
-        self.data[missing_mask] = [0, 0, 0]
+        self.data[missing_mask] = [-1, -1, -1]
 
     def _create_missing_mask(self):
         """[Creates a missing data mask with boolean values]
