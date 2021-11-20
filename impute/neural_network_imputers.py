@@ -782,11 +782,7 @@ class ImputeUBP(Impute):
         losses = list()
         for batch_idx in range(n_batches):
             if phase == 3:
-                # for i in range(len(model.layers)):
-                #     if "dense" in model.layers[i].name:
-                #         model.layers[i].set_weights(
-                #             self.phase2_weights[batch_idx][i]
-                #         )
+                # Set the refined weights from model 2.
                 model.set_weights(self.phase2_model[batch_idx])
 
             batch_start = batch_idx * self.batch_size
@@ -817,14 +813,6 @@ class ImputeUBP(Impute):
                 self.V_latent[batch_start:batch_end, :] = refined.numpy()
             else:
                 self.phase2_model.append(refined)
-
-                # phase2_batch_weights = dict()
-                # for i in range(len(refined.layers)):
-                #     if "dense" in refined.layers[i].name:
-                #         phase2_batch_weights[i] = refined.layers[
-                #             i
-                #         ].get_weights()
-                # self.phase2_weights[batch_idx] = phase2_batch_weights
 
         return np.mean(losses)
 
@@ -887,21 +875,21 @@ class ImputeUBP(Impute):
     def _build_ubp(self, phase=3, num_classes=3):
         """Create and train a UBP neural network model.
 
-        If we are implementing matrix
-        factorization, we want exactly one dense layer.
-        So in that case, X_hat = v * w, where w is the weights of that one
-        dense layer. If we are implementing NLPCA or UBP, then we should add
-        more layers and x = f(v, w) in a multi-layer perceptron (MLP).
+        If we are implementing a single layer perceptron, we want exactly one dense layer. So in that case, X_hat = v * w, where w is the weights of that one dense layer. If we are implementing NLPCA or UBP, then we should add more layers and x = f(v, w) in a multi-layer perceptron (MLP).
 
         Creates a network with the following structure:
 
-        InputLayer (V) -> DenseLayer1 -> ActivationFunction1 -> DenseLayer2 -> Lambda (to expand shape) -> DenseLayer3 -> Softmax
+        If phase > 1:
+            InputLayer (V) -> DenseLayer1 -> ActivationFunction1 ... HiddenLayerN -> ActivationFunctionN ... DenseLayerN+1 -> Lambda (to expand shape) -> DenseOutputLayer -> Softmax
+
+        If Phase == 1:
+            InputLayer (V) -> DenseLayer1 -> Lambda (to expand shape) -> DenseOutputLayer -> Softmax
 
         Args:
             num_classes (int, optional): The number of classes in the vector. Defaults to 3.
 
         Returns:
-            keras model object: Compiled Keras model.
+            tf.keras.Model object: Compiled Keras model.
         """
 
         if phase == 1 or phase == 2:
@@ -919,6 +907,8 @@ class ImputeUBP(Impute):
 
         model = Sequential()
 
+        model.add(tf.keras.Input(shape=(self.n_components,)))
+
         if phase > 1:
             # Construct multi-layer perceptron.
             # Add hidden layers dynamically.
@@ -926,7 +916,6 @@ class ImputeUBP(Impute):
                 model.add(
                     Dense(
                         layer_size,
-                        input_shape=(self.n_components,),
                         activation=self.hidden_activation,
                         kernel_initializer=kernel_initializer,
                         kernel_regularizer=kernel_regularizer,
@@ -1091,7 +1080,7 @@ class ImputeUBP(Impute):
         return layers
 
     def _fill(self, missing_mask):
-        """Mask missing data as [0, 0, 0].
+        """Mask missing data as [-1, -1, -1].
 
         Args:
             missing_mask ([np.ndarray(bool)]): [Missing data mask with True corresponding to a missing value]
@@ -1106,18 +1095,7 @@ class ImputeUBP(Impute):
         """
         return np.isnan(self.data).all(axis=2)
 
-    def _create_missing_mask_row(self):
-        """[Creates a missing data mask with boolean values]
-
-        Returns:
-            [numpy.ndarray(bool)]: [Boolean mask of missing values, with True corresponding to a missing data point]
-        """
-        a = self.data.copy()
-        a = a.astype("float32")
-        a[(self.data == -9) | (self.data == -9.0)] = np.nan
-        return np.isnan(a)
-
-    def initialise_parameters(self):
+     def initialise_parameters(self):
         self.current_eta = self.initial_eta
         self.gamma = 0.00001
         self.lmda = 0.0001
