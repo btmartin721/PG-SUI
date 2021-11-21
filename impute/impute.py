@@ -1320,10 +1320,9 @@ class Impute:
 
         # Neural networks
         if self.clf == "VAE" or self.clf == "UBP":
-            if self.clf == "UBP":
-                for col in df_stg.columns:
-                    df_stg[col] = df_stg[col].replace({pd.NA: np.nan})
-                df_stg.fillna(-9, inplace=True)
+            for col in df_stg.columns:
+                df_stg[col] = df_stg[col].replace({pd.NA: np.nan})
+            df_stg.fillna(-9, inplace=True)
 
             df_imp = self.fit_predict(df_stg.to_numpy())
             df_imp = df_imp.astype(np.float)

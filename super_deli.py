@@ -211,15 +211,15 @@ def main():
         #     initial_strategy="populations",
         # )
 
-        # vae_imp = ImputeVAE(
-        #     # gt=np.array([[0.0, 2.0], [np.nan, 2.0], [1.0, np.nan]]),
-        #     genotype_data=data,
-        #     cv=3,
-        #     prefix=args.prefix,
-        #     disable_progressbar=True,
-        #     validation_only=0.2,
-        #     initial_strategy="group_mode",
-        # )
+        vae_imp = ImputeVAE(
+            # gt=np.array([[0.0, 2.0], [np.nan, 2.0], [1.0, np.nan]]),
+            genotype_data=data,
+            cv=3,
+            prefix=args.prefix,
+            disable_progressbar=True,
+            validation_only=0.3,
+            initial_strategy="populations",
+        )
 
         # complete_encoded = imputer.train(train_epochs=300, batch_size=256)
         # print(complete_encoded)
@@ -245,7 +245,7 @@ def main():
         #     min_samples_leaf=2,
         #     max_depth=30,
         #     cv=3,
-        #     validation_only=0.5,
+        #     validation_only=0.3,
         #     chunk_size=1.0,
         #     initial_strategy="populations",
         # )
@@ -266,17 +266,17 @@ def main():
         #     validation_only=None,
         # )
 
-        ubp = ImputeUBP(
-            genotype_data=data,
-            n_components=3,
-            initial_strategy="populations",
-            disable_progressbar=True,
-            cv=3,
-            hidden_activation="elu",
-            hidden_layer_sizes="midpoint",
-            validation_only=0.3,
-            num_hidden_layers=1,
-        )
+        # ubp = ImputeUBP(
+        #     genotype_data=data,
+        #     n_components=3,
+        #     initial_strategy="populations",
+        #     disable_progressbar=True,
+        #     cv=3,
+        #     hidden_activation="elu",
+        #     hidden_layer_sizes="midpoint",
+        #     validation_only=0.3,
+        #     num_hidden_layers=1,
+        # )
 
         # ubp = ImputeUBP(
         #     genotype_data=data,

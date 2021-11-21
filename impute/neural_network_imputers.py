@@ -191,8 +191,8 @@ class ImputeVAE(Impute):
 
     @timer
     def fit_predict(self, X):
-        self.data = self._encode_onehot(X)
-        # self.data = self.df.copy().values
+        self.df = self._encode_onehot(X)
+        self.data = self.df.copy().values
 
         imputed_enc = self.train(
             train_epochs=self.train_epochs, batch_size=self.batch_size
