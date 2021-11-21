@@ -949,10 +949,6 @@ class ImputeUBP(Impute):
 
         return model
 
-    @property
-    def imputed(self):
-        return self.imputed_df
-
     def _validate_hidden_layers(self, hidden_layer_sizes, num_hidden_layers):
         if isinstance(hidden_layer_sizes, (str, int)):
             hidden_layer_sizes = [hidden_layer_sizes] * num_hidden_layers
@@ -977,7 +973,7 @@ class ImputeUBP(Impute):
         assert (
             num_hidden_layers == len(hidden_layer_sizes)
             and num_hidden_layers > 0
-        ), "num_hidden_layers must be of the same length as hidden_layer_sizes."
+        ), "num_hidden_layers must be the length of hidden_layer_sizes."
 
         return hidden_layer_sizes, num_hidden_layers
 
@@ -1004,41 +1000,6 @@ class ImputeUBP(Impute):
         for row in np.arange(X.shape[0]):
             Xt[row] = [mappings[enc] for enc in X[row]]
         return Xt
-
-    def _decode_onehot(self, df_dummies):
-        """[Decode one-hot format to 012-encoded genotypes]
-
-        Args:
-            df_dummies ([pandas.DataFrame]): [One-hot encoded imputed data]
-
-        Returns:
-            [pandas.DataFrame]: [012-encoded imputed data]
-        """
-        pos = defaultdict(list)
-        vals = defaultdict(list)
-
-        for i, c in enumerate(df_dummies.columns):
-            if "_" in c:
-                k, v = c.split("_", 1)
-                pos[k].append(i)
-                vals[k].append(v)
-
-            else:
-                pos["_"].append(i)
-
-        df = pd.DataFrame(
-            {
-                k: pd.Categorical.from_codes(
-                    np.argmax(df_dummies.iloc[:, pos[k]].values, axis=1),
-                    vals[k],
-                )
-                for k in vals
-            }
-        )
-
-        df[df_dummies.columns[pos["_"]]] = df_dummies.iloc[:, pos["_"]]
-
-        return df
 
     def _get_hidden_layer_sizes(self, n_dims, n_components, hl_func):
         """Get dimensions of hidden layers.
@@ -1095,10 +1056,8 @@ class ImputeUBP(Impute):
         """
         return np.isnan(self.data).all(axis=2)
 
-     def initialise_parameters(self):
+    def initialise_parameters(self):
         self.current_eta = self.initial_eta
-        self.gamma = 0.00001
-        self.lmda = 0.0001
         self.s = 0
         self.s_prime = np.inf
         self.num_epochs = 0

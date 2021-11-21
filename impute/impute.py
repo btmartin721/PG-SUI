@@ -1313,10 +1313,12 @@ class Impute:
         )
 
         df_known_slice = df_known[cols]
+        df_unknown_slice = df_unknown[cols]
+        df_missing_mask = df_unknown_slice.isnull()
 
         df_stg = df_unknown.copy()
 
-        # Variational Autoencoder Neural Network
+        # Neural networks
         if self.clf == "VAE" or self.clf == "UBP":
             if self.clf == "UBP":
                 for col in df_stg.columns:
@@ -1351,8 +1353,12 @@ class Impute:
         for i in range(len(df_known_slice.columns)):
             # Adapted from: https://medium.com/analytics-vidhya/using-scikit-learns-iterative-imputer-694c3cca34de
 
+            mask = df_missing_mask[df_known_slice.columns[i]]
             y_true = df_known[df_known_slice.columns[i]]
+            y_true = y_true[mask]
+
             y_pred = df_imp[df_imp.columns[i]]
+            y_pred = y_pred[mask]
 
             if self.clf_type == "classifier":
 
