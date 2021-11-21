@@ -36,3 +36,5 @@ training_data/collated/
 .mypy_cache/
 .mypy_cache/*
 mypy.ini
+.optimal_model/
+.optimal_model/*

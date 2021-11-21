@@ -16,6 +16,7 @@ import seaborn as sns
 
 # Neural network imports
 import tensorflow as tf
+from tensorflow.python.util import deprecation
 from keras import backend as K
 from keras.utils import to_categorical
 from keras.objectives import mse
@@ -28,6 +29,8 @@ from impute.impute import Impute
 from read_input.read_input import GenotypeData
 from utils.misc import timer
 from utils.misc import isnotebook
+
+deprecation._PRINT_DEPRECATION_WARNINGS = False
 
 is_notebook = isnotebook()
 
@@ -192,6 +195,8 @@ class ImputeVAE(Impute):
     @timer
     def fit_predict(self, X):
         self.df = self._encode_onehot(X)
+
+        # VAE needs a numpy array, not a dataframe
         self.data = self.df.copy().values
 
         imputed_enc = self.train(
@@ -679,7 +684,7 @@ class ImputeUBP(Impute):
         return Xpred
 
     def _train(self):
-        """Train an unsupervised backpropagation model.
+        """Train an unsupervised backpropagation (UBP) model.
 
         Returns:
             numpy.ndarray(float): Predicted values as numpy array.
@@ -722,20 +727,21 @@ class ImputeUBP(Impute):
 
                 if self.num_epochs % 50 == 0:
                     print(f"Epoch {self.num_epochs}...")
-                    print(f"Current MSE: {s}")
-                    print(f"Current Learning Rate: {self.current_eta}")
+                    print(f"Observed MSE: {s}")
 
                 if self.num_epochs == 1:
                     self.s_prime = s
                     print(f"\nBeginning UBP Phase {phase} training...\n")
                     print(f"Initial MSE: {s}")
-                    print(f"Initial Learning Rate: {self.current_eta}")
 
                 if not criterion_met and self.num_epochs > 1:
                     if s < self.s_prime:
                         s_delta = abs(self.s_prime - s)
                         if s_delta <= self.tol:
                             criterion_met = True
+                            models[phase - 1].save(
+                                ".optimal_model", include_optimizer=False
+                            )
                         else:
                             counter = 0
                             self.s_prime = s
@@ -754,18 +760,23 @@ class ImputeUBP(Impute):
                             counter += 1
                             if counter == self.early_stopping_gen:
                                 counter = 0
+                                models[phase - 1] = tf.keras.models.load_model(
+                                    ".optimal_model", compile=False
+                                )
                                 self.s = s
                                 break
                     else:
                         counter += 1
                         if counter == self.early_stopping_gen:
                             counter = 0
+                            models[phase - 1] = tf.keras.models.load_model(
+                                ".optimal_model", compile=False
+                            )
                             self.s = s
                             break
 
             print(f"Number of epochs used to train: {self.num_epochs}")
             print(f"Final MSE: {self.s}")
-            print(f"s_delta: {s_delta}")
 
         self.model = models[2]
 
