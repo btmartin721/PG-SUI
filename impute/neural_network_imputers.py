@@ -520,6 +520,7 @@ class ImputeUBP(Impute):
         initial_strategy="populations",
         validation_only=0.3,
         disable_progressbar=False,
+        nlpca=False,
         batch_size=32,
         n_components=3,
         early_stopping_gen=50,
@@ -560,6 +561,7 @@ class ImputeUBP(Impute):
         self.cv = cv
         self.validation_only = validation_only
         self.disable_progressbar = disable_progressbar
+        self.nlpca = nlpca
         self.n_components = n_components
         self.early_stopping_gen = early_stopping_gen
         self.hidden_layer_sizes = hidden_layer_sizes
@@ -582,6 +584,7 @@ class ImputeUBP(Impute):
                 "genotype_data is a required argument, but was not supplied"
             )
 
+        # For testing purposes.
         if test_cat is not None:
             self.X = test_cat.copy()
         else:
@@ -603,7 +606,6 @@ class ImputeUBP(Impute):
         self.num_total_epochs = 0
         self.model = None
         self.opt = self.set_optimizer()
-        self.loss_fn = tf.keras.losses.CategoricalCrossentropy()
 
         if self.validation_only is not None:
             print("\nEstimating validation scores...")
@@ -664,11 +666,19 @@ class ImputeUBP(Impute):
             )
 
         self.data = self._encode_onehot(X)
-        self._train()
+        self.fit()
         Xpred = self.predict(self.V_latent)
         return pd.DataFrame(Xpred)
 
     def predict(self, V):
+        """Predict imputations based on a trained UBP or NLPCA model.
+
+        Args:
+            V (numpy.ndarray(float)): Refined reduced-dimensional input for predicting imputations.
+
+        Returns:
+            numpy.ndarray: Imputation predictions.
+        """
         pred = self.model(self.V_latent, training=False)
         Xprob = pred.numpy()
         Xt = np.apply_along_axis(_mle, axis=2, arr=Xprob)
@@ -683,8 +693,16 @@ class ImputeUBP(Impute):
             Xpred[idx, known_idx] = self.X[idx, known_idx]
         return Xpred
 
-    def _train(self):
-        """Train an unsupervised backpropagation (UBP) model.
+    def fit(self):
+        """Train an unsupervised backpropagation (UBP) or NLPCA model.
+
+        UBP runs over three phases.
+
+        1. Train a single-layer perceptron to refine the input, V_latent.
+        2. Train a multi-layer perceptron (MLP) to refine only the weights
+        3. Train an MLP to refine both the weights and input, V_latent.
+
+        NLPCA just does phase 3.
 
         Returns:
             numpy.ndarray(float): Predicted values as numpy array.
@@ -694,10 +712,20 @@ class ImputeUBP(Impute):
         self._fill(missing_mask)
 
         # Define neural network models.
-        model_single_layer = self._build_ubp(phase=1)
-        model_mlp_phase2 = self._build_ubp(phase=2)
+        if self.nlpca:
+            # If using NLPCA model.
+            model_single_layer = None
+            model_mlp_phase2 = None
+            start_phase = 3
+        else:
+            # Using UBP model over three phases
+            model_single_layer = self._build_ubp(phase=1)
+            model_mlp_phase2 = self._build_ubp(phase=2)
+            start_phase = 1
+
         model_mlp_phase3 = self._build_ubp(phase=3)
 
+        # Phase 1, Phase 2, Phase 3
         models = [model_single_layer, model_mlp_phase2, model_mlp_phase3]
 
         self.initialise_parameters()
@@ -709,19 +737,16 @@ class ImputeUBP(Impute):
         criterion_met = False
         s_delta = None
 
-        for phase in range(1, 4):
+        for phase in range(start_phase, 4):
             self.num_epochs = 0
+
             while (
                 counter < self.early_stopping_gen
                 and self.num_epochs <= self.max_epochs
             ):
                 # While stopping criterion not met.
 
-                epoch_train_loss = 0
-
-                s = self._train_epoch(
-                    models, n_batches, epoch_train_loss, phase=phase
-                )
+                s = self._train_epoch(models, n_batches, phase=phase)
 
                 self.num_epochs += 1
 
@@ -731,7 +756,11 @@ class ImputeUBP(Impute):
 
                 if self.num_epochs == 1:
                     self.s_prime = s
-                    print(f"\nBeginning UBP Phase {phase} training...\n")
+
+                    if self.nlpca:
+                        print("\nBeginning NLPCA training...\n")
+                    else:
+                        print(f"\nBeginning UBP Phase {phase} training...\n")
                     print(f"Initial MSE: {s}")
 
                 if not criterion_met and self.num_epochs > 1:
@@ -780,9 +809,23 @@ class ImputeUBP(Impute):
 
         self.model = models[2]
 
-    def _train_epoch(
-        self, models, n_batches, epoch_train_loss, phase=3, num_classes=3
-    ):
+    def _train_epoch(self, models, n_batches, phase=3, num_classes=3):
+        """Train UBP or NLPCA over one epoch.
+
+        Args:
+            models (List[tf.keras.models.Sequential]): List of three keras models to train.
+
+            n_batches (int): Number of batches to train.
+
+            phase (int): Current phase. UBP has three phases. If doing NLPCA, it only does phase 3.
+
+            num_classes (int): Number of categorical classes to predict (three for 012 encoding). Defaults to 3.
+        """
+
+        if phase > 3:
+            raise ValueError(
+                f"There can only be maximum 3 phases, but phase={phase}"
+            )
 
         # Randomize the order the of the samples in the batches.
         indices = np.arange(self.data.shape[0])
@@ -792,7 +835,7 @@ class ImputeUBP(Impute):
 
         losses = list()
         for batch_idx in range(n_batches):
-            if phase == 3:
+            if phase == 3 and not self.nlpca:
                 # Set the refined weights from model 2.
                 model.set_weights(self.phase2_model[batch_idx])
 
@@ -801,6 +844,7 @@ class ImputeUBP(Impute):
             x_batch = self.data[batch_start:batch_end, :]
             v_batch = self.V_latent[batch_start:batch_end, :]
 
+            # Initialize variable v as tensorflow variable.
             if phase != 2:
                 self.v = tf.Variable(
                     tf.zeros([x_batch.shape[0], self.n_components]),
@@ -815,9 +859,10 @@ class ImputeUBP(Impute):
                     dtype=tf.float32,
                 )
 
+            # Assign current batch to v.
             self.v.assign(v_batch)
 
-            loss, refined = self.train_on_batch(self.v, x_batch, model, phase)
+            loss, refined = self._train_on_batch(self.v, x_batch, model, phase)
             losses.append(loss.numpy())
 
             if phase != 2:
@@ -827,7 +872,7 @@ class ImputeUBP(Impute):
 
         return np.mean(losses)
 
-    def train_on_batch(self, x, y, model, phase):
+    def _train_on_batch(self, x, y, model, phase):
         """Custom training loop for neural network.
 
         GradientTape records the weights and watched
@@ -850,8 +895,10 @@ class ImputeUBP(Impute):
 
         Returns:
             tf.Tensor: Calculated loss of current batch.
+
             tf.Variable, conditional: Input refined by gradient descent. Only returned if phase != 2.
-            keras.models.Sequential, conditional: Keras model with refined weights. Only returned if phase == 2.
+
+            List[np.ndarray], conditional: Refined weights from keras model, as returned with the tf.keras.models.Sequential.get_weights() function. Only returned if phase == 2.
 
         """
         if phase != 2:
