@@ -1,4 +1,5 @@
 # Standard Library Imports
+import os
 import sys
 import math
 from collections import defaultdict
@@ -14,11 +15,13 @@ from memory_profiler import memory_usage
 import matplotlib.pylab as plt
 import seaborn as sns
 
+# Ignore warnings, but still print errors.
+# Set to 0 for debugging, 2 to ignore warnings.
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"  # or any {'0', '1', '2', '3'}
+
 # Neural network imports
 import tensorflow as tf
 from tensorflow.python.util import deprecation
-from keras import backend as K
-from keras.utils import to_categorical
 from keras.objectives import mse
 from keras.models import Sequential
 from keras.layers.core import Dropout, Dense, Lambda
@@ -30,7 +33,9 @@ from read_input.read_input import GenotypeData
 from utils.misc import timer
 from utils.misc import isnotebook
 
+# Ignore warnings, but still print errors.
 deprecation._PRINT_DEPRECATION_WARNINGS = False
+tf.get_logger().setLevel("WARNING")
 
 is_notebook = isnotebook()
 
@@ -40,108 +45,132 @@ else:
     from tqdm import tqdm as progressbar
 
 
-def make_reconstruction_loss(n_features):
-    def reconstruction_loss(input_and_mask, y_pred):
-        """Loss function for variational autoencoder model with missing mask.
+class NeuralNetwork:
+    """Methods common to all neural network imputer classes and loss functions"""
 
-        Ignores missing data in the calculation of the loss function.
+    def __init__(self, **kwargs):
+        self.data = None
+
+    def make_reconstruction_loss(self, n_features):
+        """Make loss function for use with a keras model.
 
         Args:
-            n_features (int): Number of features (columns) in the dataset.
-
-            input_and_mask (numpy.ndarray): Input one-hot encoded array with missing values also one-hot encoded and h-stacked.
-
-            y_pred (numpy.ndarray): Predicted values.
+            n_features (int): Number of features in input dataset.
 
         Returns:
-            float: Mean squared error loss function.
+            callable: Function that calculates loss.
         """
-        X_values = input_and_mask[:, :n_features]
-        missing_mask = input_and_mask[:, n_features:]
-        observed_mask = 1 - missing_mask
-        X_values_observed = X_values * observed_mask
-        pred_observed = y_pred * observed_mask
 
-        return mse(y_true=X_values_observed, y_pred=pred_observed)
+        def reconstruction_loss(input_and_mask, y_pred):
+            """Custom loss function for variational autoencoder model with missing mask.
 
-    return reconstruction_loss
+            Ignores missing data in the calculation of the loss function.
+
+            Args:
+                n_features (int): Number of features (columns) in the dataset.
+
+                input_and_mask (numpy.ndarray): Input one-hot encoded array with missing values also one-hot encoded and h-stacked.
+
+                y_pred (numpy.ndarray): Predicted values.
+
+            Returns:
+                float: Mean squared error loss value with missing data masked.
+            """
+            X_values = input_and_mask[:, :n_features]
+            missing_mask = input_and_mask[:, n_features:]
+            observed_mask = 1 - missing_mask
+            X_values_observed = X_values * observed_mask
+            pred_observed = y_pred * observed_mask
+
+            return mse(y_true=X_values_observed, y_pred=pred_observed)
+
+        return reconstruction_loss
+
+    def masked_mae(self, X_true, X_pred, mask):
+        """Calculates mean absolute error with missing values ignored.
+
+        Args:
+            X_true (numpy.ndarray): One-hot encoded input data.
+            X_pred (numpy.ndarray): Predicted values.
+            mask (numpy.ndarray): One-hot encoded missing data mask.
+
+        Returns:
+            float: Mean absolute error calculation.
+        """
+        masked_diff = X_true[mask] - X_pred[mask]
+        return np.mean(np.abs(masked_diff))
+
+    def categorical_crossentropy_masked(self, y_true, y_pred):
+        """Calculates categorical crossentropy while ignoring missing values.
+
+        Used for UBP and NLPCA. Missing values should be an array of length(n_categories). If data is missing, it should be encoded as [-1] * n_categories.
+
+        Args:
+            y_true (tf.Tensor): Known values from input data.
+            y_pred (tf.Tensor): Values predicted from model.
+
+        Returns:
+            float: Loss value.
+        """
+        y_true_masked = tf.boolean_mask(
+            y_true, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
+        )
+
+        y_pred_masked = tf.boolean_mask(
+            y_pred, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
+        )
+
+        loss_fn = tf.keras.losses.CategoricalCrossentropy()
+        return loss_fn(y_true_masked, y_pred_masked)
+
+    def validate_batch_size(self, X, batch_size):
+        """Validate the batch size, and adjust as necessary.
+
+        If the specified batch_size is greater than the number of samples in the input data, it will divide batch_size by 2 until it is less than n_samples.
+
+        Args:
+            X (numpy.ndarray): Input data of shape (n_samples, n_features).
+            batch_size (int): Batch size to use.
+
+        Returns:
+            int: Batch size (adjusted if necessary).
+        """
+        if batch_size > X.shape[0]:
+            while batch_size > X.shape[0]:
+                print(
+                    "Batch size is larger than the number of samples. "
+                    "Dividing batch_size by 2."
+                )
+                batch_size //= 2
+        return batch_size
+
+    def mle(self, row):
+        """Get the Maximum Likelihood Estimation for the best prediction. Basically, it sets the index of the maxiumum value in a vector (row) to 1.0, since it is one-hot encoded.
+
+        Args:
+            row (numpy.ndarray(float)): Row vector with predicted values as floating points.
+
+        Returns:
+            numpy.ndarray(float): Row vector with the highest prediction set to 1.0 and the others set to 0.0.
+        """
+        res = np.zeros(row.shape[0])
+        res[np.argmax(row)] = 1
+        return res
+
+    def fill(self, missing_mask, missing_value, num_classes):
+        """Mask missing data as ``missing_value``.
+
+        Args:
+            missing_mask (np.ndarray(bool)): Missing data mask with True corresponding to a missing value.
+
+            missing_value (int): Value to set missing data to. If a list is provided, then its length should equal the number of one-hot classes.
+        """
+        if num_classes > 1:
+            missing_value = [missing_value] * num_classes
+        self.data[missing_mask] = missing_value
 
 
-def masked_mae(X_true, X_pred, mask):
-    """
-    Calculates mean absolute error with missing values ignored.
-
-    Args:
-        X_true (numpy.ndarray): One-hot encoded input data.
-        X_pred (numpy.ndarray): Predicted values.
-        mask (numpy.ndarray): One-hot encoded missing data mask.
-
-    Returns:
-        float: Mean absolute error calculation.
-    """
-    masked_diff = X_true[mask] - X_pred[mask]
-    return np.mean(np.abs(masked_diff))
-
-
-def categorical_crossentropy_masked(y_true, y_pred):
-    """Calculates categorical crossentropy while ignoring missing values.
-
-    Used for UBP and NLPCA. Missing values should be an array of length(n_categories). If data is missing, it should be encoded as [-1] * n_categories.
-
-    Args:
-        y_true (tf.Tensor): Known values from input data.
-        y_pred (tf.Tensor): Values predicted from model.
-
-    Returns:
-        float: Loss value.
-    """
-    y_true_masked = tf.boolean_mask(
-        y_true, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
-    )
-    y_pred_masked = tf.boolean_mask(
-        y_pred, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
-    )
-    loss_fn = tf.keras.losses.CategoricalCrossentropy()
-    return loss_fn(y_true_masked, y_pred_masked)
-
-
-def validate_batch_size(X, batch_size):
-    """Validate the batch size, and adjust as necessary.
-
-    If the specified batch_size is greater than the number of samples in the input data, it will divide batch_size by 2 until it is less than n_samples.
-
-    Args:
-        X (numpy.ndarray): Input data of shape (n_samples, n_features).
-        batch_size (int): Batch size to use.
-
-    Returns:
-        int: Batch size (adjusted if necessary).
-    """
-    if batch_size > X.shape[0]:
-        while batch_size > X.shape[0]:
-            print(
-                "Batch size is larger than the number of samples. "
-                "Dividing batch_size by 2."
-            )
-            batch_size //= 2
-    return batch_size
-
-
-def _mle(row):
-    """Get the Maximum Likelihood Estimation for the best prediction. Basically, it sets the index of the maxiumum value in a vector (row) to 1.0, since it is one-hot encoded.
-
-    Args:
-        row (numpy.ndarray(float)): Row vector with predicted values as floating points.
-
-    Returns:
-        numpy.ndarray(float): Row vector with the highest prediction set to 1.0 and the others set to 0.0.
-    """
-    res = np.zeros(row.shape[0])
-    res[np.argmax(row)] = 1
-    return res
-
-
-class ImputeVAE(Impute):
+class ImputeVAE(Impute, NeuralNetwork):
     """Class to impute missing data using a Variational Autoencoder neural network.
 
     Args:
@@ -191,7 +220,7 @@ class ImputeVAE(Impute):
         validation_only=0.2,
         disable_progressbar=False,
         train_epochs=100,
-        batch_size=64,
+        batch_size=32,
         recurrent_weight=0.5,
         optimizer="adam",
         dropout_probability=0.2,
@@ -210,7 +239,9 @@ class ImputeVAE(Impute):
             "str_encodings": {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9},
         }
 
-        super().__init__(self.clf, self.clf_type, self.imp_kwargs)
+        super(ImputeVAE, self).__init__(
+            self.clf, self.clf_type, self.imp_kwargs
+        )
 
         self.prefix = prefix
 
@@ -227,6 +258,9 @@ class ImputeVAE(Impute):
         self.cv = cv
         self.validation_only = validation_only
         self.disable_progressbar = disable_progressbar
+        self.num_classes = 1
+
+        # Initialize methods common to all neural network classes.
 
         self.df = None
         self.data = None
@@ -243,7 +277,7 @@ class ImputeVAE(Impute):
         elif gt is not None:
             X = gt
 
-        self.batch_size = validate_batch_size(X, batch_size)
+        self.batch_size = self.validate_batch_size(X, batch_size)
 
         if self.validation_only is not None:
             print("\nEstimating validation scores...")
@@ -290,11 +324,11 @@ class ImputeVAE(Impute):
         # VAE needs a numpy array, not a dataframe
         self.data = self.df.copy().values
 
-        imputed_enc = self.train(
+        imputed_enc = self.fit(
             train_epochs=self.train_epochs, batch_size=self.batch_size
         )
 
-        imputed_enc, dummy_df = self._eval_predictions(X, imputed_enc)
+        imputed_enc, dummy_df = self.predict(X, imputed_enc)
 
         imputed_df = self._decode_onehot(
             pd.DataFrame(data=imputed_enc, columns=dummy_df.columns)
@@ -302,9 +336,113 @@ class ImputeVAE(Impute):
 
         return imputed_df
 
+    def fit(self, batch_size=256, train_epochs=100):
+        """Train a variational autoencoder model to impute missing data.
+
+        Args:
+            batch_size (int, optional): Number of data splits to train on per epoch. Defaults to 256.
+
+            train_epochs (int, optional): Number of epochs (cycles through the data) to use. Defaults to 100.
+
+        Returns:
+            numpy.ndarray(float): Predicted values as numpy array.
+        """
+
+        missing_mask = self._create_missing_mask()
+        self.fill(missing_mask, -1, self.num_classes)
+        self.model = self._create_model()
+
+        observed_mask = ~missing_mask
+
+        for epoch in range(train_epochs):
+            X_pred = self._train_epoch(self.model, missing_mask, batch_size)
+            observed_mae = self.masked_mae(
+                X_true=self.data, X_pred=X_pred, mask=observed_mask
+            )
+
+            if epoch == 0:
+                print(f"Initial MAE: {observed_mae}")
+
+            elif epoch % 50 == 0:
+                print(
+                    f"Observed MAE ({epoch}/{train_epochs} epochs): "
+                    f"{observed_mae}"
+                )
+
+            old_weight = 1.0 - self.recurrent_weight
+            self.data[missing_mask] *= old_weight
+            pred_missing = X_pred[missing_mask]
+            self.data[missing_mask] += self.recurrent_weight * pred_missing
+
+        return self.data.copy()
+
+    def predict(self, X, complete_encoded):
+        """Evaluate VAE predictions by calculating the highest predicted value for each row vector for each class and setting it to 1.0.
+
+        Args:
+            X (numpy.ndarray): Input one-hot encoded data.
+            complete_encoded (numpy.ndarray): Output one-hot encoded data with the maximum predicted values for each class set to 1.0.
+
+        Returns:
+            numpy.ndarray: Imputed one-hot encoded values.
+            pandas.DataFrame: One-hot encoded pandas DataFrame with no missing values.
+        """
+
+        df = self._encode_categorical(X)
+
+        # Had to add dropna() to count unique classes while ignoring np.nan
+        col_classes = [len(df[c].dropna().unique()) for c in df.columns]
+        df_dummies = pd.get_dummies(df)
+        mle_complete = None
+
+        for i, cnt in enumerate(col_classes):
+            start_idx = int(sum(col_classes[0:i]))
+            col_completed = complete_encoded[:, start_idx : start_idx + cnt]
+            mle_completed = np.apply_along_axis(
+                self.mle, axis=1, arr=col_completed
+            )
+
+            if mle_complete is None:
+                mle_complete = mle_completed
+
+            else:
+                mle_complete = np.hstack([mle_complete, mle_completed])
+
+        return mle_complete, df_dummies
+
     @property
     def imputed(self):
         return self.imputed_df
+
+    def _train_epoch(self, model, missing_mask, batch_size):
+        """Train one cycle (epoch) of a variational autoencoder model.
+
+        Args:
+            model (Keras model object): VAE model object implemented in Keras.
+
+            missing_mask (numpy.ndarray(bool)): Missing data boolean mask, with True corresponding to a missing value.
+
+            batch_size (int): Batch size for one epoch.
+
+        Returns:
+            numpy.ndarray: VAE model predictions of the current epoch.
+        """
+
+        input_with_mask = np.hstack([self.data, missing_mask])
+        n_samples = len(input_with_mask)
+
+        n_batches = int(np.ceil(n_samples / batch_size))
+        indices = np.arange(n_samples)
+        np.random.shuffle(indices)
+        X_shuffled = input_with_mask[indices]
+
+        for batch_idx in range(n_batches):
+            batch_start = batch_idx * batch_size
+            batch_end = (batch_idx + 1) * batch_size
+            batch_data = X_shuffled[batch_start:batch_end, :]
+            model.train_on_batch(batch_data, batch_data)
+
+        return model.predict(input_with_mask)
 
     def _read_example_data(self):
         """Read in example mushrooms dataset.
@@ -318,6 +456,32 @@ class ImputeVAE(Impute):
 
         df_incomplete.iat[1, 0] = np.nan
         df_incomplete.iat[2, 1] = np.nan
+
+        missing_encoded = pd.get_dummies(df_incomplete)
+
+        for col in df.columns:
+            missing_cols = missing_encoded.columns.str.startswith(
+                str(col) + "_"
+            )
+
+            missing_encoded.loc[
+                df_incomplete[col].isnull(), missing_cols
+            ] = np.nan
+
+        return missing_encoded
+
+    def _encode_onehot(self, X):
+        """Convert 012-encoded data to one-hot encodings.
+
+        Args:
+            X (numpy.ndarray): Input array with 012-encoded data and -9 as the missing data value.
+
+        Returns:
+            pandas.DataFrame: One-hot encoded data, ignoring missing values (np.nan).
+        """
+
+        df = self._encode_categorical(X)
+        df_incomplete = df.copy()
 
         missing_encoded = pd.get_dummies(df_incomplete)
 
@@ -355,64 +519,6 @@ class ImputeVAE(Impute):
                     df_incomplete.iat[row, col] = np.nan
 
         return df_incomplete
-
-    def _encode_onehot(self, X):
-        """Convert 012-encoded data to one-hot encodings.
-
-        Args:
-            X (numpy.ndarray): Input array with 012-encoded data and -9 as the missing data value.
-
-        Returns:
-            pandas.DataFrame: One-hot encoded data, ignoring missing values (np.nan).
-        """
-
-        df = self._encode_categorical(X)
-        df_incomplete = df.copy()
-
-        missing_encoded = pd.get_dummies(df_incomplete)
-
-        for col in df.columns:
-            missing_cols = missing_encoded.columns.str.startswith(
-                str(col) + "_"
-            )
-
-            missing_encoded.loc[
-                df_incomplete[col].isnull(), missing_cols
-            ] = np.nan
-
-        return missing_encoded
-
-    def _eval_predictions(self, X, complete_encoded):
-        """Evaluate VAE predictions by calculating the highest predicted value for each row vector for each class and setting it to 1.0.
-
-        Args:
-            X (numpy.ndarray): Input one-hot encoded data.
-            complete_encoded (numpy.ndarray): Output one-hot encoded data with the maximum predicted values for each class set to 1.0.
-
-        Returns:
-            numpy.ndarray: Imputed one-hot encoded values.
-            pandas.DataFrame: One-hot encoded pandas DataFrame with no missing values.
-        """
-
-        df = self._encode_categorical(X)
-
-        # Had to add dropna() to count unique classes while ignoring np.nan
-        col_classes = [len(df[c].dropna().unique()) for c in df.columns]
-        df_dummies = pd.get_dummies(df)
-        mle_complete = None
-
-        for i, cnt in enumerate(col_classes):
-            start_idx = int(sum(col_classes[0:i]))
-            col_completed = complete_encoded[:, start_idx : start_idx + cnt]
-            mle_completed = np.apply_along_axis(_mle, axis=1, arr=col_completed)
-
-            if mle_complete is None:
-                mle_complete = mle_completed
-
-            else:
-                mle_complete = np.hstack([mle_complete, mle_completed])
-
-        return mle_complete, df_dummies
 
     def _decode_onehot(self, df_dummies):
         """Decode one-hot format to 012-encoded genotypes.
@@ -507,19 +613,11 @@ class ImputeVAE(Impute):
             )
         )
 
-        loss_function = make_reconstruction_loss(n_dims)
+        loss_function = self.make_reconstruction_loss(n_dims)
 
         model.compile(optimizer=self.optimizer, loss=loss_function)
 
         return model
-
-    def fill(self, missing_mask):
-        """Mask missing data as -1.
-
-        Args:
-            missing_mask (np.ndarray(bool)): Missing data mask with True corresponding to a missing value.
-        """
-        self.data[missing_mask] = -1
 
     def _create_missing_mask(self):
         """Creates a missing data mask with boolean values.
@@ -531,78 +629,8 @@ class ImputeVAE(Impute):
             self.data = self.data.astype(float)
         return np.isnan(self.data)
 
-    def _train_epoch(self, model, missing_mask, batch_size):
-        """Train one cycle (epoch) of a variational autoencoder model.
 
-        Args:
-            model (Keras model object): VAE model object implemented in Keras.
-
-            missing_mask (numpy.ndarray(bool)): Missing data boolean mask, with True corresponding to a missing value.
-
-            batch_size (int): Batch size for one epoch.
-
-        Returns:
-            numpy.ndarray: VAE model predictions of the current epoch.
-        """
-
-        input_with_mask = np.hstack([self.data, missing_mask])
-        n_samples = len(input_with_mask)
-
-        n_batches = int(np.ceil(n_samples / batch_size))
-        indices = np.arange(n_samples)
-        np.random.shuffle(indices)
-        X_shuffled = input_with_mask[indices]
-
-        for batch_idx in range(n_batches):
-            batch_start = batch_idx * batch_size
-            batch_end = (batch_idx + 1) * batch_size
-            batch_data = X_shuffled[batch_start:batch_end, :]
-            model.train_on_batch(batch_data, batch_data)
-
-        return model.predict(input_with_mask)
-
-    def train(self, batch_size=256, train_epochs=100):
-        """Train a variational autoencoder model.
-
-        Args:
-            batch_size (int, optional): Number of data splits to train on per epoch. Defaults to 256.
-
-            train_epochs (int, optional): Number of epochs (cycles through the data) to use. Defaults to 100.
-
-        Returns:
-            numpy.ndarray(float): Predicted values as numpy array.
-        """
-
-        missing_mask = self._create_missing_mask()
-        self.fill(missing_mask)
-        self.model = self._create_model()
-
-        observed_mask = ~missing_mask
-
-        for epoch in range(train_epochs):
-            X_pred = self._train_epoch(self.model, missing_mask, batch_size)
-            observed_mae = masked_mae(
-                X_true=self.data, X_pred=X_pred, mask=observed_mask
-            )
-
-            if epoch == 0:
-                print(f"Initial MAE: {observed_mae}")
-
-            elif epoch % 50 == 0:
-                print(
-                    f"Observed MAE ({epoch}/{train_epochs} epochs): "
-                    f"{observed_mae}"
-                )
-
-            old_weight = 1.0 - self.recurrent_weight
-            self.data[missing_mask] *= old_weight
-            pred_missing = X_pred[missing_mask]
-            self.data[missing_mask] += self.recurrent_weight * pred_missing
-
-        return self.data.copy()
-
-
-class ImputeUBP(Impute):
+class ImputeUBP(Impute, NeuralNetwork):
     """Class to impute missing data using unsupervised backpropagation or non-linear principal component analysis (NLPCA).
 
     Args:
@@ -689,7 +717,9 @@ class ImputeUBP(Impute):
 
         test_cat = kwargs.get("test_categorical", None)
 
-        super().__init__(self.clf, self.clf_type, self.imp_kwargs)
+        super(ImputeUBP, self).__init__(
+            self.clf, self.clf_type, self.imp_kwargs
+        )
 
         self.prefix = prefix
 
@@ -712,6 +742,7 @@ class ImputeUBP(Impute):
         # Get number of hidden layers
         self.df = None
         self.data = None
+        self.num_classes = 3
 
         if genotype_data is None:
             raise TypeError(
@@ -733,7 +764,7 @@ class ImputeUBP(Impute):
             self.X.shape[1], self.n_components, self.hidden_layer_sizes
         )
 
-        self.batch_size = validate_batch_size(self.X, batch_size)
+        self.batch_size = self.validate_batch_size(self.X, batch_size)
         self.V_latent = self._init_weights(self.X.shape[0], self.n_components)
         self.phase2_model = list()
         self.observed_mask = None
@@ -816,6 +847,8 @@ class ImputeUBP(Impute):
             )
 
         self.data = self._encode_onehot(X)
+        self.data = self.data
+
         self.fit()
         Xpred = self.predict(self.V_latent)
         return pd.DataFrame(Xpred)
@@ -831,7 +864,7 @@ class ImputeUBP(Impute):
         """
         pred = self.model(self.V_latent, training=False)
         Xprob = pred.numpy()
-        Xt = np.apply_along_axis(_mle, axis=2, arr=Xprob)
+        Xt = np.apply_along_axis(self.mle, axis=2, arr=Xprob)
         Xdecoded = np.argmax(Xt, axis=2)
         Xpred = np.zeros((Xdecoded.shape[0], Xdecoded.shape[1]))
         for idx, row in enumerate(Xpred):
@@ -859,7 +892,7 @@ class ImputeUBP(Impute):
         """
         missing_mask = self._create_missing_mask()
         self.observed_mask = ~missing_mask
-        self._fill(missing_mask)
+        self.fill(missing_mask, -1, self.num_classes)
 
         # Define neural network models.
         if self.nlpca:
@@ -878,7 +911,7 @@ class ImputeUBP(Impute):
         # Phase 1, Phase 2, Phase 3
         models = [model_single_layer, model_mlp_phase2, model_mlp_phase3]
 
-        self.initialise_parameters()
+        self._initialise_parameters()
 
         # Number of batches based on rows in X and V_latent.
         n_batches = int(np.ceil(self.data.shape[0] / self.batch_size))
@@ -886,6 +919,11 @@ class ImputeUBP(Impute):
         counter = 0
         criterion_met = False
         s_delta = None
+
+        if self.nlpca:
+            model_dir = "optimal_nlpca_model"
+        else:
+            model_dir = "optimal_ubp_model"
 
         for phase in range(start_phase, 4):
             self.num_epochs = 0
@@ -921,7 +959,7 @@ class ImputeUBP(Impute):
                         if s_delta <= self.tol:
                             criterion_met = True
                             models[phase - 1].save(
-                                ".optimal_model", include_optimizer=False
+                                model_dir, include_optimizer=False
                             )
                         else:
                             counter = 0
@@ -942,22 +980,22 @@ class ImputeUBP(Impute):
                             if counter == self.early_stopping_gen:
                                 counter = 0
                                 models[phase - 1] = tf.keras.models.load_model(
-                                    ".optimal_model", compile=False
+                                    model_dir, compile=False
                                 )
-                                self.s = s
+                                self.final_s = self.s_prime
                                 break
                     else:
                         counter += 1
                         if counter == self.early_stopping_gen:
                             counter = 0
                             models[phase - 1] = tf.keras.models.load_model(
-                                ".optimal_model", compile=False
+                                model_dir, compile=False
                             )
-                            self.s = s
+                            self.final_s = self.s_prime
                             break
 
             print(f"Number of epochs used to train: {self.num_epochs}")
-            print(f"Final MSE: {self.s}")
+            print(f"Final MSE: {self.final_s}")
 
         self.model = models[2]
 
@@ -1061,7 +1099,7 @@ class ImputeUBP(Impute):
             if phase != 2:
                 tape.watch(x)
             pred = model(x, training=True)
-            loss = categorical_crossentropy_masked(
+            loss = self.categorical_crossentropy_masked(
                 tf.convert_to_tensor(y, dtype=tf.float32), pred
             )
 
@@ -1272,14 +1310,6 @@ class ImputeUBP(Impute):
             layers.append(units)
         return layers
 
-    def _fill(self, missing_mask):
-        """Mask missing data as [-1, -1, -1].
-
-        Args:
-            missing_mask ([np.ndarray(bool)]): [Missing data mask with True corresponding to a missing value]
-        """
-        self.data[missing_mask] = [-1, -1, -1]
-
     def _create_missing_mask(self):
         """Creates a missing data mask with boolean values.
 
@@ -1288,9 +1318,9 @@ class ImputeUBP(Impute):
         """
         return np.isnan(self.data).all(axis=2)
 
-    def initialise_parameters(self):
+    def _initialise_parameters(self):
         """Initialize important parameters."""
         self.current_eta = self.initial_eta
-        self.s = 0
+        self.final_s = 0
         self.s_prime = np.inf
         self.num_epochs = 0
