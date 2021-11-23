@@ -1356,7 +1356,7 @@ class Impute:
             y_true = df_known[df_known_slice.columns[i]]
             y_true = y_true[mask]
 
-            y_pred = df_imp[df_imp.columns[i]]
+            y_pred = df_imp[df_known_slice.columns[i]]
             y_pred = y_pred[mask]
 
             if self.clf_type == "classifier":
