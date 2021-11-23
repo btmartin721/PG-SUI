@@ -42,7 +42,20 @@ else:
 
 def make_reconstruction_loss(n_features):
     def reconstruction_loss(input_and_mask, y_pred):
+        """Loss function for variational autoencoder model with missing mask.
 
+        Ignores missing data in the calculation of the loss function.
+
+        Args:
+            n_features (int): Number of features (columns) in the dataset.
+
+            input_and_mask (numpy.ndarray): Input one-hot encoded array with missing values also one-hot encoded and h-stacked.
+
+            y_pred (numpy.ndarray): Predicted values.
+
+        Returns:
+            float: Mean squared error loss function.
+        """
         X_values = input_and_mask[:, :n_features]
         missing_mask = input_and_mask[:, n_features:]
         observed_mask = 1 - missing_mask
@@ -55,12 +68,33 @@ def make_reconstruction_loss(n_features):
 
 
 def masked_mae(X_true, X_pred, mask):
+    """
+    Calculates mean absolute error with missing values ignored.
 
+    Args:
+        X_true (numpy.ndarray): One-hot encoded input data.
+        X_pred (numpy.ndarray): Predicted values.
+        mask (numpy.ndarray): One-hot encoded missing data mask.
+
+    Returns:
+        float: Mean absolute error calculation.
+    """
     masked_diff = X_true[mask] - X_pred[mask]
     return np.mean(np.abs(masked_diff))
 
 
 def categorical_crossentropy_masked(y_true, y_pred):
+    """Calculates categorical crossentropy while ignoring missing values.
+
+    Used for UBP and NLPCA. Missing values should be an array of length(n_categories). If data is missing, it should be encoded as [-1] * n_categories.
+
+    Args:
+        y_true (tf.Tensor): Known values from input data.
+        y_pred (tf.Tensor): Values predicted from model.
+
+    Returns:
+        float: Loss value.
+    """
     y_true_masked = tf.boolean_mask(
         y_true, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
     )
@@ -72,6 +106,17 @@ def categorical_crossentropy_masked(y_true, y_pred):
 
 
 def validate_batch_size(X, batch_size):
+    """Validate the batch size, and adjust as necessary.
+
+    If the specified batch_size is greater than the number of samples in the input data, it will divide batch_size by 2 until it is less than n_samples.
+
+    Args:
+        X (numpy.ndarray): Input data of shape (n_samples, n_features).
+        batch_size (int): Batch size to use.
+
+    Returns:
+        int: Batch size (adjusted if necessary).
+    """
     if batch_size > X.shape[0]:
         while batch_size > X.shape[0]:
             print(
@@ -97,6 +142,44 @@ def _mle(row):
 
 
 class ImputeVAE(Impute):
+    """Class to impute missing data using a Variational Autoencoder neural network.
+
+    Args:
+        genotype_data (GenotypeData object or None): Input data initialized as GenotypeData object. If value is None, then uses ``gt`` to get the genotypes. Either ``genotype_data`` or ``gt`` must be defined. Defaults to None.
+
+        gt (numpy.ndarray or None): Input genotypes directly as a numpy array. If this value is None, ``genotype_data`` must be supplied instead. Defaults to None.
+
+        prefix (str): Prefix for output files. Defaults to "output".
+
+        cv (int): Number of cross-validation replicates to perform. Only used if ``validation_only`` is not None. Defaults to 5.
+
+        initial_strategy (str): Initial strategy to impute missing data with for validation. Possible options include: "populations", "most_frequent", and "phylogeny", where "populations" imputes by the mode of each population at each site, "most_frequent" imputes by the overall mode of each site, and "phylogeny" uses an input phylogeny to inform the imputation. "populations" requires a population map file as input in the GenotypeData object, and "phylogeny" requires an input phylogeny and Rate Matrix Q (also instantiated in the GenotypeData object). Defaults to "populations".
+
+        validation_only (float or None): Proportion of sites to use for the validation. If ``validation_only`` is None, then does not perform validation. Defaults to 0.2.
+
+        disable_progressbar (bool): Whether to disable the tqdm progress bar. Useful if you are doing the imputation on e.g. a high-performance computing cluster, where sometimes tqdm does not work correctly. If False, uses tqdm progress bar. If True, does not use tqdm. Defaults to False.
+
+        train_epochs (int): Number of epochs to train the VAE model with. Defaults to 100.
+
+        batch_size (int): Batch size to train the model with.
+
+        recurrent_weight (float): Weight to apply to recurrent network. Defaults to 0.5.
+
+        optimizer (str): Gradient descent optimizer to use. See tf.keras.optimizers for more info. Defaults to "adam".
+
+        dropout_probability (float): Dropout rate for neurons in the network. Can adjust to reduce overfitting. Defaults to 0.2.
+
+        hidden_activation (str): Activation function to use for hidden layers. See tf.keras.activations for more info. Defaults to "relu".
+
+        output_activation (str): Activation function to use for output layer. See tf.keras.activations for more info. Defaults to "sigmoid".
+
+        kernel_initializer (str): Initializer to use for initializing model weights. See tf.keras.initializers for more info. Defaults to "glorot_normal".
+
+        l1_penalty (float): L1 regularization penalty to apply. Adjust if overfitting is occurring. Defaults to 0.
+
+        l2_penalty (float): L2 regularization penalty to apply. Adjust if overfitting is occurring. Defaults to 0.
+    """
+
     def __init__(
         self,
         *,
@@ -194,6 +277,14 @@ class ImputeVAE(Impute):
 
     @timer
     def fit_predict(self, X):
+        """Train the VAE model and predict missing values.
+
+        Args:
+            X (pandas.DataFrame): Input 012-encoded genotypes.
+
+        Returns:
+            pandas.DataFrame: Imputed data.
+        """
         self.df = self._encode_onehot(X)
 
         # VAE needs a numpy array, not a dataframe
@@ -216,6 +307,11 @@ class ImputeVAE(Impute):
         return self.imputed_df
 
     def _read_example_data(self):
+        """Read in example mushrooms dataset.
+
+        Returns:
+            numpy.ndarray: One-hot encoded genotypes.
+        """
         df = pd.read_csv("mushrooms_test_2.csv", header=None)
 
         df_incomplete = df.copy()
@@ -237,13 +333,13 @@ class ImputeVAE(Impute):
         return missing_encoded
 
     def _encode_categorical(self, X):
-        """[Encode -9 encoded missing values as np.nan]
+        """Encode -9 encoded missing values as np.nan.
 
         Args:
-            X ([numpy.ndarray]): [012-encoded genotypes with -9 as missing values]
+            X (numpy.ndarray): 012-encoded genotypes with -9 as missing values.
 
         Returns:
-            [pandas.DataFrame]: [DataFrame with missing values encoded as np.nan]
+            pandas.DataFrame: DataFrame with missing values encoded as np.nan.
         """
         np.nan_to_num(X, copy=False, nan=-9.0)
         X = X.astype(str)
@@ -261,13 +357,13 @@ class ImputeVAE(Impute):
         return df_incomplete
 
     def _encode_onehot(self, X):
-        """[Convert 012-encoded data to one-hot encodings]
+        """Convert 012-encoded data to one-hot encodings.
 
         Args:
-            X ([numpy.ndarray]): [Input array with 012-encoded data and -9 as the missing data value]
+            X (numpy.ndarray): Input array with 012-encoded data and -9 as the missing data value.
 
         Returns:
-            [pandas.DataFrame]: [One-hot encoded data, ignoring missing values (np.nan)]
+            pandas.DataFrame: One-hot encoded data, ignoring missing values (np.nan).
         """
 
         df = self._encode_categorical(X)
@@ -287,31 +383,27 @@ class ImputeVAE(Impute):
         return missing_encoded
 
     def _eval_predictions(self, X, complete_encoded):
-        """[Evaluate VAE predictions by calculating the highest predicted value for each row vector for each class and setting it to 1.0]
+        """Evaluate VAE predictions by calculating the highest predicted value for each row vector for each class and setting it to 1.0.
 
         Args:
-            X ([numpy.ndarray]): [Input one-hot encoded data]
-            complete_encoded ([numpy.ndarray]): [Output one-hot encoded data with the maximum predicted values for each class set to 1.0]
+            X (numpy.ndarray): Input one-hot encoded data.
+            complete_encoded (numpy.ndarray): Output one-hot encoded data with the maximum predicted values for each class set to 1.0.
 
         Returns:
-            [numpy.ndarray]: [Imputed one-hot encoded values]
-            [pandas.DataFrame]: [One-hot encoded pandas DataFrame with no missing values]
+            numpy.ndarray: Imputed one-hot encoded values.
+            pandas.DataFrame: One-hot encoded pandas DataFrame with no missing values.
         """
 
         df = self._encode_categorical(X)
 
         # Had to add dropna() to count unique classes while ignoring np.nan
         col_classes = [len(df[c].dropna().unique()) for c in df.columns]
-
         df_dummies = pd.get_dummies(df)
-
         mle_complete = None
 
         for i, cnt in enumerate(col_classes):
             start_idx = int(sum(col_classes[0:i]))
-            # col_true = dummy_df.values[:, start_idx : start_idx + cnt]
             col_completed = complete_encoded[:, start_idx : start_idx + cnt]
-
             mle_completed = np.apply_along_axis(_mle, axis=1, arr=col_completed)
 
             if mle_complete is None:
@@ -323,13 +415,13 @@ class ImputeVAE(Impute):
         return mle_complete, df_dummies
 
     def _decode_onehot(self, df_dummies):
-        """[Decode one-hot format to 012-encoded genotypes]
+        """Decode one-hot format to 012-encoded genotypes.
 
         Args:
-            df_dummies ([pandas.DataFrame]): [One-hot encoded imputed data]
+            df_dummies (pandas.DataFrame): One-hot encoded imputed data.
 
         Returns:
-            [pandas.DataFrame]: [012-encoded imputed data]
+            pandas.DataFrame: 012-encoded imputed data.
         """
         pos = defaultdict(list)
         vals = defaultdict(list)
@@ -358,10 +450,10 @@ class ImputeVAE(Impute):
         return df
 
     def _get_hidden_layer_sizes(self):
-        """[Get dimensions of hidden layers]
+        """Get dimensions of hidden layers.
 
         Returns:
-            [int, int, int]: [Number of dimensions in hidden layers]
+            [int, int, int]: Number of dimensions in hidden layers.
         """
         n_dims = self.data.shape[1]
         return [
@@ -371,10 +463,10 @@ class ImputeVAE(Impute):
         ]
 
     def _create_model(self):
-        """[Create a variational autoencoder model with the following items: InputLayer -> DenseLayer1 -> Dropout1 -> DenseLayer2 -> Dropout2 -> DenseLayer3 -> Dropout3 -> DenseLayer4 -> OutputLayer]
+        """Create a variational autoencoder model with the following items: InputLayer -> DenseLayer1 -> Dropout1 -> DenseLayer2 -> Dropout2 -> DenseLayer3 -> Dropout3 -> DenseLayer4 -> OutputLayer.
 
         Returns:
-            [keras model object]: [Compiled Keras model]
+            keras model object: Compiled Keras model.
         """
         hidden_layer_sizes = self._get_hidden_layer_sizes()
         first_layer_size = hidden_layer_sizes[0]
@@ -422,35 +514,35 @@ class ImputeVAE(Impute):
         return model
 
     def fill(self, missing_mask):
-        """[Mask missing data as -1]
+        """Mask missing data as -1.
 
         Args:
-            missing_mask ([np.ndarray(bool)]): [Missing data mask with True corresponding to a missing value]
+            missing_mask (np.ndarray(bool)): Missing data mask with True corresponding to a missing value.
         """
         self.data[missing_mask] = -1
 
     def _create_missing_mask(self):
-        """[Creates a missing data mask with boolean values]
+        """Creates a missing data mask with boolean values.
 
         Returns:
-            [numpy.ndarray(bool)]: [Boolean mask of missing values, with True corresponding to a missing data point]
+            numpy.ndarray(bool): Boolean mask of missing values, with True corresponding to a missing data point.
         """
         if self.data.dtype != "f" and self.data.dtype != "d":
             self.data = self.data.astype(float)
         return np.isnan(self.data)
 
     def _train_epoch(self, model, missing_mask, batch_size):
-        """[Train one cycle (epoch) of a variational autoencoder model]
+        """Train one cycle (epoch) of a variational autoencoder model.
 
         Args:
-            model ([Keras model object]): [VAE model object implemented in Keras]
+            model (Keras model object): VAE model object implemented in Keras.
 
-            missing_mask ([numpy.ndarray(bool)]): [Missing data boolean mask, with True corresponding to a missing value]
+            missing_mask (numpy.ndarray(bool)): Missing data boolean mask, with True corresponding to a missing value.
 
-            batch_size ([int]): [Batch size for one epoch]
+            batch_size (int): Batch size for one epoch.
 
         Returns:
-            [numpy.ndarray]: [VAE model predictions of the current epoch]
+            numpy.ndarray: VAE model predictions of the current epoch.
         """
 
         input_with_mask = np.hstack([self.data, missing_mask])
@@ -470,15 +562,15 @@ class ImputeVAE(Impute):
         return model.predict(input_with_mask)
 
     def train(self, batch_size=256, train_epochs=100):
-        """[Train a variational autoencoder model]
+        """Train a variational autoencoder model.
 
         Args:
-            batch_size (int, optional): [Number of data splits to train on per epoch]. Defaults to 256.
+            batch_size (int, optional): Number of data splits to train on per epoch. Defaults to 256.
 
-            train_epochs (int, optional): [Number of epochs (cycles through the data) to use]. Defaults to 100.
+            train_epochs (int, optional): Number of epochs (cycles through the data) to use. Defaults to 100.
 
         Returns:
-            [numpy.ndarray(float)]: [Predicted values as numpy array]
+            numpy.ndarray(float): Predicted values as numpy array.
         """
 
         missing_mask = self._create_missing_mask()
@@ -511,6 +603,50 @@ class ImputeVAE(Impute):
 
 
 class ImputeUBP(Impute):
+    """Class to impute missing data using unsupervised backpropagation or non-linear principal component analysis (NLPCA).
+
+    Args:
+        genotype_data (GenotypeData object or None): Input GenotypeData object. Argument is required. Defaults to None.
+
+        prefix (str): Prefix for output files. Defaults to "output".
+
+        cv (int): Number of cross-validation replicates to perform. Only used if ``validation_only`` is not None. Defaults to 5.
+
+        initial_strategy (str): Initial strategy to impute missing data with for validation. Possible options include: "populations", "most_frequent", and "phylogeny", where "populations" imputes by the mode of each population at each site, "most_frequent" imputes by the overall mode of each site, and "phylogeny" uses an input phylogeny to inform the imputation. "populations" requires a population map file as input in the GenotypeData object, and "phylogeny" requires an input phylogeny and Rate Matrix Q (also instantiated in the GenotypeData object). Defaults to "populations".
+
+        validation_only (float or None): Proportion of sites to use for the validation. If ``validation_only`` is None, then does not perform validation. Defaults to 0.2.
+
+        disable_progressbar (bool): Whether to disable the tqdm progress bar. Useful if you are doing the imputation on e.g. a high-performance computing cluster, where sometimes tqdm does not work correctly. If False, uses tqdm progress bar. If True, does not use tqdm. Defaults to False.
+
+        nlpca (bool): If True, then uses NLPCA model instead of UBP. Otherwise uses UBP. Defaults to False.
+
+        batch_size (int): Batch size per epoch to train the model with.
+
+        n_components (int): Number of components to use as the input data. Defaults to 3.
+
+        early_stopping_gen (int): Early stopping criterion for epochs. Training will stop if the loss (error) does not decrease past the tolerance level ``tol`` for ``early_stopping_gen`` epochs. Will save the optimal model and reload it once ``early_stopping_gen`` has been reached. Defaults to 50.
+
+        num_hidden_layers (int): Number of hidden layers to use in the model. Adjust if overfitting occurs. Defaults to 3.
+
+        hidden_layer_sizes (str, List[int], List[str], or int): Number of neurons to use in hidden layers. If string or a list of strings is supplied, the strings must be either "midpoint", "sqrt", or "log2". "midpoint" will calculate the midpoint as ``(n_features + n_components) / 2``. If "sqrt" is supplied, the square root of the number of features will be used to calculate the output units. If "log2" is supplied, the units will be calculated as ``log2(n_features)``. hidden_layer_sizes will calculate and set the number of output units for each hidden layer. If one string or integer is supplied, the model will use the same number of output units for each hidden layer. If a list of integers or strings is supplied, the model will use the values supplied in the list, which can differ. The list length must be equal to the ``num_hidden_layers``. Defaults to "midpoint".
+
+        optimizer (str): The optimizer to use with gradient descent. Possible value include: "adam", "sgd", and "adagrad" are supported. See tf.keras.optimizers for more info. Defaults to "adam".
+
+        hidden_activation (str): The activation function to use for the hidden layers. See tf.keras.activations for more info. Commonly used activation functions include "elu", "relu", and "sigmoid". Defaults to "elu".
+
+        learning_rate (float): The learning rate for the optimizers. Adjust if the loss is learning too slowly. Defaults to 0.1.
+
+        max_epochs (int): Maximum number of epochs to run if the ``early_stopping_gen`` criterion is not met.
+
+        tol (float): Tolerance level to use for the early stopping criterion. If the loss does not improve past the tolerance level after ``early_stopping_gen`` epochs, then training will halt. Defaults to 1e-3.
+
+        weights_initializer (str): Initializer to use for the model weights. See tf.keras.initializers for more info. Defaults to "glorot_normal".
+
+        l1_penalty (float): L1 regularization penalty to apply to reduce overfitting. Defaults to 0.01.
+
+        l2_penalty (float) L2 regularization penalty to apply to reduce overfitting. Defaults to 0.01.
+    """
+
     def __init__(
         self,
         *,
@@ -534,7 +670,6 @@ class ImputeUBP(Impute):
         weights_initializer="glorot_normal",
         l1_penalty=0.01,
         l2_penalty=0.01,
-        dropout_probability=0.2,
         **kwargs,
     ):
 
@@ -573,7 +708,6 @@ class ImputeUBP(Impute):
         self.weights_initializer = weights_initializer
         self.l1_penalty = l1_penalty
         self.l2_penalty = l2_penalty
-        self.dropout_probability = dropout_probability
 
         # Get number of hidden layers
         self.df = None
@@ -639,6 +773,14 @@ class ImputeUBP(Impute):
             print(self.df_scores)
 
     def set_optimizer(self):
+        """Set optimizer to use.
+
+        Return:
+            tf.keras.optimizers: Initialized optimizer.
+
+        Raises:
+            ValueError: Unsupported optimizer specified.
+        """
         if self.optimizer == "adam":
             return tf.keras.optimizers.Adam(learning_rate=self.initial_eta)
         elif self.optimizer == "sgd":
@@ -653,6 +795,14 @@ class ImputeUBP(Impute):
 
     @timer
     def fit_predict(self, input_data):
+        """Train a UBP or NLPCA model and predict the output.
+
+        Args:
+            input_data (numpy.ndarray, pandas.DataFrame, or List[List[int]]): Input data of shape (n_samples, n_features).
+
+        Returns:
+            pandas.DataFrame: Imputation predictions.
+        """
         if isinstance(input_data, pd.DataFrame):
             X = input_data.to_numpy()
         elif isinstance(input_data, list):
@@ -746,6 +896,8 @@ class ImputeUBP(Impute):
             ):
                 # While stopping criterion not met.
 
+                # Train per epoch
+                # s is error (loss)
                 s = self._train_epoch(models, n_batches, phase=phase)
 
                 self.num_epochs += 1
@@ -1008,6 +1160,17 @@ class ImputeUBP(Impute):
         return model
 
     def _validate_hidden_layers(self, hidden_layer_sizes, num_hidden_layers):
+        """Validate hidden_layer_sizes and verify that it is in the correct format.
+
+        Args:
+            hidden_layer_sizes (str, int, List[str], or List[int]): Output units for all the hidden layers.
+
+            num_hidden_layers (int): Number of hidden layers to use.
+
+        Returns:
+            List[int] or List[str]: List of hidden layer sizes.
+            int: Number of hidden layers to use.
+        """
         if isinstance(hidden_layer_sizes, (str, int)):
             hidden_layer_sizes = [hidden_layer_sizes] * num_hidden_layers
 
@@ -1036,17 +1199,28 @@ class ImputeUBP(Impute):
         return hidden_layer_sizes, num_hidden_layers
 
     def _init_weights(self, dim1, dim2, w_mean=0, w_stddev=0.01):
+        """Initialize random weights to use with the model.
+
+        Args:
+            dim1 (int): Size of first dimension.
+
+            dim2 (int): Size of second dimension.
+
+            w_mean (float, optional): Mean of normal distribution. Defaults to 0.
+
+            w_stddev (float, optional): Standard deviation of normal distribution. Defaults to 0.01.
+        """
         # Get reduced-dimension dataset.
         return np.random.normal(loc=w_mean, scale=w_stddev, size=(dim1, dim2))
 
     def _encode_onehot(self, X):
-        """[Convert 012-encoded data to one-hot encodings]
+        """Convert 012-encoded data to one-hot encodings.
 
         Args:
-            X ([numpy.ndarray]): [Input array with 012-encoded data and -9 as the missing data value]
+            X (numpy.ndarray): Input array with 012-encoded data and -9 as the missing data value.
 
         Returns:
-            [pandas.DataFrame]: [One-hot encoded data, ignoring missing values (np.nan)]
+            pandas.DataFrame: One-hot encoded data, ignoring missing values (np.nan).
         """
         Xt = np.zeros(shape=(X.shape[0], X.shape[1], 3))
         mappings = {
@@ -1107,14 +1281,15 @@ class ImputeUBP(Impute):
         self.data[missing_mask] = [-1, -1, -1]
 
     def _create_missing_mask(self):
-        """[Creates a missing data mask with boolean values]
+        """Creates a missing data mask with boolean values.
 
         Returns:
-            [numpy.ndarray(bool)]: [Boolean mask of missing values, with True corresponding to a missing data point]
+            numpy.ndarray(bool): Boolean mask of missing values, with True corresponding to a missing data point.
         """
         return np.isnan(self.data).all(axis=2)
 
     def initialise_parameters(self):
+        """Initialize important parameters."""
         self.current_eta = self.initial_eta
         self.s = 0
         self.s_prime = np.inf
