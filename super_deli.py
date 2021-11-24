@@ -267,7 +267,7 @@ def main():
             cv=3,
             hidden_activation="elu",
             hidden_layer_sizes="midpoint",
-            validation_only=0.3,
+            validation_only=None,
             num_hidden_layers=1,
             nlpca=True,
         )

@@ -15,6 +15,8 @@ from memory_profiler import memory_usage
 import matplotlib.pylab as plt
 import seaborn as sns
 
+from sklearn.model_selection import train_test_split
+
 # Ignore warnings, but still print errors.
 # Set to 0 for debugging, 2 to ignore warnings.
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"  # or any {'0', '1', '2', '3'}
@@ -122,6 +124,30 @@ class NeuralNetwork:
 
         loss_fn = tf.keras.losses.CategoricalCrossentropy()
         return loss_fn(y_true_masked, y_pred_masked)
+
+    def categorical_accuracy_masked(self, y_true, y_pred):
+        y_true_masked = tf.boolean_mask(
+            y_true, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
+        )
+
+        y_pred_masked = tf.boolean_mask(
+            y_pred, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
+        )
+
+        return tf.keras.metrics.categorical_accuracy(
+            y_true_masked, y_pred_masked
+        )
+
+    def categorical_mse_masked(self, y_true, y_pred):
+        y_true_masked = tf.boolean_mask(
+            y_true, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
+        )
+
+        y_pred_masked = tf.boolean_mask(
+            y_pred, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
+        )
+
+        return mse(y_true_masked, y_pred_masked)
 
     def validate_batch_size(self, X, batch_size):
         """Validate the batch size, and adjust as necessary.
@@ -381,10 +407,12 @@ class ImputeVAE(Impute, NeuralNetwork):
 
         Args:
             X (numpy.ndarray): Input one-hot encoded data.
+
             complete_encoded (numpy.ndarray): Output one-hot encoded data with the maximum predicted values for each class set to 1.0.
 
         Returns:
             numpy.ndarray: Imputed one-hot encoded values.
+
             pandas.DataFrame: One-hot encoded pandas DataFrame with no missing values.
         """
 
@@ -742,6 +770,7 @@ class ImputeUBP(Impute, NeuralNetwork):
         # Get number of hidden layers
         self.df = None
         self.data = None
+        self.data_test = None
         self.num_classes = 3
 
         if genotype_data is None:
@@ -847,8 +876,6 @@ class ImputeUBP(Impute, NeuralNetwork):
             )
 
         self.data = self._encode_onehot(X)
-        self.data = self.data
-
         self.fit()
         Xpred = self.predict(self.V_latent)
         return pd.DataFrame(Xpred)
@@ -862,7 +889,7 @@ class ImputeUBP(Impute, NeuralNetwork):
         Returns:
             numpy.ndarray: Imputation predictions.
         """
-        pred = self.model(self.V_latent, training=False)
+        pred = self.model(V, training=False)
         Xprob = pred.numpy()
         Xt = np.apply_along_axis(self.mle, axis=2, arr=Xprob)
         Xdecoded = np.argmax(Xt, axis=2)
@@ -961,6 +988,7 @@ class ImputeUBP(Impute, NeuralNetwork):
                             models[phase - 1].save(
                                 model_dir, include_optimizer=False
                             )
+                            self.checkpoint = self.num_epochs
                         else:
                             counter = 0
                             self.s_prime = s
@@ -1024,6 +1052,8 @@ class ImputeUBP(Impute, NeuralNetwork):
         model = models[phase - 1]
 
         losses = list()
+        val_loss = list()
+        val_acc = list()
         for batch_idx in range(n_batches):
             if phase == 3 and not self.nlpca:
                 # Set the refined weights from model 2.
@@ -1119,6 +1149,11 @@ class ImputeUBP(Impute, NeuralNetwork):
             return loss, x
         elif phase == 2:
             return loss, model.get_weights()
+
+    def _evaluate(self, x_val, y_val, model):
+        val_loss = model(x_val)
+        val_acc_metric = self.categorical_accuracy_masked(y_val, val_loss)
+        return val_loss, val_acc_metric
 
     def _build_ubp(self, phase=3, num_classes=3):
         """Create and train a UBP neural network model.
@@ -1324,3 +1359,4 @@ class ImputeUBP(Impute, NeuralNetwork):
         self.final_s = 0
         self.s_prime = np.inf
         self.num_epochs = 0
+        self.checkpoint = 1
