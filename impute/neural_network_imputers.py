@@ -15,8 +15,6 @@ from memory_profiler import memory_usage
 import matplotlib.pylab as plt
 import seaborn as sns
 
-from sklearn.model_selection import train_test_split
-
 # Ignore warnings, but still print errors.
 # Set to 0 for debugging, 2 to ignore warnings.
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"  # or any {'0', '1', '2', '3'}
@@ -770,7 +768,6 @@ class ImputeUBP(Impute, NeuralNetwork):
         # Get number of hidden layers
         self.df = None
         self.data = None
-        self.data_test = None
         self.num_classes = 3
 
         if genotype_data is None:
@@ -995,6 +992,7 @@ class ImputeUBP(Impute, NeuralNetwork):
 
                     else:
                         criterion_met = True
+                        self.checkpoint = self.num_epochs
 
                 elif criterion_met and self.num_epochs > 1:
                     if s < self.s_prime:
@@ -1022,7 +1020,7 @@ class ImputeUBP(Impute, NeuralNetwork):
                             self.final_s = self.s_prime
                             break
 
-            print(f"Number of epochs used to train: {self.num_epochs}")
+            print(f"Number of epochs used to train: {self.checkpoint}")
             print(f"Final MSE: {self.final_s}")
 
         self.model = models[2]
@@ -1149,11 +1147,6 @@ class ImputeUBP(Impute, NeuralNetwork):
             return loss, x
         elif phase == 2:
             return loss, model.get_weights()
-
-    def _evaluate(self, x_val, y_val, model):
-        val_loss = model(x_val)
-        val_acc_metric = self.categorical_accuracy_masked(y_val, val_loss)
-        return val_loss, val_acc_metric
 
     def _build_ubp(self, phase=3, num_classes=3):
         """Create and train a UBP neural network model.

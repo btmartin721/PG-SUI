@@ -217,7 +217,7 @@ def main():
         #     cv=3,
         #     prefix=args.prefix,
         #     disable_progressbar=True,
-        #     validation_only=0.3,
+        #     validation_only=None,
         #     initial_strategy="populations",
         # )
 
@@ -267,7 +267,7 @@ def main():
             cv=3,
             hidden_activation="elu",
             hidden_layer_sizes="midpoint",
-            validation_only=None,
+            validation_only=0.3,
             num_hidden_layers=1,
             nlpca=True,
         )
