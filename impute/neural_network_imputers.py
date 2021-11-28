@@ -320,7 +320,7 @@ class ImputeVAE(Impute, NeuralNetwork):
         # fout.write(f"{max(mem_usage)}")
         # sys.exit()
 
-        self.imputed_df = self.fit_predict(X)
+        self.imputed_df = pd.DataFrame(self.fit_predict(X))
         print("\nDone!\n")
 
         self.imputed_df = self.imputed_df.astype(np.float)
@@ -358,7 +358,7 @@ class ImputeVAE(Impute, NeuralNetwork):
             pd.DataFrame(data=imputed_enc, columns=dummy_df.columns)
         )
 
-        return imputed_df
+        return imputed_df.to_numpy()
 
     def fit(self, batch_size=256, train_epochs=100):
         """Train a variational autoencoder model to impute missing data.
@@ -709,6 +709,7 @@ class ImputeUBP(Impute, NeuralNetwork):
         cv=5,
         initial_strategy="populations",
         validation_only=0.3,
+        write_output=True,
         disable_progressbar=False,
         nlpca=False,
         batch_size=32,
@@ -751,6 +752,7 @@ class ImputeUBP(Impute, NeuralNetwork):
 
         self.cv = cv
         self.validation_only = validation_only
+        self.write_output = write_output
         self.disable_progressbar = disable_progressbar
         self.nlpca = nlpca
         self.n_components = n_components
@@ -766,7 +768,6 @@ class ImputeUBP(Impute, NeuralNetwork):
         self.l2_penalty = l2_penalty
 
         # Get number of hidden layers
-        self.df = None
         self.data = None
         self.num_classes = 3
 
@@ -817,14 +818,15 @@ class ImputeUBP(Impute, NeuralNetwork):
         # fout.write(f"{max(mem_usage)}")
         # sys.exit()
 
-        self.imputed_df = self.fit_predict(self.X)
+        self.imputed_df = pd.DataFrame(self.fit_predict(self.X), dtype=np.float)
 
-        self.imputed_df = self.imputed_df.astype(np.float)
+        # self.imputed_df = self.imputed_df.astype(np.float)
         self.imputed_df = self.imputed_df.astype("Int8")
 
         self._validate_imputed(self.imputed_df)
 
-        self.write_imputed(self.imputed_df)
+        if self.write_output:
+            self.write_imputed(self.imputed_df)
 
         if self.df_scores is not None:
             print(self.df_scores)
@@ -874,8 +876,7 @@ class ImputeUBP(Impute, NeuralNetwork):
 
         self.data = self._encode_onehot(X)
         self.fit()
-        Xpred = self.predict(self.V_latent)
-        return pd.DataFrame(Xpred)
+        return self.predict(self.V_latent)
 
     def predict(self, V):
         """Predict imputations based on a trained UBP or NLPCA model.

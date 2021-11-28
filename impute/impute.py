@@ -1316,18 +1316,26 @@ class Impute:
         df_unknown_slice = df_unknown[cols]
         df_missing_mask = df_unknown_slice.isnull()
 
-        df_stg = df_unknown.copy()
-
         # Neural networks
         if self.clf == "VAE" or self.clf == "UBP":
+            df_stg = df_unknown_slice.copy()
+
             for col in df_stg.columns:
                 df_stg[col] = df_stg[col].replace({pd.NA: np.nan})
             df_stg.fillna(-9, inplace=True)
 
-            df_imp = self.fit_predict(df_stg.to_numpy())
-            df_imp = df_imp.astype(np.float)
+            df_imp = pd.DataFrame(
+                self.fit_predict(df_stg.to_numpy()),
+                columns=cols,
+                dtype="int64",
+            )
+
+            # df_imp = df_imp.astype(np.float)
 
         else:
+            # Using IterativeImputer
+            df_stg = df_unknown.copy()
+
             imputer = self._define_iterative_imputer(
                 clf,
                 self.logfilepath,
