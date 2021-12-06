@@ -2,6 +2,7 @@
 import os
 import sys
 import math
+import random
 from collections import defaultdict
 
 # Third-party Imports
@@ -22,6 +23,8 @@ os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"  # or any {'0', '1', '2', '3'}
 # Neural network imports
 import tensorflow as tf
 from tensorflow.python.util import deprecation
+
+import keras.backend as K
 from keras.objectives import mse
 from keras.models import Sequential
 from keras.layers.core import Dropout, Dense, Lambda
@@ -656,6 +659,106 @@ class ImputeVAE(Impute, NeuralNetwork):
         return np.isnan(self.data)
 
 
+class ImputeUBP_NLPCA:
+    """Class to impute missing data using unsupervised backpropagation or non-linear principal component analysis (NLPCA).
+
+    Args:
+        genotype_data (GenotypeData object or None): Input GenotypeData object. Argument is required. Defaults to None.
+
+        prefix (str): Prefix for output files. Defaults to "output".
+
+        cv (int): Number of cross-validation replicates to perform. Only used if ``validation_only`` is not None. Defaults to 5.
+
+        initial_strategy (str): Initial strategy to impute missing data with for validation. Possible options include: "populations", "most_frequent", and "phylogeny", where "populations" imputes by the mode of each population at each site, "most_frequent" imputes by the overall mode of each site, and "phylogeny" uses an input phylogeny to inform the imputation. "populations" requires a population map file as input in the GenotypeData object, and "phylogeny" requires an input phylogeny and Rate Matrix Q (also instantiated in the GenotypeData object). Defaults to "populations".
+
+        validation_only (float or None): Proportion of sites to use for the validation. If ``validation_only`` is None, then does not perform validation. Defaults to 0.2.
+
+        disable_progressbar (bool): Whether to disable the tqdm progress bar. Useful if you are doing the imputation on e.g. a high-performance computing cluster, where sometimes tqdm does not work correctly. If False, uses tqdm progress bar. If True, does not use tqdm. Defaults to False.
+
+        nlpca (bool): If True, then uses NLPCA model instead of UBP. Otherwise uses UBP. Defaults to False.
+
+        batch_size (int): Batch size per epoch to train the model with.
+
+        n_components (int): Number of components to use as the input data. Defaults to 3.
+
+        early_stopping_gen (int): Early stopping criterion for epochs. Training will stop if the loss (error) does not decrease past the tolerance level ``tol`` for ``early_stopping_gen`` epochs. Will save the optimal model and reload it once ``early_stopping_gen`` has been reached. Defaults to 50.
+
+        num_hidden_layers (int): Number of hidden layers to use in the model. Adjust if overfitting occurs. Defaults to 3.
+
+        hidden_layer_sizes (str, List[int], List[str], or int): Number of neurons to use in hidden layers. If string or a list of strings is supplied, the strings must be either "midpoint", "sqrt", or "log2". "midpoint" will calculate the midpoint as ``(n_features + n_components) / 2``. If "sqrt" is supplied, the square root of the number of features will be used to calculate the output units. If "log2" is supplied, the units will be calculated as ``log2(n_features)``. hidden_layer_sizes will calculate and set the number of output units for each hidden layer. If one string or integer is supplied, the model will use the same number of output units for each hidden layer. If a list of integers or strings is supplied, the model will use the values supplied in the list, which can differ. The list length must be equal to the ``num_hidden_layers``. Defaults to "midpoint".
+
+        optimizer (str): The optimizer to use with gradient descent. Possible value include: "adam", "sgd", and "adagrad" are supported. See tf.keras.optimizers for more info. Defaults to "adam".
+
+        hidden_activation (str): The activation function to use for the hidden layers. See tf.keras.activations for more info. Commonly used activation functions include "elu", "relu", and "sigmoid". Defaults to "elu".
+
+        learning_rate (float): The learning rate for the optimizers. Adjust if the loss is learning too slowly. Defaults to 0.1.
+
+        max_epochs (int): Maximum number of epochs to run if the ``early_stopping_gen`` criterion is not met.
+
+        tol (float): Tolerance level to use for the early stopping criterion. If the loss does not improve past the tolerance level after ``early_stopping_gen`` epochs, then training will halt. Defaults to 1e-3.
+
+        weights_initializer (str): Initializer to use for the model weights. See tf.keras.initializers for more info. Defaults to "glorot_normal".
+
+        l1_penalty (float): L1 regularization penalty to apply to reduce overfitting. Defaults to 0.01.
+
+        l2_penalty (float) L2 regularization penalty to apply to reduce overfitting. Defaults to 0.01.
+    """
+
+    def __init__(
+        self,
+        *,
+        genotype_data=None,
+        X=None,
+        prefix="output",
+        cv=5,
+        initial_strategy="populations",
+        validation_only=0.3,
+        write_output=True,
+        disable_progressbar=False,
+        nlpca=False,
+        batch_size=32,
+        n_components=3,
+        early_stopping_gen=50,
+        num_hidden_layers=3,
+        hidden_layer_sizes="midpoint",
+        optimizer="adam",
+        hidden_activation="elu",
+        learning_rate=0.1,
+        max_epochs=1000,
+        tol=1e-3,
+        weights_initializer="glorot_normal",
+        l1_penalty=0.01,
+        l2_penalty=0.01,
+        **kwargs,
+    ):
+
+        # Get local variables into dictionary object
+        kwargs = locals()
+
+        if genotype_data is None and X is None and test_cat is None:
+            raise TypeError("genotype_data or X must be supplied")
+
+        elif genotype_data is not None and X is not None:
+            raise TypeError("genotype_data and X cannot both be defined.")
+
+        # For testing purposes.
+        if test_cat is not None:
+            X = test_cat.copy()
+        if genotype_data is not None:
+            X = genotype_data.genotypes_nparray
+
+        ubp = ImputeUBP(kwargs)
+        ubp.fit_predict(X)
+
+        # imputer = Impute(self.clf, self.clf_type, kwargs)
+
+        self.imputed, self.best_params = imputer.fit_predict(
+            genotype_data.genotypes_df
+        )
+
+        imputer.write_imputed(self.imputed)
+
+
 class ImputeUBP(Impute, NeuralNetwork):
     """Class to impute missing data using unsupervised backpropagation or non-linear principal component analysis (NLPCA).
 
@@ -778,33 +881,27 @@ class ImputeUBP(Impute, NeuralNetwork):
 
         # For testing purposes.
         if test_cat is not None:
-            self.X = test_cat.copy()
+            X = test_cat.copy()
         else:
-            self.X = genotype_data.genotypes_nparray
+            X = genotype_data.genotypes_nparray
 
         (
             self.hidden_layer_sizes,
             num_hidden_layers,
         ) = self._validate_hidden_layers(hidden_layer_sizes, num_hidden_layers)
 
-        self.hidden_layer_sizes = self._get_hidden_layer_sizes(
-            self.X.shape[1], self.n_components, self.hidden_layer_sizes
-        )
+        # Define random reduced-dimensionality input to refine.
+        self.V_latent = self._init_weights(X.shape[0], self.n_components)
 
-        self.batch_size = self.validate_batch_size(self.X, batch_size)
-        self.V_latent = self._init_weights(self.X.shape[0], self.n_components)
+        self.batch_size = self.validate_batch_size(X, batch_size)
+        self.opt = self.set_optimizer()
         self.phase2_model = list()
         self.observed_mask = None
-        self.num_total_epochs = 0
-        self.model = None
-        self.opt = self.set_optimizer()
 
         if self.validation_only is not None:
             print("\nEstimating validation scores...")
 
-            self.df_scores = self._imputer_validation(
-                pd.DataFrame(self.X), self.clf
-            )
+            self.df_scores = self._imputer_validation(pd.DataFrame(X), self.clf)
 
             print("\nDone!\n")
 
@@ -818,7 +915,7 @@ class ImputeUBP(Impute, NeuralNetwork):
         # fout.write(f"{max(mem_usage)}")
         # sys.exit()
 
-        self.imputed_df = pd.DataFrame(self.fit_predict(self.X), dtype=np.float)
+        self.imputed_df = pd.DataFrame(self.fit_predict(X), dtype=np.float)
 
         # self.imputed_df = self.imputed_df.astype(np.float)
         self.imputed_df = self.imputed_df.astype("Int8")
@@ -830,6 +927,17 @@ class ImputeUBP(Impute, NeuralNetwork):
 
         if self.df_scores is not None:
             print(self.df_scores)
+
+    def reset_seeds(self):
+        seed1 = np.random.randint(1, 1e6)
+        seed2 = np.random.randint(1, 1e6)
+        seed3 = np.random.randint(1, 1e6)
+        np.random.seed(seed1)
+        random.seed(seed2)
+        if tf.__version__[0] == "2":
+            tf.random.set_seed(seed3)
+        else:
+            tf.set_random_seed(seed3)
 
     def set_optimizer(self):
         """Set optimizer to use.
@@ -874,31 +982,49 @@ class ImputeUBP(Impute, NeuralNetwork):
                 f"list(list(int)), but got {type(input_data)}"
             )
 
-        self.data = self._encode_onehot(X)
-        self.fit()
-        return self.predict(self.V_latent)
+        self.hidden_layer_sizes = self._get_hidden_layer_sizes(
+            X.shape[1], self.n_components, self.hidden_layer_sizes
+        )
 
-    def predict(self, V):
+        self.data = self._encode_onehot(X)
+
+        model = self.fit()
+        Xpred = self.predict(self.V_latent, X, model)
+
+        del model
+        K.clear_session()
+        tf.compat.v1.reset_default_graph()
+
+        return Xpred
+
+    def predict(self, V, X, model):
         """Predict imputations based on a trained UBP or NLPCA model.
 
         Args:
             V (numpy.ndarray(float)): Refined reduced-dimensional input for predicting imputations.
 
+            X (numpy.ndarray(float)): Original data to impute.
+
+            model_mlp_phase3 (tf.keras.models.Sequential): Refined model (phase 3 if doing UBP).
+
         Returns:
             numpy.ndarray: Imputation predictions.
         """
-        pred = self.model(V, training=False)
+        pred = model(V, training=False)
         Xprob = pred.numpy()
         Xt = np.apply_along_axis(self.mle, axis=2, arr=Xprob)
         Xdecoded = np.argmax(Xt, axis=2)
         Xpred = np.zeros((Xdecoded.shape[0], Xdecoded.shape[1]))
+        print(Xpred.shape[1])
+        print(Xdecoded.shape[1])
         for idx, row in enumerate(Xpred):
             imputed_vals = np.zeros(len(row))
             known_vals = np.zeros(len(row))
             imputed_idx = np.where(self.observed_mask[idx] == 0)
             known_idx = np.nonzero(self.observed_mask[idx])
             Xpred[idx, imputed_idx] = Xdecoded[idx, imputed_idx]
-            Xpred[idx, known_idx] = self.X[idx, known_idx]
+            Xpred[idx, known_idx] = X[idx, known_idx]
+        del model_mlp_phase3
         return Xpred
 
     def fit(self):
@@ -919,6 +1045,11 @@ class ImputeUBP(Impute, NeuralNetwork):
         self.observed_mask = ~missing_mask
         self.fill(missing_mask, -1, self.num_classes)
 
+        # Reset model states
+        K.clear_session()
+        tf.compat.v1.reset_default_graph()
+        self.reset_seeds()
+
         # Define neural network models.
         if self.nlpca:
             # If using NLPCA model.
@@ -927,14 +1058,21 @@ class ImputeUBP(Impute, NeuralNetwork):
             start_phase = 3
         else:
             # Using UBP model over three phases
-            model_single_layer = self._build_ubp(phase=1)
-            model_mlp_phase2 = self._build_ubp(phase=2)
+            phase1model = self._build_ubp(phase=1)
+            phase2model = self._build_ubp(phase=2)
+            model_single_layer = tf.keras.models.clone_model(phase1model)
+            model_mlp_phase2 = tf.keras.models.clone_model(phase2model)
+            del phase1model
+            del phase2model
             start_phase = 1
 
-        model_mlp_phase3 = self._build_ubp(phase=3)
+        phase3model = self._build_ubp(phase=3)
+        model_mlp_phase3 = tf.keras.models.clone_model(phase3model)
+        del phase3model
 
         # Phase 1, Phase 2, Phase 3
-        models = [model_single_layer, model_mlp_phase2, model_mlp_phase3]
+        # models = list()
+        # models = [model_single_layer, model_mlp_phase2, model_mlp_phase3]
 
         self._initialise_parameters()
 
@@ -947,10 +1085,12 @@ class ImputeUBP(Impute, NeuralNetwork):
 
         if self.nlpca:
             model_dir = "optimal_nlpca_model"
-        else:
-            model_dir = "optimal_ubp_model"
 
         for phase in range(start_phase, 4):
+
+            if not self.nlpca:
+                model_dir = f"optimal_ubp_model_phase{phase}"
+
             self.num_epochs = 0
 
             while (
@@ -961,7 +1101,13 @@ class ImputeUBP(Impute, NeuralNetwork):
 
                 # Train per epoch
                 # s is error (loss)
-                s = self._train_epoch(models, n_batches, phase=phase)
+                s = self._train_epoch(
+                    model_single_layer,
+                    model_mlp_phase2,
+                    model_mlp_phase3,
+                    n_batches,
+                    phase=phase,
+                )
 
                 self.num_epochs += 1
 
@@ -983,9 +1129,18 @@ class ImputeUBP(Impute, NeuralNetwork):
                         s_delta = abs(self.s_prime - s)
                         if s_delta <= self.tol:
                             criterion_met = True
-                            models[phase - 1].save(
-                                model_dir, include_optimizer=False
-                            )
+                            if phase == 1:
+                                model_single_layer.save(
+                                    model_dir, include_optimizer=False
+                                )
+                            elif phase == 2:
+                                model_mlp_phase2.save(
+                                    model_dir, include_optimizer=False
+                                )
+                            elif phase == 3:
+                                model_mlp_phase3.save(
+                                    model_dir, include_optimizer=False
+                                )
                             self.checkpoint = self.num_epochs
                         else:
                             counter = 0
@@ -1006,31 +1161,66 @@ class ImputeUBP(Impute, NeuralNetwork):
                             counter += 1
                             if counter == self.early_stopping_gen:
                                 counter = 0
-                                models[phase - 1] = tf.keras.models.load_model(
-                                    model_dir, compile=False
-                                )
+                                if phase == 1:
+                                    model_single_layer = (
+                                        tf.keras.models.load_model(
+                                            model_dir, compile=False
+                                        )
+                                    )
+                                elif phase == 2:
+                                    model_mlp_phase2 = (
+                                        tf.keras.models.load_model(
+                                            model_dir, compile=False
+                                        )
+                                    )
+                                elif phase == 3:
+                                    model_mlp_phase3 = (
+                                        tf.keras.models.load_model(
+                                            model_dir, compile=False
+                                        )
+                                    )
                                 self.final_s = self.s_prime
                                 break
                     else:
                         counter += 1
                         if counter == self.early_stopping_gen:
                             counter = 0
-                            models[phase - 1] = tf.keras.models.load_model(
-                                model_dir, compile=False
-                            )
+                            if phase == 1:
+                                model_single_layer = tf.keras.models.load_model(
+                                    model_dir, compile=False
+                                )
+                            elif phase == 2:
+                                model_mlp_phase2 = tf.keras.models.load_model(
+                                    model_dir, compile=False
+                                )
+                            elif phase == 3:
+                                model_mlp_phase3 = tf.keras.models.load_model(
+                                    model_dir, compile=False
+                                )
                             self.final_s = self.s_prime
                             break
 
             print(f"Number of epochs used to train: {self.checkpoint}")
             print(f"Final MSE: {self.final_s}")
 
-        self.model = models[2]
+        del model_single_layer
+        del model_mlp_phase2
 
-    def _train_epoch(self, models, n_batches, phase=3, num_classes=3):
+        return model_mlp_phase3
+
+    def _train_epoch(
+        self,
+        model_single_layer,
+        model_mlp_phase2,
+        model_mlp_phase3,
+        n_batches,
+        phase=3,
+        num_classes=3,
+    ):
         """Train UBP or NLPCA over one epoch.
 
         Args:
-            models (List[tf.keras.models.Sequential]): List of three keras models to train.
+            model (tf.keras.models.Sequential): Keras model to train.
 
             n_batches (int): Number of batches to train.
 
@@ -1048,15 +1238,13 @@ class ImputeUBP(Impute, NeuralNetwork):
         indices = np.arange(self.data.shape[0])
         np.random.shuffle(indices)
 
-        model = models[phase - 1]
-
         losses = list()
         val_loss = list()
         val_acc = list()
         for batch_idx in range(n_batches):
             if phase == 3 and not self.nlpca:
                 # Set the refined weights from model 2.
-                model.set_weights(self.phase2_model[batch_idx])
+                model_mlp_phase3.set_weights(self.phase2_model[batch_idx])
 
             batch_start = batch_idx * self.batch_size
             batch_end = (batch_idx + 1) * self.batch_size
@@ -1065,23 +1253,35 @@ class ImputeUBP(Impute, NeuralNetwork):
 
             # Initialize variable v as tensorflow variable.
             if phase != 2:
-                self.v = tf.Variable(
+                v = tf.Variable(
                     tf.zeros([x_batch.shape[0], self.n_components]),
                     trainable=True,
                     dtype=tf.float32,
                 )
 
             elif phase == 2:
-                self.v = tf.Variable(
+                v = tf.Variable(
                     tf.zeros([x_batch.shape[0], self.n_components]),
                     trainable=False,
                     dtype=tf.float32,
                 )
 
             # Assign current batch to v.
-            self.v.assign(v_batch)
+            v.assign(v_batch)
 
-            loss, refined = self._train_on_batch(self.v, x_batch, model, phase)
+            if phase == 1:
+                loss, refined = self._train_on_batch(
+                    v, x_batch, model_single_layer, phase
+                )
+            elif phase == 2:
+                loss, refined = self._train_on_batch(
+                    v, x_batch, model_mlp_phase2, phase
+                )
+            elif phase == 3:
+                loss, refined = self._train_on_batch(
+                    v, x_batch, model_mlp_phase3, phase
+                )
+
             losses.append(loss.numpy())
 
             if phase != 2:
@@ -1108,7 +1308,7 @@ class ImputeUBP(Impute, NeuralNetwork):
 
             y (tf.Variable): Target variable to calculate loss.
 
-            model (keras.models.Sequential): Keras model to use.
+            model (tf.keras.models.Sequential): Keras model to use.
 
             phase (int): UBP phase to run.
 
