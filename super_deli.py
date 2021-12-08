@@ -267,7 +267,7 @@ def main():
             hidden_layer_sizes="midpoint",
             validation_only=0.3,
             num_hidden_layers=1,
-            nlpca=True,
+            nlpca=False,
         )
 
         # ubp = ImputeUBP(

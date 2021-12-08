@@ -1,5 +1,6 @@
 # Standard Library Imports
 import os
+import shutil
 import sys
 import math
 import random
@@ -886,7 +887,6 @@ class UBP(NeuralNetwork):
             pandas.DataFrame: Imputation predictions.
         """
         X = self.validate_input(input_data)
-        print(X.shape)
 
         # Define random reduced-dimensionality input to refine.
         self.V_latent = self._init_weights(X.shape[0], self.n_components)
@@ -920,21 +920,20 @@ class UBP(NeuralNetwork):
         Returns:
             numpy.ndarray: Imputation predictions.
         """
-        pred = model(V, training=False)
-        Xprob = pred.numpy()
-        print(Xprob.shape)
+        predictions = model(V, training=False)
+        Xprob = predictions.numpy()
         Xt = np.apply_along_axis(self.mle, axis=2, arr=Xprob)
-        Xdecoded = np.argmax(Xt, axis=2)
-        Xpred = np.zeros((Xdecoded.shape[0], Xdecoded.shape[1]))
-        for idx, row in enumerate(Xpred):
+        Xpred = np.argmax(Xt, axis=2)
+        Xdecoded = np.zeros((Xpred.shape[0], Xpred.shape[1]))
+        for idx, row in enumerate(Xdecoded):
             imputed_vals = np.zeros(len(row))
             known_vals = np.zeros(len(row))
             imputed_idx = np.where(self.observed_mask[idx] == 0)
             known_idx = np.nonzero(self.observed_mask[idx])
-            Xpred[idx, imputed_idx] = Xdecoded[idx, imputed_idx]
-            Xpred[idx, known_idx] = X[idx, known_idx]
+            Xdecoded[idx, imputed_idx] = Xpred[idx, imputed_idx]
+            Xdecoded[idx, known_idx] = X[idx, known_idx]
         del model
-        return Xpred
+        return Xdecoded
 
     def fit(self):
         """Train an unsupervised backpropagation (UBP) or NLPCA model.
@@ -965,6 +964,7 @@ class UBP(NeuralNetwork):
             model_single_layer = None
             model_mlp_phase2 = None
             start_phase = 3
+
         else:
             # Using UBP model over three phases
             phase1model = self._build_ubp(phase=1)
@@ -979,32 +979,34 @@ class UBP(NeuralNetwork):
         model_mlp_phase3 = tf.keras.models.clone_model(phase3model)
         del phase3model
 
-        # Phase 1, Phase 2, Phase 3
-        # models = list()
-        # models = [model_single_layer, model_mlp_phase2, model_mlp_phase3]
-
-        self._initialise_parameters()
-
         # Number of batches based on rows in X and V_latent.
         n_batches = int(np.ceil(self.data.shape[0] / self.batch_size))
 
-        counter = 0
-        criterion_met = False
-        s_delta = None
-
         if self.nlpca:
-            model_dir = "optimal_nlpca_model"
+            model_dir3 = "optimal_nlpca"
+        else:
+            model_dir1 = f"{self.prefix}_optimal_ubp_phase1"
+            model_dir2 = f"{self.prefix}_optimal_ubp_phase2"
+            model_dir3 = f"{self.prefix}_optimal_ubp_phase3"
+
+        self._remove_dir(model_dir1)
+        self._remove_dir(model_dir2)
+        self._remove_dir(model_dir3)
+
+        # self._initialise_parameters()
 
         for phase in range(start_phase, 4):
 
-            if not self.nlpca:
-                model_dir = f"optimal_ubp_model_phase{phase}"
-
-            self.num_epochs = 0
+            s_delta = None
+            s_prime = np.inf
+            final_s = 0
+            num_epochs = 0
+            counter = 0
+            checkpoint = 1
+            criterion_met = False
 
             while (
-                counter < self.early_stop_gen
-                and self.num_epochs <= self.max_epochs
+                counter < self.early_stop_gen and num_epochs <= self.max_epochs
             ):
                 # While stopping criterion not met.
 
@@ -1018,14 +1020,14 @@ class UBP(NeuralNetwork):
                     phase=phase,
                 )
 
-                self.num_epochs += 1
+                num_epochs += 1
 
-                if self.num_epochs % 50 == 0:
-                    print(f"Epoch {self.num_epochs}...")
+                if num_epochs % 50 == 0:
+                    print(f"Epoch {num_epochs}...")
                     print(f"Observed MSE: {s}")
 
-                if self.num_epochs == 1:
-                    self.s_prime = s
+                if num_epochs == 1:
+                    s_prime = s
 
                     if self.nlpca:
                         print("\nBeginning NLPCA training...\n")
@@ -1033,38 +1035,68 @@ class UBP(NeuralNetwork):
                         print(f"\nBeginning UBP Phase {phase} training...\n")
                     print(f"Initial MSE: {s}")
 
-                if not criterion_met and self.num_epochs > 1:
-                    if s < self.s_prime:
-                        s_delta = abs(self.s_prime - s)
+                if not criterion_met and num_epochs > 1:
+                    if s < s_prime:
+                        s_delta = abs(s_prime - s)
                         if s_delta <= self.tol:
                             criterion_met = True
                             if phase == 1:
-                                model_single_layer.save(
-                                    model_dir, include_optimizer=False
+                                tf.keras.models.save_model(
+                                    model_single_layer,
+                                    model_dir1,
+                                    include_optimizer=False,
+                                    overwrite=True,
                                 )
                             elif phase == 2:
-                                model_mlp_phase2.save(
-                                    model_dir, include_optimizer=False
+                                tf.keras.models.save_model(
+                                    model_mlp_phase2,
+                                    model_dir2,
+                                    include_optimizer=False,
+                                    overwrite=True,
                                 )
                             elif phase == 3:
-                                model_mlp_phase3.save(
-                                    model_dir, include_optimizer=False
+                                tf.keras.models.save_model(
+                                    model_mlp_phase3,
+                                    model_dir3,
+                                    include_optimizer=False,
+                                    overwrite=True,
                                 )
-                            self.checkpoint = self.num_epochs
+                            checkpoint = num_epochs
                         else:
                             counter = 0
-                            self.s_prime = s
+                            s_prime = s
 
                     else:
+                        if phase == 1 and not os.path.isdir(model_dir1):
+                            tf.keras.models.save_model(
+                                model_single_layer,
+                                model_dir1,
+                                include_optimizer=False,
+                                overwrite=True,
+                            )
+                        elif phase == 2 and not os.path.isdir(model_dir2):
+                            tf.keras.models.save_model(
+                                model_mlp_phase2,
+                                model_dir2,
+                                include_optimizer=False,
+                                overwrite=True,
+                            )
+                        elif phase == 3 and not os.path.isdir(model_dir3):
+                            tf.keras.models.save_model(
+                                model_mlp_phase3,
+                                model_dir3,
+                                include_optimizer=False,
+                                overwrite=True,
+                            )
                         criterion_met = True
-                        self.checkpoint = self.num_epochs
+                        checkpoint = num_epochs
 
-                elif criterion_met and self.num_epochs > 1:
-                    if s < self.s_prime:
-                        s_delta = abs(self.s_prime - s)
+                elif criterion_met and num_epochs > 1:
+                    if s < s_prime:
+                        s_delta = abs(s_prime - s)
                         if s_delta > self.tol:
                             criterion_met = False
-                            self.s_prime = s
+                            s_prime = s
                             counter = 0
                         else:
                             counter += 1
@@ -1073,22 +1105,22 @@ class UBP(NeuralNetwork):
                                 if phase == 1:
                                     model_single_layer = (
                                         tf.keras.models.load_model(
-                                            model_dir, compile=False
+                                            model_dir1, compile=False
                                         )
                                     )
                                 elif phase == 2:
                                     model_mlp_phase2 = (
                                         tf.keras.models.load_model(
-                                            model_dir, compile=False
+                                            model_dir2, compile=False
                                         )
                                     )
                                 elif phase == 3:
                                     model_mlp_phase3 = (
                                         tf.keras.models.load_model(
-                                            model_dir, compile=False
+                                            model_dir3, compile=False
                                         )
                                     )
-                                self.final_s = self.s_prime
+                                final_s = s_prime
                                 break
                     else:
                         counter += 1
@@ -1096,21 +1128,25 @@ class UBP(NeuralNetwork):
                             counter = 0
                             if phase == 1:
                                 model_single_layer = tf.keras.models.load_model(
-                                    model_dir, compile=False
+                                    model_dir1, compile=False
                                 )
                             elif phase == 2:
                                 model_mlp_phase2 = tf.keras.models.load_model(
-                                    model_dir, compile=False
+                                    model_dir2, compile=False
                                 )
                             elif phase == 3:
                                 model_mlp_phase3 = tf.keras.models.load_model(
-                                    model_dir, compile=False
+                                    model_dir3, compile=False
                                 )
-                            self.final_s = self.s_prime
+                            final_s = s_prime
                             break
 
-            print(f"Number of epochs used to train: {self.checkpoint}")
-            print(f"Final MSE: {self.final_s}")
+            print(f"Number of epochs used to train: {checkpoint}")
+            print(f"Final MSE: {final_s}")
+
+        self._remove_dir(model_dir1)
+        self._remove_dir(model_dir2)
+        self._remove_dir(model_dir3)
 
         del model_single_layer
         del model_mlp_phase2
@@ -1137,7 +1173,6 @@ class UBP(NeuralNetwork):
 
             num_classes (int): Number of categorical classes to predict (three for 012 encoding). Defaults to 3.
         """
-
         if phase > 3:
             raise ValueError(
                 f"There can only be maximum 3 phases, but phase={phase}"
@@ -1257,6 +1292,12 @@ class UBP(NeuralNetwork):
             return loss, x
         elif phase == 2:
             return loss, model.get_weights()
+
+    def _remove_dir(self, dir_path):
+        try:
+            shutil.rmtree(dir_path)
+        except OSError as e:
+            pass
 
     def _build_ubp(self, phase=3, num_classes=3):
         """Create and train a UBP neural network model.
