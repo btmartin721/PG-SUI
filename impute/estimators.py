@@ -27,6 +27,7 @@ import lightgbm as lgbm
 # Custom imports
 from read_input.read_input import GenotypeData
 from impute.impute import Impute
+from impute.neural_network_imputers import VAE, UBP
 
 from utils import misc
 from utils.misc import get_processor_name
@@ -1849,3 +1850,211 @@ class ImputeAlleleFreq(GenotypeData):
             )
 
         df.to_csv(outfile, header=False, index=False)
+
+
+class ImputeVAE:
+    """Class to impute missing data using a Variational Autoencoder neural network model.
+
+    Args:
+        genotype_data (GenotypeData object or None): Input data initialized as GenotypeData object. If value is None, then uses ``gt`` to get the genotypes. Either ``genotype_data`` or ``gt`` must be defined. Defaults to None.
+
+        gt (numpy.ndarray or None): Input genotypes directly as a numpy array. If this value is None, ``genotype_data`` must be supplied instead. Defaults to None.
+
+        prefix (str): Prefix for output files. Defaults to "output".
+
+        cv (int): Number of cross-validation replicates to perform. Only used if ``validation_only`` is not None. Defaults to 5.
+
+        initial_strategy (str): Initial strategy to impute missing data with for validation. Possible options include: "populations", "most_frequent", and "phylogeny", where "populations" imputes by the mode of each population at each site, "most_frequent" imputes by the overall mode of each site, and "phylogeny" uses an input phylogeny to inform the imputation. "populations" requires a population map file as input in the GenotypeData object, and "phylogeny" requires an input phylogeny and Rate Matrix Q (also instantiated in the GenotypeData object). Defaults to "populations".
+
+        validation_only (float or None): Proportion of sites to use for the validation. If ``validation_only`` is None, then does not perform validation. Defaults to 0.2.
+
+        disable_progressbar (bool): Whether to disable the tqdm progress bar. Useful if you are doing the imputation on e.g. a high-performance computing cluster, where sometimes tqdm does not work correctly. If False, uses tqdm progress bar. If True, does not use tqdm. Defaults to False.
+
+        train_epochs (int): Number of epochs to train the VAE model with. Defaults to 100.
+
+        batch_size (int): Batch size to train the model with.
+
+        recurrent_weight (float): Weight to apply to recurrent network. Defaults to 0.5.
+
+        optimizer (str): Gradient descent optimizer to use. See tf.keras.optimizers for more info. Defaults to "adam".
+
+        dropout_probability (float): Dropout rate for neurons in the network. Can adjust to reduce overfitting. Defaults to 0.2.
+
+        hidden_activation (str): Activation function to use for hidden layers. See tf.keras.activations for more info. Defaults to "relu".
+
+        output_activation (str): Activation function to use for output layer. See tf.keras.activations for more info. Defaults to "sigmoid".
+
+        kernel_initializer (str): Initializer to use for initializing model weights. See tf.keras.initializers for more info. Defaults to "glorot_normal".
+
+        l1_penalty (float): L1 regularization penalty to apply. Adjust if overfitting is occurring. Defaults to 0.
+
+        l2_penalty (float): L2 regularization penalty to apply. Adjust if overfitting is occurring. Defaults to 0.
+    """
+
+    def __init__(
+        self,
+        *,
+        genotype_data=None,
+        gt=None,
+        prefix="output",
+        cv=5,
+        initial_strategy="populations",
+        validation_only=0.2,
+        disable_progressbar=False,
+        train_epochs=100,
+        batch_size=32,
+        recurrent_weight=0.5,
+        optimizer="adam",
+        dropout_probability=0.2,
+        hidden_activation="relu",
+        output_activation="sigmoid",
+        kernel_initializer="glorot_normal",
+        l1_penalty=0,
+        l2_penalty=0,
+    ):
+
+        # Get local variables into dictionary object
+        all_kwargs = locals()
+
+        self.clf = VAE
+        self.clf_type = "classifier"
+
+        imp_kwargs = {
+            "str_encodings": {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9},
+        }
+
+        all_kwargs.update(imp_kwargs)
+
+        if genotype_data is None and gt is None:
+            raise TypeError("genotype_data and gt cannot both be NoneType")
+
+        if genotype_data is not None and gt is not None:
+            raise TypeError("genotype_data and gt cannot both be used")
+
+        if genotype_data is not None:
+            X = genotype_data.genotypes_nparray
+
+        elif gt is not None:
+            X = gt
+
+        imputer = Impute(self.clf, self.clf_type, all_kwargs)
+
+        if not isinstance(X, pd.DataFrame):
+            df = pd.DataFrame(X)
+        else:
+            df = X.copy()
+
+        self.imputed, self.best_params = imputer.fit_predict(df)
+
+        imputer.write_imputed(self.imputed)
+
+
+class ImputeUBP:
+    """Class to impute missing data using unsupervised backpropagation or non-linear principal component analysis (NLPCA) neural network models.
+
+    Args:
+        genotype_data (GenotypeData object): Input GenotypeData object.
+
+        gt (numpy.ndarray or None): Input genotypes directly as a numpy array. If this value is None, ``genotype_data`` must be supplied instead. Defaults to None.
+
+        prefix (str, optional): Prefix for output files. Defaults to "output".
+
+        cv (int): Number of cross-validation replicates to perform. Only used if ``validation_only`` is not None. Defaults to 5.
+
+        initial_strategy (str, optional): Initial strategy to impute missing data with for validation. Possible options include: "populations", "most_frequent", and "phylogeny", where "populations" imputes by the mode of each population at each site, "most_frequent" imputes by the overall mode of each site, and "phylogeny" uses an input phylogeny to inform the imputation. "populations" requires a population map file as input in the GenotypeData object, and "phylogeny" requires an input phylogeny and Rate Matrix Q (also instantiated in the GenotypeData object). Defaults to "populations".
+
+        validation_only (float or None, optional): Proportion of sites to use for the validation. If ``validation_only`` is None, then does not perform validation. Defaults to 0.2.
+
+        disable_progressbar (bool, optional): Whether to disable the tqdm progress bar. Useful if you are doing the imputation on e.g. a high-performance computing cluster, where sometimes tqdm does not work correctly. If False, uses tqdm progress bar. If True, does not use tqdm. Defaults to False.
+
+        nlpca (bool, optional): If True, then uses NLPCA model instead of UBP. Otherwise uses UBP. Defaults to False.
+
+        batch_size (int, optional): Batch size per epoch to train the model with.
+
+        n_components (int, optional): Number of components to use as the input data. Defaults to 3.
+
+        early_stop_gen (int, optional): Early stopping criterion for epochs. Training will stop if the loss (error) does not decrease past the tolerance level ``tol`` for ``early_stop_gen`` epochs. Will save the optimal model and reload it once ``early_stop_gen`` has been reached. Defaults to 50.
+
+        num_hidden_layers (int, optional): Number of hidden layers to use in the model. Adjust if overfitting occurs. Defaults to 3.
+
+        hidden_layer_sizes (str, List[int], List[str], or int, optional): Number of neurons to use in hidden layers. If string or a list of strings is supplied, the strings must be either "midpoint", "sqrt", or "log2". "midpoint" will calculate the midpoint as ``(n_features + n_components) / 2``. If "sqrt" is supplied, the square root of the number of features will be used to calculate the output units. If "log2" is supplied, the units will be calculated as ``log2(n_features)``. hidden_layer_sizes will calculate and set the number of output units for each hidden layer. If one string or integer is supplied, the model will use the same number of output units for each hidden layer. If a list of integers or strings is supplied, the model will use the values supplied in the list, which can differ. The list length must be equal to the ``num_hidden_layers``. Defaults to "midpoint".
+
+        optimizer (str, optional): The optimizer to use with gradient descent. Possible value include: "adam", "sgd", and "adagrad" are supported. See tf.keras.optimizers for more info. Defaults to "adam".
+
+        hidden_activation (str, optional): The activation function to use for the hidden layers. See tf.keras.activations for more info. Commonly used activation functions include "elu", "relu", and "sigmoid". Defaults to "elu".
+
+        learning_rate (float, optional): The learning rate for the optimizers. Adjust if the loss is learning too slowly. Defaults to 0.1.
+
+        max_epochs (int, optional): Maximum number of epochs to run if the ``early_stop_gen`` criterion is not met.
+
+        tol (float, optional): Tolerance level to use for the early stopping criterion. If the loss does not improve past the tolerance level after ``early_stop_gen`` epochs, then training will halt. Defaults to 1e-3.
+
+        weights_initializer (str, optional): Initializer to use for the model weights. See tf.keras.initializers for more info. Defaults to "glorot_normal".
+
+        l1_penalty (float, optional): L1 regularization penalty to apply to reduce overfitting. Defaults to 0.01.
+
+        l2_penalty (float, optional) L2 regularization penalty to apply to reduce overfitting. Defaults to 0.01.
+    """
+
+    def __init__(
+        self,
+        *,
+        genotype_data=None,
+        gt=None,
+        prefix="output",
+        cv=5,
+        initial_strategy="populations",
+        validation_only=0.3,
+        write_output=True,
+        disable_progressbar=False,
+        chunk_size=1.0,
+        nlpca=False,
+        batch_size=32,
+        n_components=3,
+        early_stop_gen=50,
+        num_hidden_layers=3,
+        hidden_layer_sizes="midpoint",
+        optimizer="adam",
+        hidden_activation="elu",
+        learning_rate=0.1,
+        max_epochs=1000,
+        tol=1e-3,
+        weights_initializer="glorot_normal",
+        l1_penalty=0.01,
+        l2_penalty=0.01,
+    ):
+
+        # Get local variables into dictionary object
+        settings = locals()
+
+        self.clf = UBP
+        self.clf_type = "classifier"
+
+        imp_kwargs = {
+            "str_encodings": {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9},
+        }
+
+        settings.update(imp_kwargs)
+
+        if genotype_data is None and gt is None:
+            raise TypeError("genotype_data and gt cannot both be NoneType")
+
+        if genotype_data is not None and gt is not None:
+            raise TypeError("genotype_data and gt cannot both be used")
+
+        if genotype_data is not None:
+            X = genotype_data.genotypes_nparray
+
+        elif gt is not None:
+            X = gt
+
+        imputer = Impute(self.clf, self.clf_type, settings)
+
+        if not isinstance(X, pd.DataFrame):
+            df = pd.DataFrame(X)
+        else:
+            df = X.copy()
+
+        self.imputed, self.best_params = imputer.fit_predict(df)
+
+        imputer.write_imputed(self.imputed)

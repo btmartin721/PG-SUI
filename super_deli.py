@@ -15,8 +15,6 @@ from utils.misc import generate_012_genotypes
 # Custom module imports
 from read_input.read_input import GenotypeData
 from impute.estimators import *
-from impute.neural_network_imputers import ImputeVAE
-from impute.neural_network_imputers import ImputeUBP
 
 from dim_reduction.dim_reduction import DimReduction
 from dim_reduction.embed import *

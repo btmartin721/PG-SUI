@@ -38,6 +38,7 @@ from sklearn_genetic.space import Continuous, Categorical, Integer
 # Custom module imports
 from impute.iterative_imputer_gridsearch import IterativeImputerGridSearch
 from impute.iterative_imputer_fixedparams import IterativeImputerFixedParams
+from impute.neural_network_imputers import VAE, UBP
 
 import impute.estimators
 
@@ -438,7 +439,11 @@ class Impute:
         """
         print(f"Doing {self.clf.__name__} imputation without grid search...")
 
-        clf = self.clf(**self.clf_kwargs)
+        if self.clf == VAE and self.clf == UBP:
+            clf = None
+
+        else:
+            clf = self.clf(**self.clf_kwargs)
 
         if self.validation_only is not None:
             print(f"Estimating {self.clf.__name__} validation scores...")
@@ -470,15 +475,19 @@ class Impute:
         else:
             df_scores = None
 
-        imputer = self._define_iterative_imputer(
-            clf,
-            self.logfilepath,
-            clf_kwargs=self.clf_kwargs,
-            prefix=self.prefix,
-            disable_progressbar=self.disable_progressbar,
-            progress_update_percent=self.progress_update_percent,
-            pops=self.pops,
-        )
+        if self.clf == VAE or self.clf == UBP:
+            imputer = None
+
+        else:
+            imputer = self._define_iterative_imputer(
+                clf,
+                self.logfilepath,
+                clf_kwargs=self.clf_kwargs,
+                prefix=self.prefix,
+                disable_progressbar=self.disable_progressbar,
+                progress_update_percent=self.progress_update_percent,
+                pops=self.pops,
+            )
 
         if self.original_num_cols is None:
             self.original_num_cols = len(df.columns)
@@ -678,7 +687,7 @@ class Impute:
         return imputed_df, df_scores, best_params
 
     def _imputer_validation(
-        self, df: pd.DataFrame, clf: Callable
+        self, df: pd.DataFrame, clf: Optional[Callable]
     ) -> pd.DataFrame:
         """Validate imputation with a validation test set.
 
@@ -687,7 +696,7 @@ class Impute:
         Args:
             df (pandas.DataFrame): 012-encoded genotypes to impute.
 
-            clf (sklearn classifier instance): sklearn classifier instance with which to run the imputation.
+            clf (sklearn classifier instance or None): sklearn classifier instance with which to run the imputation.
 
         Raises:
             ValueError: If none of the scores were able to be estimated and reps variable is empty.
@@ -802,7 +811,9 @@ class Impute:
     def _impute_df(
         self,
         df_chunks: List[pd.DataFrame],
-        imputer: Union[IterativeImputerFixedParams, IterativeImputerGridSearch],
+        imputer: Optional[
+            Union[IterativeImputerFixedParams, IterativeImputerGridSearch]
+        ],
         cols_to_keep: Optional[np.ndarray] = None,
     ) -> pd.DataFrame:
         """Impute list of pandas.DataFrame objects using custom IterativeImputer class.
@@ -812,7 +823,7 @@ class Impute:
         Args:
             df_chunks (List[pandas.DataFrame]): List of Dataframes of shape(n_samples, n_features_in_chunk).
 
-            imputer (IterativeImputerFixedParams instance): Defined IterativeImputerFixedParams instance to perform the imputation.
+            imputer (IterativeImputerFixedParams instance or None): Defined IterativeImputerFixedParams instance to perform the imputation.
 
             cols_to_keep (numpy.ndarray): Final bi-allelic columns to keep. If some columns were non-biallelic, it will be a subset of columns.
 
@@ -823,10 +834,17 @@ class Impute:
         num_chunks = len(df_chunks)
         for i, Xchunk in enumerate(df_chunks, start=1):
             if self.clf_type == "classifier":
-                df_imp = pd.DataFrame(
-                    imputer.fit_transform(Xchunk, valid_cols=cols_to_keep),
-                    dtype="Int8",
-                )
+                if self.clf == VAE or self.clf == UBP:
+                    imputer = self.clf(**self.clf_kwargs)
+                    df_imp = pd.DataFrame(
+                        imputer.fit_transform(Xchunk),
+                        dtype="Int8",
+                    )
+                else:
+                    df_imp = pd.DataFrame(
+                        imputer.fit_transform(Xchunk, valid_cols=cols_to_keep),
+                        dtype="Int8",
+                    )
 
                 imputed_chunks.append(df_imp)
 
@@ -1292,7 +1310,7 @@ class Impute:
             return arr1.copy()
 
     def _impute_eval(
-        self, df: pd.DataFrame, clf: Callable
+        self, df: pd.DataFrame, clf: Optional[Callable]
     ) -> Dict[str, List[Union[float, int]]]:
         """Function to run IterativeImputer on a pandas.DataFrame.
 
@@ -1301,7 +1319,7 @@ class Impute:
         Args:
             df (pandas.DataFrame): Original DataFrame with 012-encoded genotypes.
 
-            clf (sklearn Classifier): Classifier instance to use with IterativeImputer.
+            clf (sklearn Classifier or None): Classifier instance to use with IterativeImputer.
 
         Returns:
             Dict[List[float or int]]: Validation scores for the current imputation.
@@ -1317,20 +1335,20 @@ class Impute:
         df_missing_mask = df_unknown_slice.isnull()
 
         # Neural networks
-        if self.clf == "VAE" or self.clf == "UBP":
+        if self.clf == VAE or self.clf == UBP:
             df_stg = df_unknown_slice.copy()
 
             for col in df_stg.columns:
                 df_stg[col] = df_stg[col].replace({pd.NA: np.nan})
             df_stg.fillna(-9, inplace=True)
 
+            imputer = self.clf(**self.clf_kwargs)
+
             df_imp = pd.DataFrame(
-                self.fit_predict(df_stg.to_numpy()),
+                imputer.fit_transform(df_stg.to_numpy()),
                 columns=cols,
                 dtype="int64",
             )
-
-            # df_imp = df_imp.astype(np.float)
 
         else:
             # Using IterativeImputer
@@ -1421,7 +1439,7 @@ class Impute:
             df_unknown,
         ]
 
-        if self.clf == "VAE" or self.clf == "UBP":
+        if self.clf == VAE or self.clf == UBP:
             del lst2del
             del cols
         else:

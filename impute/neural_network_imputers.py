@@ -31,7 +31,6 @@ from keras.layers.core import Dropout, Dense, Lambda
 from keras.regularizers import l1_l2
 
 # Custom Modules
-from impute.impute import Impute
 from read_input.read_input import GenotypeData
 from utils.misc import timer
 from utils.misc import isnotebook
@@ -196,8 +195,73 @@ class NeuralNetwork:
             missing_value = [missing_value] * num_classes
         self.data[missing_mask] = missing_value
 
+    def validate_extrakwargs(self, d):
+        """Validate extra keyword arguments.
 
-class ImputeVAE(Impute, NeuralNetwork):
+        Args:
+            d (Dict[str, Any]): Dictionary with keys=keywords and values=passed setting.
+
+        Returns:
+            numpy.ndarray: Test categorical dataset.
+
+        Raises:
+            ValueError: If not a supported keyword argument.
+        """
+        supported_kwargs = ["test_categorical"]
+        if kwargs is not None:
+            for k in kwargs.keys():
+                if k not in supported_kwargs:
+                    raise ValueError(f"{k} is not a valid argument.")
+
+        test_cat = kwargs.get("test_categorical", None)
+        return test_cat
+
+    def validate_input(self, input_data, out_type="numpy"):
+        """Validate input data and ensure that it is of correct type.
+
+        Args:
+            input_data (List[List[int]], numpy.ndarray, or pandas.DataFrame): Input data to validate.
+
+            out_type (str, optional): Type of object to convert input data to. Possible options include "numpy" and "pandas". Defaults to "numpy".
+
+        Returns:
+            numpy.ndarray: Input data as numpy array.
+
+        Raises:
+            TypeError: Must be of type pandas.DataFrame, numpy.ndarray, or List[List[int]].
+
+            ValueError: astype must be either "numpy" or "pandas".
+        """
+        if out_type == "numpy":
+            if isinstance(input_data, pd.DataFrame):
+                X = input_data.to_numpy()
+            elif isinstance(input_data, list):
+                X = np.array(input_data)
+            elif isinstance(input_data, np.ndarray):
+                X = input_data.copy()
+            else:
+                raise TypeError(
+                    f"input_data must be of type pd.DataFrame, np.ndarray, or "
+                    f"list(list(int)), but got {type(input_data)}"
+                )
+
+        elif out_type == "pandas":
+            if isinstance(input_data, pd.DataFrame):
+                X = input_data.copy()
+            elif isinstance(input_data, (list, np.ndarray)):
+                X = pd.DataFrame(input_data)
+            else:
+                raise TypeError(
+                    f"input_data must be of type pd.DataFrame, np.ndarray, or "
+                    f"list(list(int)), but got {type(input_data)}"
+                )
+        else:
+            raise ValueError("astype must be either 'numpy' or 'pandas'.")
+
+        return X
+
+
+class VAE(NeuralNetwork):
     """Class to impute missing data using a Variational Autoencoder neural network.
 
     Args:
@@ -257,18 +321,7 @@ class ImputeVAE(Impute, NeuralNetwork):
         l1_penalty=0,
         l2_penalty=0,
     ):
-
-        self.clf = "VAE"
-        self.clf_type = "classifier"
-        self.imp_kwargs = {
-            "initial_strategy": initial_strategy,
-            "genotype_data": genotype_data,
-            "str_encodings": {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9},
-        }
-
-        super(ImputeVAE, self).__init__(
-            self.clf, self.clf_type, self.imp_kwargs
-        )
+        super().__init__()
 
         self.prefix = prefix
 
@@ -287,22 +340,9 @@ class ImputeVAE(Impute, NeuralNetwork):
         self.disable_progressbar = disable_progressbar
         self.num_classes = 1
 
-        # Initialize methods common to all neural network classes.
-
+        # Initialize variables common to all neural network classes.
         self.df = None
         self.data = None
-
-        if genotype_data is None and gt is None:
-            raise TypeError("genotype_data and gt cannot both be NoneType")
-
-        if genotype_data is not None and gt is not None:
-            raise TypeError("genotype_data and gt cannot both be used")
-
-        if genotype_data is not None:
-            X = genotype_data.genotypes_nparray
-
-        elif gt is not None:
-            X = gt
 
         self.batch_size = self.validate_batch_size(X, batch_size)
 
@@ -337,15 +377,19 @@ class ImputeVAE(Impute, NeuralNetwork):
             print(self.df_scores)
 
     @timer
-    def fit_predict(self, X):
+    def fit_transform(self, X):
         """Train the VAE model and predict missing values.
 
         Args:
-            X (pandas.DataFrame): Input 012-encoded genotypes.
+            X (pandas.DataFrame, numpy.ndarray, or List[List[int]]): Input 012-encoded genotypes.
 
         Returns:
             pandas.DataFrame: Imputed data.
+
+        Raises:
+            TypeError: Must be either pandas.DataFrame, numpy.ndarray, or List[List[int]].
         """
+        X = self.validate_input(input_data, astype="pandas")
         self.df = self._encode_onehot(X)
 
         # VAE needs a numpy array, not a dataframe
@@ -659,11 +703,13 @@ class ImputeVAE(Impute, NeuralNetwork):
         return np.isnan(self.data)
 
 
-class ImputeUBP_NLPCA:
+class UBP(NeuralNetwork):
     """Class to impute missing data using unsupervised backpropagation or non-linear principal component analysis (NLPCA).
 
     Args:
         genotype_data (GenotypeData object or None): Input GenotypeData object. Argument is required. Defaults to None.
+
+        gt (numpy.ndarray or None): Input genotypes directly as a numpy array. If this value is None, ``genotype_data`` must be supplied instead. Defaults to None.
 
         prefix (str): Prefix for output files. Defaults to "output".
 
@@ -681,7 +727,7 @@ class ImputeUBP_NLPCA:
 
         n_components (int): Number of components to use as the input data. Defaults to 3.
 
-        early_stopping_gen (int): Early stopping criterion for epochs. Training will stop if the loss (error) does not decrease past the tolerance level ``tol`` for ``early_stopping_gen`` epochs. Will save the optimal model and reload it once ``early_stopping_gen`` has been reached. Defaults to 50.
+        early_stop_gen (int): Early stopping criterion for epochs. Training will stop if the loss (error) does not decrease past the tolerance level ``tol`` for ``early_stop_gen`` epochs. Will save the optimal model and reload it once ``early_stop_gen`` has been reached. Defaults to 50.
 
         num_hidden_layers (int): Number of hidden layers to use in the model. Adjust if overfitting occurs. Defaults to 3.
 
@@ -693,9 +739,9 @@ class ImputeUBP_NLPCA:
 
         learning_rate (float): The learning rate for the optimizers. Adjust if the loss is learning too slowly. Defaults to 0.1.
 
-        max_epochs (int): Maximum number of epochs to run if the ``early_stopping_gen`` criterion is not met.
+        max_epochs (int): Maximum number of epochs to run if the ``early_stop_gen`` criterion is not met.
 
-        tol (float): Tolerance level to use for the early stopping criterion. If the loss does not improve past the tolerance level after ``early_stopping_gen`` epochs, then training will halt. Defaults to 1e-3.
+        tol (float): Tolerance level to use for the early stopping criterion. If the loss does not improve past the tolerance level after ``early_stop_gen`` epochs, then training will halt. Defaults to 1e-3.
 
         weights_initializer (str): Initializer to use for the model weights. See tf.keras.initializers for more info. Defaults to "glorot_normal".
 
@@ -708,7 +754,7 @@ class ImputeUBP_NLPCA:
         self,
         *,
         genotype_data=None,
-        X=None,
+        gt=None,
         prefix="output",
         cv=5,
         initial_strategy="populations",
@@ -718,7 +764,7 @@ class ImputeUBP_NLPCA:
         nlpca=False,
         batch_size=32,
         n_components=3,
-        early_stopping_gen=50,
+        early_stop_gen=50,
         num_hidden_layers=3,
         hidden_layer_sizes="midpoint",
         optimizer="adam",
@@ -729,127 +775,9 @@ class ImputeUBP_NLPCA:
         weights_initializer="glorot_normal",
         l1_penalty=0.01,
         l2_penalty=0.01,
-        **kwargs,
     ):
 
-        # Get local variables into dictionary object
-        kwargs = locals()
-
-        if genotype_data is None and X is None and test_cat is None:
-            raise TypeError("genotype_data or X must be supplied")
-
-        elif genotype_data is not None and X is not None:
-            raise TypeError("genotype_data and X cannot both be defined.")
-
-        # For testing purposes.
-        if test_cat is not None:
-            X = test_cat.copy()
-        if genotype_data is not None:
-            X = genotype_data.genotypes_nparray
-
-        ubp = ImputeUBP(kwargs)
-        ubp.fit_predict(X)
-
-        # imputer = Impute(self.clf, self.clf_type, kwargs)
-
-        self.imputed, self.best_params = imputer.fit_predict(
-            genotype_data.genotypes_df
-        )
-
-        imputer.write_imputed(self.imputed)
-
-
-class ImputeUBP(Impute, NeuralNetwork):
-    """Class to impute missing data using unsupervised backpropagation or non-linear principal component analysis (NLPCA).
-
-    Args:
-        genotype_data (GenotypeData object or None): Input GenotypeData object. Argument is required. Defaults to None.
-
-        prefix (str): Prefix for output files. Defaults to "output".
-
-        cv (int): Number of cross-validation replicates to perform. Only used if ``validation_only`` is not None. Defaults to 5.
-
-        initial_strategy (str): Initial strategy to impute missing data with for validation. Possible options include: "populations", "most_frequent", and "phylogeny", where "populations" imputes by the mode of each population at each site, "most_frequent" imputes by the overall mode of each site, and "phylogeny" uses an input phylogeny to inform the imputation. "populations" requires a population map file as input in the GenotypeData object, and "phylogeny" requires an input phylogeny and Rate Matrix Q (also instantiated in the GenotypeData object). Defaults to "populations".
-
-        validation_only (float or None): Proportion of sites to use for the validation. If ``validation_only`` is None, then does not perform validation. Defaults to 0.2.
-
-        disable_progressbar (bool): Whether to disable the tqdm progress bar. Useful if you are doing the imputation on e.g. a high-performance computing cluster, where sometimes tqdm does not work correctly. If False, uses tqdm progress bar. If True, does not use tqdm. Defaults to False.
-
-        nlpca (bool): If True, then uses NLPCA model instead of UBP. Otherwise uses UBP. Defaults to False.
-
-        batch_size (int): Batch size per epoch to train the model with.
-
-        n_components (int): Number of components to use as the input data. Defaults to 3.
-
-        early_stopping_gen (int): Early stopping criterion for epochs. Training will stop if the loss (error) does not decrease past the tolerance level ``tol`` for ``early_stopping_gen`` epochs. Will save the optimal model and reload it once ``early_stopping_gen`` has been reached. Defaults to 50.
-
-        num_hidden_layers (int): Number of hidden layers to use in the model. Adjust if overfitting occurs. Defaults to 3.
-
-        hidden_layer_sizes (str, List[int], List[str], or int): Number of neurons to use in hidden layers. If string or a list of strings is supplied, the strings must be either "midpoint", "sqrt", or "log2". "midpoint" will calculate the midpoint as ``(n_features + n_components) / 2``. If "sqrt" is supplied, the square root of the number of features will be used to calculate the output units. If "log2" is supplied, the units will be calculated as ``log2(n_features)``. hidden_layer_sizes will calculate and set the number of output units for each hidden layer. If one string or integer is supplied, the model will use the same number of output units for each hidden layer. If a list of integers or strings is supplied, the model will use the values supplied in the list, which can differ. The list length must be equal to the ``num_hidden_layers``. Defaults to "midpoint".
-
-        optimizer (str): The optimizer to use with gradient descent. Possible value include: "adam", "sgd", and "adagrad" are supported. See tf.keras.optimizers for more info. Defaults to "adam".
-
-        hidden_activation (str): The activation function to use for the hidden layers. See tf.keras.activations for more info. Commonly used activation functions include "elu", "relu", and "sigmoid". Defaults to "elu".
-
-        learning_rate (float): The learning rate for the optimizers. Adjust if the loss is learning too slowly. Defaults to 0.1.
-
-        max_epochs (int): Maximum number of epochs to run if the ``early_stopping_gen`` criterion is not met.
-
-        tol (float): Tolerance level to use for the early stopping criterion. If the loss does not improve past the tolerance level after ``early_stopping_gen`` epochs, then training will halt. Defaults to 1e-3.
-
-        weights_initializer (str): Initializer to use for the model weights. See tf.keras.initializers for more info. Defaults to "glorot_normal".
-
-        l1_penalty (float): L1 regularization penalty to apply to reduce overfitting. Defaults to 0.01.
-
-        l2_penalty (float) L2 regularization penalty to apply to reduce overfitting. Defaults to 0.01.
-    """
-
-    def __init__(
-        self,
-        *,
-        genotype_data=None,
-        prefix="output",
-        cv=5,
-        initial_strategy="populations",
-        validation_only=0.3,
-        write_output=True,
-        disable_progressbar=False,
-        nlpca=False,
-        batch_size=32,
-        n_components=3,
-        early_stopping_gen=50,
-        num_hidden_layers=3,
-        hidden_layer_sizes="midpoint",
-        optimizer="adam",
-        hidden_activation="elu",
-        learning_rate=0.1,
-        max_epochs=1000,
-        tol=1e-3,
-        weights_initializer="glorot_normal",
-        l1_penalty=0.01,
-        l2_penalty=0.01,
-        **kwargs,
-    ):
-
-        self.clf = "UBP"
-        self.clf_type = "classifier"
-        self.imp_kwargs = {
-            "initial_strategy": initial_strategy,
-            "genotype_data": genotype_data,
-            "str_encodings": {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9},
-        }
-
-        supported_kwargs = ["test_categorical"]
-        if kwargs is not None:
-            for k in kwargs.keys():
-                if k not in supported_kwargs:
-                    raise ValueError(f"{k} is not a valid argument.")
-
-        test_cat = kwargs.get("test_categorical", None)
-
-        super(ImputeUBP, self).__init__(
-            self.clf, self.clf_type, self.imp_kwargs
-        )
+        super().__init__()
 
         self.prefix = prefix
 
@@ -858,8 +786,9 @@ class ImputeUBP(Impute, NeuralNetwork):
         self.write_output = write_output
         self.disable_progressbar = disable_progressbar
         self.nlpca = nlpca
+        self.initial_batch_size = batch_size
         self.n_components = n_components
-        self.early_stopping_gen = early_stopping_gen
+        self.early_stop_gen = early_stop_gen
         self.hidden_layer_sizes = hidden_layer_sizes
         self.optimizer = optimizer
         self.hidden_activation = hidden_activation
@@ -870,63 +799,49 @@ class ImputeUBP(Impute, NeuralNetwork):
         self.l1_penalty = l1_penalty
         self.l2_penalty = l2_penalty
 
-        # Get number of hidden layers
+        # Initialize instance variables
         self.data = None
+        self.V_latent = None
+        self.batch_size = None
+        self.observed_mask = None
         self.num_classes = 3
-
-        if genotype_data is None:
-            raise TypeError(
-                "genotype_data is a required argument, but was not supplied"
-            )
-
-        # For testing purposes.
-        if test_cat is not None:
-            X = test_cat.copy()
-        else:
-            X = genotype_data.genotypes_nparray
+        self.opt = self.set_optimizer()
+        self.phase2_model = list()
 
         (
             self.hidden_layer_sizes,
             num_hidden_layers,
         ) = self._validate_hidden_layers(hidden_layer_sizes, num_hidden_layers)
 
-        # Define random reduced-dimensionality input to refine.
-        self.V_latent = self._init_weights(X.shape[0], self.n_components)
+        # if self.validation_only is not None:
+        #     print("\nEstimating validation scores...")
 
-        self.batch_size = self.validate_batch_size(X, batch_size)
-        self.opt = self.set_optimizer()
-        self.phase2_model = list()
-        self.observed_mask = None
+        #     self.df_scores = self._imputer_validation(pd.DataFrame(X), self.clf)
 
-        if self.validation_only is not None:
-            print("\nEstimating validation scores...")
+        #     print("\nDone!\n")
 
-            self.df_scores = self._imputer_validation(pd.DataFrame(X), self.clf)
+        # else:
+        #     self.df_scores = None
 
-            print("\nDone!\n")
-
-        else:
-            self.df_scores = None
-
-        print("\nImputing full dataset...")
+        # print("\nImputing full dataset...")
 
         # mem_usage = memory_usage((self._impute_single, (X,)))
         # with open(f"profiling_results/memUsage_{self.prefix}.txt", "w") as fout:
         # fout.write(f"{max(mem_usage)}")
         # sys.exit()
 
-        self.imputed_df = pd.DataFrame(self.fit_predict(X), dtype=np.float)
+        # self.imputed_df = pd.DataFrame(self.fit_predict(X), dtype=np.float)
 
-        # self.imputed_df = self.imputed_df.astype(np.float)
-        self.imputed_df = self.imputed_df.astype("Int8")
+        # # self.imputed_df = self.imputed_df.astype(np.float)
+        # self.imputed_df = self.imputed_df.astype("Int8")
 
-        self._validate_imputed(self.imputed_df)
+        # self._validate_imputed(self.imputed_df)
 
-        if self.write_output:
-            self.write_imputed(self.imputed_df)
+        # if self.write_output:
+        #     self.write_imputed(self.imputed_df)
 
-        if self.df_scores is not None:
-            print(self.df_scores)
+        # if self.df_scores is not None:
+        #     print(self.df_scores)
 
     def reset_seeds(self):
         seed1 = np.random.randint(1, 1e6)
@@ -961,7 +876,7 @@ class ImputeUBP(Impute, NeuralNetwork):
             )
 
     @timer
-    def fit_predict(self, input_data):
+    def fit_transform(self, input_data):
         """Train a UBP or NLPCA model and predict the output.
 
         Args:
@@ -970,17 +885,12 @@ class ImputeUBP(Impute, NeuralNetwork):
         Returns:
             pandas.DataFrame: Imputation predictions.
         """
-        if isinstance(input_data, pd.DataFrame):
-            X = input_data.to_numpy()
-        elif isinstance(input_data, list):
-            X = np.array(input_data)
-        elif isinstance(input_data, np.ndarray):
-            X = input_data.copy()
-        else:
-            raise TypeError(
-                f"input_data must be of type pd.DataFrame, np.ndarray, or "
-                f"list(list(int)), but got {type(input_data)}"
-            )
+        X = self.validate_input(input_data)
+        print(X.shape)
+
+        # Define random reduced-dimensionality input to refine.
+        self.V_latent = self._init_weights(X.shape[0], self.n_components)
+        self.batch_size = self.validate_batch_size(X, self.initial_batch_size)
 
         self.hidden_layer_sizes = self._get_hidden_layer_sizes(
             X.shape[1], self.n_components, self.hidden_layer_sizes
@@ -1012,11 +922,10 @@ class ImputeUBP(Impute, NeuralNetwork):
         """
         pred = model(V, training=False)
         Xprob = pred.numpy()
+        print(Xprob.shape)
         Xt = np.apply_along_axis(self.mle, axis=2, arr=Xprob)
         Xdecoded = np.argmax(Xt, axis=2)
         Xpred = np.zeros((Xdecoded.shape[0], Xdecoded.shape[1]))
-        print(Xpred.shape[1])
-        print(Xdecoded.shape[1])
         for idx, row in enumerate(Xpred):
             imputed_vals = np.zeros(len(row))
             known_vals = np.zeros(len(row))
@@ -1024,7 +933,7 @@ class ImputeUBP(Impute, NeuralNetwork):
             known_idx = np.nonzero(self.observed_mask[idx])
             Xpred[idx, imputed_idx] = Xdecoded[idx, imputed_idx]
             Xpred[idx, known_idx] = X[idx, known_idx]
-        del model_mlp_phase3
+        del model
         return Xpred
 
     def fit(self):
@@ -1094,7 +1003,7 @@ class ImputeUBP(Impute, NeuralNetwork):
             self.num_epochs = 0
 
             while (
-                counter < self.early_stopping_gen
+                counter < self.early_stop_gen
                 and self.num_epochs <= self.max_epochs
             ):
                 # While stopping criterion not met.
@@ -1159,7 +1068,7 @@ class ImputeUBP(Impute, NeuralNetwork):
                             counter = 0
                         else:
                             counter += 1
-                            if counter == self.early_stopping_gen:
+                            if counter == self.early_stop_gen:
                                 counter = 0
                                 if phase == 1:
                                     model_single_layer = (
@@ -1183,7 +1092,7 @@ class ImputeUBP(Impute, NeuralNetwork):
                                 break
                     else:
                         counter += 1
-                        if counter == self.early_stopping_gen:
+                        if counter == self.early_stop_gen:
                             counter = 0
                             if phase == 1:
                                 model_single_layer = tf.keras.models.load_model(
