@@ -1870,6 +1870,8 @@ class ImputeVAE:
 
         disable_progressbar (bool): Whether to disable the tqdm progress bar. Useful if you are doing the imputation on e.g. a high-performance computing cluster, where sometimes tqdm does not work correctly. If False, uses tqdm progress bar. If True, does not use tqdm. Defaults to False.
 
+        chunk_size (int or float, optional): Number of loci for which to perform IterativeImputer at one time. Useful for reducing the memory usage if you are running out of RAM. If integer is specified, selects ``chunk_size`` loci at a time. If a float is specified, selects ``math.ceil(total_loci * chunk_size)`` loci at a time. Defaults to 1.0 (all features).
+
         train_epochs (int): Number of epochs to train the VAE model with. Defaults to 100.
 
         batch_size (int): Batch size to train the model with.
@@ -1901,6 +1903,7 @@ class ImputeVAE:
         initial_strategy="populations",
         validation_only=0.2,
         disable_progressbar=False,
+        chunk_size=1.0,
         train_epochs=100,
         batch_size=32,
         recurrent_weight=0.5,
@@ -1966,6 +1969,8 @@ class ImputeUBP:
         validation_only (float or None, optional): Proportion of sites to use for the validation. If ``validation_only`` is None, then does not perform validation. Defaults to 0.2.
 
         disable_progressbar (bool, optional): Whether to disable the tqdm progress bar. Useful if you are doing the imputation on e.g. a high-performance computing cluster, where sometimes tqdm does not work correctly. If False, uses tqdm progress bar. If True, does not use tqdm. Defaults to False.
+
+        chunk_size (int or float, optional): Number of loci for which to perform IterativeImputer at one time. Useful for reducing the memory usage if you are running out of RAM. If integer is specified, selects ``chunk_size`` loci at a time. If a float is specified, selects ``math.ceil(total_loci * chunk_size)`` loci at a time. Defaults to 1.0 (all features).
 
         nlpca (bool, optional): If True, then uses NLPCA model instead of UBP. Otherwise uses UBP. Defaults to False.
 

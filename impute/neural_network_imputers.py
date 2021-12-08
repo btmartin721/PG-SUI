@@ -327,6 +327,7 @@ class VAE(NeuralNetwork):
         self.prefix = prefix
 
         self.train_epochs = train_epochs
+        self.initial_batch_size = batch_size
         self.recurrent_weight = recurrent_weight
         self.optimizer = optimizer
         self.dropout_probability = dropout_probability
@@ -345,44 +346,42 @@ class VAE(NeuralNetwork):
         self.df = None
         self.data = None
 
-        self.batch_size = self.validate_batch_size(X, batch_size)
+        # if self.validation_only is not None:
+        #     print("\nEstimating validation scores...")
 
-        if self.validation_only is not None:
-            print("\nEstimating validation scores...")
+        #     self.df_scores = self._imputer_validation(pd.DataFrame(X), self.clf)
 
-            self.df_scores = self._imputer_validation(pd.DataFrame(X), self.clf)
+        #     print("\nDone!\n")
 
-            print("\nDone!\n")
+        # else:
+        #     self.df_scores = None
 
-        else:
-            self.df_scores = None
-
-        print("\nImputing full dataset...")
+        # print("\nImputing full dataset...")
 
         # mem_usage = memory_usage((self._impute_single, (X,)))
         # with open(f"profiling_results/memUsage_{self.prefix}.txt", "w") as fout:
         # fout.write(f"{max(mem_usage)}")
         # sys.exit()
 
-        self.imputed_df = pd.DataFrame(self.fit_predict(X))
-        print("\nDone!\n")
+        # self.imputed_df = pd.DataFrame(self.fit_predict(X))
+        # print("\nDone!\n")
 
-        self.imputed_df = self.imputed_df.astype(np.float)
-        self.imputed_df = self.imputed_df.astype("Int8")
+        # self.imputed_df = self.imputed_df.astype(np.float)
+        # self.imputed_df = self.imputed_df.astype("Int8")
 
-        self._validate_imputed(self.imputed_df)
+        # self._validate_imputed(self.imputed_df)
 
-        self.write_imputed(self.imputed_df)
+        # self.write_imputed(self.imputed_df)
 
-        if self.df_scores is not None:
-            print(self.df_scores)
+        # if self.df_scores is not None:
+        #     print(self.df_scores)
 
     @timer
-    def fit_transform(self, X):
+    def fit_transform(self, input_data):
         """Train the VAE model and predict missing values.
 
         Args:
-            X (pandas.DataFrame, numpy.ndarray, or List[List[int]]): Input 012-encoded genotypes.
+            input_data (pandas.DataFrame, numpy.ndarray, or List[List[int]]): Input 012-encoded genotypes.
 
         Returns:
             pandas.DataFrame: Imputed data.
@@ -390,7 +389,10 @@ class VAE(NeuralNetwork):
         Raises:
             TypeError: Must be either pandas.DataFrame, numpy.ndarray, or List[List[int]].
         """
-        X = self.validate_input(input_data, astype="pandas")
+        X = self.validate_input(input_data, out_type="pandas")
+
+        self.batch_size = self.validate_batch_size(X, self.initial_batch_size)
+
         self.df = self._encode_onehot(X)
 
         # VAE needs a numpy array, not a dataframe

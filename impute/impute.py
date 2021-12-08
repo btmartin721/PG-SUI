@@ -836,10 +836,16 @@ class Impute:
             if self.clf_type == "classifier":
                 if self.clf == VAE or self.clf == UBP:
                     imputer = self.clf(**self.clf_kwargs)
-                    df_imp = pd.DataFrame(
-                        imputer.fit_transform(Xchunk),
-                        dtype="Int8",
-                    )
+                    if self.clf == UBP:
+                        df_imp = pd.DataFrame(
+                            imputer.fit_transform(Xchunk),
+                            dtype="Int8",
+                        )
+                    else:
+                        df_imp = pd.DataFrame(imputer.fit_transform(Xchunk))
+                        df_imp = df_imp.astype("float")
+                        df_imp = df_imp.astype("Int8")
+
                 else:
                     df_imp = pd.DataFrame(
                         imputer.fit_transform(Xchunk, valid_cols=cols_to_keep),
@@ -1344,11 +1350,21 @@ class Impute:
 
             imputer = self.clf(**self.clf_kwargs)
 
-            df_imp = pd.DataFrame(
-                imputer.fit_transform(df_stg.to_numpy()),
-                columns=cols,
-                dtype="int64",
-            )
+            if self.clf == VAE:
+                df_imp = pd.DataFrame(
+                    imputer.fit_transform(df_stg.to_numpy()),
+                    columns=cols,
+                )
+
+                df_imp = df_imp.astype("float")
+                df_imp = df_imp.astype("int64")
+
+            else:
+                df_imp = pd.DataFrame(
+                    imputer.fit_transform(df_stg.to_numpy()),
+                    columns=cols,
+                    dtype="int64",
+                )
 
         else:
             # Using IterativeImputer
