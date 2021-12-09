@@ -1947,9 +1947,17 @@ class ImputeVAE:
         else:
             df = X.copy()
 
-        self.imputed, self.best_params = imputer.fit_predict(df)
+        self._imputed, self._best_params = imputer.fit_predict(df)
 
-        imputer.write_imputed(self.imputed)
+        imputer.write_imputed(self._imputed)
+
+    @property
+    def imputed(self):
+        return self._imputed
+
+    @property
+    def best_params(self):
+        return self._best_params
 
 
 class ImputeUBP:
@@ -2060,6 +2068,15 @@ class ImputeUBP:
         else:
             df = X.copy()
 
-        self.imputed, self.best_params = imputer.fit_predict(df)
+        self._imputed, self._best_params = imputer.fit_predict(df)
 
-        imputer.write_imputed(self.imputed)
+        if write_output:
+            imputer.write_imputed(self._imputed)
+
+    @property
+    def imputed(self):
+        return self._imputed
+
+    @property
+    def best_params(self):
+        return self._best_params

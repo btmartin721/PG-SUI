@@ -98,7 +98,7 @@ class NeuralNetwork:
             mask (numpy.ndarray): One-hot encoded missing data mask.
 
         Returns:
-            float: Mean absolute error calculation.
+            float: Mean squared error calculation.
         """
         return np.square(np.subtract(X_true[mask], X_pred[mask])).mean()
 
@@ -345,36 +345,6 @@ class VAE(NeuralNetwork):
         self.df = None
         self.data = None
 
-        # if self.validation_only is not None:
-        #     print("\nEstimating validation scores...")
-
-        #     self.df_scores = self._imputer_validation(pd.DataFrame(X), self.clf)
-
-        #     print("\nDone!\n")
-
-        # else:
-        #     self.df_scores = None
-
-        # print("\nImputing full dataset...")
-
-        # mem_usage = memory_usage((self._impute_single, (X,)))
-        # with open(f"profiling_results/memUsage_{self.prefix}.txt", "w") as fout:
-        # fout.write(f"{max(mem_usage)}")
-        # sys.exit()
-
-        # self.imputed_df = pd.DataFrame(self.fit_predict(X))
-        # print("\nDone!\n")
-
-        # self.imputed_df = self.imputed_df.astype(np.float)
-        # self.imputed_df = self.imputed_df.astype("Int8")
-
-        # self._validate_imputed(self.imputed_df)
-
-        # self.write_imputed(self.imputed_df)
-
-        # if self.df_scores is not None:
-        #     print(self.df_scores)
-
     @timer
     def fit_transform(self, input_data):
         """Train the VAE model and predict missing values.
@@ -389,9 +359,7 @@ class VAE(NeuralNetwork):
             TypeError: Must be either pandas.DataFrame, numpy.ndarray, or List[List[int]].
         """
         X = self.validate_input(input_data, out_type="pandas")
-
         self.batch_size = self.validate_batch_size(X, self.initial_batch_size)
-
         self.df = self._encode_onehot(X)
 
         # VAE needs a numpy array, not a dataframe
@@ -450,7 +418,9 @@ class VAE(NeuralNetwork):
         return self.data.copy()
 
     def predict(self, X, complete_encoded):
-        """Evaluate VAE predictions by calculating the highest predicted value for each row vector for each class and setting it to 1.0.
+        """Evaluate VAE predictions by calculating the highest predicted value.
+
+        Calucalates highest predicted value for each row vector and each class, setting the most likely class to 1.0.
 
         Args:
             X (numpy.ndarray): Input one-hot encoded data.
@@ -473,6 +443,7 @@ class VAE(NeuralNetwork):
         for i, cnt in enumerate(col_classes):
             start_idx = int(sum(col_classes[0:i]))
             col_completed = complete_encoded[:, start_idx : start_idx + cnt]
+
             mle_completed = np.apply_along_axis(
                 self.mle, axis=1, arr=col_completed
             )
@@ -493,7 +464,7 @@ class VAE(NeuralNetwork):
         """Train one cycle (epoch) of a variational autoencoder model.
 
         Args:
-            model (Keras model object): VAE model object implemented in Keras.
+            model (tf.keras.Sequential object): VAE model object implemented in Keras with tensorflow.
 
             missing_mask (numpy.ndarray(bool)): Missing data boolean mask, with True corresponding to a missing value.
 
@@ -689,9 +660,7 @@ class VAE(NeuralNetwork):
         )
 
         loss_function = self.make_reconstruction_loss(n_dims)
-
         model.compile(optimizer=self.optimizer, loss=loss_function)
-
         return model
 
     def _create_missing_mask(self):
@@ -706,10 +675,10 @@ class VAE(NeuralNetwork):
 
 
 class UBP(NeuralNetwork):
-    """Class to impute missing data using unsupervised backpropagation or non-linear principal component analysis (NLPCA).
+    """Class to impute missing data using unsupervised backpropagation or inverse non-linear principal component analysis (NLPCA).
 
     Args:
-        genotype_data (GenotypeData object or None): Input GenotypeData object. Argument is required. Defaults to None.
+        genotype_data (GenotypeData object or None): Input GenotypeData object. If this value is None, ``gt`` must be supplied instead. Defaults to None.
 
         gt (numpy.ndarray or None): Input genotypes directly as a numpy array. If this value is None, ``genotype_data`` must be supplied instead. Defaults to None.
 
@@ -815,68 +784,6 @@ class UBP(NeuralNetwork):
             num_hidden_layers,
         ) = self._validate_hidden_layers(hidden_layer_sizes, num_hidden_layers)
 
-        # if self.validation_only is not None:
-        #     print("\nEstimating validation scores...")
-
-        #     self.df_scores = self._imputer_validation(pd.DataFrame(X), self.clf)
-
-        #     print("\nDone!\n")
-
-        # else:
-        #     self.df_scores = None
-
-        # print("\nImputing full dataset...")
-
-        # mem_usage = memory_usage((self._impute_single, (X,)))
-        # with open(f"profiling_results/memUsage_{self.prefix}.txt", "w") as fout:
-        # fout.write(f"{max(mem_usage)}")
-        # sys.exit()
-
-        # self.imputed_df = pd.DataFrame(self.fit_predict(X), dtype=np.float)
-
-        # # self.imputed_df = self.imputed_df.astype(np.float)
-        # self.imputed_df = self.imputed_df.astype("Int8")
-
-        # self._validate_imputed(self.imputed_df)
-
-        # if self.write_output:
-        #     self.write_imputed(self.imputed_df)
-
-        # if self.df_scores is not None:
-        #     print(self.df_scores)
-
-    def reset_seeds(self):
-        seed1 = np.random.randint(1, 1e6)
-        seed2 = np.random.randint(1, 1e6)
-        seed3 = np.random.randint(1, 1e6)
-        np.random.seed(seed1)
-        random.seed(seed2)
-        if tf.__version__[0] == "2":
-            tf.random.set_seed(seed3)
-        else:
-            tf.set_random_seed(seed3)
-
-    def set_optimizer(self):
-        """Set optimizer to use.
-
-        Return:
-            tf.keras.optimizers: Initialized optimizer.
-
-        Raises:
-            ValueError: Unsupported optimizer specified.
-        """
-        if self.optimizer == "adam":
-            return tf.keras.optimizers.Adam(learning_rate=self.initial_eta)
-        elif self.optimizer == "sgd":
-            return tf.keras.optimizers.SGD(learning_rate=self.initial_eta)
-        elif self.optimizer == "adagrad":
-            return tf.keras.optimizers.Adagrad(learning_rate=self.initial_eta)
-        else:
-            raise ValueError(
-                f"Only 'adam', 'sgd', and 'adagrad' optimizers are supported, "
-                f"but got {self.optimizer}."
-            )
-
     @timer
     def fit_transform(self, input_data):
         """Train a UBP or NLPCA model and predict the output.
@@ -916,7 +823,7 @@ class UBP(NeuralNetwork):
 
             X (numpy.ndarray(float)): Original data to impute.
 
-            model_mlp_phase3 (tf.keras.models.Sequential): Refined model (phase 3 if doing UBP).
+            model_mlp_phase3 (tf.keras.Sequential): Trained model (phase 3 if doing UBP).
 
         Returns:
             numpy.ndarray: Imputation predictions.
@@ -961,7 +868,7 @@ class UBP(NeuralNetwork):
 
         # Define neural network models.
         if self.nlpca:
-            # If using NLPCA model.
+            # If using NLPCA model: Don't need phases 1 and 2.
             model_single_layer = None
             model_mlp_phase2 = None
             start_phase = 3
@@ -970,10 +877,14 @@ class UBP(NeuralNetwork):
             # Using UBP model over three phases
             phase1model = self._build_ubp(phase=1)
             phase2model = self._build_ubp(phase=2)
+
+            # Initialize new model with new random weights.
             model_single_layer = tf.keras.models.clone_model(phase1model)
             model_mlp_phase2 = tf.keras.models.clone_model(phase2model)
+
             del phase1model
             del phase2model
+
             start_phase = 1
 
         phase3model = self._build_ubp(phase=3)
@@ -1006,11 +917,10 @@ class UBP(NeuralNetwork):
             checkpoint = 1
             criterion_met = False
 
+            # While stopping criterion not met: keep doing more epochs.
             while (
                 counter < self.early_stop_gen and num_epochs <= self.max_epochs
             ):
-                # While stopping criterion not met.
-
                 # Train per epoch
                 # s is error (loss)
                 s = self._train_epoch(
@@ -1295,6 +1205,13 @@ class UBP(NeuralNetwork):
             return loss, model.get_weights()
 
     def _remove_dir(self, dir_path):
+        """Remove directory from disk.
+
+        Will pass if directory doesn't exist.
+
+        Args:
+            dir_path (str): The directory to remove.
+        """
         try:
             shutil.rmtree(dir_path)
         except OSError as e:
@@ -1317,7 +1234,7 @@ class UBP(NeuralNetwork):
             num_classes (int, optional): The number of classes in the vector. Defaults to 3.
 
         Returns:
-            tf.keras.Model object: Compiled Keras model.
+            tf.keras.Sequential object: Keras model.
         """
 
         if phase == 1 or phase == 2:
@@ -1456,7 +1373,9 @@ class UBP(NeuralNetwork):
 
         Args:
             n_dims (int): The number of feature dimensions (columns) (d).
+
             n_components (int): The number of reduced dimensions (t).
+
             hl_func (str): The function to use to calculate the hidden layer sizes. Possible options: "midpoint", "sqrt", "log2".
 
         Returns:
@@ -1505,3 +1424,36 @@ class UBP(NeuralNetwork):
         self.s_prime = np.inf
         self.num_epochs = 0
         self.checkpoint = 1
+
+    def reset_seeds(self):
+        """Reset random seeds for initializing weights."""
+        seed1 = np.random.randint(1, 1e6)
+        seed2 = np.random.randint(1, 1e6)
+        seed3 = np.random.randint(1, 1e6)
+        np.random.seed(seed1)
+        random.seed(seed2)
+        if tf.__version__[0] == "2":
+            tf.random.set_seed(seed3)
+        else:
+            tf.set_random_seed(seed3)
+
+    def set_optimizer(self):
+        """Set optimizer to use.
+
+        Returns:
+            tf.keras.optimizers: Initialized optimizer.
+
+        Raises:
+            ValueError: Unsupported optimizer specified.
+        """
+        if self.optimizer == "adam":
+            return tf.keras.optimizers.Adam(learning_rate=self.initial_eta)
+        elif self.optimizer == "sgd":
+            return tf.keras.optimizers.SGD(learning_rate=self.initial_eta)
+        elif self.optimizer == "adagrad":
+            return tf.keras.optimizers.Adagrad(learning_rate=self.initial_eta)
+        else:
+            raise ValueError(
+                f"Only 'adam', 'sgd', and 'adagrad' optimizers are supported, "
+                f"but got {self.optimizer}."
+            )
