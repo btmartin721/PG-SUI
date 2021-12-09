@@ -9,11 +9,9 @@ Population Genomic Supervised and Unsupervised Imputation
 + numpy == 1.20
 + matplotlib
 + seaborn
-+ kneed
 + tqdm
 + jupyterlab
 + scikit-learn == 0.24
-+ scikit-learn-extra
 + sklearn-genetic-opt >= 0.6.0
 + toytree
 + scipy >= 1.6.2 and < 1.7.0
@@ -31,7 +29,7 @@ conda install matplotlib seaborn jupyterlab scikit-learn tqdm pandas=1.2.5 numpy
 # Only works if using Intel CPUs; speeds up processing
 conda install scikit-learn-intelex
 
-conda install -c conda-forge toytree scikit-learn-extra kneed
+conda install -c conda-forge toytree
 
 # For genetic algorithm plotting functions
 pip install sklearn-genetic-opt[all]
