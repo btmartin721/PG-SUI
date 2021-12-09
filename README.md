@@ -1,8 +1,6 @@
-# Super Deli  
+# PG-SUI 
 
-![Super Deli Logo](https://github.com/btmartin721/super_deli/blob/master/logos/full_logo_1280x640.png)
-
-A comprehensive machine learning species delimitation package
+Population Genomic Supervised and Unsupervised Imputation
 
 ## Requirements
 
