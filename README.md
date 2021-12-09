@@ -42,7 +42,7 @@ There are a number of options for the structure file format. See the help menu:
 
 ```python pg_sui.py -h```  
 
-## API Pipeline (so far)
+## API Imputation Options
 
 ```
 # Read in PHYLIP or STRUCTURE-formatted file
