@@ -13,6 +13,8 @@ import toyplot as tp
 import toytree as tt
 
 # Scikit-learn imports
+import lightgbm as lgbm
+import xgboost as xgb
 from sklearn.ensemble import ExtraTreesClassifier
 from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.ensemble import RandomForestClassifier
@@ -21,8 +23,6 @@ from sklearn.impute import SimpleImputer
 from sklearn.linear_model import BayesianRidge
 from sklearn.neighbors import KNeighborsClassifier
 
-import xgboost as xgb
-import lightgbm as lgbm
 
 # Custom imports
 from read_input.read_input import GenotypeData
