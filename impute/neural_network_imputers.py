@@ -428,13 +428,13 @@ class VAE(NeuralNetwork):
 
         observed_mask = ~missing_mask
 
-        for epoch in range(train_epochs):
+        for epoch in range(1, train_epochs + 1):
             X_pred = self._train_epoch(self.model, missing_mask, batch_size)
             observed_mae = self.masked_mae(
                 X_true=self.data, X_pred=X_pred, mask=observed_mask
             )
 
-            if epoch == 0:
+            if epoch == 1:
                 print(f"Initial MAE: {observed_mae}")
 
             elif epoch % 50 == 0:
