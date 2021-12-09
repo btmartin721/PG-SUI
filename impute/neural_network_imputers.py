@@ -89,8 +89,8 @@ class NeuralNetwork:
 
         return reconstruction_loss
 
-    def masked_mae(self, X_true, X_pred, mask):
-        """Calculates mean absolute error with missing values ignored.
+    def masked_mse(self, X_true, X_pred, mask):
+        """Calculates mean squared error with missing values ignored.
 
         Args:
             X_true (numpy.ndarray): One-hot encoded input data.
@@ -100,8 +100,7 @@ class NeuralNetwork:
         Returns:
             float: Mean absolute error calculation.
         """
-        masked_diff = X_true[mask] - X_pred[mask]
-        return np.mean(np.abs(masked_diff))
+        return np.square(np.subtract(X_true[mask], X_pred[mask])).mean()
 
     def categorical_crossentropy_masked(self, y_true, y_pred):
         """Calculates categorical crossentropy while ignoring missing values.
@@ -430,17 +429,17 @@ class VAE(NeuralNetwork):
 
         for epoch in range(1, train_epochs + 1):
             X_pred = self._train_epoch(self.model, missing_mask, batch_size)
-            observed_mae = self.masked_mae(
+            observed_mse = self.masked_mse(
                 X_true=self.data, X_pred=X_pred, mask=observed_mask
             )
 
             if epoch == 1:
-                print(f"Initial MAE: {observed_mae}")
+                print(f"Initial MSE: {observed_mse}")
 
             elif epoch % 50 == 0:
                 print(
-                    f"Observed MAE ({epoch}/{train_epochs} epochs): "
-                    f"{observed_mae}"
+                    f"Observed MSE ({epoch}/{train_epochs} epochs): "
+                    f"{observed_mse}"
                 )
 
             old_weight = 1.0 - self.recurrent_weight
