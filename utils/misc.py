@@ -309,9 +309,12 @@ def get_processor_name():
     if platform.system() == "Windows":
         return platform.processor()
     elif platform.system() == "Darwin":
-        os.environ["PATH"] = os.environ["PATH"] + os.pathsep + "/usr/sbin"
-        command = "sysctl -n machdep.cpu.brand_string"
-        return subprocess.check_output(command).strip()
+        #os.environ["PATH"] = os.environ["PATH"] + os.pathsep + "/usr/sbin"
+        arch=platform.processor()
+        if arch[0]=="i":
+            return("Intel")
+        else:
+            return(arch)
     elif platform.system() == "Linux":
         command = "cat /proc/cpuinfo"
         all_info = subprocess.check_output(command, shell=True).strip()
