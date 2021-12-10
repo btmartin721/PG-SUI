@@ -1961,7 +1961,7 @@ class ImputeVAE:
 
 
 class ImputeUBP:
-    """Class to impute missing data using unsupervised backpropagation or non-linear principal component analysis (NLPCA) neural network models.
+    """Class to impute missing data using unsupervised backpropagation neural network models.
 
     Args:
         genotype_data (GenotypeData object): Input GenotypeData object.
@@ -1979,8 +1979,6 @@ class ImputeUBP:
         disable_progressbar (bool, optional): Whether to disable the tqdm progress bar. Useful if you are doing the imputation on e.g. a high-performance computing cluster, where sometimes tqdm does not work correctly. If False, uses tqdm progress bar. If True, does not use tqdm. Defaults to False.
 
         chunk_size (int or float, optional): Number of loci for which to perform IterativeImputer at one time. Useful for reducing the memory usage if you are running out of RAM. If integer is specified, selects ``chunk_size`` loci at a time. If a float is specified, selects ``math.ceil(total_loci * chunk_size)`` loci at a time. Defaults to 1.0 (all features).
-
-        nlpca (bool, optional): If True, then uses NLPCA model instead of UBP. Otherwise uses UBP. Defaults to False.
 
         batch_size (int, optional): Batch size per epoch to train the model with.
 
@@ -2008,7 +2006,7 @@ class ImputeUBP:
 
         l2_penalty (float, optional) L2 regularization penalty to apply to reduce overfitting. Defaults to 0.01.
     """
-
+    nlpca=False
     def __init__(
         self,
         *,
@@ -2021,7 +2019,6 @@ class ImputeUBP:
         write_output=True,
         disable_progressbar=False,
         chunk_size=1.0,
-        nlpca=False,
         batch_size=32,
         n_components=3,
         early_stop_gen=50,
@@ -2039,9 +2036,12 @@ class ImputeUBP:
 
         # Get local variables into dictionary object
         settings = locals()
+        settings["nlpca"]=self.nlpca
 
         self.clf = UBP
         self.clf_type = "classifier"
+        if self.nlpca:
+            self.clf.__name__ = "NLPCA"
 
         imp_kwargs = {
             "str_encodings": {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9},
@@ -2072,6 +2072,68 @@ class ImputeUBP:
 
         if write_output:
             imputer.write_imputed(self._imputed)
+
+    @property
+    def imputed(self):
+        return self._imputed
+
+    @property
+    def best_params(self):
+        return self._best_params
+
+class ImputeNLPCA(ImputeUBP):
+    """Class to impute missing data using non-linear principal component analysis (NLPCA) neural network models.
+
+    Args:
+        genotype_data (GenotypeData object): Input GenotypeData object.
+
+        gt (numpy.ndarray or None): Input genotypes directly as a numpy array. If this value is None, ``genotype_data`` must be supplied instead. Defaults to None.
+
+        prefix (str, optional): Prefix for output files. Defaults to "output".
+
+        cv (int): Number of cross-validation replicates to perform. Only used if ``validation_only`` is not None. Defaults to 5.
+
+        initial_strategy (str, optional): Initial strategy to impute missing data with for validation. Possible options include: "populations", "most_frequent", and "phylogeny", where "populations" imputes by the mode of each population at each site, "most_frequent" imputes by the overall mode of each site, and "phylogeny" uses an input phylogeny to inform the imputation. "populations" requires a population map file as input in the GenotypeData object, and "phylogeny" requires an input phylogeny and Rate Matrix Q (also instantiated in the GenotypeData object). Defaults to "populations".
+
+        validation_only (float or None, optional): Proportion of sites to use for the validation. If ``validation_only`` is None, then does not perform validation. Defaults to 0.2.
+
+        disable_progressbar (bool, optional): Whether to disable the tqdm progress bar. Useful if you are doing the imputation on e.g. a high-performance computing cluster, where sometimes tqdm does not work correctly. If False, uses tqdm progress bar. If True, does not use tqdm. Defaults to False.
+
+        chunk_size (int or float, optional): Number of loci for which to perform IterativeImputer at one time. Useful for reducing the memory usage if you are running out of RAM. If integer is specified, selects ``chunk_size`` loci at a time. If a float is specified, selects ``math.ceil(total_loci * chunk_size)`` loci at a time. Defaults to 1.0 (all features).
+
+        batch_size (int, optional): Batch size per epoch to train the model with.
+
+        n_components (int, optional): Number of components to use as the input data. Defaults to 3.
+
+        early_stop_gen (int, optional): Early stopping criterion for epochs. Training will stop if the loss (error) does not decrease past the tolerance level ``tol`` for ``early_stop_gen`` epochs. Will save the optimal model and reload it once ``early_stop_gen`` has been reached. Defaults to 50.
+
+        num_hidden_layers (int, optional): Number of hidden layers to use in the model. Adjust if overfitting occurs. Defaults to 3.
+
+        hidden_layer_sizes (str, List[int], List[str], or int, optional): Number of neurons to use in hidden layers. If string or a list of strings is supplied, the strings must be either "midpoint", "sqrt", or "log2". "midpoint" will calculate the midpoint as ``(n_features + n_components) / 2``. If "sqrt" is supplied, the square root of the number of features will be used to calculate the output units. If "log2" is supplied, the units will be calculated as ``log2(n_features)``. hidden_layer_sizes will calculate and set the number of output units for each hidden layer. If one string or integer is supplied, the model will use the same number of output units for each hidden layer. If a list of integers or strings is supplied, the model will use the values supplied in the list, which can differ. The list length must be equal to the ``num_hidden_layers``. Defaults to "midpoint".
+
+        optimizer (str, optional): The optimizer to use with gradient descent. Possible value include: "adam", "sgd", and "adagrad" are supported. See tf.keras.optimizers for more info. Defaults to "adam".
+
+        hidden_activation (str, optional): The activation function to use for the hidden layers. See tf.keras.activations for more info. Commonly used activation functions include "elu", "relu", and "sigmoid". Defaults to "elu".
+
+        learning_rate (float, optional): The learning rate for the optimizers. Adjust if the loss is learning too slowly. Defaults to 0.1.
+
+        max_epochs (int, optional): Maximum number of epochs to run if the ``early_stop_gen`` criterion is not met.
+
+        tol (float, optional): Tolerance level to use for the early stopping criterion. If the loss does not improve past the tolerance level after ``early_stop_gen`` epochs, then training will halt. Defaults to 1e-3.
+
+        weights_initializer (str, optional): Initializer to use for the model weights. See tf.keras.initializers for more info. Defaults to "glorot_normal".
+
+        l1_penalty (float, optional): L1 regularization penalty to apply to reduce overfitting. Defaults to 0.01.
+
+        l2_penalty (float, optional) L2 regularization penalty to apply to reduce overfitting. Defaults to 0.01.
+    """
+    nlpca=True
+    def __init__(
+        self,
+        *args,
+        **kwargs
+    ):
+        super().__init__(*args, **kwargs)
 
     @property
     def imputed(self):
