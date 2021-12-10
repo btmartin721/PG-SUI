@@ -16,10 +16,10 @@ from utils.misc import generate_012_genotypes
 from read_input.read_input import GenotypeData
 from impute.estimators import *
 
-from dim_reduction.dim_reduction import DimReduction
-from dim_reduction.embed import *
+#from dim_reduction.dim_reduction import DimReduction
+#from dim_reduction.embed import *
 
-from clustering.clustering import *
+#from clustering.clustering import *
 
 
 def main():
