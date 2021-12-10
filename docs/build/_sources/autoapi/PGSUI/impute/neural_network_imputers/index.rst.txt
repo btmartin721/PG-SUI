@@ -1,0 +1,327 @@
+:orphan:
+
+:py:mod:`PG-SUI.impute.neural_network_imputers`
+===============================================
+
+.. py:module:: PG-SUI.impute.neural_network_imputers
+
+
+Module Contents
+---------------
+
+Classes
+~~~~~~~
+
+.. autoapisummary::
+
+   PG-SUI.impute.neural_network_imputers.NeuralNetwork
+   PG-SUI.impute.neural_network_imputers.VAE
+   PG-SUI.impute.neural_network_imputers.UBP
+
+
+
+
+.. py:class:: NeuralNetwork(**kwargs)
+
+   Methods common to all neural network imputer classes and loss functions
+
+   .. py:method:: make_reconstruction_loss(self, n_features)
+
+      Make loss function for use with a keras model.
+
+      Args:
+          n_features (int): Number of features in input dataset.
+
+      Returns:
+          callable: Function that calculates loss.
+
+
+   .. py:method:: masked_mse(self, X_true, X_pred, mask)
+
+      Calculates mean squared error with missing values ignored.
+
+      Args:
+          X_true (numpy.ndarray): One-hot encoded input data.
+          X_pred (numpy.ndarray): Predicted values.
+          mask (numpy.ndarray): One-hot encoded missing data mask.
+
+      Returns:
+          float: Mean squared error calculation.
+
+
+   .. py:method:: categorical_crossentropy_masked(self, y_true, y_pred)
+
+      Calculates categorical crossentropy while ignoring missing values.
+
+      Used for UBP and NLPCA. Missing values should be an array of length(n_categories). If data is missing, it should be encoded as [-1] * n_categories.
+
+      Args:
+          y_true (tf.Tensor): Known values from input data.
+          y_pred (tf.Tensor): Values predicted from model.
+
+      Returns:
+          float: Loss value.
+
+
+   .. py:method:: validate_batch_size(self, X, batch_size)
+
+      Validate the batch size, and adjust as necessary.
+
+      If the specified batch_size is greater than the number of samples in the input data, it will divide batch_size by 2 until it is less than n_samples.
+
+      Args:
+          X (numpy.ndarray): Input data of shape (n_samples, n_features).
+          batch_size (int): Batch size to use.
+
+      Returns:
+          int: Batch size (adjusted if necessary).
+
+
+   .. py:method:: mle(self, row)
+
+      Get the Maximum Likelihood Estimation for the best prediction. Basically, it sets the index of the maxiumum value in a vector (row) to 1.0, since it is one-hot encoded.
+
+      Args:
+          row (numpy.ndarray(float)): Row vector with predicted values as floating points.
+
+      Returns:
+          numpy.ndarray(float): Row vector with the highest prediction set to 1.0 and the others set to 0.0.
+
+
+   .. py:method:: fill(self, missing_mask, missing_value, num_classes)
+
+      Mask missing data as ``missing_value``.
+
+      Args:
+          missing_mask (np.ndarray(bool)): Missing data mask with True corresponding to a missing value.
+
+          missing_value (int): Value to set missing data to. If a list is provided, then its length should equal the number of one-hot classes.
+
+
+   .. py:method:: validate_extrakwargs(self, d)
+
+      Validate extra keyword arguments.
+
+      Args:
+          d (Dict[str, Any]): Dictionary with keys=keywords and values=passed setting.
+
+      Returns:
+          numpy.ndarray: Test categorical dataset.
+
+      Raises:
+          ValueError: If not a supported keyword argument.
+
+
+   .. py:method:: validate_input(self, input_data, out_type='numpy')
+
+      Validate input data and ensure that it is of correct type.
+
+      Args:
+          input_data (List[List[int]], numpy.ndarray, or pandas.DataFrame): Input data to validate.
+
+          out_type (str, optional): Type of object to convert input data to. Possible options include "numpy" and "pandas". Defaults to "numpy".
+
+      Returns:
+          numpy.ndarray: Input data as numpy array.
+
+      Raises:
+          TypeError: Must be of type pandas.DataFrame, numpy.ndarray, or List[List[int]].
+
+          ValueError: astype must be either "numpy" or "pandas".
+
+
+
+.. py:class:: VAE(*, genotype_data=None, gt=None, prefix='output', cv=5, initial_strategy='populations', validation_only=0.2, disable_progressbar=False, train_epochs=100, batch_size=32, recurrent_weight=0.5, optimizer='adam', dropout_probability=0.2, hidden_activation='relu', output_activation='sigmoid', kernel_initializer='glorot_normal', l1_penalty=0, l2_penalty=0)
+
+
+
+   Class to impute missing data using a Variational Autoencoder neural network.
+
+   Args:
+       genotype_data (GenotypeData object or None): Input data initialized as GenotypeData object. If value is None, then uses ``gt`` to get the genotypes. Either ``genotype_data`` or ``gt`` must be defined. Defaults to None.
+
+       gt (numpy.ndarray or None): Input genotypes directly as a numpy array. If this value is None, ``genotype_data`` must be supplied instead. Defaults to None.
+
+       prefix (str): Prefix for output files. Defaults to "output".
+
+       cv (int): Number of cross-validation replicates to perform. Only used if ``validation_only`` is not None. Defaults to 5.
+
+       initial_strategy (str): Initial strategy to impute missing data with for validation. Possible options include: "populations", "most_frequent", and "phylogeny", where "populations" imputes by the mode of each population at each site, "most_frequent" imputes by the overall mode of each site, and "phylogeny" uses an input phylogeny to inform the imputation. "populations" requires a population map file as input in the GenotypeData object, and "phylogeny" requires an input phylogeny and Rate Matrix Q (also instantiated in the GenotypeData object). Defaults to "populations".
+
+       validation_only (float or None): Proportion of sites to use for the validation. If ``validation_only`` is None, then does not perform validation. Defaults to 0.2.
+
+       disable_progressbar (bool): Whether to disable the tqdm progress bar. Useful if you are doing the imputation on e.g. a high-performance computing cluster, where sometimes tqdm does not work correctly. If False, uses tqdm progress bar. If True, does not use tqdm. Defaults to False.
+
+       train_epochs (int): Number of epochs to train the VAE model with. Defaults to 100.
+
+       batch_size (int): Batch size to train the model with.
+
+       recurrent_weight (float): Weight to apply to recurrent network. Defaults to 0.5.
+
+       optimizer (str): Gradient descent optimizer to use. See tf.keras.optimizers for more info. Defaults to "adam".
+
+       dropout_probability (float): Dropout rate for neurons in the network. Can adjust to reduce overfitting. Defaults to 0.2.
+
+       hidden_activation (str): Activation function to use for hidden layers. See tf.keras.activations for more info. Defaults to "relu".
+
+       output_activation (str): Activation function to use for output layer. See tf.keras.activations for more info. Defaults to "sigmoid".
+
+       kernel_initializer (str): Initializer to use for initializing model weights. See tf.keras.initializers for more info. Defaults to "glorot_normal".
+
+       l1_penalty (float): L1 regularization penalty to apply. Adjust if overfitting is occurring. Defaults to 0.
+
+       l2_penalty (float): L2 regularization penalty to apply. Adjust if overfitting is occurring. Defaults to 0.
+
+   .. py:method:: fit_transform(self, input_data)
+
+      Train the VAE model and predict missing values.
+
+      Args:
+          input_data (pandas.DataFrame, numpy.ndarray, or List[List[int]]): Input 012-encoded genotypes.
+
+      Returns:
+          pandas.DataFrame: Imputed data.
+
+      Raises:
+          TypeError: Must be either pandas.DataFrame, numpy.ndarray, or List[List[int]].
+
+
+   .. py:method:: fit(self, batch_size=256, train_epochs=100)
+
+      Train a variational autoencoder model to impute missing data.
+
+      Args:
+          batch_size (int, optional): Number of data splits to train on per epoch. Defaults to 256.
+
+          train_epochs (int, optional): Number of epochs (cycles through the data) to use. Defaults to 100.
+
+      Returns:
+          numpy.ndarray(float): Predicted values as numpy array.
+
+
+   .. py:method:: predict(self, X, complete_encoded)
+
+      Evaluate VAE predictions by calculating the highest predicted value.
+
+      Calucalates highest predicted value for each row vector and each class, setting the most likely class to 1.0.
+
+      Args:
+          X (numpy.ndarray): Input one-hot encoded data.
+
+          complete_encoded (numpy.ndarray): Output one-hot encoded data with the maximum predicted values for each class set to 1.0.
+
+      Returns:
+          numpy.ndarray: Imputed one-hot encoded values.
+
+          pandas.DataFrame: One-hot encoded pandas DataFrame with no missing values.
+
+
+
+.. py:class:: UBP(*, genotype_data=None, gt=None, prefix='output', cv=5, initial_strategy='populations', validation_only=0.3, write_output=True, disable_progressbar=False, nlpca=False, batch_size=32, n_components=3, early_stop_gen=50, num_hidden_layers=3, hidden_layer_sizes='midpoint', optimizer='adam', hidden_activation='elu', learning_rate=0.1, max_epochs=1000, tol=0.001, weights_initializer='glorot_normal', l1_penalty=0.01, l2_penalty=0.01)
+
+
+
+   Class to impute missing data using unsupervised backpropagation or inverse non-linear principal component analysis (NLPCA).
+
+   Args:
+       genotype_data (GenotypeData object or None): Input GenotypeData object. If this value is None, ``gt`` must be supplied instead. Defaults to None.
+
+       gt (numpy.ndarray or None): Input genotypes directly as a numpy array. If this value is None, ``genotype_data`` must be supplied instead. Defaults to None.
+
+       prefix (str): Prefix for output files. Defaults to "output".
+
+       cv (int): Number of cross-validation replicates to perform. Only used if ``validation_only`` is not None. Defaults to 5.
+
+       initial_strategy (str): Initial strategy to impute missing data with for validation. Possible options include: "populations", "most_frequent", and "phylogeny", where "populations" imputes by the mode of each population at each site, "most_frequent" imputes by the overall mode of each site, and "phylogeny" uses an input phylogeny to inform the imputation. "populations" requires a population map file as input in the GenotypeData object, and "phylogeny" requires an input phylogeny and Rate Matrix Q (also instantiated in the GenotypeData object). Defaults to "populations".
+
+       validation_only (float or None): Proportion of sites to use for the validation. If ``validation_only`` is None, then does not perform validation. Defaults to 0.2.
+
+       disable_progressbar (bool): Whether to disable the tqdm progress bar. Useful if you are doing the imputation on e.g. a high-performance computing cluster, where sometimes tqdm does not work correctly. If False, uses tqdm progress bar. If True, does not use tqdm. Defaults to False.
+
+       nlpca (bool): If True, then uses NLPCA model instead of UBP. Otherwise uses UBP. Defaults to False.
+
+       batch_size (int): Batch size per epoch to train the model with.
+
+       n_components (int): Number of components to use as the input data. Defaults to 3.
+
+       early_stop_gen (int): Early stopping criterion for epochs. Training will stop if the loss (error) does not decrease past the tolerance level ``tol`` for ``early_stop_gen`` epochs. Will save the optimal model and reload it once ``early_stop_gen`` has been reached. Defaults to 50.
+
+       num_hidden_layers (int): Number of hidden layers to use in the model. Adjust if overfitting occurs. Defaults to 3.
+
+       hidden_layer_sizes (str, List[int], List[str], or int): Number of neurons to use in hidden layers. If string or a list of strings is supplied, the strings must be either "midpoint", "sqrt", or "log2". "midpoint" will calculate the midpoint as ``(n_features + n_components) / 2``. If "sqrt" is supplied, the square root of the number of features will be used to calculate the output units. If "log2" is supplied, the units will be calculated as ``log2(n_features)``. hidden_layer_sizes will calculate and set the number of output units for each hidden layer. If one string or integer is supplied, the model will use the same number of output units for each hidden layer. If a list of integers or strings is supplied, the model will use the values supplied in the list, which can differ. The list length must be equal to the ``num_hidden_layers``. Defaults to "midpoint".
+
+       optimizer (str): The optimizer to use with gradient descent. Possible value include: "adam", "sgd", and "adagrad" are supported. See tf.keras.optimizers for more info. Defaults to "adam".
+
+       hidden_activation (str): The activation function to use for the hidden layers. See tf.keras.activations for more info. Commonly used activation functions include "elu", "relu", and "sigmoid". Defaults to "elu".
+
+       learning_rate (float): The learning rate for the optimizers. Adjust if the loss is learning too slowly. Defaults to 0.1.
+
+       max_epochs (int): Maximum number of epochs to run if the ``early_stop_gen`` criterion is not met.
+
+       tol (float): Tolerance level to use for the early stopping criterion. If the loss does not improve past the tolerance level after ``early_stop_gen`` epochs, then training will halt. Defaults to 1e-3.
+
+       weights_initializer (str): Initializer to use for the model weights. See tf.keras.initializers for more info. Defaults to "glorot_normal".
+
+       l1_penalty (float): L1 regularization penalty to apply to reduce overfitting. Defaults to 0.01.
+
+       l2_penalty (float) L2 regularization penalty to apply to reduce overfitting. Defaults to 0.01.
+
+   .. py:method:: fit_transform(self, input_data)
+
+      Train a UBP or NLPCA model and predict the output.
+
+      Args:
+          input_data (numpy.ndarray, pandas.DataFrame, or List[List[int]]): Input data of shape (n_samples, n_features).
+
+      Returns:
+          pandas.DataFrame: Imputation predictions.
+
+
+   .. py:method:: predict(self, V, X, model)
+
+      Predict imputations based on a trained UBP or NLPCA model.
+
+      Args:
+          V (numpy.ndarray(float)): Refined reduced-dimensional input for predicting imputations.
+
+          X (numpy.ndarray(float)): Original data to impute.
+
+          model_mlp_phase3 (tf.keras.Sequential): Trained model (phase 3 if doing UBP).
+
+      Returns:
+          numpy.ndarray: Imputation predictions.
+
+
+   .. py:method:: fit(self)
+
+      Train an unsupervised backpropagation (UBP) or NLPCA model.
+
+      UBP runs over three phases.
+
+      1. Train a single-layer perceptron to refine the input, V_latent.
+      2. Train a multi-layer perceptron (MLP) to refine only the weights
+      3. Train an MLP to refine both the weights and input, V_latent.
+
+      NLPCA just does phase 3.
+
+      Returns:
+          numpy.ndarray(float): Predicted values as numpy array.
+
+
+   .. py:method:: reset_seeds(self)
+
+      Reset random seeds for initializing weights.
+
+
+   .. py:method:: set_optimizer(self)
+
+      Set optimizer to use.
+
+      Returns:
+          tf.keras.optimizers: Initialized optimizer.
+
+      Raises:
+          ValueError: Unsupported optimizer specified.
+
+
+
