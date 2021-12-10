@@ -892,14 +892,14 @@ class UBP(NeuralNetwork):
 
         if self.nlpca:
             model_dir3 = "optimal_nlpca"
+            self._remove_dir(model_dir3)
         else:
             model_dir1 = f"{self.prefix}_optimal_ubp_phase1"
             model_dir2 = f"{self.prefix}_optimal_ubp_phase2"
             model_dir3 = f"{self.prefix}_optimal_ubp_phase3"
-
-        self._remove_dir(model_dir1)
-        self._remove_dir(model_dir2)
-        self._remove_dir(model_dir3)
+            self._remove_dir(model_dir1)
+            self._remove_dir(model_dir2)
+            self._remove_dir(model_dir3)
 
         # self._initialise_parameters()
 
@@ -1051,8 +1051,9 @@ class UBP(NeuralNetwork):
             print(f"Number of epochs used to train: {checkpoint}")
             print(f"Final MSE: {final_s}")
 
-        self._remove_dir(model_dir1)
-        self._remove_dir(model_dir2)
+        if not self.nlpca:
+            self._remove_dir(model_dir1)
+            self._remove_dir(model_dir2)
         self._remove_dir(model_dir3)
 
         del model_single_layer
