@@ -192,9 +192,9 @@ class IterativeImputerFixedParams(IterativeImputer):
         **NOTE: Inductive mode support was removed herein.
 
     References:
-        .. [1] `Stef van Buuren, Karin Groothuis-Oudshoorn (2011). "mice: Multivariate Imputation by Chained Equations in R". Journal of Statistical Software 45: 1-67.
-
-        <https://www.jstatsoft.org/article/view/v045i03>`_ .. [2] `S. F. Buck, (1960). "A Method of Estimation of Missing Values in	Multivariate Data Suitable for use with an Electronic Computer". Journal of the Royal Statistical Society 22(2): 302-306. <https://www.jstor.org/stable/2984099>`_
+        .. [1] `Stef van Buuren, Karin Groothuis-Oudshoorn (2011). "mice: Multivariate Imputation by Chained Equations in R". Journal of Statistical Software 45: 1-67. <https://www.jstatsoft.org/article/view/v045i03>`_ .. 
+        
+        .. [2] `S. F. Buck, (1960). "A Method of Estimation of Missing Values in	Multivariate Data Suitable for use with an Electronic Computer". Journal of the Royal Statistical Society 22(2): 302-306. <https://www.jstor.org/stable/2984099>`_
     """
 
     def __init__(

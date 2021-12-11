@@ -1,8 +1,0 @@
-:orphan:
-
-:py:mod:`PG-SUI.read_input`
-===========================
-
-.. py:module:: PG-SUI.read_input
-
-
