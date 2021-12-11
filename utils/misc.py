@@ -259,7 +259,7 @@ def timer(func):
         end_time = time.perf_counter()
         run_time = end_time - start_time
         final_runtime = str(datetime.timedelta(seconds=run_time))
-        print(f"Finshed {func.__name__!r} in {final_runtime}\n")
+        print(f"Finished {func.__name__!r} in {final_runtime}\n")
         return value
 
     return wrapper_timer
