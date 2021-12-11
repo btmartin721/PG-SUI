@@ -33,3 +33,13 @@ training_data/collated/
 .ipynb_checkpoints
 .ipynb_checkpoints/
 .ipynb_checkpoints/*
+.mypy_cache/
+.mypy_cache/*
+mypy.ini
+.optimal_model/
+.optimal_model/*
+optimal_nlpca_model/
+optimal_nlpca_model/*
+optimal_ubp_model/
+optimal_ubp_model/*
+output*

@@ -9,6 +9,8 @@ from collections import defaultdict
 from operator import itemgetter
 from pathlib import Path
 from statistics import mean, median
+from contextlib import redirect_stdout
+from typing import Optional, Union, List, Dict, Tuple, Any, Callable
 
 # Third party imports
 import numpy as np
@@ -31,11 +33,12 @@ from sklearn.neighbors import KNeighborsClassifier
 import xgboost as xgb
 import lightgbm as lgbm
 
+from sklearn_genetic.space import Continuous, Categorical, Integer
+
 # Custom module imports
-from impute.iterative_imputer_custom import (
-    IterativeImputerGridSearch,
-    IterativeImputerAllData,
-)
+from impute.iterative_imputer_gridsearch import IterativeImputerGridSearch
+from impute.iterative_imputer_fixedparams import IterativeImputerFixedParams
+from impute.neural_network_imputers import VAE, UBP
 
 import impute.estimators
 
@@ -60,7 +63,8 @@ if get_processor_name().strip().startswith("Intel"):
         intelex = True
     except ImportError:
         print(
-            "Warning: Intel CPU detected but scikit-learn-intelex is not installed. We recommend installing it to speed up computation."
+            "Warning: Intel CPU detected but scikit-learn-intelex is not "
+            "installed. We recommend installing it to speed up computation."
         )
         intelex = False
 else:
@@ -68,12 +72,56 @@ else:
 
 
 class Impute:
-    def __init__(self, clf, clf_type, pops, kwargs):
+    """Class to impute missing data from the provided classifier.
+
+    The Impute class will either run a variational autoencoder or IterativeImputer with the provided estimator. The settings for the provided estimator should be provided as the ``kwargs`` argument as a dictionary object with the estimator's keyword arguments as the keys and the corresponding values. E.g., ``kwargs={"n_jobs", 4, "initial_strategy": "populations"}``. ``clf_type`` just specifies either "classifier" or "regressor". "regressor" is primarily just for quick and dirty testing.
+
+    Once the Impute class is initialized, the imputation should be performed with ``fit_predict()``.
+
+    The imputed data can then be written to a file with ``write_imputed()``
+
+    Args:
+        clf (str or Callable estimator object): The estimator object to use. If using a variational autoencoder, the provided value should be "VAE". Otherwise, it should be a callable estimator object that is compatible with scikit-learn's IterativeImputer.
+
+        clf_type (str): Specify whether to use a "classifier" or "regressor". The "regressor" option is just for quick and dirty testing, and "classifier" should almost always be used.
+
+        kwargs (Dict[str, Any]): Settings to use with the estimator. The keys should be the estimator's keywords, and the values should be their corresponding settings.
+
+    Raises:
+        TypeError: Check whether the ``gridparams`` values are of the correct format if ``ga=True`` or ``ga=False``.
+
+    Examples:
+        # Don't use parentheses after estimator object.
+        >>> imputer = Impute(
+                sklearn.ensemble.RandomForestClassifier,
+                "classifier",
+                {
+                    "n_jobs": 4,
+                    "initial_strategy": "populations",
+                    "max_iter": 25,
+                    "n_estimators": 100,
+                    "ga": True
+                }
+            )
+
+        >>> self.imputed, self.best_params = imputer.fit_predict(df)
+
+        >>> imputer.write_imputed(self.imputed)
+    """
+
+    def __init__(
+        self, clf: Union[str, Callable], clf_type: str, kwargs: Dict[str, Any]
+    ) -> None:
         self.clf = clf
         self.clf_type = clf_type
-        self.pops = pops
+        self.original_num_cols = None
 
-        # Separate local variables into separate settings objects
+        try:
+            self.pops = kwargs["genotype_data"].populations
+        except AttributeError:
+            self.pops = None
+
+        # Separate local variables into settings objects
         (
             self.gridparams,
             self.imp_kwargs,
@@ -93,7 +141,19 @@ class Impute:
             self.validation_only,
         ) = self._gather_impute_settings(kwargs)
 
+        if self.gridparams is not None:
+            for v in self.gridparams.values():
+                if (
+                    isinstance(v, (Categorical, Integer, Continuous))
+                    and not self.ga
+                ):
+                    raise TypeError(
+                        "ga argument must be True if gridparams are of type sklearn_genetic.space"
+                    )
+
         self.logfilepath = f"{self.prefix}_imputer_progress_log.txt"
+
+        self.invalid_indexes = None
 
         # Remove logfile if exists
         try:
@@ -102,18 +162,20 @@ class Impute:
             pass
 
     @timer
-    def fit_predict(self, X):
-        """[Fit and predict with IterativeImputer(clf). if ```gridparams is None```, then a grid search is not performed. If gridparams is not None, then a RandomizedSearchCV is performed on a subset of the data and a final imputation is done on the whole dataset using the best found parameters]
+    def fit_predict(
+        self, X: pd.DataFrame
+    ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+        """Fit and predict imputations with IterativeImputer(estimator).
+
+        Fits and predicts imputed 012-encoded genotypes using IterativeImputer with any of the supported estimator objects. If ``gridparams=None``, then a grid search is not performed. If ``gridparams!=None``, then a RandomizedSearchCV is performed on a subset of the data and a final imputation is done on the whole dataset using the best found parameters.
 
         Args:
-            X ([pandas.DataFrame]): [DataFrame with 012-encoded genotypes]
+            X (pandas.DataFrame): DataFrame with 012-encoded genotypes.
 
         Returns:
-            [pandas.DataFrame]: [DataFrame with 012-encoded genotypes and missing data imputed]
+            pandas.DataFrame: DataFrame with missing 012-encoded genotypes imputed.
 
-            [float]: [Best score found from grid search. If self.clf is a regressor, will be the lowest root mean squared error. If self.clf is a classifier, will be the highest percent accuracy]
-
-            [dict]: [Best parameters found using grid search]
+            Dict[str, Any]: Best parameters found during grid search.
         """
         # Test if output file can be written to
         try:
@@ -162,14 +224,16 @@ class Impute:
         print("\nDone!\n")
         return imputed_df, best_params
 
-    def write_imputed(self, data):
-        """[Save imputed data to a CSV file]
+    def write_imputed(
+        self, data: Union[pd.DataFrame, np.ndarray, List[List[int]]]
+    ) -> None:
+        """Save imputed data to disk as a CSV file.
 
         Args:
-            data ([pandas.DataFrame, numpy.array, or list(list)]): [Object returned from impute_missing()]
+            data (pandas.DataFrame, numpy.ndarray, or List[List[int]]): Object returned from ``fit_predict()``.
 
         Raises:
-            TypeError: [Must be of type pandas.DataFrame, numpy.array, or list]
+            TypeError: Must be of type pandas.DataFrame, numpy.array, or List[List[int]].
         """
         outfile = f"{self.prefix}_imputed_012.csv"
 
@@ -190,33 +254,48 @@ class Impute:
                 " numpy.ndarray, or 2-dimensional list"
             )
 
-    def read_imputed(self, filename):
-        """[Read in imputed CSV file as formatted by write_imputed]
+    def read_imputed(self, filename: str) -> pd.DataFrame:
+        """Read in imputed CSV file as formatted by write_imputed.
 
         Args:
-            filename ([str]): [Name of imputed CSV file to be read]
+            filename (str): Name of imputed CSV file to be read.
 
         Returns:
-            [pandas.DataFrame]: [Imputed data as DataFrame of 8-bit integers]
+            pandas.DataFrame: Imputed data as DataFrame of 8-bit integers.
         """
         return pd.read_csv(filename, dtype="Int8", header=None)
 
-    def df2chunks(self, df, chunk_size):
-        """[Break up pandas.DataFrame into chunks. If set to 1.0 of type float, then returns only one chunk containing all the data]
+    def df2chunks(
+        self, df: pd.DataFrame, chunk_size: Union[int, float]
+    ) -> List[pd.DataFrame]:
+        """Break up pandas.DataFrame into chunks and impute chunks.
+
+        If set to 1.0 of type float, then returns only one chunk containing all the data.
 
         Args:
-            df ([pandas.DataFrame]): [DataFrame to split into chunks]
+            df (pandas.DataFrame): DataFrame to split into chunks.
 
-            chunk_size ([int or float]): [If integer, then breaks DataFrame into ```chunk_size``` chunks. If float, breaks DataFrame up into ```chunk_size * len(df.columns)``` chunks]
+            chunk_size (int or float): If type is integer, then breaks DataFrame into ``chunk_size`` chunks. If type is float, breaks DataFrame up into ``chunk_size * len(df.columns)`` chunks.
 
         Returns:
-            [list(pandas.DataFrame)]: [List of pandas DataFrames (one element per chunk)]
+            List[pandas.DataFrame]: List of pandas DataFrames of shape (n_samples, n_features_in_chunk).
 
         Raises:
-            [ValueError]: [chunk_size must be of type int or float]
+            ValueError: ``chunk_size`` must be of type int or float.
         """
-        if isinstance(chunk_size, (int, float)):
+        if (
+            self.imp_kwargs["initial_strategy"] == "phylogeny"
+            and chunk_size != 1.0
+        ):
+            print(
+                "WARNING: Chunking is not supported with initial_strategy == "
+                "'phylogeny'; Setting chunk_size to 1.0 and imputing entire "
+                "dataset"
+            )
 
+            chunk_size = 1.0
+
+        if isinstance(chunk_size, (int, float)):
             chunks = list()
             df_cp = df.copy()
 
@@ -259,72 +338,77 @@ class Impute:
 
         return chunks
 
-    def subset_data_for_gridsearch(
-        self, df, columns_to_subset, original_num_cols
-    ):
-        """[Randomly subsets pandas.DataFrame with ```column_percent``` fraction of the data. Allows faster testing]
+    def _subset_data_for_gridsearch(
+        self,
+        df: pd.DataFrame,
+        columns_to_subset: Union[int, float],
+        original_num_cols: int,
+    ) -> Tuple[pd.DataFrame, np.ndarray]:
+        """Randomly subsets pandas.DataFrame.
+
+        Subset pandas DataFrame with ``column_percent`` fraction of the data. Allows for faster validation.
 
         Args:
-            df ([pandas.DataFrame]): [DataFrame with 012-encoded genotypes]
+            df (pandas.DataFrame): DataFrame with 012-encoded genotypes.
 
-            columns_to_subset ([int or float]): [If float, proportion of DataFrame to randomly subset, which should be between 0 and 1. if integer, subsets ```columns_to_subset``` random columns]
+            columns_to_subset (int or float): If float, proportion of DataFrame to randomly subset should be between 0 and 1. if integer, subsets ``columns_to_subset`` random columns.
 
-            original_num_cols ([int]): [Number of columns in original DataFrame]
+            original_num_cols (int): Number of columns in original DataFrame.
 
         Returns:
-            [pandas.DataFrame]: [Randomly subset DataFrame]
+            pandas.DataFrame: New DataFrame with random subset of features.
+            numpy.ndarray: Sorted numpy array of column indices to keep.
+
+        Raises:
+            TypeError: column_subset must be of type float or int.
         """
         # Get a random numpy arrray of column names to select
         if isinstance(columns_to_subset, float):
             n = int(original_num_cols * columns_to_subset)
-            if n > len(df.columns):
-                print(
-                    "Warning: column_subset is greater than remaining columns following filtering. Using all columns"
-                )
-                all_cols = True
-            else:
-                all_cols = False
-
-            if all_cols:
-                df_sub = df.copy()
-            else:
-                df_sub = df.sample(n=n, axis="columns", replace=False)
-
         elif isinstance(columns_to_subset, int):
-            if columns_to_subset > len(df.columns):
-                print(
-                    "Warning: column_subset is greater than remaining columns following filtering. Using all columns"
-                )
-                all_cols = True
-            else:
-                all_cols = False
+            n = columns_to_subset
+        else:
+            raise TypeError(
+                f"column_subset must be of type float or int, "
+                f"but got {type(columns_to_subset)}"
+            )
 
-            if all_cols:
-                df_sub = df.copy()
-            else:
-                sub = columns_to_subset
-                df_sub = df.sample(n=sub, axis="columns", replace=False)
+        col_arr = np.array(df.columns)
+
+        if n > len(df.columns):
+            print(
+                "Warning: Column_subset is greater than remaining columns following filtering. Using all columns"
+            )
+
+            df_sub = df.copy()
+            cols = col_arr.copy()
+        else:
+            cols = np.random.choice(col_arr, n, replace=False)
+            df_sub = df.loc[:, np.sort(cols)]
+            # df_sub = df.sample(n=n, axis="columns", replace=False)
 
         df_sub.columns = df_sub.columns.astype(str)
 
-        return df_sub
+        return df_sub, np.sort(cols)
 
-    def _print_scores(self, df_scores):
-        """[Print pandas Dataframe with validation scores]
+    def _print_scores(self, df_scores: pd.DataFrame) -> None:
+        """Print validation scores as pandas.DataFrame.
 
         Args:
-            df ([pandas.DataFrame]): [DataFrame with score statistics]
+            df (pandas.DataFrame): DataFrame with score statistics.
         """
-        print("Validation scores")
+        print("Validation scores:")
         print(df_scores)
 
-    def _write_imputed_params_score(self, df_scores, best_params):
-        """[Save best_score and best_params to files]
+    def _write_imputed_params_score(
+        self, df_scores: pd.DataFrame, best_params: Dict[str, Any]
+    ) -> None:
+        """Save best_score and best_params to files on disk.
 
         Args:
-            best_score ([float]): [Best RMSE or accuracy score for the regressor or classifier, respectively]
+            best_score (float): Best RMSE or accuracy score for the regressor or classifier, respectively.
 
-            best_params ([dict]): [Best parameters found in grid search]
+            best_params (dict): Best parameters found in grid search.
         """
         best_score_outfile = f"{self.prefix}_imputed_best_score.csv"
         best_params_outfile = f"{self.prefix}_imputed_best_params.csv"
@@ -338,41 +422,99 @@ class Impute:
             for k, v in best_params.items():
                 fout.write(f"{k},{v}\n")
 
-    def _impute_single(self, df):
-        """[Run IterativeImputer without a grid search]
+    def _impute_single(
+        self, df: pd.DataFrame
+    ) -> Tuple[pd.DataFrame, pd.DataFrame, None]:
+        """Run IterativeImputer without a grid search.
+
+        Will do a different type of validation if ``validation_only != None``.
 
         Args:
-            df ([pandas.DataFrame]): [DataFrame of 012-encoded genotypes]
+            df (pandas.DataFrame): DataFrame of 012-encoded genotypes.
 
         Returns:
-            [pandas.DataFrame]: [Imputed 012-encoded genotypes]
+            pandas.DataFrame: Imputed DataFrame of 012-encoded genotypes.
+            pandas.DataFrame: DataFrame with validation scores.
+            NoneType: Only used with _impute_gridsearch. Set to None here for compatibility.
         """
         print(f"Doing {self.clf.__name__} imputation without grid search...")
 
-        clf = self.clf(**self.clf_kwargs)
+        if self.clf == VAE and self.clf == UBP:
+            clf = None
+
+        else:
+            clf = self.clf(**self.clf_kwargs)
 
         if self.validation_only is not None:
-            print("Estimating validation scores...")
+            print(f"Estimating {self.clf.__name__} validation scores...")
+
+            if self.disable_progressbar:
+                with open(self.logfilepath, "a") as fout:
+                    # Redirect to progress logfile
+                    with redirect_stdout(fout):
+                        print(
+                            f"Doing {self.clf.__name__} imputation "
+                            f"without grid search...\n"
+                        )
+
+                        print(
+                            f"Estimating {self.clf.__name__} "
+                            f"validation scores...\n"
+                        )
 
             df_scores = self._imputer_validation(df, clf)
 
-            print("\nDone!\n")
+            print(f"\nDone with {self.clf.__name__} validation!\n")
+
+            if self.disable_progressbar:
+                with open(self.logfilepath, "a") as fout:
+                    # Redirect to progress logfile
+                    with redirect_stdout(fout):
+                        print(f"\nDone with {self.clf.__name__} validation!\n")
 
         else:
             df_scores = None
 
-        imputer = self._define_iterative_imputer(
-            clf,
-            self.logfilepath,
-            clf_kwargs=self.clf_kwargs,
-            prefix=self.prefix,
-            disable_progressbar=self.disable_progressbar,
-            progress_update_percent=self.progress_update_percent,
-            pops=self.pops,
-        )
+        if self.clf == VAE or self.clf == UBP:
+            imputer = None
+
+        else:
+            imputer = self._define_iterative_imputer(
+                clf,
+                self.logfilepath,
+                clf_kwargs=self.clf_kwargs,
+                prefix=self.prefix,
+                disable_progressbar=self.disable_progressbar,
+                progress_update_percent=self.progress_update_percent,
+                pops=self.pops,
+            )
+
+        if self.original_num_cols is None:
+            self.original_num_cols = len(df.columns)
+
+        # Remove non-biallelic loci
+        # Only used if initial_strategy == 'phylogeny'
+        if self.invalid_indexes is not None:
+            df.drop(
+                labels=self.invalid_indexes,
+                axis=1,
+                inplace=True,
+            )
+
+        if self.disable_progressbar:
+            with open(self.logfilepath, "a") as fout:
+                # Redirect to progress logfile
+                with redirect_stdout(fout):
+                    print(f"Doing {self.clf.__name__} imputation...\n")
 
         df_chunks = self.df2chunks(df, self.chunk_size)
-        imputed_df = self._impute_df(df_chunks, imputer, len(df.columns))
+        imputed_df = self._impute_df(df_chunks, imputer)
+
+        if self.disable_progressbar:
+            with open(self.logfilepath, "a") as fout:
+                # Redirect to progress logfile
+                with redirect_stdout(fout):
+                    print(f"\nDone with {self.clf.__name__} imputation!\n")
 
         lst2del = [df_chunks]
         del lst2del
@@ -383,33 +525,36 @@ class Impute:
         print(f"\nDone with {self.clf.__name__} imputation!\n")
         return imputed_df, df_scores, None
 
-    def _impute_gridsearch(self, df):
-        """[Do IterativeImputer with RandomizedSearchCV]
+    def _impute_gridsearch(
+        self, df: pd.DataFrame
+    ) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, Any]]:
+        """Do IterativeImputer with RandomizedSearchCV or GASearchCV.
 
         Args:
-            df ([pandas.DataFrame]): [DataFrame with 012-encoded genotypes]
+            df (pandas.DataFrame): DataFrame with 012-encoded genotypes.
 
         Returns:
-            [pandas.DataFrame]: [DataFrame with 012-encoded genotypes imputed using the best parameters found from the grid search]
-
-            [float]: [Absolute value of the best score found during the grid search]
-
-            [dict]: [Best parameters found during the grid search]
+            pandas.DataFrame: DataFrame with 012-encoded genotypes imputed using the best parameters found with the grid search.
+            float: Absolute value of best score found during the grid search.
+            dict: Best parameters found during the grid search.
         """
         original_num_cols = len(df.columns)
-        df_tmp = self._remove_nonbiallelic(df)
-        df_subset = self.subset_data_for_gridsearch(
-            df_tmp, self.column_subset, original_num_cols
+        df_bi = self._remove_nonbiallelic(df)
+        df_subset, cols_to_keep = self._subset_data_for_gridsearch(
+            df_bi, self.column_subset, original_num_cols
         )
 
-        lst2del = [df_tmp]
-        del lst2del
-        gc.collect()
-
         print(f"Validation dataset size: {len(df_subset.columns)}\n")
-        print("Doing grid search...")
 
         clf = self.clf()
+
+        print(f"Doing {self.clf.__name__} grid search...")
+
+        if self.disable_progressbar:
+            with open(self.logfilepath, "a") as fout:
+                # Redirect to progress logfile
+                with redirect_stdout(fout):
+                    print(f"Doing {self.clf.__name__} grid search...\n")
 
         imputer = self._define_iterative_imputer(
             clf,
@@ -430,9 +575,20 @@ class Impute:
             pops=self.pops,
         )
 
-        Xt, params_list, score_list = imputer.fit_transform(df_subset)
+        if len(cols_to_keep) == original_num_cols:
+            cols_to_keep = None
 
-        print("\nDone!")
+        Xt, params_list, score_list = imputer.fit_transform(
+            df_subset, cols_to_keep
+        )
+
+        print(f"\nDone with {self.clf.__name__} grid search!")
+
+        if self.disable_progressbar:
+            with open(self.logfilepath, "a") as fout:
+                # Redirect to progress logfile
+                with redirect_stdout(fout):
+                    print(f"\nDone with {self.clf.__name__} grid search!")
 
         del imputer
         del Xt
@@ -460,6 +616,7 @@ class Impute:
         del median_score
         del max_score
         del min_score
+        gc.collect()
 
         if self.clf_type == "classifier":
             df_scores = df_scores.apply(lambda x: x * 100)
@@ -480,7 +637,19 @@ class Impute:
         del test
         gc.collect()
 
-        print("\nDoing imputation with best found parameters...")
+        print(
+            f"\nDoing {self.clf.__name__} imputation "
+            f"with best found parameters...\n"
+        )
+
+        if self.disable_progressbar:
+            with open(self.logfilepath, "a") as fout:
+                # Redirect to progress logfile
+                with redirect_stdout(fout):
+                    print(
+                        f"\nDoing {self.clf.__name__} imputation "
+                        f"with best found parameters...\n"
+                    )
 
         best_imputer = self._define_iterative_imputer(
             best_clf,
@@ -492,31 +661,48 @@ class Impute:
             pops=self.pops,
         )
 
-        df_chunks = self.df2chunks(df, self.chunk_size)
-        imputed_df = self._impute_df(df_chunks, best_imputer, original_num_cols)
+        final_cols = None
+        if len(df_bi.columns) < original_num_cols:
+            final_cols = np.array(df_bi.columns)
 
-        lst2del = [df_chunks]
-        del df_chunks
+        df_chunks = self.df2chunks(df_bi, self.chunk_size)
+        imputed_df = self._impute_df(
+            df_chunks, best_imputer, cols_to_keep=final_cols
+        )
+
+        lst2del = [df_chunks, df_bi]
+        del lst2del
         gc.collect()
 
         self._validate_imputed(imputed_df)
 
-        print(f"\nDone with {self.clf.__name__} imputation!\n")
+        print(f"Done with {self.clf.__name__} imputation!\n")
+
+        if self.disable_progressbar:
+            with open(self.logfilepath, "a") as fout:
+                # Redirect to progress logfile
+                with redirect_stdout(fout):
+                    print(f"Done with {self.clf.__name__} imputation!\n")
+
         return imputed_df, df_scores, best_params
 
-    def _imputer_validation(self, df, clf):
-        """[Validate imputation by running it on a validation test set ``cv`` times. Actual missing values are imputed with sklearn.impute.SimpleImputer, and then missing values are randomly introduced to known genotypes. The dataset with no missing data is compared to the dataset with known missing data to obtain validation scores]
+    def _imputer_validation(
+        self, df: pd.DataFrame, clf: Optional[Callable]
+    ) -> pd.DataFrame:
+        """Validate imputation with a validation test set.
+
+        Validation imputation by running it on a validation test set ``cv`` times. Actual missing values are imputed with sklearn.impute.SimpleImputer, and then missing values are randomly introduced to known genotypes. The dataset with no missing data is compared to the dataset with known missing data to obtain validation scores.
 
         Args:
-            df ([pandas.DataFrame]): [012-encoded genotypes to impute]
+            df (pandas.DataFrame): 012-encoded genotypes to impute.
 
-            clf ([sklearn classifier instance]): [sklearn classifier instance with which to run the imputation]
+            clf (sklearn classifier instance or None): sklearn classifier instance with which to run the imputation.
 
         Raises:
-            ValueError: [If none of the scores were able to be estimated and reps is empty]
+            ValueError: If none of the scores were able to be estimated and reps variable is empty.
 
         Returns:
-            [pandas.DataFrame]: [Validation scores in a pandas DataFrame object. Contains the scoring metric, mean, median, minimum, and maximum validation scores among all features, and the lower and upper 95% confidence interval among the replicates]
+            pandas.DataFrame: Validation scores in a pandas DataFrame object. Contains the scoring metric, mean, median, minimum, and maximum validation scores among all features, and the lower and upper 95% confidence interval among the replicates.
         """
         reps = defaultdict(list)
         for cnt, rep in enumerate(
@@ -532,6 +718,11 @@ class Impute:
             if self.disable_progressbar:
                 perc = int((cnt / self.cv) * 100)
                 print(f"Validation replicate {cnt}/{self.cv} ({perc}%)")
+
+                with open(self.logfilepath, "a") as fout:
+                    # Redirect to progress logfile
+                    with redirect_stdout(fout):
+                        print(f"Validation replicate {cnt}/{self.cv} ({perc}%)")
 
             scores = self._impute_eval(df, clf)
 
@@ -617,64 +808,94 @@ class Impute:
 
         return df_scores
 
-    def _impute_df(self, df_chunks, imputer, original_num_cols):
-        """[Impute list of pandas.DataFrame objects using IterativeImputer. The DataFrames correspond to each chunk of features]
+    def _impute_df(
+        self,
+        df_chunks: List[pd.DataFrame],
+        imputer: Optional[
+            Union[IterativeImputerFixedParams, IterativeImputerGridSearch]
+        ],
+        cols_to_keep: Optional[np.ndarray] = None,
+    ) -> pd.DataFrame:
+        """Impute list of pandas.DataFrame objects using custom IterativeImputer class.
+
+        The DataFrames are chunks of the whole input data, with each chunk correspoding to ``chunk_size`` features from ``df2chunks()``.
 
         Args:
-            df_chunks ([list(pandas.DataFrame)]): [Dataframe with 012-encoded genotypes]
+            df_chunks (List[pandas.DataFrame]): List of Dataframes of shape(n_samples, n_features_in_chunk).
 
-            imputer ([IterativeImputerAllData instance]): [Defined IterativeImputerAllData instance to perform the imputation]
+            imputer (IterativeImputerFixedParams instance or None): Defined IterativeImputerFixedParams instance to perform the imputation.
 
-            original_num_cols ([int]): [Number of columns in original dataset]
+            cols_to_keep (numpy.ndarray): Final bi-allelic columns to keep. If some columns were non-biallelic, it will be a subset of columns.
 
         Returns:
-            [pandas.DataFrame]: [Single DataFrame object, with all the imputed chunks concatenated together]
+            pandas.DataFrame: Single DataFrame object, with all the imputed chunks concatenated together.
         """
         imputed_chunks = list()
         num_chunks = len(df_chunks)
         for i, Xchunk in enumerate(df_chunks, start=1):
             if self.clf_type == "classifier":
-                df_imp = pd.DataFrame(
-                    imputer.fit_transform(Xchunk), dtype="Int8"
-                )
+                if self.clf == VAE or self.clf == UBP:
+                    imputer = self.clf(**self.clf_kwargs)
+                    if self.clf == UBP:
+                        df_imp = pd.DataFrame(
+                            imputer.fit_transform(Xchunk),
+                            dtype="Int8",
+                        )
+                    else:
+                        df_imp = pd.DataFrame(imputer.fit_transform(Xchunk))
+                        df_imp = df_imp.astype("float")
+                        df_imp = df_imp.astype("Int8")
+
+                else:
+                    df_imp = pd.DataFrame(
+                        imputer.fit_transform(Xchunk, valid_cols=cols_to_keep),
+                        dtype="Int8",
+                    )
 
                 imputed_chunks.append(df_imp)
 
             else:
                 # Regressor. Needs to be rounded to integer first.
-                df_imp = pd.DataFrame(imputer.fit_transform(Xchunk))
+                df_imp = pd.DataFrame(
+                    imputer.fit_transform(
+                        Xchunk,
+                        valid_cols=cols_to_keep,
+                    )
+                )
                 df_imp = df_imp.round(0).astype("Int8")
 
                 imputed_chunks.append(df_imp)
 
         concat_df = pd.concat(imputed_chunks, axis=1)
-        assert (
-            len(concat_df.columns) == original_num_cols
-        ), "Failed merge operation: Could not merge chunks back together"
 
         del imputed_chunks
         gc.collect()
 
         return concat_df
 
-    def _validate_imputed(self, df):
-        """[Asserts that there is no missing data left in the imputed DataFrame]
+    def _validate_imputed(self, df: pd.DataFrame) -> None:
+        """Asserts that there is no missing data left in the imputed DataFrame.
 
         Args:
-            df ([pandas.DataFrame]): [DataFrame with imputed 012-encoded genotypes]
+            df (pandas.DataFrame): DataFrame with imputed 012-encoded genotypes.
+
+        Raises:
+            AssertionError: Error if missing values are still found in the dataset after imputation.
         """
         assert (
             not df.isnull().values.any()
         ), "Imputation failed...Missing values found in the imputed dataset"
 
-    def _get_best_params(self, params_list):
+    def _get_best_params(
+        self, params_list: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
         """[Gets the best parameters from the grid search. Determines the parameter types and either gets the mean or mode if the type is numeric or string/ boolean]
 
         Args:
-            params_list ([list(dict)]): [List of grid search parameter values]
+            params_list (List[dict]): List of grid search parameter values.
 
         Returns:
-            [dict]: [Dictionary with parameters as keys and their best values]
+            Dict[str, Any]: Dictionary with parameters as keys and their best values.
         """
         best_params = dict()
         keys = list(params_list[0].keys())
@@ -700,47 +921,55 @@ class Impute:
 
         return best_params
 
-    def _mode_list_of_dicts(self, l, k):
-        """[Get mode for key k in a list of dictionaries]
+    def _mode_list_of_dicts(
+        self, l: List[Dict[str, Union[str, bool]]], k: str
+    ) -> str:
+        """Get mode for key k in a list of dictionaries.
 
         Args:
-            l ([list(dict)]): [List of dictionaries]
-            k ([str]): [Key to find the mode across all dictionaries in l]
+            l (list(dict)): List of dictionaries.
+            k (str): Key to find the mode across all dictionaries in l.
 
         Returns:
-            [str]: [Most common value across list of dictionaries for one key]
+            str or bool: Most common value across list of dictionaries for one key.
         """
         k_count = Counter(map(itemgetter(k), l))
         return k_count.most_common()[0][0]
 
-    def _average_list_of_dicts(self, l, k, is_int=False):
-        """[Get average of a given key in a list of dictionaries]
+    def _average_list_of_dicts(
+        self,
+        l: List[Dict[str, Union[int, float]]],
+        k: str,
+        is_int: bool = False,
+    ) -> Union[int, float]:
+        """Get average of a given key in a list of dictionaries.
 
         Args:
-            l ([list(dict)]): [List of dictionaries]
+            l (List[Dict[str, Union[int, float]]]): List of dictionaries.
 
-            k ([str]): [Key to find average across list of dictionaries]
+            k (str): Key to find average across list of dictionaries.
 
-            is_int (bool, optional): [Whether or not the value for key k is an integer. If False, it is expected to be of type float]. Defaults to False.
+            is_int (bool, optional): Whether or not the value for key k is an integer. If False, it is expected to be of type float. Defaults to False.
 
         Returns:
-            [int or float]: [average of given key across list of dictionaries]
+            int or float: average of given key across list of dictionaries.
         """
         if is_int:
             return int(sum(d[k] for d in l) / len(l))
         else:
             return sum(d[k] for d in l) / len(l)
 
-    def _remove_nonbiallelic(self, df):
-        """[Remove sites that do not have both 0 and 2 encoded values in a column and if any of the allele counts is less than the number of cross-validation folds]
+    def _remove_nonbiallelic(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Remove non-biallelic sites from pandas.DataFrame.
+
+        Remove sites that do not have both 0 and 2 encoded values in a column and if any of the allele counts is less than the number of cross-validation folds.
 
         Args:
-            df ([pandas.DataFrame]): [DataFrame with 012-encoded genotypes]
+            df (pandas.DataFrame): DataFrame with 012-encoded genotypes.
 
         Returns:
-            [pandas.DataFrame]: [DataFrame with sites removed]
+            pandas.DataFrame: DataFrame with non-biallelic sites dropped.
         """
-        cv2 = self.cv * 2
         df_cp = df.copy()
         bad_cols = list()
         if pd.__version__[0] == 0:
@@ -751,14 +980,14 @@ class Impute:
                 ):
                     bad_cols.append(col)
 
-                if len(df_cp[df_cp[col] == 0.0]) < cv2:
+                elif len(df_cp[df_cp[col] == 0.0]) < self.cv:
                     bad_cols.append(col)
 
-                if df_cp[col].isin([1.0]).any():
-                    if len(df_cp[df_cp[col] == 1]) < cv2:
+                elif df_cp[col].isin([1.0]).any():
+                    if len(df_cp[df_cp[col] == 1]) < self.cv:
                         bad_cols.append(col)
 
-                if len(df_cp[df_cp[col] == 2.0]) < cv2:
+                elif len(df_cp[df_cp[col] == 2.0]) < self.cv:
                     bad_cols.append(col)
 
         # pandas 1.X.X
@@ -767,46 +996,71 @@ class Impute:
                 if 0.0 not in df[col].unique() and 2.0 not in df[col].unique():
                     bad_cols.append(col)
 
-                elif len(df_cp[df_cp[col] == 0.0]) < cv2:
+                elif len(df_cp[df_cp[col] == 0.0]) < self.cv:
                     bad_cols.append(col)
 
                 elif 1.0 in df_cp[col].unique():
-                    if len(df_cp[df_cp[col] == 1.0]) < cv2:
+                    if len(df_cp[df_cp[col] == 1.0]) < self.cv:
                         bad_cols.append(col)
 
-                elif len(df_cp[df_cp[col] == 2.0]) < cv2:
+                elif len(df_cp[df_cp[col] == 2.0]) < self.cv:
                     bad_cols.append(col)
 
-        df_cp.drop(bad_cols, axis=1, inplace=True)
+        if bad_cols:
+            df_cp.drop(bad_cols, axis=1, inplace=True)
 
-        print(
-            f"{len(bad_cols)} columns removed for being non-biallelic or having genotype counts < number of cross-validation folds\nSubsetting from {len(df_cp.columns)} remaining columns\n"
-        )
+            print(
+                f"{len(bad_cols)} columns removed for being non-biallelic or "
+                f"having genotype counts < number of cross-validation "
+                f"folds\nSubsetting from {len(df_cp.columns)} remaining columns\n"
+            )
 
         return df_cp
 
-    def _gather_impute_settings(self, kwargs):
-        """[Gather impute settings from the various imputation classes and IterativeImputer. Gathers them for use with the Impute() class. Returns dictionary with keys as keyword arguments and the values as the settings. The imputation can then be run by specifying e.g. IterativeImputer(**imp_kwargs)]
+    def _gather_impute_settings(
+        self, kwargs: Dict[str, Any]
+    ) -> Tuple[
+        Optional[Dict[str, Any]],
+        Optional[Dict[str, Any]],
+        Optional[Dict[str, Any]],
+        Optional[Dict[str, Any]],
+        Optional[int],
+        Optional[int],
+        Optional[int],
+        Optional[str],
+        Optional[Union[int, float]],
+        Optional[bool],
+        Optional[bool],
+        Optional[Optional[int]],
+        Optional[str],
+        Optional[int],
+        Optional[Union[int, float]],
+        Optional[float],
+    ]:
+        """Gather impute settings from kwargs object.
+
+        Gather impute settings from the various imputation classes and IterativeImputer. Gathers them for use with the ``Impute`` class. Returns dictionary with keys as keyword arguments and the values as the settings. The imputation can then be run by specifying IterativeImputer(**imp_kwargs).
 
         Args:
-            kwargs ([dict]): [Dictionary with keys as the keyword arguments and their corresponding values]
+            kwargs (Dict[str, Any]): Dictionary with keys as the keyword arguments and their corresponding values.
 
         Returns:
-            [dict]: [Parameters distributions to run with grid search]
-            [dict]: [IterativeImputer keyword arguments]
-            [dict]: [Classifier keyword arguments]
-            [dict]: [Genetic algorithm keyword arguments]
-            [int]: [Number of iterations to run with grid search]
-            [int]: [Number of cross-validation folds to use]
-            [int]: [Number of processors to use with grid search]
-            [str]: [Prefix for output files]
-            [int or float]: [Proportion of dataset to use for grid search]
-            [bool]: [If True, disables the tqdm progress bar and just prints status updates to a file]
-            [int]: [Percent in which to print progress updates for features]
-            [str]: [Scoring metric to use with grid search. Can be any of the sklearn classifier metrics in string format]
-            [int]: [Number of generations without improvement before Early Stopping criterion is called]
-            [int or float]: [Chunk sizes for doing full imputation following grid search. If int, then splits into chunks of ``chunk_size``. If float, then splits into chunks of ``n_features * chunk_size``]
-            [float or None]: [Proportion of loci to use for validation if grid search is not used. If None, then doesn't do validation]
+            Dict[str, Any]: Parameters with distributions to run with grid search.
+            Dict[str, Any]: IterativeImputer keyword arguments.
+            Dict[str, Any]: Classifier keyword arguments.
+            Dict[str, Any]: Genetic algorithm keyword arguments.
+            int: Number of iterations to run with grid search.
+            int: Number of cross-validation folds to use with grid search.
+            int: Number of processors to use with grid search.
+            str or None: Prefix for output files.
+            int or float: Proportion of dataset (if float) or number of columns (if int) to use for grid search.
+            bool: True if using GASearchCV, False if using RandomSearchCV.
+            bool: If True, disables the tqdm progress bar and just prints status updates to a file. If False, uses tqdm progress bar.
+            int or None: Percent in which to print progress updates for features. If None, then does not print progress through features.
+            str: Scoring metric to use with grid search. Can be any of the sklearn classifier metrics in string format.
+            int: Number of generations without improvement before Early Stopping criterion is called.
+            int or float: Chunk sizes for doing full imputation following grid search. If int, then splits into chunks of ``chunk_size``. If float, then splits into chunks of ``n_features * chunk_size``.
+            float or None: Proportion of loci to use for validation if grid search is not used. If None, then doesn't do validation.
         """
         gridparams = kwargs.pop("gridparams", None)
         cv = kwargs.pop("cv", None)
@@ -820,7 +1074,6 @@ class Impute:
         early_stop_gen = kwargs.pop("early_stop_gen", None)
         chunk_size = kwargs.pop("chunk_size", None)
         validation_only = kwargs.pop("validation_only", None)
-
         progress_update_percent = kwargs.pop("progress_update_percent", None)
 
         if prefix is None:
@@ -840,6 +1093,8 @@ class Impute:
             "random_state",
             "verbose",
             "sample_posterior",
+            "genotype_data",
+            "str_encodings",
         ]
 
         ga_keys = [
@@ -851,7 +1106,7 @@ class Impute:
             "ga_algorithm",
         ]
 
-        to_remove = ["genotype_data", "self", "__class__"]
+        to_remove = ["self", "__class__"]
 
         for k, v in clf_kwargs.copy().items():
             if k in to_remove:
@@ -903,71 +1158,52 @@ class Impute:
             validation_only,
         )
 
-    def _format_features(self, df, missing_val=-9):
-        """[Format a 2D list for input into iterative imputer]
+    def _format_features(
+        self, df: pd.DataFrame, missing_val: int = -9
+    ) -> pd.DataFrame:
+        """Format a 2D list for input into iterative imputer.
 
         Args:
-            df ([pandas.DataFrame]): [DataFrame of features with shape(n_samples, n_features)]
+            df (pandas.DataFrame): DataFrame of features with shape (n_samples, n_features).
 
-            missing_val (int, optional): [Missing value to replace with numpy.nan]. Defaults to -9.
+            missing_val (int, optional): Missing value to replace with numpy.nan. Defaults to -9.
 
         Returns:
-            [pandas.DataFrame]: [Formatted pandas.DataFrame for input into IterativeImputer]
+            pandas.DataFrame: Formatted pandas.DataFrame for input into IterativeImputer.
         """
         # Replace missing data with NaN
         X = df.replace(missing_val, np.nan)
         return X
 
-    def _defile_dataset(self, df, col_selection_rate=0.40):
-        """[Function to select ``col_selection_rate * columns`` columns in a pandas DataFrame and change anywhere from 15% to 50% of the values in each of those columns to np.nan (missing data). Since we know the true values of the ones changed to np.nan, we can assess the accuracy of the classifier and do a grid search]
+    def _defile_dataset(
+        self, df: pd.DataFrame, col_selection_rate: float = 0.40
+    ) -> Tuple[pd.DataFrame, pd.DataFrame, np.ndarray]:
+        """Replace random columns and rows with np.nan.
+
+        Function to select ``col_selection_rate * columns`` columns in a pandas DataFrame and change anywhere from 15% to 50% of the values in each of those columns to np.nan (missing data). Since we know the true values of the ones changed to np.nan, we can assess the accuracy of the classifier and do a grid search.
 
         Args:
-            df ([pandas.DataFrame]): [012-encoded genotypes to extract columns from.]
+            df (pandas.DataFrame): 012-encoded genotypes to extract columns from.
 
-            col_selection_rate (float, optional): [Proportion of the DataFrame to extract]. Defaults to 0.40.
+            col_selection_rate (float, optional): Proportion of the DataFrame to extract. Defaults to 0.40.
 
         Returns:
-            [pandas.DataFrame]: [DataFrame with newly missing values]
-            [numpy.ndarray]: [Columns that were extracted via random sampling]
+            pandas.DataFrame: DataFrame with values imputed initially with sklearn.impute.SimpleImputer, ImputeAlleleFreq (by populations) or ImputePhylo.
+            pandas.DataFrame: DataFrame with randomly missing values.
+            numpy.ndarray: Columns that were extracted via random sampling.
         """
-        # Code adapted from:
-        # https://medium.com/analytics-vidhya/using-scikit-learns-iterative-imputer-694c3cca34de
-
+        # Code adapted from: https://medium.com/analytics-vidhya/using-scikit-learns-iterative-imputer-694c3cca34de
         cols = np.random.choice(
-            df.columns, int(len(df.columns) * col_selection_rate)
+            df.columns,
+            int(len(df.columns) * col_selection_rate),
+            replace=False,
         )
 
-        # Fill in unknown values with simple imputations
-        simple_imputer = SimpleImputer(
-            strategy=self.imp_kwargs["initial_strategy"]
-        )
+        initial_strategy = self.imp_kwargs["initial_strategy"]
+        gt_data = self.imp_kwargs["genotype_data"]
+        str_enc = self.imp_kwargs["str_encodings"]
 
-        df_defiled = pd.DataFrame(simple_imputer.fit_transform(df))
-        df_filled = df_defiled.copy()
-
-        del simple_imputer
-        gc.collect()
-
-        for col in cols:
-            data_drop_rate = np.random.choice(np.arange(0.15, 0.5, 0.02), 1)[0]
-
-            drop_ind = np.random.choice(
-                np.arange(len(df_defiled[col])),
-                size=int(len(df_defiled[col]) * data_drop_rate),
-                replace=False,
-            )
-
-            # Introduce random np.nan values
-            df_defiled.iloc[drop_ind, col] = np.nan
-
-        return df_filled, df_defiled, cols
-
-    def _defile_dataset_groups(self, df, col_selection_rate=0.40):
-        cols = np.random.choice(
-            df.columns, int(len(df.columns) * col_selection_rate)
-        )
-
-        if self.imp_kwargs["initial_strategy"] == "most_frequent_populations":
+        if initial_strategy == "populations":
             simple_imputer = impute.estimators.ImputeAlleleFreq(
                 gt=df.fillna(-9).values.tolist(),
                 pops=self.pops,
@@ -977,10 +1213,66 @@ class Impute:
                 verbose=False,
             )
 
-        df_defiled = simple_imputer.imputed
+            df_defiled = simple_imputer.imputed
+            valid_cols = cols.copy()
+
+        elif initial_strategy == "phylogeny":
+            print(
+                "Doing initial imputation with initial_strategy == "
+                "'phylogeny'..."
+            )
+
+            # NOTE: non-biallelic sites are removed with ImputePhylo
+            simple_imputer = impute.estimators.ImputePhylo(
+                genotype_data=gt_data,
+                str_encodings=str_enc,
+                write_output=False,
+                disable_progressbar=True,
+            )
+
+            valid_mask = np.flatnonzero(
+                np.logical_not(np.isnan(simple_imputer.valid_sites))
+            )
+
+            # ImputePhylo resets the column names
+            # So here I switch them back
+            # and remove any columns that were non-biallelic
+            valid_cols = np.sort(self._remove_invalid_cols(cols, valid_mask))
+            new_colnames = self._remove_invalid_cols(
+                np.array(df.columns), valid_mask
+            )
+
+            self.invalid_indexes = self._remove_invalid_cols(
+                np.array(df.columns), valid_mask, validation_mode=False
+            )
+
+            df_defiled = simple_imputer.imputed
+            old_colnames = list(df_defiled.columns)
+            df_defiled.rename(
+                columns={i: j for i, j in zip(old_colnames, new_colnames)},
+                inplace=True,
+            )
+
+        else:
+            # Fill in unknown values with sklearn.impute.SimpleImputer
+            simple_imputer = SimpleImputer(
+                strategy=self.imp_kwargs["initial_strategy"]
+            )
+
+            df_defiled = pd.DataFrame(
+                simple_imputer.fit_transform(df.fillna(-9).values)
+            )
+            valid_cols = cols.copy()
+
+        del simple_imputer
+        del cols
+        gc.collect()
+
+        self.original_num_cols = len(df_defiled.columns)
         df_filled = df_defiled.copy()
 
-        for col in cols:
+        # Randomly choose rows (samples) to introduce missing data to
+        for col in valid_cols:
             data_drop_rate = np.random.choice(np.arange(0.15, 0.5, 0.02), 1)[0]
 
             drop_ind = np.random.choice(
@@ -990,48 +1282,94 @@ class Impute:
             )
 
             # Introduce random np.nan values
-            df_defiled.iloc[drop_ind, col] = np.nan
+            df_defiled.loc[drop_ind, col] = np.nan
 
-        return df_filled, df_defiled, cols
+        return df_filled, df_defiled, valid_cols
 
-    def _impute_eval(self, df, clf):
-        """[Function to run IterativeImputer on a DataFrame. The dataframe columns will be randomly subset and a fraction of the known, true values are converted to missing data to allow evalutation of the model with either accuracy or mean_squared_error scores]
+    def _remove_invalid_cols(
+        self, arr1: np.ndarray, arr2: np.ndarray, validation_mode: bool = True
+    ) -> Optional[Union[List[int], np.ndarray]]:
+        """Finds set difference between two numpy arrays and returns the values unique to arr1 that are not found in arr2.
 
-            Args:
-                df ([pandas.DataFrame]): [Original DataFrame with 012-encoded genotypes]
-
-                clf ([sklearn Classifier]): [Classifier instance to use with IterativeImputer]
+        Args:
+            arr1 (numpy.ndarray): 1D Array that contains input values.
+            arr2 (numpy.ndarray): 1D Comparison array.
+            validation_mode (bool, optional): If False, returns indexes to remove. If True, returns numpy.ndarray of remaining column labels.
 
         Returns:
-                [dict(list)]: [Validation scores for the current imputation]
+            List[int], np.ndarray, or None: List of Bad indexes to remove, numpy.ndarray with invalid column labels removed, or None if no bad columns were found.
+        """
+        bad_idx = list()
+        for i, item in enumerate(arr1):
+            if not np.any(arr2 == item):
+                bad_idx.append(i)
+
+        if not validation_mode:
+            if bad_idx:
+                return bad_idx
+            else:
+                return None
+
+        if bad_idx:
+            return np.delete(arr1, bad_idx)
+        else:
+            return arr1.copy()
+
+    def _impute_eval(
+        self, df: pd.DataFrame, clf: Optional[Callable]
+    ) -> Dict[str, List[Union[float, int]]]:
+        """Function to run IterativeImputer on a pandas.DataFrame.
+
+        The dataframe columns are randomly subset and a fraction of the known, true values are converted to missing data to allow evalutation of the model with either accuracy or mean_squared_error scores.
+
+        Args:
+            df (pandas.DataFrame): Original DataFrame with 012-encoded genotypes.
+
+            clf (sklearn Classifier or None): Classifier instance to use with IterativeImputer.
+
+        Returns:
+            Dict[List[float or int]]: Validation scores for the current imputation.
         """
         # Code adapted from:
         # https://medium.com/analytics-vidhya/using-scikit-learns-iterative-imputer-694c3cca34de
-
-        # Subset the DataFrame randomly and replace known values with np.nan
-
-        if self.imp_kwargs["initial_strategy"] == "most_frequent_populations":
-            df_known, df_unknown, cols = self._defile_dataset_groups(
-                df, col_selection_rate=self.validation_only
-            )
-
-        else:
-
-            df_known, df_unknown, cols = self._defile_dataset(
-                df, col_selection_rate=self.validation_only
-            )
+        df_known, df_unknown, cols = self._defile_dataset(
+            df, col_selection_rate=self.validation_only
+        )
 
         df_known_slice = df_known[cols]
         df_unknown_slice = df_unknown[cols]
+        df_missing_mask = df_unknown_slice.isnull()
 
-        df_stg = df_unknown.copy()
+        # Neural networks
+        if self.clf == VAE or self.clf == UBP:
+            df_stg = df_unknown_slice.copy()
 
-        # Variational Autoencoder Neural Network
-        if self.clf == "VAE":
-            df_imp = self.fit_predict(df_stg.to_numpy())
-            df_imp = df_imp.astype(np.float)
+            for col in df_stg.columns:
+                df_stg[col] = df_stg[col].replace({pd.NA: np.nan})
+            df_stg.fillna(-9, inplace=True)
+
+            imputer = self.clf(**self.clf_kwargs)
+
+            if self.clf == VAE:
+                df_imp = pd.DataFrame(
+                    imputer.fit_transform(df_stg.to_numpy()),
+                    columns=cols,
+                )
+
+                df_imp = df_imp.astype("float")
+                df_imp = df_imp.astype("int64")
+
+            else:
+                df_imp = pd.DataFrame(
+                    imputer.fit_transform(df_stg.to_numpy()),
+                    columns=cols,
+                    dtype="int64",
+                )
 
         else:
+            # Using IterativeImputer
+            df_stg = df_unknown.copy()
+
             imputer = self._define_iterative_imputer(
                 clf,
                 self.logfilepath,
@@ -1044,8 +1382,11 @@ class Impute:
 
             imp_arr = imputer.fit_transform(df_stg)
 
+            # Get only subset of validation columns
+            # get_loc returns the index of the value
             df_imp = pd.DataFrame(
-                imp_arr[:, [df_known.columns.get_loc(i) for i in cols]]
+                imp_arr[:, [df_unknown.columns.get_loc(i) for i in cols]],
+                columns=cols,
             )
 
         # Get score of each column
@@ -1053,10 +1394,21 @@ class Impute:
         for i in range(len(df_known_slice.columns)):
             # Adapted from: https://medium.com/analytics-vidhya/using-scikit-learns-iterative-imputer-694c3cca34de
 
-            y_true = df_known[df_known.columns[i]]
-            y_pred = df_imp[df_imp.columns[i]]
+            mask = df_missing_mask[df_known_slice.columns[i]]
+            y_true = df_known[df_known_slice.columns[i]]
+            y_true = y_true[mask]
+
+            y_pred = df_imp[df_known_slice.columns[i]]
+            y_pred = y_pred[mask]
 
             if self.clf_type == "classifier":
+
+                # Had to do this because get incompatible type error if using
+                # initial_imputation="populations"
+                if y_true.dtypes != "int64":
+                    y_true = y_true.astype("int64")
+                if y_pred.dtypes != "int64":
+                    y_pred = y_pred.astype("int64")
 
                 scores["accuracy"].append(
                     metrics.accuracy_score(y_true, y_pred)
@@ -1100,11 +1452,10 @@ class Impute:
             df_imp,
             df_known,
             df_known_slice,
-            df_unknown_slice,
             df_unknown,
         ]
 
-        if self.clf == "VAE":
+        if self.clf == VAE or self.clf == UBP:
             del lst2del
             del cols
         else:
@@ -1119,64 +1470,65 @@ class Impute:
 
     def _define_iterative_imputer(
         self,
-        clf,
-        logfilepath,
-        clf_kwargs=None,
-        ga_kwargs=None,
-        prefix="out",
-        n_jobs=None,
-        n_iter=None,
-        cv=None,
-        clf_type=None,
-        ga=False,
-        search_space=None,
-        disable_progressbar=False,
-        progress_update_percent=None,
-        scoring_metric=None,
-        early_stop_gen=None,
-        pops=None,
-    ):
-        """[Define an IterativeImputer instance]
+        clf: Callable,
+        logfilepath: str,
+        clf_kwargs: Optional[Dict[str, Any]] = None,
+        ga_kwargs: Optional[Dict[str, Any]] = None,
+        prefix: str = "out",
+        n_jobs: Optional[int] = None,
+        n_iter: Optional[int] = None,
+        cv: Optional[int] = None,
+        clf_type: Optional[str] = None,
+        ga: bool = False,
+        search_space: Optional[Dict[str, Any]] = None,
+        disable_progressbar: bool = False,
+        progress_update_percent: Optional[int] = None,
+        scoring_metric: Optional[str] = None,
+        early_stop_gen: Optional[int] = None,
+        pops: Optional[List[Union[int, str]]] = None,
+    ) -> Union[IterativeImputerGridSearch, IterativeImputerFixedParams]:
+        """Define an IterativeImputer instance.
 
-            Args:
-                clf ([sklearn Classifier]): [Classifier to use with IterativeImputer]
+        The instances are of custom, overloaded IterativeImputer classes.
 
-                logfilepath [str]: [Path to progress log file]
+        Args:
+            clf (sklearn Classifier instance): Estimator to use with IterativeImputer.
 
-                clf_kwargs (dict, optional): [Keyword arguments for classifier]. Defaults to None.
+            logfilepath (str): Path to progress log file.
 
-                ga_kwargs (dict, optional): [Keyword arguments for genetic algorithm grid search]. Defaults to None.
+            clf_kwargs (dict, optional): Keyword arguments for classifier. Defaults to None.
 
-                prefix (str, optional): [Prefix for saving GA plots to PDF file]. Defaults to None.
+            ga_kwargs (dict, optional): Keyword arguments for genetic algorithm grid search. Defaults to None.
 
-                n_jobs (int, optional): [Number of parallel jobs to use with the IterativeImputer grid search. Ignored if search_space=None]. Defaults to None.
+            prefix (str, optional): Prefix for saving GA plots to PDF file. Defaults to None.
 
-                n_iter (int, optional): [Number of iterations for grid search. Ignored if search_space=None]. Defaults to None.
+            n_jobs (int, optional): Number of parallel jobs to use with the IterativeImputer grid search. Ignored if ``search_space=None``. Defaults to None.
 
-                cv (int, optional): [Number of cross-validation folds to use with grid search. Ignored if search_space=None]. Defaults to None
+            n_iter (int, optional): [Number of iterations for grid search. Ignored if ``search_space=None``]. Defaults to None.
 
-                clf_type (str, optional): [Type of estimator. Valid options are "classifier" or "regressor". Ignored if search_space=None]. Defaults to None.
+            cv (int, optional): Number of cross-validation folds to use with grid search. Ignored if ``search_space=None``. Defaults to None
 
-                ga (bool, optional): [Whether to use genetic algorithm for the grid search. If False, uses RandomizedSearchCV instead]. Defaults to False.
+            clf_type (str, optional): Type of estimator. Valid options are "classifier" or "regressor". Ignored if ``search_space=None``. Defaults to None.
 
-                search_space (dict, optional): [gridparams dictionary with search space to explore in random grid search]. Defaults to None.
+            ga (bool, optional): Whether to use genetic algorithm for the grid search. If False, uses RandomizedSearchCV instead. Defaults to False.
 
-                disable_progressbar (bool, optional): [Whether or not to disable the tqdm progress bar]. Defaults to False.
+            search_space (dict, optional): gridparams dictionary with search space to explore in random grid search. Defaults to None.
 
-                progress_update_percent (int, optional): [Print progress updates every ```progress_update_percent``` percent]. Defaults to None.
+            disable_progressbar (bool, optional): Whether or not to disable the tqdm progress bar. Defaults to False.
 
-                scoring_metric (str, optional): [Scoring metric to use with grid search]. Defaults to None.
+            progress_update_percent (int, optional): Print progress updates every ``progress_update_percent`` percent. Defaults to None.
 
-                early_stop_gen (int, optional): [Number of consecutive generations without improvement to raise early stopping callback]. Defaults to None.
+            scoring_metric (str, optional): Scoring metric to use with grid search. Defaults to None.
 
-                pops [list]: [Population IDs as 1d-list in order of sampleID]
+            early_stop_gen (int, optional): Number of consecutive generations without improvement to raise early stopping callback. Defaults to None.
 
+            pops (List[Union[int, str]], optional): Population IDs as 1d-list in order of sampleID.
 
         Returns:
-                [sklearn.impute.IterativeImputer]: [IterativeImputer instance]
+            sklearn.impute.IterativeImputer: IterativeImputer instance.
         """
         if search_space is None:
-            imp = IterativeImputerAllData(
+            imp = IterativeImputerFixedParams(
                 logfilepath,
                 clf_kwargs,
                 prefix,

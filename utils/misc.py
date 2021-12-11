@@ -9,11 +9,9 @@ import re
 import logging
 
 import numpy as np
-import theano
-import theano.tensor as T
+from numpy.random import choice
 from tqdm import tqdm
 from tqdm.utils import disp_len, _unicode  # for overriding status_print
-from numpy.random import choice
 
 
 # from skopt import BayesSearchCV
@@ -27,7 +25,26 @@ def generate_random_dataset(
     min_missing_rate=0.15,
     max_missing_rate=0.5,
 ):
+    """Generate a random integer dataset that can be used for testing.
 
+    Will also add randomly missing values of random proportions between ``min_missing_rate`` and ``max_missing_rate``.
+
+    Args:
+        min_value (int, optional): Minimum value to use. Defaults to 0.
+
+        max_value (int, optional): Maxiumum value to use. Defaults to 2.
+
+        nrows (int, optional): Number of rows to use. Defaults to 35.
+
+        ncols (int, optional): Number of columns to use. Defaults to 20.
+
+        min_missing_rate (float, optional): Minimum proportion of missing data per column. Defaults to 0.15.
+
+        max_missing_rate (float, optional): Maximum proportion of missing data per column.
+
+    Returns:
+        numpy.ndarray: Numpy array with randomly generated dataset.
+    """
     assert (
         min_missing_rate >= 0 and min_missing_rate < 1.0
     ), f"min_missing_rate must be >= 0 and < 1.0, but got {min_missing_rate}"
@@ -74,7 +91,25 @@ def generate_012_genotypes(
     min_alt_rate=0.001,
     max_alt_rate=0.3,
 ):
+    """Generate random 012-encoded genotypes.
 
+    Allows users to control the rate of reference, heterozygote, and alternate alleles. Will insert a random proportion between ``min_het_rate`` and ``max_het_rate`` and ``min_alt_rate`` and ``max_alt_rate`` and from no misssing data to a proportion of ``max_missing_rate``.
+
+    Args:
+        nrows (int, optional): Number of rows to generate. Defaults to 35.
+
+        ncols (int, optional): Number of columns to generate. Defaults to 20.
+
+        max_missing_rate (float, optional): Maximum proportion of missing data to use. Defaults to 0.5.
+
+        min_het_rate (float, optional): Minimum proportion of heterozygotes (1's) to insert. Defaults to 0.001.
+
+        max_het_rate (float, optional): Maximum proportion of heterozygotes (1's) to insert. Defaults to 0.3.
+
+        min_alt_rate (float, optional): Minimum proportion of alternate alleles (2's) to insert. Defaults to 0.001.
+
+        max_alt_rate (float, optional): Maximum proportion of alternate alleles (2's) to insert. Defaults to 0.3.
+    """
     assert (
         min_het_rate > 0 and min_het_rate <= 1.0
     ), f"min_het_rate must be > 0 and <= 1.0, but got {min_het_rate}"
@@ -169,9 +204,9 @@ def generate_012_genotypes(
 
 
 def get_indices(l):
-    """
-    [Takes a list and returns dict giving indices matching each possible
-    list member]
+    """Takes a list and returns dict giving indices matching each possible
+    list member.
+
     Example:
             Input [0, 1, 1, 0, 0]
             Output {0:[0,3,4], 1:[1,2]}
@@ -187,10 +222,17 @@ def get_indices(l):
 
 
 def all_zero(l):
-    """
-    [Returns TRUE if supplied list contains all zeros
+    """Check whether list consists of all zeros.
+
+    Returns TRUE if supplied list contains all zeros
     Returns FALSE if list contains ANY non-zero values
-    Returns FALSE if list is empty]
+    Returns FALSE if list is empty.
+
+    Args:
+        l (List[int]): List to check.
+
+    Returns:
+        bool: True if all zeros, False otherwise.
     """
     values = set(l)
     if len(values) > 1:
@@ -208,7 +250,7 @@ def weighted_draw(d, num_samples=1):
 
 
 def timer(func):
-    """[print the runtime of the decorated function in the format HH:MM:SS]"""
+    """print the runtime of the decorated function in the format HH:MM:SS."""
 
     @functools.wraps(func)
     def wrapper_timer(*args, **kwargs):
@@ -242,10 +284,10 @@ def progressbar(it, prefix="", size=60, file=sys.stdout):
 
 
 def isnotebook():
-    """[Checks whether in Jupyter notebook]
+    """Checks whether in Jupyter notebook.
 
     Returns:
-            [bool]: [True if in Jupyter notebook, False otherwise]
+        bool: True if in Jupyter notebook, False otherwise.
     """
     try:
         shell = get_ipython().__class__.__name__
@@ -267,9 +309,12 @@ def get_processor_name():
     if platform.system() == "Windows":
         return platform.processor()
     elif platform.system() == "Darwin":
-        os.environ["PATH"] = os.environ["PATH"] + os.pathsep + "/usr/sbin"
-        command = "sysctl -n machdep.cpu.brand_string"
-        return subprocess.check_output(command).strip()
+        #os.environ["PATH"] = os.environ["PATH"] + os.pathsep + "/usr/sbin"
+        arch=platform.processor()
+        if arch[0]=="i":
+            return("Intel")
+        else:
+            return(arch)
     elif platform.system() == "Linux":
         command = "cat /proc/cpuinfo"
         all_info = subprocess.check_output(command, shell=True).strip()
@@ -281,16 +326,16 @@ def get_processor_name():
 
 
 class tqdm_linux(tqdm):
-    """
-    Decorate an iterable object, returning an iterator which acts exactly
-    like the original iterable, but prints a dynamically updating
+    """Adds a dynamically updating progress bar.
+
+    Decorate an iterable object, with a dynamically updating
     progressbar every time a value is requested.
     """
 
     @staticmethod
     def status_printer(self, file):
-        """
-        Manage the printing and in-place updating of a line of characters.
+        """Manage the printing and in-place updating of a line of characters.
+
         Note that if the string is longer than a line, then in-place
         updating may not work (it will print a new line at each refresh).
 
@@ -314,7 +359,7 @@ class tqdm_linux(tqdm):
 
 
 class HiddenPrints:
-    """[Class to supress printing within a with statement]"""
+    """Class to supress printing within a with statement."""
 
     def __enter__(self):
         self._original_stdout = sys.stdout
@@ -326,9 +371,7 @@ class HiddenPrints:
 
 
 class StreamToLogger(object):
-    """
-    Fake file-like stream object that redirects writes to a logger instance.
-    """
+    """Fake file-like stream object that redirects writes to a logger instance."""
 
     def __init__(self, logger, log_level=logging.INFO):
         self.logger = logger
@@ -353,36 +396,3 @@ class StreamToLogger(object):
         if self.linebuf != "":
             self.logger.log(self.log_level, self.linebuf.rstrip())
         self.linebuf = ""
-
-
-def initialize_weights(sz):
-    theta = theano.shared(
-        np.array(np.random.rand(sz[0], sz[1]), dtype=theano.config.floatX)
-    )
-
-    return theta
-
-
-def gradient_descent(cost, theta, alpha):
-    return theta - (alpha * T.grad(cost, wrt=theta))
-
-
-# def bayes_search_CV_init(self, estimator, search_spaces, optimizer_kwargs=None,	n_iter=50, scoring=None, fit_params=None, n_jobs=1,	n_points=1, iid=True, refit=True, cv=None, verbose=0,
-# 	pre_dispatch='2*n_jobs', random_state=None,	error_score='raise',
-# 	return_train_score=False
-# ):
-
-# 	self.search_spaces = search_spaces
-# 	self.n_iter = n_iter
-# 	self.n_points = n_points
-# 	self.random_state = random_state
-# 	self.optimizer_kwargs = optimizer_kwargs
-# 	self._check_search_space(self.search_spaces)
-# 	self.fit_params = fit_params
-
-# 	super(BayesSearchCV, self).__init__(
-# 		estimator=estimator, scoring=scoring,
-# 		n_jobs=n_jobs, refit=refit, cv=cv, verbose=verbose,
-# 		pre_dispatch=pre_dispatch, error_score=error_score,
-# 		return_train_score=return_train_score
-# 	)
