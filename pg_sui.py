@@ -140,13 +140,13 @@ def main():
         # 	"lambda_2": stats.loguniform(1e-6, 0.01),
         # }
 
-        # # Bayesian Ridge gridparams - Genetic algorithm
-        # grid_params = {
-        # 	"alpha_1": Continuous(1e-6, 1e-3, distribution="log-uniform"),
-        # 	"alpha_2": Continuous(1e-6, 1e-3, distribution="log-uniform"),
-        # 	"lambda_1": Continuous(1e-6, 1e-3, distribution="log-uniform"),
-        # 	"lambda_2": Continuous(1e-6, 1e-3, distribution="log-uniform")
-        # }
+        # Bayesian Ridge gridparams - Genetic algorithm
+        grid_params = {
+        	"alpha_1": Continuous(1e-6, 1e-3, distribution="log-uniform"),
+        	"alpha_2": Continuous(1e-6, 1e-3, distribution="log-uniform"),
+        	"lambda_1": Continuous(1e-6, 1e-3, distribution="log-uniform"),
+        	"lambda_2": Continuous(1e-6, 1e-3, distribution="log-uniform")
+        }
 
         # # Random forest imputation with genetic algorithm grid search
         # rf_imp = ImputeRandomForest(
@@ -166,7 +166,7 @@ def main():
         #     mutation_probability=0.1,
         #     progress_update_percent=20,
         #     chunk_size=0.5,
-        #     initial_strategy="phylogeny",
+        #     initial_strategy="nmf",
         # )
 
         # # RandomizedSearchCV Test
@@ -242,7 +242,22 @@ def main():
         #     write_output=False,
         # )
 
-        # br_imp = ImputeBayesianRidge(data, prefix=args.prefix, n_iter=100, gridparams=grid_params, grid_iter=3, cv=3, n_jobs=4, max_iter=5, n_nearest_features=3, column_subset=4, ga=False, disable_progressbar=True, progress_update_percent=20, chunk_size=1.0)
+        # br_imp = ImputeBayesianRidge(data,
+        #     prefix=args.prefix,
+        #     n_iter=100,
+        #     gridparams=grid_params,
+        #     grid_iter=3,
+        #     cv=3,
+        #     n_jobs=4,
+        #     max_iter=5,
+        #     n_nearest_features=3,
+        #     column_subset=4,
+        #     ga=True,
+        #     disable_progressbar=True,
+        #     initial_strategy="nmf",
+        #     progress_update_percent=20,
+        #     chunk_size=1.0
+        # )
 
         # vae = ImputeVAE(
         #     gt=np.array([[0, 1], [-9, 1], [2, -9]]),
@@ -250,23 +265,23 @@ def main():
         #     cv=3,
         #     validation_only=None,
         # )
-        # ubp = ImputeNLPCA(
-        #     genotype_data=data,
-        #     n_components=3,
-        #     initial_strategy="populations",
-        #     disable_progressbar=True,
-        #     cv=3,
-        #     hidden_activation="elu",
-        #     hidden_layer_sizes="midpoint",
-        #     validation_only=0.3,
-        #     num_hidden_layers=1,
-        #     learning_rate=0.05,
-        # )
+        ubp = ImputeNLPCA(
+            genotype_data=data,
+            n_components=3,
+            initial_strategy="nmf",
+            disable_progressbar=True,
+            cv=3,
+            hidden_activation="elu",
+            hidden_layer_sizes="midpoint",
+            validation_only=0.3,
+            num_hidden_layers=1,
+            learning_rate=0.05,
+        )
 
         # nlpca = ImputeNLPCA(
         #     genotype_data=data,
         #     n_components=3,
-        #     initial_strategy="populations",
+        #     initial_strategy="nmf",
         #     disable_progressbar=True,
         #     cv=3,
         #     hidden_activation="elu",
@@ -285,7 +300,8 @@ def main():
         nmf = ImputeNMF(
             genotype_data=data,
             max_iter=50,
-            tol=0.5
+            tol=0.5,
+            prefix="NMF"
             )
 
         # ubp = ImputeUBP(
