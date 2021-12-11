@@ -344,65 +344,6 @@ def main():
     # 	"MX": "#FF0000"
     # }
 
-    # dr = DimReduction(
-    # 	data.imputed_rf_df,
-    # 	data.populations,
-    # 	data.individuals,
-    # 	args.prefix,
-    # 	colors=colors,
-    # 	reps=2
-    # )
-
-    # pca = runPCA(dimreduction=dr, plot_cumvar=False, keep_pcs=10)
-
-    # pca.plot(plot_3d=True)
-
-    # rf = runRandomForestUML(dimreduction=dr, n_estimators=1000, n_jobs=4, min_samples_leaf=4)
-
-    # rf_cmds = runMDS(
-    # 	dimreduction=dr,
-    # 	distances=rf.dissimilarity,
-    # 	keep_dims=3,
-    # 	n_jobs=4,
-    # 	max_iter=1000,
-    # 	n_init=25
-    # )
-
-    # rf_isomds = runMDS(dr, distances=rf.dissimilarity_matrix, metric=False, keep_dims=3, n_jobs=4, max_iter=1000, n_init=25)
-
-    # rf_cmds.plot(plot_3d=True)
-    # rf_isomds.plot(plot_3d=True)
-
-    # tsne = runTSNE(dimreduction=dr, keep_dims=3, n_iter=20000, perplexity=15.0)
-    # tsne.plot(plot_3d=True)
-
-    # maxk = 9
-
-    # pam_rf = PamClustering(rf_cmds, use_embedding=False, dimreduction=dr, distances=rf.dissimilarity, maxk=9, max_iter=2500)
-
-    # pam.msw(plot_msw_clusters=True, plot_msw_line=True, axes=3)
-
-    # pam_rf.gapstat(plot_gap=True, show_plot=False)
-
-    # kmeans = KMeansClustering(rf_cmds, dimreduction=dr, sampleids=data.individuals, maxk=9)
-    # kmeans.msw(plot_msw_clusters=True, plot_msw_line=True, axes=3)
-
-    # tsne_pam = PamClustering(tsne, dimreduction=dr, sampleids=data.individuals)
-    # tsne_pam.msw(plot_msw_clusters=True, plot_msw_line=True, axes=3)
-
-    # cmds_dbscan = DBSCANClustering(
-    # 	rf_cmds, dimreduction=dr, sampleids=data.individuals, plot_eps=True
-    # )
-
-    # cmds_dbscan.plot(plot_3d=True)
-
-    # cmds_affprop = AffinityPropogationClustering(rf_cmds, dimreduction=dr, sampleids=data.individuals)
-
-    # cmds_affprop.plot(plot_3d=True)
-
-    # cmds_aggclust = AgglomHier(rf_cmds, dimreduction=dr, maxk=maxk, sampleids=data.individuals)
-    # cmds.msw(plot_msw_clusters=True, plot_msw_line=True, axes=3)
-
 
 def get_arguments():
     """[Parse command-line arguments. Imported with argparse]
