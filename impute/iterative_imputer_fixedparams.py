@@ -100,7 +100,7 @@ class IterativeImputerFixedParams(IterativeImputer):
 
         n_nearest_features (int, optional): Number of other features to use to estimate the missing values of each feature column. Nearness between features is measured using the absolute correlation coefficient between each feature pair (after initial imputation). To ensure coverage of features throughout the imputation process, the neighbor features are not necessarily nearest,	but are drawn with probability proportional to correlation for each	imputed target feature. Can provide significant speed-up when the number of features is huge. If ``None``, all features will be used. Defaults to None.
 
-        initial_strategy (str, optional): Which strategy to use to initialize the missing values. Same as the ``strategy`` parameter in :class:`~sklearn.impute.SimpleImputer`	Valid values: "mean", "median", "most_frequent", "populations", "phylogeny", or "constant". Defaults to "mean".
+        initial_strategy (str, optional): Which strategy to use to initialize the missing values. Same as the ``strategy`` parameter in :class:`~sklearn.impute.SimpleImputer`	Valid values: "mean", "median", "most_frequent", "populations", "phylogeny", "nmf", or "constant". Defaults to "mean".
 
         imputation_order (str, optional): The order in which the features will be imputed. Possible values: "ascending" (From features with fewest missing values to most), "descending" (From features with most missing values to fewest, "roman" (Left to right), "arabic" (Right to left),  random" (A random order for each round). Defaults to "ascending".
 
@@ -192,8 +192,8 @@ class IterativeImputerFixedParams(IterativeImputer):
         **NOTE: Inductive mode support was removed herein.
 
     References:
-        .. [1] `Stef van Buuren, Karin Groothuis-Oudshoorn (2011). "mice: Multivariate Imputation by Chained Equations in R". Journal of Statistical Software 45: 1-67. <https://www.jstatsoft.org/article/view/v045i03>`_ .. 
-        
+        .. [1] `Stef van Buuren, Karin Groothuis-Oudshoorn (2011). "mice: Multivariate Imputation by Chained Equations in R". Journal of Statistical Software 45: 1-67. <https://www.jstatsoft.org/article/view/v045i03>`_ ..
+
         .. [2] `S. F. Buck, (1960). "A Method of Estimation of Missing Values in	Multivariate Data Suitable for use with an Electronic Computer". Journal of the Royal Statistical Society 22(2): 302-306. <https://www.jstor.org/stable/2984099>`_
     """
 
@@ -318,6 +318,17 @@ class IterativeImputerFixedParams(IterativeImputer):
                 write_output=False,
                 verbose=False,
                 iterative_mode=True,
+            )
+
+            X_filled = self.initial_imputer_.imputed.to_numpy()
+            Xt = X.copy()
+
+        elif self.initial_strategy == "nmf":
+            self.initial_imputer_ = impute.estimators.ImputeNMF(
+                gt=np.nan_to_num(X, nan=-9),
+                missing=-9,
+                write_output=False,
+                verbose=False
             )
 
             X_filled = self.initial_imputer_.imputed.to_numpy()

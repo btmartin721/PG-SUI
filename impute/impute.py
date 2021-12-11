@@ -295,6 +295,18 @@ class Impute:
 
             chunk_size = 1.0
 
+        if (
+            self.imp_kwargs["initial_strategy"] == "nmf"
+            and chunk_size != 1.0
+        ):
+            print(
+                "WARNING: Chunking is not supported with initial_strategy == "
+                "'nmf'; Setting chunk_size to 1.0 and imputing entire "
+                "dataset"
+            )
+
+            chunk_size = 1.0
+
         if isinstance(chunk_size, (int, float)):
             chunks = list()
             df_cp = df.copy()
@@ -1252,6 +1264,16 @@ class Impute:
                 columns={i: j for i, j in zip(old_colnames, new_colnames)},
                 inplace=True,
             )
+
+        elif initial_strategy == "nmf":
+            simple_imputer = impute.estimators.ImputeNMF(
+                gt=df.fillna(-9).to_numpy(),
+                missing=-9,
+                write_output=False,
+                verbose=False,
+            )
+            df_defiled = simple_imputer.imputed
+            valid_cols = cols.copy()
 
         else:
             # Fill in unknown values with sklearn.impute.SimpleImputer
