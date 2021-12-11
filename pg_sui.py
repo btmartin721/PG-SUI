@@ -250,20 +250,43 @@ def main():
         #     cv=3,
         #     validation_only=None,
         # )
+        # ubp = ImputeNLPCA(
+        #     genotype_data=data,
+        #     n_components=3,
+        #     initial_strategy="populations",
+        #     disable_progressbar=True,
+        #     cv=3,
+        #     hidden_activation="elu",
+        #     hidden_layer_sizes="midpoint",
+        #     validation_only=0.3,
+        #     num_hidden_layers=1,
+        #     learning_rate=0.05,
+        # )
 
-        ubp = ImputeUBP(
+        # nlpca = ImputeNLPCA(
+        #     genotype_data=data,
+        #     n_components=3,
+        #     initial_strategy="populations",
+        #     disable_progressbar=True,
+        #     cv=3,
+        #     hidden_activation="elu",
+        #     hidden_layer_sizes="midpoint",
+        #     validation_only=0.3,
+        #     num_hidden_layers=1,
+        #     learning_rate=0.05,
+        # )
+        R = [
+             [2,2,-9,0],
+             [2,-9,-9,-1],
+             [2,1,-9,-1],
+             [1,-9,-9,1],
+             [-9,1,2,1],
+            ]
+        nmf = ImputeNMF(
             genotype_data=data,
-            n_components=3,
-            initial_strategy="populations",
-            disable_progressbar=True,
-            cv=3,
-            hidden_activation="elu",
-            hidden_layer_sizes="midpoint",
-            validation_only=0.3,
-            num_hidden_layers=1,
-            nlpca=False,
-            learning_rate=0.05,
-        )
+            max_iter=50,
+            tol=0.5
+            )
 
         # ubp = ImputeUBP(
         #     genotype_data=data,

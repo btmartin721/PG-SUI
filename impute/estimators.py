@@ -2143,7 +2143,7 @@ class ImputeNLPCA(ImputeUBP):
     def best_params(self):
         return self._best_params
 
-class ImputeMF(GenotypeData):
+class ImputeNMF(GenotypeData):
     """Impute missing data using matrix factorization. Population IDs can be sepcified with the pops argument. if pops is None, then imputation is by global allele frequency. If pops is not None, then imputation is by population-wise allele frequency. A list of population IDs in the appropriate format can be obtained from the GenotypeData object as GenotypeData.populations.
 
     Args:
@@ -2151,13 +2151,11 @@ class ImputeMF(GenotypeData):
 
         gt (List[int] or None, optional): List of 012-encoded genotypes to be imputed. Either ``gt`` or ``genotype_data`` must be defined, and they cannot both be defined. Defaults to None.
 
-        by_populations (bool, optional): Whether or not to impute by population or globally. Defaults to False (global allele frequency).
+        latent_features (float, optional): The number of latent variables used to reduce dimensionality of the data. Defaults to 2.
 
-        pops (List[Union[str, int]] or None, optional): Population IDs in the same order as the samples. If ``by_populations=True``, then either ``pops`` or ``genotype_data`` must be defined. If both are defined, the ``pops`` argument will take priority. Defaults to None.
+        learning_rate (float, optional): The learning rate for the optimizers. Adjust if the loss is learning too slowly. Defaults to 0.1.
 
-        diploid (bool, optional): When diploid=True, function assumes 0=homozygous ref; 1=heterozygous; 2=homozygous alt. 0-1-2 genotypes are decomposed to compute p (=frequency of ref) and q (=frequency of alt). In this case, p and q alleles are sampled to generate either 0 (hom-p), 1 (het), or 2 (hom-q) genotypes. When diploid=FALSE, 0-1-2 are sampled according to their observed frequency. Defaults to True.
-
-        default (int, optional): Value to set if no alleles sampled at a locus. Defaults to 0.
+        tol (float, optional): Tolerance of the stopping condition. Defaults to 1e-3.
 
         missing (int, optional): Missing data value. Defaults to -9.
 
@@ -2180,35 +2178,77 @@ class ImputeMF(GenotypeData):
     def __init__(
         self,
         *,
-        genotype_data: Any,
+        genotype_data=None,
+        gt=None,
         latent_features: int = 2,
-        n_steps: int = 5000,
+        max_iter: int = 100,
         learning_rate: float = 0.0002,
         regularization_param: float = 0.02,
+        tol: float = 0.1,
+        n_fail: int = 20,
         missing: int = -9,
         prefix: str = "output",
         write_output: bool = True,
-        output_format: str = "df",
+        output_format= None,
         verbose: bool = True,
         **kwargs: Dict[str, Any],
     ) -> None:
 
         super().__init__()
 
-        if genotype_data is None:
-            raise TypeError("genotype_data cannot be NoneType")
-
-        self.n_steps = n_steps
+        self.max_iter = max_iter
         self.latent_features = latent_features
-        self.regularization_param = regularization_param
+        self.n_fail = n_fail
         self.learning_rate = learning_rate
+        self.tol = tol
+        self.regularization_param = regularization_param
         self.missing = missing
         self.prefix = prefix
         self.output_format = output_format
         self.verbose = verbose
         self.iterative_mode = kwargs.get("iterative_mode", False)
-        print(genotype_data)
-        self.imputed = self.fit_predict(genotype_data)
+
+        if genotype_data is None and gt is None:
+            raise TypeError("genotype_data and gt cannot both be NoneType")
+
+        if genotype_data is not None and gt is not None:
+            raise TypeError("genotype_data and gt cannot both be used")
+
+        if genotype_data is not None:
+            X = genotype_data.genotypes_nparray
+        elif gt is not None:
+            X = gt
+
+        nX = self.fit_predict(X)
+        self._imputed = pd.DataFrame(nX)
+
+        if genotype_data is not None:
+            print(genotype_data.genotypes_df)
+            self._imputed = self._imputed.rename(index = genotype_data.genotypes_df.index, columns = genotype_data.genotypes_df.columns)
+            print(self._imputed)
+
+        if self.output_format is not None:
+            if self.output_format == "df":
+                return (self._imputed)
+            elif self.output_format == "array":
+                return (nX)
+            elif self.output_format == "list":
+                return (self._imputed.tolist())
+            else:
+                return(self)
+        else:
+            return(self)
+        # imputer = Impute(self.clf, self.clf_type, settings)
+        #
+        # if not isinstance(X, pd.DataFrame):
+        #     df = pd.DataFrame(X)
+        # else:
+        #     df = X.copy()
+        #
+        # self._imputed, self._best_params = imputer.fit_predict(df)
+        #
+        # if write_output:
+        #     imputer.write_imputed(self._imputed)
 
         # if write_output:
         #     self.write2file(self.imputed)
@@ -2230,18 +2270,20 @@ class ImputeMF(GenotypeData):
         #data = pd.DataFrame()
 
         #imputation
-        #print(data)
+        if self.verbose:
+            print(f"Doing NMF imputation without grid search...")
         R = X
+        R[R==self.missing]=-9
         R = R+1
         R[R<0] = 0
-        print(R)
         n_row = len(R)
         n_col = len(R[0])
         p = np.random.rand(n_row,self.latent_features)
         q = np.random.rand(n_col,self.latent_features)
         q_t = q.T
-
-        for step in range(self.n_steps):
+        fails=0
+        e_current = None
+        for step in range(self.max_iter):
             for i in range(n_row):
                 for j in range(n_col):
                     if R[i][j] > 0:
@@ -2249,7 +2291,6 @@ class ImputeMF(GenotypeData):
                         for k in range(self.latent_features):
                             p[i][k] = p[i][k] + self.learning_rate * (2 * eij * q_t[k][j] - self.regularization_param * p[i][k])
                             q_t[k][j] = q_t[k][j] + self.learning_rate * (2 * eij * p[i][k] - self.regularization_param * q_t[k][j])
-            eR = np.dot(p,q_t)
             e = 0
             for i in range(n_row):
                 for j in range(len(R[i])):
@@ -2257,35 +2298,33 @@ class ImputeMF(GenotypeData):
                         e = e + pow(R[i][j] - np.dot(p[i,:],q_t[:,j]), 2)
                         for k in range(self.latent_features):
                             e = e + (self.regularization_param/2) * ( pow(p[i][k],2) + pow(q_t[k][j],2) )
-            if e < 0.001:
+            if e_current is None:
+                e_current = e
+            else:
+                if abs(e_current - e) < self.tol:
+                    fails+=1
+                else:
+                    fails=0
+                e_current=e
+            if fails >= self.n_fail:
                 break
         nR = np.dot(p, q_t)
-        print(nR)
 
         #transform values per-column (i.e., only allowing values found in original)
-        tR=nR
-        for j in range(n_col):
-            observed = nR[:,j]
-            expected = R[:,j]
-            options = np.unique(expected[expected != 0])
-            for i in range(n_row):
-                transform = min(options, key=lambda x:abs(x-nR[i,j]))
-                tR[i,j]=transform
-        tR = tR-1
-        tR[tR<0] = -9
-        print(tR)
+        tR=self.transform(R, nR)
 
         #get accuracy of re-constructing non-missing genotypes
-        diff=np.sum(X[X>=0]==tR[X>=0])
-        tot=X[X>=0].size
-        accuracy=diff/tot
-        print(accuracy)
+        accuracy=self.accuracy(X, tR)
 
         #insert imputed values for missing genotypes
         fR=X
         fR[X<0] = tR[X<0]
-        print(fR)
 
+        if self.verbose:
+            print("Done!")
+            print
+
+        return(fR)
         # if self.iterative_mode:
         #     data = data.astype(dtype="float32")
         # else:
@@ -2305,6 +2344,27 @@ class ImputeMF(GenotypeData):
 
         # else:
         #     raise ValueError("Unknown output_format type specified!")
+
+    def transform(self, original, predicted):
+        n_row = len(original)
+        n_col = len(original[0])
+        tR=predicted
+        for j in range(n_col):
+            observed = predicted[:,j]
+            expected = original[:,j]
+            options = np.unique(expected[expected != 0])
+            for i in range(n_row):
+                transform = min(options, key=lambda x:abs(x-predicted[i,j]))
+                tR[i,j]=transform
+        tR = tR-1
+        tR[tR<0] = -9
+        return(tR)
+
+    def accuracy(self, expected, predicted):
+        prop_same=np.sum(expected[expected>=0]==predicted[expected>=0])
+        tot=expected[expected>=0].size
+        accuracy=prop_same/tot
+        return(accuracy)
 
     # def write2file(
     #     self, X: Union[pd.DataFrame, np.ndarray, List[List[Union[int, float]]]]
