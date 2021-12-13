@@ -20,8 +20,21 @@ setup(
     long_description=LONG_DESCRIPTION,
     url="https://github.com/btmartin721/PG-SUI",
     packages=find_packages(),
-    install_requires=[],  # add any additional packages that
-    # needs to be installed along with your package. Eg: 'caer'
+    install_requires=[
+        "matplotlib",
+        "seaborn",
+        "jupyterlab",
+        "scikit-learn>=0.24",
+        "tqdm" "pandas>=1.2.5,<1.3.0",
+        "numpy>=1.20.2,<1.21",
+        "scipy>=1.6.2,<1.7",
+        "xgboost",
+        "lightgbm",
+        "tensorflow",
+        "keras",
+        "toytree",
+        "sklearn-genetic-opt[all]>=0.6.0",
+    ],
     keywords=[
         "python",
         "impute",
@@ -29,6 +42,7 @@ setup(
         "machine learning",
         "neural network",
         "api",
+        "IterativeImputer",
     ],
     classifiers=[
         "Development Status :: 4 - Beta",
