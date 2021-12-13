@@ -975,7 +975,9 @@ class ImputePhylo(GenotypeData):
 
         treefile (str or None, optional): Path to Newick-formatted phylogenetic tree file. Not required if ``genotype_data`` is defined with the ``guidetree`` option. Defaults to None.
 
-        qmatrix_iqtree (str or None, optional): Path to *.iqtree file containing Rate Matrix Q table. If specified, ``ImputePhylo`` will read the Q matrix from the IQ-TREE output file. Cannot be used in conjunction with ``qmatrix`` argument. Not required if the ``qmatrix`` or ``qmatrix_iqtree`` options were used with the ``GenotypeData`` object. Defaults to None.
+        siterates (str or None, optional): Path to file containing per-site rates, with 1 rate per line corresponding to 1 site. Not required if ``genotype_data`` is defined with the siterates or siterates_iqtree option. Defaults to None.
+
+        siterates_iqtree (str or None, optional): Path to *.rates file output from IQ-TREE, containing a per-site rate table. If specified, ``ImputePhylo`` will read the site-rates from the IQ-TREE output file. Cannot be used in conjunction with ``siterates`` argument. Not required if the ``siterates`` or ``siterates_iqtree`` options were used with the ``GenotypeData`` object. Defaults to None.
 
         qmatrix (str or None, optional): Path to file containing only a Rate Matrix Q table. Not required if ``genotype_data`` is defined with the qmatrix or qmatrix_iqtree option. Defaults to None.
 
@@ -1000,6 +1002,8 @@ class ImputePhylo(GenotypeData):
         filetype: Optional[str] = None,
         popmapfile: Optional[str] = None,
         treefile: Optional[str] = None,
+        siterates: Optional[str] = None,
+        siterates_iqtree: Optional[str] = None,
         qmatrix_iqtree: Optional[str] = None,
         qmatrix: Optional[str] = None,
         str_encodings: Dict[str, int] = {
@@ -1023,6 +1027,8 @@ class ImputePhylo(GenotypeData):
         self.treefile = treefile
         self.qmatrix_iqtree = qmatrix_iqtree
         self.qmatrix = qmatrix
+        self.siterates = siterates
+        self.siterates_iqtree = siterates_iqtree
         self.str_encodings = str_encodings
         self.prefix = prefix
         self.save_plots = save_plots
@@ -1033,9 +1039,9 @@ class ImputePhylo(GenotypeData):
         self.valid_sites_count = None
 
         self.validate_arguments(genotype_data)
-        data, tree, q = self.parse_arguments(genotype_data)
+        data, tree, q, site_rates = self.parse_arguments(genotype_data)
 
-        self.imputed = self.impute_phylo(tree, data, q)
+        self.imputed = self.impute_phylo(tree, data, q, site_rates)
 
         if write_output:
             outfile = f"{prefix}_imputed_012.csv"
@@ -1083,6 +1089,7 @@ class ImputePhylo(GenotypeData):
         elif genotype_data.tree is None and self.treefile is not None:
             tree = self.read_tree(self.treefile)
 
+        #read (optional) Q-matrix
         if (
             genotype_data.q is not None
             and self.qmatrix is None
@@ -1110,7 +1117,34 @@ class ImputePhylo(GenotypeData):
                 )
                 q = self.q_from_iqtree(self.qmatrix_iqtree)
 
-        return data, tree, q
+        #read (optional) site-specific substitution rates
+        site_rates = None
+        if (
+            genotype_data.site_rates is not None
+            and self.siterates is None
+            and self.siterates_iqtree is None
+        ):
+            site_rates = genotype_data.site_rates
+        elif genotype_data.site_rates is None:
+            if self.siterates is not None:
+                site_rates = self.siterates_from_file(self.siterates)
+            elif self.siterates_iqtree is not None:
+                site_rates = self.siterates_from_iqtree(self.siterates_iqtree)
+
+        elif genotype_data.site_rates is not None:
+            if self.siterates is not None:
+                print(
+                    "WARNING: Both genotype_data.site_rates and siterates are defined; "
+                    "using local definition"
+                )
+                site_rates = self.siterates_from_file(self.siterates)
+            if self.siterates_iqtree is not None:
+                print(
+                    "WARNING: Both genotype_data.site_rates and siterates are defined; "
+                    "using local definition"
+                )
+                site_rates = self.siterates_from_iqtree(self.siterates_iqtree)
+        return (data, tree, q, site_rates)
 
     def validate_arguments(self, genotype_data: Any) -> None:
         """Validate that the correct arguments were supplied.
@@ -1187,6 +1221,7 @@ class ImputePhylo(GenotypeData):
         tree: tt.tree,
         genotypes: Dict[str, List[Union[str, int]]],
         Q: pd.DataFrame,
+        site_rates = None,
     ) -> pd.DataFrame:
         """Imputes genotype values with a guide tree.
 
@@ -1210,6 +1245,8 @@ class ImputePhylo(GenotypeData):
             genotypes (Dict[str, List[Union[str, int]]]): Dictionary with key=sampleids, value=sequences.
 
             Q (pandas.DataFrame): Rate Matrix Q from .iqtree or separate file.
+
+            site_rates (List): Site-specific substitution rates (used to weight per-site Q)
 
         Returns:
             pandas.DataFrame: Imputed genotypes.
@@ -1254,9 +1291,12 @@ class ImputePhylo(GenotypeData):
 
             # LATER: Need to get site rates
             rate = 1.0
+            if site_rates is not None:
+                rate = site_rates[snp_index]
 
             site_Q = Q.copy(deep=True) * rate
-
+            #print(site_Q)
+            
             # calculate state likelihoods for internal nodes
             for node in tree.treenode.traverse("postorder"):
                 if node.is_leaf():

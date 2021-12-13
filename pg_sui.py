@@ -265,18 +265,18 @@ def main():
         #     cv=3,
         #     validation_only=None,
         # )
-        ubp = ImputeNLPCA(
-            genotype_data=data,
-            n_components=3,
-            initial_strategy="nmf",
-            disable_progressbar=True,
-            cv=3,
-            hidden_activation="elu",
-            hidden_layer_sizes="midpoint",
-            validation_only=0.3,
-            num_hidden_layers=1,
-            learning_rate=0.05,
-        )
+        # ubp = ImputeNLPCA(
+        #     genotype_data=data,
+        #     n_components=3,
+        #     initial_strategy="nmf",
+        #     disable_progressbar=True,
+        #     cv=3,
+        #     hidden_activation="elu",
+        #     hidden_layer_sizes="midpoint",
+        #     validation_only=0.3,
+        #     num_hidden_layers=1,
+        #     learning_rate=0.05,
+        # )
 
         # nlpca = ImputeNLPCA(
         #     genotype_data=data,
@@ -290,19 +290,19 @@ def main():
         #     num_hidden_layers=1,
         #     learning_rate=0.05,
         # )
-        R = [
-             [2,2,-9,0],
-             [2,-9,-9,-1],
-             [2,1,-9,-1],
-             [1,-9,-9,1],
-             [-9,1,2,1],
-            ]
-        nmf = ImputeNMF(
-            genotype_data=data,
-            max_iter=50,
-            tol=0.5,
-            prefix="NMF"
-            )
+        # R = [
+        #      [2,2,-9,0],
+        #      [2,-9,-9,-1],
+        #      [2,1,-9,-1],
+        #      [1,-9,-9,1],
+        #      [-9,1,2,1],
+        #     ]
+        # nmf = ImputeNMF(
+        #     genotype_data=data,
+        #     max_iter=50,
+        #     tol=0.5,
+        #     prefix="NMF"
+        #     )
 
         # ubp = ImputeUBP(
         #     genotype_data=data,
@@ -330,7 +330,10 @@ def main():
         #     initial_strategy="group_mode",
         # )
 
-        # ImputePhylo(genotype_data=data, save_plots=False)
+        ImputePhylo(genotype_data=data,
+        save_plots=False,
+        qmatrix_iqtree="example_data/trees/test.iqtree",
+        siterates_iqtree="example_data/trees/test_n100.rate")
 
     # colors = {
     # 	"GU": "#FF00FF",
