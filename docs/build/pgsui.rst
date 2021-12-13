@@ -5,8 +5,8 @@ PG-SUI
    :maxdepth: 4
    :caption: Modules:
 
-   pgsui.impute
    pgsui.read_input
+   pgsui.impute
    pgsui.utils
 
 Module contents

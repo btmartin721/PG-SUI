@@ -10,8 +10,8 @@ Welcome to PG-SUI's documentation!
    :maxdepth: 4
    :caption: Contents:
 
+   install
    pgsui
-
 
 Indices and tables
 ==================
