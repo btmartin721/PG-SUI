@@ -1,4 +1,4 @@
-PG-SUI
+PG-SUI Modules
 ==============
 
 .. toctree::

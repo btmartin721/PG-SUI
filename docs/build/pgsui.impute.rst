@@ -1,4 +1,4 @@
-impute modules:
+impute
 =====================
 
 .. toctree::
@@ -18,3 +18,4 @@ Module contents
    :members:
    :undoc-members:
    :show-inheritance:
+   :private-members:

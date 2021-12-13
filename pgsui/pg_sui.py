@@ -7,14 +7,6 @@ import sys
 import numpy as np
 import pandas as pd
 import scipy.stats as stats
-from sklearn_genetic.space import Continuous, Categorical, Integer
-
-from utils.misc import get_processor_name
-from utils.misc import generate_012_genotypes
-
-# Custom module imports
-from read_input.read_input import GenotypeData
-from impute.estimators import *
 
 
 def main():

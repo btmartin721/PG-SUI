@@ -1,11 +1,11 @@
-read\_input modules
+read\_input
 =========================
 
 .. toctree::
    :maxdepth: 4
 
-   pgsui.read_input.popmap_file
    pgsui.read_input.read_input
+   pgsui.read_input.popmap_file
 
 Module contents
 ---------------

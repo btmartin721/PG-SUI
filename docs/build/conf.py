@@ -63,8 +63,11 @@ exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store', '../../pgsui/read_input/
 #
 html_theme = 'sphinx_rtd_theme'
 html_theme_options = {
-    'collapse_navigation': False
+    'collapse_navigation': True,
+    'titles_only': True
 }
+github_url = 'https://github.com/btmartin721/PG-SUI'
+
 
 
 # Add any paths that contain custom static files (such as style sheets) here,
@@ -81,3 +84,4 @@ html_static_path = ['_static']
 todo_include_todos = True
 napoleon_include_init_with_doc = True
 napoleon_google_docstring = True
+autodoc_member_order = "bysource"
