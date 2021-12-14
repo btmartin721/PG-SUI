@@ -114,3 +114,5 @@ PG-SUI has been tested on the new Mac M1 chips and is working fine, but some cha
 
 
 Any other problems we run into testing on the Mac ARM architecture will be adjusted here. Note that the step installing scikit-learn-intelex was skipped here. PG-SUI will automatically detect the CPU architecture you are running, and forgo importing this package (which will only work on Intel processors).
+
+

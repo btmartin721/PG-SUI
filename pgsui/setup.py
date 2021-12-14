@@ -17,7 +17,7 @@ setup(
     maintainer=MAINTAINER,
     maintainer_email=AUTHOR_EMAIL,
     description=DESCRIPTION,
-    long_description=open("README.txt").read(),
+    long_description=open("README.md").read(),
     url="https://github.com/btmartin721/PG-SUI",
     packages=find_packages(),
     install_requires=[

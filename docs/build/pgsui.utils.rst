@@ -7,7 +7,6 @@ utils
 
    pgsui.utils.misc
    pgsui.utils.sequence_tools
-   pgsui.utils.settings
 
 Module contents
 ---------------

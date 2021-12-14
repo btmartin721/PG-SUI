@@ -13,7 +13,6 @@ import toytree as tt
 
 from read_input.popmap_file import ReadPopmap
 from utils import sequence_tools
-from utils import settings
 
 
 class GenotypeData:
