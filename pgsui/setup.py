@@ -1,11 +1,11 @@
 from setuptools import setup, find_packages
 
 VERSION = "0.1"
-DESCRIPTION = "Python API to impute missing values frmo population genomic data"
-LONG_DESCRIPTION = "PG-SUI is a python API that uses machine learning to impute missing values from SNP data. There are several supervised and unsupervised machine learning methods available to impute missing data, as well as some non-machine learning imputers that are useful."
+DESCRIPTION = "Python machine learning API to impute missing values frmo population genomic data"
 
 AUTHORS = "Bradley T. Martin and Tyler K. Chafin"
 AUTHOR_EMAIL = "evobio721@gmail.com"
+MAINTAINER = "Bradley T. Martin"
 
 # Setting up
 setup(
@@ -14,10 +14,10 @@ setup(
     version=VERSION,
     author=AUTHORS,
     author_email=AUTHOR_EMAIL,
-    maintainer="Bradley T. Martin",
+    maintainer=MAINTAINER,
     maintainer_email=AUTHOR_EMAIL,
     description=DESCRIPTION,
-    long_description=LONG_DESCRIPTION,
+    long_description=open("README.txt").read(),
     url="https://github.com/btmartin721/PG-SUI",
     packages=find_packages(),
     install_requires=[
@@ -48,13 +48,12 @@ setup(
         "Development Status :: 4 - Beta",
         "Intended Audience :: Science/Research",
         "Topic :: Scientific/Engineering :: Bio-Informatics",
-        "Programming Language :: Python :: 3.7",
-        "Programming Language :: Python :: 3.8"
+        "Programming Language :: Python :: 3",
         "Operating System :: MacOS :: MacOS X",
         "Operating System :: Microsoft :: Windows",
         "Operating System :: Unix",
         "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
         "Natural Language :: English",
     ],
-    license="GPL3",
+    license="GNU General Public License v3 (GPLv3)",
 )

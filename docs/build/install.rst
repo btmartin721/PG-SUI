@@ -3,17 +3,21 @@ Installation
 
 Requirements
 ------------
+
 * python >= 3.7
 * pandas == 1.2.5
 * numpy == 1.20
+* scipy >= 1.6.2 and < 1.7.0
 * matplotlib
 * seaborn
-* tqdm
 * jupyterlab
-* scikit-learn >= 0.24
-* sklearn-genetic-opt >= 0.6.0
+* tqdm
 * toytree
-* scipy >= 1.6.2 and < 1.7.0
+* scikit-learn >= 0.24
+* tensorflow >= 2.0
+* keras
+* xgboost
+* lightgbm
 
 Python versions < 3.7 are not currently supported.  
 
