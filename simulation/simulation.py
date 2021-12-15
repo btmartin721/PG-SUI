@@ -1,6 +1,7 @@
 import sys
 
 import toytree
+import toyplot
 import pyvolve
 import re
 
@@ -25,16 +26,36 @@ class SimGenotypeData(read_input.GenotypeData):
 
             n_to_sample (int or Dict[str][int]): Integer or dict (mapping tips in guide tree to integer values) given the number of individuals to sample per population. Defaults to 10.
 
-            bldist_ind (functools.partial or Dict[str][functools.partial]): Function or dict of functions defining a distribution from which terminal/ tip/ leaf branch lengths will be sampled.
+            bldist_ind (functools.partial or Dict[str: functools.partial]): Function or dict of functions defining a distribution from which terminal/ tip/ leaf branch lengths will be sampled.
 
             bldist_amongInd
 
             bldist_amongGroup
 
-
     Attributes:
             samples (List[str]): List containing sample IDs of shape (n_samples,).
 
+    # Raises:
+    #     TypeError: Check whether the ``gridparams`` values are of the correct format if ``ga=True`` or ``ga=False``.
+    #
+    #
+    # Examples:
+    #     # Don't use parentheses after estimator object.
+    #     >>> imputer = Impute(
+    #             sklearn.ensemble.RandomForestClassifier,
+    #             "classifier",
+    #             {
+    #                 "n_jobs": 4,
+    #                 "initial_strategy": "populations",
+    #                 "max_iter": 25,
+    #                 "n_estimators": 100,
+    #                 "ga": True
+    #             }
+    #         )
+    #
+    #     >>> self.imputed, self.best_params = imputer.fit_predict(df)
+    #
+    #     >>> imputer.write_imputed(self.imputed)
 
 
     """
@@ -45,21 +66,19 @@ class SimGenotypeData(read_input.GenotypeData):
         genotype_data = None,
         n_to_sample = 10,
     ) -> None:
-        self.poptree = poptree
         self.genotype_data = genotype_data
         self.n_to_sample = n_to_sample
 
         super().__init__()
 
-        if genotype_data is None and poptree is None:
-            raise TypeError("genotype_data and poptree cannot both be NoneType")
+        if self.genotype_data is None:
+            if guidetree is not None:
+                raise TypeError("genotype_data and poptree cannot both be NoneType")
+            else:
+                #simulate data on guide tree
+                pass
 
-        if genotype_data is not None and poptree is not None:
-            raise TypeError("genotype_data and poptree cannot both be used")
-
-        if poptree is not None:
-            self.init_poptree()
-
+        #otherwise, simulate missing data on input GenotypeData object
         elif genotype_data is not None:
             self.filename = genotype_data.filename
             self.filetype = genotype_data.filetype
@@ -67,6 +86,8 @@ class SimGenotypeData(read_input.GenotypeData):
             self.guidetree = genotype_data.guidetree
             self.qmatrix_iqtree = genotype_data.qmatrix_iqtree
             self.qmatrix = genotype_data.qmatrix
+            self.siterates = genotype_data.siterates
+            self.siterates_iqtree = genotype_data.siterates_iqtree
 
             self.snpsdict = genotype_data.snpsdict
             self.samples= genotype_data.samples
@@ -75,6 +96,8 @@ class SimGenotypeData(read_input.GenotypeData):
             self.onehot= genotype_data.onehot
             self.num_snps = genotype_data.num_snps
             self.num_inds = genotype_data.num_inds
+            self.q = genotype_data.q
+            self.site_rates = genotype_data.site_rates
 
             if self.guidetree is not None:
                 self.tree = self.read_tree(self.guidetree)
@@ -90,37 +113,3 @@ class SimGenotypeData(read_input.GenotypeData):
                 self.q = self.q_from_file(self.qmatrix)
             elif self.qmatrix is None and self.qmatrix_iqtree is None:
                 self.q = None
-
-    def init_poptree(self):
-        #get tiplabels from newick string
-        tiplabels = tree_tools.get_tree_tips(self.poptree)
-
-        #get individual and pop labels
-        for pop in tiplabels:
-            clade="("
-            if type(self.n_to_sample) is dict:
-                if pop not in self.n_to_sample:
-                    raise ValueError(
-                        f"Population  {pop} was not found in "
-                        f"input list ``n_to_sample``\n"
-                    )
-                else:
-                    end=tiplabels[pop]+1
-            else:
-                end=n_to_sample+1
-            for i in range(1, self.n_to_sample+1):
-                indlabel=str(pop)+"_"+str(i)
-                self.samples.append(indlabel)
-                self.pops.append(str(pop))
-                self.num_inds+=1
-                clade = clade + indlabel
-                if i == self.n_to_sample:
-                    clade = clade + ")"
-                else:
-                    clade = clade + ", "
-
-            #NOTE: This assumes that no population label both unique and
-            #not contained within another. For example, population labels like
-            #[1, 12, 3, 5] will not work, as `1` is contained within `12`,
-            #but pop labels like [pop-1, pop-12, ...] will work.
-            self.poptree=re.sub(rf"{pop}", clade, self.poptree)
