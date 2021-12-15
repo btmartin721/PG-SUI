@@ -22,7 +22,7 @@ class SimGenotypeData(read_input.GenotypeData):
     Args:
             genotype_data (GenotypeDate): Optional GenotypeData object (with genotype_data.guidetree defined) on which to simulate missing data. Defaults to None.
 
-            poptree (str): Newick string representing a population-level guide tree [e.g., "(((A, B), C), D);")] Defaults to None.
+            guidetree (str): File containing newick-formatted guidetree. Defaults to None.
 
             n_to_sample (int or Dict[str][int]): Integer or dict (mapping tips in guide tree to integer values) given the number of individuals to sample per population. Defaults to 10.
 
@@ -62,21 +62,29 @@ class SimGenotypeData(read_input.GenotypeData):
 
     def __init__(
         self,
-        poptree = None,
         genotype_data = None,
-        n_to_sample = 10,
+        filename: Optional[str] = None,
+        filetype: Optional[str] = None,
+        popmapfile: Optional[str] = None,
+        guidetree: Optional[str] = None,
+        qmatrix_iqtree: Optional[str] = None,
+        qmatrix: Optional[str] = None,
+        siterates: Optional[str] = None,
+        siterates_iqtree: Optional[str] = None,
+        missing_prop = 0.1,
+        missing_type = "random",
     ) -> None:
         self.genotype_data = genotype_data
-        self.n_to_sample = n_to_sample
+        self.guidetree = guidetree
 
         super().__init__()
 
-        if self.genotype_data is None:
-            if guidetree is not None:
-                raise TypeError("genotype_data and poptree cannot both be NoneType")
-            else:
-                #simulate data on guide tree
-                pass
+        # if self.genotype_data is None:
+        #     if guidetree is not None:
+        #         raise TypeError("genotype_data and poptree cannot both be NoneType")
+        #     else:
+        #         #simulate data on guide tree
+        #         self.guidetree = self.read_tree(guidetree)
 
         #otherwise, simulate missing data on input GenotypeData object
         elif genotype_data is not None:
