@@ -8,6 +8,11 @@ import numpy as np
 import pandas as pd
 import scipy.stats as stats
 
+from sklearn_genetic.space import Continuous, Categorical, Integer
+
+from pgsui.read_input import GenotypeData
+from pgsui.estimators import *
+
 
 def main():
     """Class instantiations and main package body"""
