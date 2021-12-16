@@ -194,7 +194,7 @@ class GenotypeData:
                 "GenotypeData read_XX() call does not match filetype!\n"
             )
 
-    def read_tree(self, treefile: str) -> tt.tree:
+    def read_tree(self, treefile: str, format=0) -> tt.tree:
         """Read Newick-style phylogenetic tree into toytree object.
 
         Format should be of type 0 (see toytree documentation).
@@ -210,7 +210,7 @@ class GenotypeData:
 
         assert os.access(treefile, os.R_OK), f"File {treefile} isn't readable"
 
-        return tt.tree(treefile, tree_format=0)
+        return tt.tree(treefile, tree_format=format)
 
     def q_from_iqtree(self, iqfile: str) -> pd.DataFrame:
         """Read in Q-matrix from *.iqtree file.
