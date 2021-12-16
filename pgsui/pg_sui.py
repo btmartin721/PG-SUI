@@ -10,8 +10,10 @@ import scipy.stats as stats
 
 from sklearn_genetic.space import Continuous, Categorical, Integer
 
-from pgsui.read_input import GenotypeData
-from pgsui.estimators import *
+from read_input.read_input import GenotypeData
+
+# from pgsui.read_input import GenotypeData
+# from pgsui.estimators import *
 
 
 def main():
@@ -214,24 +216,24 @@ def main():
         # complete_encoded = imputer.train(train_epochs=300, batch_size=256)
         # print(complete_encoded)
 
-        rf_imp = ImputeRandomForest(
-            data,
-            prefix=args.prefix,
-            n_estimators=50,
-            n_nearest_features=3,
-            n_jobs=4,
-            max_iter=2,
-            disable_progressbar=True,
-            extratrees=False,
-            max_features="sqrt",
-            min_samples_split=5,
-            min_samples_leaf=2,
-            max_depth=30,
-            cv=3,
-            validation_only=0.3,
-            chunk_size=1.0,
-            initial_strategy="populations",
-        )
+        # rf_imp = ImputeRandomForest(
+        #     data,
+        #     prefix=args.prefix,
+        #     n_estimators=50,
+        #     n_nearest_features=3,
+        #     n_jobs=4,
+        #     max_iter=2,
+        #     disable_progressbar=True,
+        #     extratrees=False,
+        #     max_features="sqrt",
+        #     min_samples_split=5,
+        #     min_samples_leaf=2,
+        #     max_depth=30,
+        #     cv=3,
+        #     validation_only=0.3,
+        #     chunk_size=1.0,
+        #     initial_strategy="populations",
+        # )
 
         # afpops = ImputeAlleleFreq(
         #     genotype_data=data,

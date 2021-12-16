@@ -498,9 +498,7 @@ class Impute:
         # Only used if initial_strategy == 'phylogeny'
         if self.invalid_indexes is not None:
             df.drop(
-                labels=self.invalid_indexes,
-                axis=1,
-                inplace=True,
+                labels=self.invalid_indexes, axis=1, inplace=True,
             )
 
         if self.disable_progressbar:
@@ -840,8 +838,7 @@ class Impute:
                     imputer = self.clf(**self.clf_kwargs)
                     if self.clf == UBP:
                         df_imp = pd.DataFrame(
-                            imputer.fit_transform(Xchunk),
-                            dtype="Int8",
+                            imputer.fit_transform(Xchunk), dtype="Int8",
                         )
                     else:
                         df_imp = pd.DataFrame(imputer.fit_transform(Xchunk))
@@ -859,10 +856,7 @@ class Impute:
             else:
                 # Regressor. Needs to be rounded to integer first.
                 df_imp = pd.DataFrame(
-                    imputer.fit_transform(
-                        Xchunk,
-                        valid_cols=cols_to_keep,
-                    )
+                    imputer.fit_transform(Xchunk, valid_cols=cols_to_keep,)
                 )
                 df_imp = df_imp.round(0).astype("Int8")
 
@@ -982,15 +976,15 @@ class Impute:
                 ):
                     bad_cols.append(col)
 
-                elif len(df_cp[df_cp[col] == 0.0]) < self.cv:
-                    bad_cols.append(col)
+                # elif len(df_cp[df_cp[col] == 0.0]) < self.cv:
+                #     bad_cols.append(col)
 
-                elif df_cp[col].isin([1.0]).any():
-                    if len(df_cp[df_cp[col] == 1]) < self.cv:
-                        bad_cols.append(col)
+                # elif df_cp[col].isin([1.0]).any():
+                #     if len(df_cp[df_cp[col] == 1]) < self.cv:
+                #         bad_cols.append(col)
 
-                elif len(df_cp[df_cp[col] == 2.0]) < self.cv:
-                    bad_cols.append(col)
+                # elif len(df_cp[df_cp[col] == 2.0]) < self.cv:
+                #     bad_cols.append(col)
 
         # pandas 1.X.X
         else:
@@ -998,24 +992,27 @@ class Impute:
                 if 0.0 not in df[col].unique() and 2.0 not in df[col].unique():
                     bad_cols.append(col)
 
-                elif len(df_cp[df_cp[col] == 0.0]) < self.cv:
-                    bad_cols.append(col)
+                # elif len(df_cp[df_cp[col] == 0.0]) < self.cv:
+                #     bad_cols.append(col)
 
-                elif 1.0 in df_cp[col].unique():
-                    if len(df_cp[df_cp[col] == 1.0]) < self.cv:
-                        bad_cols.append(col)
+                # elif 1.0 in df_cp[col].unique():
+                #     if len(df_cp[df_cp[col] == 1.0]) < self.cv:
+                #         bad_cols.append(col)
 
-                elif len(df_cp[df_cp[col] == 2.0]) < self.cv:
-                    bad_cols.append(col)
+                # elif len(df_cp[df_cp[col] == 2.0]) < self.cv:
+                #     bad_cols.append(col)
 
         if bad_cols:
-            df_cp.drop(bad_cols, axis=1, inplace=True)
+            df_cp.loc[:, bad_cols] = 0
 
-            print(
-                f"{len(bad_cols)} columns removed for being non-biallelic or "
-                f"having genotype counts < number of cross-validation "
-                f"folds\nSubsetting from {len(df_cp.columns)} remaining columns\n"
-            )
+        # if bad_cols:
+        #     df_cp.drop(bad_cols, axis=1, inplace=True)
+
+        #     print(
+        #         f"{len(bad_cols)} columns removed for being non-biallelic or "
+        #         f"having genotype counts < number of cross-validation "
+        #         f"folds\nSubsetting from {len(df_cp.columns)} remaining columns\n"
+        #     )
 
         return df_cp
 
@@ -1354,8 +1351,7 @@ class Impute:
 
             if self.clf == VAE:
                 df_imp = pd.DataFrame(
-                    imputer.fit_transform(df_stg.to_numpy()),
-                    columns=cols,
+                    imputer.fit_transform(df_stg.to_numpy()), columns=cols,
                 )
 
                 df_imp = df_imp.astype("float")

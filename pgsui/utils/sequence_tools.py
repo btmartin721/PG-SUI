@@ -99,6 +99,9 @@ def get_major_allele(l, num=None, vcf=False):
             all_items.extend(get_iupac_caseless(i))
 
     c = Counter(all_items)  # requires collections import
+
+    # List of tuples with [(allele, count), ...] in order of
+    # most to least common
     rets = c.most_common(num)
 
     # Returns two most common non-ambiguous bases

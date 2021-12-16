@@ -545,10 +545,47 @@ class GenotypeData:
                 else:
                     loc.append(snps[i][j].upper())
 
-            if sequence_tools.count_alleles(loc, vcf=vcf) != 2:
-                skip += 1
-                valid_sites[j] = np.nan
-                continue
+            num_alleles = sequence_tools.count_alleles(loc, vcf=vcf)
+            if num_alleles != 2:
+
+                # If monomorphic
+                if num_alleles < 2:
+                    ref = sequence_tools.get_major_allele(loc, vcf=vcf)
+                    ref = str(ref[0])
+                    if vcf:
+                        for i in range(0, len(snps)):
+                            gen = snps[i][j].split("/")
+                            if gen[0] in ["-", "-9", "N"] or gen[1] in [
+                                "-",
+                                "-9",
+                                "N",
+                            ]:
+                                new_snps[i].append(-9)
+
+                            elif gen[0] == gen[1] and gen[0] == ref:
+                                new_snps[i].append(0)
+
+                            else:
+                                new_snps[i].append(1)
+                    else:
+                        for i in range(0, len(snps)):
+                            if loc[i] in ["-", "-9", "N"]:
+                                new_snps[i].append(-9)
+
+                            elif loc[i] == ref:
+                                new_snps[i].append(0)
+
+                            elif loc[i] == alt:
+                                new_snps[i].append(2)
+
+                            else:
+                                new_snps[i].append(1)
+
+                # If >2 alleles
+                elif num_alleles > 2:
+                    skip += 1
+                    valid_sites[j] = np.nan
+                    continue
             else:
                 ref, alt = sequence_tools.get_major_allele(loc, vcf=vcf)
                 ref = str(ref)
