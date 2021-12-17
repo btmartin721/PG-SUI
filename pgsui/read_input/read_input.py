@@ -1,5 +1,6 @@
 import os
 import sys
+import warnings
 
 from typing import Optional, Union, List, Dict, Tuple, Any, Callable
 
@@ -527,6 +528,8 @@ class GenotypeData:
 
             int, optional: Number of remaining valid sites.
         """
+        warnings.formatwarning = self._format_warning
+
         skip = 0
         new_snps = list()
 
@@ -536,7 +539,9 @@ class GenotypeData:
         for i in range(0, len(snps)):
             new_snps.append([])
 
+        # TODO: valid_sites is now deprecated.
         valid_sites = np.ones(len(snps[0]))
+
         for j in range(0, len(snps[0])):
             loc = list()
             for i in range(0, len(snps)):
@@ -550,6 +555,9 @@ class GenotypeData:
 
                 # If monomorphic
                 if num_alleles < 2:
+                    warnings.warn(
+                        f"Monomorphic site detected at SNP column {j+1}.\n"
+                    )
                     ref = sequence_tools.get_major_allele(loc, vcf=vcf)
                     ref = str(ref[0])
                     if vcf:
@@ -583,9 +591,59 @@ class GenotypeData:
 
                 # If >2 alleles
                 elif num_alleles > 2:
-                    skip += 1
-                    valid_sites[j] = np.nan
-                    continue
+                    warnings.warn(
+                        f" SNP column {j+1} had >2 alleles and was forced to "
+                        f"be bi-allelic. If that is not what you want, please "
+                        f"fix or remove the column and re-run.\n"
+                    )
+                    all_alleles = sequence_tools.get_major_allele(loc, vcf=vcf)
+                    all_alleles = [str(x[0]) for x in all_alleles]
+                    ref = all_alleles.pop(0)
+                    alt = all_alleles.pop(0)
+                    others = all_alleles
+
+                    if vcf:
+                        for i in range(0, len(snps)):
+                            gen = snps[i][j].split("/")
+                            if gen[0] in ["-", "-9", "N"] or gen[1] in [
+                                "-",
+                                "-9",
+                                "N",
+                            ]:
+                                new_snps[i].append(-9)
+
+                            elif gen[0] == gen[1] and gen[0] == ref:
+                                new_snps[i].append(0)
+
+                            elif gen[0] == gen[1] and gen[0] == alt:
+                                new_snps[i].append(2)
+
+                            # Force biallelic
+                            elif gen[0] == gen[1] and gen[0] in others:
+                                new_snps[i].append(2)
+
+                            else:
+                                new_snps[i].append(1)
+                    else:
+                        for i in range(0, len(snps)):
+                            if loc[i] in ["-", "-9", "N"]:
+                                new_snps[i].append(-9)
+
+                            elif loc[i] == ref:
+                                new_snps[i].append(0)
+
+                            elif loc[i] == alt:
+                                new_snps[i].append(2)
+
+                            # Force biallelic
+                            elif loc[i] in others:
+                                new_snps[i].append(2)
+
+                            else:
+                                new_snps[i].append(1)
+                    # skip += 1
+                    # valid_sites[j] = np.nan
+                    # continue
             else:
                 ref, alt = sequence_tools.get_major_allele(loc, vcf=vcf)
                 ref = str(ref)
@@ -621,6 +679,8 @@ class GenotypeData:
 
                         else:
                             new_snps[i].append(1)
+
+        # TODO: skip and impute_mode are now deprecated.
         if skip > 0:
             if impute_mode:
                 print(
@@ -642,6 +702,26 @@ class GenotypeData:
                 valid_sites,
                 np.count_nonzero(~np.isnan(valid_sites)),
             )
+
+    def _format_warning(
+        self, message, category, filename, lineno, file=None, line=None
+    ):
+        """For setting the format of warnings.warn warnings.
+
+        Set ``warnings.formatwarnings = self._format_warning`` to use it.
+
+        Args:
+            message (str): Warning message to print.
+            category (str): Type of warning.
+            filename (str): Name of python file where the warning was raised.
+            lineno (str): Line number where warning occurred.
+            file (None): Not used here.
+            line (None): Not used here.
+
+        Returns:
+            str: Full warning message.
+        """
+        return f"{filename}:{lineno}: {category.__name__}:{message}"
 
     def convert_onehot(
         self,

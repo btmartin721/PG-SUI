@@ -498,7 +498,9 @@ class Impute:
         # Only used if initial_strategy == 'phylogeny'
         if self.invalid_indexes is not None:
             df.drop(
-                labels=self.invalid_indexes, axis=1, inplace=True,
+                labels=self.invalid_indexes,
+                axis=1,
+                inplace=True,
             )
 
         if self.disable_progressbar:
@@ -539,9 +541,9 @@ class Impute:
             dict: Best parameters found during the grid search.
         """
         original_num_cols = len(df.columns)
-        df_bi = self._remove_nonbiallelic(df)
+        # df_bi = self._remove_nonbiallelic(df)
         df_subset, cols_to_keep = self._subset_data_for_gridsearch(
-            df_bi, self.column_subset, original_num_cols
+            df, self.column_subset, original_num_cols
         )
 
         print(f"Validation dataset size: {len(df_subset.columns)}\n")
@@ -662,15 +664,15 @@ class Impute:
         )
 
         final_cols = None
-        if len(df_bi.columns) < original_num_cols:
-            final_cols = np.array(df_bi.columns)
+        if len(df.columns) < original_num_cols:
+            final_cols = np.array(df.columns)
 
-        df_chunks = self.df2chunks(df_bi, self.chunk_size)
+        df_chunks = self.df2chunks(df, self.chunk_size)
         imputed_df = self._impute_df(
             df_chunks, best_imputer, cols_to_keep=final_cols
         )
 
-        lst2del = [df_chunks, df_bi]
+        lst2del = [df_chunks, df]
         del lst2del
         gc.collect()
 
@@ -838,7 +840,8 @@ class Impute:
                     imputer = self.clf(**self.clf_kwargs)
                     if self.clf == UBP:
                         df_imp = pd.DataFrame(
-                            imputer.fit_transform(Xchunk), dtype="Int8",
+                            imputer.fit_transform(Xchunk),
+                            dtype="Int8",
                         )
                     else:
                         df_imp = pd.DataFrame(imputer.fit_transform(Xchunk))
@@ -856,7 +859,10 @@ class Impute:
             else:
                 # Regressor. Needs to be rounded to integer first.
                 df_imp = pd.DataFrame(
-                    imputer.fit_transform(Xchunk, valid_cols=cols_to_keep,)
+                    imputer.fit_transform(
+                        Xchunk,
+                        valid_cols=cols_to_keep,
+                    )
                 )
                 df_imp = df_imp.round(0).astype("Int8")
 
@@ -1351,7 +1357,8 @@ class Impute:
 
             if self.clf == VAE:
                 df_imp = pd.DataFrame(
-                    imputer.fit_transform(df_stg.to_numpy()), columns=cols,
+                    imputer.fit_transform(df_stg.to_numpy()),
+                    columns=cols,
                 )
 
                 df_imp = df_imp.astype("float")
