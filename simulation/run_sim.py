@@ -2,6 +2,7 @@
 import sys
 import os
 import subprocess
+import errno
 
 import toytree
 import toyplot.pdf
@@ -55,13 +56,13 @@ def main():
     seed=1234
     random.seed(seed)
 
-    num_clades=3
-    samples_per_clade=20
+    num_clades=4
+    samples_per_clade=5
     num_loci=1
-    loc_length=10000
+    loc_length=1000
     write_gene_alignments=False
     make_gene_trees=False
-    snps_per_locus=100
+    snps_per_locus=10
     iqtree_bin="iqtree"
 
     ###################
@@ -71,9 +72,10 @@ def main():
     indlabels=[]
     for i in range(num_clades):
         clades.append(("pop"+str(i)))
-        poplabels.append(("pop"+str(i)))
         for j in range(samples_per_clade):
+            poplabels.append(("pop"+str(i)))
             indlabels.append(("pop"+str(i)+"_"+str(j)))
+    outgroup = "pop"+str(num_clades-1)+"_*"
 
     ####### Varying clade vs. stem heights
     for clade_height in [0.001, 0.002, 0.003, 0.004, 0.005, 0.006, 0.007, 0.008, 0.009]:
@@ -155,12 +157,24 @@ def main():
                     if make_gene_trees:
                         print("ERROR: Can't make gene trees when write_gene_alignments = False")
                 elif make_gene_trees:
-                    run_iqtree(fastaout, iqtree_path=iqtree_bin, keep_all=False, keep_report=False)
+                    run_iqtree(fastaout,
+                        iqtree_path=iqtree_bin,
+                        keep_all=False,
+                        keep_report=False)
+                    reroot_tree(tree=(fastaout+".treefile"),
+                        rooted=(fastaout+".rooted.tre"),
+                        outgroup_wildcard=outgroup)
 
             #write full SNP alignment & generate tree
             all_snp_out=model_outpath+"/"+base+"_"+model+"_base-snps-concat.fasta"
             write_fasta(data, all_snp_out)
-            run_iqtree(all_snp_out, iqtree_path=iqtree_bin, keep_all=False, keep_report=False)
+            run_iqtree(all_snp_out,
+                iqtree_path=iqtree_bin,
+                keep_all=False,
+                keep_report=False)
+            reroot_tree(tree=(all_snp_out+".treefile"),
+                rooted=(all_snp_out+".rooted.tre"),
+                outgroup_wildcard=outgroup)
 
             ######## Varying introgression weight
             num_sampled_loci = len(data[indlabels[0]])
@@ -168,16 +182,12 @@ def main():
             model_base=model_outpath+"/"+base+"_"+model
 
             for alpha in [0.1, 0.0, 0.2, 0.3, 0.4, 0.5]:
+            #for alpha in [0.1, 0.5, 0.9]:
                 alpha_base=model_base + "_i" + str(alpha)
 
-                #write a logfile recording which loci are introgressed
-
-                #for introgression, choose a SNP index, and then sample new
-                #genotypes for recipient population from genotypes in the source
-                #population.
+                #TO-DO: write a logfile recording which loci are introgressed?
                 source_pool = [indlabels[i] for i, pop in enumerate(poplabels) if pop == "pop2"]
                 target_pool = [indlabels[i] for i, pop in enumerate(poplabels) if pop == "pop1"]
-
                 if alpha == 0.0:
                     introgressed_data = copy.copy(data)
                 else:
@@ -186,7 +196,18 @@ def main():
                                             source=source_pool,
                                             target=target_pool)
 
-                sys.exit()
+                introgessed_aln_out=alpha_base + "_base-snps-concat.fasta"
+                write_fasta(introgressed_data, introgessed_aln_out)
+                run_iqtree(introgessed_aln_out,
+                        iqtree_path=iqtree_bin,
+                        keep_all=False,
+                        keep_report=False)
+                reroot_tree(tree=(introgessed_aln_out+".treefile"),
+                    rooted=(introgessed_aln_out+".rooted.tre"),
+                    outgroup_wildcard=outgroup)
+                #TO-DO: Need to re-root those trees!
+
+                #sys.exit()
                 #at this step, infer site-specific rates and substitution models in IQ-TREE
                 #using a concatenated SNP alignment
 
@@ -199,6 +220,14 @@ def main():
 
                     ####### Varying proportion of missing data
                     #for missing_prop in [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]:
+                sys.exit()
+
+def reroot_tree(tree, rooted="out.rooted.tre", outgroup_wildcard="out"):
+    t=toytree.tree(tree)
+    rt=t.root(regex=outgroup_wildcard)
+    rt.write(rooted, tree_format=5)
+    return(rt)
+
 
 def hybridization(dat, prob=0.1, source=None, target=None):
     new_dat=dict()
@@ -212,16 +241,17 @@ def hybridization(dat, prob=0.1, source=None, target=None):
         aln_len=len(dat[individual])
     all_indices=list(range(aln_len))
     num=int(aln_len*prob)
-    
+
     for target_individual in target:
         snp_indices = np.random.choice(all_indices, size=num, replace=False)
         for index in snp_indices:
-            new_dat[target_individual][index] = new_dat[np.random.choice(source, size=1)[0]][index]
+            source_ind=np.random.choice(source, size=1)[0]
+            new_dat[target_individual][index] = new_dat[source_ind][index]
     return(new_dat)
 
-def run_iqtree(aln, iqtree_path="iqtree", keep_all=False, keep_report=False):
+def run_iqtree(aln, iqtree_path="iqtree", keep_all=False, keep_report=False, outgroup=None):
     #run
-    result = subprocess.run([iqtree_path,
+    cmd = [iqtree_path,
                     "-s",
                     str(aln),
                     "-m",
@@ -229,19 +259,23 @@ def run_iqtree(aln, iqtree_path="iqtree", keep_all=False, keep_report=False):
                     "-redo",
                     "-nt",
                     "4"
-                    ], capture_output=True, text=True)
+                    ]
+    if outgroup is not None:
+        cmd.append("-o")
+        cmd.append(str(outgroup))
+    result = subprocess.run(cmd, capture_output=True, text=True)
     #print(result.stdout)
     #print(result.stderr)
 
     if not keep_all:
         #delete everything except treefile
-        os.remove((aln + ".bionj"))
-        os.remove((aln + ".ckp.gz"))
-        os.remove((aln + ".log"))
-        os.remove((aln + ".mldist"))
-        os.remove((aln + ".uniqueseq.phy"))
+        silentremove((aln + ".bionj"))
+        silentremove((aln + ".ckp.gz"))
+        silentremove((aln + ".log"))
+        silentremove((aln + ".mldist"))
+        silentremove((aln + ".uniqueseq.phy"))
         if not keep_report:
-            os.remove((aln + ".iqtree"))
+            silentremove((aln + ".iqtree"))
     return((aln + ".treefile"))
 
 def add_locus(d, new):
@@ -254,7 +288,7 @@ def write_fasta(seqs, fas):
 	with open(fas, 'w') as fh:
 		#Write seqs to FASTA first
 		for a in seqs.keys():
-			name = ">id_" + str(a) + "\n"
+			name = ">" + str(a) + "\n"
 			seq = "".join(seqs[a]) + "\n"
 			fh.write(name)
 			fh.write(seq)
@@ -326,6 +360,13 @@ def sample_locus(tree, model, gene_len=1000, num_snps=1, out="out.fasta"):
         #delete fasta file
         #os.remove(".temp.fasta")
         #return SNP
+
+def silentremove(filename):
+    try:
+        os.remove(filename)
+    except OSError as e: # this would be "except OSError, e:" before Python 2.6
+        if e.errno != errno.ENOENT: # errno.ENOENT = no such file or directory
+            raise # re-raise exception if a different error occurred
 
 def get_tree_tips(tree):
     tips = re.split('[ ,\(\);]', tree)
