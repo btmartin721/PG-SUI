@@ -11,6 +11,7 @@ import scipy.stats as stats
 from sklearn_genetic.space import Continuous, Categorical, Integer
 
 from read_input.read_input import GenotypeData
+from impute.estimators import *
 
 # from pgsui.read_input import GenotypeData
 # from pgsui.estimators import *
@@ -106,13 +107,13 @@ def main():
         # Proportion of dataset to use with bootstrapping
         # max_samples = [x for x in np.linspace(0.5, 1.0, num=6)]
 
-        # # Random Forest gridparams - RandomizedSearchCV
-        grid_params = {
-            "max_features": max_features,
-            "max_depth": max_depth,
-            "min_samples_split": min_samples_split,
-            "min_samples_leaf": min_samples_leaf,
-        }
+        # # # Random Forest gridparams - RandomizedSearchCV
+        # grid_params = {
+        #     "max_features": max_features,
+        #     "max_depth": max_depth,
+        #     "min_samples_split": min_samples_split,
+        #     "min_samples_leaf": min_samples_leaf,
+        # }
 
         # Random Forest gridparams - Genetic Algorithms
         # grid_params = {
@@ -124,13 +125,13 @@ def main():
         # 	"max_samples": max_samples
         # }
 
-        # # Genetic Algorithm grid_params
-        # grid_params = {
-        #     "max_features": Categorical(["sqrt", "log2"]),
-        #     "min_samples_split": Integer(2, 10),
-        #     "min_samples_leaf": Integer(1, 10),
-        #     "max_depth": Integer(2, 110),
-        # }
+        # Genetic Algorithm grid_params
+        grid_params = {
+            "max_features": Categorical(["sqrt", "log2"]),
+            "min_samples_split": Integer(2, 10),
+            "min_samples_leaf": Integer(1, 10),
+            "max_depth": Integer(2, 110),
+        }
 
         # Bayesian Ridge gridparams - RandomizedSearchCV
         # grid_params = {
@@ -148,26 +149,26 @@ def main():
         # 	"lambda_2": Continuous(1e-6, 1e-3, distribution="log-uniform")
         # }
 
-        # # Random forest imputation with genetic algorithm grid search
-        # rf_imp = ImputeRandomForest(
-        #     data,
-        #     prefix=args.prefix,
-        #     n_estimators=50,
-        #     n_nearest_features=3,
-        #     gridparams=grid_params,
-        #     cv=3,
-        #     grid_iter=40,
-        #     n_jobs=4,
-        #     max_iter=2,
-        #     column_subset=0.2,
-        #     ga=True,
-        #     disable_progressbar=True,
-        #     extratrees=False,
-        #     mutation_probability=0.1,
-        #     progress_update_percent=20,
-        #     chunk_size=0.5,
-        #     initial_strategy="phylogeny",
-        # )
+        # Random forest imputation with genetic algorithm grid search
+        rf_imp = ImputeRandomForest(
+            data,
+            prefix=args.prefix,
+            n_estimators=50,
+            n_nearest_features=1,
+            gridparams=grid_params,
+            cv=5,
+            grid_iter=40,
+            n_jobs=4,
+            max_iter=2,
+            column_subset=1.0,
+            ga=True,
+            disable_progressbar=True,
+            extratrees=False,
+            mutation_probability=0.1,
+            progress_update_percent=20,
+            chunk_size=1.0,
+            initial_strategy="populations",
+        )
 
         # # RandomizedSearchCV Test
         # rf_imp = ImputeRandomForest(
