@@ -57,15 +57,26 @@ def main():
     random.seed(seed)
 
     num_clades=4
-    samples_per_clade=5
-    num_loci=1
-    loc_length=1000
+    samples_per_clade=20
+    num_loci=250
+    loc_length=2000
     write_gene_alignments=False
     make_gene_trees=False
-    snps_per_locus=10
-    iqtree_bin="iqtree"
+    make_guidetrees=True #set to true to run IQTREE on simulated SNP matrices
+    keep_all=False #set to true to keep ALL iqtree outputs
+    keep_report=True #set to true to keep .iqtree files
+    get_siterates=True #set to true to infer site-specific rates in IQTREE
+    snps_per_locus=4
+    iqtree_bin="iqtree2"
+    get_rates=True
+    iq_procs=4
 
     ###################
+
+    if get_siterates and not make_guidetrees:
+        print("ERROR: can't set get_siterates=True and make_guidetrees=False")
+        print("Setting make_guidetrees=True and proceeding...")
+        make_guidetrees=True
 
     clades=[]
     poplabels=[]
@@ -75,7 +86,7 @@ def main():
         for j in range(samples_per_clade):
             poplabels.append(("pop"+str(i)))
             indlabels.append(("pop"+str(i)+"_"+str(j)))
-    outgroup = "pop"+str(num_clades-1)+"_*"
+    outgroup = "pop"+str(num_clades-1)+"_"
 
     ####### Varying clade vs. stem heights
     for clade_height in [0.001, 0.002, 0.003, 0.004, 0.005, 0.006, 0.007, 0.008, 0.009]:
@@ -126,18 +137,40 @@ def main():
 
         my_tree = pyvolve.read_tree(tree=guidetree)
 
-        for model in ["gtr","gtrgamma"]:
+        #for model in ["gtr","gtrgamma"]:
+        for model in ["gtrgamma"]:
             model_outpath=treeset_path+"/"+base+"_"+model
             if not os.path.exists(model_outpath):
                 os.mkdir(model_outpath)
 
-            if model == "gtr":
-                #GTR model, without rate heterogeneity
-                my_model = pyvolve.Model("nucleotide")
-            else:
-                my_model = pyvolve.Model("nucleotide", alpha = 0.4, num_categories = 4)
-
             for locus in range(num_loci):
+                f = np.random.random(4)
+                f /= f.sum()
+                parameters = {
+                "mu":
+                    {"AC": np.random.uniform(low=0.0, high=1.0),
+                    "AG": np.random.uniform(low=0.0, high=1.0),
+                    "AT": np.random.uniform(low=0.0, high=1.0),
+                    "CG": np.random.uniform(low=0.0, high=1.0),
+                    "CT": np.random.uniform(low=0.0, high=1.0),
+                    "GT": np.random.uniform(low=0.0, high=1.0)},
+                "state_freqs":
+                    [f[0], f[1], f[2], f[3]]
+                }
+                if model == "gtr":
+                    #GTR model, without rate heterogeneity
+                    my_model = pyvolve.Model("nucleotide",
+                        parameters)
+                else:
+                    my_model = pyvolve.Model("nucleotide",
+                        parameters,
+                        rate_factors = [
+                                    np.random.uniform(low=0.0, high=0.7, size=1),
+                                    np.random.uniform(low=0.5, high=1.2, size=1),
+                                    np.random.uniform(low=1.0, high=1.8, size=1),
+                                    np.random.uniform(low=1.5, high=5.0, size=1)
+                                    ],
+                        rate_probs = [0.6, 0.3, 0.05, 0.05] )
                 if write_gene_alignments:
                     fasta_outpath=model_outpath + "/full_alignments"
                     if not os.path.exists(fasta_outpath):
@@ -146,42 +179,49 @@ def main():
                     fasta_outpath=model_outpath
                 fastaout=fasta_outpath +"/"+ base+"_"+model+"_loc"+str(locus) + "_gene-alignment.fasta"
                 #sample a gene alignment
-                sample_locus(my_tree, my_model, loc_length, snps_per_locus, fastaout)
+                loc = sample_locus(my_tree, my_model, loc_length, snps_per_locus, fastaout)
 
-                #sample SNP(s) from gene alignment
-                sampled = sample_snp(read_fasta(fastaout), loc_length, snps_per_locus)
-                data = add_locus(data,sampled)
+                if loc:
+                    #sample SNP(s) from gene alignment
+                    sampled = sample_snp(read_fasta(fastaout), loc_length, snps_per_locus)
+                    if sampled is not None:
+                        data = add_locus(data,sampled)
 
-                if not write_gene_alignments:
-                    os.remove(fastaout)
-                    if make_gene_trees:
-                        print("ERROR: Can't make gene trees when write_gene_alignments = False")
-                elif make_gene_trees:
-                    run_iqtree(fastaout,
-                        iqtree_path=iqtree_bin,
-                        keep_all=False,
-                        keep_report=False)
-                    reroot_tree(tree=(fastaout+".treefile"),
-                        rooted=(fastaout+".rooted.tre"),
-                        outgroup_wildcard=outgroup)
+                    if not write_gene_alignments:
+                        os.remove(fastaout)
+                        if make_gene_trees:
+                            print("ERROR: Can't make gene trees when write_gene_alignments = False")
+                    elif make_gene_trees:
+                        run_iqtree(fastaout,
+                            iqtree_path=iqtree_bin,
+                            keep_all=keep_all,
+                            keep_report=keep_report,
+                            rates=get_siterates,
+                            procs=iq_procs)
+                        reroot_tree(tree=(fastaout+".treefile"),
+                            rooted=(fastaout+".rooted.tre"),
+                            outgroup_wildcard=outgroup)
 
             #write full SNP alignment & generate tree
             all_snp_out=model_outpath+"/"+base+"_"+model+"_base-snps-concat.fasta"
             write_fasta(data, all_snp_out)
-            run_iqtree(all_snp_out,
-                iqtree_path=iqtree_bin,
-                keep_all=False,
-                keep_report=False)
-            reroot_tree(tree=(all_snp_out+".treefile"),
-                rooted=(all_snp_out+".rooted.tre"),
-                outgroup_wildcard=outgroup)
+            if make_guidetrees:
+                run_iqtree(all_snp_out,
+                    iqtree_path=iqtree_bin,
+                    keep_all=keep_all,
+                    keep_report=keep_report,
+                    rates=get_siterates,
+                    procs=iq_procs)
+                reroot_tree(tree=(all_snp_out+".treefile"),
+                    rooted=(all_snp_out+".rooted.tre"),
+                    outgroup_wildcard=outgroup)
 
             ######## Varying introgression weight
             num_sampled_loci = len(data[indlabels[0]])
             #Modeled as contemporary exchange from pop2 -> pop1
             model_base=model_outpath+"/"+base+"_"+model
 
-            for alpha in [0.1, 0.0, 0.2, 0.3, 0.4, 0.5]:
+            for alpha in [0.1, 0.0, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]:
             #for alpha in [0.1, 0.5, 0.9]:
                 alpha_base=model_base + "_i" + str(alpha)
 
@@ -198,35 +238,26 @@ def main():
 
                 introgessed_aln_out=alpha_base + "_base-snps-concat.fasta"
                 write_fasta(introgressed_data, introgessed_aln_out)
-                run_iqtree(introgessed_aln_out,
-                        iqtree_path=iqtree_bin,
-                        keep_all=False,
-                        keep_report=False)
-                reroot_tree(tree=(introgessed_aln_out+".treefile"),
-                    rooted=(introgessed_aln_out+".rooted.tre"),
-                    outgroup_wildcard=outgroup)
-                #TO-DO: Need to re-root those trees!
-
-                #sys.exit()
-                #at this step, infer site-specific rates and substitution models in IQ-TREE
-                #using a concatenated SNP alignment
-
-                #Now, our datasets are complete, so simulate different types of missing
-                #data on the guidetree(s)
-
-                ######## Varying type of missing data (systematic vs. random)
-                #for missing_type in ["systematic", "random"]:
-
-
-                    ####### Varying proportion of missing data
-                    #for missing_prop in [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]:
-                sys.exit()
+                if make_guidetrees:
+                    run_iqtree(introgessed_aln_out,
+                            iqtree_path=iqtree_bin,
+                            keep_all=keep_all,
+                            keep_report=keep_report,
+                            rates=get_siterates,
+                            procs=iq_procs)
+                    reroot_tree(tree=(introgessed_aln_out+".treefile"),
+                        rooted=(introgessed_aln_out+".rooted.tre"),
+                        outgroup_wildcard=outgroup)
 
 def reroot_tree(tree, rooted="out.rooted.tre", outgroup_wildcard="out"):
     t=toytree.tree(tree)
-    rt=t.root(regex=outgroup_wildcard)
-    rt.write(rooted, tree_format=5)
-    return(rt)
+    try:
+        rt=t.root(wildcard=outgroup_wildcard)
+        rt.write(rooted, tree_format=5)
+        return(rt)
+    except Exception:
+        t.write(rooted, tree_format=5)
+        return(None)
 
 
 def hybridization(dat, prob=0.1, source=None, target=None):
@@ -249,20 +280,30 @@ def hybridization(dat, prob=0.1, source=None, target=None):
             new_dat[target_individual][index] = new_dat[source_ind][index]
     return(new_dat)
 
-def run_iqtree(aln, iqtree_path="iqtree", keep_all=False, keep_report=False, outgroup=None):
+def run_iqtree(aln,
+    iqtree_path="iqtree",
+    keep_all=False,
+    keep_report=False,
+    outgroup=None,
+    rates=False,
+    procs=4):
     #run
     cmd = [iqtree_path,
                     "-s",
                     str(aln),
                     "-m",
-                    "GTR+G",
+                    "GTR+I*G4",
                     "-redo",
-                    "-nt",
-                    "4"
+                    "-T",
+                    str(procs)
                     ]
     if outgroup is not None:
         cmd.append("-o")
         cmd.append(str(outgroup))
+    if rates:
+        #use -wst (NOT -mlrate) if using iq-tree 1.6xx
+        #cmd.append("-wsr")
+        cmd.append("--mlrate")
     result = subprocess.run(cmd, capture_output=True, text=True)
     #print(result.stdout)
     #print(result.stderr)
@@ -334,7 +375,7 @@ def sample_snp(aln_dict, aln_len, snps_per_locus=1):
                 snp_indices.append(i)
                 break
     if len(snp_indices) == 0:
-        return(snp_indices)
+        return(None)
     elif len(snp_indices) == 1:
         #sample them all
         for sample in aln_dict.keys():
@@ -347,19 +388,16 @@ def sample_snp(aln_dict, aln_len, snps_per_locus=1):
     return(snp_aln)
 
 def sample_locus(tree, model, gene_len=1000, num_snps=1, out="out.fasta"):
+    try:
         my_partition = pyvolve.Partition(models = model, size=gene_len)
-        # Evolve!
         my_evolver = pyvolve.Evolver(partitions = my_partition, tree = tree)
         my_evolver(seqfile = out,
             seqfmt = "fasta",
             ratefile=False,
             infofile=False)
-        #read fasta file
-        aln=read_fasta(out)
-
-        #delete fasta file
-        #os.remove(".temp.fasta")
-        #return SNP
+        return(True)
+    except Exception:
+        return False
 
 def silentremove(filename):
     try:
