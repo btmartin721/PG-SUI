@@ -58,15 +58,15 @@ def main():
 
     num_clades=4
     samples_per_clade=20
-    num_loci=250
-    loc_length=2000
+    num_loci=1000
+    loc_length=100
     write_gene_alignments=False
     make_gene_trees=False
     make_guidetrees=True #set to true to run IQTREE on simulated SNP matrices
     keep_all=False #set to true to keep ALL iqtree outputs
     keep_report=True #set to true to keep .iqtree files
     get_siterates=True #set to true to infer site-specific rates in IQTREE
-    snps_per_locus=4
+    snps_per_locus=1
     iqtree_bin="iqtree2"
     get_rates=True
     iq_procs=4
@@ -144,6 +144,7 @@ def main():
                 os.mkdir(model_outpath)
 
             for locus in range(num_loci):
+                print(locus)
                 f = np.random.random(4)
                 f /= f.sum()
                 parameters = {
@@ -165,12 +166,12 @@ def main():
                     my_model = pyvolve.Model("nucleotide",
                         parameters,
                         rate_factors = [
-                                    np.random.uniform(low=0.0, high=0.7, size=1),
+                                    np.random.uniform(low=0.1, high=0.7, size=1),
                                     np.random.uniform(low=0.5, high=1.2, size=1),
                                     np.random.uniform(low=1.0, high=1.8, size=1),
                                     np.random.uniform(low=1.5, high=5.0, size=1)
                                     ],
-                        rate_probs = [0.6, 0.3, 0.05, 0.05] )
+                        rate_probs = [0.4, 0.3, 0.2, 0.1] )
                 if write_gene_alignments:
                     fasta_outpath=model_outpath + "/full_alignments"
                     if not os.path.exists(fasta_outpath):
