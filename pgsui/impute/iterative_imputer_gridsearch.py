@@ -51,8 +51,7 @@ from sklearn_genetic.plots import plot_fitness_evolution
 from sklearn_genetic.utils import logbook_to_pandas
 
 # Custom function imports
-import pgsui.impute.simple_imputers
-
+from pgsui.impute import simple_imputers
 from pgsui.utils.misc import get_processor_name
 from pgsui.utils.misc import HiddenPrints
 from pgsui.utils.misc import isnotebook
@@ -332,7 +331,7 @@ class IterativeImputerGridSearch(IterativeImputer):
         mask_missing_values = X_missing_mask.copy()
 
         if self.initial_strategy == "populations":
-            self.initial_imputer_ = impute.simple_imputers.ImputeAlleleFreq(
+            self.initial_imputer_ = simple_imputers.ImputeAlleleFreq(
                 gt=np.nan_to_num(X, nan=-9).tolist(),
                 pops=self.pops,
                 by_populations=True,
@@ -359,7 +358,7 @@ class IterativeImputerGridSearch(IterativeImputer):
                 )
 
             else:
-                self.initial_imputer_ = impute.simple_imputers.ImputePhylo(
+                self.initial_imputer_ = simple_imputers.ImputePhylo(
                     genotype_data=self.genotype_data,
                     str_encodings=self.str_encodings,
                     write_output=False,
@@ -379,7 +378,7 @@ class IterativeImputerGridSearch(IterativeImputer):
                 mask_missing_values = mask_missing_values[:, valid_mask]
 
         elif self.initial_strategy == "nmf":
-            self.initial_imputer_ = impute.estimators.ImputeNMF(
+            self.initial_imputer_ = simple_imputers.ImputeNMF(
                 gt=np.nan_to_num(X, nan=-9),
                 missing=-9,
                 write_output=False,

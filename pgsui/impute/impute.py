@@ -40,11 +40,9 @@ from pgsui.impute.iterative_imputer_gridsearch import IterativeImputerGridSearch
 from pgsui.impute.iterative_imputer_fixedparams import IterativeImputerFixedParams
 from pgsui.impute.neural_network_imputers import VAE, UBP
 
-import pgsui.impute.simple_imputers
-
 from pgsui.read_input.read_input import GenotypeData
-
-from pgsui.utils import misc
+from pgsui.impute import simple_imputers
+from pgsui.utils.misc import get_processor_name
 from pgsui.utils.misc import get_processor_name
 from pgsui.utils.misc import isnotebook
 from pgsui.utils.misc import timer
@@ -1253,7 +1251,7 @@ class Impute:
         str_enc = self.imp_kwargs["str_encodings"]
 
         if initial_strategy == "populations":
-            simple_imputer = impute.simple_imputers.ImputeAlleleFreq(
+            simple_imputer = simple_imputers.ImputeAlleleFreq(
                 gt=df.fillna(-9).values.tolist(),
                 pops=self.pops,
                 by_populations=True,
@@ -1273,7 +1271,7 @@ class Impute:
             )
 
             # NOTE: non-biallelic sites are removed with ImputePhylo
-            simple_imputer = impute.simple_imputers.ImputePhylo(
+            simple_imputer = simple_imputers.ImputePhylo(
                 genotype_data=gt_data,
                 str_encodings=str_enc,
                 write_output=False,
@@ -1305,7 +1303,7 @@ class Impute:
             )
 
         elif initial_strategy == "nmf":
-            simple_imputer = impute.estimators.ImputeNMF(
+            simple_imputer = simple_imputers.ImputeNMF(
                 gt=df.fillna(-9).to_numpy(),
                 missing=-9,
                 write_output=False,
