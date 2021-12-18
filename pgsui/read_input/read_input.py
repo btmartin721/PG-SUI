@@ -34,6 +34,10 @@ class GenotypeData:
 
             qmatrix (str or None): Path to file containing only Q rate matrix, and not the full iqtree file. Defaults to None.
 
+            siterates (str or None, optional): Path to file containing per-site rates, with 1 rate per line corresponding to 1 site. Not required if ``genotype_data`` is defined with the siterates or siterates_iqtree option. Defaults to None.
+
+            siterates_iqtree (str or None, optional): Path to *.rates file output from IQ-TREE, containing a per-site rate table. If specified, ``ImputePhylo`` will read the site-rates from the IQ-TREE output file. Cannot be used in conjunction with ``siterates`` argument. Not required if the ``siterates`` or ``siterates_iqtree`` options were used with the ``GenotypeData`` object. Defaults to None.
+
             verbose (bool, optional): Verbosity level. Defaults to True.
 
     Attributes:
@@ -67,6 +71,10 @@ class GenotypeData:
             genotypes_df (pandas.DataFrame): 012-encoded genotypes of shape (n_samples, n_sites). Missing values are encoded as -9.
 
             genotypes_onehot (numpy.ndarray of shape (n_samples, n_SNPs, 4)): One-hot encoded numpy array. The inner-most array consists of one-hot encoded values for the four nucleotides in the order of "A", "T", "G", "C". Values of 0.5 indicate heterozygotes, and missing values contain 0.0 for all four nucleotides.
+
+            q (pandas.DataFrame): Q-matrix of nucleotide substitution rates, if initialized with ``qmatrix`` or ``qmatrix_iqtree``
+
+            site_rates (List[float]): Site-specific substitution rates, if initialized with ``siterates`` or ``siterates_iqtree``
     """
 
     def __init__(
@@ -77,6 +85,8 @@ class GenotypeData:
         guidetree: Optional[str] = None,
         qmatrix_iqtree: Optional[str] = None,
         qmatrix: Optional[str] = None,
+        siterates: Optional[str] = None,
+        siterates_iqtree: Optional[str] = None,
         verbose: bool = True,
     ) -> None:
         self.filename = filename
@@ -85,6 +95,8 @@ class GenotypeData:
         self.guidetree = guidetree
         self.qmatrix_iqtree = qmatrix_iqtree
         self.qmatrix = qmatrix
+        self.siterates = siterates
+        self.siterates_iqtree = siterates_iqtree
         self.verbose = verbose
 
         self.snpsdict: Dict[str, List[Union[str, int]]] = dict()
@@ -96,9 +108,14 @@ class GenotypeData:
         self.alt = list()
         self.num_snps: int = 0
         self.num_inds: int = 0
+        self.q = None
+        self.site_rates = None
 
         if self.qmatrix_iqtree is not None and self.qmatrix is not None:
             raise TypeError("qmatrix_iqtree and qmatrix cannot both be defined")
+
+        if self.siterates_iqtree is not None and self.siterates is not None:
+            raise TypeError("siterates_iqtree and siterates cannot both be defined")
 
         if self.filetype is not None:
             self.parse_filetype(filetype, popmapfile)
@@ -117,6 +134,15 @@ class GenotypeData:
             self.q = self.q_from_file(self.qmatrix)
         elif self.qmatrix is None and self.qmatrix_iqtree is None:
             self.q = None
+
+        if self.siterates_iqtree is not None:
+            self.site_rates = self.siterates_from_iqtree(self.siterates_iqtree)
+            self.validate_rates()
+        elif self.siterates_iqtree is None and self.siterates is not None:
+            self.site_rates = self.siterates_from_file(self.siterates)
+            self.validate_rates()
+        elif self.siterates is None and self.siterates_iqtree is None:
+            self.site_rates = None
 
     def parse_filetype(
         self, filetype: Optional[str] = None, popmapfile: Optional[str] = None
@@ -338,6 +364,66 @@ class GenotypeData:
             for nuc2 in ["A", "C", "G", "T"]:
                 q[nuc1][nuc2] = default
         return q
+
+
+    def siterates_from_iqtree(self, iqfile: str) -> pd.DataFrame:
+        """Read in site-specific substitution rates from *.rates file.
+
+        The *.rates file is an optional IQ-TREE output files and contains a table of site-specific rates and rate categories.
+
+        Args:
+            iqfile (str): Path to *.rates input file.
+
+        Returns:
+            List[float]: List of rates.
+
+        Raises:
+            FileNotFoundError: If rates file could not be found.
+            IOError: If rates file could not be read from.
+        """
+        s=list()
+        try:
+            with open(iqfile, "r") as fin:
+                for line in fin:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    elif line[0] == "#":
+                        continue
+                    else:
+                        stuff = line.split()
+                        if stuff[0] == "Site":
+                            continue
+                        else:
+                            s.append(float(stuff[1]))
+        except (IOError, FileNotFoundError):
+            sys.exit(f"Could not open iqtree file {iqfile}")
+        return(s)
+
+    def validate_rates(self):
+        if self.site_rates is not None:
+            if len(self.site_rates) != self.num_snps:
+                raise ValueError("Number of sites in provides siterates file not equal to number of genotypes")
+
+    def siterates_from_file(self, fname: str):
+        """Read site-specific substitution rates from file on disk.
+
+        Args:
+            fname (str): Path to input file.
+        Returns:
+            List[float]: List of rates.
+        """
+        s=list()
+        with open(fname, "r") as fin:
+            for line in fin:
+                line = line.strip()
+                if not line:
+                    continue
+                else:
+                    s.append(float(line.split()[0]))
+        fin.close()
+        return(s)
+
 
     def read_structure(self, onerow: bool = False, popids: bool = True) -> None:
         """Read a structure file with two rows per individual.
