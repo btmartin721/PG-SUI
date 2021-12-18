@@ -11,11 +11,11 @@ import toyplot as tp
 import toytree as tt
 
 # Custom imports
-from read_input.read_input import GenotypeData
-from utils import misc
-from utils.misc import get_processor_name
-from utils.misc import isnotebook
-from utils.misc import timer
+from pgsui.read_input.read_input import GenotypeData
+from pgsui.utils import misc
+from pgsui.utils.misc import get_processor_name
+from pgsui.utils.misc import isnotebook
+from pgsui.utils.misc import timer
 
 is_notebook = isnotebook()
 

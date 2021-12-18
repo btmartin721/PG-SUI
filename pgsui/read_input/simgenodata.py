@@ -11,9 +11,9 @@ from functools import partial
 import pandas as pd
 import numpy as np
 import scipy as sp
-from read_input import GenotypeData
+from pgsui.read_input import GenotypeData
 
-from utils import tree_tools
+from pgsui.utils import tree_tools
 
 class SimGenotypeData(GenotypeData):
     """Simulate SNP matrices for use with ImputeXXX methods.

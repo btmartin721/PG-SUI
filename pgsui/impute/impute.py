@@ -36,18 +36,18 @@ import lightgbm as lgbm
 from sklearn_genetic.space import Continuous, Categorical, Integer
 
 # Custom module imports
-from impute.iterative_imputer_gridsearch import IterativeImputerGridSearch
-from impute.iterative_imputer_fixedparams import IterativeImputerFixedParams
-from impute.neural_network_imputers import VAE, UBP
+from pgsui.impute.iterative_imputer_gridsearch import IterativeImputerGridSearch
+from pgsui.impute.iterative_imputer_fixedparams import IterativeImputerFixedParams
+from pgsui.impute.neural_network_imputers import VAE, UBP
 
-import impute.simple_imputers
+import pgsui.impute.simple_imputers
 
-from read_input.read_input import GenotypeData
+from pgsui.read_input.read_input import GenotypeData
 
-from utils import misc
-from utils.misc import get_processor_name
-from utils.misc import isnotebook
-from utils.misc import timer
+from pgsui.utils import misc
+from pgsui.utils.misc import get_processor_name
+from pgsui.utils.misc import isnotebook
+from pgsui.utils.misc import timer
 
 is_notebook = isnotebook()
 

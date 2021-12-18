@@ -33,10 +33,10 @@ from sklearn.utils._mask import _get_mask
 from sklearn.utils.validation import FLOAT_DTYPES
 
 # Custom function imports
-import impute.simple_imputers
-from utils.misc import get_processor_name
-from utils.misc import HiddenPrints
-from utils.misc import isnotebook
+import pgsui.impute.simple_imputers
+from pgsui.utils.misc import get_processor_name
+from pgsui.utils.misc import HiddenPrints
+from pgsui.utils.misc import isnotebook
 
 # Uses scikit-learn-intellex package if CPU is Intel
 if get_processor_name().strip().startswith("Intel"):

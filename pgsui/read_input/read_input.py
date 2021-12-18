@@ -12,8 +12,8 @@ import numpy as np
 import pandas as pd
 import toytree as tt
 
-from read_input.popmap_file import ReadPopmap
-from utils import sequence_tools
+from pgsui.read_input.popmap_file import ReadPopmap
+from pgsui.utils import sequence_tools
 
 
 class GenotypeData:

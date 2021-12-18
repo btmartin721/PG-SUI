@@ -23,15 +23,15 @@ from sklearn.neighbors import KNeighborsClassifier
 
 
 # Custom imports
-from read_input.read_input import GenotypeData
+from pgsui.read_input.read_input import GenotypeData
 
-from impute.impute import Impute
-from impute.neural_network_imputers import VAE, UBP
+from pgsui.impute.impute import Impute
+from pgsui.impute.neural_network_imputers import VAE, UBP
 
-from utils import misc
-from utils.misc import get_processor_name
-from utils.misc import isnotebook
-from utils.misc import timer
+from pgsui.utils import misc
+from pgsui.utils.misc import get_processor_name
+from pgsui.utils.misc import isnotebook
+from pgsui.utils.misc import timer
 
 is_notebook = isnotebook()
 
