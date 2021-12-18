@@ -184,11 +184,22 @@ class ImputeKNN(Impute):
 
         super().__init__(self.clf, self.clf_type, kwargs)
 
-        self.imputed, self.best_params = self.fit_predict(
+        imputed012, self.best_params = self.fit_predict(
             genotype_data.genotypes_df
         )
 
-        self.write_imputed(self.imputed)
+        imputed, imputed_filename = genotype_data.decode_imputed(
+            imputed012, write_output=True, prefix=prefix
+        )
+
+        self.imputed = GenotypeData(
+            filename=imputed_filename,
+            filetype=genotype_data.filetype,
+            popmapfile=genotype_data.popmapfile,
+            guidetree=genotype_data.guidetree,
+            qmatrix_iqtree=genotype_data.qmatrix_iqtree,
+            qmatrix=genotype_data.qmatrix,
+        )
 
 
 class ImputeRandomForest(Impute):
@@ -198,6 +209,8 @@ class ImputeRandomForest(Impute):
         genotype_data (GenotypeData object): GenotypeData instance that was used to read in the sequence data.
 
         prefix (str, optional): Prefix for imputed data's output filename.
+
+        write_output (bool, optional): If True, writes imputed data to file on disk. Otherwise just stores it as a class attribute.
 
         gridparams (Dict[str, Any] or None or None, optional): Dictionary with keys=keyword arguments for the specified estimator and values=lists of parameter values or distributions. If using RandomizedSearchCV, distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). ``gridparams`` will be used for a randomized grid search with cross-validation. If using the genetic algorithm grid search (GASearchCV), the parameters can be specified as ``sklearn_genetic.space`` objects. The grid search will determine the optimal parameters as those that maximize accuracy (or minimize root mean squared error for BayesianRidge regressor). NOTE: Takes a long time, so run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. If ``gridparams=None``\, a grid search is not performed. Defaults to None.
 
@@ -361,11 +374,22 @@ class ImputeRandomForest(Impute):
 
         super().__init__(self.clf, self.clf_type, kwargs)
 
-        self.imputed, self.best_params = self.fit_predict(
+        imputed012, self.best_params = self.fit_predict(
             genotype_data.genotypes_df
         )
 
-        self.write_imputed(self.imputed)
+        imputed, imputed_filename = genotype_data.decode_imputed(
+            imputed012, write_output=True, prefix=prefix
+        )
+
+        self.imputed = GenotypeData(
+            filename=imputed_filename,
+            filetype=genotype_data.filetype,
+            popmapfile=genotype_data.popmapfile,
+            guidetree=genotype_data.guidetree,
+            qmatrix_iqtree=genotype_data.qmatrix_iqtree,
+            qmatrix=genotype_data.qmatrix,
+        )
 
 
 class ImputeGradientBoosting(Impute):
@@ -517,11 +541,22 @@ class ImputeGradientBoosting(Impute):
 
         super().__init__(self.clf, self.clf_type, kwargs)
 
-        self.imputed, self.best_params = self.fit_predict(
+        imputed012, self.best_params = self.fit_predict(
             genotype_data.genotypes_df
         )
 
-        self.write_imputed(self.imputed)
+        imputed, imputed_filename = genotype_data.decode_imputed(
+            imputed012, write_output=True, prefix=prefix
+        )
+
+        self.imputed = GenotypeData(
+            filename=imputed_filename,
+            filetype=genotype_data.filetype,
+            popmapfile=genotype_data.popmapfile,
+            guidetree=genotype_data.guidetree,
+            qmatrix_iqtree=genotype_data.qmatrix_iqtree,
+            qmatrix=genotype_data.qmatrix,
+        )
 
 
 class ImputeBayesianRidge(Impute):
@@ -532,7 +567,7 @@ class ImputeBayesianRidge(Impute):
 
         prefix (str, optional): Prefix for imputed data's output filename.
 
-         gridparams (Dict[str, Any] or None, optional): Dictionary with keys=keyword arguments for the specified estimator and values=lists of parameter values or distributions. If using RandomizedSearchCV, distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). ``gridparams`` will be used for a randomized grid search with cross-validation. If using the genetic algorithm grid search (GASearchCV) by setting ``ga=True``\, the parameters can be specified as ``sklearn_genetic.space`` objects. The grid search will determine the optimal parameters as those that maximize accuracy (or minimize root mean squared error for BayesianRidge regressor). NOTE: Takes a long time, so run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. If ``gridparams=None``\, a grid search is not performed. Defaults to None.
+        gridparams (Dict[str, Any] or None, optional): Dictionary with keys=keyword arguments for the specified estimator and values=lists of parameter values or distributions. If using RandomizedSearchCV, distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). ``gridparams`` will be used for a randomized grid search with cross-validation. If using the genetic algorithm grid search (GASearchCV) by setting ``ga=True``\, the parameters can be specified as ``sklearn_genetic.space`` objects. The grid search will determine the optimal parameters as those that maximize accuracy (or minimize root mean squared error for BayesianRidge regressor). NOTE: Takes a long time, so run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. If ``gridparams=None``\, a grid search is not performed. Defaults to None.
 
         grid_iter (int, optional): Number of iterations for randomized grid search. Defaults to 50.
 
@@ -660,11 +695,22 @@ class ImputeBayesianRidge(Impute):
 
         super().__init__(self.clf, self.clf_type, kwargs)
 
-        self.imputed, self.best_params = self.fit_predict(
+        imputed012, self.best_params = self.fit_predict(
             genotype_data.genotypes_df
         )
 
-        self.write_imputed(self.imputed)
+        imputed, imputed_filename = genotype_data.decode_imputed(
+            imputed012, write_output=True, prefix=prefix
+        )
+
+        self.imputed = GenotypeData(
+            filename=imputed_filename,
+            filetype=genotype_data.filetype,
+            popmapfile=genotype_data.popmapfile,
+            guidetree=genotype_data.guidetree,
+            qmatrix_iqtree=genotype_data.qmatrix_iqtree,
+            qmatrix=genotype_data.qmatrix,
+        )
 
 
 class ImputeXGBoost(Impute):
@@ -784,11 +830,22 @@ class ImputeXGBoost(Impute):
 
         super().__init__(self.clf, self.clf_type, kwargs)
 
-        self.imputed, self.best_params = self.fit_predict(
+        imputed012, self.best_params = self.fit_predict(
             genotype_data.genotypes_df
         )
 
-        self.write_imputed(self.imputed)
+        imputed, imputed_filename = genotype_data.decode_imputed(
+            imputed012, write_output=True, prefix=prefix
+        )
+
+        self.imputed = GenotypeData(
+            filename=imputed_filename,
+            filetype=genotype_data.filetype,
+            popmapfile=genotype_data.popmapfile,
+            guidetree=genotype_data.guidetree,
+            qmatrix_iqtree=genotype_data.qmatrix_iqtree,
+            qmatrix=genotype_data.qmatrix,
+        )
 
 
 class ImputeLightGBM(Impute):
@@ -953,20 +1010,29 @@ class ImputeLightGBM(Impute):
 
         super().__init__(self.clf, self.clf_type, kwargs)
 
-        self.imputed, self.best_params = self.fit_predict(
+        imputed012, self.best_params = self.fit_predict(
             genotype_data.genotypes_df
         )
 
-        self.write_imputed(self.imputed)
+        imputed, imputed_filename = genotype_data.decode_imputed(
+            imputed012, write_output=True, prefix=prefix
+        )
+
+        self.imputed = GenotypeData(
+            filename=imputed_filename,
+            filetype=genotype_data.filetype,
+            popmapfile=genotype_data.popmapfile,
+            guidetree=genotype_data.guidetree,
+            qmatrix_iqtree=genotype_data.qmatrix_iqtree,
+            qmatrix=genotype_data.qmatrix,
+        )
 
 
 class ImputeVAE:
     """Class to impute missing data using a Variational Autoencoder neural network model.
 
     Args:
-        genotype_data (GenotypeData object or None): Input data initialized as GenotypeData object. If value is None, then uses ``gt`` to get the genotypes. Either ``genotype_data`` or ``gt`` must be defined. Defaults to None.
-
-        gt (numpy.ndarray or None): Input genotypes directly as a numpy array. If this value is None, ``genotype_data`` must be supplied instead. Defaults to None.
+        genotype_data (GenotypeData object): Input data initialized as GenotypeData object. Required positional argument.
 
         prefix (str): Prefix for output files. Defaults to "output".
 
@@ -1003,9 +1069,8 @@ class ImputeVAE:
 
     def __init__(
         self,
+        genotype_data,
         *,
-        genotype_data=None,
-        gt=None,
         prefix="output",
         cv=5,
         initial_strategy="populations",
@@ -1036,17 +1101,10 @@ class ImputeVAE:
 
         all_kwargs.update(imp_kwargs)
 
-        if genotype_data is None and gt is None:
-            raise TypeError("genotype_data and gt cannot both be NoneType")
+        if genotype_data is None:
+            raise TypeError("genotype_data cannot be NoneType")
 
-        if genotype_data is not None and gt is not None:
-            raise TypeError("genotype_data and gt cannot both be used")
-
-        if genotype_data is not None:
-            X = genotype_data.genotypes_nparray
-
-        elif gt is not None:
-            X = gt
+        X = genotype_data.genotypes_nparray
 
         imputer = Impute(self.clf, self.clf_type, all_kwargs)
 
@@ -1055,17 +1113,20 @@ class ImputeVAE:
         else:
             df = X.copy()
 
-        self._imputed, self._best_params = imputer.fit_predict(df)
+        imputed012, self.best_params = self.fit_predict(df)
 
-        imputer.write_imputed(self._imputed)
+        imputed, imputed_filename = genotype_data.decode_imputed(
+            imputed012, write_output=True, prefix=prefix
+        )
 
-    @property
-    def imputed(self):
-        return self._imputed
-
-    @property
-    def best_params(self):
-        return self._best_params
+        self.imputed = GenotypeData(
+            filename=imputed_filename,
+            filetype=genotype_data.filetype,
+            popmapfile=genotype_data.popmapfile,
+            guidetree=genotype_data.guidetree,
+            qmatrix_iqtree=genotype_data.qmatrix_iqtree,
+            qmatrix=genotype_data.qmatrix,
+        )
 
 
 class ImputeUBP(Impute):
@@ -1074,9 +1135,8 @@ class ImputeUBP(Impute):
     UBP [1]_ is an extension of NLPCA [2]_ with the input being randomly generated and of reduced dimensionality that gets trained to predict the supplied output based on only known values. It then uses the trained model to predict missing values. However, in contrast to NLPCA, UBP trains the model over three phases. The first is a single layer perceptron used to refine the randomly generated input. The second phase is a multi-layer perceptron that uses the refined reduced-dimension data from the first phase as input. In the second phase, the model weights are refined but not the input. In the third phase, the model weights and the inputs are then refined.
 
     Args:
-        genotype_data (GenotypeData object): Input GenotypeData object.
+        genotype_data (GenotypeData object): Input data initialized as GenotypeData object. Required positional argument.
 
-        gt (numpy.ndarray or None): Input genotypes directly as a numpy array. If this value is None, ``genotype_data`` must be supplied instead. Defaults to None.
 
         prefix (str, optional): Prefix for output files. Defaults to "output".
 
@@ -1128,9 +1188,8 @@ class ImputeUBP(Impute):
 
     def __init__(
         self,
+        genotype_data,
         *,
-        genotype_data=None,
-        gt=None,
         prefix="output",
         cv=5,
         initial_strategy="populations",
@@ -1168,17 +1227,10 @@ class ImputeUBP(Impute):
 
         settings.update(imp_kwargs)
 
-        if genotype_data is None and gt is None:
-            raise TypeError("genotype_data and gt cannot both be NoneType")
+        if genotype_data is None:
+            raise TypeError("genotype_data cannot be NoneType")
 
-        if genotype_data is not None and gt is not None:
-            raise TypeError("genotype_data and gt cannot both be used")
-
-        if genotype_data is not None:
-            X = genotype_data.genotypes_nparray
-
-        elif gt is not None:
-            X = gt
+        X = genotype_data.genotypes_nparray
 
         super().__init__(self.clf, self.clf_type, settings)
 
@@ -1187,18 +1239,20 @@ class ImputeUBP(Impute):
         else:
             df = X.copy()
 
-        self._imputed, self._best_params = self.fit_predict(df)
+        imputed012, self.best_params = self.fit_predict(df)
 
-        if write_output:
-            self.write_imputed(self._imputed)
+        imputed, imputed_filename = genotype_data.decode_imputed(
+            imputed012, write_output=True, prefix=prefix
+        )
 
-    @property
-    def imputed(self):
-        return self._imputed
-
-    @property
-    def best_params(self):
-        return self._best_params
+        self.imputed = GenotypeData(
+            filename=imputed_filename,
+            filetype=genotype_data.filetype,
+            popmapfile=genotype_data.popmapfile,
+            guidetree=genotype_data.guidetree,
+            qmatrix_iqtree=genotype_data.qmatrix_iqtree,
+            qmatrix=genotype_data.qmatrix,
+        )
 
 
 class ImputeNLPCA(ImputeUBP):
@@ -1207,7 +1261,7 @@ class ImputeNLPCA(ImputeUBP):
     NLPCA [1]_ trains randomly generated, reduced-dimensionality input to predict the correct output. In the case of imputation, the model is trained only on known values, and the trained model is then used to predict the missing values.
 
     Args:
-        genotype_data (GenotypeData object): Input GenotypeData object.
+        genotype_data (GenotypeData object): Input data initialized as GenotypeData object. Required positional argument.
 
         gt (numpy.ndarray or None): Input genotypes directly as a numpy array. If this value is None, ``genotype_data`` must be supplied instead. Defaults to None.
 
@@ -1257,14 +1311,6 @@ class ImputeNLPCA(ImputeUBP):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-
-    @property
-    def imputed(self):
-        return self._imputed
-
-    @property
-    def best_params(self):
-        return self._best_params
 
 
 class ImputeMF(GenotypeData):
@@ -1332,10 +1378,10 @@ class ImputeMF(GenotypeData):
         self.verbose = verbose
         self.iterative_mode = kwargs.get("iterative_mode", False)
         print(genotype_data)
-        self.imputed = self.fit_predict(genotype_data)
+        self.imputed012 = self.fit_predict(genotype_data)
 
         # if write_output:
-        #     self.write2file(self.imputed)
+        #     self.write2file(self.imputed012)
 
     def fit_predict(self, X):
         # print(X)

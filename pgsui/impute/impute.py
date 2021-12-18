@@ -232,7 +232,7 @@ class Impute:
             TypeError: Must be of type pandas.DataFrame, numpy.array, or List[List[int]].
         """
 
-        outfile = f"{self.prefix}_imputed_012.csv"
+        outfile = f"{self.prefix}_imputed012.csv"
 
         if isinstance(data, pd.DataFrame):
             data.to_csv(outfile, header=False, index=False)
@@ -1216,6 +1216,7 @@ class Impute:
                 missing=-9,
                 write_output=False,
                 verbose=False,
+                validation_mode=True,
             )
 
             df_defiled = simple_imputer.imputed
@@ -1233,6 +1234,7 @@ class Impute:
                 str_encodings=str_enc,
                 write_output=False,
                 disable_progressbar=True,
+                validation_mode=True,
             )
 
             valid_mask = np.flatnonzero(

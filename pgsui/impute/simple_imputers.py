@@ -300,7 +300,7 @@ class ImputePhylo(GenotypeData):
         """
         try:
             if list(genotypes.values())[0][0][1] == "/":
-                genotypes = self.str2iupac(genotypes, self.str_encodings)
+                genotypes = self._str2iupac(genotypes, self.str_encodings)
         except IndexError:
             if self.is_int(list(genotypes.values())[0][0][0]):
                 raise
@@ -627,49 +627,6 @@ class ImputePhylo(GenotypeData):
         pt = scipy.linalg.expm(m * t)
         ret[:] = pt
         return ret
-
-    def str2iupac(
-        self, genotypes: Dict[str, List[str]], str_encodings: Dict[str, int]
-    ) -> Dict[str, List[str]]:
-        """Convert STRUCTURE-format encodings to IUPAC bases.
-
-        Args:
-            genotypes (Dict[str, List[str]]): Genotypes at all sites.
-            str_encodings (Dict[str, int]): Dictionary that maps IUPAC bases (keys) to integer encodings (values).
-
-        Returns:
-            Dict[str, List[str]]: Genotypes converted to IUPAC format.
-        """
-        a = str_encodings["A"]
-        c = str_encodings["C"]
-        g = str_encodings["G"]
-        t = str_encodings["T"]
-        n = str_encodings["N"]
-        nuc = {
-            f"{a}/{a}": "A",
-            f"{c}/{c}": "C",
-            f"{g}/{g}": "G",
-            f"{t}/{t}": "T",
-            f"{n}/{n}": "N",
-            f"{a}/{c}": "M",
-            f"{c}/{a}": "M",
-            f"{a}/{g}": "R",
-            f"{g}/{a}": "R",
-            f"{a}/{t}": "W",
-            f"{t}/{a}": "W",
-            f"{c}/{g}": "S",
-            f"{g}/{c}": "S",
-            f"{c}/{t}": "Y",
-            f"{t}/{c}": "Y",
-            f"{g}/{t}": "K",
-            f"{t}/{g}": "K",
-        }
-
-        for k, v in genotypes.items():
-            for i, gt in enumerate(v):
-                v[i] = nuc[gt]
-
-        return genotypes
 
     def get_iupac_full(self, char: str) -> List[str]:
         """Map nucleotide to list of expanded IUPAC encodings.

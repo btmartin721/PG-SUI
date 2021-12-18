@@ -107,13 +107,13 @@ def main():
         # Proportion of dataset to use with bootstrapping
         # max_samples = [x for x in np.linspace(0.5, 1.0, num=6)]
 
-        # # # Random Forest gridparams - RandomizedSearchCV
-        # grid_params = {
-        #     "max_features": max_features,
-        #     "max_depth": max_depth,
-        #     "min_samples_split": min_samples_split,
-        #     "min_samples_leaf": min_samples_leaf,
-        # }
+        # Random Forest gridparams - RandomizedSearchCV
+        grid_params = {
+            "max_features": max_features,
+            "max_depth": max_depth,
+            "min_samples_split": min_samples_split,
+            "min_samples_leaf": min_samples_leaf,
+        }
 
         # Random Forest gridparams - Genetic Algorithms
         # grid_params = {
@@ -126,12 +126,12 @@ def main():
         # }
 
         # Genetic Algorithm grid_params
-        grid_params = {
-            "max_features": Categorical(["sqrt", "log2"]),
-            "min_samples_split": Integer(2, 10),
-            "min_samples_leaf": Integer(1, 10),
-            "max_depth": Integer(2, 110),
-        }
+        # grid_params = {
+        #     "max_features": Categorical(["sqrt", "log2"]),
+        #     "min_samples_split": Integer(2, 10),
+        #     "min_samples_leaf": Integer(1, 10),
+        #     "max_depth": Integer(2, 110),
+        # }
 
         # Bayesian Ridge gridparams - RandomizedSearchCV
         # grid_params = {
@@ -156,12 +156,12 @@ def main():
             n_estimators=50,
             n_nearest_features=1,
             gridparams=grid_params,
-            cv=5,
+            cv=3,
             grid_iter=40,
             n_jobs=4,
             max_iter=2,
             column_subset=1.0,
-            ga=True,
+            ga=False,
             disable_progressbar=True,
             extratrees=False,
             mutation_probability=0.1,
@@ -169,6 +169,11 @@ def main():
             chunk_size=1.0,
             initial_strategy="populations",
         )
+
+        rf_data = rf_imp.imputed
+
+        # imp_decoded = data.decode_imputed(rf_imp.imputed)
+        # print(imp_decoded)
 
         # # RandomizedSearchCV Test
         # rf_imp = ImputeRandomForest(

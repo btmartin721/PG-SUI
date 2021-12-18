@@ -88,6 +88,8 @@ class GenotypeData:
         self.snps: List[List[int]] = list()
         self.pops: List[Union[str, int]] = list()
         self.onehot: Union[np.ndarray, List[List[List[float]]]] = list()
+        self.ref = list()
+        self.alt = list()
         self.num_snps: int = 0
         self.num_inds: int = 0
 
@@ -346,23 +348,20 @@ class GenotypeData:
                     line = line.strip()
                     if not line:
                         continue
-                    if not firstline:
-                        firstline = line.split()
-                        continue
+                    firstline = line.split()
+                    ind = firstline[0]
+                    pop = None
+                    if popids:
+                        pop = firstline[1]
+                        self.pops.append(pop)
+                        firstline = firstline[2:]
                     else:
-                        ind = firstline[0]
-                        pop = None
-                        if popids:
-                            pop = firstline[1]
-                            self.pops.append(pop)
-                            firstline = firstline[2:]
-                        else:
-                            firstline = firstline[1:]
-                        self.samples.append(ind)
-                        genotypes = merge_alleles(firstline, second=None)
-                        snp_data.append(genotypes)
-                        self.snpsdict[ind] = genotypes
-                        firstline = None
+                        firstline = firstline[1:]
+                    self.samples.append(ind)
+                    genotypes = merge_alleles(firstline, second=None)
+                    snp_data.append(genotypes)
+                    self.snpsdict[ind] = genotypes
+                    firstline = None
 
         print("Done!")
 
@@ -560,6 +559,8 @@ class GenotypeData:
                     )
                     ref = sequence_tools.get_major_allele(loc, vcf=vcf)
                     ref = str(ref[0])
+                    alt = None
+
                     if vcf:
                         for i in range(0, len(snps)):
                             gen = snps[i][j].split("/")
@@ -582,9 +583,6 @@ class GenotypeData:
 
                             elif loc[i] == ref:
                                 new_snps[i].append(0)
-
-                            elif loc[i] == alt:
-                                new_snps[i].append(2)
 
                             else:
                                 new_snps[i].append(1)
@@ -648,6 +646,7 @@ class GenotypeData:
                 ref, alt = sequence_tools.get_major_allele(loc, vcf=vcf)
                 ref = str(ref)
                 alt = str(alt)
+
                 if vcf:
                     for i in range(0, len(snps)):
                         gen = snps[i][j].split("/")
@@ -679,6 +678,10 @@ class GenotypeData:
 
                         else:
                             new_snps[i].append(1)
+
+            # Set the ref and alt alleles for each column
+            self.ref.append(ref)
+            self.alt.append(alt)
 
         # TODO: skip and impute_mode are now deprecated.
         if skip > 0:
@@ -843,6 +846,132 @@ class GenotypeData:
         for sample in self.samples:
             if sample in my_popmap:
                 self.pops.append(my_popmap[sample])
+
+    def decode_imputed(self, X, write_output=True, prefix="output"):
+        """Decode 012-encoded imputed data to STRUCTURE or PHYLIP format.
+
+        Args:
+            X (pandas.DataFrame, numpy.ndarray, or List[List[int]]): 012-encoded imputed data to decode.
+
+            write_output (bool, optional): If True, saves output to file on disk. Otherwise just makes a GenotypeData attribute. Defaults to True.
+
+            prefix (str, optional): Prefix to append to output file. Defaults to "output".
+
+        Returns:
+            pandas.DataFrame: Decoded imputations.
+            str: Filename of imputed data.
+        """
+        if isinstance(X, pd.DataFrame):
+            df = X.copy()
+        elif isinstance(X, (np.ndarray, list)):
+            df = pd.DataFrame(X)
+
+        nuc = {
+            "A/A": "A",
+            "G/G": "G",
+            "C/C": "C",
+            "T/T": "T",
+            "A/G": "R",
+            "G/A": "R",
+            "C/T": "Y",
+            "T/C": "Y",
+            "G/C": "S",
+            "C/G": "S",
+            "A/T": "W",
+            "T/A": "W",
+            "G/T": "K",
+            "T/G": "K",
+            "A/C": "M",
+            "C/A": "M",
+        }
+
+        df_decoded = df.copy()
+
+        dreplace = dict()
+        for col, ref, alt in zip(df.columns, self.ref, self.alt):
+
+            ref2 = f"{ref}/{ref}"
+            alt2 = f"{alt}/{alt}"
+            het2 = f"{ref}/{alt}"
+
+            if self.filetype.lower().startswith("phylip"):
+                ref2 = nuc[ref2]
+                alt2 = nuc[alt2]
+                het2 = nuc[het2]
+
+            d = {"0": ref2, 0: ref2, "1": het2, 1: het2, "2": alt2, 2: alt2}
+            dreplace[col] = d
+
+        df_decoded.replace(dreplace, inplace=True)
+
+        ft = self.filetype.lower()
+
+        if write_output:
+            outfile = f"{prefix}_imputed"
+
+        if ft.startswith("structure"):
+
+            of = f"{outfile}.str"
+
+            if ft.startswith("structure2row"):
+
+                for col in df_decoded.columns:
+                    df_decoded[col] = (
+                        df_decoded[col]
+                        .str.split("/")
+                        .apply(lambda x: list(map(int, x)))
+                    )
+
+                df_decoded.insert(0, "sampleID", self.samples)
+                df_decoded.insert(1, "popID", self.pops)
+
+                df_decoded = (
+                    df_decoded.set_index(["sampleID", "popID"])
+                    .apply(pd.Series.explode)
+                    .reset_index()
+                )
+
+            elif ft.startswith("structure1row"):
+                df_decoded = pd.concat(
+                    [
+                        df_decoded[c]
+                        .astype(str)
+                        .str.split("/", expand=True)
+                        .add_prefix(f"{c}_")
+                        for c in df_decoded.columns
+                    ],
+                    axis=1,
+                )
+
+                df_decoded.insert(0, "sampleID", self.samples)
+                df_decoded.insert(1, "popID", self.pops)
+
+            if write_output:
+                df_decoded.to_csv(
+                    of,
+                    sep="\t",
+                    header=False,
+                    index=False,
+                )
+
+        elif ft.startswith("phylip"):
+            of = f"{outfile}.phy"
+            header = f"{self.num_inds} {self.num_snps}\n"
+
+            if write_output:
+                with open(of, "w") as fout:
+                    fout.write(header)
+
+                lst_decoded = df_decoded.values.tolist()
+
+                with open(of, "a") as fout:
+                    for sample, row in zip(self.samples, lst_decoded):
+                        seqs = "".join([str(x) for x in row])
+                        fout.write(f"{sample}\t{seqs}\n")
+
+                df_decoded.insert(0, "sampleID", self.samples)
+
+        return df_decoded, of
 
     @property
     def snpcount(self) -> int:
