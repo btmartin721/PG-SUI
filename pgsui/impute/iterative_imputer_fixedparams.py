@@ -350,6 +350,7 @@ class IterativeImputerFixedParams(IterativeImputer):
                     write_output=False,
                     disable_progressbar=True,
                     column_subset=cols_to_keep,
+                    validation_mode=True,
                 )
 
             X_filled = self.initial_imputer_.imputed.to_numpy()

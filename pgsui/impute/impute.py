@@ -232,7 +232,7 @@ class Impute:
             TypeError: Must be of type pandas.DataFrame, numpy.array, or List[List[int]].
         """
 
-        outfile = f"{self.prefix}_imputed012.csv"
+        outfile = f"{self.prefix}_imputed_012.csv"
 
         if isinstance(data, pd.DataFrame):
             data.to_csv(outfile, header=False, index=False)
@@ -541,9 +541,9 @@ class Impute:
             dict: Best parameters found during the grid search.
         """
         original_num_cols = len(df.columns)
-        # df_bi = self._remove_nonbiallelic(df)
+        df_bi = self._remove_nonbiallelic(df)
         df_subset, cols_to_keep = self._subset_data_for_gridsearch(
-            df, self.column_subset, original_num_cols
+            df_bi, self.column_subset, original_num_cols
         )
 
         print(f"Validation dataset size: {len(df_subset.columns)}\n")
@@ -664,15 +664,15 @@ class Impute:
         )
 
         final_cols = None
-        if len(df.columns) < original_num_cols:
-            final_cols = np.array(df.columns)
+        if len(df_bi.columns) < original_num_cols:
+            final_cols = np.array(df_bi.columns)
 
-        df_chunks = self.df2chunks(df, self.chunk_size)
+        df_chunks = self.df2chunks(df_bi, self.chunk_size)
         imputed_df = self._impute_df(
             df_chunks, best_imputer, cols_to_keep=final_cols
         )
 
-        lst2del = [df_chunks, df]
+        lst2del = [df_chunks, df_bi]
         del lst2del
         gc.collect()
 
@@ -982,15 +982,15 @@ class Impute:
                 ):
                     bad_cols.append(col)
 
-                # elif len(df_cp[df_cp[col] == 0.0]) < self.cv:
-                #     bad_cols.append(col)
+                elif len(df_cp[df_cp[col] == 0.0]) < self.cv:
+                    bad_cols.append(col)
 
-                # elif df_cp[col].isin([1.0]).any():
-                #     if len(df_cp[df_cp[col] == 1]) < self.cv:
-                #         bad_cols.append(col)
+                elif df_cp[col].isin([1.0]).any():
+                    if len(df_cp[df_cp[col] == 1]) < self.cv:
+                        bad_cols.append(col)
 
-                # elif len(df_cp[df_cp[col] == 2.0]) < self.cv:
-                #     bad_cols.append(col)
+                elif len(df_cp[df_cp[col] == 2.0]) < self.cv:
+                    bad_cols.append(col)
 
         # pandas 1.X.X
         else:
@@ -998,27 +998,24 @@ class Impute:
                 if 0.0 not in df[col].unique() and 2.0 not in df[col].unique():
                     bad_cols.append(col)
 
-                # elif len(df_cp[df_cp[col] == 0.0]) < self.cv:
-                #     bad_cols.append(col)
+                elif len(df_cp[df_cp[col] == 0.0]) < self.cv:
+                    bad_cols.append(col)
 
-                # elif 1.0 in df_cp[col].unique():
-                #     if len(df_cp[df_cp[col] == 1.0]) < self.cv:
-                #         bad_cols.append(col)
+                elif 1.0 in df_cp[col].unique():
+                    if len(df_cp[df_cp[col] == 1.0]) < self.cv:
+                        bad_cols.append(col)
 
-                # elif len(df_cp[df_cp[col] == 2.0]) < self.cv:
-                #     bad_cols.append(col)
+                elif len(df_cp[df_cp[col] == 2.0]) < self.cv:
+                    bad_cols.append(col)
 
         if bad_cols:
-            df_cp.loc[:, bad_cols] = 0
+            df_cp.drop(bad_cols, axis=1, inplace=True)
 
-        # if bad_cols:
-        #     df_cp.drop(bad_cols, axis=1, inplace=True)
-
-        #     print(
-        #         f"{len(bad_cols)} columns removed for being non-biallelic or "
-        #         f"having genotype counts < number of cross-validation "
-        #         f"folds\nSubsetting from {len(df_cp.columns)} remaining columns\n"
-        #     )
+            print(
+                f"{len(bad_cols)} columns removed for being non-biallelic or "
+                f"having genotype counts < number of cross-validation "
+                f"folds\nSubsetting from {len(df_cp.columns)} remaining columns\n"
+            )
 
         return df_cp
 

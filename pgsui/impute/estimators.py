@@ -199,6 +199,7 @@ class ImputeKNN(Impute):
             guidetree=genotype_data.guidetree,
             qmatrix_iqtree=genotype_data.qmatrix_iqtree,
             qmatrix=genotype_data.qmatrix,
+            verbose=False,
         )
 
 
@@ -389,6 +390,7 @@ class ImputeRandomForest(Impute):
             guidetree=genotype_data.guidetree,
             qmatrix_iqtree=genotype_data.qmatrix_iqtree,
             qmatrix=genotype_data.qmatrix,
+            verbose=False,
         )
 
 
@@ -556,6 +558,7 @@ class ImputeGradientBoosting(Impute):
             guidetree=genotype_data.guidetree,
             qmatrix_iqtree=genotype_data.qmatrix_iqtree,
             qmatrix=genotype_data.qmatrix,
+            verbose=False,
         )
 
 
@@ -710,6 +713,7 @@ class ImputeBayesianRidge(Impute):
             guidetree=genotype_data.guidetree,
             qmatrix_iqtree=genotype_data.qmatrix_iqtree,
             qmatrix=genotype_data.qmatrix,
+            verbose=False,
         )
 
 
@@ -845,6 +849,7 @@ class ImputeXGBoost(Impute):
             guidetree=genotype_data.guidetree,
             qmatrix_iqtree=genotype_data.qmatrix_iqtree,
             qmatrix=genotype_data.qmatrix,
+            verbose=False,
         )
 
 
@@ -1025,6 +1030,7 @@ class ImputeLightGBM(Impute):
             guidetree=genotype_data.guidetree,
             qmatrix_iqtree=genotype_data.qmatrix_iqtree,
             qmatrix=genotype_data.qmatrix,
+            verbose=False,
         )
 
 
@@ -1126,6 +1132,7 @@ class ImputeVAE:
             guidetree=genotype_data.guidetree,
             qmatrix_iqtree=genotype_data.qmatrix_iqtree,
             qmatrix=genotype_data.qmatrix,
+            verbose=False,
         )
 
 
@@ -1252,6 +1259,7 @@ class ImputeUBP(Impute):
             guidetree=genotype_data.guidetree,
             qmatrix_iqtree=genotype_data.qmatrix_iqtree,
             qmatrix=genotype_data.qmatrix,
+            verbose=False,
         )
 
 

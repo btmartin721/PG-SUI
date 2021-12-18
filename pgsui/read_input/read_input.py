@@ -34,6 +34,8 @@ class GenotypeData:
 
             qmatrix (str or None): Path to file containing only Q rate matrix, and not the full iqtree file. Defaults to None.
 
+            verbose (bool, optional): Verbosity level. Defaults to True.
+
     Attributes:
             samples (List[str]): List containing sample IDs of shape (n_samples,).
 
@@ -75,6 +77,7 @@ class GenotypeData:
         guidetree: Optional[str] = None,
         qmatrix_iqtree: Optional[str] = None,
         qmatrix: Optional[str] = None,
+        verbose: bool = True,
     ) -> None:
         self.filename = filename
         self.filetype = filetype
@@ -82,6 +85,7 @@ class GenotypeData:
         self.guidetree = guidetree
         self.qmatrix_iqtree = qmatrix_iqtree
         self.qmatrix = qmatrix
+        self.verbose = verbose
 
         self.snpsdict: Dict[str, List[Union[str, int]]] = dict()
         self.samples: List[str] = list()
@@ -300,7 +304,8 @@ class GenotypeData:
             ValueError: Population IDs do not match for two-row format.
             AssertionError: All sequences must be the same length.
         """
-        print(f"\nReading structure file {self.filename}...")
+        if self.verbose:
+            print(f"\nReading structure file {self.filename}...")
 
         snp_data = list()
         with open(self.filename, "r") as fin:
@@ -363,28 +368,32 @@ class GenotypeData:
                     self.snpsdict[ind] = genotypes
                     firstline = None
 
-        print("Done!")
+        if self.verbose:
+            print("Done!")
+            print("\nConverting genotypes to one-hot encoding...")
 
-        print("\nConverting genotypes to one-hot encoding...")
         # Convert snp_data to onehot encoding format
         self.convert_onehot(snp_data)
 
-        print("Done!")
+        if self.verbose:
+            print("Done!")
+            print("\nConverting genotypes to 012 format...")
 
-        print("\nConverting genotypes to 012 format...")
         # Convert snp_data to 012 format
-
         self.convert_012(snp_data, vcf=True)
 
-        print("Done!")
+        if self.verbose:
+            print("Done!")
 
         # Get number of samples and snps
         self.num_snps = len(self.snps[0])
         self.num_inds = len(self.samples)
 
-        print(
-            f"\nFound {self.num_snps} SNPs and {self.num_inds} individuals...\n"
-        )
+        if self.verbose:
+            print(
+                f"\nFound {self.num_snps} SNPs and {self.num_inds} "
+                f"individuals...\n"
+            )
 
         # Make sure all sequences are the same length.
         for item in self.snps:
@@ -404,7 +413,8 @@ class GenotypeData:
 
             ValueError: Number of individuals differs from header line.
         """
-        print(f"\nReading phylip file {self.filename}...")
+        if self.verbose:
+            print(f"\nReading phylip file {self.filename}...")
 
         self.check_filetype("phylip")
         snp_data = list()
@@ -439,18 +449,23 @@ class GenotypeData:
 
                 self.samples.append(inds)
 
-        print("Done!")
+        if self.verbose:
+            print("Done!")
+            print("\nConverting genotypes to one-hot encoding...")
 
-        print("\nConverting genotypes to one-hot encoding...")
-        # Convert snp_data to onehot format
+        # Convert snp_data to onehot format.
         self.convert_onehot(snp_data)
-        print("Done!")
 
-        print("\nConverting genotypes to 012 encoding...")
+        if self.verbose:
+            print("Done!")
+
+            print("\nConverting genotypes to 012 encoding...")
+
         # Convert snp_data to 012 format
-
         self.convert_012(snp_data)
-        print("Done!")
+
+        if self.verbose:
+            print("Done!")
 
         self.num_snps = num_snps
         self.num_inds = num_inds
@@ -1035,7 +1050,7 @@ class GenotypeData:
             pandas.DataFrame of shape (n_samples, n_SNPs): 012-encoded genotypes.
         """
         df = pd.DataFrame.from_records(self.snps)
-        df.replace(to_replace=-9, value=np.nan, inplace=True)
+        df.replace(to_replace=-9.0, value=np.nan, inplace=True)
         return df.astype(np.float32)
 
     @property

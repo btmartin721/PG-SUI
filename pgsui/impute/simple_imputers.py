@@ -64,11 +64,9 @@ class ImputePhylo(GenotypeData):
 
         save_plots (bool, optional): Whether to save PDF files with genotype imputations for each site to disk. It makes one PDF file per locus, so if you have a lot of loci it will make a lot of PDF files. Defaults to False.
 
-        write_output (bool, optional): Whether to save the imputed data to disk. Defaults to True.
-
         disable_progressbar (bool, optional): Whether to disable the progress bar during the imputation. Defaults to False.
 
-        kwargs (Dict[str, Any] or None, optional): Additional keyword arguments intended for internal purposes only. Possible arguments: {"column_subset": List[int] or numpy.ndarray[int]}; Subset SNPs by a list of indices. Defauls to None.
+        kwargs (Dict[str, Any] or None, optional): Additional keyword arguments intended for internal purposes only. Possible arguments: {"column_subset": List[int] or numpy.ndarray[int], "validation_mode": bool}; Subset SNPs by a list of indices. Defauls to None.
     """
 
     def __init__(
@@ -90,7 +88,6 @@ class ImputePhylo(GenotypeData):
         },
         prefix: str = "output",
         save_plots: bool = False,
-        write_output: bool = True,
         disable_progressbar: bool = False,
         **kwargs: Optional[Any],
     ) -> None:
@@ -107,6 +104,7 @@ class ImputePhylo(GenotypeData):
         self.save_plots = save_plots
         self.disable_progressbar = disable_progressbar
         self.column_subset = kwargs.get("column_subset", None)
+        self.validation_mode = kwargs.get("validation_mode", False)
 
         self.valid_sites = None
         self.valid_sites_count = None
@@ -114,11 +112,25 @@ class ImputePhylo(GenotypeData):
         self.validate_arguments(genotype_data)
         data, tree, q = self.parse_arguments(genotype_data)
 
-        self.imputed = self.impute_phylo(tree, data, q)
+        if not self.validation_mode:
+            imputed012 = self.impute_phylo(tree, data, q)
 
-        if write_output:
-            outfile = f"{prefix}_imputed_012.csv"
-            self.imputed.to_csv(outfile, header=False, index=False)
+            imputed, imputed_filename = genotype_data.decode_imputed(
+                imputed012, write_output=True, prefix=prefix
+            )
+
+            self.imputed = GenotypeData(
+                filename=imputed_filename,
+                filetype=genotype_data.filetype,
+                popmapfile=genotype_data.popmapfile,
+                guidetree=genotype_data.guidetree,
+                qmatrix_iqtree=genotype_data.qmatrix_iqtree,
+                qmatrix=genotype_data.qmatrix,
+                verbose=False,
+            )
+
+        else:
+            self.imputed = self.impute_phylo(tree, data, q)
 
     def nbiallelic(self) -> int:
         """Get the number of remaining bi-allelic sites after imputation.
@@ -628,6 +640,49 @@ class ImputePhylo(GenotypeData):
         ret[:] = pt
         return ret
 
+    def _str2iupac(
+        self, genotypes: Dict[str, List[str]], str_encodings: Dict[str, int]
+    ) -> Dict[str, List[str]]:
+        """Convert STRUCTURE-format encodings to IUPAC bases.
+
+        Args:
+            genotypes (Dict[str, List[str]]): Genotypes at all sites.
+            str_encodings (Dict[str, int]): Dictionary that maps IUPAC bases (keys) to integer encodings (values).
+
+        Returns:
+            Dict[str, List[str]]: Genotypes converted to IUPAC format.
+        """
+        a = str_encodings["A"]
+        c = str_encodings["C"]
+        g = str_encodings["G"]
+        t = str_encodings["T"]
+        n = str_encodings["N"]
+        nuc = {
+            f"{a}/{a}": "A",
+            f"{c}/{c}": "C",
+            f"{g}/{g}": "G",
+            f"{t}/{t}": "T",
+            f"{n}/{n}": "N",
+            f"{a}/{c}": "M",
+            f"{c}/{a}": "M",
+            f"{a}/{g}": "R",
+            f"{g}/{a}": "R",
+            f"{a}/{t}": "W",
+            f"{t}/{a}": "W",
+            f"{c}/{g}": "S",
+            f"{g}/{c}": "S",
+            f"{c}/{t}": "Y",
+            f"{t}/{c}": "Y",
+            f"{g}/{t}": "K",
+            f"{t}/{g}": "K",
+        }
+
+        for k, v in genotypes.items():
+            for i, gt in enumerate(v):
+                v[i] = nuc[gt]
+
+        return genotypes
+
     def get_iupac_full(self, char: str) -> List[str]:
         """Map nucleotide to list of expanded IUPAC encodings.
 
@@ -665,9 +720,7 @@ class ImputeAlleleFreq(GenotypeData):
     """Impute missing data by global allele frequency. Population IDs can be sepcified with the pops argument. if pops is None, then imputation is by global allele frequency. If pops is not None, then imputation is by population-wise allele frequency. A list of population IDs in the appropriate format can be obtained from the GenotypeData object as GenotypeData.populations.
 
     Args:
-        genotype_data (GenotypeData object or None, optional): GenotypeData instance. If ``genotype_data`` is not defined, then ``gt`` must be defined instead, and they cannot both be defined. Defaults to None.
-
-        gt (List[int] or None, optional): List of 012-encoded genotypes to be imputed. Either ``gt`` or ``genotype_data`` must be defined, and they cannot both be defined. Defaults to None.
+        genotype_data (GenotypeData object or None): GenotypeData instance. Required keyword argument. Defaults to None.
 
         by_populations (bool, optional): Whether or not to impute by population or globally. Defaults to False (global allele frequency).
 
@@ -681,13 +734,11 @@ class ImputeAlleleFreq(GenotypeData):
 
         prefix (str, optional): Prefix for writing output files. Defaults to "output".
 
-        write_output (bool, optional): Whether to save imputed output to a file. If ``write_output`` is False, then just returns the imputed values as a pandas.DataFrame object. If ``write_output`` is True, then it saves the imputed data as a CSV file called ``<prefix>_imputed_012.csv``\.
-
         output_format (str, optional): Format of output imputed matrix. Possible values include: "df" for a pandas.DataFrame object, "array" for a numpy.ndarray object, and "list" for a 2D list. Defaults to "df".
 
         verbose (bool, optional): Whether to print status updates. Set to False for no status updates. Defaults to True.
 
-        kwargs (Dict[str, Any]): Additional keyword arguments to supply. Primarily for internal purposes. Options include: {"iterative_mode": bool}. "iterative_mode" determines whether ``ImputeAlleleFreq`` is being used as the initial imputer in ``IterativeImputer``\.
+        kwargs (Dict[str, Any]): Additional keyword arguments to supply. Primarily for internal purposes. Options include: {"iterative_mode": bool, validation_mode: bool, gt: List[List[int]]}. "iterative_mode" determines whether ``ImputeAlleleFreq`` is being used as the initial imputer in ``IterativeImputer``\. ``gt`` is used internally for the simple imputers during grid searches and validation. If ``genotype_data is None`` then ``gt`` cannot also be None, and vice versa. Only one of ``gt`` or ``genotype_data`` can be set.
 
     Raises:
         TypeError: genotype_data and gt cannot both be NoneType.
@@ -699,20 +750,20 @@ class ImputeAlleleFreq(GenotypeData):
         self,
         *,
         genotype_data: Optional[Any] = None,
-        gt: Optional[List[int]] = None,
         by_populations: bool = False,
         pops: Optional[List[Union[str, int]]] = None,
         diploid: bool = True,
         default: int = 0,
         missing: int = -9,
         prefix: str = "output",
-        write_output: bool = True,
         output_format: str = "df",
         verbose: bool = True,
         **kwargs: Dict[str, Any],
     ) -> None:
 
         super().__init__()
+
+        gt = kwargs.get("gt", None)
 
         if genotype_data is None and gt is None:
             raise TypeError("genotype_data and gt cannot both be NoneType")
@@ -758,11 +809,27 @@ class ImputeAlleleFreq(GenotypeData):
         self.output_format = output_format
         self.verbose = verbose
         self.iterative_mode = kwargs.get("iterative_mode", False)
+        self.validation_mode = kwargs.get("validation_mode", False)
 
-        self.imputed, self.valid_cols = self.fit_predict(gt_list)
+        if not self.validation_mode:
+            imputed012, self.valid_cols = self.fit_predict(gt_list)
 
-        if write_output:
-            self.write2file(self.imputed)
+            imputed, imputed_filename = genotype_data.decode_imputed(
+                imputed012, write_output=True, prefix=prefix
+            )
+
+            self.imputed = GenotypeData(
+                filename=imputed_filename,
+                filetype=genotype_data.filetype,
+                popmapfile=genotype_data.popmapfile,
+                guidetree=genotype_data.guidetree,
+                qmatrix_iqtree=genotype_data.qmatrix_iqtree,
+                qmatrix=genotype_data.qmatrix,
+                verbose=False,
+            )
+
+        else:
+            self.imputed, self.valid_cols = self.fit_predict(gt_list)
 
     def fit_predict(
         self, X: List[List[int]]

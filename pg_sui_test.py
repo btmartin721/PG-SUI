@@ -244,25 +244,20 @@ def main():
         #     initial_strategy="populations",
         # )
 
-        # afpops = ImputeAlleleFreq(
-        #     genotype_data=data,
-        #     by_populations=True,
-        #     prefix=args.prefix,
-        # )
+    # afpops = ImputeAlleleFreq(
+    #     genotype_data=data,
+    #     by_populations=True,
+    #     prefix=args.prefix,
+    # )
 
-        # print(data.genotypes_df)
-        # print(afpops.genotypes_df)
+    # print(data.genotypes_df)
+    # print(afpops.genotypes_df)
 
-        # br_imp = ImputeBayesianRidge(data, prefix=args.prefix, n_iter=100, gridparams=grid_params, grid_iter=3, cv=3, n_jobs=4, max_iter=5, n_nearest_features=3, column_subset=4, ga=False, disable_progressbar=True, progress_update_percent=20, chunk_size=1.0)
+    # br_imp = ImputeBayesianRidge(data, prefix=args.prefix, n_iter=100, gridparams=grid_params, grid_iter=3, cv=3, n_jobs=4, max_iter=5, n_nearest_features=3, column_subset=4, ga=False, disable_progressbar=True, progress_update_percent=20, chunk_size=1.0)
 
-        # aftestpops = ImputeAlleleFreq(
-        #     genotype_data=data, by_populations=True, prefix=args.prefix
-        # )
-
-        # aftestpops_data = aftestpops.imputed
-
-        # print(data.genotypes_df)
-        # print(aftestpops_data.genotypes_df)
+    aftestpops = ImputeAlleleFreq(
+        genotype_data=data,
+    )
 
     # vae = ImputeVAE(
     #     gt=np.array([[0, 1], [-9, 1], [2, -9]]),
@@ -271,28 +266,18 @@ def main():
     #     validation_only=None,
     # )
 
-    # vae_data = vae.imputed
-
-    # print(data.genotypes_df)
-    # print(vae_data.genotypes_df)
-
-    ubp = ImputeUBP(
-        data,
-        n_components=3,
-        initial_strategy="populations",
-        disable_progressbar=True,
-        cv=3,
-        hidden_activation="elu",
-        hidden_layer_sizes="midpoint",
-        validation_only=0.3,
-        num_hidden_layers=1,
-        learning_rate=0.05,
-    )
-
-    ubp_data = ubp.imputed
-
-    print(data.genotypes_df)
-    print(ubp_data.genotypes_df)
+    # ubp = ImputeUBP(
+    #     genotype_data=data,
+    #     n_components=3,
+    #     initial_strategy="populations",
+    #     disable_progressbar=True,
+    #     cv=3,
+    #     hidden_activation="elu",
+    #     hidden_layer_sizes="midpoint",
+    #     validation_only=0.3,
+    #     num_hidden_layers=1,
+    #     learning_rate=0.05,
+    # )
 
     # ubp = ImputeUBP(
     #     genotype_data=data,
