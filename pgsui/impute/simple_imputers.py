@@ -67,6 +67,24 @@ class ImputePhylo(GenotypeData):
         disable_progressbar (bool, optional): Whether to disable the progress bar during the imputation. Defaults to False.
 
         kwargs (Dict[str, Any] or None, optional): Additional keyword arguments intended for internal purposes only. Possible arguments: {"column_subset": List[int] or numpy.ndarray[int], "validation_mode": bool}; Subset SNPs by a list of indices. Defauls to None.
+
+    Attributes:
+        imputed (GenotypeData): New GenotypeData instance with imputed data.
+
+    Example:
+        >>>data = GenotypeData(
+        >>>    filename="test.str",
+        >>>    filetype="structure2rowPopID",
+        >>>    guidetree="test.tre",
+        >>>    qmatrix_iqtree="test.iqtree"
+        >>>)
+        >>>
+        >>>phylo = ImputePhylo(
+        >>>     genotype_data=data,
+        >>>     save_plots=True,
+        >>>)
+        >>>
+        >>>phylo_gtdata = phylo.imputed
     """
 
     def __init__(
@@ -115,14 +133,20 @@ class ImputePhylo(GenotypeData):
         if not self.validation_mode:
             imputed012 = self.impute_phylo(tree, data, q)
 
-            imputed, imputed_filename = genotype_data.decode_imputed(
+            imputed_filename = genotype_data.decode_imputed(
                 imputed012, write_output=True, prefix=prefix
             )
 
+            ft = genotype_data.filetype
+
+            if ft.lower().startswith("structure") and ft.lower().endswith(
+                "row"
+            ):
+                ft += "PopID"
+
             self.imputed = GenotypeData(
                 filename=imputed_filename,
-                filetype=genotype_data.filetype,
-                popmapfile=genotype_data.popmapfile,
+                filetype=ft,
                 guidetree=genotype_data.guidetree,
                 qmatrix_iqtree=genotype_data.qmatrix_iqtree,
                 qmatrix=genotype_data.qmatrix,
@@ -744,6 +768,24 @@ class ImputeAlleleFreq(GenotypeData):
         TypeError: genotype_data and gt cannot both be NoneType.
         TypeError: genotype_data and gt cannot both be provided.
         TypeError: Either pops or genotype_data must be defined if by_populations is True.
+
+    Attributes:
+        imputed (GenotypeData): New GenotypeData instance with imputed data.
+
+    Example:
+        >>>data = GenotypeData(
+        >>>    filename="test.str",
+        >>>    filetype="structure2rowPopID",
+        >>>    guidetree="test.tre",
+        >>>    qmatrix_iqtree="test.iqtree"
+        >>>)
+        >>>
+        >>>afpop = ImputeAlleleFreq(
+        >>>     genotype_data=data,
+        >>>     by_populations=True,
+        >>>)
+        >>>
+        >>>afpop_gtdata = afpop.imputed
     """
 
     def __init__(
@@ -814,14 +856,20 @@ class ImputeAlleleFreq(GenotypeData):
         if not self.validation_mode:
             imputed012, self.valid_cols = self.fit_predict(gt_list)
 
-            imputed, imputed_filename = genotype_data.decode_imputed(
+            imputed_filename = genotype_data.decode_imputed(
                 imputed012, write_output=True, prefix=prefix
             )
 
+            ft = genotype_data.filetype
+
+            if ft.lower().startswith("structure") and ft.lower().endswith(
+                "row"
+            ):
+                ft += "PopID"
+
             self.imputed = GenotypeData(
                 filename=imputed_filename,
-                filetype=genotype_data.filetype,
-                popmapfile=genotype_data.popmapfile,
+                filetype=ft,
                 guidetree=genotype_data.guidetree,
                 qmatrix_iqtree=genotype_data.qmatrix_iqtree,
                 qmatrix=genotype_data.qmatrix,

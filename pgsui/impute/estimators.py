@@ -129,6 +129,41 @@ class ImputeKNN(Impute):
         random_state (int or None, optional): The seed of the pseudo random number generator to use for the iterative imputer. Randomizes selection of etimator features if n_nearest_features is not None or the imputation_order is "random". Use an integer for determinism. If None, then uses a different random seed each time. Defaults to None.
 
         verbose (int, optional): Verbosity flag, controls the debug messages that are issues as functions are evaluated. The higher, the more verbose. Possible values are 0, 1, or 2. Defaults to 0.
+
+    Attributes:
+        clf (sklearn or neural network classifier): Estimator to use.
+
+        imputed (GenotypeData): New GenotypeData instance with imputed data.
+
+        best_params (Dict[str, Any]): Best found parameters from grid search. In neural networks this value is None because grid searches are not supported.
+
+    Example:
+        >>>from sklearn_genetic.space import Categorical, Integer, Continuous
+        >>>
+        >>>data = GenotypeData(
+        >>>    filename="test.str",
+        >>>    filetype="structure2rowPopID",
+        >>>    guidetree="test.tre",
+        >>>    qmatrix_iqtree="test.iqtree"
+        >>>)
+        >>>
+        >>># Genetic Algorithm grid_params
+        >>>grid_params = {
+        >>>    "n_neighbors": Integer(3, 10),
+        >>>    "leaf_size": Integer(10, 50),
+        >>>}
+        >>>
+        >>>knn = ImputeKNN(
+        >>>     genotype_data=data,
+        >>>     gridparams=grid_params,
+        >>>     cv=5,
+        >>>     ga=True,
+        >>>     n_nearest_features=10,
+        >>>     n_estimators=100,
+        >>>     initial_strategy="phylogeny",
+        >>>)
+        >>>
+        >>>knn_gtdata = knn.imputed
     """
 
     def __init__(
@@ -184,22 +219,8 @@ class ImputeKNN(Impute):
 
         super().__init__(self.clf, self.clf_type, kwargs)
 
-        imputed012, self.best_params = self.fit_predict(
+        self.imputed, self.best_params = self.fit_predict(
             genotype_data.genotypes_df
-        )
-
-        imputed, imputed_filename = genotype_data.decode_imputed(
-            imputed012, write_output=True, prefix=prefix
-        )
-
-        self.imputed = GenotypeData(
-            filename=imputed_filename,
-            filetype=genotype_data.filetype,
-            popmapfile=genotype_data.popmapfile,
-            guidetree=genotype_data.guidetree,
-            qmatrix_iqtree=genotype_data.qmatrix_iqtree,
-            qmatrix=genotype_data.qmatrix,
-            verbose=False,
         )
 
 
@@ -294,6 +315,41 @@ class ImputeRandomForest(Impute):
         random_state (int or None, optional): The seed of the pseudo random number generator to use for the iterative imputer. Randomizes selection of etimator features if n_nearest_features is not None or the imputation_order is "random". Use an integer for determinism. If None, then uses a different random seed each time. Defaults to None.
 
         verbose (int, optional): Verbosity flag, controls the debug messages that are issues as functions are evaluated. The higher, the more verbose. Possible values are 0, 1, or 2. Defaults to 0.
+
+    Attributes:
+        clf (sklearn or neural network classifier): Estimator to use.
+
+        imputed (GenotypeData): New GenotypeData instance with imputed data.
+
+        best_params (Dict[str, Any]): Best found parameters from grid search. In neural networks this value is None because grid searches are not supported.
+
+    Example:
+        >>>from sklearn_genetic.space import Categorical, Integer, Continuous
+        >>>
+        >>>data = GenotypeData(
+        >>>    filename="test.str",
+        >>>    filetype="structure2rowPopID",
+        >>>    guidetree="test.tre",
+        >>>    qmatrix_iqtree="test.iqtree"
+        >>>)
+        >>>
+        >>># Genetic Algorithm grid_params
+        >>>grid_params = {
+        >>>    "min_samples_leaf": Integer(1, 10),
+        >>>    "max_depth": Integer(2, 110),
+        >>>}
+        >>>
+        >>>rf = ImputeRandomForest(
+        >>>     genotype_data=data,
+        >>>     gridparams=grid_params,
+        >>>     cv=5,
+        >>>     ga=True,
+        >>>     n_nearest_features=10,
+        >>>     n_estimators=100,
+        >>>     initial_strategy="phylogeny",
+        >>>)
+        >>>
+        >>>rf_gtdata = rf.imputed
     """
 
     def __init__(
@@ -375,22 +431,8 @@ class ImputeRandomForest(Impute):
 
         super().__init__(self.clf, self.clf_type, kwargs)
 
-        imputed012, self.best_params = self.fit_predict(
+        self.imputed, self.best_params = self.fit_predict(
             genotype_data.genotypes_df
-        )
-
-        imputed, imputed_filename = genotype_data.decode_imputed(
-            imputed012, write_output=True, prefix=prefix
-        )
-
-        self.imputed = GenotypeData(
-            filename=imputed_filename,
-            filetype=genotype_data.filetype,
-            popmapfile=genotype_data.popmapfile,
-            guidetree=genotype_data.guidetree,
-            qmatrix_iqtree=genotype_data.qmatrix_iqtree,
-            qmatrix=genotype_data.qmatrix,
-            verbose=False,
         )
 
 
@@ -481,6 +523,41 @@ class ImputeGradientBoosting(Impute):
         random_state (int or None, optional): The seed of the pseudo random number generator to use for the iterative imputer. Randomizes selection of etimator features if ``n_nearest_features`` is not None or the imputation_order is "random". Use an integer for determinism. If None, then uses a different random seed each time. Defaults to None.
 
         verbose (int, optional): Verbosity flag, controls the debug messages that are issues as functions are evaluated. The higher, the more verbose. Possible values are 0, 1, or 2. Defaults to 0.
+
+    Attributes:
+        clf (sklearn or neural network classifier): Estimator to use.
+
+        imputed (GenotypeData): New GenotypeData instance with imputed data.
+
+        best_params (Dict[str, Any]): Best found parameters from grid search. In neural networks this value is None because grid searches are not supported.
+
+    Example:
+        >>>from sklearn_genetic.space import Categorical, Integer, Continuous
+        >>>
+        >>>data = GenotypeData(
+        >>>    filename="test.str",
+        >>>    filetype="structure2rowPopID",
+        >>>    guidetree="test.tre",
+        >>>    qmatrix_iqtree="test.iqtree"
+        >>>)
+        >>>
+        >>># Genetic Algorithm grid_params
+        >>>grid_params = {
+        >>>    "learning_rate": Continuous(lower=0.01, upper=0.1),
+        >>>    "max_depth": Integer(2, 110),
+        >>>}
+        >>>
+        >>>gb = ImputeGradientBoosting(
+        >>>     genotype_data=data,
+        >>>     gridparams=grid_params,
+        >>>     cv=5,
+        >>>     ga=True,
+        >>>     n_nearest_features=10,
+        >>>     n_estimators=100,
+        >>>     initial_strategy="phylogeny",
+        >>>)
+        >>>
+        >>>gb_gtdata = gb.imputed
     """
 
     def __init__(
@@ -543,22 +620,8 @@ class ImputeGradientBoosting(Impute):
 
         super().__init__(self.clf, self.clf_type, kwargs)
 
-        imputed012, self.best_params = self.fit_predict(
+        self.imputed, self.best_params = self.fit_predict(
             genotype_data.genotypes_df
-        )
-
-        imputed, imputed_filename = genotype_data.decode_imputed(
-            imputed012, write_output=True, prefix=prefix
-        )
-
-        self.imputed = GenotypeData(
-            filename=imputed_filename,
-            filetype=genotype_data.filetype,
-            popmapfile=genotype_data.popmapfile,
-            guidetree=genotype_data.guidetree,
-            qmatrix_iqtree=genotype_data.qmatrix_iqtree,
-            qmatrix=genotype_data.qmatrix,
-            verbose=False,
         )
 
 
@@ -639,6 +702,45 @@ class ImputeBayesianRidge(Impute):
         random_state (int or None, optional): The seed of the pseudo random number generator to use for the iterative imputer. Randomizes selection of etimator features if ``n_nearest_features`` is not None or the imputation_order is "random". Use an integer for determinism. If None, then uses a different random seed each time. Defaults to None.
 
         verbose (int, optional): Verbosity flag, controls the debug messages that are issues as functions are evaluated. The higher, the more verbose. Possible values are 0, 1, or 2. Defaults to 0.
+
+    Attributes:
+        clf (sklearn or neural network classifier): Estimator to use.
+
+        imputed (GenotypeData): New GenotypeData instance with imputed data.
+
+        best_params (Dict[str, Any]): Best found parameters from grid search. In neural networks this value is None because grid searches are not supported.
+
+    Example:
+        >>>from sklearn_genetic.space import Categorical, Integer, Continuous
+        >>>
+        >>>data = GenotypeData(
+        >>>    filename="test.str",
+        >>>    filetype="structure2rowPopID",
+        >>>    guidetree="test.tre",
+        >>>    qmatrix_iqtree="test.iqtree"
+        >>>)
+        >>>
+        >>># Genetic Algorithm grid_params
+        >>>grid_params = {
+        >>>    "alpha_1": Continuous(
+        >>>         lower=1e-6, upper=0.1, distribution="log-uniform"
+        >>>     ),
+        >>>     "lambda_1": Continuous(
+        >>>         lower=1e-6, upper=0.1, distribution="log-uniform"
+        >>>     ),
+        >>>}
+        >>>
+        >>>br = ImputeBayesianRidge(
+        >>>     genotype_data=data,
+        >>>     gridparams=grid_params,
+        >>>     cv=5,
+        >>>     ga=True,
+        >>>     n_nearest_features=10,
+        >>>     n_estimators=100,
+        >>>     initial_strategy="phylogeny",
+        >>>)
+        >>>
+        >>>br_gtdata = br.imputed
     """
 
     def __init__(
@@ -698,22 +800,8 @@ class ImputeBayesianRidge(Impute):
 
         super().__init__(self.clf, self.clf_type, kwargs)
 
-        imputed012, self.best_params = self.fit_predict(
+        self.imputed, self.best_params = self.fit_predict(
             genotype_data.genotypes_df
-        )
-
-        imputed, imputed_filename = genotype_data.decode_imputed(
-            imputed012, write_output=True, prefix=prefix
-        )
-
-        self.imputed = GenotypeData(
-            filename=imputed_filename,
-            filetype=genotype_data.filetype,
-            popmapfile=genotype_data.popmapfile,
-            guidetree=genotype_data.guidetree,
-            qmatrix_iqtree=genotype_data.qmatrix_iqtree,
-            qmatrix=genotype_data.qmatrix,
-            verbose=False,
         )
 
 
@@ -780,6 +868,41 @@ class ImputeXGBoost(Impute):
         random_state (int or None, optional): The seed of the pseudo random number generator to use for the iterative imputer. Randomizes selection of etimator features if ``n_nearest_features`` is not None or the imputation_order is "random". Use an integer for determinism. If None, then uses a different random seed each time. Defaults to None.
 
         verbose (int, optional): Verbosity flag, controls the debug messages that are issues as functions are evaluated. The higher, the more verbose. Possible values are 0, 1, or 2. Defaults to 0.
+
+    Attributes:
+        clf (sklearn or neural network classifier): Estimator to use.
+
+        imputed (GenotypeData): New GenotypeData instance with imputed data.
+
+        best_params (Dict[str, Any]): Best found parameters from grid search. In neural networks this value is None because grid searches are not supported.
+
+    Example:
+        >>>from sklearn_genetic.space import Categorical, Integer, Continuous
+        >>>
+        >>>data = GenotypeData(
+        >>>    filename="test.str",
+        >>>    filetype="structure2rowPopID",
+        >>>    guidetree="test.tre",
+        >>>    qmatrix_iqtree="test.iqtree"
+        >>>)
+        >>>
+        >>># Genetic Algorithm grid_params
+        >>>grid_params = {
+        >>>    "learning_rate": Continuous(lower=0.01, upper=0.1),
+        >>>    "max_depth": Integer(2, 110),
+        >>>}
+        >>>
+        >>>xgb = ImputeXGBoost(
+        >>>     genotype_data=data,
+        >>>     gridparams=grid_params,
+        >>>     cv=5,
+        >>>     ga=True,
+        >>>     n_nearest_features=10,
+        >>>     n_estimators=100,
+        >>>     initial_strategy="phylogeny",
+        >>>)
+        >>>
+        >>>xgb_gtdata = xgb.imputed
     """
 
     def __init__(
@@ -834,22 +957,8 @@ class ImputeXGBoost(Impute):
 
         super().__init__(self.clf, self.clf_type, kwargs)
 
-        imputed012, self.best_params = self.fit_predict(
+        self.imputed, self.best_params = self.fit_predict(
             genotype_data.genotypes_df
-        )
-
-        imputed, imputed_filename = genotype_data.decode_imputed(
-            imputed012, write_output=True, prefix=prefix
-        )
-
-        self.imputed = GenotypeData(
-            filename=imputed_filename,
-            filetype=genotype_data.filetype,
-            popmapfile=genotype_data.popmapfile,
-            guidetree=genotype_data.guidetree,
-            qmatrix_iqtree=genotype_data.qmatrix_iqtree,
-            qmatrix=genotype_data.qmatrix,
-            verbose=False,
         )
 
 
@@ -946,6 +1055,41 @@ class ImputeLightGBM(Impute):
         random_state (int or None, optional): The seed of the pseudo random number generator to use for the iterative imputer. Randomizes selection of etimator features if n_nearest_features is not None or the imputation_order is 'random'. Use an integer for determinism. If None, then uses a different random seed each time. Defaults to None.
 
         verbose (int, optional): Verbosity flag, controls the debug messages that are issues as functions are evaluated. The higher, the more verbose. Possible values are 0, 1, or 2. Defaults to 0.
+
+    Attributes:
+        clf (sklearn or neural network classifier): Estimator to use.
+
+        imputed (GenotypeData): New GenotypeData instance with imputed data.
+
+        best_params (Dict[str, Any]): Best found parameters from grid search. In neural networks this value is None because grid searches are not supported.
+
+    Example:
+        >>>from sklearn_genetic.space import Categorical, Integer, Continuous
+        >>>
+        >>>data = GenotypeData(
+        >>>    filename="test.str",
+        >>>    filetype="structure2rowPopID",
+        >>>    guidetree="test.tre",
+        >>>    qmatrix_iqtree="test.iqtree"
+        >>>)
+        >>>
+        >>># Genetic Algorithm grid_params
+        >>>grid_params = {
+        >>>    "learning_rate": Continuous(lower=0.01, upper=0.1),
+        >>>    "max_depth": Integer(2, 110),
+        >>>}
+        >>>
+        >>>lgbm = ImputeLightGBM(
+        >>>     genotype_data=data,
+        >>>     gridparams=grid_params,
+        >>>     cv=5,
+        >>>     ga=True,
+        >>>     n_nearest_features=10,
+        >>>     n_estimators=100,
+        >>>     initial_strategy="phylogeny",
+        >>>)
+        >>>
+        >>>lgbm_gtdata = lgbm.imputed
     """
 
     def __init__(
@@ -1015,26 +1159,12 @@ class ImputeLightGBM(Impute):
 
         super().__init__(self.clf, self.clf_type, kwargs)
 
-        imputed012, self.best_params = self.fit_predict(
+        self.imputed, self.best_params = self.fit_predict(
             genotype_data.genotypes_df
         )
 
-        imputed, imputed_filename = genotype_data.decode_imputed(
-            imputed012, write_output=True, prefix=prefix
-        )
 
-        self.imputed = GenotypeData(
-            filename=imputed_filename,
-            filetype=genotype_data.filetype,
-            popmapfile=genotype_data.popmapfile,
-            guidetree=genotype_data.guidetree,
-            qmatrix_iqtree=genotype_data.qmatrix_iqtree,
-            qmatrix=genotype_data.qmatrix,
-            verbose=False,
-        )
-
-
-class ImputeVAE:
+class ImputeVAE(Impute):
     """Class to impute missing data using a Variational Autoencoder neural network model.
 
     Args:
@@ -1071,6 +1201,30 @@ class ImputeVAE:
         l1_penalty (float): L1 regularization penalty to apply. Adjust if overfitting is occurring. Defaults to 0.
 
         l2_penalty (float): L2 regularization penalty to apply. Adjust if overfitting is occurring. Defaults to 0.
+
+    Attributes:
+        clf (sklearn or neural network classifier): Estimator to use.
+
+        imputed (GenotypeData): New GenotypeData instance with imputed data.
+
+        best_params (Dict[str, Any]): Best found parameters from grid search. In neural networks this value is None because grid searches are not supported.
+
+    Example:
+        >>>data = GenotypeData(
+        >>>    filename="test.str",
+        >>>    filetype="structure2rowPopID",
+        >>>    guidetree="test.tre",
+        >>>    qmatrix_iqtree="test.iqtree"
+        >>>)
+        >>>
+        >>>vae = ImputeVAE(
+        >>>     genotype_data=data,
+        >>>     cv=5,
+        >>>     learning_rate=0.05,
+        >>>     validation_only=0.3
+        >>>)
+        >>>
+        >>>vae_gtdata = vae.imputed
     """
 
     def __init__(
@@ -1107,33 +1261,19 @@ class ImputeVAE:
 
         all_kwargs.update(imp_kwargs)
 
+        super().__init__(self.clf, self.clf_type, all_kwargs)
+
         if genotype_data is None:
             raise TypeError("genotype_data cannot be NoneType")
 
         X = genotype_data.genotypes_nparray
-
-        imputer = Impute(self.clf, self.clf_type, all_kwargs)
 
         if not isinstance(X, pd.DataFrame):
             df = pd.DataFrame(X)
         else:
             df = X.copy()
 
-        imputed012, self.best_params = self.fit_predict(df)
-
-        imputed, imputed_filename = genotype_data.decode_imputed(
-            imputed012, write_output=True, prefix=prefix
-        )
-
-        self.imputed = GenotypeData(
-            filename=imputed_filename,
-            filetype=genotype_data.filetype,
-            popmapfile=genotype_data.popmapfile,
-            guidetree=genotype_data.guidetree,
-            qmatrix_iqtree=genotype_data.qmatrix_iqtree,
-            qmatrix=genotype_data.qmatrix,
-            verbose=False,
-        )
+        self.imputed, self.best_params = self.fit_predict(df)
 
 
 class ImputeUBP(Impute):
@@ -1143,7 +1283,6 @@ class ImputeUBP(Impute):
 
     Args:
         genotype_data (GenotypeData object): Input data initialized as GenotypeData object. Required positional argument.
-
 
         prefix (str, optional): Prefix for output files. Defaults to "output".
 
@@ -1182,6 +1321,32 @@ class ImputeUBP(Impute):
         l1_penalty (float, optional): L1 regularization penalty to apply to reduce overfitting. Defaults to 0.01.
 
         l2_penalty (float, optional) L2 regularization penalty to apply to reduce overfitting. Defaults to 0.01.
+
+    Attributes:
+        nlpca (bool): If True, does NLPCA model. Otherwise does UBP.
+
+        clf (sklearn or neural network classifier): Estimator to use.
+
+        imputed (GenotypeData): New GenotypeData instance with imputed data.
+
+        best_params (Dict[str, Any]): Best found parameters from grid search. In neural networks this value is None because grid searches are not supported.
+
+    Example:
+        >>>data = GenotypeData(
+        >>>    filename="test.str",
+        >>>    filetype="structure2rowPopID",
+        >>>    guidetree="test.tre",
+        >>>    qmatrix_iqtree="test.iqtree"
+        >>>)
+        >>>
+        >>> ubp = ImputeUBP(
+        >>>     genotype_data=data,
+        >>>     cv=5,
+        >>>     learning_rate=0.05,
+        >>>     validation_only=0.3
+        >>>)
+        >>>
+        >>>ubp_gtdata = ubp.imputed
 
     References:
         .. [1] Gashler, M. S., Smith, M. R., Morris, R., & Martinez, T. (2016). Missing value imputation with unsupervised backpropagation. Computational Intelligence, 32(2), 196-215.
@@ -1246,21 +1411,7 @@ class ImputeUBP(Impute):
         else:
             df = X.copy()
 
-        imputed012, self.best_params = self.fit_predict(df)
-
-        imputed, imputed_filename = genotype_data.decode_imputed(
-            imputed012, write_output=True, prefix=prefix
-        )
-
-        self.imputed = GenotypeData(
-            filename=imputed_filename,
-            filetype=genotype_data.filetype,
-            popmapfile=genotype_data.popmapfile,
-            guidetree=genotype_data.guidetree,
-            qmatrix_iqtree=genotype_data.qmatrix_iqtree,
-            qmatrix=genotype_data.qmatrix,
-            verbose=False,
-        )
+        self.imputed, self.best_params = self.fit_predict(df)
 
 
 class ImputeNLPCA(ImputeUBP):
@@ -1310,6 +1461,32 @@ class ImputeNLPCA(ImputeUBP):
         l1_penalty (float, optional): L1 regularization penalty to apply to reduce overfitting. Defaults to 0.01.
 
         l2_penalty (float, optional) L2 regularization penalty to apply to reduce overfitting. Defaults to 0.01.
+
+    Attributes:
+        nlpca (bool): If True, does NLPCA model. Otherwise does UBP.
+
+        clf (sklearn or neural network classifier): Estimator to use.
+
+        imputed (GenotypeData): New GenotypeData instance with imputed data.
+
+        best_params (Dict[str, Any]): Best found parameters from grid search. In neural networks this value is None because grid searches are not supported.
+
+    Example:
+        >>>data = GenotypeData(
+        >>>    filename="test.str",
+        >>>    filetype="structure2rowPopID",
+        >>>    guidetree="test.tre",
+        >>>    qmatrix_iqtree="test.iqtree"
+        >>>)
+        >>>
+        >>> nlpca = ImputeNLPCA(
+        >>>     genotype_data=data,
+        >>>     cv=5,
+        >>>     learning_rate=0.05,
+        >>>     validation_only=0.3
+        >>>)
+        >>>
+        >>>nlpca_gtdata = nlpca.imputed
 
     References:
     .. [1] Scholz, M., Kaplan, F., Guy, C. L., Kopka, J., & Selbig, J. (2005). Non-linear PCA: a missing data approach. Bioinformatics, 21(20), 3887-3895.

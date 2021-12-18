@@ -42,6 +42,8 @@ from impute.neural_network_imputers import VAE, UBP
 
 import impute.simple_imputers
 
+from read_input.read_input import GenotypeData
+
 from utils import misc
 from utils.misc import get_processor_name
 from utils.misc import isnotebook
@@ -116,6 +118,8 @@ class Impute:
         except AttributeError:
             self.pops = None
 
+        self.genotype_data = kwargs["genotype_data"]
+
         # Separate local variables into settings objects
         (
             self.gridparams,
@@ -168,8 +172,7 @@ class Impute:
             X (pandas.DataFrame): DataFrame with 012-encoded genotypes.
 
         Returns:
-            pandas.DataFrame: DataFrame with missing 012-encoded genotypes imputed.
-
+            GenotypeData: GenotypeData object with missing genotypes imputed.
             Dict[str, Any]: Best parameters found during grid search.
         """
 
@@ -217,8 +220,41 @@ class Impute:
 
             print(f"Best Parameters: {best_params}\n")
 
+        imp_data = self._imputed2genotypedata(imputed_df, self.genotype_data)
+
         print("\nDone!\n")
-        return imputed_df, best_params
+        return imp_data, best_params
+
+    def _imputed2genotypedata(self, imp012, genotype_data):
+        """Create new instance of GenotypeData object from imputed DataFrame.
+
+        The imputed, decoded DataFrame gets written to file and re-loaded to instantiate a new GenotypeData object.
+
+        Args:
+            imp012 (pandas.DataFrame): Imputed 012-encoded DataFrame.
+
+            genotype_data (GenotypeData): Original GenotypeData object to load attributes from.
+
+        Returns:
+            GenotypeData: GenotypeData object with imputed data.
+        """
+        imputed_filename = genotype_data.decode_imputed(
+            imp012, write_output=True, prefix=self.prefix
+        )
+
+        ft = genotype_data.filetype
+
+        if ft.lower().startswith("structure") and ft.lower().endswith("row"):
+            ft += "PopID"
+
+        return GenotypeData(
+            filename=imputed_filename,
+            filetype=ft,
+            guidetree=genotype_data.guidetree,
+            qmatrix_iqtree=genotype_data.qmatrix_iqtree,
+            qmatrix=genotype_data.qmatrix,
+            verbose=False,
+        )
 
     def write_imputed(
         self, data: Union[pd.DataFrame, np.ndarray, List[List[int]]]
@@ -541,9 +577,8 @@ class Impute:
             dict: Best parameters found during the grid search.
         """
         original_num_cols = len(df.columns)
-        df_bi = self._remove_nonbiallelic(df)
         df_subset, cols_to_keep = self._subset_data_for_gridsearch(
-            df_bi, self.column_subset, original_num_cols
+            df, self.column_subset, original_num_cols
         )
 
         print(f"Validation dataset size: {len(df_subset.columns)}\n")
@@ -664,15 +699,15 @@ class Impute:
         )
 
         final_cols = None
-        if len(df_bi.columns) < original_num_cols:
-            final_cols = np.array(df_bi.columns)
+        if len(df.columns) < original_num_cols:
+            final_cols = np.array(df.columns)
 
-        df_chunks = self.df2chunks(df_bi, self.chunk_size)
+        df_chunks = self.df2chunks(df, self.chunk_size)
         imputed_df = self._impute_df(
             df_chunks, best_imputer, cols_to_keep=final_cols
         )
 
-        lst2del = [df_chunks, df_bi]
+        lst2del = [df_chunks, df]
         del lst2del
         gc.collect()
 

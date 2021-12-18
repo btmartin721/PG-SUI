@@ -12,7 +12,7 @@ from sklearn_genetic.space import Continuous, Categorical, Integer
 
 from read_input.read_input import GenotypeData
 from impute.estimators import *
-from impute.simple_imputers import ImputeAlleleFreq
+from impute.simple_imputers import ImputeAlleleFreq, ImputePhylo
 
 # from pgsui.read_input import GenotypeData
 # from pgsui.estimators import *
@@ -151,25 +151,28 @@ def main():
         # }
 
         # Random forest imputation with genetic algorithm grid search
-        # rf_imp = ImputeRandomForest(
-        #     data,
-        #     prefix=args.prefix,
-        #     n_estimators=50,
-        #     n_nearest_features=1,
-        #     gridparams=grid_params,
-        #     cv=3,
-        #     grid_iter=40,
-        #     n_jobs=4,
-        #     max_iter=2,
-        #     column_subset=1.0,
-        #     ga=False,
-        #     disable_progressbar=True,
-        #     extratrees=False,
-        #     mutation_probability=0.1,
-        #     progress_update_percent=20,
-        #     chunk_size=1.0,
-        #     initial_strategy="phylogeny",
-        # )
+        rf_imp = ImputeRandomForest(
+            data,
+            prefix=args.prefix,
+            n_estimators=50,
+            n_nearest_features=1,
+            gridparams=grid_params,
+            cv=3,
+            grid_iter=40,
+            n_jobs=4,
+            max_iter=2,
+            column_subset=1.0,
+            ga=False,
+            disable_progressbar=True,
+            extratrees=False,
+            mutation_probability=0.1,
+            progress_update_percent=20,
+            chunk_size=1.0,
+            initial_strategy="phylogeny",
+        )
+
+        rfdata = rf_imp.imputed
+        print(rfdata.genotypes_df)
 
         # rf_data = rf_imp.imputed
         # print(data.genotypes_df)
@@ -212,15 +215,16 @@ def main():
         #     initial_strategy="populations",
         # )
 
-        # vae_imp = ImputeVAE(
-        #     # gt=np.array([[0.0, 2.0], [np.nan, 2.0], [1.0, np.nan]]),
+        # vae = ImputeVAE(
         #     genotype_data=data,
-        #     cv=3,
         #     prefix=args.prefix,
         #     disable_progressbar=True,
-        #     validation_only=0.3,
+        #     validation_only=None,
         #     initial_strategy="populations",
         # )
+
+        # vae_gtdata = vae.imputed
+        # print(vae_gtdata.genotypes_df)
 
         # complete_encoded = imputer.train(train_epochs=300, batch_size=256)
         # print(complete_encoded)
@@ -276,23 +280,24 @@ def main():
     # print(data.genotypes_df)
     # print(vae_data.genotypes_df)
 
-    ubp = ImputeUBP(
-        data,
-        n_components=3,
-        initial_strategy="populations",
-        disable_progressbar=True,
-        cv=3,
-        hidden_activation="elu",
-        hidden_layer_sizes="midpoint",
-        validation_only=0.3,
-        num_hidden_layers=1,
-        learning_rate=0.05,
-    )
+    # nlpca = ImputeNLPCA(
+    #     data,
+    #     n_components=3,
+    #     initial_strategy="populations",
+    #     disable_progressbar=True,
+    #     cv=3,
+    #     hidden_activation="elu",
+    #     hidden_layer_sizes="midpoint",
+    #     validation_only=None,
+    #     num_hidden_layers=1,
+    #     learning_rate=0.1,
+    # )
 
-    ubp_data = ubp.imputed
+    # nlpca_data = nlpca.imputed
+    # print(nlpca_data.genotypes_df)
 
-    print(data.genotypes_df)
-    print(ubp_data.genotypes_df)
+    # print(data.genotypes_df)
+    # print(nlpca_data.genotypes_df)
 
     # ubp = ImputeUBP(
     #     genotype_data=data,
@@ -320,78 +325,10 @@ def main():
     #     initial_strategy="group_mode",
     # )
 
-    # ImputePhylo(genotype_data=data, save_plots=False)
+    # phylo = ImputePhylo(genotype_data=data, save_plots=False)
 
-    # colors = {
-    # 	"GU": "#FF00FF",
-    # 	"EA": "#FF8C00",
-    # 	"TT": "#228B22",
-    # 	"TC": "#6495ED",
-    # 	"DS": "#00FFFF",
-    # 	"ON": "#800080",
-    # 	"CH": "#696969",
-    # 	"FL": "#FFFF00",
-    # 	"MX": "#FF0000"
-    # }
-
-    # dr = DimReduction(
-    # 	data.imputed_rf_df,
-    # 	data.populations,
-    # 	data.individuals,
-    # 	args.prefix,
-    # 	colors=colors,
-    # 	reps=2
-    # )
-
-    # pca = runPCA(dimreduction=dr, plot_cumvar=False, keep_pcs=10)
-
-    # pca.plot(plot_3d=True)
-
-    # rf = runRandomForestUML(dimreduction=dr, n_estimators=1000, n_jobs=4, min_samples_leaf=4)
-
-    # rf_cmds = runMDS(
-    # 	dimreduction=dr,
-    # 	distances=rf.dissimilarity,
-    # 	keep_dims=3,
-    # 	n_jobs=4,
-    # 	max_iter=1000,
-    # 	n_init=25
-    # )
-
-    # rf_isomds = runMDS(dr, distances=rf.dissimilarity_matrix, metric=False, keep_dims=3, n_jobs=4, max_iter=1000, n_init=25)
-
-    # rf_cmds.plot(plot_3d=True)
-    # rf_isomds.plot(plot_3d=True)
-
-    # tsne = runTSNE(dimreduction=dr, keep_dims=3, n_iter=20000, perplexity=15.0)
-    # tsne.plot(plot_3d=True)
-
-    # maxk = 9
-
-    # pam_rf = PamClustering(rf_cmds, use_embedding=False, dimreduction=dr, distances=rf.dissimilarity, maxk=9, max_iter=2500)
-
-    # pam.msw(plot_msw_clusters=True, plot_msw_line=True, axes=3)
-
-    # pam_rf.gapstat(plot_gap=True, show_plot=False)
-
-    # kmeans = KMeansClustering(rf_cmds, dimreduction=dr, sampleids=data.individuals, maxk=9)
-    # kmeans.msw(plot_msw_clusters=True, plot_msw_line=True, axes=3)
-
-    # tsne_pam = PamClustering(tsne, dimreduction=dr, sampleids=data.individuals)
-    # tsne_pam.msw(plot_msw_clusters=True, plot_msw_line=True, axes=3)
-
-    # cmds_dbscan = DBSCANClustering(
-    # 	rf_cmds, dimreduction=dr, sampleids=data.individuals, plot_eps=True
-    # )
-
-    # cmds_dbscan.plot(plot_3d=True)
-
-    # cmds_affprop = AffinityPropogationClustering(rf_cmds, dimreduction=dr, sampleids=data.individuals)
-
-    # cmds_affprop.plot(plot_3d=True)
-
-    # cmds_aggclust = AgglomHier(rf_cmds, dimreduction=dr, maxk=maxk, sampleids=data.individuals)
-    # cmds.msw(plot_msw_clusters=True, plot_msw_line=True, axes=3)
+    # phylodata = phylo.imputed
+    # print(phylodata.genotypes_df)
 
 
 def get_arguments():

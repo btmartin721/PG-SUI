@@ -138,22 +138,70 @@ class GenotypeData:
             if filetype == "phylip":
                 self.filetype = filetype
                 self.read_phylip()
-            elif filetype == "structure1row":
-                if popmapfile is not None:
+            elif filetype.lower().startswith("structure1row"):
+                if popmapfile is not None and filetype.lower().endswith("row"):
                     self.filetype = "structure1row"
                     self.read_structure(onerow=True, popids=False)
-                else:
+
+                elif popmapfile is None and filetype.lower().endswith("popid"):
                     self.filetype = "structure1rowPopID"
                     self.read_structure(onerow=True, popids=True)
-            elif filetype == "structure2row":
-                if popmapfile is not None:
+
+                elif popmapfile is not None and filetype.lower().endswith(
+                    "popid"
+                ):
+                    print(
+                        "WARNING: popmapfile was not None but provided "
+                        "filetype was structure1rowPopID. Using populations "
+                        "from 2nd column in STRUCTURE file."
+                    )
+                    self.filetype = "structure1rowPopID"
+                    self.read_structure(onerow=True, popids=True)
+
+                elif popmapfile is None and filetype.lower().endswith("row"):
+                    raise ValueError(
+                        "If popmap file is not provided, filetype must be "
+                        "structure1rowPopID and the 2nd STRUCTURE file column "
+                        "should contain population IDs"
+                    )
+
+                else:
+                    raise ValueError(
+                        f"Unsupported filetype provided: {filetype}"
+                    )
+
+            elif filetype.lower().startswith("structure2row"):
+                if popmapfile is not None and filetype.lower().endswith("row"):
                     self.filetype = "structure2row"
                     self.read_structure(onerow=False, popids=False)
-                else:
+
+                elif popmapfile is None and filetype.lower().endswith("popid"):
                     self.filetype = "structure2rowPopID"
                     self.read_structure(onerow=False, popids=True)
+
+                elif popmapfile is not None and filetype.lower().endswith(
+                    "popid"
+                ):
+                    print(
+                        "WARNING: popmapfile was not None but provided "
+                        "filetype was structure2rowPopID. Using populations "
+                        "from 2nd column in STRUCTURE file."
+                    )
+                    self.filetype = "structure2rowPopID"
+                    self.read_structure(onerow=False, popids=True)
+
+                elif popmapfile is None and filetype.lower().endswith("row"):
+                    raise ValueError(
+                        "If popmap file is not provided, filetype must be "
+                        "structure2rowPopID and the 2nd STRUCTURE file column "
+                        "should contain population IDs"
+                    )
+
+                else:
+                    raise OSError(f"Unsupported filetype provided: {filetype}")
+
             else:
-                raise OSError(f"Filetype {filetype} is not supported!\n")
+                raise OSError(f"Unsupported filetype provided: {filetype}\n")
 
     def check_filetype(self, filetype: str) -> None:
         """Validate that the filetype is correct.
@@ -774,8 +822,8 @@ class GenotypeData:
             }
 
         elif (
-            self.filetype == "structure1row"
-            or self.filetype == "structure2row"
+            self.filetype.startswith("structure1row")
+            or self.filetype.startswith("structure2row")
             and encodings_dict is None
         ):
             onehot_dict = {
@@ -873,8 +921,7 @@ class GenotypeData:
             prefix (str, optional): Prefix to append to output file. Defaults to "output".
 
         Returns:
-            pandas.DataFrame: Decoded imputations.
-            str: Filename of imputed data.
+            str: Filename that imputed data was written to.
         """
         if isinstance(X, pd.DataFrame):
             df = X.copy()
@@ -986,7 +1033,7 @@ class GenotypeData:
 
                 df_decoded.insert(0, "sampleID", self.samples)
 
-        return df_decoded, of
+        return of
 
     @property
     def snpcount(self) -> int:

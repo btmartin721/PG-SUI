@@ -131,13 +131,13 @@ class IterativeImputerFixedParams(IterativeImputer):
         str_encodings (dict(str: int), optional): Integer encodings used in STRUCTURE-formatted file. Should be a dictionary with keys=nucleotides and values=integer encodings. The missing data encoding should also be included. Argument is ignored if using a PHYLIP-formatted file. Defaults to {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}
 
     Attributes:
-        initial_imputer_: (:class:`~sklearn.impute.SimpleImputer`):  Imputer used to initialize the missing values.
+        initial_imputer_ (sklearn.impute.SimpleImputer):  Imputer used to initialize the missing values.
 
         n_iter_ (int): Number of iteration rounds that occurred. Will be less than ``self.max_iter`` if early stopping criterion was reached.
 
         n_features_with_missing_ (int): Number of features with missing values.
 
-        indicator_ (:class:`~sklearn.impute.MissingIndicator`): Indicator used to add binary indicators for missing values ``None`` if add_indicator is False.
+        indicator_ (sklearn.impute.MissingIndicator): Indicator used to add binary indicators for missing values ``None`` if add_indicator is False.
 
         random_state_ (RandomState instance): RandomState instance that is generated either from a seed, the random number generator or by ``np.random``\.
 
