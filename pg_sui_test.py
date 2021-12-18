@@ -13,7 +13,7 @@ from sklearn_genetic.space import Continuous, Categorical, Integer
 import pgsui
 from pgsui.read_input.read_input import GenotypeData
 from pgsui.impute.estimators import *
-from pgsui.impute.simple_imputers import ImputeAlleleFreq
+from pgsui.impute.simple_imputers import *
 
 # from pgsui.read_input import GenotypeData
 # from pgsui.estimators import *
@@ -267,18 +267,18 @@ def main():
     #     validation_only=None,
     # )
 
-    # ubp = ImputeUBP(
-    #     genotype_data=data,
-    #     n_components=3,
-    #     initial_strategy="populations",
-    #     disable_progressbar=True,
-    #     cv=3,
-    #     hidden_activation="elu",
-    #     hidden_layer_sizes="midpoint",
-    #     validation_only=0.3,
-    #     num_hidden_layers=1,
-    #     learning_rate=0.05,
-    # )
+    ubp = ImputeUBP(
+        genotype_data=data,
+        n_components=3,
+        initial_strategy="nmf",
+        disable_progressbar=True,
+        cv=3,
+        hidden_activation="elu",
+        hidden_layer_sizes="midpoint",
+        validation_only=0.3,
+        num_hidden_layers=1,
+        learning_rate=0.05,
+    )
 
     # ubp = ImputeUBP(
     #     genotype_data=data,

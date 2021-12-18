@@ -10,9 +10,9 @@ import scipy.stats as stats
 
 from sklearn_genetic.space import Continuous, Categorical, Integer
 
-from read_input.read_input import GenotypeData
-from impute.estimators import *
-from impute.simple_imputers import ImputeAlleleFreq, ImputePhylo
+from pgsui.read_input.read_input import GenotypeData
+from pgsui.impute.estimators import *
+from pgsui.impute.simple_imputers import ImputeAlleleFreq, ImputePhylo
 
 # from pgsui.read_input import GenotypeData
 # from pgsui.estimators import *
