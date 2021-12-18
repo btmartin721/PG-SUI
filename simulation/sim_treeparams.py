@@ -59,7 +59,7 @@ def main():
     num_clades=4
     samples_per_clade=20
     num_loci=1000
-    loc_length=100
+    loc_length=500
     write_gene_alignments=False
     make_gene_trees=False
     make_guidetrees=True #set to true to run IQTREE on simulated SNP matrices
@@ -178,13 +178,13 @@ def main():
                         os.mkdir(fasta_outpath)
                 else:
                     fasta_outpath=model_outpath
-                fastaout=fasta_outpath +"/"+ base+"_"+model+"_loc"+str(locus) + "_gene-alignment.fasta"
+                fastaout=fasta_outpath +"/"+ base+"_"+model+"_loc"+str(locus) + "_gene-alignment.phylip"
                 #sample a gene alignment
                 loc = sample_locus(my_tree, my_model, loc_length, snps_per_locus, fastaout)
 
                 if loc:
                     #sample SNP(s) from gene alignment
-                    sampled = sample_snp(read_fasta(fastaout), loc_length, snps_per_locus)
+                    sampled = sample_snp(read_phylip(fastaout), loc_length, snps_per_locus)
                     if sampled is not None:
                         data = add_locus(data,sampled)
 
@@ -204,8 +204,8 @@ def main():
                             outgroup_wildcard=outgroup)
 
             #write full SNP alignment & generate tree
-            all_snp_out=model_outpath+"/"+base+"_"+model+"_base-snps-concat.fasta"
-            write_fasta(data, all_snp_out)
+            all_snp_out=model_outpath+"/"+base+"_"+model+"_base-snps-concat.phylip"
+            write_phylip(data, all_snp_out)
             if make_guidetrees:
                 run_iqtree(all_snp_out,
                     iqtree_path=iqtree_bin,
@@ -237,8 +237,8 @@ def main():
                                             source=source_pool,
                                             target=target_pool)
 
-                introgessed_aln_out=alpha_base + "_base-snps-concat.fasta"
-                write_fasta(introgressed_data, introgessed_aln_out)
+                introgessed_aln_out=alpha_base + "_base-snps-concat.phylip"
+                write_phylip(introgressed_data, introgessed_aln_out)
                 if make_guidetrees:
                     run_iqtree(introgessed_aln_out,
                             iqtree_path=iqtree_bin,
@@ -336,6 +336,44 @@ def write_fasta(seqs, fas):
 			fh.write(seq)
 		fh.close()
 
+def write_phylip(seqs, phy):
+    #get header
+    samps=0
+    snps=None
+    for key in seqs.keys():
+        samps+=1
+        if snps is None:
+            snps = len(seqs[key])
+        elif snps != len(seqs[key]):
+            raise ValueError(("Error writing file"+phy+"- sequences not equal length\n"))
+	with open(=phy, 'w') as fh:
+        header=str(samps)+"\t"+str(seqs)+"\n"
+        fh.write(header)
+		#Write seqs to FASTA first
+		for a in seqs.keys():
+			line = str(a) + "\t" + "".join(seqs[a]) + "\n"
+			fh.write(line)
+		fh.close()
+
+def read_phylip(phy):
+    data = dict()
+    header=True
+    sample=None
+    with open(phy, "r") as fin:
+        for line in fin:
+            line = line.strip()
+            if not line:  # If blank line.
+                continue
+            else:
+                if header=True:
+                    header=False
+                    continue
+                else:
+                    stuff = line.split()
+                    data[stuff[0]] = stuff[1]
+        fin.close()
+        return(data)
+
 def read_fasta(fasta):
     data = dict()
     header=False
@@ -354,6 +392,7 @@ def read_fasta(fasta):
             else:
                 sequence = sequence + line
         data[sample] = sequence
+        fin.close()
         return(data)
 
 def sample_snp(aln_dict, aln_len, snps_per_locus=1):
@@ -388,12 +427,12 @@ def sample_snp(aln_dict, aln_len, snps_per_locus=1):
                 snp_aln[sample].append(aln_dict[sample][i])
     return(snp_aln)
 
-def sample_locus(tree, model, gene_len=1000, num_snps=1, out="out.fasta"):
+def sample_locus(tree, model, gene_len=1000, num_snps=1, out="out.phylip"):
     try:
         my_partition = pyvolve.Partition(models = model, size=gene_len)
         my_evolver = pyvolve.Evolver(partitions = my_partition, tree = tree)
         my_evolver(seqfile = out,
-            seqfmt = "fasta",
+            seqfmt = "phylip",
             ratefile=False,
             infofile=False)
         return(True)
