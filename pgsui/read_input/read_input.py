@@ -1037,7 +1037,9 @@ class GenotypeData:
 
         dreplace = dict()
         for col, ref, alt in zip(df.columns, self.ref, self.alt):
-
+            #if site is monomorphic, set alt and red state the same 
+            if alt is None:
+                alt = ref
             ref2 = f"{ref}/{ref}"
             alt2 = f"{alt}/{alt}"
             het2 = f"{ref}/{alt}"
