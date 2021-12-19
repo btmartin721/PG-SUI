@@ -340,6 +340,7 @@ class IterativeImputerGridSearch(IterativeImputer):
                 output_format="array",
                 verbose=False,
                 iterative_mode=True,
+                validation_mode=True,
             )
 
             X_filled = self.initial_imputer_.imputed
@@ -383,12 +384,13 @@ class IterativeImputerGridSearch(IterativeImputer):
                 missing=-9,
                 write_output=False,
                 verbose=False,
-                output_format="array"
+                output_format="array",
+                validation_mode=True,
             )
 
             X_filled = self.initial_imputer_.imputed
             Xt = X.copy()
-            print(X_filled)
+            #print(X_filled)
 
         else:
             if self.initial_imputer_ is None:

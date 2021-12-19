@@ -136,7 +136,6 @@ class ImputePhylo(GenotypeData):
         >>>
         >>>phylo_gtdata = phylo.imputed
     """
-
     def __init__(
         self,
         *,
@@ -145,10 +144,10 @@ class ImputePhylo(GenotypeData):
         filetype: Optional[str] = None,
         popmapfile: Optional[str] = None,
         treefile: Optional[str] = None,
-        siterates: Optional[str] = None,
-        siterates_iqtree: Optional[str] = None,
         qmatrix_iqtree: Optional[str] = None,
         qmatrix: Optional[str] = None,
+        siterates: Optional[str] = None,
+        siterates_iqtree: Optional[str] = None,
         str_encodings: Dict[str, int] = {
             "A": 1,
             "C": 2,
@@ -158,7 +157,6 @@ class ImputePhylo(GenotypeData):
         },
         prefix: str = "output",
         save_plots: bool = False,
-        write_output: bool = True,
         disable_progressbar: bool = False,
         **kwargs: Optional[Any],
     ) -> None:
@@ -177,6 +175,7 @@ class ImputePhylo(GenotypeData):
         self.save_plots = save_plots
         self.disable_progressbar = disable_progressbar
         self.column_subset = kwargs.get("column_subset", None)
+        self.validation_mode = kwargs.get("validation_mode", False)
 
         self.valid_sites = None
         self.valid_sites_count = None
@@ -184,11 +183,33 @@ class ImputePhylo(GenotypeData):
         self.validate_arguments(genotype_data)
         data, tree, q, site_rates = self.parse_arguments(genotype_data)
 
-        self.imputed = self.impute_phylo(tree, data, q, site_rates)
+        if self.validation_mode == True:
+            imputed012 = self.impute_phylo(tree, data, q, site_rates)
 
-        if write_output:
-            outfile = f"{prefix}_imputed_012.csv"
-            self.imputed.to_csv(outfile, header=False, index=False)
+            imputed_filename = genotype_data.decode_imputed(
+                imputed012, write_output=True, prefix=prefix
+            )
+
+            ft = genotype_data.filetype
+
+            if ft.lower().startswith("structure") and ft.lower().endswith(
+                "row"
+            ):
+                ft += "PopID"
+
+            self.imputed = GenotypeData(
+                filename=imputed_filename,
+                filetype=ft,
+                guidetree=genotype_data.guidetree,
+                qmatrix_iqtree=genotype_data.qmatrix_iqtree,
+                qmatrix=genotype_data.qmatrix,
+                siterates=genotype_data.siterates,
+                siterates_iqtree=genotype_data.siterates_iqtre,
+                verbose=False,
+            )
+
+        else:
+            self.imputed = self.impute_phylo(tree, data, q, site_rates)
 
     def nbiallelic(self) -> int:
         """Get the number of remaining bi-allelic sites after imputation.
@@ -921,7 +942,7 @@ class ImputeAlleleFreq(GenotypeData):
         self.iterative_mode = kwargs.get("iterative_mode", False)
         self.validation_mode = kwargs.get("validation_mode", False)
 
-        if not self.validation_mode:
+        if self.validation_mode == True:
             imputed012, self.valid_cols = self.fit_predict(gt_list)
 
             imputed_filename = genotype_data.decode_imputed(
@@ -942,7 +963,7 @@ class ImputeAlleleFreq(GenotypeData):
                 qmatrix_iqtree=genotype_data.qmatrix_iqtree,
                 qmatrix=genotype_data.qmatrix,
                 siterates=genotype_data.siterates,
-                siterates_iqtree=genotype.siterates_iqtree,
+                siterates_iqtree=genotype_data.siterates_iqtree,
                 verbose=False,
             )
 
@@ -1151,6 +1172,7 @@ class ImputeNMF(GenotypeData):
         self.output_format = output_format
         self.verbose = verbose
         self.iterative_mode = kwargs.get("iterative_mode", False)
+        self.validation_mode = kwargs.get("validation_mode", False)
 
         if genotype_data is None and gt is None:
             raise TypeError("genotype_data and gt cannot both be NoneType")
@@ -1163,19 +1185,43 @@ class ImputeNMF(GenotypeData):
         elif gt is not None:
             X = gt
 
-        nX = self.fit_predict(X)
-        self.imputed = pd.DataFrame(nX)
+        if self.validation_mode == True:
+            imputed012 = pd.DataFrame(self.fit_predict(X))
 
-        if self.output_format is not None:
-            if self.output_format == "df":
-                pass
-            elif self.output_format == "array":
-                self.imputed = nX
-            elif self.output_format == "list":
-                self.imputed = self.imputed.tolist()
+            imputed_filename = genotype_data.decode_imputed(
+                imputed012, write_output=True, prefix=prefix
+            )
 
-        if write_output:
-            self.write2file(self.imputed)
+            ft = genotype_data.filetype
+
+            if ft.lower().startswith("structure") and ft.lower().endswith(
+                "row"
+            ):
+                ft += "PopID"
+
+            self.imputed = GenotypeData(
+                filename=imputed_filename,
+                filetype=ft,
+                guidetree=genotype_data.guidetree,
+                qmatrix_iqtree=genotype_data.qmatrix_iqtree,
+                qmatrix=genotype_data.qmatrix,
+                siterates=genotype_data.siterates,
+                siterates_iqtree=genotype_data.siterates_iqtree,
+                verbose=False,
+            )
+        else:
+            self.imputed = pd.DataFrame(self.fit_predict(X))
+            if self.output_format is not None:
+                if self.output_format == "df":
+                    pass
+                elif self.output_format == "array":
+                    self.imputed = nX
+                elif self.output_format == "list":
+                    self.imputed = self.imputed.tolist()
+
+            if write_output:
+                self.write2file(self.imputed)
+
 
     def fit_predict(self, X):
         #imputation

@@ -327,6 +327,7 @@ class IterativeImputerFixedParams(IterativeImputer):
                 write_output=False,
                 verbose=False,
                 iterative_mode=True,
+                validation_mode=True,
             )
 
             X_filled = self.initial_imputer_.imputed.to_numpy()
@@ -337,7 +338,8 @@ class IterativeImputerFixedParams(IterativeImputer):
                 gt=np.nan_to_num(X, nan=-9),
                 missing=-9,
                 write_output=False,
-                verbose=False
+                verbose=False,
+                validation_mode=True,
             )
 
             X_filled = self.initial_imputer_.imputed.to_numpy()
