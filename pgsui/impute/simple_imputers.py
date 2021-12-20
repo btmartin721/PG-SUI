@@ -54,54 +54,6 @@ class ImputePhylo(GenotypeData):
 
         treefile (str or None, optional): Path to Newick-formatted phylogenetic tree file. Not required if ``genotype_data`` is defined with the ``guidetree`` option. Defaults to None.
 
-        qmatrix_iqtree (str or None, optional): Path to \*.iqtree file containing Rate Matrix Q table. If specified, ``ImputePhylo`` will read the Q matrix from the IQ-TREE output file. Cannot be used in conjunction with ``qmatrix`` argument. Not required if the ``qmatrix`` or ``qmatrix_iqtree`` options were used with the ``GenotypeData`` object. Defaults to None.
-
-        qmatrix (str or None, optional): Path to file containing only a Rate Matrix Q table. Not required if ``genotype_data`` is defined with the qmatrix or qmatrix_iqtree option. Defaults to None.
-
-        str_encodings (Dict[str, int], optional): Integer encodings used in STRUCTURE-formatted file. Should be a dictionary with keys=nucleotides and values=integer encodings. The missing data encoding should also be included. Argument is ignored if using a PHYLIP-formatted file. Defaults to {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}
-
-        prefix (str, optional): Prefix to use with output files.
-
-        save_plots (bool, optional): Whether to save PDF files with genotype imputations for each site to disk. It makes one PDF file per locus, so if you have a lot of loci it will make a lot of PDF files. Defaults to False.
-
-        disable_progressbar (bool, optional): Whether to disable the progress bar during the imputation. Defaults to False.
-
-        kwargs (Dict[str, Any] or None, optional): Additional keyword arguments intended for internal purposes only. Possible arguments: {"column_subset": List[int] or numpy.ndarray[int], "validation_mode": bool}; Subset SNPs by a list of indices. Defauls to None.
-
-    Attributes:
-        imputed (GenotypeData): New GenotypeData instance with imputed data.
-
-    Example:
-        >>>data = GenotypeData(
-        >>>    filename="test.str",
-        >>>    filetype="structure2rowPopID",
-        >>>    guidetree="test.tre",
-        >>>    qmatrix_iqtree="test.iqtree"
-        >>>)
-        >>>
-        >>>phylo = ImputePhylo(
-        >>>     genotype_data=data,
-        >>>     save_plots=True,
-        >>>)
-        >>>
-        >>>phylo_gtdata = phylo.imputed
-    """
-
-
-class ImputePhylo(GenotypeData):
-    """Impute missing data using a phylogenetic tree to inform the imputation.
-
-    Args:
-        genotype_data (GenotypeData object or None, optional): GenotypeData object. If not None, some or all of the below options are not required. If None, all the below options are required. Defaults to None.
-
-        alnfile (str or None, optional): Path to PHYLIP or STRUCTURE-formatted file to impute. Defaults to None.
-
-        filetype (str or None, optional): Filetype for the input alignment. Valid options include: "phylip", "structure1row", "structure1rowPopID", "structure2row", "structure2rowPopId". Not required if ``genotype_data`` is defined. Defaults to "phylip".
-
-        popmapfile (str or None, optional): Path to population map file. Required if filetype is "phylip", "structure1row", or "structure2row". If filetype is "structure1rowPopID" or "structure2rowPopID", then the population IDs must be the second column of the STRUCTURE file. Not required if ``genotype_data`` is defined. Defaults to None.
-
-        treefile (str or None, optional): Path to Newick-formatted phylogenetic tree file. Not required if ``genotype_data`` is defined with the ``guidetree`` option. Defaults to None.
-
         siterates (str or None, optional): Path to file containing per-site rates, with 1 rate per line corresponding to 1 site. Not required if ``genotype_data`` is defined with the siterates or siterates_iqtree option. Defaults to None.
 
         siterates_iqtree (str or None, optional): Path to *.rates file output from IQ-TREE, containing a per-site rate table. If specified, ``ImputePhylo`` will read the site-rates from the IQ-TREE output file. Cannot be used in conjunction with ``siterates`` argument. Not required if the ``siterates`` or ``siterates_iqtree`` options were used with the ``GenotypeData`` object. Defaults to None.
@@ -183,8 +135,8 @@ class ImputePhylo(GenotypeData):
         self.valid_sites = None
         self.valid_sites_count = None
 
-        self.validate_arguments(genotype_data)
-        data, tree, q, site_rates = self.parse_arguments(genotype_data)
+        self._validate_arguments(genotype_data)
+        data, tree, q, site_rates = self._parse_arguments(genotype_data)
 
         if self.validation_mode == True:
             imputed012 = self.impute_phylo(tree, data, q, site_rates)
@@ -214,6 +166,210 @@ class ImputePhylo(GenotypeData):
         else:
             self.imputed = self.impute_phylo(tree, data, q, site_rates)
 
+    def impute_phylo(
+        self,
+        tree: tt.tree,
+        genotypes: Dict[str, List[Union[str, int]]],
+        Q: pd.DataFrame,
+        site_rates=None,
+    ) -> pd.DataFrame:
+        """Imputes genotype values with a guide tree.
+
+        Imputes genotype values by using a provided guide
+        tree to inform the imputation, assuming maximum parsimony.
+
+        Process Outline:
+            For each SNP:
+            1) if site_rates, get site-transformated Q matrix.
+
+            2) Postorder traversal of tree to compute ancestral
+            state likelihoods for internal nodes (tips -> root).
+            If exclude_N==True, then ignore N tips for this step.
+
+            3) Preorder traversal of tree to populate missing genotypes
+            with the maximum likelihood state (root -> tips).
+
+        Args:
+            tree (toytree.tree object): Input tree.
+
+            genotypes (Dict[str, List[Union[str, int]]]): Dictionary with key=sampleids, value=sequences.
+
+            Q (pandas.DataFrame): Rate Matrix Q from .iqtree or separate file.
+
+            site_rates (List): Site-specific substitution rates (used to weight per-site Q)
+
+        Returns:
+            pandas.DataFrame: Imputed genotypes.
+
+        Raises:
+            IndexError: If index does not exist when trying to read genotypes.
+            AssertionError: Sites must have same lengths.
+            AssertionError: Missing data still found after imputation.
+        """
+        try:
+            if list(genotypes.values())[0][0][1] == "/":
+                genotypes = self.str2iupac(genotypes, self.str_encodings)
+        except IndexError:
+            if self._is_int(list(genotypes.values())[0][0][0]):
+                raise
+
+        if self.column_subset is not None:
+            if isinstance(self.column_subset, np.ndarray):
+                self.column_subset = self.column_subset.tolist()
+
+            genotypes = {
+                k: [v[i] for i in self.column_subset]
+                for k, v in genotypes.items()
+            }
+
+        # For each SNP:
+        nsites = list(set([len(v) for v in genotypes.values()]))
+        assert len(nsites) == 1, "Some sites have different lengths!"
+
+        outdir = f"{self.prefix}_imputation_plots"
+
+        if self.save_plots:
+            Path(outdir).mkdir(parents=True, exist_ok=True)
+
+        for snp_index in progressbar(
+            range(nsites[0]),
+            desc="Feature Progress: ",
+            leave=True,
+            disable=self.disable_progressbar,
+        ):
+            node_lik = dict()
+
+            # LATER: Need to get site rates
+            rate = 1.0
+            if site_rates is not None:
+                rate = site_rates[snp_index]
+
+            site_Q = Q.copy(deep=True) * rate
+            # print(site_Q)
+
+            # calculate state likelihoods for internal nodes
+            for node in tree.treenode.traverse("postorder"):
+                if node.is_leaf():
+                    continue
+
+                if node.idx not in node_lik:
+                    node_lik[node.idx] = None
+
+                for child in node.get_leaves():
+                    # get branch length to child
+                    # bl = child.edge.length
+                    # get transition probs
+                    pt = self._transition_probs(site_Q, child.dist)
+                    if child.is_leaf():
+                        if child.name in genotypes:
+                            # get genotype
+                            sum = None
+
+                            for allele in self._get_iupac_full(
+                                genotypes[child.name][snp_index]
+                            ):
+                                if sum is None:
+                                    sum = list(pt[allele])
+                                else:
+                                    sum = [
+                                        sum[i] + val
+                                        for i, val in enumerate(
+                                            list(pt[allele])
+                                        )
+                                    ]
+
+                            if node_lik[node.idx] is None:
+                                node_lik[node.idx] = sum
+
+                            else:
+                                node_lik[node.idx] = [
+                                    sum[i] * val
+                                    for i, val in enumerate(node_lik[node.idx])
+                                ]
+                        else:
+                            # raise error
+                            sys.exit(
+                                f"Error: Taxon {child.name} not found in "
+                                f"genotypes"
+                            )
+
+                    else:
+                        l = self._get_internal_lik(pt, node_lik[child.idx])
+                        if node_lik[node.idx] is None:
+                            node_lik[node.idx] = l
+
+                        else:
+                            node_lik[node.idx] = [
+                                l[i] * val
+                                for i, val in enumerate(node_lik[node.idx])
+                            ]
+
+            # infer most likely states for tips with missing data
+            # for each child node:
+            bads = list()
+            for samp in genotypes.keys():
+                if genotypes[samp][snp_index].upper() == "N":
+                    bads.append(samp)
+                    # go backwards into tree until a node informed by
+                    # actual data
+                    # is found
+                    # node = tree.search_nodes(name=samp)[0]
+                    node = tree.idx_dict[
+                        tree.get_mrca_idx_from_tip_labels(names=samp)
+                    ]
+                    dist = node.dist
+                    node = node.up
+                    imputed = None
+
+                    while node and imputed is None:
+                        if self._all_missing(
+                            tree, node.idx, snp_index, genotypes
+                        ):
+                            dist += node.dist
+                            node = node.up
+
+                        else:
+                            pt = self._transition_probs(site_Q, dist)
+                            lik = self._get_internal_lik(pt, node_lik[node.idx])
+                            maxpos = lik.index(max(lik))
+                            if maxpos == 0:
+                                imputed = "A"
+
+                            elif maxpos == 1:
+                                imputed = "C"
+
+                            elif maxpos == 2:
+                                imputed = "G"
+
+                            else:
+                                imputed = "T"
+
+                    genotypes[samp][snp_index] = imputed
+
+            if self.save_plots:
+                self._draw_imputed_position(
+                    tree,
+                    bads,
+                    genotypes,
+                    snp_index,
+                    f"{outdir}/{self.prefix}_pos{snp_index}.pdf",
+                )
+
+        df = pd.DataFrame.from_dict(genotypes, orient="index")
+
+        # Make sure no missing data remains in the dataset
+        assert (
+            not df.isin([-9]).any().any()
+        ), "Imputation failed...Missing values found in the imputed dataset"
+
+        imp_snps, self.valid_sites, self.valid_sites_count = self.convert_012(
+            df.to_numpy().tolist(), impute_mode=True
+        )
+
+        df_imp = pd.DataFrame.from_records(imp_snps)
+
+        return df_imp
+
     def nbiallelic(self) -> int:
         """Get the number of remaining bi-allelic sites after imputation.
 
@@ -222,7 +378,7 @@ class ImputePhylo(GenotypeData):
         """
         return len(self.imputed.columns)
 
-    def parse_arguments(
+    def _parse_arguments(
         self, genotype_data: Any
     ) -> Tuple[Dict[str, List[Union[int, str]]], tt.tree, pd.DataFrame]:
         """Determine which arguments were specified and set appropriate values.
@@ -313,7 +469,7 @@ class ImputePhylo(GenotypeData):
                 site_rates = self.siterates_from_iqtree(self.siterates_iqtree)
         return (data, tree, q, site_rates)
 
-    def validate_arguments(self, genotype_data: Any) -> None:
+    def _validate_arguments(self, genotype_data: Any) -> None:
         """Validate that the correct arguments were supplied.
 
         Args:
@@ -354,7 +510,7 @@ class ImputePhylo(GenotypeData):
         if self.qmatrix is not None and self.qmatrix_iqtree is not None:
             raise TypeError("qmatrix and qmatrix_iqtree cannot both be defined")
 
-    def print_q(self, q: pd.DataFrame) -> None:
+    def _print_q(self, q: pd.DataFrame) -> None:
         """Print Rate Matrix Q.
 
         Args:
@@ -368,7 +524,7 @@ class ImputePhylo(GenotypeData):
                 print(q[nuc1][nuc2], end="\t")
             print("")
 
-    def is_int(self, val: Union[str, int]) -> bool:
+    def _is_int(self, val: Union[str, int]) -> bool:
         """Check if value is integer.
 
         Args:
@@ -383,211 +539,7 @@ class ImputePhylo(GenotypeData):
             return False
         return True
 
-    def impute_phylo(
-        self,
-        tree: tt.tree,
-        genotypes: Dict[str, List[Union[str, int]]],
-        Q: pd.DataFrame,
-        site_rates=None,
-    ) -> pd.DataFrame:
-        """Imputes genotype values with a guide tree.
-
-        Imputes genotype values by using a provided guide
-        tree to inform the imputation, assuming maximum parsimony.
-
-        Process Outline:
-            For each SNP:
-            1) if site_rates, get site-transformated Q matrix.
-
-            2) Postorder traversal of tree to compute ancestral
-            state likelihoods for internal nodes (tips -> root).
-            If exclude_N==True, then ignore N tips for this step.
-
-            3) Preorder traversal of tree to populate missing genotypes
-            with the maximum likelihood state (root -> tips).
-
-        Args:
-            tree (toytree.tree object): Input tree.
-
-            genotypes (Dict[str, List[Union[str, int]]]): Dictionary with key=sampleids, value=sequences.
-
-            Q (pandas.DataFrame): Rate Matrix Q from .iqtree or separate file.
-
-            site_rates (List): Site-specific substitution rates (used to weight per-site Q)
-
-        Returns:
-            pandas.DataFrame: Imputed genotypes.
-
-        Raises:
-            IndexError: If index does not exist when trying to read genotypes.
-            AssertionError: Sites must have same lengths.
-            AssertionError: Missing data still found after imputation.
-        """
-        try:
-            if list(genotypes.values())[0][0][1] == "/":
-                genotypes = self.str2iupac(genotypes, self.str_encodings)
-        except IndexError:
-            if self.is_int(list(genotypes.values())[0][0][0]):
-                raise
-
-        if self.column_subset is not None:
-            if isinstance(self.column_subset, np.ndarray):
-                self.column_subset = self.column_subset.tolist()
-
-            genotypes = {
-                k: [v[i] for i in self.column_subset]
-                for k, v in genotypes.items()
-            }
-
-        # For each SNP:
-        nsites = list(set([len(v) for v in genotypes.values()]))
-        assert len(nsites) == 1, "Some sites have different lengths!"
-
-        outdir = f"{self.prefix}_imputation_plots"
-
-        if self.save_plots:
-            Path(outdir).mkdir(parents=True, exist_ok=True)
-
-        for snp_index in progressbar(
-            range(nsites[0]),
-            desc="Feature Progress: ",
-            leave=True,
-            disable=self.disable_progressbar,
-        ):
-            node_lik = dict()
-
-            # LATER: Need to get site rates
-            rate = 1.0
-            if site_rates is not None:
-                rate = site_rates[snp_index]
-
-            site_Q = Q.copy(deep=True) * rate
-            # print(site_Q)
-
-            # calculate state likelihoods for internal nodes
-            for node in tree.treenode.traverse("postorder"):
-                if node.is_leaf():
-                    continue
-
-                if node.idx not in node_lik:
-                    node_lik[node.idx] = None
-
-                for child in node.get_leaves():
-                    # get branch length to child
-                    # bl = child.edge.length
-                    # get transition probs
-                    pt = self.transition_probs(site_Q, child.dist)
-                    if child.is_leaf():
-                        if child.name in genotypes:
-                            # get genotype
-                            sum = None
-
-                            for allele in self.get_iupac_full(
-                                genotypes[child.name][snp_index]
-                            ):
-                                if sum is None:
-                                    sum = list(pt[allele])
-                                else:
-                                    sum = [
-                                        sum[i] + val
-                                        for i, val in enumerate(
-                                            list(pt[allele])
-                                        )
-                                    ]
-
-                            if node_lik[node.idx] is None:
-                                node_lik[node.idx] = sum
-
-                            else:
-                                node_lik[node.idx] = [
-                                    sum[i] * val
-                                    for i, val in enumerate(node_lik[node.idx])
-                                ]
-                        else:
-                            # raise error
-                            sys.exit(
-                                f"Error: Taxon {child.name} not found in "
-                                f"genotypes"
-                            )
-
-                    else:
-                        l = self.get_internal_lik(pt, node_lik[child.idx])
-                        if node_lik[node.idx] is None:
-                            node_lik[node.idx] = l
-
-                        else:
-                            node_lik[node.idx] = [
-                                l[i] * val
-                                for i, val in enumerate(node_lik[node.idx])
-                            ]
-
-            # infer most likely states for tips with missing data
-            # for each child node:
-            bads = list()
-            for samp in genotypes.keys():
-                if genotypes[samp][snp_index].upper() == "N":
-                    bads.append(samp)
-                    # go backwards into tree until a node informed by
-                    # actual data
-                    # is found
-                    # node = tree.search_nodes(name=samp)[0]
-                    node = tree.idx_dict[
-                        tree.get_mrca_idx_from_tip_labels(names=samp)
-                    ]
-                    dist = node.dist
-                    node = node.up
-                    imputed = None
-
-                    while node and imputed is None:
-                        if self.allMissing(
-                            tree, node.idx, snp_index, genotypes
-                        ):
-                            dist += node.dist
-                            node = node.up
-
-                        else:
-                            pt = self.transition_probs(site_Q, dist)
-                            lik = self.get_internal_lik(pt, node_lik[node.idx])
-                            maxpos = lik.index(max(lik))
-                            if maxpos == 0:
-                                imputed = "A"
-
-                            elif maxpos == 1:
-                                imputed = "C"
-
-                            elif maxpos == 2:
-                                imputed = "G"
-
-                            else:
-                                imputed = "T"
-
-                    genotypes[samp][snp_index] = imputed
-
-            if self.save_plots:
-                self.draw_imputed_position(
-                    tree,
-                    bads,
-                    genotypes,
-                    snp_index,
-                    f"{outdir}/{self.prefix}_pos{snp_index}.pdf",
-                )
-
-        df = pd.DataFrame.from_dict(genotypes, orient="index")
-
-        # Make sure no missing data remains in the dataset
-        assert (
-            not df.isin([-9]).any().any()
-        ), "Imputation failed...Missing values found in the imputed dataset"
-
-        imp_snps, self.valid_sites, self.valid_sites_count = self.convert_012(
-            df.to_numpy().tolist(), impute_mode=True
-        )
-
-        df_imp = pd.DataFrame.from_records(imp_snps)
-
-        return df_imp
-
-    def get_nuc_colors(self, nucs: List[str]) -> List[str]:
+    def _get_nuc_colors(self, nucs: List[str]) -> List[str]:
         """Get colors for each nucleotide when plotting.
 
         Args:
@@ -623,7 +575,7 @@ class ImputePhylo(GenotypeData):
                 ret.append("#000000")
         return ret
 
-    def label_bads(
+    def _label_bads(
         self, tips: List[str], labels: List[str], bads: List[str]
     ) -> List[str]:
         """Insert asterisks around bad nucleotides.
@@ -641,7 +593,7 @@ class ImputePhylo(GenotypeData):
                 labels[i] = "*" + str(labels[i]) + "*"
         return labels
 
-    def draw_imputed_position(
+    def _draw_imputed_position(
         self,
         tree: tt.tree,
         bads: List[str],
@@ -666,9 +618,9 @@ class ImputePhylo(GenotypeData):
         colors = [genotypes[i][pos] for i in tree.get_tip_labels()]
         labels = colors
 
-        labels = self.label_bads(tree.get_tip_labels(), labels, bads)
+        labels = self._label_bads(tree.get_tip_labels(), labels, bads)
 
-        colors = self.get_nuc_colors(colors)
+        colors = self._get_nuc_colors(colors)
 
         mystyle = {
             "edge_type": "p",
@@ -691,7 +643,7 @@ class ImputePhylo(GenotypeData):
 
         toyplot.pdf.render(canvas, out)
 
-    def allMissing(
+    def all_missing(
         self,
         tree: tt.tree,
         node_index: int,
@@ -717,7 +669,7 @@ class ImputePhylo(GenotypeData):
                 return False
         return True
 
-    def get_internal_lik(
+    def _get_internal_lik(
         self, pt: pd.DataFrame, lik_arr: List[float]
     ) -> List[float]:
         """Get ancestral state likelihoods for internal nodes of the tree.
@@ -740,7 +692,7 @@ class ImputePhylo(GenotypeData):
             ret.append(sum)
         return ret
 
-    def transition_probs(self, Q: pd.DataFrame, t: float) -> pd.DataFrame:
+    def _transition_probs(self, Q: pd.DataFrame, t: float) -> pd.DataFrame:
         """Get transition probabilities for tree.
 
         Args:
@@ -799,7 +751,7 @@ class ImputePhylo(GenotypeData):
 
         return genotypes
 
-    def get_iupac_full(self, char: str) -> List[str]:
+    def _get_iupac_full(self, char: str) -> List[str]:
         """Map nucleotide to list of expanded IUPAC encodings.
 
         Args:

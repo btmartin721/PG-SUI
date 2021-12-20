@@ -678,6 +678,13 @@ class GenotypeData:
             List[int], optional: List of integers indicating bi-allelic site indexes.
 
             int, optional: Number of remaining valid sites.
+
+        Warnings:
+            warnings.warn: If site is monomorphic.
+            warnings.warn: If site has >2 alleles.
+
+        Todo:
+            skip and impute_mode are now deprecated.
         """
         warnings.formatwarning = self._format_warning
 

@@ -772,7 +772,7 @@ class UBP(NeuralNetwork):
         self.batch_size = None
         self.observed_mask = None
         self.num_classes = 3
-        self.opt = self.set_optimizer()
+        self.opt = self._set_optimizer()
         self.phase2_model = list()
 
         (
@@ -860,7 +860,7 @@ class UBP(NeuralNetwork):
         # Reset model states
         K.clear_session()
         tf.compat.v1.reset_default_graph()
-        self.reset_seeds()
+        self._reset_seeds()
 
         # Define neural network models.
         if self.nlpca:
@@ -1422,7 +1422,7 @@ class UBP(NeuralNetwork):
         self.num_epochs = 0
         self.checkpoint = 1
 
-    def reset_seeds(self):
+    def _reset_seeds(self):
         """Reset random seeds for initializing weights."""
         seed1 = np.random.randint(1, 1e6)
         seed2 = np.random.randint(1, 1e6)
@@ -1434,7 +1434,7 @@ class UBP(NeuralNetwork):
         else:
             tf.set_random_seed(seed3)
 
-    def set_optimizer(self):
+    def _set_optimizer(self):
         """Set optimizer to use.
 
         Returns:
