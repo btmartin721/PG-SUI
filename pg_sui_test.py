@@ -267,18 +267,18 @@ def main():
     #     validation_only=None,
     # )
 
-    ubp = ImputeUBP(
-        genotype_data=data,
-        n_components=3,
-        initial_strategy="nmf",
-        disable_progressbar=True,
-        cv=3,
-        hidden_activation="elu",
-        hidden_layer_sizes="midpoint",
-        validation_only=0.3,
-        num_hidden_layers=1,
-        learning_rate=0.05,
-    )
+    # ubp = ImputeUBP(
+    #     genotype_data=data,
+    #     n_components=3,
+    #     initial_strategy="nmf",
+    #     disable_progressbar=True,
+    #     cv=3,
+    #     hidden_activation="elu",
+    #     hidden_layer_sizes="midpoint",
+    #     validation_only=0.3,
+    #     num_hidden_layers=1,
+    #     learning_rate=0.05,
+    # )
 
     # ubp = ImputeUBP(
     #     genotype_data=data,
@@ -306,7 +306,8 @@ def main():
     #     initial_strategy="group_mode",
     # )
 
-    # ImputePhylo(genotype_data=data, save_plots=False)
+    ImputePhylo(genotype_data=data,
+        save_plots=False)
 
     # colors = {
     # 	"GU": "#FF00FF",

@@ -82,7 +82,7 @@ def main():
 
         sim = SimGenotypeData(data,
                 prop_missing=0.1,
-                strategy="nonrandom")
+                strategy="nonrandom_weighted")
 
 
 def get_arguments():
