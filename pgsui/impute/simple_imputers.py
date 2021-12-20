@@ -11,11 +11,11 @@ import toyplot as tp
 import toytree as tt
 
 # Custom imports
-from read_input.read_input import GenotypeData
-from utils import misc
-from utils.misc import get_processor_name
-from utils.misc import isnotebook
-from utils.misc import timer
+from pgsui.read_input.read_input import GenotypeData
+from pgsui.utils import misc
+from pgsui.utils.misc import get_processor_name
+from pgsui.utils.misc import isnotebook
+from pgsui.utils.misc import timer
 
 is_notebook = isnotebook()
 
@@ -86,7 +86,56 @@ class ImputePhylo(GenotypeData):
         >>>
         >>>phylo_gtdata = phylo.imputed
     """
+class ImputePhylo(GenotypeData):
+    """Impute missing data using a phylogenetic tree to inform the imputation.
 
+    Args:
+        genotype_data (GenotypeData object or None, optional): GenotypeData object. If not None, some or all of the below options are not required. If None, all the below options are required. Defaults to None.
+
+        alnfile (str or None, optional): Path to PHYLIP or STRUCTURE-formatted file to impute. Defaults to None.
+
+        filetype (str or None, optional): Filetype for the input alignment. Valid options include: "phylip", "structure1row", "structure1rowPopID", "structure2row", "structure2rowPopId". Not required if ``genotype_data`` is defined. Defaults to "phylip".
+
+        popmapfile (str or None, optional): Path to population map file. Required if filetype is "phylip", "structure1row", or "structure2row". If filetype is "structure1rowPopID" or "structure2rowPopID", then the population IDs must be the second column of the STRUCTURE file. Not required if ``genotype_data`` is defined. Defaults to None.
+
+        treefile (str or None, optional): Path to Newick-formatted phylogenetic tree file. Not required if ``genotype_data`` is defined with the ``guidetree`` option. Defaults to None.
+
+        siterates (str or None, optional): Path to file containing per-site rates, with 1 rate per line corresponding to 1 site. Not required if ``genotype_data`` is defined with the siterates or siterates_iqtree option. Defaults to None.
+
+        siterates_iqtree (str or None, optional): Path to *.rates file output from IQ-TREE, containing a per-site rate table. If specified, ``ImputePhylo`` will read the site-rates from the IQ-TREE output file. Cannot be used in conjunction with ``siterates`` argument. Not required if the ``siterates`` or ``siterates_iqtree`` options were used with the ``GenotypeData`` object. Defaults to None.
+
+        qmatrix (str or None, optional): Path to file containing only a Rate Matrix Q table. Not required if ``genotype_data`` is defined with the qmatrix or qmatrix_iqtree option. Defaults to None.
+
+        str_encodings (Dict[str, int], optional): Integer encodings used in STRUCTURE-formatted file. Should be a dictionary with keys=nucleotides and values=integer encodings. The missing data encoding should also be included. Argument is ignored if using a PHYLIP-formatted file. Defaults to {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}
+
+        prefix (str, optional): Prefix to use with output files.
+
+        save_plots (bool, optional): Whether to save PDF files with genotype imputations for each site to disk. It makes one PDF file per locus, so if you have a lot of loci it will make a lot of PDF files. Defaults to False.
+
+        write_output (bool, optional): Whether to save the imputed data to disk. Defaults to True.
+
+        disable_progressbar (bool, optional): Whether to disable the progress bar during the imputation. Defaults to False.
+
+        kwargs (Dict[str, Any] or None, optional): Additional keyword arguments intended for internal purposes only. Possible arguments: {"column_subset": List[int] or numpy.ndarray[int]}; Subset SNPs by a list of indices. Defauls to None.
+
+    Attributes:
+        imputed (GenotypeData): New GenotypeData instance with imputed data.
+
+    Example:
+        >>>data = GenotypeData(
+        >>>    filename="test.str",
+        >>>    filetype="structure2rowPopID",
+        >>>    guidetree="test.tre",
+        >>>    qmatrix_iqtree="test.iqtree"
+        >>>)
+        >>>
+        >>>phylo = ImputePhylo(
+        >>>     genotype_data=data,
+        >>>     save_plots=True,
+        >>>)
+        >>>
+        >>>phylo_gtdata = phylo.imputed
+    """
     def __init__(
         self,
         *,
@@ -97,6 +146,8 @@ class ImputePhylo(GenotypeData):
         treefile: Optional[str] = None,
         qmatrix_iqtree: Optional[str] = None,
         qmatrix: Optional[str] = None,
+        siterates: Optional[str] = None,
+        siterates_iqtree: Optional[str] = None,
         str_encodings: Dict[str, int] = {
             "A": 1,
             "C": 2,
@@ -117,6 +168,8 @@ class ImputePhylo(GenotypeData):
         self.treefile = treefile
         self.qmatrix_iqtree = qmatrix_iqtree
         self.qmatrix = qmatrix
+        self.siterates = siterates
+        self.siterates_iqtree = siterates_iqtree
         self.str_encodings = str_encodings
         self.prefix = prefix
         self.save_plots = save_plots
@@ -128,10 +181,10 @@ class ImputePhylo(GenotypeData):
         self.valid_sites_count = None
 
         self.validate_arguments(genotype_data)
-        data, tree, q = self.parse_arguments(genotype_data)
+        data, tree, q, site_rates = self.parse_arguments(genotype_data)
 
-        if not self.validation_mode:
-            imputed012 = self.impute_phylo(tree, data, q)
+        if self.validation_mode == True:
+            imputed012 = self.impute_phylo(tree, data, q, site_rates)
 
             imputed_filename = genotype_data.decode_imputed(
                 imputed012, write_output=True, prefix=prefix
@@ -150,11 +203,13 @@ class ImputePhylo(GenotypeData):
                 guidetree=genotype_data.guidetree,
                 qmatrix_iqtree=genotype_data.qmatrix_iqtree,
                 qmatrix=genotype_data.qmatrix,
+                siterates=genotype_data.siterates,
+                siterates_iqtree=genotype_data.siterates_iqtre,
                 verbose=False,
             )
 
         else:
-            self.imputed = self.impute_phylo(tree, data, q)
+            self.imputed = self.impute_phylo(tree, data, q, site_rates)
 
     def nbiallelic(self) -> int:
         """Get the number of remaining bi-allelic sites after imputation.
@@ -198,6 +253,7 @@ class ImputePhylo(GenotypeData):
         elif genotype_data.tree is None and self.treefile is not None:
             tree = self.read_tree(self.treefile)
 
+        #read (optional) Q-matrix
         if (
             genotype_data.q is not None
             and self.qmatrix is None
@@ -225,7 +281,34 @@ class ImputePhylo(GenotypeData):
                 )
                 q = self.q_from_iqtree(self.qmatrix_iqtree)
 
-        return data, tree, q
+        #read (optional) site-specific substitution rates
+        site_rates = None
+        if (
+            genotype_data.site_rates is not None
+            and self.siterates is None
+            and self.siterates_iqtree is None
+        ):
+            site_rates = genotype_data.site_rates
+        elif genotype_data.site_rates is None:
+            if self.siterates is not None:
+                site_rates = self.siterates_from_file(self.siterates)
+            elif self.siterates_iqtree is not None:
+                site_rates = self.siterates_from_iqtree(self.siterates_iqtree)
+
+        elif genotype_data.site_rates is not None:
+            if self.siterates is not None:
+                print(
+                    "WARNING: Both genotype_data.site_rates and siterates are defined; "
+                    "using local definition"
+                )
+                site_rates = self.siterates_from_file(self.siterates)
+            if self.siterates_iqtree is not None:
+                print(
+                    "WARNING: Both genotype_data.site_rates and siterates are defined; "
+                    "using local definition"
+                )
+                site_rates = self.siterates_from_iqtree(self.siterates_iqtree)
+        return (data, tree, q, site_rates)
 
     def validate_arguments(self, genotype_data: Any) -> None:
         """Validate that the correct arguments were supplied.
@@ -302,6 +385,7 @@ class ImputePhylo(GenotypeData):
         tree: tt.tree,
         genotypes: Dict[str, List[Union[str, int]]],
         Q: pd.DataFrame,
+        site_rates = None,
     ) -> pd.DataFrame:
         """Imputes genotype values with a guide tree.
 
@@ -326,6 +410,8 @@ class ImputePhylo(GenotypeData):
 
             Q (pandas.DataFrame): Rate Matrix Q from .iqtree or separate file.
 
+            site_rates (List): Site-specific substitution rates (used to weight per-site Q)
+
         Returns:
             pandas.DataFrame: Imputed genotypes.
 
@@ -336,7 +422,7 @@ class ImputePhylo(GenotypeData):
         """
         try:
             if list(genotypes.values())[0][0][1] == "/":
-                genotypes = self._str2iupac(genotypes, self.str_encodings)
+                genotypes = self.str2iupac(genotypes, self.str_encodings)
         except IndexError:
             if self.is_int(list(genotypes.values())[0][0][0]):
                 raise
@@ -369,8 +455,11 @@ class ImputePhylo(GenotypeData):
 
             # LATER: Need to get site rates
             rate = 1.0
+            if site_rates is not None:
+                rate = site_rates[snp_index]
 
             site_Q = Q.copy(deep=True) * rate
+            #print(site_Q)
 
             # calculate state likelihoods for internal nodes
             for node in tree.treenode.traverse("postorder"):
@@ -611,7 +700,7 @@ class ImputePhylo(GenotypeData):
         Args:
             tree (toytree.tree): Input guide tree object.
 
-            node_index (int): Parent node to determine if all desendants have missing data.
+            node_index (int): Parent node to determine if all descendants have missing data.
 
             snp_index (int): Index of current SNP site.
 
@@ -853,7 +942,7 @@ class ImputeAlleleFreq(GenotypeData):
         self.iterative_mode = kwargs.get("iterative_mode", False)
         self.validation_mode = kwargs.get("validation_mode", False)
 
-        if not self.validation_mode:
+        if self.validation_mode == True:
             imputed012, self.valid_cols = self.fit_predict(gt_list)
 
             imputed_filename = genotype_data.decode_imputed(
@@ -873,6 +962,8 @@ class ImputeAlleleFreq(GenotypeData):
                 guidetree=genotype_data.guidetree,
                 qmatrix_iqtree=genotype_data.qmatrix_iqtree,
                 qmatrix=genotype_data.qmatrix,
+                siterates=genotype_data.siterates,
+                siterates_iqtree=genotype_data.siterates_iqtree,
                 verbose=False,
             )
 
@@ -976,6 +1067,239 @@ class ImputeAlleleFreq(GenotypeData):
 
         else:
             raise ValueError("Unknown output_format type specified!")
+
+    def write2file(
+        self, X: Union[pd.DataFrame, np.ndarray, List[List[Union[int, float]]]]
+    ) -> None:
+        """Write imputed data to file on disk.
+
+        Args:
+            X (pandas.DataFrame, numpy.ndarray, List[List[Union[int, float]]]): Imputed data to write to file.
+
+        Raises:
+            TypeError: If X is of unsupported type.
+        """
+        outfile = f"{self.prefix}_imputed_012.csv"
+
+        if isinstance(X, pd.DataFrame):
+            df = X
+        elif isinstance(X, (np.ndarray, list)):
+            df = pd.DataFrame(X)
+        else:
+            raise TypeError(
+                f"Could not write imputed data because it is of incorrect "
+                f"type. Got {type(X)}"
+            )
+
+        df.to_csv(outfile, header=False, index=False)
+
+class ImputeNMF(GenotypeData):
+    """Impute missing data using matrix factorization. Population IDs can be sepcified with the pops argument. if pops is None, then imputation is by global allele frequency. If pops is not None, then imputation is by population-wise allele frequency. A list of population IDs in the appropriate format can be obtained from the GenotypeData object as GenotypeData.populations.
+
+    Args:
+        genotype_data (GenotypeData object or None, optional): GenotypeData instance. If ``genotype_data`` is not defined, then ``gt`` must be defined instead, and they cannot both be defined. Defaults to None.
+
+        gt (List[int] or None, optional): List of 012-encoded genotypes to be imputed. Either ``gt`` or ``genotype_data`` must be defined, and they cannot both be defined. Defaults to None.
+
+        latent_features (float, optional): The number of latent variables used to reduce dimensionality of the data. Defaults to 2.
+
+        learning_rate (float, optional): The learning rate for the optimizers. Adjust if the loss is learning too slowly. Defaults to 0.1.
+
+        tol (float, optional): Tolerance of the stopping condition. Defaults to 1e-3.
+
+        missing (int, optional): Missing data value. Defaults to -9.
+
+        prefix (str, optional): Prefix for writing output files. Defaults to "output".
+
+        write_output (bool, optional): Whether to save imputed output to a file. If ``write_output`` is False, then just returns the imputed values as a pandas.DataFrame object. If ``write_output`` is True, then it saves the imputed data as a CSV file called ``<prefix>_imputed_012.csv``.
+
+        output_format (str, optional): Format of output imputed matrix. Possible values include: "df" for a pandas.DataFrame object, "array" for a numpy.ndarray object, and "list" for a 2D list. Defaults to "df".
+
+        verbose (bool, optional): Whether to print status updates. Set to False for no status updates. Defaults to True.
+
+        **kwargs (Dict[str, Any]): Additional keyword arguments to supply. Primarily for internal purposes. Options include: {"iterative_mode": bool}. "iterative_mode" determines whether ``ImputeAlleleFreq`` is being used as the initial imputer in ``IterativeImputer``.
+
+    Attributes:
+        imputed (GenotypeData): New GenotypeData instance with imputed data.
+
+    Example:
+        >>>data = GenotypeData(
+        >>>    filename="test.str",
+        >>>    filetype="structure2rowPopID"
+        >>>)
+        >>>
+        >>>nmf = ImputeNMF(
+        >>>     genotype_data=data,
+        >>>)
+        >>>
+        >>>nmf_gtdata = nmf.imputed
+
+    Raises:
+        TypeError: genotype_data and gt cannot both be NoneType.
+        TypeError: genotype_data and gt cannot both be provided.
+        TypeError: Either pops or genotype_data must be defined if by_populations is True.
+    """
+
+    def __init__(
+        self,
+        *,
+        genotype_data=None,
+        gt=None,
+        latent_features: int = 2,
+        max_iter: int = 100,
+        learning_rate: float = 0.0002,
+        regularization_param: float = 0.02,
+        tol: float = 0.1,
+        n_fail: int = 20,
+        missing: int = -9,
+        prefix: str = "output",
+        write_output: bool = True,
+        output_format= None,
+        verbose: bool = True,
+        **kwargs: Dict[str, Any],
+    ) -> None:
+
+        super().__init__()
+
+        self.max_iter = max_iter
+        self.latent_features = latent_features
+        self.n_fail = n_fail
+        self.learning_rate = learning_rate
+        self.tol = tol
+        self.regularization_param = regularization_param
+        self.missing = missing
+        self.prefix = prefix
+        self.output_format = output_format
+        self.verbose = verbose
+        self.iterative_mode = kwargs.get("iterative_mode", False)
+        self.validation_mode = kwargs.get("validation_mode", False)
+
+        if genotype_data is None and gt is None:
+            raise TypeError("genotype_data and gt cannot both be NoneType")
+
+        if genotype_data is not None and gt is not None:
+            raise TypeError("genotype_data and gt cannot both be used")
+
+        if genotype_data is not None:
+            X = genotype_data.genotypes_nparray
+        elif gt is not None:
+            X = gt
+
+        if self.validation_mode == True:
+            imputed012 = pd.DataFrame(self.fit_predict(X))
+
+            imputed_filename = genotype_data.decode_imputed(
+                imputed012, write_output=True, prefix=prefix
+            )
+
+            ft = genotype_data.filetype
+
+            if ft.lower().startswith("structure") and ft.lower().endswith(
+                "row"
+            ):
+                ft += "PopID"
+
+            self.imputed = GenotypeData(
+                filename=imputed_filename,
+                filetype=ft,
+                guidetree=genotype_data.guidetree,
+                qmatrix_iqtree=genotype_data.qmatrix_iqtree,
+                qmatrix=genotype_data.qmatrix,
+                siterates=genotype_data.siterates,
+                siterates_iqtree=genotype_data.siterates_iqtree,
+                verbose=False,
+            )
+        else:
+            self.imputed = pd.DataFrame(self.fit_predict(X))
+            if self.output_format is not None:
+                if self.output_format == "df":
+                    pass
+                elif self.output_format == "array":
+                    self.imputed = nX
+                elif self.output_format == "list":
+                    self.imputed = self.imputed.tolist()
+
+            if write_output:
+                self.write2file(self.imputed)
+
+
+    def fit_predict(self, X):
+        #imputation
+        if self.verbose:
+            print(f"Doing NMF imputation without grid search...")
+        R = X
+        R[R==self.missing]=-9
+        R = R+1
+        R[R<0] = 0
+        n_row = len(R)
+        n_col = len(R[0])
+        p = np.random.rand(n_row,self.latent_features)
+        q = np.random.rand(n_col,self.latent_features)
+        q_t = q.T
+        fails=0
+        e_current = None
+        for step in range(self.max_iter):
+            for i in range(n_row):
+                for j in range(n_col):
+                    if R[i][j] > 0:
+                        eij = R[i][j] - np.dot(p[i,:],q_t[:,j])
+                        for k in range(self.latent_features):
+                            p[i][k] = p[i][k] + self.learning_rate * (2 * eij * q_t[k][j] - self.regularization_param * p[i][k])
+                            q_t[k][j] = q_t[k][j] + self.learning_rate * (2 * eij * p[i][k] - self.regularization_param * q_t[k][j])
+            e = 0
+            for i in range(n_row):
+                for j in range(len(R[i])):
+                    if R[i][j] > 0:
+                        e = e + pow(R[i][j] - np.dot(p[i,:],q_t[:,j]), 2)
+                        for k in range(self.latent_features):
+                            e = e + (self.regularization_param/2) * ( pow(p[i][k],2) + pow(q_t[k][j],2) )
+            if e_current is None:
+                e_current = e
+            else:
+                if abs(e_current - e) < self.tol:
+                    fails+=1
+                else:
+                    fails=0
+                e_current=e
+            if fails >= self.n_fail:
+                break
+        nR = np.dot(p, q_t)
+
+        #transform values per-column (i.e., only allowing values found in original)
+        tR=self.transform(R, nR)
+
+        #get accuracy of re-constructing non-missing genotypes
+        accuracy=self.accuracy(X, tR)
+
+        #insert imputed values for missing genotypes
+        fR=X
+        fR[X<0] = tR[X<0]
+
+        if self.verbose:
+            print("Done!")
+
+        return(fR)
+
+    def transform(self, original, predicted):
+        n_row = len(original)
+        n_col = len(original[0])
+        tR=predicted
+        for j in range(n_col):
+            observed = predicted[:,j]
+            expected = original[:,j]
+            options = np.unique(expected[expected != 0])
+            for i in range(n_row):
+                transform = min(options, key=lambda x:abs(x-predicted[i,j]))
+                tR[i,j]=transform
+        tR = tR-1
+        tR[tR<0] = -9
+        return(tR)
+
+    def accuracy(self, expected, predicted):
+        prop_same=np.sum(expected[expected>=0]==predicted[expected>=0])
+        tot=expected[expected>=0].size
+        accuracy=prop_same/tot
+        return(accuracy)
 
     def write2file(
         self, X: Union[pd.DataFrame, np.ndarray, List[List[Union[int, float]]]]

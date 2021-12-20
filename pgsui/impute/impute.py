@@ -36,18 +36,16 @@ import lightgbm as lgbm
 from sklearn_genetic.space import Continuous, Categorical, Integer
 
 # Custom module imports
-from impute.iterative_imputer_gridsearch import IterativeImputerGridSearch
-from impute.iterative_imputer_fixedparams import IterativeImputerFixedParams
-from impute.neural_network_imputers import VAE, UBP
+from pgsui.impute.iterative_imputer_gridsearch import IterativeImputerGridSearch
+from pgsui.impute.iterative_imputer_fixedparams import IterativeImputerFixedParams
+from pgsui.impute.neural_network_imputers import VAE, UBP
 
-import impute.simple_imputers
-
-from read_input.read_input import GenotypeData
-
-from utils import misc
-from utils.misc import get_processor_name
-from utils.misc import isnotebook
-from utils.misc import timer
+from pgsui.read_input.read_input import GenotypeData
+from pgsui.impute import simple_imputers
+from pgsui.utils.misc import get_processor_name
+from pgsui.utils.misc import get_processor_name
+from pgsui.utils.misc import isnotebook
+from pgsui.utils.misc import timer
 
 is_notebook = isnotebook()
 
@@ -253,6 +251,8 @@ class Impute:
             guidetree=genotype_data.guidetree,
             qmatrix_iqtree=genotype_data.qmatrix_iqtree,
             qmatrix=genotype_data.qmatrix,
+            siterates=genotype_data.siterates,
+            siterates_iqtree=genotype.siterates_iqtree,
             verbose=False,
         )
 
@@ -325,6 +325,18 @@ class Impute:
             print(
                 "WARNING: Chunking is not supported with initial_strategy == "
                 "'phylogeny'; Setting chunk_size to 1.0 and imputing entire "
+                "dataset"
+            )
+
+            chunk_size = 1.0
+
+        if (
+            self.imp_kwargs["initial_strategy"] == "nmf"
+            and chunk_size != 1.0
+        ):
+            print(
+                "WARNING: Chunking is not supported with initial_strategy == "
+                "'nmf'; Setting chunk_size to 1.0 and imputing entire "
                 "dataset"
             )
 
@@ -1241,7 +1253,7 @@ class Impute:
         str_enc = self.imp_kwargs["str_encodings"]
 
         if initial_strategy == "populations":
-            simple_imputer = impute.simple_imputers.ImputeAlleleFreq(
+            simple_imputer = simple_imputers.ImputeAlleleFreq(
                 gt=df.fillna(-9).values.tolist(),
                 pops=self.pops,
                 by_populations=True,
@@ -1261,7 +1273,7 @@ class Impute:
             )
 
             # NOTE: non-biallelic sites are removed with ImputePhylo
-            simple_imputer = impute.simple_imputers.ImputePhylo(
+            simple_imputer = simple_imputers.ImputePhylo(
                 genotype_data=gt_data,
                 str_encodings=str_enc,
                 write_output=False,
@@ -1291,6 +1303,16 @@ class Impute:
                 columns={i: j for i, j in zip(old_colnames, new_colnames)},
                 inplace=True,
             )
+
+        elif initial_strategy == "nmf":
+            simple_imputer = simple_imputers.ImputeNMF(
+                gt=df.fillna(-9).to_numpy(),
+                missing=-9,
+                write_output=False,
+                verbose=False,
+            )
+            df_defiled = simple_imputer.imputed
+            valid_cols = cols.copy()
 
         else:
             # Fill in unknown values with sklearn.impute.SimpleImputer

@@ -33,10 +33,10 @@ from sklearn.utils._mask import _get_mask
 from sklearn.utils.validation import FLOAT_DTYPES
 
 # Custom function imports
-import impute.simple_imputers
-from utils.misc import get_processor_name
-from utils.misc import HiddenPrints
-from utils.misc import isnotebook
+from pgsui.impute import simple_imputers
+from pgsui.utils.misc import get_processor_name
+from pgsui.utils.misc import HiddenPrints
+from pgsui.utils.misc import isnotebook
 
 # Uses scikit-learn-intellex package if CPU is Intel
 if get_processor_name().strip().startswith("Intel"):
@@ -110,7 +110,7 @@ class IterativeImputerFixedParams(IterativeImputer):
 
         n_nearest_features (int, optional): Number of other features to use to estimate the missing values of each feature column. Nearness between features is measured using the absolute correlation coefficient between each feature pair (after initial imputation). To ensure coverage of features throughout the imputation process, the neighbor features are not necessarily nearest,	but are drawn with probability proportional to correlation for each	imputed target feature. Can provide significant speed-up when the number of features is huge. If ``None``\, all features will be used. Defaults to None.
 
-        initial_strategy (str, optional): Which strategy to use to initialize the missing values. Same as the ``strategy`` parameter in :class:`~sklearn.impute.SimpleImputer`	Valid values: "mean", "median", "most_frequent", "populations", "phylogeny", or "constant". Defaults to "mean".
+        initial_strategy (str, optional): Which strategy to use to initialize the missing values. Same as the ``strategy`` parameter in :class:`~sklearn.impute.SimpleImputer`	Valid values: "mean", "median", "most_frequent", "populations", "phylogeny", "nmf", or "constant". Defaults to "mean".
 
         imputation_order (str, optional): The order in which the features will be imputed. Possible values: "ascending" (From features with fewest missing values to most), "descending" (From features with most missing values to fewest, "roman" (Left to right), "arabic" (Right to left),  random" (A random order for each round). Defaults to "ascending".
 
@@ -319,7 +319,7 @@ class IterativeImputerFixedParams(IterativeImputer):
         mask_missing_values = X_missing_mask.copy()
 
         if self.initial_strategy == "populations":
-            self.initial_imputer_ = impute.simple_imputers.ImputeAlleleFreq(
+            self.initial_imputer_ = simple_imputers.ImputeAlleleFreq(
                 gt=np.nan_to_num(X, nan=-9).tolist(),
                 pops=self.pops,
                 by_populations=True,
@@ -327,6 +327,19 @@ class IterativeImputerFixedParams(IterativeImputer):
                 write_output=False,
                 verbose=False,
                 iterative_mode=True,
+                validation_mode=True,
+            )
+
+            X_filled = self.initial_imputer_.imputed.to_numpy()
+            Xt = X.copy()
+
+        elif self.initial_strategy == "nmf":
+            self.initial_imputer_ = simple_imputers.ImputeNMF(
+                gt=np.nan_to_num(X, nan=-9),
+                missing=-9,
+                write_output=False,
+                verbose=False,
+                validation_mode=True,
             )
 
             X_filled = self.initial_imputer_.imputed.to_numpy()
@@ -344,7 +357,7 @@ class IterativeImputerFixedParams(IterativeImputer):
                 )
 
             else:
-                self.initial_imputer_ = impute.simple_imputers.ImputePhylo(
+                self.initial_imputer_ = simple_imputers.ImputePhylo(
                     genotype_data=self.genotype_data,
                     str_encodings=self.str_encodings,
                     write_output=False,
