@@ -148,9 +148,9 @@ data = GenotypeData(...)
 The data can be retrieved as a pandas DataFrame, a 2D numpy array, or a 2D list, each with shape (n_samples, n_SNPs):
 
 ```
-df = data.genotypes_df
-arr = data.genotypes_nparray
-l = data.genotypes_list
+df = data.genotypes012_df
+arr = data.genotypes012_array
+l = data.genotypes012_list
 ```
 
 You can also retrieve the number of individuals and SNP sites:

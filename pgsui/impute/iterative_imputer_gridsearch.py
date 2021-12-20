@@ -51,10 +51,10 @@ from sklearn_genetic.plots import plot_fitness_evolution
 from sklearn_genetic.utils import logbook_to_pandas
 
 # Custom function imports
-from pgsui.impute import simple_imputers
-from pgsui.utils.misc import get_processor_name
-from pgsui.utils.misc import HiddenPrints
-from pgsui.utils.misc import isnotebook
+from impute import simple_imputers
+from utils.misc import get_processor_name
+from utils.misc import HiddenPrints
+from utils.misc import isnotebook
 
 # Uses scikit-learn-intellex package if CPU is Intel
 if get_processor_name().strip().startswith("Intel"):
@@ -390,7 +390,7 @@ class IterativeImputerGridSearch(IterativeImputer):
 
             X_filled = self.initial_imputer_.imputed
             Xt = X.copy()
-            #print(X_filled)
+            # print(X_filled)
 
         else:
             if self.initial_imputer_ is None:
