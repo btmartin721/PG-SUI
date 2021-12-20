@@ -13,6 +13,7 @@ import numpy as np
 import scipy as sp
 from read_input.read_input import GenotypeData
 
+
 class SimGenotypeData(GenotypeData):
     """Simulate missing data on genotypes read/ encoded in a GenotypeData object.
 
@@ -60,13 +61,10 @@ class SimGenotypeData(GenotypeData):
             genotypes_onehot (numpy.ndarray of shape (n_samples, n_SNPs, 4)): One-hot encoded numpy array, after inserting missing data. The inner-most array consists of one-hot encoded values for the four nucleotides in the order of "A", "T", "G", "C". Values of 0.5 indicate heterozygotes, and missing values contain 0.0 for all four nucleotides.
 
             mask (numpy.ndarray): 2-dimensional array tracking the indices of sampled missing data sites (n_samples, n_sites)
+    """
 
-"""
     def __init__(
-        self,
-        genotype_data = None,
-        prop_missing = None,
-        strategy = "random"
+        self, genotype_data=None, prop_missing=None, strategy="random"
     ) -> None:
         self.genotype_data = genotype_data
         self.prop_missing = prop_missing
@@ -74,9 +72,9 @@ class SimGenotypeData(GenotypeData):
 
         super().__init__()
 
-        #Copy genotype_data attributes into local attributes
-        #keep original genotype_data as a reference for calculating
-        #accuracy after imputing masked sites
+        # Copy genotype_data attributes into local attributes
+        # keep original genotype_data as a reference for calculating
+        # accuracy after imputing masked sites
         if self.genotype_data is None:
             raise TypeError("genotype_data cannot be NoneType")
         else:
@@ -90,10 +88,10 @@ class SimGenotypeData(GenotypeData):
             self.siterates_iqtree = genotype_data.siterates_iqtree
 
             self.snpsdict = copy.deepcopy(genotype_data.snpsdict)
-            self.samples= copy.deepcopy(genotype_data.samples)
-            self.snps= copy.deepcopy(genotype_data.snps)
-            self.pops= copy.deepcopy(genotype_data.pops)
-            self.onehot= copy.deepcopy(genotype_data.onehot)
+            self.samples = copy.deepcopy(genotype_data.samples)
+            self.snps = copy.deepcopy(genotype_data.snps)
+            self.pops = copy.deepcopy(genotype_data.pops)
+            self.onehot = copy.deepcopy(genotype_data.onehot)
             self.num_snps = copy.deepcopy(genotype_data.num_snps)
             self.num_inds = copy.deepcopy(genotype_data.num_inds)
             self.q = copy.deepcopy(genotype_data.q)
@@ -105,7 +103,9 @@ class SimGenotypeData(GenotypeData):
                 self.tree = None
 
             if self.qmatrix_iqtree is not None and self.qmatrix is not None:
-                raise TypeError("qmatrix_iqtree and qmatrix cannot both be defined")
+                raise TypeError(
+                    "qmatrix_iqtree and qmatrix cannot both be defined"
+                )
 
             if self.qmatrix_iqtree is not None:
                 self.q = self.q_from_iqtree(self.qmatrix_iqtree)
@@ -117,79 +117,96 @@ class SimGenotypeData(GenotypeData):
             if self.prop_missing is None:
                 raise TypeError("prop_missing cannot be NoneType")
 
-            #add in missing data
+            # add in missing data
             self.add_missing()
 
     def add_missing(self):
-        print("\nAdding",self.prop_missing,"missing data using strategy:",self.strategy)
+        print(
+            "\nAdding",
+            self.prop_missing,
+            "missing data using strategy:",
+            self.strategy,
+        )
 
         if self.strategy == "random":
-            self.mask = np.random.choice([0, 1],
+            self.mask = np.random.choice(
+                [0, 1],
                 size=self.genotypes012_array.shape,
-                p=((1 - self.prop_missing), self.prop_missing)).astype(np.bool)
+                p=((1 - self.prop_missing), self.prop_missing),
+            ).astype(np.bool)
 
-            #mask 012-encoded (self.snps) and one-hot encoded genotypes (self.onehot)
+            # mask 012-encoded (self.snps) and one-hot encoded genotypes (self.onehot)
             self.mask_snps()
 
-        elif self.strategy == "nonrandom" or self.strategy== "nonrandom_weighted":
+        elif (
+            self.strategy == "nonrandom"
+            or self.strategy == "nonrandom_weighted"
+        ):
             if self.tree is None:
-                raise TypeError("SimGenotypeData.tree cannot be NoneType when strategy=\"systematic\"")
+                raise TypeError(
+                    'SimGenotypeData.tree cannot be NoneType when strategy="systematic"'
+                )
             mask = np.full_like(self.genotypes012_array, 0.0, dtype=bool)
 
             if self.strategy == "nonrandom_weighted":
-                weighted=True
+                weighted = True
             else:
-                weighted=False
+                weighted = False
 
             sample_map = dict()
             for i, sample in enumerate(self.samples):
                 sample_map[sample] = i
 
-            filled=False
+            filled = False
             while not filled:
-                #Get list of samples from tree
-                samples = self.sample_tree(internal_only=False, skip_root=True, weighted=weighted)
+                # Get list of samples from tree
+                samples = self.sample_tree(
+                    internal_only=False, skip_root=True, weighted=weighted
+                )
 
-                #convert to row indices
+                # convert to row indices
                 rows = [sample_map[i] for i in samples]
 
-                #randomly sample a column
-                np.random.choice([0, self.num_snps]
+                # randomly sample a column
+                np.random.choice([0, self.num_snps])
 
-                #mask column
+                # mask column
 
+                # check that column is not 100% missing now
+                # if yes, revert and sample again
 
-                #check that column is not 100% missing now
-                #if yes, revert and sample again
+                # if not, set values in mask matrix
 
-                #if not, set values in mask matrix
-
-                #if this addition pushes missing % > self.prop_missing,
-                #check previous prop_missing, remove masked samples from this
-                #column until closest to target prop_missing
+                # if this addition pushes missing % > self.prop_missing,
+                # check previous prop_missing, remove masked samples from this
+                # column until closest to target prop_missing
 
                 sys.exit()
         else:
-            raise ValueError("Invalid SimGenotypeData.strategy value:",self.strategy)
+            raise ValueError(
+                "Invalid SimGenotypeData.strategy value:", self.strategy
+            )
 
     def accuracy(self, imputed):
         pass
 
-    def sample_tree(self,
+    def sample_tree(
+        self,
         internal_only=False,
         tips_only=False,
         skip_root=True,
-        weighted=False):
+        weighted=False,
+    ):
 
         if tips_only and internal_only:
             raise ValueError("internal_only and tips_only cannot both be true")
 
-        #to only sample internal nodes add  if not i.is_leaf()
+        # to only sample internal nodes add  if not i.is_leaf()
         node_dict = dict()
 
         for i in self.tree.treenode.traverse("preorder"):
             if skip_root:
-                if i.idx == self.tree.nnodes-1:
+                if i.idx == self.tree.nnodes - 1:
                     continue
             if tips_only:
                 if not i.is_leaf():
@@ -200,17 +217,16 @@ class SimGenotypeData(GenotypeData):
             node_dict[i.idx] = i.dist
         if weighted:
             s = sum(list(node_dict.values()))
-            p = [i/s for i in list(node_dict.values())]
+            p = [i / s for i in list(node_dict.values())]
             node_idx = np.random.choice(list(node_dict.keys()), size=1, p=p)[0]
         else:
             node_idx = np.random.choice(list(node_dict.keys()), size=1)[0]
-        return(tree.get_tip_labels(idx=node_idx))
-
+        return tree.get_tip_labels(idx=node_idx)
 
     def mask_snps(self):
-        i=0
+        i = 0
         for row in self.mask:
             for j in row.nonzero()[0]:
                 self.snps[i][j] = -9
-                self.onehot[i][j] = [0.0,0.0,0.0,0.0]
-            i=i+1
+                self.onehot[i][j] = [0.0, 0.0, 0.0, 0.0]
+            i = i + 1
