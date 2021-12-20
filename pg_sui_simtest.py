@@ -9,13 +9,14 @@ import pandas as pd
 import scipy.stats as stats
 from sklearn_genetic.space import Continuous, Categorical, Integer
 
-from pgsui.utils.misc import get_processor_name
-from pgsui.utils.misc import generate_012_genotypes
+from utils.misc import get_processor_name
+from utils.misc import generate_012_genotypes
 
 # Custom module imports
-from pgsui.read_input.read_input import GenotypeData
-from pgsui.read_input.simgenodata import SimGenotypeData
-from pgsui.impute.estimators import *
+from read_input.read_input import GenotypeData
+from read_input.simgenodata import SimGenotypeData
+from impute.estimators import *
+
 
 def main():
     """[Class instantiations and main package body]"""
@@ -79,10 +80,7 @@ def main():
             qmatrix_iqtree=args.iqtree,
         )
 
-
-        sim = SimGenotypeData(data,
-                prop_missing=0.1,
-                strategy="nonrandom")
+        sim = SimGenotypeData(data, prop_missing=0.1, strategy="nonrandom")
 
 
 def get_arguments():

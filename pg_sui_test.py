@@ -11,12 +11,12 @@ import scipy.stats as stats
 from sklearn_genetic.space import Continuous, Categorical, Integer
 
 import pgsui
-from pgsui.read_input.read_input import GenotypeData
-from pgsui.impute.estimators import *
-from pgsui.impute.simple_imputers import *
+from read_input.read_input import GenotypeData
+from impute.estimators import *
+from impute.simple_imputers import *
 
-# from pgsui.read_input import GenotypeData
-# from pgsui.estimators import *
+# from read_input import GenotypeData
+# from estimators import *
 
 
 def main():
@@ -145,10 +145,10 @@ def main():
 
         # Bayesian Ridge gridparams - Genetic algorithm
         grid_params = {
-        	"alpha_1": Continuous(1e-6, 1e-3, distribution="log-uniform"),
-        	"alpha_2": Continuous(1e-6, 1e-3, distribution="log-uniform"),
-        	"lambda_1": Continuous(1e-6, 1e-3, distribution="log-uniform"),
-        	"lambda_2": Continuous(1e-6, 1e-3, distribution="log-uniform")
+            "alpha_1": Continuous(1e-6, 1e-3, distribution="log-uniform"),
+            "alpha_2": Continuous(1e-6, 1e-3, distribution="log-uniform"),
+            "lambda_1": Continuous(1e-6, 1e-3, distribution="log-uniform"),
+            "lambda_2": Continuous(1e-6, 1e-3, distribution="log-uniform"),
         }
 
         # Random forest imputation with genetic algorithm grid search
@@ -173,8 +173,8 @@ def main():
         # )
 
         # rf_data = rf_imp.imputed
-        # print(data.genotypes_df)
-        # print(rf_data.genotypes_df)
+        # print(data.genotypes012_df)
+        # print(rf_data.genotypes012_df)
 
         # imp_decoded = data.decode_imputed(rf_imp.imputed)
         # print(imp_decoded)
@@ -251,8 +251,8 @@ def main():
     #     prefix=args.prefix,
     # )
 
-    # print(data.genotypes_df)
-    # print(afpops.genotypes_df)
+    # print(data.genotypes012_df)
+    # print(afpops.genotypes012_df)
 
     # br_imp = ImputeBayesianRidge(data, prefix=args.prefix, n_iter=100, gridparams=grid_params, grid_iter=3, cv=3, n_jobs=4, max_iter=5, n_nearest_features=3, column_subset=4, ga=False, disable_progressbar=True, progress_update_percent=20, chunk_size=1.0)
 

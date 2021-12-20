@@ -79,9 +79,9 @@ The data can be retrieved from the GenotypeData object as a pandas DataFrame, a 
 
 .. code-block:: python
 
-    df = data.genotypes_df # pandas DataFrame
-    arr = data.genotypes_nparray # numpy array
-    l = data.genotypes_list # python list
+    df = data.genotypes012_df # pandas DataFrame
+    arr = data.genotypes012_array # numpy array
+    l = data.genotypes012_list # python list
 
 You can also retrieve the number of individuals and SNP sites:
 

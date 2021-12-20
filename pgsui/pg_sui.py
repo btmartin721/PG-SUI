@@ -10,12 +10,12 @@ import scipy.stats as stats
 
 from sklearn_genetic.space import Continuous, Categorical, Integer
 
-from pgsui.read_input.read_input import GenotypeData
-from pgsui.impute.estimators import *
-from pgsui.impute.simple_imputers import ImputeAlleleFreq, ImputePhylo
+from read_input.read_input import GenotypeData
+from impute.estimators import *
+from impute.simple_imputers import ImputeAlleleFreq, ImputePhylo
 
-# from pgsui.read_input import GenotypeData
-# from pgsui.estimators import *
+# from read_input import GenotypeData
+# from estimators import *
 
 
 def main():
@@ -172,11 +172,11 @@ def main():
         )
 
         rfdata = rf_imp.imputed
-        print(rfdata.genotypes_df)
+        print(rfdata.genotypes012_df)
 
         # rf_data = rf_imp.imputed
-        # print(data.genotypes_df)
-        # print(rf_data.genotypes_df)
+        # print(data.genotypes012_df)
+        # print(rf_data.genotypes012_df)
 
         # imp_decoded = data.decode_imputed(rf_imp.imputed)
         # print(imp_decoded)
@@ -224,7 +224,7 @@ def main():
         # )
 
         # vae_gtdata = vae.imputed
-        # print(vae_gtdata.genotypes_df)
+        # print(vae_gtdata.genotypes012_df)
 
         # complete_encoded = imputer.train(train_epochs=300, batch_size=256)
         # print(complete_encoded)
@@ -254,8 +254,8 @@ def main():
         #     prefix=args.prefix,
         # )
 
-        # print(data.genotypes_df)
-        # print(afpops.genotypes_df)
+        # print(data.genotypes012_df)
+        # print(afpops.genotypes012_df)
 
         # br_imp = ImputeBayesianRidge(data, prefix=args.prefix, n_iter=100, gridparams=grid_params, grid_iter=3, cv=3, n_jobs=4, max_iter=5, n_nearest_features=3, column_subset=4, ga=False, disable_progressbar=True, progress_update_percent=20, chunk_size=1.0)
 
@@ -265,8 +265,8 @@ def main():
 
         # aftestpops_data = aftestpops.imputed
 
-        # print(data.genotypes_df)
-        # print(aftestpops_data.genotypes_df)
+        # print(data.genotypes012_df)
+        # print(aftestpops_data.genotypes012_df)
 
     # vae = ImputeVAE(
     #     gt=np.array([[0, 1], [-9, 1], [2, -9]]),
@@ -277,8 +277,8 @@ def main():
 
     # vae_data = vae.imputed
 
-    # print(data.genotypes_df)
-    # print(vae_data.genotypes_df)
+    # print(data.genotypes012_df)
+    # print(vae_data.genotypes012_df)
 
     # nlpca = ImputeNLPCA(
     #     data,
@@ -294,10 +294,10 @@ def main():
     # )
 
     # nlpca_data = nlpca.imputed
-    # print(nlpca_data.genotypes_df)
+    # print(nlpca_data.genotypes012_df)
 
-    # print(data.genotypes_df)
-    # print(nlpca_data.genotypes_df)
+    # print(data.genotypes012_df)
+    # print(nlpca_data.genotypes012_df)
 
     # ubp = ImputeUBP(
     #     genotype_data=data,
@@ -328,7 +328,7 @@ def main():
     # phylo = ImputePhylo(genotype_data=data, save_plots=False)
 
     # phylodata = phylo.imputed
-    # print(phylodata.genotypes_df)
+    # print(phylodata.genotypes012_df)
 
 
 def get_arguments():
