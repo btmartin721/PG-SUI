@@ -110,6 +110,7 @@ class GenotypeData:
         self.num_inds: int = 0
         self.q = None
         self.site_rates = None
+        self.tree = None
 
         if self.qmatrix_iqtree is not None and self.qmatrix is not None:
             raise TypeError("qmatrix_iqtree and qmatrix cannot both be defined")
@@ -1037,7 +1038,7 @@ class GenotypeData:
 
         dreplace = dict()
         for col, ref, alt in zip(df.columns, self.ref, self.alt):
-            #if site is monomorphic, set alt and red state the same 
+            #if site is monomorphic, set alt and ref state the same
             if alt is None:
                 alt = ref
             ref2 = f"{ref}/{ref}"
