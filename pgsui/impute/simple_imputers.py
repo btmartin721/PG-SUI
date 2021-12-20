@@ -700,7 +700,7 @@ class ImputePhylo(GenotypeData):
         Args:
             tree (toytree.tree): Input guide tree object.
 
-            node_index (int): Parent node to determine if all desendants have missing data.
+            node_index (int): Parent node to determine if all descendants have missing data.
 
             snp_index (int): Index of current SNP site.
 
