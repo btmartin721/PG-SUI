@@ -23,15 +23,15 @@ from sklearn.neighbors import KNeighborsClassifier
 
 
 # Custom imports
-from pgsui.read_input.read_input import GenotypeData
+from read_input.read_input import GenotypeData
 
-from pgsui.impute.impute import Impute
-from pgsui.impute.neural_network_imputers import VAE, UBP
+from impute.impute import Impute
+from impute.neural_network_imputers import VAE, UBP
 
-from pgsui.utils import misc
-from pgsui.utils.misc import get_processor_name
-from pgsui.utils.misc import isnotebook
-from pgsui.utils.misc import timer
+from utils import misc
+from utils.misc import get_processor_name
+from utils.misc import isnotebook
+from utils.misc import timer
 
 is_notebook = isnotebook()
 
@@ -220,7 +220,7 @@ class ImputeKNN(Impute):
         super().__init__(self.clf, self.clf_type, kwargs)
 
         self.imputed, self.best_params = self.fit_predict(
-            genotype_data.genotypes_df
+            genotype_data.genotypes012_df
         )
 
 
@@ -432,7 +432,7 @@ class ImputeRandomForest(Impute):
         super().__init__(self.clf, self.clf_type, kwargs)
 
         self.imputed, self.best_params = self.fit_predict(
-            genotype_data.genotypes_df
+            genotype_data.genotypes012_df
         )
 
 
@@ -621,7 +621,7 @@ class ImputeGradientBoosting(Impute):
         super().__init__(self.clf, self.clf_type, kwargs)
 
         self.imputed, self.best_params = self.fit_predict(
-            genotype_data.genotypes_df
+            genotype_data.genotypes012_df
         )
 
 
@@ -801,7 +801,7 @@ class ImputeBayesianRidge(Impute):
         super().__init__(self.clf, self.clf_type, kwargs)
 
         self.imputed, self.best_params = self.fit_predict(
-            genotype_data.genotypes_df
+            genotype_data.genotypes012_df
         )
 
 
@@ -958,7 +958,7 @@ class ImputeXGBoost(Impute):
         super().__init__(self.clf, self.clf_type, kwargs)
 
         self.imputed, self.best_params = self.fit_predict(
-            genotype_data.genotypes_df
+            genotype_data.genotypes012_df
         )
 
 
@@ -1160,7 +1160,7 @@ class ImputeLightGBM(Impute):
         super().__init__(self.clf, self.clf_type, kwargs)
 
         self.imputed, self.best_params = self.fit_predict(
-            genotype_data.genotypes_df
+            genotype_data.genotypes012_df
         )
 
 
@@ -1266,7 +1266,7 @@ class ImputeVAE(Impute):
         if genotype_data is None:
             raise TypeError("genotype_data cannot be NoneType")
 
-        X = genotype_data.genotypes_nparray
+        X = genotype_data.genotypes012_array
 
         if not isinstance(X, pd.DataFrame):
             df = pd.DataFrame(X)
@@ -1402,7 +1402,7 @@ class ImputeUBP(Impute):
         if genotype_data is None:
             raise TypeError("genotype_data cannot be NoneType")
 
-        X = genotype_data.genotypes_nparray
+        X = genotype_data.genotypes012_array
 
         super().__init__(self.clf, self.clf_type, settings)
 

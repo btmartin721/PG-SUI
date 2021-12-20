@@ -11,11 +11,11 @@ import toyplot as tp
 import toytree as tt
 
 # Custom imports
-from pgsui.read_input.read_input import GenotypeData
-from pgsui.utils import misc
-from pgsui.utils.misc import get_processor_name
-from pgsui.utils.misc import isnotebook
-from pgsui.utils.misc import timer
+from read_input.read_input import GenotypeData
+from utils import misc
+from utils.misc import get_processor_name
+from utils.misc import isnotebook
+from utils.misc import timer
 
 is_notebook = isnotebook()
 
@@ -86,6 +86,8 @@ class ImputePhylo(GenotypeData):
         >>>
         >>>phylo_gtdata = phylo.imputed
     """
+
+
 class ImputePhylo(GenotypeData):
     """Impute missing data using a phylogenetic tree to inform the imputation.
 
@@ -136,6 +138,7 @@ class ImputePhylo(GenotypeData):
         >>>
         >>>phylo_gtdata = phylo.imputed
     """
+
     def __init__(
         self,
         *,
@@ -253,7 +256,7 @@ class ImputePhylo(GenotypeData):
         elif genotype_data.tree is None and self.treefile is not None:
             tree = self.read_tree(self.treefile)
 
-        #read (optional) Q-matrix
+        # read (optional) Q-matrix
         if (
             genotype_data.q is not None
             and self.qmatrix is None
@@ -281,7 +284,7 @@ class ImputePhylo(GenotypeData):
                 )
                 q = self.q_from_iqtree(self.qmatrix_iqtree)
 
-        #read (optional) site-specific substitution rates
+        # read (optional) site-specific substitution rates
         site_rates = None
         if (
             genotype_data.site_rates is not None
@@ -385,7 +388,7 @@ class ImputePhylo(GenotypeData):
         tree: tt.tree,
         genotypes: Dict[str, List[Union[str, int]]],
         Q: pd.DataFrame,
-        site_rates = None,
+        site_rates=None,
     ) -> pd.DataFrame:
         """Imputes genotype values with a guide tree.
 
@@ -459,7 +462,7 @@ class ImputePhylo(GenotypeData):
                 rate = site_rates[snp_index]
 
             site_Q = Q.copy(deep=True) * rate
-            #print(site_Q)
+            # print(site_Q)
 
             # calculate state likelihoods for internal nodes
             for node in tree.treenode.traverse("postorder"):
@@ -903,7 +906,7 @@ class ImputeAlleleFreq(GenotypeData):
             raise TypeError("genotype_data and gt cannot both be used")
 
         if genotype_data is not None:
-            gt_list = genotype_data.genotypes_list
+            gt_list = genotype_data.genotypes012_list
         elif gt is not None:
             gt_list = gt
 
@@ -1093,6 +1096,7 @@ class ImputeAlleleFreq(GenotypeData):
 
         df.to_csv(outfile, header=False, index=False)
 
+
 class ImputeNMF(GenotypeData):
     """Impute missing data using matrix factorization. Population IDs can be sepcified with the pops argument. if pops is None, then imputation is by global allele frequency. If pops is not None, then imputation is by population-wise allele frequency. A list of population IDs in the appropriate format can be obtained from the GenotypeData object as GenotypeData.populations.
 
@@ -1154,7 +1158,7 @@ class ImputeNMF(GenotypeData):
         missing: int = -9,
         prefix: str = "output",
         write_output: bool = True,
-        output_format= None,
+        output_format=None,
         verbose: bool = True,
         **kwargs: Dict[str, Any],
     ) -> None:
@@ -1181,7 +1185,7 @@ class ImputeNMF(GenotypeData):
             raise TypeError("genotype_data and gt cannot both be used")
 
         if genotype_data is not None:
-            X = genotype_data.genotypes_nparray
+            X = genotype_data.genotypes012_array
         elif gt is not None:
             X = gt
 
@@ -1222,84 +1226,91 @@ class ImputeNMF(GenotypeData):
             if write_output:
                 self.write2file(self.imputed)
 
-
     def fit_predict(self, X):
-        #imputation
+        # imputation
         if self.verbose:
             print(f"Doing NMF imputation without grid search...")
         R = X
-        R[R==self.missing]=-9
-        R = R+1
-        R[R<0] = 0
+        R[R == self.missing] = -9
+        R = R + 1
+        R[R < 0] = 0
         n_row = len(R)
         n_col = len(R[0])
-        p = np.random.rand(n_row,self.latent_features)
-        q = np.random.rand(n_col,self.latent_features)
+        p = np.random.rand(n_row, self.latent_features)
+        q = np.random.rand(n_col, self.latent_features)
         q_t = q.T
-        fails=0
+        fails = 0
         e_current = None
         for step in range(self.max_iter):
             for i in range(n_row):
                 for j in range(n_col):
                     if R[i][j] > 0:
-                        eij = R[i][j] - np.dot(p[i,:],q_t[:,j])
+                        eij = R[i][j] - np.dot(p[i, :], q_t[:, j])
                         for k in range(self.latent_features):
-                            p[i][k] = p[i][k] + self.learning_rate * (2 * eij * q_t[k][j] - self.regularization_param * p[i][k])
-                            q_t[k][j] = q_t[k][j] + self.learning_rate * (2 * eij * p[i][k] - self.regularization_param * q_t[k][j])
+                            p[i][k] = p[i][k] + self.learning_rate * (
+                                2 * eij * q_t[k][j]
+                                - self.regularization_param * p[i][k]
+                            )
+                            q_t[k][j] = q_t[k][j] + self.learning_rate * (
+                                2 * eij * p[i][k]
+                                - self.regularization_param * q_t[k][j]
+                            )
             e = 0
             for i in range(n_row):
                 for j in range(len(R[i])):
                     if R[i][j] > 0:
-                        e = e + pow(R[i][j] - np.dot(p[i,:],q_t[:,j]), 2)
+                        e = e + pow(R[i][j] - np.dot(p[i, :], q_t[:, j]), 2)
                         for k in range(self.latent_features):
-                            e = e + (self.regularization_param/2) * ( pow(p[i][k],2) + pow(q_t[k][j],2) )
+                            e = e + (self.regularization_param / 2) * (
+                                pow(p[i][k], 2) + pow(q_t[k][j], 2)
+                            )
             if e_current is None:
                 e_current = e
             else:
                 if abs(e_current - e) < self.tol:
-                    fails+=1
+                    fails += 1
                 else:
-                    fails=0
-                e_current=e
+                    fails = 0
+                e_current = e
             if fails >= self.n_fail:
                 break
         nR = np.dot(p, q_t)
 
-        #transform values per-column (i.e., only allowing values found in original)
-        tR=self.transform(R, nR)
+        # transform values per-column (i.e., only allowing values found in original)
+        tR = self.transform(R, nR)
 
-        #get accuracy of re-constructing non-missing genotypes
-        accuracy=self.accuracy(X, tR)
+        # get accuracy of re-constructing non-missing genotypes
+        accuracy = self.accuracy(X, tR)
 
-        #insert imputed values for missing genotypes
-        fR=X
-        fR[X<0] = tR[X<0]
+        # insert imputed values for missing genotypes
+        fR = X
+        fR[X < 0] = tR[X < 0]
 
         if self.verbose:
             print("Done!")
 
-        return(fR)
+        return fR
 
     def transform(self, original, predicted):
         n_row = len(original)
         n_col = len(original[0])
-        tR=predicted
+        tR = predicted
         for j in range(n_col):
-            observed = predicted[:,j]
-            expected = original[:,j]
+            observed = predicted[:, j]
+            expected = original[:, j]
             options = np.unique(expected[expected != 0])
             for i in range(n_row):
-                transform = min(options, key=lambda x:abs(x-predicted[i,j]))
-                tR[i,j]=transform
-        tR = tR-1
-        tR[tR<0] = -9
-        return(tR)
+                transform = min(options, key=lambda x: abs(x - predicted[i, j]))
+                tR[i, j] = transform
+        tR = tR - 1
+        tR[tR < 0] = -9
+        return tR
 
     def accuracy(self, expected, predicted):
-        prop_same=np.sum(expected[expected>=0]==predicted[expected>=0])
-        tot=expected[expected>=0].size
-        accuracy=prop_same/tot
-        return(accuracy)
+        prop_same = np.sum(expected[expected >= 0] == predicted[expected >= 0])
+        tot = expected[expected >= 0].size
+        accuracy = prop_same / tot
+        return accuracy
 
     def write2file(
         self, X: Union[pd.DataFrame, np.ndarray, List[List[Union[int, float]]]]

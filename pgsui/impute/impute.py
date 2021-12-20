@@ -36,16 +36,16 @@ import lightgbm as lgbm
 from sklearn_genetic.space import Continuous, Categorical, Integer
 
 # Custom module imports
-from pgsui.impute.iterative_imputer_gridsearch import IterativeImputerGridSearch
-from pgsui.impute.iterative_imputer_fixedparams import IterativeImputerFixedParams
-from pgsui.impute.neural_network_imputers import VAE, UBP
+from impute.iterative_imputer_gridsearch import IterativeImputerGridSearch
+from impute.iterative_imputer_fixedparams import IterativeImputerFixedParams
+from impute.neural_network_imputers import VAE, UBP
 
-from pgsui.read_input.read_input import GenotypeData
-from pgsui.impute import simple_imputers
-from pgsui.utils.misc import get_processor_name
-from pgsui.utils.misc import get_processor_name
-from pgsui.utils.misc import isnotebook
-from pgsui.utils.misc import timer
+from read_input.read_input import GenotypeData
+from impute import simple_imputers
+from utils.misc import get_processor_name
+from utils.misc import get_processor_name
+from utils.misc import isnotebook
+from utils.misc import timer
 
 is_notebook = isnotebook()
 
@@ -330,10 +330,7 @@ class Impute:
 
             chunk_size = 1.0
 
-        if (
-            self.imp_kwargs["initial_strategy"] == "nmf"
-            and chunk_size != 1.0
-        ):
+        if self.imp_kwargs["initial_strategy"] == "nmf" and chunk_size != 1.0:
             print(
                 "WARNING: Chunking is not supported with initial_strategy == "
                 "'nmf'; Setting chunk_size to 1.0 and imputing entire "

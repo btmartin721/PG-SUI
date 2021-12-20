@@ -12,8 +12,8 @@ import numpy as np
 import pandas as pd
 import toytree as tt
 
-from pgsui.read_input.popmap_file import ReadPopmap
-from pgsui.utils import sequence_tools
+from read_input.popmap_file import ReadPopmap
+from utils import sequence_tools
 
 
 class GenotypeData:
@@ -64,11 +64,11 @@ class GenotypeData:
 
             individuals (List[str]): List of sample IDs of shape (n_samples,).
 
-            genotypes_list (List[List[str]]): List of 012-encoded genotypes of shape (n_samples, n_sites).
+            genotypes012_list (List[List[str]]): List of 012-encoded genotypes of shape (n_samples, n_sites).
 
-            genotypes_nparray (numpy.ndarray): 012-encoded genotypes of shape (n_samples, n_sites).
+            genotypes012_array (numpy.ndarray): 012-encoded genotypes of shape (n_samples, n_sites).
 
-            genotypes_df (pandas.DataFrame): 012-encoded genotypes of shape (n_samples, n_sites). Missing values are encoded as -9.
+            genotypes012_df (pandas.DataFrame): 012-encoded genotypes of shape (n_samples, n_sites). Missing values are encoded as -9.
 
             genotypes_onehot (numpy.ndarray of shape (n_samples, n_SNPs, 4)): One-hot encoded numpy array. The inner-most array consists of one-hot encoded values for the four nucleotides in the order of "A", "T", "G", "C". Values of 0.5 indicate heterozygotes, and missing values contain 0.0 for all four nucleotides.
 
@@ -116,7 +116,9 @@ class GenotypeData:
             raise TypeError("qmatrix_iqtree and qmatrix cannot both be defined")
 
         if self.siterates_iqtree is not None and self.siterates is not None:
-            raise TypeError("siterates_iqtree and siterates cannot both be defined")
+            raise TypeError(
+                "siterates_iqtree and siterates cannot both be defined"
+            )
 
         if self.filetype is not None:
             self.parse_filetype(filetype, popmapfile)
@@ -366,7 +368,6 @@ class GenotypeData:
                 q[nuc1][nuc2] = default
         return q
 
-
     def siterates_from_iqtree(self, iqfile: str) -> pd.DataFrame:
         """Read in site-specific substitution rates from *.rates file.
 
@@ -382,7 +383,7 @@ class GenotypeData:
             FileNotFoundError: If rates file could not be found.
             IOError: If rates file could not be read from.
         """
-        s=list()
+        s = list()
         try:
             with open(iqfile, "r") as fin:
                 for line in fin:
@@ -399,12 +400,14 @@ class GenotypeData:
                             s.append(float(stuff[1]))
         except (IOError, FileNotFoundError):
             sys.exit(f"Could not open iqtree file {iqfile}")
-        return(s)
+        return s
 
     def validate_rates(self):
         if self.site_rates is not None:
             if len(self.site_rates) != self.num_snps:
-                raise ValueError("Number of sites in provides siterates file not equal to number of genotypes")
+                raise ValueError(
+                    "Number of sites in provides siterates file not equal to number of genotypes"
+                )
 
     def siterates_from_file(self, fname: str):
         """Read site-specific substitution rates from file on disk.
@@ -414,7 +417,7 @@ class GenotypeData:
         Returns:
             List[float]: List of rates.
         """
-        s=list()
+        s = list()
         with open(fname, "r") as fin:
             for line in fin:
                 line = line.strip()
@@ -423,8 +426,7 @@ class GenotypeData:
                 else:
                     s.append(float(line.split()[0]))
         fin.close()
-        return(s)
-
+        return s
 
     def read_structure(self, onerow: bool = False, popids: bool = True) -> None:
         """Read a structure file with two rows per individual.
@@ -1038,7 +1040,7 @@ class GenotypeData:
 
         dreplace = dict()
         for col, ref, alt in zip(df.columns, self.ref, self.alt):
-            #if site is monomorphic, set alt and ref state the same
+            # if site is monomorphic, set alt and ref state the same
             if alt is None:
                 alt = ref
             ref2 = f"{ref}/{ref}"
@@ -1161,7 +1163,7 @@ class GenotypeData:
         return self.samples
 
     @property
-    def genotypes_list(self) -> List[List[int]]:
+    def genotypes012_list(self) -> List[List[int]]:
         """Encoded 012 genotypes as a 2D list.
 
         Returns:
@@ -1170,7 +1172,7 @@ class GenotypeData:
         return self.snps
 
     @property
-    def genotypes_nparray(self) -> np.ndarray:
+    def genotypes012_array(self) -> np.ndarray:
         """012-encoded genotypes as a numpy.ndarray.
 
         Returns:
@@ -1179,7 +1181,7 @@ class GenotypeData:
         return np.array(self.snps)
 
     @property
-    def genotypes_df(self) -> pd.DataFrame:
+    def genotypes012_df(self) -> pd.DataFrame:
         """Encoded 012 genotypes as a pandas DataFrame object
 
         Returns:

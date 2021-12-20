@@ -28,9 +28,9 @@ from keras.layers.core import Dropout, Dense, Lambda
 from keras.regularizers import l1_l2
 
 # Custom Modules
-from pgsui.read_input.read_input import GenotypeData
-from pgsui.utils.misc import timer
-from pgsui.utils.misc import isnotebook
+from read_input.read_input import GenotypeData
+from utils.misc import timer
+from utils.misc import isnotebook
 
 # Ignore warnings, but still print errors.
 deprecation._PRINT_DEPRECATION_WARNINGS = False

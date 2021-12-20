@@ -11,7 +11,7 @@ from functools import partial
 import pandas as pd
 import numpy as np
 import scipy as sp
-from pgsui.read_input.read_input import GenotypeData
+from read_input.read_input import GenotypeData
 
 class SimGenotypeData(GenotypeData):
     """Simulate missing data on genotypes read/ encoded in a GenotypeData object.
@@ -51,11 +51,11 @@ class SimGenotypeData(GenotypeData):
 
             individuals (List[str]): List of sample IDs of shape (n_samples,).
 
-            genotypes_list (List[List[str]]): List of 012-encoded genotypes of shape (n_samples, n_sites), after inserting missing data.
+            genotypes012_list (List[List[str]]): List of 012-encoded genotypes of shape (n_samples, n_sites), after inserting missing data.
 
-            genotypes_nparray (numpy.ndarray): 012-encoded genotypes of shape (n_samples, n_sites), after inserting missing data
+            genotypes012_array (numpy.ndarray): 012-encoded genotypes of shape (n_samples, n_sites), after inserting missing data
 
-            genotypes_df (pandas.DataFrame): 012-encoded genotypes of shape (n_samples, n_sites), after inserting missing data. Missing values are encoded as -9.
+            genotypes012_df (pandas.DataFrame): 012-encoded genotypes of shape (n_samples, n_sites), after inserting missing data. Missing values are encoded as -9.
 
             genotypes_onehot (numpy.ndarray of shape (n_samples, n_SNPs, 4)): One-hot encoded numpy array, after inserting missing data. The inner-most array consists of one-hot encoded values for the four nucleotides in the order of "A", "T", "G", "C". Values of 0.5 indicate heterozygotes, and missing values contain 0.0 for all four nucleotides.
 
@@ -125,7 +125,7 @@ class SimGenotypeData(GenotypeData):
 
         if self.strategy == "random":
             self.mask = np.random.choice([0, 1],
-                size=self.genotypes_nparray.shape,
+                size=self.genotypes012_array.shape,
                 p=((1 - self.prop_missing), self.prop_missing)).astype(np.bool)
 
             #mask 012-encoded (self.snps) and one-hot encoded genotypes (self.onehot)
@@ -134,7 +134,7 @@ class SimGenotypeData(GenotypeData):
         elif self.strategy == "nonrandom" or self.strategy== "nonrandom_weighted":
             if self.tree is None:
                 raise TypeError("SimGenotypeData.tree cannot be NoneType when strategy=\"systematic\"")
-            mask = np.full_like(self.genotypes_nparray, 0.0, dtype=bool)
+            mask = np.full_like(self.genotypes012_array, 0.0, dtype=bool)
 
             if self.strategy == "nonrandom_weighted":
                 weighted=True
