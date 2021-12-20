@@ -223,39 +223,6 @@ class Impute:
         print("\nDone!\n")
         return imp_data, best_params
 
-    def _imputed2genotypedata(self, imp012, genotype_data):
-        """Create new instance of GenotypeData object from imputed DataFrame.
-
-        The imputed, decoded DataFrame gets written to file and re-loaded to instantiate a new GenotypeData object.
-
-        Args:
-            imp012 (pandas.DataFrame): Imputed 012-encoded DataFrame.
-
-            genotype_data (GenotypeData): Original GenotypeData object to load attributes from.
-
-        Returns:
-            GenotypeData: GenotypeData object with imputed data.
-        """
-        imputed_filename = genotype_data.decode_imputed(
-            imp012, write_output=True, prefix=self.prefix
-        )
-
-        ft = genotype_data.filetype
-
-        if ft.lower().startswith("structure") and ft.lower().endswith("row"):
-            ft += "PopID"
-
-        return GenotypeData(
-            filename=imputed_filename,
-            filetype=ft,
-            guidetree=genotype_data.guidetree,
-            qmatrix_iqtree=genotype_data.qmatrix_iqtree,
-            qmatrix=genotype_data.qmatrix,
-            siterates=genotype_data.siterates,
-            siterates_iqtree=genotype.siterates_iqtree,
-            verbose=False,
-        )
-
     def write_imputed(
         self, data: Union[pd.DataFrame, np.ndarray, List[List[int]]]
     ) -> None:
@@ -299,7 +266,7 @@ class Impute:
 
         return pd.read_csv(filename, dtype="Int8", header=None)
 
-    def df2chunks(
+    def _df2chunks(
         self, df: pd.DataFrame, chunk_size: Union[int, float]
     ) -> List[pd.DataFrame]:
         """Break up pandas.DataFrame into chunks and impute chunks.
@@ -381,6 +348,39 @@ class Impute:
         print(f"Data split into {num_chunks} chunks with {chunk_len} features")
 
         return chunks
+
+    def _imputed2genotypedata(self, imp012, genotype_data):
+        """Create new instance of GenotypeData object from imputed DataFrame.
+
+        The imputed, decoded DataFrame gets written to file and re-loaded to instantiate a new GenotypeData object.
+
+        Args:
+            imp012 (pandas.DataFrame): Imputed 012-encoded DataFrame.
+
+            genotype_data (GenotypeData): Original GenotypeData object to load attributes from.
+
+        Returns:
+            GenotypeData: GenotypeData object with imputed data.
+        """
+        imputed_filename = genotype_data.decode_imputed(
+            imp012, write_output=True, prefix=self.prefix
+        )
+
+        ft = genotype_data.filetype
+
+        if ft.lower().startswith("structure") and ft.lower().endswith("row"):
+            ft += "PopID"
+
+        return GenotypeData(
+            filename=imputed_filename,
+            filetype=ft,
+            guidetree=genotype_data.guidetree,
+            qmatrix_iqtree=genotype_data.qmatrix_iqtree,
+            qmatrix=genotype_data.qmatrix,
+            siterates=genotype_data.siterates,
+            siterates_iqtree=genotype.siterates_iqtree,
+            verbose=False,
+        )
 
     def _subset_data_for_gridsearch(
         self,
@@ -554,7 +554,7 @@ class Impute:
                 with redirect_stdout(fout):
                     print(f"Doing {self.clf.__name__} imputation...\n")
 
-        df_chunks = self.df2chunks(df, self.chunk_size)
+        df_chunks = self._df2chunks(df, self.chunk_size)
         imputed_df = self._impute_df(df_chunks, imputer)
 
         if self.disable_progressbar:
@@ -711,7 +711,7 @@ class Impute:
         if len(df.columns) < original_num_cols:
             final_cols = np.array(df.columns)
 
-        df_chunks = self.df2chunks(df, self.chunk_size)
+        df_chunks = self._df2chunks(df, self.chunk_size)
         imputed_df = self._impute_df(
             df_chunks, best_imputer, cols_to_keep=final_cols
         )
@@ -864,7 +864,7 @@ class Impute:
     ) -> pd.DataFrame:
         """Impute list of pandas.DataFrame objects using custom IterativeImputer class.
 
-        The DataFrames are chunks of the whole input data, with each chunk correspoding to ``chunk_size`` features from ``df2chunks()``\.
+        The DataFrames are chunks of the whole input data, with each chunk correspoding to ``chunk_size`` features from ``_df2chunks()``\.
 
         Args:
             df_chunks (List[pandas.DataFrame]): List of Dataframes of shape(n_samples, n_features_in_chunk).
