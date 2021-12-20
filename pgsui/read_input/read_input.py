@@ -121,7 +121,7 @@ class GenotypeData:
             )
 
         if self.filetype is not None:
-            self.parse_filetype(filetype, popmapfile)
+            self._parse_filetype(filetype, popmapfile)
 
         if self.popmapfile is not None:
             self.read_popmap(popmapfile)
@@ -140,14 +140,14 @@ class GenotypeData:
 
         if self.siterates_iqtree is not None:
             self.site_rates = self.siterates_from_iqtree(self.siterates_iqtree)
-            self.validate_rates()
+            self._validate_rates()
         elif self.siterates_iqtree is None and self.siterates is not None:
             self.site_rates = self.siterates_from_file(self.siterates)
-            self.validate_rates()
+            self._validate_rates()
         elif self.siterates is None and self.siterates_iqtree is None:
             self.site_rates = None
 
-    def parse_filetype(
+    def _parse_filetype(
         self, filetype: Optional[str] = None, popmapfile: Optional[str] = None
     ) -> None:
         """Check the filetype and call the appropriate function to read the file format.
@@ -232,7 +232,7 @@ class GenotypeData:
             else:
                 raise OSError(f"Unsupported filetype provided: {filetype}\n")
 
-    def check_filetype(self, filetype: str) -> None:
+    def _check_filetype(self, filetype: str) -> None:
         """Validate that the filetype is correct.
 
         Args:
@@ -279,7 +279,7 @@ class GenotypeData:
         Returns:
             pandas.DataFrame: Q-matrix as pandas DataFrame object.
         """
-        q = self.blank_q_matrix()
+        q = self._blank_q_matrix()
 
         if not label:
             print(
@@ -325,7 +325,7 @@ class GenotypeData:
             FileNotFoundError: If iqtree file could not be found.
             IOError: If iqtree file could not be read from.
         """
-        q = self.blank_q_matrix()
+        q = self._blank_q_matrix()
         qlines = list()
         try:
             with open(iqfile, "r") as fin:
@@ -358,7 +358,7 @@ class GenotypeData:
         qdf = pd.DataFrame(q)
         return qdf.T
 
-    def blank_q_matrix(
+    def _blank_q_matrix(
         self, default: float = 0.0
     ) -> Dict[str, Dict[str, float]]:
         q: Dict[str, Dict[str, float]] = dict()
@@ -402,7 +402,7 @@ class GenotypeData:
             sys.exit(f"Could not open iqtree file {iqfile}")
         return s
 
-    def validate_rates(self):
+    def _validate_rates(self):
         if self.site_rates is not None:
             if len(self.site_rates) != self.num_snps:
                 raise ValueError(
@@ -553,7 +553,7 @@ class GenotypeData:
         if self.verbose:
             print(f"\nReading phylip file {self.filename}...")
 
-        self.check_filetype("phylip")
+        self._check_filetype("phylip")
         snp_data = list()
         with open(self.filename, "r") as fin:
             num_inds = 0
