@@ -60,6 +60,10 @@ class SimGenotypeData(GenotypeData):
 
             genotypes_onehot (numpy.ndarray of shape (n_samples, n_SNPs, 4)): One-hot encoded numpy array, after inserting missing data. The inner-most array consists of one-hot encoded values for the four nucleotides in the order of "A", "T", "G", "C". Values of 0.5 indicate heterozygotes, and missing values contain 0.0 for all four nucleotides.
 
+            missing_count (int): Number of genotypes masked by chosen missing data strategy
+
+            prop_missing_real (float): True proportion of missing data generated using chosen strategy
+
             mask (numpy.ndarray): 2-dimensional array tracking the indices of sampled missing data sites (n_samples, n_sites)
     """
 
@@ -120,7 +124,14 @@ class SimGenotypeData(GenotypeData):
             # add in missing data
             self.add_missing()
 
-    def add_missing(self):
+    def add_missing(self, tol=None, max_tries=None):
+        """Function to generate masked sites in a SimGenotypeData object
+
+        Args:
+            tol (float): Tolerance to reach proportion specified in self.prop_missing. Defaults to 1/num_snps*num_inds
+
+            max_tries (int): Maximum number of tries to reach targeted missing data proportion within specified tol. Defaults to num_inds.
+        """
         print(
             "\nAdding",
             self.prop_missing,
@@ -157,6 +168,14 @@ class SimGenotypeData(GenotypeData):
             for i, sample in enumerate(self.samples):
                 sample_map[sample] = i
 
+            #if no tolerance provided, set to 1 snp position
+            if tol is None:
+                tol = 1.0/mask.size
+
+            #if no max_tries provided, set to # inds
+            if max_tries is None:
+                max_tries = mask.shape[0]
+
             filled = False
             while not filled:
                 # Get list of samples from tree
@@ -168,20 +187,42 @@ class SimGenotypeData(GenotypeData):
                 rows = [sample_map[i] for i in samples]
 
                 # randomly sample a column
-                np.random.choice([0, self.num_snps])
+                col_idx = np.random.randint(0, mask.shape[1])
+                sampled_col = mask[:, col_idx]
 
                 # mask column
+                sampled_col[rows] = True
 
                 # check that column is not 100% missing now
-                # if yes, revert and sample again
+                # if yes, sample again
+                if np.sum(sampled_col) == sampled_col.size:
+                    continue
 
                 # if not, set values in mask matrix
-
-                # if this addition pushes missing % > self.prop_missing,
-                # check previous prop_missing, remove masked samples from this
-                # column until closest to target prop_missing
-
-                sys.exit()
+                else:
+                    mask[:,col_idx] = sampled_col
+                    # if this addition pushes missing % > self.prop_missing,
+                    # check previous prop_missing, remove masked samples from this
+                    # column until closest to target prop_missing
+                    current_prop=(np.sum(mask)/mask.size)
+                    if abs(current_prop - self.prop_missing) <= tol:
+                        filled=True
+                        break
+                    elif current_prop > self.prop_missing:
+                            tries=0
+                            while abs(current_prop - self.prop_missing) > tol and tries<max_tries:
+                                r=np.random.randint(0, mask.shape[0])
+                                c=np.random.randint(0, mask.shape[1])
+                                mask[r,c] = False
+                                tries=tries+1
+                                current_prop=(np.sum(mask)/mask.size)
+                                #print("After removal:",(np.sum(mask)/mask.size))
+                            filled=True
+                    else:
+                        continue
+            #finish
+            self.mask = mask
+            self.mask_snps()
         else:
             raise ValueError(
                 "Invalid SimGenotypeData.strategy value:", self.strategy
@@ -197,6 +238,20 @@ class SimGenotypeData(GenotypeData):
         skip_root=True,
         weighted=False,
     ):
+        """Function for randomly sampling clades from SimGenotypeData.tree
+
+        Args:
+            internal_only (bool): Only sample from NON-TIPS. Defaults to False.
+
+            tips_only (bool): Only sample from tips. Defaults to False.
+
+            skip_root (bool): Exclude sampling of root node. Defaults to True.
+
+            weighted (bool): Weight sampling by branch length. Defaults to False.
+
+        Returns:
+            List[str]: List of descendant tips from the sampled node.
+        """
 
         if tips_only and internal_only:
             raise ValueError("internal_only and tips_only cannot both be true")
@@ -221,12 +276,32 @@ class SimGenotypeData(GenotypeData):
             node_idx = np.random.choice(list(node_dict.keys()), size=1, p=p)[0]
         else:
             node_idx = np.random.choice(list(node_dict.keys()), size=1)[0]
-        return tree.get_tip_labels(idx=node_idx)
+        return self.tree.get_tip_labels(idx=node_idx)
 
     def mask_snps(self):
+        """Mask positions in SimGenotypeData.snps and SimGenotypeData.onehot
+        """
         i = 0
         for row in self.mask:
             for j in row.nonzero()[0]:
                 self.snps[i][j] = -9
                 self.onehot[i][j] = [0.0, 0.0, 0.0, 0.0]
             i = i + 1
+
+    @property
+    def missing_count(self) -> int:
+        """Count of masked genotypes in SimGenotypeData.mask
+
+        Returns:
+            int: Integer count of masked alleles.
+        """
+        return np.sum(np.mask)
+
+    @property
+    def prop_missing_real(self) -> float:
+        """Proportion of genotypes masked in SimGenotypeData.mask
+
+        Returns:
+            float: Total number of masked alleles divided by SNP matrix size.
+        """
+        return (np.sum(np.mask)/mask.size)
