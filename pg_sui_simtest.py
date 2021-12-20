@@ -9,12 +9,13 @@ import pandas as pd
 import scipy.stats as stats
 from sklearn_genetic.space import Continuous, Categorical, Integer
 
-from utils.misc import get_processor_name
-from utils.misc import generate_012_genotypes
+from pgsui.utils.misc import get_processor_name
+from pgsui.utils.misc import generate_012_genotypes
 
 # Custom module imports
-from read_input.read_input import GenotypeData
-from impute.estimators import *
+from pgsui.read_input.read_input import GenotypeData
+from pgsui.read_input.simgenodata import SimGenotypeData
+from pgsui.impute.estimators import *
 
 def main():
     """[Class instantiations and main package body]"""
@@ -79,9 +80,10 @@ def main():
         )
 
 
-        sim <- SimGenotypeData(data,
+        sim = SimGenotypeData(data,
                 prop_missing=0.1,
-                strategy="random")
+                strategy="nonrandom")
+
 
 def get_arguments():
     """[Parse command-line arguments. Imported with argparse]
