@@ -136,8 +136,38 @@ class SimGenotypeData(GenotypeData):
                 raise TypeError("SimGenotypeData.tree cannot be NoneType when strategy=\"systematic\"")
             mask = np.full_like(self.genotypes_nparray, 0.0, dtype=bool)
 
-            while(True):
-                samples = self.sample_tree()
+            if self.strategy == "nonrandom_weighted":
+                weighted=True
+            else:
+                weighted=False
+
+            sample_map = dict()
+            for i, sample in enumerate(self.samples):
+                sample_map[sample] = i
+
+            filled=False
+            while not filled:
+                #Get list of samples from tree
+                samples = self.sample_tree(internal_only=False, skip_root=True, weighted=weighted)
+
+                #convert to row indices
+                rows = [sample_map[i] for i in samples]
+
+                #randomly sample a column
+                np.random.choice([0, self.num_snps]
+
+                #mask column
+
+
+                #check that column is not 100% missing now
+                #if yes, revert and sample again
+
+                #if not, set values in mask matrix
+
+                #if this addition pushes missing % > self.prop_missing,
+                #check previous prop_missing, remove masked samples from this
+                #column until closest to target prop_missing
+
                 sys.exit()
         else:
             raise ValueError("Invalid SimGenotypeData.strategy value:",self.strategy)
@@ -168,10 +198,14 @@ class SimGenotypeData(GenotypeData):
                 if i.is_leaf():
                     continue
             node_dict[i.idx] = i.dist
-        print(node_dict)
-        sys.exit()
-        node_idx = np.random.choice(nodes, size=1)[0]
-        print(self.tree.get_tip_labels(idx=node_idx))
+        if weighted:
+            s = sum(list(node_dict.values()))
+            p = [i/s for i in list(node_dict.values())]
+            node_idx = np.random.choice(list(node_dict.keys()), size=1, p=p)[0]
+        else:
+            node_idx = np.random.choice(list(node_dict.keys()), size=1)[0]
+        return(tree.get_tip_labels(idx=node_idx))
+
 
     def mask_snps(self):
         i=0
