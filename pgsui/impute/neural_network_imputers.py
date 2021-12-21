@@ -14,15 +14,16 @@ import pandas as pd
 # from memory_profiler import memory_usage
 
 # Ignore warnings, but still print errors.
-# Set to 0 for debugging, 2 to ignore warnings.
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"  # or any {'0', '1', '2', '3'}
+# Set to 0 for debugging, 2 to ignore warnings, 3 to ignore all but fatal.errors
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # or any {'0', '1', '2', '3'}
 
 # Neural network imports
 import tensorflow as tf
 from tensorflow.python.util import deprecation
 
 import keras.backend as K
-from keras.objectives import mse
+
+# from keras.objectives import mse
 from keras.models import Sequential
 from keras.layers.core import Dropout, Dense, Lambda
 from keras.regularizers import l1_l2
@@ -34,7 +35,7 @@ from utils.misc import isnotebook
 
 # Ignore warnings, but still print errors.
 deprecation._PRINT_DEPRECATION_WARNINGS = False
-tf.get_logger().setLevel("WARNING")
+tf.get_logger().setLevel("ERROR")
 
 is_notebook = isnotebook()
 
@@ -81,7 +82,9 @@ class NeuralNetwork:
             X_values_observed = X_values * observed_mask
             pred_observed = y_pred * observed_mask
 
-            return mse(y_true=X_values_observed, y_pred=pred_observed)
+            return tf.keras.metrics.mean_squared_error(
+                y_true=X_values_observed, y_pred=pred_observed
+            )
 
         return reconstruction_loss
 

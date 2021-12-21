@@ -10,9 +10,11 @@ import scipy.stats as stats
 
 from sklearn_genetic.space import Continuous, Categorical, Integer
 
-from read_input.read_input import GenotypeData
-from impute.estimators import *
-from impute.simple_imputers import ImputeAlleleFreq, ImputePhylo
+from pgsui import GenotypeData
+
+# from read_input.read_input import GenotypeData
+# from impute.estimators import *
+# from impute.simple_imputers import ImputeAlleleFreq, ImputePhylo
 
 # from read_input import GenotypeData
 # from estimators import *
@@ -150,29 +152,29 @@ def main():
         # 	"lambda_2": Continuous(1e-6, 1e-3, distribution="log-uniform")
         # }
 
-        # Random forest imputation with genetic algorithm grid search
-        rf_imp = ImputeRandomForest(
-            data,
-            prefix=args.prefix,
-            n_estimators=50,
-            n_nearest_features=1,
-            gridparams=grid_params,
-            cv=3,
-            grid_iter=40,
-            n_jobs=4,
-            max_iter=2,
-            column_subset=1.0,
-            ga=False,
-            disable_progressbar=True,
-            extratrees=False,
-            mutation_probability=0.1,
-            progress_update_percent=20,
-            chunk_size=1.0,
-            initial_strategy="phylogeny",
-        )
+        # # Random forest imputation with genetic algorithm grid search
+        # rf_imp = ImputeRandomForest(
+        #     data,
+        #     prefix=args.prefix,
+        #     n_estimators=50,
+        #     n_nearest_features=1,
+        #     gridparams=grid_params,
+        #     cv=3,
+        #     grid_iter=40,
+        #     n_jobs=4,
+        #     max_iter=2,
+        #     column_subset=1.0,
+        #     ga=False,
+        #     disable_progressbar=True,
+        #     extratrees=False,
+        #     mutation_probability=0.1,
+        #     progress_update_percent=20,
+        #     chunk_size=1.0,
+        #     initial_strategy="phylogeny",
+        # )
 
-        rfdata = rf_imp.imputed
-        print(rfdata.genotypes012_df)
+        # rfdata = rf_imp.imputed
+        # print(rfdata.genotypes012_df)
 
         # rf_data = rf_imp.imputed
         # print(data.genotypes012_df)
@@ -280,21 +282,21 @@ def main():
     # print(data.genotypes012_df)
     # print(vae_data.genotypes012_df)
 
-    # nlpca = ImputeNLPCA(
-    #     data,
-    #     n_components=3,
-    #     initial_strategy="populations",
-    #     disable_progressbar=True,
-    #     cv=3,
-    #     hidden_activation="elu",
-    #     hidden_layer_sizes="midpoint",
-    #     validation_only=None,
-    #     num_hidden_layers=1,
-    #     learning_rate=0.1,
-    # )
+    nlpca = ImputeNLPCA(
+        data,
+        n_components=3,
+        initial_strategy="populations",
+        disable_progressbar=True,
+        cv=3,
+        hidden_activation="elu",
+        hidden_layer_sizes="midpoint",
+        validation_only=None,
+        num_hidden_layers=1,
+        learning_rate=0.1,
+    )
 
-    # nlpca_data = nlpca.imputed
-    # print(nlpca_data.genotypes012_df)
+    nlpca_data = nlpca.imputed
+    print(nlpca_data.genotypes012_df)
 
     # print(data.genotypes012_df)
     # print(nlpca_data.genotypes012_df)
