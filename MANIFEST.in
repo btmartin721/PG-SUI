@@ -1,0 +1,4 @@
+include pgsui/example_data/structure_files/*.str
+include pgsui/example_data/phylip_files/*.phy
+include pgsui/example_data/popmaps/test.popmap
+include pgsui/example_data/trees/test*

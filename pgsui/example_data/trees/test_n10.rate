@@ -1,0 +1,19 @@
+# Site-specific subtitution rates determined by empirical Bayesian method
+# This file can be read in MS Excel or in R with command:
+#   tab=read.table('test.phy.rate',header=TRUE)
+# Columns are tab-separated with following meaning:
+#   Site:   Alignment site ID
+#   Rate:   Posterior mean site rate weighted by posterior probability
+#   Cat:    Category with highest posterior (0=invariable, 1=slow, etc)
+#   C_Rate: Corresponding rate of highest category
+Site	Rate	Cat	C_Rate
+1	0.65244	1	0.41526
+2	0.71905	1	0.41526
+3	0.66729	1	0.41526
+4	2.65438	2	2.84311
+5	0.45287	1	0.41526
+6	0.70798	1	0.41526
+7	0.70532	1	0.41526
+8	0.43881	1	0.41526
+9	0.46221	1	0.41526
+10	0.69352	1	0.41526
