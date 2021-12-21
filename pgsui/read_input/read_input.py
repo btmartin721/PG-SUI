@@ -1062,7 +1062,6 @@ class GenotypeData:
                 ref2 = nuc[ref2]
                 alt2 = nuc[alt2]
                 het2 = nuc[het2]
-
             d = {"0": ref2, 0: ref2, "1": het2, 1: het2, "2": alt2, 2: alt2}
             dreplace[col] = d
 
