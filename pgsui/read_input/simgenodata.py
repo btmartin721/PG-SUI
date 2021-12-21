@@ -26,6 +26,8 @@ class SimGenotypeData(GenotypeData):
 
             strategy (str, optional): Strategy for simulating missing data. May be one of: \"nonrandom\", \"nonrandom_weighted\", or \"random\". When set to \"nonrandom\", branches from GenotypeData.guidetree will be randomly sampled to generate missing data on descendant nodes. For \"nonrandom_weighted\", missing data will be placed on nodes proportionally to their branch lengths (e.g., to generate data distributed as might be the case with mutation-disruption of RAD sites). Defaults to \"random\"
 
+            subset (float): Proportion of sites to randomly subset from the input data. Defaults to 1.0 (i.e., all data retained)
+
             verbose (bool, optional): Verbosity level. Defaults to True.
 
     Attributes:
@@ -73,6 +75,7 @@ class SimGenotypeData(GenotypeData):
         self.genotype_data = genotype_data
         self.prop_missing = prop_missing
         self.strategy = strategy
+        self.subset = subset
 
         # Copy genotype_data attributes into local attributes
         # keep original genotype_data as a reference for calculating
@@ -216,7 +219,9 @@ class SimGenotypeData(GenotypeData):
             i=i+1
 
     def accuracy(self, imputed):
-        pass
+        masked_sites=np.sum(self.mask)
+        num_correct=np.sum(self.genotype_data.genotypes012_array[self.mask]==imputed.imputed.genotypes012_array[self.mask])
+        return(num_correct/masked_sites)
 
     def sample_tree(
         self,

@@ -16,7 +16,7 @@ from utils.misc import generate_012_genotypes
 from read_input.read_input import GenotypeData
 from read_input.simgenodata import SimGenotypeData
 from impute.estimators import *
-
+from impute.simple_imputers import *
 
 def main():
     """[Class instantiations and main package body]"""
@@ -78,12 +78,47 @@ def main():
             popmapfile=args.popmap,
             guidetree=args.treefile,
             qmatrix_iqtree=args.iqtree,
+            siterates_iqtree=args.rates
         )
 
-
+        prefix="c0.001_s0.009_gtrgamma_i0.0"
         sim = SimGenotypeData(data,
                 prop_missing=0.1,
-                strategy="nonrandom_weighted")
+                strategy="random")
+
+        nmf = ImputeNMF(genotype_data=sim)
+
+        accuracy = sim.accuracy(nmf)
+        print("Accuracy:",accuracy)
+
+        phylo = ImputePhylo(genotype_data=sim, save_plots=False)
+
+        accuracy = sim.accuracy(phylo)
+        print("Accuracy:",accuracy)
+
+        nlpca = ImputeNLPCA(
+            genotype_data=sim,
+            initial_strategy="populations",
+            cv=5
+        )
+        accuracy = sim.accuracy(nlpca)
+        print("Accuracy:",accuracy)
+
+        ubp = ImputeUBP(
+            genotype_data=sim,
+            initial_strategy="populations"
+        )
+        accuracy = sim.accuracy(ubp)
+        print("Accuracy:",accuracy)
+
+        # vae = ImputeVAE(
+        #     genotype_data=sim,
+        #     initial_strategy="populations"
+        # )
+        # accuracy = sim.accuracy(vae)
+        # print("Accuracy:",accuracy)
+
+
 
 
 def get_arguments():
@@ -122,14 +157,6 @@ def get_arguments():
         help="Newick-formatted treefile",
     )
 
-    filetype_args.add_argument(
-        "-i",
-        "--iqtree",
-        type=str,
-        required=False,
-        help=".iqtree output file containing Rate Matrix Q",
-    )
-
     # Structure Arguments
     structure_args.add_argument(
         "--onerow_perind",
@@ -154,6 +181,22 @@ def get_arguments():
         default=None,
         help="Two-column tab-separated population map file: inds\tpops. No header line",
     )
+    optional_args.add_argument(
+        "-i",
+        "--iqtree",
+        type=str,
+        required=False,
+        help=".iqtree output file containing Rate Matrix Q",
+    )
+
+    optional_args.add_argument(
+        "-r",
+        "--rates",
+        type=str,
+        required=False,
+        help="IQ-TREE site-rates output file",
+    )
+
     optional_args.add_argument(
         "--prefix",
         type=str,
