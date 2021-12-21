@@ -155,7 +155,7 @@ class ImputePhylo(GenotypeData):
             self.imputed = GenotypeData(
                 filename=imputed_filename,
                 filetype=ft,
-                popmapfile=self.genotype_data.popmapfile,
+                popmapfile=genotype_data.popmapfile,
                 guidetree=genotype_data.guidetree,
                 qmatrix_iqtree=genotype_data.qmatrix_iqtree,
                 qmatrix=genotype_data.qmatrix,
@@ -915,7 +915,7 @@ class ImputeAlleleFreq(GenotypeData):
             self.imputed = GenotypeData(
                 filename=imputed_filename,
                 filetype=ft,
-                popmapfile=self.genotype_data.popmapfile,
+                popmapfile=genotype_data.popmapfile,
                 guidetree=genotype_data.guidetree,
                 qmatrix_iqtree=genotype_data.qmatrix_iqtree,
                 qmatrix=genotype_data.qmatrix,
@@ -1160,7 +1160,7 @@ class ImputeNMF(GenotypeData):
             self.imputed = GenotypeData(
                 filename=imputed_filename,
                 filetype=ft,
-                popmapfile=self.genotype_data.popmapfile,
+                popmapfile=genotype_data.popmapfile,
                 guidetree=genotype_data.guidetree,
                 qmatrix_iqtree=genotype_data.qmatrix_iqtree,
                 qmatrix=genotype_data.qmatrix,
