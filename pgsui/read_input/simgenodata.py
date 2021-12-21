@@ -146,6 +146,8 @@ class SimGenotypeData(GenotypeData):
                 p=((1 - self.prop_missing), self.prop_missing),
             ).astype(np.bool)
 
+            self.validate_mask()
+
             # mask 012-encoded (self.snps) and one-hot encoded genotypes (self.onehot)
             self.mask_snps()
 
@@ -188,7 +190,7 @@ class SimGenotypeData(GenotypeData):
 
                 # randomly sample a column
                 col_idx = np.random.randint(0, mask.shape[1])
-                sampled_col = mask[:, col_idx]
+                sampled_col = copy.copy(mask[:, col_idx])
 
                 # mask column
                 sampled_col[rows] = True
@@ -222,11 +224,22 @@ class SimGenotypeData(GenotypeData):
                         continue
             #finish
             self.mask = mask
+            self.validate_mask()
             self.mask_snps()
         else:
             raise ValueError(
                 "Invalid SimGenotypeData.strategy value:", self.strategy
             )
+
+    def validate_mask(self):
+        """
+        Internal function to make sure no entirely missing columns are simulated.
+        """
+        i=0
+        for column in self.mask.T:
+            if np.sum(column) == column.size:
+                self.mask[np.random.randint(0, mask.shape[0]),i]=False
+            i=i+1
 
     def accuracy(self, imputed):
         pass
