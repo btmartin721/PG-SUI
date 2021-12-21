@@ -1251,7 +1251,7 @@ class Impute:
 
         if initial_strategy == "populations":
             simple_imputer = simple_imputers.ImputeAlleleFreq(
-                gt=df.fillna(-9).values.tolist(),
+                genotype_data=self.genotype_data,
                 pops=self.pops,
                 by_populations=True,
                 missing=-9,
@@ -1307,6 +1307,7 @@ class Impute:
                 missing=-9,
                 write_output=False,
                 verbose=False,
+                validation_mode=True
             )
             df_defiled = simple_imputer.imputed
             valid_cols = cols.copy()

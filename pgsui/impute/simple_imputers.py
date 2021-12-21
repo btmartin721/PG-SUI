@@ -138,7 +138,7 @@ class ImputePhylo(GenotypeData):
         self._validate_arguments(genotype_data)
         data, tree, q, site_rates = self._parse_arguments(genotype_data)
 
-        if self.validation_mode == True:
+        if self.validation_mode == False:
             imputed012 = self.impute_phylo(tree, data, q, site_rates)
 
             imputed_filename = genotype_data.decode_imputed(
@@ -897,7 +897,7 @@ class ImputeAlleleFreq(GenotypeData):
         self.iterative_mode = kwargs.get("iterative_mode", False)
         self.validation_mode = kwargs.get("validation_mode", False)
 
-        if self.validation_mode == True:
+        if self.validation_mode == False:
             imputed012, self.valid_cols = self.fit_predict(gt_list)
 
             imputed_filename = genotype_data.decode_imputed(
@@ -1141,7 +1141,7 @@ class ImputeNMF(GenotypeData):
         elif gt is not None:
             X = gt
 
-        if self.validation_mode == True:
+        if self.validation_mode == False:
             imputed012 = pd.DataFrame(self.fit_predict(X))
 
             imputed_filename = genotype_data.decode_imputed(
