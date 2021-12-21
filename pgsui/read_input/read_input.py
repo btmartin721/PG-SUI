@@ -716,6 +716,10 @@ class GenotypeData:
                     warnings.warn(
                         f"Monomorphic site detected at SNP column {j+1}.\n"
                     )
+                    """
+                    ***TO-DO***: Check here if column is all-missing. What to
+                    do in this case? Error out?
+                    """
                     ref = sequence_tools.get_major_allele(loc, vcf=vcf)
                     ref = str(ref[0])
                     alt = None
