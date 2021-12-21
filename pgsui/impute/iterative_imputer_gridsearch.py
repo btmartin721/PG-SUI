@@ -51,10 +51,16 @@ from sklearn_genetic.plots import plot_fitness_evolution
 from sklearn_genetic.utils import logbook_to_pandas
 
 # Custom function imports
-from impute import simple_imputers
-from utils.misc import get_processor_name
-from utils.misc import HiddenPrints
-from utils.misc import isnotebook
+try:
+    from . import simple_imputers
+    from ..utils.misc import get_processor_name
+    from ..utils.misc import HiddenPrints
+    from ..utils.misc import isnotebook
+except ModuleNotFoundError:
+    from impute import simple_imputers
+    from utils.misc import get_processor_name
+    from utils.misc import HiddenPrints
+    from utils.misc import isnotebook
 
 # Uses scikit-learn-intellex package if CPU is Intel
 if get_processor_name().strip().startswith("Intel"):

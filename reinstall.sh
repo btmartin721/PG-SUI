@@ -5,6 +5,9 @@ SRCDIR=~/Desktop/PG-SUI
 
 cd $SRCDIR
 
+rm -r build/
+rm -r dist/
+
 pip uninstall pgsui
 
 python setup.py install --force

@@ -21,17 +21,27 @@ from sklearn.impute import SimpleImputer
 from sklearn.linear_model import BayesianRidge
 from sklearn.neighbors import KNeighborsClassifier
 
-
 # Custom imports
-from read_input.read_input import GenotypeData
+try:
+    from ..read_input.read_input import GenotypeData
 
-from impute.impute import Impute
-from impute.neural_network_imputers import VAE, UBP
+    from .impute import Impute
+    from .neural_network_imputers import VAE, UBP
 
-from utils import misc
-from utils.misc import get_processor_name
-from utils.misc import isnotebook
-from utils.misc import timer
+    from ..utils import misc
+    from ..utils.misc import get_processor_name
+    from ..utils.misc import isnotebook
+    from ..utils.misc import timer
+except ModuleNotFoundError:
+    from read_input.read_input import GenotypeData
+
+    from impute.impute import Impute
+    from impute.neural_network_imputers import VAE, UBP
+
+    from utils import misc
+    from utils.misc import get_processor_name
+    from utils.misc import isnotebook
+    from utils.misc import timer
 
 is_notebook = isnotebook()
 

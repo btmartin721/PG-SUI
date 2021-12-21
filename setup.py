@@ -56,8 +56,9 @@ setup(
         "Natural Language :: English",
     ],
     license="GNU General Public License v3 (GPLv3)",
-    packages=find_packages("pgsui"),
-    package_dir={"": "pgsui"},
+    packages=find_packages(),
+    # packages=find_packages("pgsui"),
+    # package_dir={"": "pgsui"},
     python_requires=">=3.7,<4",
     install_requires=[
         "matplotlib",

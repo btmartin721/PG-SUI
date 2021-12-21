@@ -36,16 +36,27 @@ import lightgbm as lgbm
 from sklearn_genetic.space import Continuous, Categorical, Integer
 
 # Custom module imports
-from impute.iterative_imputer_gridsearch import IterativeImputerGridSearch
-from impute.iterative_imputer_fixedparams import IterativeImputerFixedParams
-from impute.neural_network_imputers import VAE, UBP
+try:
+    from .iterative_imputer_gridsearch import IterativeImputerGridSearch
+    from .iterative_imputer_fixedparams import IterativeImputerFixedParams
+    from .neural_network_imputers import VAE, UBP
 
-from read_input.read_input import GenotypeData
-from impute import simple_imputers
-from utils.misc import get_processor_name
-from utils.misc import get_processor_name
-from utils.misc import isnotebook
-from utils.misc import timer
+    from ..read_input.read_input import GenotypeData
+    from . import simple_imputers
+    from ..utils.misc import get_processor_name
+    from ..utils.misc import isnotebook
+    from ..utils.misc import timer
+except ModuleNotFoundError:
+    from impute.iterative_imputer_gridsearch import IterativeImputerGridSearch
+    from impute.iterative_imputer_fixedparams import IterativeImputerFixedParams
+    from impute.neural_network_imputers import VAE, UBP
+
+    from read_input.read_input import GenotypeData
+    from impute import simple_imputers
+    from utils.misc import get_processor_name
+    from utils.misc import get_processor_name
+    from utils.misc import isnotebook
+    from utils.misc import timer
 
 is_notebook = isnotebook()
 
@@ -1308,7 +1319,7 @@ class Impute:
                 missing=-9,
                 write_output=False,
                 verbose=False,
-                validation_mode=True
+                validation_mode=True,
             )
             df_defiled = simple_imputer.imputed
             valid_cols = cols.copy()

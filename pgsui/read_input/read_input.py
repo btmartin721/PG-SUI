@@ -12,9 +12,12 @@ import numpy as np
 import pandas as pd
 import toytree as tt
 
-from read_input.popmap_file import ReadPopmap
-from utils import sequence_tools
-
+try:
+    from .popmap_file import ReadPopmap
+    from ..utils import sequence_tools
+except ModuleNotFoundError:
+    from read_input.popmap_file import ReadPopmap
+    from utils import sequence_tools
 
 class GenotypeData:
     """Read genotype and tree data and encode genotypes.
