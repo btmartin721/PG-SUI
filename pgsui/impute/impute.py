@@ -378,7 +378,7 @@ class Impute:
             qmatrix_iqtree=genotype_data.qmatrix_iqtree,
             qmatrix=genotype_data.qmatrix,
             siterates=genotype_data.siterates,
-            siterates_iqtree=genotype.siterates_iqtree,
+            siterates_iqtree=genotype_data.siterates_iqtree,
             verbose=False,
         )
 
