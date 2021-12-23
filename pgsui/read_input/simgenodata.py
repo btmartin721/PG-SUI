@@ -17,6 +17,7 @@ try:
 except ModuleNotFoundError:
     from read_input.read_input import GenotypeData
 
+
 class SimGenotypeData(GenotypeData):
     """Simulate missing data on genotypes read/ encoded in a GenotypeData object.
 

@@ -4,9 +4,9 @@ import warnings
 
 from typing import Optional, Union, List, Dict, Tuple, Any, Callable
 
-# Make sure python version is >= 3.6
-if sys.version_info < (3, 6):
-    raise ImportError("Python < 3.6 is not supported!")
+# Make sure python version is >= 3.7
+if sys.version_info < (3, 7):
+    raise ImportError("Python < 3.7 is not supported!")
 
 import numpy as np
 import pandas as pd
@@ -805,10 +805,7 @@ class GenotypeData:
 
                             else:
                                 new_snps[i].append(1)
-                    # skip += 1
-                    # valid_sites[j] = np.nan
-                    # continue
-            else:
+
                 ref, alt = sequence_tools.get_major_allele(loc, vcf=vcf)
                 ref = str(ref)
                 alt = str(alt)
