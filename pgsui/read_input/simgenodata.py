@@ -11,8 +11,11 @@ from functools import partial
 import pandas as pd
 import numpy as np
 import scipy as sp
-from read_input.read_input import GenotypeData
 
+try:
+    from .read_input import GenotypeData
+except ModuleNotFoundError:
+    from read_input.read_input import GenotypeData
 
 class SimGenotypeData(GenotypeData):
     """Simulate missing data on genotypes read/ encoded in a GenotypeData object.
@@ -70,9 +73,12 @@ class SimGenotypeData(GenotypeData):
     """
 
     def __init__(
-        self, genotype_data=None, prop_missing=None, strategy="random"
+        self,
+        genotype_data=None,
+        prop_missing=None,
+        strategy="random",
+        subset=1.0
     ) -> None:
-        self.genotype_data = genotype_data
         self.prop_missing = prop_missing
         self.strategy = strategy
         self.subset = subset
@@ -80,9 +86,10 @@ class SimGenotypeData(GenotypeData):
         # Copy genotype_data attributes into local attributes
         # keep original genotype_data as a reference for calculating
         # accuracy after imputing masked sites
-        if self.genotype_data is None:
+        if genotype_data is None:
             raise TypeError("genotype_data cannot be NoneType")
         else:
+            self.genotype_data = copy.deepcopy(genotype_data)
             super().__init__(
                 filename=self.genotype_data.filename,
                 filetype=self.genotype_data.filetype,
