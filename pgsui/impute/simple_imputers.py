@@ -17,7 +17,7 @@ try:
     from ..utils.misc import get_processor_name
     from ..utils.misc import isnotebook
     from ..utils.misc import timer
-except ModuleNotFoundError:
+except (ModuleNotFoundError, ValueError):
     from read_input.read_input import GenotypeData
     from utils import misc
     from utils.misc import get_processor_name
@@ -216,7 +216,7 @@ class ImputePhylo(GenotypeData):
         """
         try:
             if list(genotypes.values())[0][0][1] == "/":
-                genotypes = self.str2iupac(genotypes, self.str_encodings)
+                genotypes = self._str2iupac(genotypes, self.str_encodings)
         except IndexError:
             if self._is_int(list(genotypes.values())[0][0][0]):
                 raise
@@ -651,7 +651,7 @@ class ImputePhylo(GenotypeData):
 
         toyplot.pdf.render(canvas, out)
 
-    def all_missing(
+    def _all_missing(
         self,
         tree: tt.tree,
         node_index: int,

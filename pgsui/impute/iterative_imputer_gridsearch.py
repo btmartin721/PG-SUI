@@ -56,7 +56,7 @@ try:
     from ..utils.misc import get_processor_name
     from ..utils.misc import HiddenPrints
     from ..utils.misc import isnotebook
-except ModuleNotFoundError:
+except (ModuleNotFoundError, ValueError):
     from impute import simple_imputers
     from utils.misc import get_processor_name
     from utils.misc import HiddenPrints
@@ -351,7 +351,6 @@ class IterativeImputerGridSearch(IterativeImputer):
 
             X_filled = self.initial_imputer_.imputed
             Xt = X.copy()
-            print(X_filled)
 
         elif self.initial_strategy == "phylogeny":
             if (
@@ -396,7 +395,6 @@ class IterativeImputerGridSearch(IterativeImputer):
 
             X_filled = self.initial_imputer_.imputed
             Xt = X.copy()
-            # print(X_filled)
 
         else:
             if self.initial_imputer_ is None:

@@ -15,9 +15,10 @@ import toytree as tt
 try:
     from .popmap_file import ReadPopmap
     from ..utils import sequence_tools
-except ModuleNotFoundError:
+except (ModuleNotFoundError, ValueError):
     from read_input.popmap_file import ReadPopmap
     from utils import sequence_tools
+
 
 class GenotypeData:
     """Read genotype and tree data and encode genotypes.
@@ -702,7 +703,6 @@ class GenotypeData:
 
         # TODO: valid_sites is now deprecated.
         valid_sites = np.ones(len(snps[0]))
-
         for j in range(0, len(snps[0])):
             loc = list()
             for i in range(0, len(snps)):
@@ -806,6 +806,7 @@ class GenotypeData:
                             else:
                                 new_snps[i].append(1)
 
+            else:
                 ref, alt = sequence_tools.get_major_allele(loc, vcf=vcf)
                 ref = str(ref)
                 alt = str(alt)

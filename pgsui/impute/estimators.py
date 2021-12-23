@@ -32,7 +32,7 @@ try:
     from ..utils.misc import get_processor_name
     from ..utils.misc import isnotebook
     from ..utils.misc import timer
-except ModuleNotFoundError:
+except (ModuleNotFoundError, ValueError):
     from read_input.read_input import GenotypeData
 
     from impute.impute import Impute

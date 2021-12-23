@@ -33,7 +33,7 @@ try:
     from ..read_input.read_input import GenotypeData
     from ..utils.misc import timer
     from ..utils.misc import isnotebook
-except ModuleNotFoundError:
+except (ModuleNotFoundError, ValueError):
     from read_input.read_input import GenotypeData
     from utils.misc import timer
     from utils.misc import isnotebook

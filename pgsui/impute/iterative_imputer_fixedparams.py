@@ -38,7 +38,7 @@ try:
     from ..utils.misc import get_processor_name
     from ..utils.misc import HiddenPrints
     from ..utils.misc import isnotebook
-except ModuleNotFoundError:
+except (ModuleNotFoundError, ValueError):
     from impute import simple_imputers
     from utils.misc import get_processor_name
     from utils.misc import HiddenPrints

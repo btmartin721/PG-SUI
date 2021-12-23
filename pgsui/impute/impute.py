@@ -46,7 +46,7 @@ try:
     from ..utils.misc import get_processor_name
     from ..utils.misc import isnotebook
     from ..utils.misc import timer
-except ModuleNotFoundError:
+except (ModuleNotFoundError, ValueError):
     from impute.iterative_imputer_gridsearch import IterativeImputerGridSearch
     from impute.iterative_imputer_fixedparams import IterativeImputerFixedParams
     from impute.neural_network_imputers import VAE, UBP

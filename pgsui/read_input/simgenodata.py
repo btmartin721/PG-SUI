@@ -14,7 +14,7 @@ import scipy as sp
 
 try:
     from .read_input import GenotypeData
-except ModuleNotFoundError:
+except (ModuleNotFoundError, ValueError):
     from read_input.read_input import GenotypeData
 
 
@@ -78,7 +78,7 @@ class SimGenotypeData(GenotypeData):
         genotype_data=None,
         prop_missing=None,
         strategy="random",
-        subset=1.0
+        subset=1.0,
     ) -> None:
         self.prop_missing = prop_missing
         self.strategy = strategy
@@ -100,7 +100,7 @@ class SimGenotypeData(GenotypeData):
                 qmatrix=self.genotype_data.qmatrix,
                 siterates=self.genotype_data.siterates,
                 siterates_iqtree=self.genotype_data.siterates_iqtree,
-                verbose=False
+                verbose=False,
             )
 
             if self.prop_missing is None:
@@ -155,11 +155,11 @@ class SimGenotypeData(GenotypeData):
             for i, sample in enumerate(self.samples):
                 sample_map[sample] = i
 
-            #if no tolerance provided, set to 1 snp position
+            # if no tolerance provided, set to 1 snp position
             if tol is None:
-                tol = 1.0/mask.size
+                tol = 1.0 / mask.size
 
-            #if no max_tries provided, set to # inds
+            # if no max_tries provided, set to # inds
             if max_tries is None:
                 max_tries = mask.shape[0]
 
@@ -187,27 +187,30 @@ class SimGenotypeData(GenotypeData):
 
                 # if not, set values in mask matrix
                 else:
-                    mask[:,col_idx] = sampled_col
+                    mask[:, col_idx] = sampled_col
                     # if this addition pushes missing % > self.prop_missing,
                     # check previous prop_missing, remove masked samples from this
                     # column until closest to target prop_missing
-                    current_prop=(np.sum(mask)/mask.size)
+                    current_prop = np.sum(mask) / mask.size
                     if abs(current_prop - self.prop_missing) <= tol:
-                        filled=True
+                        filled = True
                         break
                     elif current_prop > self.prop_missing:
-                            tries=0
-                            while abs(current_prop - self.prop_missing) > tol and tries<max_tries:
-                                r=np.random.randint(0, mask.shape[0])
-                                c=np.random.randint(0, mask.shape[1])
-                                mask[r,c] = False
-                                tries=tries+1
-                                current_prop=(np.sum(mask)/mask.size)
-                                #print("After removal:",(np.sum(mask)/mask.size))
-                            filled=True
+                        tries = 0
+                        while (
+                            abs(current_prop - self.prop_missing) > tol
+                            and tries < max_tries
+                        ):
+                            r = np.random.randint(0, mask.shape[0])
+                            c = np.random.randint(0, mask.shape[1])
+                            mask[r, c] = False
+                            tries = tries + 1
+                            current_prop = np.sum(mask) / mask.size
+                            # print("After removal:",(np.sum(mask)/mask.size))
+                        filled = True
                     else:
                         continue
-            #finish
+            # finish
             self.mask = mask
             self.validate_mask()
             self.mask_snps()
@@ -220,16 +223,19 @@ class SimGenotypeData(GenotypeData):
         """
         Internal function to make sure no entirely missing columns are simulated.
         """
-        i=0
+        i = 0
         for column in self.mask.T:
             if np.sum(column) == column.size:
-                self.mask[np.random.randint(0, mask.shape[0]),i]=False
-            i=i+1
+                self.mask[np.random.randint(0, mask.shape[0]), i] = False
+            i = i + 1
 
     def accuracy(self, imputed):
-        masked_sites=np.sum(self.mask)
-        num_correct=np.sum(self.genotype_data.genotypes012_array[self.mask]==imputed.imputed.genotypes012_array[self.mask])
-        return(num_correct/masked_sites)
+        masked_sites = np.sum(self.mask)
+        num_correct = np.sum(
+            self.genotype_data.genotypes012_array[self.mask]
+            == imputed.imputed.genotypes012_array[self.mask]
+        )
+        return num_correct / masked_sites
 
     def sample_tree(
         self,
@@ -279,8 +285,7 @@ class SimGenotypeData(GenotypeData):
         return self.tree.get_tip_labels(idx=node_idx)
 
     def mask_snps(self):
-        """Mask positions in SimGenotypeData.snps and SimGenotypeData.onehot
-        """
+        """Mask positions in SimGenotypeData.snps and SimGenotypeData.onehot"""
         i = 0
         for row in self.mask:
             for j in row.nonzero()[0]:
@@ -304,4 +309,4 @@ class SimGenotypeData(GenotypeData):
         Returns:
             float: Total number of masked alleles divided by SNP matrix size.
         """
-        return (np.sum(np.mask)/mask.size)
+        return np.sum(np.mask) / mask.size

@@ -76,16 +76,17 @@ setup(
         "toytree",
         "sklearn-genetic-opt[all]>=0.6.0",
         "importlib-resources>=1.1.0",
+        "pyvolve",
     ],
     extras_require={"intel": ["scikit-learn-intelex"]},
     package_data={
-        "": [
-            "pgsui/example_data/structure_files/*.str",
-            "pgsui/example_data/phylip_files/*.phy",
-            "pgsui/example_data/popmaps/test.popmap",
-            "pgsui/example_data/trees/test*",
+        "pgsui": [
+            "example_data/structure_files/*.str",
+            "example_data/phylip_files/*.phy",
+            "example_data/popmaps/test.popmap",
+            "example_data/trees/test*",
         ]
     },
-    entry_points={"console_scripts": ["pgsuitest=pgsui.test.test_pgsui:main"]},
     include_package_data=True,
+    entry_points={"console_scripts": ["pgsuitest=pgsui.test.test_pgsui:main"]},
 )
