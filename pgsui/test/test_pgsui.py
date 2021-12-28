@@ -89,8 +89,9 @@ def main():
                     alnfile = files(data_dir).joinpath(aln)
 
                     print("--------------------------------------------------")
-                    print(f"Testing GenotypeData with {ft} filetype...")
+                    print(f"--- Testing GenotypeData with {ft} filetype...")
                     print("--------------------------------------------------")
+                    print("\n")
 
                     with as_file(alnfile) as a:
                         data = GenotypeData(
@@ -103,8 +104,9 @@ def main():
                         )
 
                 print("-------------------------------------------------------")
-                print("Testing GenotypeData with non-iqtree rates files...")
+                print("--- Testing GenotypeData with non-iqtree rates files...")
                 print("-------------------------------------------------------")
+                print("\n")
 
                 with as_file(strfile) as a:
                     data = GenotypeData(
@@ -136,8 +138,9 @@ def main():
                 print("\n")
 
                 print("-----------------------------------------------------")
-                print("Testing ImputeAlleleFreq by-population...")
+                print("--- Testing ImputeAlleleFreq by-population...")
                 print("-----------------------------------------------------")
+                print("\n")
 
                 afpops = ImputeAlleleFreq(
                     genotype_data=data,
@@ -147,8 +150,9 @@ def main():
                 )
 
                 print("-----------------------------------------------------")
-                print("Testing ImputeAlleleFreq global...")
+                print("--- Testing ImputeAlleleFreq global...")
                 print("-----------------------------------------------------")
+                print("\n")
 
                 afpops = ImputeAlleleFreq(
                     genotype_data=data,
@@ -158,8 +162,9 @@ def main():
                 )
 
                 print("-----------------------------------------------------")
-                print("Testing ImputePhylo...")
+                print("--- Testing ImputePhylo...")
                 print("-----------------------------------------------------")
+                print("\n")
 
                 phylo = ImputePhylo(
                     genotype_data=data,
@@ -169,8 +174,9 @@ def main():
                 )
 
                 print("-----------------------------------------------------")
-                print("Testing ImputeNMF...")
+                print("--- Testing ImputeNMF...")
                 print("-----------------------------------------------------")
+                print("\n")
 
                 mf = ImputeNMF(
                     genotype_data=data,
@@ -182,6 +188,10 @@ def main():
                 print("+++ SUCCESS!")
                 print("++++++++++++++++++++++++++++++++")
                 print("\n")
+
+                ##############################################
+                ### Make gridparams
+                ##############################################
 
                 # For randomizedsearchcv
                 # Number of trees in random forest
@@ -228,10 +238,11 @@ def main():
 
                 print("-----------------------------------------------------")
                 print(
-                    "Testing ImputeRandomForest with randomized grid search "
-                    "and initial_strategy == 'populations'..."
+                    "--- Testing ImputeRandomForest with randomized grid\n"
+                    "--- search and initial_strategy == 'populations'..."
                 )
                 print("-----------------------------------------------------")
+                print("\n")
 
                 # Random forest imputation with RandomizedSearchCV grid search
                 rf_imp = ImputeRandomForest(
@@ -255,9 +266,11 @@ def main():
 
                 print("-----------------------------------------------------")
                 print(
-                    "Testing ImputeRandomForest with GA grid search and initial_strategy == 'phylogeny'..."
+                    "--- Testing ImputeRandomForest with GA grid search and\n"
+                    "--- initial_strategy == 'phylogeny'..."
                 )
                 print("-----------------------------------------------------")
+                print("\n")
 
                 # Genetic Algorithm grid search Test
                 rf_imp2 = ImputeRandomForest(
@@ -277,6 +290,7 @@ def main():
                     chunk_size=1.0,
                     initial_strategy="phylogeny",
                 )
+
                 print("++++++++++++++++++++++++++++++++")
                 print("+++ SUCCESS!")
                 print("++++++++++++++++++++++++++++++++")
@@ -289,9 +303,11 @@ def main():
 
                 print("-----------------------------------------------------")
                 print(
-                    "Testing VAE with validation procedure with intial_strategy='populations'..."
+                    "--- Testing VAE with validation procedure with\n"
+                    "--- intial_strategy='populations'..."
                 )
                 print("-----------------------------------------------------")
+                print("\n")
 
                 vae = ImputeVAE(
                     genotype_data=data,
@@ -304,10 +320,11 @@ def main():
 
                 print("-----------------------------------------------------")
                 print(
-                    "Testing ImputeNLPCA with initial_strategy == "
-                    "'phylogeny'..."
+                    "--- Testing ImputeNLPCA with\n"
+                    "--- initial_strategy == 'phylogeny'..."
                 )
                 print("-----------------------------------------------------")
+                print("\n")
 
                 nlpca = ImputeNLPCA(
                     data,
@@ -322,9 +339,10 @@ def main():
                     learning_rate=0.1,
                 )
 
-                print("-----------------------------------------------------")
-                print("Testing ImputeUBP with initial_strategy == 'nmf'...")
-                print("-----------------------------------------------------")
+                print("-------------------------------------------------------")
+                print("--- Testing ImputeUBP with initial_strategy == 'nmf'...")
+                print("-------------------------------------------------------")
+                print("\n")
 
                 ubp = ImputeUBP(
                     genotype_data=data,
@@ -353,3 +371,4 @@ def main():
             print("######################################")
             print("### ALL TESTS PASSED SUCCESSFULLY!")
             print("######################################")
+            print("\n")
