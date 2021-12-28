@@ -83,7 +83,7 @@ def main():
             popmapfile=args.popmap,
             guidetree=args.treefile,
             qmatrix_iqtree=args.iqtree,
-            siterates_iqtree="example_data/trees/test_n10.rate",
+            siterates_iqtree="pgsui/example_data/trees/test_n10.rate",
         )
 
     if args.resume_imputed:
