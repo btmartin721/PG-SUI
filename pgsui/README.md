@@ -4,11 +4,11 @@ Population Genomic Supervised and Unsupervised Imputation
 
 ## About PG-SUI
 
-PG-SUI is a Python 3 API that uses machine learning to impute missing values from population genomic SNP data. There are several supervised and unsupervised machine learning algorithms available to impute missing data, as well as some non-machine learning imputers that are useful. 
+PG-SUI is a Python 3 API that uses machine learning to impute missing values from population genomic SNP data. There are several supervised and unsupervised machine learning algorithms available to impute missing data, as well as some non-machine learning imputers that are useful.
 
 ### Supervised Imputation Methods
 
-Supervised methods utilze the scikit-learn's IterativeImputer, which is based on the MICE (Multivariate Imputation by Chained Equations) algorithm [[1]](#1), and iterates over each SNP site (i.e., feature) while uses the N nearest neighbor features to inform the imputation. The number of nearest features can be adjusted by users. IterativeImputer currently works with any of the following scikit-learn classifiers: 
+Supervised methods utilze the scikit-learn's IterativeImputer, which is based on the MICE (Multivariate Imputation by Chained Equations) algorithm [[1]](#1), and iterates over each SNP site (i.e., feature) while uses the N nearest neighbor features to inform the imputation. The number of nearest features can be adjusted by users. IterativeImputer currently works with any of the following scikit-learn classifiers:
 
 + K-Nearest Neighbors
 + Random Forest
@@ -103,7 +103,7 @@ pip install sklearn-genetic-opt[all]
 
 ##### Mac ARM architecture
 
-PG-SUI has been tested on the new Mac M1 chips and is working fine, but some changes to the installation process were necessary as of 9-December-21. Installation was successful using the following:
+PG-SUI has been tested on the new Mac M1 chips and is working fine, but some changes to the installation process were necessary as of 20-December-21. Installation was successful using the following:
 
 ```
 ### Install Miniforge3 instead of Miniconda3
@@ -119,7 +119,10 @@ conda create -n pg-sui python
 conda activate pg-sui
 
 #install packages
-conda install -c conda-forge matplotlib seaborn jupyterlab scikit-learn tqdm pandas=1.2.5 numpy=1.20.2 scipy=1.6.2 xgboost lightgbm tensorflow keras sklearn-genetic toytree
+conda install -c conda-forge matplotlib seaborn jupyterlab scikit-learn tqdm pandas=1.2.5 numpy=1.20.2 scipy=1.6.2 xgboost lightgbm keras sklearn-genetic toytree
+
+#install alternate version of tensorflow
+pip install --upgrade --force --no-dependencies https://github.com/apple/tensorflow_macos/releases/download/v0.1alpha3/tensorflow_macos-0.1a3-cp38-cp38-macosx_11_0_arm64.whl https://github.com/apple/tensorflow_macos/releases/download/v0.1alpha3/tensorflow_addons_macos-0.1a3-cp38-cp38-macosx_11_0_arm64.whl
 
 #downgrade setuptools (may or may not be necessary)
 pip install setuptools==57
@@ -136,7 +139,7 @@ Any other problems we run into testing on the Mac ARM architecture will be adjus
 Takes a STRUCTURE or PHYLIP file and a population map (popmap) file as input.  
 There are a number of options for the structure file format. See the help menu:
 
-```python pg_sui.py -h``` 
+```python pg_sui.py -h```
 
 You can read your input files like this:
 
@@ -207,11 +210,11 @@ ubp = ImputeUBP(...) # Unsupervised backpropagation
 - Documentation
 
 ## References:
-   
+
     <a id="1">[1]</a>Stef van Buuren, Karin Groothuis-Oudshoorn (2011). mice: Multivariate Imputation by Chained Equations in R. Journal of Statistical Software 45: 1-67.
 
      <a id="2">[2]</a>Kingma, D.P. & Welling, M. (2013). Auto-encoding variational bayes. In: Proceedings  of  the  International Conference on Learning Representations (ICLR). arXiv:1312.6114 [stat.ML].
 
     <a id="3">[3]</a>Scholz, M., Kaplan, F., Guy, C. L., Kopka, J., & Selbig, J. (2005). Non-linear PCA: a missing data approach. Bioinformatics, 21(20), 3887-3895.
-    
+
     <a id="4">[4]</a>Gashler, M. S., Smith, M. R., Morris, R., & Martinez, T. (2016). Missing value imputation with unsupervised backpropagation. Computational Intelligence, 32(2), 196-215.
