@@ -305,18 +305,18 @@ def main():
     # print(data.genotypes012_df)
     # print(vae_data.genotypes012_df)
 
-    # nlpca = ImputeNLPCA(
-    #     data,
-    #     n_components=3,
-    #     initial_strategy="populations",
-    #     disable_progressbar=True,
-    #     cv=3,
-    #     hidden_activation="elu",
-    #     hidden_layer_sizes="midpoint",
-    #     validation_only=None,
-    #     num_hidden_layers=1,
-    #     learning_rate=0.1,
-    # )
+    nlpca = ImputeNLPCA(
+        data,
+        n_components=3,
+        initial_strategy="populations",
+        disable_progressbar=True,
+        cv=3,
+        hidden_activation="elu",
+        hidden_layer_sizes="midpoint",
+        validation_only=None,
+        num_hidden_layers=1,
+        learning_rate=0.1,
+    )
 
     # nlpca_data = nlpca.imputed
     # print(nlpca_data.genotypes012_df)
@@ -350,9 +350,9 @@ def main():
     #     initial_strategy="group_mode",
     # )
 
-    phylo = ImputePhylo(
-        genotype_data=data, save_plots=False, disable_progressbar=True
-    )
+    # phylo = ImputePhylo(
+    #     genotype_data=data, save_plots=False, disable_progressbar=True
+    # )
 
     # phylodata = phylo.imputed
     # print(phylodata.genotypes012_df)

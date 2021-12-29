@@ -138,9 +138,10 @@ class NeuralNetwork:
             y_pred, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
         )
 
-        return tf.keras.metrics.categorical_accuracy(
-            y_true_masked, y_pred_masked
-        )
+        metric = tf.keras.metrics.CategoricalAccuracy()
+        metric.update_state(y_true_masked, y_pred_masked)
+
+        return metric.result().numpy()
 
     def categorical_mse_masked(self, y_true, y_pred):
         y_true_masked = tf.boolean_mask(
@@ -915,7 +916,9 @@ class UBP(NeuralNetwork):
 
             s_delta = None
             s_prime = np.inf
+            acc_prime = np.inf
             final_s = 0
+            final_acc = 0
             num_epochs = 0
             counter = 0
             checkpoint = 1
@@ -927,7 +930,7 @@ class UBP(NeuralNetwork):
             ):
                 # Train per epoch
                 # s is error (loss)
-                s = self._train_epoch(
+                s, train_acc = self._train_epoch(
                     model_single_layer,
                     model_mlp_phase2,
                     model_mlp_phase3,
@@ -939,16 +942,21 @@ class UBP(NeuralNetwork):
 
                 if num_epochs % 50 == 0:
                     print(f"Epoch {num_epochs}...")
-                    print(f"Observed MSE: {s}")
+                    print(
+                        f"Observed MSE: {s} (Accuracy: {round(train_acc * 100, 2)}%)"
+                    )
 
                 if num_epochs == 1:
                     s_prime = s
+                    acc_prime = train_acc
 
                     if self.nlpca:
                         print("\nBeginning NLPCA training...\n")
                     else:
                         print(f"\nBeginning UBP Phase {phase} training...\n")
-                    print(f"Initial MSE: {s}")
+                    print(
+                        f"Initial MSE: {s} (Accuracy: {round(train_acc * 100, 2)}%)"
+                    )
 
                 if not criterion_met and num_epochs > 1:
                     if s < s_prime:
@@ -980,6 +988,7 @@ class UBP(NeuralNetwork):
                         else:
                             counter = 0
                             s_prime = s
+                            acc_prime = train_acc
 
                     else:
                         if phase == 1 and not os.path.isdir(model_dir1):
@@ -1012,6 +1021,7 @@ class UBP(NeuralNetwork):
                         if s_delta > self.tol:
                             criterion_met = False
                             s_prime = s
+                            acc_prime = train_acc
                             counter = 0
                         else:
                             counter += 1
@@ -1036,6 +1046,7 @@ class UBP(NeuralNetwork):
                                         )
                                     )
                                 final_s = s_prime
+                                final_acc = acc_prime
                                 break
                     else:
                         counter += 1
@@ -1054,10 +1065,13 @@ class UBP(NeuralNetwork):
                                     model_dir3, compile=False
                                 )
                             final_s = s_prime
+                            final_acc = acc_prime
                             break
 
             print(f"Number of epochs used to train: {checkpoint}")
-            print(f"Final MSE: {final_s}")
+            print(
+                f"Final MSE: {final_s} (Accuracy: {round(final_acc * 100, 2)}%)"
+            )
 
         if not self.nlpca:
             self._remove_dir(model_dir1)
@@ -1099,6 +1113,7 @@ class UBP(NeuralNetwork):
         np.random.shuffle(indices)
 
         losses = list()
+        train_acc = list()
         val_loss = list()
         val_acc = list()
         for batch_idx in range(n_batches):
@@ -1130,26 +1145,27 @@ class UBP(NeuralNetwork):
             v.assign(v_batch)
 
             if phase == 1:
-                loss, refined = self._train_on_batch(
+                loss, refined, train_accuracy = self._train_on_batch(
                     v, x_batch, model_single_layer, phase
                 )
             elif phase == 2:
-                loss, refined = self._train_on_batch(
+                loss, refined, train_accuracy = self._train_on_batch(
                     v, x_batch, model_mlp_phase2, phase
                 )
             elif phase == 3:
-                loss, refined = self._train_on_batch(
+                loss, refined, train_accuracy = self._train_on_batch(
                     v, x_batch, model_mlp_phase3, phase
                 )
 
             losses.append(loss.numpy())
+            train_acc.append(train_accuracy)
 
             if phase != 2:
                 self.V_latent[batch_start:batch_end, :] = refined.numpy()
             else:
                 self.phase2_model.append(refined)
 
-        return np.mean(losses)
+        return np.mean(losses), np.mean(train_acc)
 
     def _train_on_batch(self, x, y, model, phase):
         """Custom training loop for neural network.
@@ -1179,6 +1195,8 @@ class UBP(NeuralNetwork):
 
             List[np.ndarray], conditional: Refined weights from keras model, as returned with the tf.keras.models.Sequential.get_weights() function. Only returned if phase == 2.
 
+            float: Training CategoricalAccuracy.
+
         """
         if phase != 2:
             src = [x]
@@ -1204,10 +1222,14 @@ class UBP(NeuralNetwork):
         gradients = tape.gradient(loss, src)
         self.opt.apply_gradients(zip(gradients, src))
 
+        train_accuracy = self.categorical_accuracy_masked(
+            tf.convert_to_tensor(y, dtype=tf.float32), pred
+        )
+
         if phase != 2:
-            return loss, x
+            return loss, x, train_accuracy
         elif phase == 2:
-            return loss, model.get_weights()
+            return loss, model.get_weights(), train_accuracy
 
     def _remove_dir(self, dir_path):
         """Remove directory from disk.
