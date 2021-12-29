@@ -1242,13 +1242,42 @@ class ImputeVAE(Impute):
         genotype_data,
         *,
         prefix="output",
-        cv=5,
+        cv: int = 5,
         initial_strategy="populations",
         validation_only=0.2,
-        disable_progressbar=False,
-        chunk_size=1.0,
         train_epochs=100,
         batch_size=32,
+        gridparams: Optional[Dict[str, Any]] = None,
+        grid_iter: int = 50,
+        ga: bool = False,
+        population_size: int = 10,
+        tournament_size: int = 3,
+        elitism: bool = True,
+        crossover_probability: float = 0.8,
+        mutation_probability: float = 0.1,
+        ga_algorithm: str = "eaMuPlusLambda",
+        early_stop_gen: int = 5,
+        scoring_metric: str = "neg_root_mean_squared_error",
+        column_subset: Union[int, float] = 0.1,
+        chunk_size: Union[int, float] = 1.0,
+        disable_progressbar: bool = False,
+        progress_update_percent: Optional[int] = None,
+        n_jobs: int = 1,
+        n_iter: int = 300,
+        clf_tol: float = 1e-3,
+        max_iter: int = 10,
+        tol: float = 1e-3,
+        str_encodings: Dict[str, int] = {
+            "A": 1,
+            "C": 2,
+            "G": 3,
+            "T": 4,
+            "N": -9,
+        },
+        imputation_order: str = "ascending",
+        skip_complete: bool = False,
+        random_state: Optional[int] = None,
+        verbose: int = 0,
         recurrent_weight=0.5,
         optimizer="adam",
         dropout_probability=0.2,
@@ -1264,12 +1293,6 @@ class ImputeVAE(Impute):
 
         self.clf = VAE
         self.clf_type = "classifier"
-
-        imp_kwargs = {
-            "str_encodings": {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9},
-        }
-
-        all_kwargs.update(imp_kwargs)
 
         super().__init__(self.clf, self.clf_type, all_kwargs)
 

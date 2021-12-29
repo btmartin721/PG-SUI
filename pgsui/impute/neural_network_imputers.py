@@ -10,6 +10,8 @@ from collections import defaultdict
 import numpy as np
 import pandas as pd
 
+from sklearn.base import BaseEstimator
+
 # For development purposes
 # from memory_profiler import memory_usage
 
@@ -50,11 +52,12 @@ else:
     from tqdm import tqdm as progressbar
 
 
-class NeuralNetwork:
+class NeuralNetwork(BaseEstimator):
     """Methods common to all neural network imputer classes and loss functions"""
 
     def __init__(self, **kwargs):
         self.data = None
+        self._estimator_type = "classifier"
 
     def make_reconstruction_loss(self, n_features):
         """Make loss function for use with a keras model.
@@ -328,9 +331,12 @@ class VAE(NeuralNetwork):
         super().__init__()
 
         self.prefix = prefix
-
+        self.genotype_data=genotype_data
+        self.gt=gt
+        self.initial_strategy=initial_strategy
         self.train_epochs = train_epochs
         self.initial_batch_size = batch_size
+        self.batch_size = batch_size
         self.recurrent_weight = recurrent_weight
         self.optimizer = optimizer
         self.dropout_probability = dropout_probability
@@ -673,8 +679,11 @@ class VAE(NeuralNetwork):
         Returns:
             numpy.ndarray(bool): Boolean mask of missing values, with True corresponding to a missing data point.
         """
-        if self.data.dtype != "f" and self.data.dtype != "d":
-            self.data = self.data.astype(float)
+        print("create_missing_mask")
+        print(self.data, flush=True)
+        sys.exit()
+        #if self.data.dtype != "f" and self.data.dtype != "d":
+        self.data = self.data.astype(float)
         return np.isnan(self.data)
 
 

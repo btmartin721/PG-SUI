@@ -94,9 +94,15 @@ def main():
         # accuracy = sim.accuracy(phylo)
         # print("Accuracy:",accuracy)
 
+        grid_params = {
+            "dropout_probability": Continuous(1e-2, 1.0, distribution="log-uniform")
+        }
+
         vae = ImputeVAE(
             genotype_data=sim,
-            initial_strategy="populations"
+            initial_strategy="populations",
+            ga=False,
+            #gridparams=grid_params
         )
         accuracy = sim.accuracy(vae)
         print("VAE Accuracy:",accuracy)
@@ -105,72 +111,72 @@ def main():
 
         sys.exit()
 
-
-        nlpca = ImputeNLPCA(
-            genotype_data=sim,
-            initial_strategy="populations",
-            cv=5,
-            num_hidden_layers=3
-        )
-        accuracy = sim.accuracy(nlpca)
-        print("NLPCA Accuracy (num_hidden_layers=3):",accuracy)
-
-        nlpca = ImputeNLPCA(
-            genotype_data=sim,
-            initial_strategy="populations",
-            cv=5,
-            num_hidden_layers=5
-        )
-        accuracy = sim.accuracy(nlpca)
-        print("NLPCA Accuracy (num_hidden_layers=5):",accuracy)
-
-        nlpca = ImputeNLPCA(
-            genotype_data=sim,
-            initial_strategy="populations",
-            cv=5,
-            num_hidden_layers=8
-        )
-        accuracy = sim.accuracy(nlpca)
-        print("NLPCA Accuracy (num_hidden_layers=8):",accuracy)
-
-        nlpca = ImputeNLPCA(
-            genotype_data=sim,
-            initial_strategy="populations",
-            cv=5,
-            num_hidden_layers=10
-        )
-        accuracy = sim.accuracy(nlpca)
-        print("NLPCA Accuracy (num_hidden_layers=10):",accuracy)
-
-
-
-
-        nlpca = ImputeNLPCA(
-            genotype_data=sim,
-            initial_strategy="populations",
-            cv=5,
-            n_components=2
-        )
-        accuracy = sim.accuracy(nlpca)
-        print("NLPCA Accuracy (n_components=2):",accuracy)
-
-        nlpca = ImputeNLPCA(
-            genotype_data=sim,
-            initial_strategy="populations",
-            cv=5,
-            n_components=3
-        )
-        accuracy = sim.accuracy(nlpca)
-        print("NLPCA Accuracy (n_components=3):",accuracy)
-
-        nlpca = ImputeNLPCA(
-            genotype_data=sim,
-            initial_strategy="populations",
-            cv=5,
-            n_components=4
-        )
-        accuracy = sim.accuracy(nlpca)
-        print("NLPCA Accuracy (n_components=4):",accuracy)
+        #
+        # nlpca = ImputeNLPCA(
+        #     genotype_data=sim,
+        #     initial_strategy="populations",
+        #     cv=5,
+        #     num_hidden_layers=3
+        # )
+        # accuracy = sim.accuracy(nlpca)
+        # print("NLPCA Accuracy (num_hidden_layers=3):",accuracy)
+        #
+        # nlpca = ImputeNLPCA(
+        #     genotype_data=sim,
+        #     initial_strategy="populations",
+        #     cv=5,
+        #     num_hidden_layers=5
+        # )
+        # accuracy = sim.accuracy(nlpca)
+        # print("NLPCA Accuracy (num_hidden_layers=5):",accuracy)
+        #
+        # nlpca = ImputeNLPCA(
+        #     genotype_data=sim,
+        #     initial_strategy="populations",
+        #     cv=5,
+        #     num_hidden_layers=8
+        # )
+        # accuracy = sim.accuracy(nlpca)
+        # print("NLPCA Accuracy (num_hidden_layers=8):",accuracy)
+        #
+        # nlpca = ImputeNLPCA(
+        #     genotype_data=sim,
+        #     initial_strategy="populations",
+        #     cv=5,
+        #     num_hidden_layers=10
+        # )
+        # accuracy = sim.accuracy(nlpca)
+        # print("NLPCA Accuracy (num_hidden_layers=10):",accuracy)
+        #
+        #
+        #
+        #
+        # nlpca = ImputeNLPCA(
+        #     genotype_data=sim,
+        #     initial_strategy="populations",
+        #     cv=5,
+        #     n_components=2
+        # )
+        # accuracy = sim.accuracy(nlpca)
+        # print("NLPCA Accuracy (n_components=2):",accuracy)
+        #
+        # nlpca = ImputeNLPCA(
+        #     genotype_data=sim,
+        #     initial_strategy="populations",
+        #     cv=5,
+        #     n_components=3
+        # )
+        # accuracy = sim.accuracy(nlpca)
+        # print("NLPCA Accuracy (n_components=3):",accuracy)
+        #
+        # nlpca = ImputeNLPCA(
+        #     genotype_data=sim,
+        #     initial_strategy="populations",
+        #     cv=5,
+        #     n_components=4
+        # )
+        # accuracy = sim.accuracy(nlpca)
+        # print("NLPCA Accuracy (n_components=4):",accuracy)
 
 
         # ubp = ImputeUBP(
