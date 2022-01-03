@@ -10,6 +10,22 @@ from collections import defaultdict
 import numpy as np
 import pandas as pd
 
+from sklearn.base import BaseEstimator
+from sklearn.model_selection import train_test_split
+
+# Grid search imports
+from sklearn.model_selection import StratifiedKFold
+
+# Randomized grid search imports
+from sklearn.model_selection import RandomizedSearchCV
+
+# Genetic algorithm grid search imports
+from sklearn_genetic import GASearchCV
+from sklearn_genetic.callbacks import ConsecutiveStopping
+from sklearn_genetic.plots import plot_fitness_evolution
+
+from keras.wrappers.scikit_learn import KerasClassifier
+
 # For development purposes
 # from memory_profiler import memory_usage
 
@@ -53,8 +69,20 @@ else:
 class NeuralNetwork:
     """Methods common to all neural network imputer classes and loss functions"""
 
-    def __init__(self, **kwargs):
+    def __init__(self):
         self.data = None
+
+    def reset_seeds(self):
+        """Reset random seeds for initializing weights."""
+        seed1 = np.random.randint(1, 1e6)
+        seed2 = np.random.randint(1, 1e6)
+        seed3 = np.random.randint(1, 1e6)
+        np.random.seed(seed1)
+        random.seed(seed2)
+        if tf.__version__[0] == "2":
+            tf.random.set_seed(seed3)
+        else:
+            tf.set_random_seed(seed3)
 
     def make_reconstruction_loss(self, n_features):
         """Make loss function for use with a keras model.
@@ -188,17 +216,19 @@ class NeuralNetwork:
         res[np.argmax(row)] = 1
         return res
 
-    def fill(self, missing_mask, missing_value, num_classes):
+    def fill(self, data, missing_mask, missing_value, num_classes):
         """Mask missing data as ``missing_value``.
 
         Args:
+            data (numpy.ndarray): Input with missing values of shape (n_samples, n_features, num_classes).
+
             missing_mask (np.ndarray(bool)): Missing data mask with True corresponding to a missing value.
 
             missing_value (int): Value to set missing data to. If a list is provided, then its length should equal the number of one-hot classes.
         """
         if num_classes > 1:
             missing_value = [missing_value] * num_classes
-        self.data[missing_mask] = missing_value
+        data[missing_mask] = missing_value
 
     def validate_extrakwargs(self, d):
         """Validate extra keyword arguments.
@@ -264,6 +294,1117 @@ class NeuralNetwork:
             raise ValueError("astype must be either 'numpy' or 'pandas'.")
 
         return X
+
+    def set_optimizer(self):
+        """Set optimizer to use.
+
+        Returns:
+            tf.keras.optimizers: Initialized optimizer.
+
+        Raises:
+            ValueError: Unsupported optimizer specified.
+        """
+        if self.optimizer == "adam":
+            return tf.keras.optimizers.Adam(learning_rate=self.learning_rate)
+        elif self.optimizer == "sgd":
+            return tf.keras.optimizers.SGD(learning_rate=self.learning_rate)
+        elif self.optimizer == "adagrad":
+            return tf.keras.optimizers.Adagrad(learning_rate=self.learning_rate)
+        else:
+            raise ValueError(
+                f"Only 'adam', 'sgd', and 'adagrad' optimizers are supported, "
+                f"but got {self.optimizer}."
+            )
+
+    def grid_search(
+        self,
+        X_train,
+        y_train,
+        estimator,
+        grid_cv,
+        ga,
+        early_stop_gen,
+        scoring_metric,
+        grid_n_iter,
+        search_space,
+        grid_n_jobs,
+        ga_kwargs,
+    ):
+        # Modified code
+        cross_val = StratifiedKFold(n_splits=grid_cv, shuffle=False)
+
+        if ga:
+            callback = ConsecutiveStopping(
+                generations=early_stop_gen, metric="fitness"
+            )
+
+            # Do genetic algorithm
+            with HiddenPrints():
+                search = GASearchCV(
+                    estimator=estimator,
+                    cv=cross_val,
+                    scoring=scoring_metric,
+                    generations=grid_n_iter,
+                    param_grid=search_space,
+                    n_jobs=grid_n_jobs,
+                    verbose=False,
+                    **ga_kwargs,
+                )
+
+                search.fit(X_train, y_train, callbacks=callback)
+
+        else:
+            # Do randomized grid search
+            search = RandomizedSearchCV(
+                estimator,
+                param_distributions=search_space,
+                n_iter=grid_n_iter,
+                scoring=scoring_metric,
+                n_jobs=grid_n_jobs,
+                cv=cross_val,
+            )
+
+            search.fit(X_train, y_train)
+
+        return search
+
+
+class TrackBatches(tf.keras.callbacks.Callback):
+    def on_train_begin(self, logs=None):
+        self.model.n_batches = self.params.get("steps")
+        # self.model.batch_size = self.params.get("batch_size")
+
+    def on_train_batch_begin(self, batch, logs=None):
+        print(batch)
+        self.model.batch_idx = batch
+
+    def on_test_batch_begin(self, batch, logs=None):
+        self.model.batch_idx = batch
+
+
+class UBPModel(tf.keras.Model, NeuralNetwork):
+    def __init__(
+        self,
+        V,
+        output_shape,
+        n_components,
+        weights_initializer,
+        hidden_layer_sizes,
+        hidden_activation,
+        l1_penalty,
+        l2_penalty,
+        nlpca,
+        phase=3,
+        num_classes=3,
+        phase2_weights=None,
+    ):
+        super(UBPModel, self).__init__()
+
+        self._V = V
+        self.phase = phase
+        self.hidden_layer_sizes = hidden_layer_sizes
+        self.nlpca = nlpca
+        self.n_components = n_components
+
+        # Initialize parameters that are set via callbacks during fit().
+        self._batch_size = 0
+        self._batch_idx = 0
+        self._n_batches = 0
+
+        self._phase2_weights = list()
+
+        if phase == 1 or phase == 2:
+            kernel_regularizer = l1_l2(l1_penalty, l2_penalty)
+        elif phase == 3:
+            kernel_regularizer = None
+        else:
+            raise ValueError(f"Phase must equal 1, 2, or 3, but got {phase}")
+
+        if phase == 3:
+            # Phase 3 uses weights from phase 2.
+            kernel_initializer = None
+        else:
+            kernel_initializer = weights_initializer
+
+        if phase > 1:
+
+            if len(hidden_layer_sizes) > 5:
+                raise ValueError("The maximum number of hidden layers is 5.")
+
+            self.dense2 = None
+            self.dense3 = None
+            self.dense4 = None
+            self.dense5 = None
+
+            # Construct multi-layer perceptron.
+            # Add hidden layers dynamically.
+            self.dense1 = Dense(
+                hidden_layer_sizes[0],
+                input_shape=(n_components,),
+                activation=hidden_activation,
+                kernel_initializer=kernel_initializer,
+                kernel_regularizer=kernel_regularizer,
+            )
+
+            if len(hidden_layer_sizes) >= 2:
+                self.dense2 = Dense(
+                    hidden_layer_sizes[1],
+                    activation=hidden_activation,
+                    kernel_initializer=kernel_initializer,
+                    kernel_regularizer=kernel_regularizer,
+                )
+
+            if len(hidden_layer_sizes) >= 3:
+                self.dense3 = Dense(
+                    hidden_layer_sizes[2],
+                    activation=hidden_activation,
+                    kernel_initializer=kernel_initializer,
+                    kernel_regularizer=kernel_regularizer,
+                )
+
+            if len(hidden_layer_sizes) >= 4:
+                self.dense4 = Dense(
+                    hidden_layer_sizes[3],
+                    activation=hidden_activation,
+                    kernel_initializer=kernel_initializer,
+                    kernel_regularizer=kernel_regularizer,
+                )
+
+            if len(hidden_layer_sizes) == 5:
+                self.dense5 = Dense(
+                    hidden_layer_sizes[4],
+                    activation=hidden_activation,
+                    kernel_initializer=kernel_initializer,
+                    kernel_regularizer=kernel_regularizer,
+                )
+
+            self.dense6 = Dense(
+                output_shape,
+                kernel_initializer=kernel_initializer,
+                kernel_regularizer=kernel_regularizer,
+            )
+
+            self.lmda = Lambda(lambda x: tf.expand_dims(x, -1))
+            self.output1 = Dense(num_classes, activation="softmax")
+
+        else:
+            # phase == 1.
+            # Construct single-layer perceptron.
+            self.dense1 = Dense(
+                output_shape,
+                input_shape=(n_components,),
+                kernel_initializer=kernel_initializer,
+                kernel_regularizer=kernel_regularizer,
+            )
+
+            self.lmda = Lambda(lambda x: tf.expand_dims(x, -1))
+            self.output1 = Dense(num_classes, activation="softmax")
+
+    def call(self, inputs):
+        x = self.dense1(inputs)
+
+        if self.phase > 1:
+            if self.dense2 is not None:
+                x = self.dense2(x)
+            if self.dense3 is not None:
+                x = self.dense3(x)
+            if self.dense4 is not None:
+                x = self.dense4(x)
+            if self.dense5 is not None:
+                x = self.dense5(x)
+            x = self.dense6(x)
+
+        else:
+            x = self.dense1(inputs)
+
+        x = self.lmda(x)
+        return self.output1(x)
+
+    @property
+    def V(self):
+        return self._V
+
+    @property
+    def batch_size(self):
+        return self._batch_size
+
+    @property
+    def batch_idx(self):
+        return self._batch_idx
+
+    @property
+    def n_batches(self):
+        return self._n_batches
+
+    @property
+    def phase2_weights(self):
+        return self._phase2_weights
+
+    @V.setter
+    def V(self, value):
+        self._V = value
+
+    @batch_size.setter
+    def batch_size(self, value):
+        self._batch_size = int(value)
+
+    @batch_idx.setter
+    def batch_idx(self, value):
+        self._batch_idx = int(value)
+
+    @n_batches.setter
+    def n_batches(self, value):
+        self._n_batches = int(value)
+
+    @phase2_weights.setter
+    def phase2_weights(self, l):
+        if not isinstance(l, list):
+            raise TypeError(f"phase2_weights must be a list, but got {type(l)}")
+        if len(l) != self._n_batches:
+            raise AssertionError(
+                "phase2_weights must equal the number of batches."
+            )
+        if self.phase != 3:
+            raise AttributeError("phase2_weights should only be set in phase 3")
+        self._phase2_weights = l
+
+    # def fit(self):
+    #     """Train an unsupervised backpropagation (UBP) or NLPCA model.
+
+    #     If NLPCA is True, then does NLPCA. Otherwise does UBP.
+
+    #     UBP runs over three phases.
+
+    #     1. Train a single-layer perceptron to refine the input, V_latent.
+    #     2. Train a multi-layer perceptron (MLP) to refine only the weights
+    #     3. Train an MLP to refine both the weights and input, V_latent.
+
+    #     NLPCA just does phase 3.
+
+    #     Returns:
+    #         numpy.ndarray(float): Predicted values as numpy array.
+    #     """
+    #     missing_mask = self._create_missing_mask()
+    #     self.observed_mask = ~missing_mask
+    #     self.fill(missing_mask, -1, self.num_classes)
+
+    #     # Reset model states
+    #     K.clear_session()
+    #     tf.compat.v1.reset_default_graph()
+    #     self.reset_seeds()
+
+    #     # Define neural network models.
+    #     if self.nlpca:
+    #         # If using NLPCA model: Don't need phases 1 and 2.
+    #         model_single_layer = None
+    #         model_mlp_phase2 = None
+    #         start_phase = 3
+
+    #     else:
+    #         # Using UBP model over three phases
+    #         phase1model = self.call(phase=1)
+    #         phase2model = self.call(phase=2)
+
+    #         # Initialize new model with new random weights.
+    #         model_single_layer = tf.keras.models.clone_model(phase1model)
+    #         model_mlp_phase2 = tf.keras.models.clone_model(phase2model)
+
+    #         del phase1model
+    #         del phase2model
+
+    #         start_phase = 1
+
+    #     phase3model = self.call(phase=3)
+    #     model_mlp_phase3 = tf.keras.models.clone_model(phase3model)
+    #     del phase3model
+
+    #     # Number of batches based on rows in X and V_latent.
+    #     n_batches = int(np.ceil(self.y_train.shape[0] / self.batch_size))
+    #     n_batches_test = int(
+    #         np.ceil(self.y_test.shape[0] / self.batch_size_test)
+    #     )
+
+    #     if self.nlpca:
+    #         model_dir3 = "optimal_nlpca"
+    #         self._remove_dir(model_dir3)
+    #     else:
+    #         model_dir1 = f"{self.prefix}_optimal_ubp_phase1"
+    #         model_dir2 = f"{self.prefix}_optimal_ubp_phase2"
+    #         model_dir3 = f"{self.prefix}_optimal_ubp_phase3"
+    #         self._remove_dir(model_dir1)
+    #         self._remove_dir(model_dir2)
+    #         self._remove_dir(model_dir3)
+
+    #     self.train_loss = tf.keras.metrics.Mean(name="train_loss")
+    #     self.train_acc = tf.keras.metrics.Mean(name="train_acc")
+    #     self.eval_loss = tf.keras.metrics.Mean(name="eval_loss")
+    #     self.eval_acc = tf.keras.metrics.Mean(name="eval_acc")
+
+    #     for phase in range(start_phase, 4):
+
+    #         s_delta = None
+    #         s_prime = np.inf
+    #         acc_prime = np.inf
+    #         final_s = 0
+    #         final_acc = 0
+    #         num_epochs = 0
+    #         counter = 0
+    #         checkpoint = 1
+    #         criterion_met = False
+
+    #         # While stopping criterion not met: keep doing more epochs.
+    #         while (
+    #             counter < self.early_stop_gen and num_epochs <= self.max_epochs
+    #         ):
+    #             # Reset loss states.
+    #             self.train_loss.reset_states()
+    #             self.eval_loss.reset_states()
+
+    #             # Train per epoch
+    #             # s is error (loss)
+    #             s, train_acc = self.train(
+    #                 model_single_layer,
+    #                 model_mlp_phase2,
+    #                 model_mlp_phase3,
+    #                 n_batches,
+    #                 n_batches_test,
+    #                 phase=phase,
+    #             )
+
+    #             num_epochs += 1
+
+    #             if num_epochs % 50 == 0:
+    #                 print(f"Epoch {num_epochs}...")
+    #                 print(
+    #                     f"Observed MSE: {s} (Accuracy: {round(train_acc * 100, 2)}%)"
+    #                 )
+
+    #             if num_epochs == 1:
+    #                 s_prime = s
+    #                 acc_prime = train_acc
+
+    #                 if self.nlpca:
+    #                     print("\nBeginning NLPCA training...\n")
+    #                 else:
+    #                     print(f"\nBeginning UBP Phase {phase} training...\n")
+    #                 print(
+    #                     f"Initial MSE: {s} (Accuracy: {round(train_acc * 100, 2)}%)"
+    #                 )
+
+    #             if not criterion_met and num_epochs > 1:
+    #                 if s < s_prime:
+    #                     s_delta = abs(s_prime - s)
+    #                     if s_delta <= self.tol:
+    #                         criterion_met = True
+    #                         if phase == 1:
+    #                             tf.keras.models.save_model(
+    #                                 model_single_layer,
+    #                                 model_dir1,
+    #                                 include_optimizer=False,
+    #                                 overwrite=True,
+    #                             )
+    #                         elif phase == 2:
+    #                             tf.keras.models.save_model(
+    #                                 model_mlp_phase2,
+    #                                 model_dir2,
+    #                                 include_optimizer=False,
+    #                                 overwrite=True,
+    #                             )
+    #                         elif phase == 3:
+    #                             tf.keras.models.save_model(
+    #                                 model_mlp_phase3,
+    #                                 model_dir3,
+    #                                 include_optimizer=False,
+    #                                 overwrite=True,
+    #                             )
+    #                         checkpoint = num_epochs
+    #                     else:
+    #                         counter = 0
+    #                         s_prime = s
+    #                         acc_prime = train_acc
+
+    #                 else:
+    #                     if phase == 1 and not os.path.isdir(model_dir1):
+    #                         tf.keras.models.save_model(
+    #                             model_single_layer,
+    #                             model_dir1,
+    #                             include_optimizer=False,
+    #                             overwrite=True,
+    #                         )
+    #                     elif phase == 2 and not os.path.isdir(model_dir2):
+    #                         tf.keras.models.save_model(
+    #                             model_mlp_phase2,
+    #                             model_dir2,
+    #                             include_optimizer=False,
+    #                             overwrite=True,
+    #                         )
+    #                     elif phase == 3 and not os.path.isdir(model_dir3):
+    #                         tf.keras.models.save_model(
+    #                             model_mlp_phase3,
+    #                             model_dir3,
+    #                             include_optimizer=False,
+    #                             overwrite=True,
+    #                         )
+    #                     criterion_met = True
+    #                     checkpoint = num_epochs
+
+    #             elif criterion_met and num_epochs > 1:
+    #                 if s < s_prime:
+    #                     s_delta = abs(s_prime - s)
+    #                     if s_delta > self.tol:
+    #                         criterion_met = False
+    #                         s_prime = s
+    #                         acc_prime = train_acc
+    #                         counter = 0
+    #                     else:
+    #                         counter += 1
+    #                         if counter == self.early_stop_gen:
+    #                             counter = 0
+    #                             if phase == 1:
+    #                                 model_single_layer = (
+    #                                     tf.keras.models.load_model(
+    #                                         model_dir1, compile=False
+    #                                     )
+    #                                 )
+    #                             elif phase == 2:
+    #                                 model_mlp_phase2 = (
+    #                                     tf.keras.models.load_model(
+    #                                         model_dir2, compile=False
+    #                                     )
+    #                                 )
+    #                             elif phase == 3:
+    #                                 model_mlp_phase3 = (
+    #                                     tf.keras.models.load_model(
+    #                                         model_dir3, compile=False
+    #                                     )
+    #                                 )
+    #                             final_s = s_prime
+    #                             final_acc = acc_prime
+    #                             break
+    #                 else:
+    #                     counter += 1
+    #                     if counter == self.early_stop_gen:
+    #                         counter = 0
+    #                         if phase == 1:
+    #                             model_single_layer = tf.keras.models.load_model(
+    #                                 model_dir1, compile=False
+    #                             )
+    #                         elif phase == 2:
+    #                             model_mlp_phase2 = tf.keras.models.load_model(
+    #                                 model_dir2, compile=False
+    #                             )
+    #                         elif phase == 3:
+    #                             model_mlp_phase3 = tf.keras.models.load_model(
+    #                                 model_dir3, compile=False
+    #                             )
+    #                         final_s = s_prime
+    #                         final_acc = acc_prime
+    #                         break
+
+    #         print(f"Number of epochs used to train: {checkpoint}")
+    #         print(
+    #             f"Final MSE: {final_s} (Accuracy: {round(final_acc * 100, 2)}%)"
+    #         )
+
+    #     if not self.nlpca:
+    #         self._remove_dir(model_dir1)
+    #         self._remove_dir(model_dir2)
+    #     self._remove_dir(model_dir3)
+
+    #     del model_single_layer
+    #     del model_mlp_phase2
+
+    #     return model_mlp_phase3
+
+    # @traceback_utils.filter_traceback
+    # def fit(
+    #     self,
+    #     x=None,
+    #     y=None,
+    #     batch_size=None,
+    #     epochs=1,
+    #     verbose="auto",
+    #     callbacks=None,
+    #     validation_split=0.0,
+    #     validation_data=None,
+    #     shuffle=True,
+    #     class_weight=None,
+    #     sample_weight=None,
+    #     initial_epoch=0,
+    #     steps_per_epoch=None,
+    #     validation_steps=None,
+    #     validation_batch_size=None,
+    #     validation_freq=1,
+    #     max_queue_size=10,
+    #     workers=1,
+    #     use_multiprocessing=False,
+    # ):
+    #     """Trains the model for a fixed number of epochs (iterations on a dataset).
+
+    #     Args:
+    #         x: Input data. It could be:
+    #         - A Numpy array (or array-like), or a list of arrays
+    #         (in case the model has multiple inputs).
+    #         - A TensorFlow tensor, or a list of tensors
+    #         (in case the model has multiple inputs).
+    #         - A dict mapping input names to the corresponding array/tensors,
+    #         if the model has named inputs.
+    #         - A `tf.data` dataset. Should return a tuple
+    #         of either `(inputs, targets)` or
+    #         `(inputs, targets, sample_weights)`.
+    #         - A generator or `keras.utils.Sequence` returning `(inputs, targets)`
+    #         or `(inputs, targets, sample_weights)`.
+    #         - A `tf.keras.utils.experimental.DatasetCreator`, which wraps a
+    #         callable that takes a single argument of type
+    #             `tf.distribute.InputContext`, and returns a `tf.data.Dataset`.
+    #             `DatasetCreator` should be used when users prefer to specify the
+    #             per-replica batching and sharding logic for the `Dataset`.
+    #             See `tf.keras.utils.experimental.DatasetCreator` doc for more
+    #             information.
+    #         A more detailed description of unpacking behavior for iterator types
+    #         (Dataset, generator, Sequence) is given below. If using
+    #         `tf.distribute.experimental.ParameterServerStrategy`, only
+    #         `DatasetCreator` type is supported for `x`.
+    #         y: Target data. Like the input data `x`,
+    #         it could be either Numpy array(s) or TensorFlow tensor(s).
+    #         It should be consistent with `x` (you cannot have Numpy inputs and
+    #         tensor targets, or inversely). If `x` is a dataset, generator,
+    #         or `keras.utils.Sequence` instance, `y` should
+    #         not be specified (since targets will be obtained from `x`).
+    #         batch_size: Integer or `None`.
+    #             Number of samples per gradient update.
+    #             If unspecified, `batch_size` will default to 32.
+    #             Do not specify the `batch_size` if your data is in the
+    #             form of datasets, generators, or `keras.utils.Sequence` instances
+    #             (since they generate batches).
+    #         epochs: Integer. Number of epochs to train the model.
+    #             An epoch is an iteration over the entire `x` and `y`
+    #             data provided
+    #             (unless the `steps_per_epoch` flag is set to
+    #             something other than None).
+    #             Note that in conjunction with `initial_epoch`,
+    #             `epochs` is to be understood as "final epoch".
+    #             The model is not trained for a number of iterations
+    #             given by `epochs`, but merely until the epoch
+    #             of index `epochs` is reached.
+    #         verbose: 'auto', 0, 1, or 2. Verbosity mode.
+    #             0 = silent, 1 = progress bar, 2 = one line per epoch.
+    #             'auto' defaults to 1 for most cases, but 2 when used with
+    #             `ParameterServerStrategy`. Note that the progress bar is not
+    #             particularly useful when logged to a file, so verbose=2 is
+    #             recommended when not running interactively (eg, in a production
+    #             environment).
+    #         callbacks: List of `keras.callbacks.Callback` instances.
+    #             List of callbacks to apply during training.
+    #             See `tf.keras.callbacks`. Note `tf.keras.callbacks.ProgbarLogger`
+    #             and `tf.keras.callbacks.History` callbacks are created automatically
+    #             and need not be passed into `model.fit`.
+    #             `tf.keras.callbacks.ProgbarLogger` is created or not based on
+    #             `verbose` argument to `model.fit`.
+    #             Callbacks with batch-level calls are currently unsupported with
+    #             `tf.distribute.experimental.ParameterServerStrategy`, and users are
+    #             advised to implement epoch-level calls instead with an appropriate
+    #             `steps_per_epoch` value.
+    #         validation_split: Float between 0 and 1.
+    #             Fraction of the training data to be used as validation data.
+    #             The model will set apart this fraction of the training data,
+    #             will not train on it, and will evaluate
+    #             the loss and any model metrics
+    #             on this data at the end of each epoch.
+    #             The validation data is selected from the last samples
+    #             in the `x` and `y` data provided, before shuffling. This argument is
+    #             not supported when `x` is a dataset, generator or
+    #         `keras.utils.Sequence` instance.
+    #             `validation_split` is not yet supported with
+    #             `tf.distribute.experimental.ParameterServerStrategy`.
+    #         validation_data: Data on which to evaluate
+    #             the loss and any model metrics at the end of each epoch.
+    #             The model will not be trained on this data. Thus, note the fact
+    #             that the validation loss of data provided using `validation_split`
+    #             or `validation_data` is not affected by regularization layers like
+    #             noise and dropout.
+    #             `validation_data` will override `validation_split`.
+    #             `validation_data` could be:
+    #             - A tuple `(x_val, y_val)` of Numpy arrays or tensors.
+    #             - A tuple `(x_val, y_val, val_sample_weights)` of NumPy arrays.
+    #             - A `tf.data.Dataset`.
+    #             - A Python generator or `keras.utils.Sequence` returning
+    #             `(inputs, targets)` or `(inputs, targets, sample_weights)`.
+    #             `validation_data` is not yet supported with
+    #             `tf.distribute.experimental.ParameterServerStrategy`.
+    #         shuffle: Boolean (whether to shuffle the training data
+    #             before each epoch) or str (for 'batch'). This argument is ignored
+    #             when `x` is a generator or an object of tf.data.Dataset.
+    #             'batch' is a special option for dealing
+    #             with the limitations of HDF5 data; it shuffles in batch-sized
+    #             chunks. Has no effect when `steps_per_epoch` is not `None`.
+    #         class_weight: Optional dictionary mapping class indices (integers)
+    #             to a weight (float) value, used for weighting the loss function
+    #             (during training only).
+    #             This can be useful to tell the model to
+    #             "pay more attention" to samples from
+    #             an under-represented class.
+    #         sample_weight: Optional Numpy array of weights for
+    #             the training samples, used for weighting the loss function
+    #             (during training only). You can either pass a flat (1D)
+    #             Numpy array with the same length as the input samples
+    #             (1:1 mapping between weights and samples),
+    #             or in the case of temporal data,
+    #             you can pass a 2D array with shape
+    #             `(samples, sequence_length)`,
+    #             to apply a different weight to every timestep of every sample. This
+    #             argument is not supported when `x` is a dataset, generator, or
+    #         `keras.utils.Sequence` instance, instead provide the sample_weights
+    #             as the third element of `x`.
+    #         initial_epoch: Integer.
+    #             Epoch at which to start training
+    #             (useful for resuming a previous training run).
+    #         steps_per_epoch: Integer or `None`.
+    #             Total number of steps (batches of samples)
+    #             before declaring one epoch finished and starting the
+    #             next epoch. When training with input tensors such as
+    #             TensorFlow data tensors, the default `None` is equal to
+    #             the number of samples in your dataset divided by
+    #             the batch size, or 1 if that cannot be determined. If x is a
+    #             `tf.data` dataset, and 'steps_per_epoch'
+    #             is None, the epoch will run until the input dataset is exhausted.
+    #             When passing an infinitely repeating dataset, you must specify the
+    #             `steps_per_epoch` argument. If `steps_per_epoch=-1` the training
+    #             will run indefinitely with an infinitely repeating dataset.
+    #             This argument is not supported with array inputs.
+    #             When using `tf.distribute.experimental.ParameterServerStrategy`:
+    #                 * `steps_per_epoch=None` is not supported.
+    #         validation_steps: Only relevant if `validation_data` is provided and
+    #             is a `tf.data` dataset. Total number of steps (batches of
+    #             samples) to draw before stopping when performing validation
+    #             at the end of every epoch. If 'validation_steps' is None, validation
+    #             will run until the `validation_data` dataset is exhausted. In the
+    #             case of an infinitely repeated dataset, it will run into an
+    #             infinite loop. If 'validation_steps' is specified and only part of
+    #             the dataset will be consumed, the evaluation will start from the
+    #             beginning of the dataset at each epoch. This ensures that the same
+    #             validation samples are used every time.
+    #         validation_batch_size: Integer or `None`.
+    #             Number of samples per validation batch.
+    #             If unspecified, will default to `batch_size`.
+    #             Do not specify the `validation_batch_size` if your data is in the
+    #             form of datasets, generators, or `keras.utils.Sequence` instances
+    #             (since they generate batches).
+    #         validation_freq: Only relevant if validation data is provided. Integer
+    #             or `collections.abc.Container` instance (e.g. list, tuple, etc.).
+    #             If an integer, specifies how many training epochs to run before a
+    #             new validation run is performed, e.g. `validation_freq=2` runs
+    #             validation every 2 epochs. If a Container, specifies the epochs on
+    #             which to run validation, e.g. `validation_freq=[1, 2, 10]` runs
+    #             validation at the end of the 1st, 2nd, and 10th epochs.
+    #         max_queue_size: Integer. Used for generator or `keras.utils.Sequence`
+    #             input only. Maximum size for the generator queue.
+    #             If unspecified, `max_queue_size` will default to 10.
+    #         workers: Integer. Used for generator or `keras.utils.Sequence` input
+    #             only. Maximum number of processes to spin up
+    #             when using process-based threading. If unspecified, `workers`
+    #             will default to 1.
+    #         use_multiprocessing: Boolean. Used for generator or
+    #             `keras.utils.Sequence` input only. If `True`, use process-based
+    #             threading. If unspecified, `use_multiprocessing` will default to
+    #             `False`. Note that because this implementation relies on
+    #             multiprocessing, you should not pass non-picklable arguments to
+    #             the generator as they can't be passed easily to children processes.
+
+    #     Unpacking behavior for iterator-like inputs:
+    #         A common pattern is to pass a tf.data.Dataset, generator, or
+    #     tf.keras.utils.Sequence to the `x` argument of fit, which will in fact
+    #     yield not only features (x) but optionally targets (y) and sample weights.
+    #     Keras requires that the output of such iterator-likes be unambiguous. The
+    #     iterator should return a tuple of length 1, 2, or 3, where the optional
+    #     second and third elements will be used for y and sample_weight
+    #     respectively. Any other type provided will be wrapped in a length one
+    #     tuple, effectively treating everything as 'x'. When yielding dicts, they
+    #     should still adhere to the top-level tuple structure.
+    #     e.g. `({"x0": x0, "x1": x1}, y)`. Keras will not attempt to separate
+    #     features, targets, and weights from the keys of a single dict.
+    #         A notable unsupported data type is the namedtuple. The reason is that
+    #     it behaves like both an ordered datatype (tuple) and a mapping
+    #     datatype (dict). So given a namedtuple of the form:
+    #         `namedtuple("example_tuple", ["y", "x"])`
+    #     it is ambiguous whether to reverse the order of the elements when
+    #     interpreting the value. Even worse is a tuple of the form:
+    #         `namedtuple("other_tuple", ["x", "y", "z"])`
+    #     where it is unclear if the tuple was intended to be unpacked into x, y,
+    #     and sample_weight or passed through as a single element to `x`. As a
+    #     result the data processing code will simply raise a ValueError if it
+    #     encounters a namedtuple. (Along with instructions to remedy the issue.)
+
+    #     Returns:
+    #         A `History` object. Its `History.history` attribute is
+    #         a record of training loss values and metrics values
+    #         at successive epochs, as well as validation loss values
+    #         and validation metrics values (if applicable).
+
+    #     Raises:
+    #         RuntimeError: 1. If the model was never compiled or,
+    #         2. If `model.fit` is  wrapped in `tf.function`.
+    #         ValueError: In case of mismatch between the provided input data
+    #             and what the model expects or when the input data is empty.
+    #     """
+    #     base_layer.keras_api_gauge.get_cell("fit").set(True)
+    #     # Legacy graph support is contained in `training_v1.Model`.
+    #     version_utils.disallow_legacy_graph("Model", "fit")
+    #     self._assert_compile_was_called()
+    #     self._check_call_args("fit")
+    #     _disallow_inside_tf_function("fit")
+
+    #     if verbose == "auto":
+    #         if self.distribute_strategy._should_use_with_coordinator:
+    #             # pylint: disable=protected-access
+    #             verbose = 2  # Default to epoch-level logging for PSStrategy.
+    #         else:
+    #             verbose = 1  # Default to batch-level logging otherwise.
+    #     elif (
+    #         verbose == 1
+    #         and self.distribute_strategy._should_use_with_coordinator
+    #     ):  # pylint: disable=protected-access
+    #         raise ValueError(
+    #             f"`verbose=1` is not allowed with `ParameterServerStrategy` for "
+    #             f"performance reasons. Received: `verbose`={verbose}"
+    #         )
+
+    #     if validation_split:
+    #         # Create the validation data using the training data. Only supported for
+    #         # `Tensor` and `NumPy` input.
+    #         (
+    #             x,
+    #             y,
+    #             sample_weight,
+    #         ), validation_data = data_adapter.train_validation_split(
+    #             (x, y, sample_weight), validation_split=validation_split
+    #         )
+
+    #     if validation_data:
+    #         (
+    #             val_x,
+    #             val_y,
+    #             val_sample_weight,
+    #         ) = data_adapter.unpack_x_y_sample_weight(validation_data)
+
+    #     if (
+    #         self.distribute_strategy._should_use_with_coordinator
+    #     ):  # pylint: disable=protected-access
+    #         self._cluster_coordinator = (
+    #             tf.distribute.experimental.coordinator.ClusterCoordinator(
+    #                 self.distribute_strategy
+    #             )
+    #         )
+
+    #     with self.distribute_strategy.scope(), training_utils.RespectCompiledTrainableState(
+    #         self
+    #     ):
+    #         # Creates a `tf.data.Dataset` and handles batch and epoch iteration.
+    #         data_handler = data_adapter.get_data_handler(
+    #             x=x,
+    #             y=y,
+    #             sample_weight=sample_weight,
+    #             batch_size=batch_size,
+    #             steps_per_epoch=steps_per_epoch,
+    #             initial_epoch=initial_epoch,
+    #             epochs=epochs,
+    #             shuffle=shuffle,
+    #             class_weight=class_weight,
+    #             max_queue_size=max_queue_size,
+    #             workers=workers,
+    #             use_multiprocessing=use_multiprocessing,
+    #             model=self,
+    #             steps_per_execution=self._steps_per_execution,
+    #         )
+
+    #     # Container that configures and calls `tf.keras.Callback`s.
+    #     if not isinstance(callbacks, callbacks_module.CallbackList):
+    #         callbacks = callbacks_module.CallbackList(
+    #             callbacks,
+    #             add_history=True,
+    #             add_progbar=verbose != 0,
+    #             model=self,
+    #             verbose=verbose,
+    #             epochs=epochs,
+    #             steps=data_handler.inferred_steps,
+    #         )
+
+    #     self.stop_training = False
+    #     self.train_function = self.make_train_function()
+    #     self._train_counter.assign(0)
+    #     callbacks.on_train_begin()
+    #     training_logs = None
+
+    #     # Handle fault-tolerance for multi-worker.
+    #     # TODO(omalleyt): Fix the ordering issues that mean this has to
+    #     # happen after `callbacks.on_train_begin`.
+    #     data_handler._initial_epoch = (  # pylint: disable=protected-access
+    #         self._maybe_load_initial_epoch_from_ckpt(initial_epoch)
+    #     )
+    #     logs = None
+
+    #     self._step = 0
+    #     self._end_step = 0
+    #     for epoch, iterator in data_handler.enumerate_epochs():
+    #         self.reset_metrics()
+    #         callbacks.on_epoch_begin(epoch)
+    #         with data_handler.catch_stop_iteration():
+    #             for step in data_handler.steps():
+    #                 with tf.profiler.experimental.Trace(
+    #                     "train",
+    #                     epoch_num=epoch,
+    #                     step_num=step,
+    #                     batch_size=batch_size,
+    #                     _r=1,
+    #                 ):
+    #                     callbacks.on_train_batch_begin(
+    #                         step, data_handler.step_increment
+    #                     )
+    #                     self._step = step
+    #                     self._end_step = step + data_handler.step_increment
+    #                     tmp_logs = self.train_function(iterator)
+    #                     if data_handler.should_sync:
+    #                         context.async_wait()
+    #                     logs = tmp_logs  # No error, now safe to assign to logs.
+    #                     end_step = step + data_handler.step_increment
+    #                     callbacks.on_train_batch_end(end_step, logs)
+    #                     if self.stop_training:
+    #                         break
+
+    #         logs = tf_utils.sync_to_numpy_or_python_type(logs)
+    #         if logs is None:
+    #             raise ValueError(
+    #                 "Unexpected result of `train_function` "
+    #                 "(Empty logs). Please use "
+    #                 "`Model.compile(..., run_eagerly=True)`, or "
+    #                 "`tf.config.run_functions_eagerly(True)` for more "
+    #                 "information of where went wrong, or file a "
+    #                 "issue/bug to `tf.keras`."
+    #             )
+    #             epoch_logs = copy.copy(logs)
+
+    #         # Run validation.
+    #         if validation_data and self._should_eval(epoch, validation_freq):
+    #             # Create data_handler for evaluation and cache it.
+    #             if getattr(self, "_eval_data_handler", None) is None:
+    #                 self._eval_data_handler = data_adapter.get_data_handler(
+    #                     x=val_x,
+    #                     y=val_y,
+    #                     sample_weight=val_sample_weight,
+    #                     batch_size=validation_batch_size or batch_size,
+    #                     steps_per_epoch=validation_steps,
+    #                     initial_epoch=0,
+    #                     epochs=1,
+    #                     max_queue_size=max_queue_size,
+    #                     workers=workers,
+    #                     use_multiprocessing=use_multiprocessing,
+    #                     model=self,
+    #                     steps_per_execution=self._steps_per_execution,
+    #                 )
+    #             val_logs = self.evaluate(
+    #                 x=val_x,
+    #                 y=val_y,
+    #                 sample_weight=val_sample_weight,
+    #                 batch_size=validation_batch_size or batch_size,
+    #                 steps=validation_steps,
+    #                 callbacks=callbacks,
+    #                 max_queue_size=max_queue_size,
+    #                 workers=workers,
+    #                 use_multiprocessing=use_multiprocessing,
+    #                 return_dict=True,
+    #                 _use_cached_eval_dataset=True,
+    #             )
+    #             val_logs = {
+    #                 "val_" + name: val for name, val in val_logs.items()
+    #             }
+    #             epoch_logs.update(val_logs)
+
+    #         callbacks.on_epoch_end(epoch, epoch_logs)
+    #         training_logs = epoch_logs
+    #         if self.stop_training:
+    #             break
+
+    #     # If eval data_hanlder exists, delete it after all epochs are done.
+    #     if getattr(self, "_eval_data_handler", None) is not None:
+    #         del self._eval_data_handler
+    #     callbacks.on_train_end(logs=training_logs)
+    #     return self.history
+
+    # def train(
+    #     self,
+    #     model_single_layer,
+    #     model_mlp_phase2,
+    #     model_mlp_phase3,
+    #     n_batches,
+    #     n_batches_test,
+    #     phase=3,
+    #     num_classes=3,
+    # ):
+    #     """Train UBP or NLPCA over one epoch.
+
+    #     Args:
+    #         model (tf.keras.models.Sequential): Keras model to train.
+
+    #         n_batches (int): Number of batches to train.
+
+    #         n_batches_test (int): Number of batches for test dataset.
+
+    #         phase (int): Current phase. UBP has three phases. If doing NLPCA, it only does phase 3.
+
+    #         num_classes (int): Number of categorical classes to predict (three for 012 encoding). Defaults to 3.
+    #     """
+
+    #     # Randomize the order the of the samples in the batches.
+    #     indices = np.arange(self.y_train.shape[0])
+    #     np.random.shuffle(indices)
+
+    #     indices_test = np.arange(self.y_test.shape[0])
+    #     np.random.shuffle(indices_test)
+
+    #     losses = list()
+    #     train_acc = list()
+    #     val_loss = list()
+    #     val_acc = list()
+
+    #     for batch_idx in range(n_batches_test):
+
+    #         batch_start = batch_idx * self.batch_size_test
+    #         batch_end = (batch_idx + 1) * self.batch_size_test
+    #         x_batch = self.y_test[batch_start:batch_end, :]
+    #         v_batch = self.X[batch_start:batch_end, :]
+
+    #         v = tf.Variable(
+    #             tf.zeros([x_batch.shape[0], self.n_components]),
+    #             trainable=False,
+    #             dtype=tf.float32,
+    #         )
+
+    #         v.assign(v_batch)
+
+    #         if phase == 1:
+    #             self.eval_once(v, x_batch, model_single_layer)
+    #         elif phase == 2:
+    #             self.eval_once(v, x_batch, model_mlp_phase2)
+    #         elif phase == 3:
+    #             self.eval_once(v, x_batch, model_mlp_phase3)
+
+    #     return np.mean(losses), np.mean(train_acc)
+
+    def train_step(self, data):
+        """Custom training loop for neural network.
+
+        GradientTape records the weights and watched
+        variables (usually tf.Variable objects), which
+        in this case are the weights and the input (x)
+        (if not phase 2), during the forward pass.
+        This allows us to run gradient descent during
+        backpropagation to refine the watched variables.
+
+        This function will train on a batch of samples (rows).
+
+        Args:
+            data (Tuple[tf.Variable, tf.Variable]): Input tensorflow variables of shape (batch_size, n_components) and (batch_size, n_features).
+
+        Returns:
+            tf.Tensor: Calculated loss of current batch.
+
+            tf.Variable, conditional: Input refined by gradient descent. Only returned if phase != 2.
+
+            List[np.ndarray], conditional: Refined weights from keras model, as returned with the tf.keras.models.Sequential.get_weights() function. Only returned if phase == 2.
+
+            float: Training CategoricalAccuracy.
+
+        Raises:
+            ValueError: Maximum number of phases is 3.
+            ValueError: phase cannot be below 0.
+
+        """
+        v_batch, x_batch = data
+
+        batch_size = v_batch.shape[0]
+
+        batch_start = self._batch_idx * batch_size
+        batch_end = (self._batch_idx + 1) * batch_size
+
+        phase = self.phase
+
+        if phase > 3:
+            raise ValueError(
+                f"There can only be maximum 3 phases, but phase={phase}"
+            )
+        if phase < 0:
+            raise ValueError(f"Phase cannot be below 0, but phase={phase}")
+
+        if phase == 3 and not self.nlpca:
+            # Set the refined weights from model 2.
+            self.set_weights(self._phase2_weights[self._batch_idx])
+
+        # Initialize variable v as tensorflow variable.
+        if phase != 2:
+            v = tf.Variable(
+                tf.zeros([x_batch.shape[0], self.n_components]),
+                trainable=True,
+                dtype=tf.float32,
+            )
+
+        elif phase == 2:
+            v = tf.Variable(
+                tf.zeros([x_batch.shape[0], self.n_components]),
+                trainable=False,
+                dtype=tf.float32,
+            )
+
+        # Assign current batch to v.
+        v.assign(v_batch)
+
+        if phase != 2:
+            src = [v_batch]
+
+        with tf.GradientTape() as tape:
+            # Forward pass
+            if phase != 2:
+                tape.watch(v_batch)
+            pred = self(v_batch, training=True)
+            loss = self.compiled_loss(
+                tf.convert_to_tensor(y, dtype=tf.float32),
+                pred,
+                regularization_losses=self.losses,
+            )
+
+        if phase != 2:
+            # Phase == 1 or 3.
+            src.extend(model.trainable_variables)
+        elif phase == 2:
+            # Phase == 2.
+            src = model.trainable_variables
+
+        # Refine the watched variables with
+        # gradient descent backpropagation
+        gradients = tape.gradient(loss, src)
+        self.optimizer.apply_gradients(zip(gradients, src))
+
+        self.compiled_metrics.update_state(
+            tf.convert_to_tensor(y, dtype=tf.float32), pred
+        )
+
+        if phase == 2:
+            self._phase2_weights.append(self.get_weights())
+        else:
+            self._V[batch_start:batch_end, :] = v_batch.numpy()
+
+        return {m.name: m.result() for m in self.metrics}
+
+    # def eval_once(self, x, y, model):
+    #     pred = model(x, training=False)
+    #     loss = self.categorical_crossentropy_masked(
+    #         tf.convert_to_tensor(y, dtype=tf.float32), pred
+    #     )
+    #     acc = self.categorical_accuracy_masked(
+    #         tf.convert_to_tensor(y, dtype=tf.float32), pred
+    #     )
+
+    #     self.eval_loss(loss)
+    #     self.eval_acc(acc)
 
 
 class VAE(NeuralNetwork):
@@ -723,115 +1864,253 @@ class UBP(NeuralNetwork):
 
         l1_penalty (float): L1 regularization penalty to apply to reduce overfitting. Defaults to 0.01.
 
-        l2_penalty (float) L2 regularization penalty to apply to reduce overfitting. Defaults to 0.01.
+        l2_penalty (float): L2 regularization penalty to apply to reduce overfitting. Defaults to 0.01.
+
+        kwargs (Any): Unsupported kwargs intended for other imputation methods.
     """
 
     def __init__(
         self,
+        genotype_data,
         *,
-        genotype_data=None,
-        gt=None,
         prefix="output",
-        cv=5,
-        initial_strategy="populations",
-        validation_only=0.3,
+        gridparams=None,  # TODO: Add to docstrings
+        validation_size=0.3,  # TODO: Add to docstrings
         write_output=True,
         disable_progressbar=False,
         nlpca=False,
         batch_size=32,
         n_components=3,
-        early_stop_gen=50,
         num_hidden_layers=3,
         hidden_layer_sizes="midpoint",
         optimizer="adam",
         hidden_activation="elu",
         learning_rate=0.1,
-        max_epochs=1000,
+        max_epochs=100,
         tol=1e-3,
         weights_initializer="glorot_normal",
         l1_penalty=0.01,
         l2_penalty=0.01,
+        cv=5,  # TODO: Add to docstrings
+        ga=False,  # TODO: Add below GA arguments to docstrings
+        early_stop_gen=50,
+        scoring_metric="neg_mean_squared_error",
+        grid_iter=50,
+        n_jobs=1,
+        population_size=10,
+        tournament_size=3,
+        elitism=True,
+        crossover_probability=0.8,
+        mutation_probability=0.1,
+        algorithm="eaMuPlusLambda",
+        **kwargs,
     ):
 
         super().__init__()
 
+        # CLF parameters.
+        self.genotype_data = genotype_data
         self.prefix = prefix
-
-        self.cv = cv
-        self.validation_only = validation_only
+        self.gridparams = gridparams
+        self.validation_size = validation_size
         self.write_output = write_output
         self.disable_progressbar = disable_progressbar
         self.nlpca = nlpca
-        self.initial_batch_size = batch_size
+        self.batch_size = batch_size
         self.n_components = n_components
         self.early_stop_gen = early_stop_gen
+        self.num_hidden_layers = num_hidden_layers
         self.hidden_layer_sizes = hidden_layer_sizes
         self.optimizer = optimizer
         self.hidden_activation = hidden_activation
-        self.initial_eta = learning_rate
+        self.learning_rate = learning_rate
         self.max_epochs = max_epochs
         self.tol = tol
         self.weights_initializer = weights_initializer
         self.l1_penalty = l1_penalty
         self.l2_penalty = l2_penalty
 
-        # Initialize instance variables
-        self.data = None
-        self.V_latent = None
-        self.batch_size = None
-        self.observed_mask = None
+        # TODO: Make estimators compatible with variable number of classes.
+        # E.g., with morphologial data.
         self.num_classes = 3
-        self.opt = self._set_optimizer()
-        self.phase2_model = list()
 
-        (
-            self.hidden_layer_sizes,
-            num_hidden_layers,
-        ) = self._validate_hidden_layers(hidden_layer_sizes, num_hidden_layers)
+        # Grid search settings.
+        self.ga = ga
+        self.scoring_metric = scoring_metric
+        self.grid_iter = grid_iter
+        self.n_jobs = n_jobs
+        self.population_size = population_size
+        self.tournament_size = tournament_size
+        self.elitism = elitism
+        self.crossover_probability = crossover_probability
+        self.mutation_probability = mutation_probability
+        self.algorithm = algorithm
 
     @timer
-    def fit_transform(self, input_data):
+    def fit_predict(self, y):
         """Train a UBP or NLPCA model and predict the output.
 
-        Args:
-            input_data (numpy.ndarray, pandas.DataFrame, or List[List[int]]): Input data of shape (n_samples, n_features).
+        Uses input data from GenotypeData object.
 
         Returns:
             pandas.DataFrame: Imputation predictions.
         """
-        X = self.validate_input(input_data)
+        # Initialize instance variables
+        # self.data = None
+        # self.batch_size = None
+        # self.observed_mask = None
+        # self.opt = self.set_optimizer()
+        self.phase2_model = list()
 
-        # Define random reduced-dimensionality input to refine.
-        self.V_latent = self._init_weights(X.shape[0], self.n_components)
-        self.batch_size = self.validate_batch_size(X, self.initial_batch_size)
-
-        self.hidden_layer_sizes = self._get_hidden_layer_sizes(
-            X.shape[1], self.n_components, self.hidden_layer_sizes
+        (
+            self.hidden_layer_sizes,
+            self.num_hidden_layers,
+        ) = self._validate_hidden_layers(
+            self.hidden_layer_sizes, self.num_hidden_layers
         )
 
-        self.data = self._encode_onehot(X)
+        # In NLPCA and UBP, X and y are flipped.
+        # X is the randomly initialized model input.
+        # y is the actual input data.
+        y = self.validate_input(y)
 
-        model = self.fit()
-        Xpred = self.predict(self.V_latent, X, model)
+        # Initialize small random values.
+        X = self._init_weights(y.shape[0], self.n_components)
 
-        del model
-        K.clear_session()
-        tf.compat.v1.reset_default_graph()
+        # # Define random reduced-dimensionality input to refine.
+        # # self.V_latent = y
+        # X_train, X_test, y_train, y_test = train_test_split(
+        #     X, y, test_size=self.validation_size
+        # )
 
-        return Xpred
+        # self.batch_size = self.validate_batch_size(y_train, self.batch_size)
+        # self.batch_size_test = self.validate_batch_size(y_test, self.batch_size)
+
+        hl_sizes = self._get_hidden_layer_sizes(
+            y.shape[1], self.n_components, self.hidden_layer_sizes
+        )
+
+        y_train = self._encode_onehot(y)
+        # self.data_test = self._encode_onehot(y_test)
+
+        # self.trained_model = self.train()
+
+        missing_mask = self._create_missing_mask(y_train)
+        observed_mask = ~missing_mask
+        self.fill(y_train, missing_mask, -1, self.num_classes)
+
+        # Define neural network models.
+        if self.nlpca:
+            # If using NLPCA model: Don't need phases 1 and 2.
+            start_phase = 3
+        else:
+            start_phase = 1
+
+        # Number of batches based on rows in X and V_latent.
+        # n_batches = int(np.ceil(self.data.shape[0] / self.batch_size))
+
+        # if self.nlpca:
+        #     model_dir3 = "optimal_nlpca"
+        #     self._remove_dir(model_dir3)
+        # else:
+        #     model_dir1 = f"{self.prefix}_optimal_ubp_phase1"
+        #     model_dir2 = f"{self.prefix}_optimal_ubp_phase2"
+        #     model_dir3 = f"{self.prefix}_optimal_ubp_phase3"
+        #     self._remove_dir(model_dir1)
+        #     self._remove_dir(model_dir2)
+        #     self._remove_dir(model_dir3)
+
+        # self._initialise_parameters()
+
+        models = list()
+        w = None
+        for phase in range(start_phase, 4):
+
+            # Reset model states
+            model = None
+            K.clear_session()
+            tf.compat.v1.reset_default_graph()
+            self.reset_seeds()
+
+            model = UBPModel(
+                X,
+                y_train.shape[1],
+                self.n_components,
+                self.weights_initializer,
+                hl_sizes,
+                self.hidden_activation,
+                self.l1_penalty,
+                self.l2_penalty,
+                self.nlpca,
+                phase=phase,
+                num_classes=3,
+            )
+
+            if phase == 3 and not self.nlpca:
+                model.phase2_weights = w
+
+            model.compile(
+                optimizer=self.set_optimizer(),
+                loss=self.categorical_crossentropy_masked,
+                metrics=[self.categorical_accuracy_masked],
+            )
+
+            history = model.fit(
+                x=X,
+                y=y_train,
+                batch_size=self.batch_size,
+                epochs=self.max_epochs,
+                callbacks=[TrackBatches()],
+                validation_split=self.validation_size,
+            )
+
+            if phase == 1:
+                X = model.V
+
+            if phase == 2:
+                w = model.phase2_weights
+
+        pred = self.predict(X, y, models[-1])
 
     def predict(self, V, X, model):
-        """Predict imputations based on a trained UBP or NLPCA model.
+        """Predict imputations based on input X.
 
         Args:
-            V (numpy.ndarray(float)): Refined reduced-dimensional input for predicting imputations.
+            X (numpy.ndarray(float), pandas.DataFrame, or List[List[int]]): Original data to impute.
 
-            X (numpy.ndarray(float)): Original data to impute.
-
-            model_mlp_phase3 (tf.keras.Sequential): Trained model (phase 3 if doing UBP).
+            model (tf.keras.Model): Trained Keras model to predict with.
 
         Returns:
             numpy.ndarray: Imputation predictions.
+        """
+        if X is None:
+            if self.genotype_data is None:
+                raise TypeError(
+                    "genotype_data argument must be provided if X is "
+                    "not provided in fit()"
+                )
+            else:
+                X = self.genotype_data.genotypes012_array
+
+        X = self.validate_input(X)
+        return self.predict_imputed(X, V, model)
+
+    def predict_imputed(self, X, V, model):
+        """Predict imputations based on a trained UBP or NLPCA model.
+
+        Args:
+            X (numpy.ndarray(float)): Original data to impute.
+
+            V (numpy.ndarray(float)): Refined reduced-dimensional input for predicting imputations.
+
+            model (tf.keras.Sequential): Trained model (phase 3 if doing UBP).
+
+        Returns:
+            numpy.ndarray: Imputation predictions.
+
+        Raises:
+            TypeError: V cannot be NoneType.
+            TypeError: model cannot be NoneType.
         """
         predictions = model(V, training=False)
         Xprob = predictions.numpy()
@@ -845,10 +2124,9 @@ class UBP(NeuralNetwork):
             known_idx = np.nonzero(self.observed_mask[idx])
             Xdecoded[idx, imputed_idx] = Xpred[idx, imputed_idx]
             Xdecoded[idx, known_idx] = X[idx, known_idx]
-        del model
         return Xdecoded
 
-    def fit(self):
+    def train(self):
         """Train an unsupervised backpropagation (UBP) or NLPCA model.
 
         UBP runs over three phases.
@@ -869,7 +2147,7 @@ class UBP(NeuralNetwork):
         # Reset model states
         K.clear_session()
         tf.compat.v1.reset_default_graph()
-        self._reset_seeds()
+        self.reset_seeds()
 
         # Define neural network models.
         if self.nlpca:
@@ -1436,13 +2714,16 @@ class UBP(NeuralNetwork):
             layers.append(units)
         return layers
 
-    def _create_missing_mask(self):
+    def _create_missing_mask(self, data):
         """Creates a missing data mask with boolean values.
 
+        Args:
+            data (numpy.ndarray): Data to generate missing mask from, of shape (n_samples, n_features, n_classes).
+
         Returns:
-            numpy.ndarray(bool): Boolean mask of missing values, with True corresponding to a missing data point.
+            numpy.ndarray(bool): Boolean mask of missing values of shape (n_samples, n_features), with True corresponding to a missing data point.
         """
-        return np.isnan(self.data).all(axis=2)
+        return np.isnan(data).all(axis=2)
 
     def _initialise_parameters(self):
         """Initialize important parameters."""
@@ -1451,36 +2732,3 @@ class UBP(NeuralNetwork):
         self.s_prime = np.inf
         self.num_epochs = 0
         self.checkpoint = 1
-
-    def _reset_seeds(self):
-        """Reset random seeds for initializing weights."""
-        seed1 = np.random.randint(1, 1e6)
-        seed2 = np.random.randint(1, 1e6)
-        seed3 = np.random.randint(1, 1e6)
-        np.random.seed(seed1)
-        random.seed(seed2)
-        if tf.__version__[0] == "2":
-            tf.random.set_seed(seed3)
-        else:
-            tf.set_random_seed(seed3)
-
-    def _set_optimizer(self):
-        """Set optimizer to use.
-
-        Returns:
-            tf.keras.optimizers: Initialized optimizer.
-
-        Raises:
-            ValueError: Unsupported optimizer specified.
-        """
-        if self.optimizer == "adam":
-            return tf.keras.optimizers.Adam(learning_rate=self.initial_eta)
-        elif self.optimizer == "sgd":
-            return tf.keras.optimizers.SGD(learning_rate=self.initial_eta)
-        elif self.optimizer == "adagrad":
-            return tf.keras.optimizers.Adagrad(learning_rate=self.initial_eta)
-        else:
-            raise ValueError(
-                f"Only 'adam', 'sgd', and 'adagrad' optimizers are supported, "
-                f"but got {self.optimizer}."
-            )

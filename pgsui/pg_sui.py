@@ -132,13 +132,13 @@ def main():
         # 	"max_samples": max_samples
         # }
 
-        # Genetic Algorithm grid_params
-        grid_params = {
-            "max_features": Categorical(["sqrt", "log2"]),
-            "min_samples_split": Integer(2, 10),
-            "min_samples_leaf": Integer(1, 10),
-            "max_depth": Integer(2, 110),
-        }
+        # # Genetic Algorithm grid_params
+        # grid_params = {
+        #     "max_features": Categorical(["sqrt", "log2"]),
+        #     "min_samples_split": Integer(2, 10),
+        #     "min_samples_leaf": Integer(1, 10),
+        #     "max_depth": Integer(2, 110),
+        # }
 
         # Bayesian Ridge gridparams - RandomizedSearchCV
         # grid_params = {
@@ -305,17 +305,29 @@ def main():
     # print(data.genotypes012_df)
     # print(vae_data.genotypes012_df)
 
+    # For randomizedsearchcv
+    learning_rate = [x for x in np.linspace(start=0.01, stop=0.1, num=10)]
+    hidden_activation = ["elu", "relu"]
+    num_hidden_layers = [1, 2, 3]
+    hidden_layer_sizes = ["sqrt", "midpoint"]
+    n_components = [2, 3]
+
+    grid_params = {
+        "learning_rate": learning_rate,
+        "hidden_activation": hidden_activation,
+        "num_hidden_layers": num_hidden_layers,
+        "hidden_layer_sizes": hidden_layer_sizes,
+        "n_components": n_components,
+    }
+
     nlpca = ImputeNLPCA(
         data,
-        n_components=3,
+        # gridparams=grid_params,
         initial_strategy="populations",
         disable_progressbar=True,
         cv=3,
-        hidden_activation="elu",
-        hidden_layer_sizes="midpoint",
-        validation_only=None,
-        num_hidden_layers=1,
-        learning_rate=0.1,
+        column_subset=1.0,
+        validation_only=1.0,
     )
 
     # nlpca_data = nlpca.imputed

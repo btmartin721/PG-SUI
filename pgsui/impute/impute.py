@@ -21,6 +21,7 @@ from scipy import stats as st
 # from memory_profiler import memory_usage
 
 # Scikit-learn imports
+from sklearn.utils.estimator_checks import check_estimator
 from sklearn.ensemble import ExtraTreesClassifier
 from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.ensemble import RandomForestClassifier
@@ -121,6 +122,11 @@ class Impute:
         self.clf = clf
         self.clf_type = clf_type
         self.original_num_cols = None
+
+        if self.clf == VAE or self.clf == UBP:
+            self.algorithm = "nn"
+        else:
+            self.algorithm = "ii"
 
         try:
             self.pops = kwargs["genotype_data"].populations
@@ -498,7 +504,7 @@ class Impute:
         """
         print(f"Doing {self.clf.__name__} imputation without grid search...")
 
-        if self.clf == VAE and self.clf == UBP:
+        if self.algorithm == "nn":
             clf = None
 
         else:
@@ -534,7 +540,7 @@ class Impute:
         else:
             df_scores = None
 
-        if self.clf == VAE or self.clf == UBP:
+        if self.algorithm == "nn":
             imputer = None
 
         else:
@@ -604,7 +610,8 @@ class Impute:
 
         print(f"Validation dataset size: {len(df_subset.columns)}\n")
 
-        clf = self.clf()
+        if self.algorithm == "ii":
+            clf = self.clf()
 
         print(f"Doing {self.clf.__name__} grid search...")
 
@@ -614,31 +621,51 @@ class Impute:
                 with redirect_stdout(fout):
                     print(f"Doing {self.clf.__name__} grid search...\n")
 
-        imputer = self._define_iterative_imputer(
-            clf,
-            self.logfilepath,
-            clf_kwargs=self.clf_kwargs,
-            ga_kwargs=self.ga_kwargs,
-            prefix=self.prefix,
-            n_jobs=self.n_jobs,
-            n_iter=self.grid_iter,
-            cv=self.cv,
-            clf_type=self.clf_type,
-            ga=self.ga,
-            search_space=self.gridparams,
-            disable_progressbar=self.disable_progressbar,
-            progress_update_percent=self.progress_update_percent,
-            scoring_metric=self.scoring_metric,
-            early_stop_gen=self.early_stop_gen,
-            pops=self.pops,
-        )
+        if self.algorithm == "nn":
+            clf = self.clf(**self.clf_kwargs, **ga_kwargs, **self.imp_kwargs)
+            # X_train = self.imp_kwargs["genotype_data"].genotypes012_array
+            # y_train = clf.y_train
 
-        if len(cols_to_keep) == original_num_cols:
-            cols_to_keep = None
+            search = self._nn_grid_search(
+                X_train,
+                y_train,
+                clf,
+                self.cv,
+                self.ga,
+                self.early_stop_gen,
+                self.scoring_metric,
+                self.grid_iter,
+                self.gridparams,
+                self.n_jobs,
+                self.ga_kwargs,
+            )
 
-        Xt, params_list, score_list = imputer.fit_transform(
-            df_subset, cols_to_keep
-        )
+        else:
+            imputer = self._define_iterative_imputer(
+                clf,
+                self.logfilepath,
+                clf_kwargs=self.clf_kwargs,
+                ga_kwargs=self.ga_kwargs,
+                prefix=self.prefix,
+                n_jobs=self.n_jobs,
+                n_iter=self.grid_iter,
+                cv=self.cv,
+                clf_type=self.clf_type,
+                ga=self.ga,
+                search_space=self.gridparams,
+                disable_progressbar=self.disable_progressbar,
+                progress_update_percent=self.progress_update_percent,
+                scoring_metric=self.scoring_metric,
+                early_stop_gen=self.early_stop_gen,
+                pops=self.pops,
+            )
+
+            if len(cols_to_keep) == original_num_cols:
+                cols_to_keep = None
+
+            Xt, params_list, score_list = imputer.fit_transform(
+                df_subset, cols_to_keep
+            )
 
         print(f"\nDone with {self.clf.__name__} grid search!")
 
@@ -648,33 +675,37 @@ class Impute:
                 with redirect_stdout(fout):
                     print(f"\nDone with {self.clf.__name__} grid search!")
 
-        del imputer
-        del Xt
+        if self.algorithm == "ii":
+            del imputer
+            del Xt
 
-        # Average or mode of best parameters
-        # and write them to a file
-        best_params = self._get_best_params(params_list)
+            # Average or mode of best parameters
+            # and write them to a file
+            best_params = self._get_best_params(params_list)
 
-        avg_score = mean(abs(x) for x in score_list if x != -9)
-        median_score = median(abs(x) for x in score_list if x != -9)
-        max_score = max(abs(x) for x in score_list if x != -9)
-        min_score = min(abs(x) for x in score_list if x != -9)
+            avg_score = mean(abs(x) for x in score_list if x != -9)
+            median_score = median(abs(x) for x in score_list if x != -9)
+            max_score = max(abs(x) for x in score_list if x != -9)
+            min_score = min(abs(x) for x in score_list if x != -9)
 
-        df_scores = pd.DataFrame(
-            {
-                "Mean": avg_score,
-                "Median": median_score,
-                "Min": min_score,
-                "Max": max_score,
-            },
-            index=[0],
-        )
+            df_scores = pd.DataFrame(
+                {
+                    "Mean": avg_score,
+                    "Median": median_score,
+                    "Min": min_score,
+                    "Max": max_score,
+                },
+                index=[0],
+            )
 
-        del avg_score
-        del median_score
-        del max_score
-        del min_score
-        gc.collect()
+            del avg_score
+            del median_score
+            del max_score
+            del min_score
+            gc.collect()
+        else:
+            best_params = search.best_params_
+            df_scores = pd.DataFrame(search.best_score_)
 
         if self.clf_type == "classifier":
             df_scores = df_scores.apply(lambda x: x * 100)
@@ -687,10 +718,14 @@ class Impute:
         self.clf_kwargs.update(best_params)
 
         test = self.clf()
-        if hasattr(test, "n_jobs"):
-            best_clf = self.clf(n_jobs=self.n_jobs, **self.clf_kwargs)
+
+        if self.algorithm == "nn":
+            best_imputer = self.clf(**clf_kwargs, **imp_kwargs)
         else:
-            best_clf = self.clf(**self.clf_kwargs)
+            if hasattr(test, "n_jobs"):
+                best_clf = self.clf(n_jobs=self.n_jobs, **self.clf_kwargs)
+            else:
+                best_clf = self.clf(**self.clf_kwargs)
 
         del test
         gc.collect()
@@ -709,15 +744,16 @@ class Impute:
                         f"with best found parameters...\n"
                     )
 
-        best_imputer = self._define_iterative_imputer(
-            best_clf,
-            self.logfilepath,
-            clf_kwargs=self.clf_kwargs,
-            prefix=self.prefix,
-            disable_progressbar=self.disable_progressbar,
-            progress_update_percent=self.progress_update_percent,
-            pops=self.pops,
-        )
+        if self.algorithm == "ii":
+            best_imputer = self._define_iterative_imputer(
+                best_clf,
+                self.logfilepath,
+                clf_kwargs=self.clf_kwargs,
+                prefix=self.prefix,
+                disable_progressbar=self.disable_progressbar,
+                progress_update_percent=self.progress_update_percent,
+                pops=self.pops,
+            )
 
         final_cols = None
         if len(df.columns) < original_num_cols:
@@ -892,11 +928,11 @@ class Impute:
         num_chunks = len(df_chunks)
         for i, Xchunk in enumerate(df_chunks, start=1):
             if self.clf_type == "classifier":
-                if self.clf == VAE or self.clf == UBP:
+                if self.algorithm == "nn":
                     imputer = self.clf(**self.clf_kwargs)
                     if self.clf == UBP:
                         df_imp = pd.DataFrame(
-                            imputer.fit_transform(Xchunk),
+                            imputer.fit_predict(Xchunk),
                             dtype="Int8",
                         )
                     else:
@@ -1195,7 +1231,10 @@ class Impute:
             ga_kwargs["criteria"] = "min"
 
         elif self.clf_type == "classifier":
-            ga_kwargs["criteria"] = "max"
+            if self.algorithm == "ii":
+                ga_kwargs["criteria"] = "max"
+            else:
+                ga_kwargs["criteria"] = "min"
 
         return (
             gridparams,
@@ -1412,14 +1451,14 @@ class Impute:
         df_missing_mask = df_unknown_slice.isnull()
 
         # Neural networks
-        if self.clf == VAE or self.clf == UBP:
+        if self.algorithm == "nn":
             df_stg = df_unknown_slice.copy()
 
             for col in df_stg.columns:
                 df_stg[col] = df_stg[col].replace({pd.NA: np.nan})
             df_stg.fillna(-9, inplace=True)
 
-            imputer = self.clf(**self.clf_kwargs)
+            imputer = self.clf(self.genotype_data, **self.clf_kwargs)
 
             if self.clf == VAE:
                 df_imp = pd.DataFrame(
@@ -1432,7 +1471,7 @@ class Impute:
 
             else:
                 df_imp = pd.DataFrame(
-                    imputer.fit_transform(df_stg.to_numpy()),
+                    imputer.fit_predict(df_stg.to_numpy()),
                     columns=cols,
                     dtype="int64",
                 )
@@ -1526,7 +1565,7 @@ class Impute:
             df_unknown,
         ]
 
-        if self.clf == VAE or self.clf == UBP:
+        if self.algorithm == "nn":
             del lst2del
             del cols
         else:
