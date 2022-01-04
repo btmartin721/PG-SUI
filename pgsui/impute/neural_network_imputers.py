@@ -37,13 +37,19 @@ os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # or any {'0', '1', '2', '3'}
 # Neural network imports
 import tensorflow as tf
 from tensorflow.python.util import deprecation
+from tensorflow.keras.callbacks import (
+    EarlyStopping,
+    ProgbarLogger,
+    ReduceLROnPlateau,
+    CSVLogger,
+)
+from tensorflow.keras.layers import Dropout, Dense, Lambda
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.regularizers import l1_l2
 
 import keras.backend as K
 
 # from keras.objectives import mse
-from keras.models import Sequential
-from keras.layers.core import Dropout, Dense, Lambda
-from keras.regularizers import l1_l2
 
 # Custom Modules
 try:
@@ -370,15 +376,140 @@ class NeuralNetwork:
         return search
 
 
-class TrackBatches(tf.keras.callbacks.Callback):
+class UBPCallbacks(tf.keras.callbacks.Callback):
     def on_train_begin(self, logs=None):
         self.model.n_batches = self.params.get("steps")
+        if self.model.phase == 3 and not self.model.nlpca:
+            self.model.set_weights(self.model.phase2_weights)
+
+        # if self.model.phase == 3 and not self.model.nlpca:
+        #     for i, layer in enumerate(self.model.layers):
+        #         layer.set_weights(self.model.phase2_weights[i])
 
     def on_train_batch_begin(self, batch, logs=None):
         self.model.batch_idx = batch
 
+    def on_train_end(self, logs=None):
+        if self.model.phase == 2 and not self.model.nlpca:
+            # UBP model and phase == 2: Save the weights from  Phase 2.
+            # weights = list()
+            # for layer in self.model.layers:
+            #     weights.append(layer.get_weights())
+            self.model.phase2_weights = self.model.get_weights()
+
     def on_test_batch_begin(self, batch, logs=None):
         self.model.batch_idx = batch
+
+
+class UBPEarlyStopping(tf.keras.callbacks.Callback):
+    """Stop training when the loss is at its min, i.e. the loss stops decreasing.
+
+    Arguments:
+        patience: Number of epochs to wait after min has been hit. After this
+        number of no improvement, training stops.
+    """
+
+    def __init__(self, patience=0, phase=3):
+        super(UBPEarlyStopping, self).__init__()
+        self.patience = patience
+        self.phase = phase
+
+        # best_weights to store the weights at which the minimum loss occurs.
+        self.best_weights = None
+
+        # In UBP, the input gets refined during training.
+        # So we have to revert it too.
+        self.best_input = None
+
+    def on_train_begin(self, logs=None):
+        # The number of epoch it has waited when loss is no longer minimum.
+        self.wait = 0
+        # The epoch the training stops at.
+        self.stopped_epoch = 0
+        # Initialize the best as infinity.
+        self.best = np.Inf
+
+    def on_epoch_end(self, epoch, logs=None):
+        current = logs.get("loss")
+        if np.less(current, self.best):
+            self.best = current
+            self.wait = 0
+            # Record the best weights if current results is better (less).
+            self.best_weights = self.model.get_weights()
+
+            if self.phase != 2:
+                # Only refine input in phase 2.
+                self.best_input = self.model.V
+        else:
+            self.wait += 1
+            if self.wait >= self.patience:
+                self.stopped_epoch = epoch
+                self.model.stop_training = True
+                self.model.set_weights(self.best_weights)
+
+                if self.phase != 2:
+                    self.model.V = self.best_input
+
+    def on_train_end(self, logs=None):
+        if self.stopped_epoch > 0:
+            print("Epoch %05d: early stopping" % (self.stopped_epoch + 1))
+
+
+class UBPDense(tf.keras.layers.Layer):
+    def __init__(
+        self,
+        units,
+        activation=None,
+        use_bias=True,
+        kernel_initializer="glorot_uniform",
+        bias_initializer="zeros",
+        kernel_regularizer=None,
+        bias_regularizer=None,
+        activity_regularizer=None,
+        kernel_constraint=None,
+        bias_constraint=None,
+        phase2_weights=None,
+        phase=3,
+        nlpca=False,
+        **kwargs,
+    ):
+        super(UBPDense, self).__init__()
+        self.units = units
+        self.activation = activation
+        self.use_bias = use_bias
+        self.kernel_initializer = kernel_initializer
+        self.bias_initializer = bias_initializer
+        self.kernel_regularizer = kernel_regularizer
+        self.bias_regularizer = bias_regularizer
+        self.activity_regularizer = activity_regularizer
+        self.kernel_constraint = kernel_constraint
+        self.bias_constraint = bias_constraint
+        self.phase2_weights = phase2_weights
+        self.phase = phase
+        self.nlpca = nlpca
+
+    def build(self, input_shape):
+        """Overridden build to initialize layer weights.
+
+        If phase == 3 and model is UBP, then loads the weights from phase 2. Else just creates the weights like normal
+
+        Args:
+            input_shape(tf.TensorShape): Shape of input to layer.
+        """
+        if self.phase == 3 and not self.nlpca:
+            self.w = self.set_weights(self.phase2_weights[0])
+            self.b = self.set_weights(self.phase2_weights[1])
+        else:
+            self.w = self.add_weight(
+                shape=(input_shape, self.units),
+                initializer=self.kernel_initializer,
+                regularizer=self.kernel_regularizer,
+                trainable=True,
+            )
+
+            self.b = self.add_weight(
+                shape=(self.units,), initializer="zeros", trainable=True
+            )
 
 
 class UBPModel(tf.keras.Model, NeuralNetwork):
@@ -441,6 +572,7 @@ class UBPModel(tf.keras.Model, NeuralNetwork):
     def __init__(
         self,
         V,
+        X_train,
         output_shape,
         n_components,
         weights_initializer,
@@ -449,6 +581,7 @@ class UBPModel(tf.keras.Model, NeuralNetwork):
         l1_penalty,
         l2_penalty,
         nlpca,
+        observed_mask,
         phase=3,
         num_classes=3,
         phase2_weights=None,
@@ -456,24 +589,29 @@ class UBPModel(tf.keras.Model, NeuralNetwork):
         super(UBPModel, self).__init__()
 
         self._V = V
+        self.X_train = X_train
         self.phase = phase
         self.hidden_layer_sizes = hidden_layer_sizes
         self.nlpca = nlpca
+        self.observed_mask = observed_mask
         self.n_components = n_components
+        self.weights_initializer = weights_initializer
+        self._phase2_weights = phase2_weights
 
         # Initialize parameters that are set via callbacks during fit().
         self._batch_size = 0
         self._batch_idx = 0
         self._n_batches = 0
 
-        self._phase2_weights = list()
-
         if phase == 1 or phase == 2:
             kernel_regularizer = l1_l2(l1_penalty, l2_penalty)
         elif phase == 3:
             kernel_regularizer = None
+
         else:
             raise ValueError(f"Phase must equal 1, 2, or 3, but got {phase}")
+
+        self.kernel_regularizer = kernel_regularizer
 
         if phase == 3:
             # Phase 3 uses weights from phase 2. So don't initialize.
@@ -540,20 +678,22 @@ class UBPModel(tf.keras.Model, NeuralNetwork):
             )
 
             self.lmda = Lambda(lambda x: tf.expand_dims(x, -1))
-            self.output1 = Dense(num_classes, activation="softmax")
+            self.output1 = Dense(num_classes, activation="softmax",)
 
         else:
             # phase == 1.
             # Construct single-layer perceptron.
+
             self.dense1 = Dense(
                 output_shape,
                 input_shape=(n_components,),
                 kernel_initializer=kernel_initializer,
                 kernel_regularizer=kernel_regularizer,
+                activation=hidden_activation,
             )
 
             self.lmda = Lambda(lambda x: tf.expand_dims(x, -1))
-            self.output1 = Dense(num_classes, activation="softmax")
+            self.output1 = Dense(num_classes, activation="softmax",)
 
     def call(self, inputs):
         """Forward propagates inputs through the model defined in __init__().
@@ -584,6 +724,61 @@ class UBPModel(tf.keras.Model, NeuralNetwork):
 
         x = self.lmda(x)
         return self.output1(x)
+
+    def mle(self, row):
+        """Get the Maximum Likelihood Estimation for the best prediction. Basically, it sets the index of the maxiumum value in a vector (row) to 1.0, since it is one-hot encoded.
+
+        Args:
+            row (numpy.ndarray(float)): Row vector with predicted values as floating points.
+
+        Returns:
+            numpy.ndarray(float): Row vector with the highest prediction set to 1.0 and the others set to 0.0.
+        """
+        res = np.zeros(row.shape[0])
+        res[np.argmax(row)] = 1
+        return res
+
+    def predict_step(self, data):
+        """Predict imputations for one batch based on a trained UBP or NLPCA model.
+
+        Args:
+            X (numpy.ndarray(float)): Original data to impute.
+
+            V (numpy.ndarray(float)): Refined reduced-dimensional input for predicting imputations.
+
+            model (tf.keras.Sequential): Trained model (phase 3 if doing UBP).
+
+            observed_mask (numpy.ndarray(bool)): Mask with True as non-missing values and False as missing.
+
+        Returns:
+            numpy.ndarray: Imputation predictions.
+
+        Raises:
+            TypeError: V cannot be NoneType.
+            TypeError: model cannot be NoneType.
+        """
+        v_batch, x_batch = data
+
+        batch_size = x_batch.numpy().shape[0]
+
+        # self._batch_idx is set in the UBPCallbacks() callback
+        # on_test_batch_begin() method.
+        batch_start = self._batch_idx * batch_size
+        batch_end = (self._batch_idx + 1) * batch_size
+
+        predictions = model(self._V, training=False)
+        Xprob = predictions.numpy()
+        Xt = np.apply_along_axis(self.mle, axis=2, arr=Xprob)
+        Xpred = np.argmax(Xt, axis=2)
+        Xdecoded = np.zeros((Xpred.shape[0], Xpred.shape[1]))
+        for idx, row in enumerate(Xdecoded):
+            imputed_vals = np.zeros(len(row))
+            known_vals = np.zeros(len(row))
+            imputed_idx = np.where(observed_mask[idx] == 0)
+            known_idx = np.nonzero(observed_mask[idx])
+            Xdecoded[idx, imputed_idx] = Xpred[idx, imputed_idx]
+            Xdecoded[idx, known_idx] = X[idx, known_idx]
+        return Xdecoded
 
     @property
     def V(self):
@@ -630,13 +825,8 @@ class UBPModel(tf.keras.Model, NeuralNetwork):
         self._n_batches = int(value)
 
     @phase2_weights.setter
-    def phase2_weights(self, l):
-        """Set phase 2 weights."""
-        if not isinstance(l, list):
-            raise TypeError(f"phase2_weights must be a list, but got {type(l)}")
-        if self.phase != 3:
-            raise AttributeError("phase2_weights should only be set in phase 3")
-        self._phase2_weights = l
+    def phase2_weights(self, value):
+        self._phase2_weights = value
 
     def train_step(self, data):
         """Custom training loop for one step (=batch) in a single epoch.
@@ -663,7 +853,7 @@ class UBPModel(tf.keras.Model, NeuralNetwork):
         ToDo:
             Obtain batch_size without using run_eagerly option in compile(). This will allow the step to be run in graph mode, thereby speeding up computation.
         """
-        v_batch, x_batch = data
+        x_batch = data[1]
 
         # Get current batch_size.
         # NOTE: run_eagerly must be set to True in the compile() method for this
@@ -671,12 +861,16 @@ class UBPModel(tf.keras.Model, NeuralNetwork):
         # There is really no other way to get the batch_size in graph
         # mode as far as I know. eager execution is slower, so it would be nice
         # to find a way to obtain batch_size without converting to numpy.
-        batch_size = v_batch.numpy().shape[0]
+        batch_size = x_batch.numpy().shape[0]
 
-        # self._batch_idx is set in the TrackBatches() callback
+        # self._batch_idx is set in the UBPCallbacks() callback
         # on_train_batch_begin() method.
         batch_start = self._batch_idx * batch_size
         batch_end = (self._batch_idx + 1) * batch_size
+
+        # override v_batch. This model refines the input to fit the output, so
+        # v_batch has to be overridden.
+        v_batch = self._V[batch_start:batch_end, :]
 
         phase = self.phase
 
@@ -687,9 +881,8 @@ class UBPModel(tf.keras.Model, NeuralNetwork):
         if phase < 0:
             raise ValueError(f"Phase cannot be below 0, but phase={phase}")
 
-        if phase == 3 and not self.nlpca:
-            # Set the refined weights from model 2.
-            self.set_weights(self._phase2_weights[self._batch_idx])
+        # NOTE: Moved self.set_weights(self._phase2_weights[self._batch_idx])
+        # to custom callback because it threw an error when it was here.
 
         # Initialize variable v as tensorflow variable.
         if phase != 2:
@@ -740,9 +933,7 @@ class UBPModel(tf.keras.Model, NeuralNetwork):
             tf.convert_to_tensor(x_batch, dtype=tf.float32), pred
         )
 
-        if phase == 2:
-            self._phase2_weights.append(self.get_weights())
-        else:
+        if phase != 2:
             self._V[batch_start:batch_end, :] = v.numpy()
 
         # history object that gets returned from fit().
@@ -1235,7 +1426,7 @@ class UBP(NeuralNetwork):
         l2_penalty=0.01,
         cv=5,  # TODO: Add to docstrings
         ga=False,  # TODO: Add below GA arguments to docstrings
-        early_stop_gen=50,
+        early_stop_gen=25,
         scoring_metric="neg_mean_squared_error",
         grid_iter=50,
         n_jobs=1,
@@ -1297,8 +1488,6 @@ class UBP(NeuralNetwork):
         Returns:
             pandas.DataFrame: Imputation predictions.
         """
-        self.phase2_model = list()
-
         (
             self.hidden_layer_sizes,
             self.num_hidden_layers,
@@ -1328,8 +1517,10 @@ class UBP(NeuralNetwork):
         if self.nlpca:
             # If using NLPCA model: Don't need phases 1 and 2.
             start_phase = 3
+            logfile = f"{self.prefix}_nlpca_log.csv"
         else:
             start_phase = 1
+            logfile = f"{self.prefix}_ubp_log.csv"
 
         models = list()
         histories = list()
@@ -1337,8 +1528,8 @@ class UBP(NeuralNetwork):
         for phase in range(start_phase, 4):
 
             # Reset model states
-            model = None
             K.clear_session()
+            tf.keras.backend.clear_session()
             tf.compat.v1.reset_default_graph()
             self.reset_seeds()
 
@@ -1354,10 +1545,10 @@ class UBP(NeuralNetwork):
                 self.nlpca,
                 phase=phase,
                 num_classes=3,
+                phase2_weights=w,
             )
 
-            if phase == 3 and not self.nlpca:
-                model.phase2_weights = w
+            model.build((None, X.shape[1]))
 
             model.compile(
                 optimizer=self.set_optimizer(),
@@ -1366,25 +1557,35 @@ class UBP(NeuralNetwork):
                 run_eagerly=True,
             )
 
+            callbacks = [
+                UBPCallbacks(),
+                UBPEarlyStopping(patience=self.early_stop_gen, phase=phase,),
+                ReduceLROnPlateau(
+                    monitor="val_loss", factor=0.2, patience=self.early_stop_gen
+                ),
+                CSVLogger(filename=logfile),
+            ]
+
             history = model.fit(
                 x=X,
                 y=y_train,
                 batch_size=self.batch_size,
                 epochs=self.max_epochs,
-                callbacks=[TrackBatches()],
+                callbacks=callbacks,
                 validation_split=self.validation_size,
                 shuffle=False,
             )
 
             histories.append(history.history)
 
-            if phase == 1:
-                X = model.V
-
-            if phase == 2:
+            if phase != 2:
+                X = model.V.copy()
+            else:
                 w = model.phase2_weights
 
             models.append(model)
+
+            del model
 
         pred = self.predict(X, y, models[-1], observed_mask)
         self._plot_history(histories)
@@ -1462,7 +1663,7 @@ class UBP(NeuralNetwork):
             fn = "histplot_nlpca.pdf"
             fig, (ax1, ax2) = plt.subplots(1, 2)
             fig.suptitle("NLPCA")
-            fig.tight_layout()
+            fig.tight_layout(h_pad=2.0, w_pad=2.0)
             history = lod[0]
 
             # Plot accuracy
@@ -1488,20 +1689,20 @@ class UBP(NeuralNetwork):
             plt.clf()
 
         else:
-            fig = plt.figure()
-            plt.subplots_adjust(hspace=0.5)
+            fig = plt.figure(figsize=(12, 16))
             fig.suptitle("UBP")
+            fig.tight_layout(h_pad=2.0, w_pad=2.0)
             fn = "histplot_ubp.pdf"
 
             idx = 1
             for i, history in enumerate(lod, start=1):
                 plt.subplot(3, 2, idx)
-                title = f"UBP Phase {i}"
+                title = f"Phase {i}"
 
                 # Plot model accuracy
                 plt.plot(history["categorical_accuracy_masked"])
                 plt.plot(history["val_categorical_accuracy_masked"])
-                plt.title(title)
+                plt.title(f"{title} Accuracy")
                 plt.ylabel("Accuracy")
                 plt.xlabel("Epoch")
                 plt.legend(["Train", "Validation"], loc="best")
@@ -1510,18 +1711,17 @@ class UBP(NeuralNetwork):
                 plt.subplot(3, 2, idx + 1)
                 plt.plot(history["loss"])
                 plt.plot(history["val_loss"])
-                plt.title("Model Loss")
+                plt.title(f"{title} Loss")
                 plt.ylabel("Loss (MSE)")
                 plt.xlabel("Epoch")
-                plt.yticks([0.0, 0.25, 0.5, 0.75, 1.0])
                 plt.legend(["Train", "Validation"], loc="best")
 
                 idx += 2
 
+            plt.savefig(fn, bbox_inches="tight")
+
             plt.close()
             plt.clf()
-
-            plt.savefig(fn, bbox_inches="tight")
 
     def train(self):
         """Train an unsupervised backpropagation (UBP) or NLPCA model.
@@ -1703,22 +1903,16 @@ class UBP(NeuralNetwork):
                             if counter == self.early_stop_gen:
                                 counter = 0
                                 if phase == 1:
-                                    model_single_layer = (
-                                        tf.keras.models.load_model(
-                                            model_dir1, compile=False
-                                        )
+                                    model_single_layer = tf.keras.models.load_model(
+                                        model_dir1, compile=False
                                     )
                                 elif phase == 2:
-                                    model_mlp_phase2 = (
-                                        tf.keras.models.load_model(
-                                            model_dir2, compile=False
-                                        )
+                                    model_mlp_phase2 = tf.keras.models.load_model(
+                                        model_dir2, compile=False
                                     )
                                 elif phase == 3:
-                                    model_mlp_phase3 = (
-                                        tf.keras.models.load_model(
-                                            model_dir3, compile=False
-                                        )
+                                    model_mlp_phase3 = tf.keras.models.load_model(
+                                        model_dir3, compile=False
                                     )
                                 final_s = s_prime
                                 final_acc = acc_prime

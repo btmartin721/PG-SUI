@@ -1383,7 +1383,7 @@ class ImputeUBP(Impute):
         crossover_probability=0.8,
         mutation_probability=0.1,
         ga_algorithm="eaMuPlusLambda",
-        early_stop_gen=50,
+        early_stop_gen=25,
         scoring_metric="neg_mean_squared_error",
         column_subset=0.1,
         initial_strategy="populations",
