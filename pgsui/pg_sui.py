@@ -12,7 +12,7 @@ from sklearn_genetic.space import Continuous, Categorical, Integer
 
 # from pgsui import GenotypeData
 from read_input.read_input import GenotypeData
-from impute.estimators import ImputeNLPCA, ImputeRandomForest
+from impute.estimators import ImputeNLPCA, ImputeUBP, ImputeRandomForest
 from impute.simple_imputers import ImputePhylo
 
 # from read_input.read_input import GenotypeData
@@ -320,7 +320,7 @@ def main():
         "n_components": n_components,
     }
 
-    nlpca = ImputeNLPCA(
+    nlpca = ImputeUBP(
         data,
         # gridparams=grid_params,
         initial_strategy="populations",
