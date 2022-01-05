@@ -1200,7 +1200,7 @@ class ImputeVAE(Impute):
 
         optimizer (str): Gradient descent optimizer to use. See tf.keras.optimizers for more info. Defaults to "adam".
 
-        dropout_probability (float): Dropout rate for neurons in the network. Can adjust to reduce overfitting. Defaults to 0.2.
+        dropout_probability (float, optional): Dropout rate during training to reduce overfitting. Must be a float between 0 and 1. Defaults to 0.2.
 
         hidden_activation (str): Activation function to use for hidden layers. See tf.keras.activations for more info. Defaults to "relu".
 
@@ -1332,6 +1332,8 @@ class ImputeUBP(Impute):
 
         l2_penalty (float, optional) L2 regularization penalty to apply to reduce overfitting. Defaults to 0.01.
 
+        dropout_probability (float, optional): Dropout rate during training to reduce overfitting. Must be a float between 0 and 1. Defaults to 0.2.
+
     Attributes:
         nlpca (bool): If True, does NLPCA model. Otherwise does UBP.
 
@@ -1404,6 +1406,7 @@ class ImputeUBP(Impute):
         weights_initializer="glorot_normal",
         l1_penalty=0.01,
         l2_penalty=0.01,
+        dropout_probability=0.2,
     ):
 
         # Get local variables into dictionary object

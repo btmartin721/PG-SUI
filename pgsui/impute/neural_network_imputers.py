@@ -666,10 +666,7 @@ class UBPModel(tf.keras.Model, NeuralNetwork):
             )
 
             self.lmda = Lambda(lambda x: tf.expand_dims(x, -1))
-            self.output1 = Dense(
-                num_classes,
-                activation="softmax",
-            )
+            self.output1 = Dense(num_classes, activation="softmax",)
 
         else:
             # phase == 1.
@@ -684,10 +681,7 @@ class UBPModel(tf.keras.Model, NeuralNetwork):
             )
 
             self.lmda = Lambda(lambda x: tf.expand_dims(x, -1))
-            self.output1 = Dense(
-                num_classes,
-                activation="softmax",
-            )
+            self.output1 = Dense(num_classes, activation="softmax",)
 
     def call(self, inputs):
         """Forward propagates inputs through the model defined in __init__().
@@ -971,6 +965,8 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
 
         l2_penalty (float): L2 regularization penalty to use to reduce overfitting.
 
+        dropout_probability (float): Dropout rate during training to reduce overfitting. Must be a float between 0 and 1.
+
         num_classes (int, optional): Number of classes in output. Corresponds to the 3rd dimension of the output shape (batch_size, n_features, num_classes). Defaults to 3.
 
         phase (NoneType): Here for compatibility with UBP.
@@ -995,7 +991,7 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
         _n_batches (int): Total number of batches per epoch.
 
     Example:
-        >>>model = NLPCAModel(V, output_shape, n_components, weights_initializer, hidden_layer_sizes, hidden_activation, l1_penalty, l2_penalty, num_classes=3)
+        >>>model = NLPCAModel(V, output_shape, n_components, weights_initializer, hidden_layer_sizes, hidden_activation, l1_penalty, l2_penalty, dropout_probability, num_classes=3)
         >>>model.compile(optimizer=optimizer, loss=loss_func, metrics=[my_metrics], run_eagerly=True)
         >>>history = model.fit(X, y, batch_size=batch_size, epochs=epochs, callbacks=[MyCallback()], validation_split=validation_split, shuffle=False)
     """
@@ -1010,6 +1006,7 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
         hidden_activation,
         l1_penalty,
         l2_penalty,
+        dropout_probability,
         num_classes=3,
         phase=None,
     ):
@@ -1089,16 +1086,17 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
 
         # Expand dims to 3d to shape (batch_size, n_features, num_classes).
         self.lmda = Lambda(lambda x: tf.expand_dims(x, -1))
-        self.output1 = Dense(
-            num_classes,
-            activation="softmax",
-        )
+        self.output1 = Dense(num_classes, activation="softmax",)
 
-    def call(self, inputs):
+        self.dropout_layer = Dropout(rate=dropout_probability)
+
+    def call(self, inputs, training=None):
         """Forward propagates inputs through the model defined in __init__().
 
         Args:
             inputs (tf.keras.Input): Input tensor to forward propagate through the model.
+
+            training (bool or None): Whether in training mode or not. Affects whether dropout is used.
 
         Returns:
             tf.keras.Model: Output tensor from forward propagation.
@@ -1106,13 +1104,19 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
         x = self.dense1(inputs)
         if self.dense2 is not None:
             x = self.dense2(x)
+            x = self.dropout_layer(x, training=training)
         if self.dense3 is not None:
             x = self.dense3(x)
+            x = self.dropout_layer(x, training=training)
         if self.dense4 is not None:
             x = self.dense4(x)
+            x = self.dropout_layer(x, training=training)
         if self.dense5 is not None:
             x = self.dense5(x)
+            x = self.dropout_layer(x, training=training)
         x = self.dense6(x)
+        x = self.dropout_layer(x, training=training)
+
         x = self.lmda(x)
         return self.output1(x)
 
@@ -1392,10 +1396,7 @@ class UBPPhase1(tf.keras.Model, NeuralNetwork):
 
         # Expand dims to 3d (batch_size, n_features, num_classes)
         self.lmda = Lambda(lambda x: tf.expand_dims(x, -1))
-        self.output1 = Dense(
-            num_classes,
-            activation="softmax",
-        )
+        self.output1 = Dense(num_classes, activation="softmax",)
 
     def call(self, inputs):
         """Forward propagates inputs through the model defined in __init__().
@@ -1449,7 +1450,7 @@ class UBPPhase1(tf.keras.Model, NeuralNetwork):
 
         # override v_batch. This model refines the input to fit the output, so
         # v_batch has to be overridden.
-        v_batch = self._V_latent[batch_start:batch_end, :]
+        v_batch = self._V_latent[batch_start:batch_end, :].copy()
 
         # NOTE: Moved self.set_weights(self._phase2_weights[self._batch_idx])
         # to custom callback because it threw an error when it was here.
@@ -1485,7 +1486,7 @@ class UBPPhase1(tf.keras.Model, NeuralNetwork):
             tf.convert_to_tensor(y_true, dtype=tf.float32), y_pred
         )
 
-        self._V_latent[batch_start:batch_end, :] = v.numpy()
+        self._V_latent[batch_start:batch_end, :] = v.numpy().copy()
 
         # history object that gets returned from fit().
         return {m.name: m.result() for m in self.metrics}
@@ -1511,7 +1512,7 @@ class UBPPhase1(tf.keras.Model, NeuralNetwork):
         batch_end = (self._batch_idx + 1) * batch_size
 
         # Get the input that's being refined.
-        v_batch = self._V_latent[batch_start:batch_end, :]
+        v_batch = self._V_latent[batch_start:batch_end, :].copy()
 
         v = tf.Variable(
             tf.zeros([batch_size, self.n_components]),
@@ -1602,6 +1603,8 @@ class UBPPhase2(tf.keras.Model, NeuralNetwork):
 
         l2_penalty (float): L2 regularization penalty to use to reduce overfitting.
 
+        dropout_probability (float): Dropout rate during training to reduce overfitting. Must be a float between 0 and 1.
+
         phase (int, optional): Current phase if doing UBP model. Defaults to 3.
 
         num_classes (int, optional): Number of classes in output. Corresponds to the 3rd dimension of the output shape (batch_size, n_features, num_classes). Defaults to 3.
@@ -1625,7 +1628,7 @@ class UBPPhase2(tf.keras.Model, NeuralNetwork):
         _n_batches (int): Total number of batches per epoch.
 
     Example:
-        >>>model = UBPPhase2(output_shape, n_components, weights_initializer, hidden_layer_sizes, hidden_activation, l1_penalty, l2_penalty, phase=3, num_classes=3)
+        >>>model = UBPPhase2(output_shape, n_components, weights_initializer, hidden_layer_sizes, hidden_activation, l1_penalty, l2_penalty, dropout_probability, phase=3, num_classes=3)
         >>>model.compile(optimizer=optimizer, loss=loss_func, metrics=[my_metrics], run_eagerly=True)
         >>>history = model.fit(X, y, batch_size=batch_size, epochs=epochs, callbacks=[MyCallback()], validation_split=validation_split, shuffle=False)
     """
@@ -1639,6 +1642,7 @@ class UBPPhase2(tf.keras.Model, NeuralNetwork):
         hidden_activation,
         l1_penalty,
         l2_penalty,
+        dropout_probability,
         phase=3,
         num_classes=3,
     ):
@@ -1716,16 +1720,16 @@ class UBPPhase2(tf.keras.Model, NeuralNetwork):
 
         # Expand dims to 3d with shape (batch_size, n_features, num_classes)
         self.lmda = Lambda(lambda x: tf.expand_dims(x, -1))
-        self.output1 = Dense(
-            num_classes,
-            activation="softmax",
-        )
+        self.output1 = Dense(num_classes, activation="softmax",)
+        self.dropout_layer = Dropout(rate=dropout_probability)
 
-    def call(self, inputs):
+    def call(self, inputs, training=None):
         """Forward propagates inputs through the model defined in __init__().
 
         Args:
             inputs (tf.keras.Input): Input tensor to forward propagate through the model.
+
+            training (bool or None): Whether in training mode or not. Affects whether dropout is used.
 
         Returns:
             tf.keras.Model: Output tensor from forward propagation.
@@ -1733,13 +1737,19 @@ class UBPPhase2(tf.keras.Model, NeuralNetwork):
         x = self.dense1(inputs)
         if self.dense2 is not None:
             x = self.dense2(x)
+            x = self.dropout_layer(x, training=training)
         if self.dense3 is not None:
             x = self.dense3(x)
+            x = self.dropout_layer(x, training=training)
         if self.dense4 is not None:
             x = self.dense4(x)
+            x = self.dropout_layer(x, training=training)
         if self.dense5 is not None:
             x = self.dense5(x)
+            x = self.dropout_layer(x, training=training)
         x = self.dense6(x)
+        x = self.dropout_layer(x, training=training)
+
         x = self.lmda(x)
         return self.output1(x)
 
@@ -1767,7 +1777,7 @@ class UBPPhase2(tf.keras.Model, NeuralNetwork):
         ToDo:
             Obtain batch_size without using run_eagerly option in compile(). This will allow the step to be run in graph mode, thereby speeding up computation.
         """
-        v_batch, y_true = data
+        v_train, y_true = data
 
         # Get current batch_size.
         # NOTE: run_eagerly must be set to True in the compile() method for this
@@ -1784,6 +1794,8 @@ class UBPPhase2(tf.keras.Model, NeuralNetwork):
 
         # NOTE: Moved self.set_weights(self._phase2_weights[self._batch_idx])
         # to custom callback because it threw an error when it was here.
+
+        v_batch = v_train.numpy()
 
         # v doesn't get refined in phase 2, so set trainable=False.
         v = tf.Variable(
@@ -1831,7 +1843,7 @@ class UBPPhase2(tf.keras.Model, NeuralNetwork):
             A dict containing values that will be passed to ``tf.keras.callbacks.CallbackList.on_train_batch_end``. Typically, the values of the Model's metrics are returned.
         """
         # Unpack the data. Don't need V here. Just X (y_true).
-        v_batch, y_true = data
+        v_test, y_true = data
 
         batch_size = y_true.numpy().shape[0]
 
@@ -1839,6 +1851,8 @@ class UBPPhase2(tf.keras.Model, NeuralNetwork):
         # on_train_batch_begin() method.
         batch_start = self._batch_idx * batch_size
         batch_end = (self._batch_idx + 1) * batch_size
+
+        v_batch = v_test.numpy()
 
         v = tf.Variable(
             tf.zeros([batch_size, self.n_components]),
@@ -1921,6 +1935,8 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
 
         l2_penalty (float): L2 regularization penalty to use to reduce overfitting.
 
+        dropout_probability (float): Dropout rate during training to reduce overfitting. Must be a float between 0 and 1.
+
         phase (int, optional): Current phase if doing UBP model. Defaults to 3.
 
         num_classes (int, optional): Number of classes in output. Corresponds to the 3rd dimension of the output shape (batch_size, n_features, num_classes). Defaults to 3.
@@ -1946,7 +1962,7 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
         _n_batches (int): Total number of batches per epoch.
 
     Example:
-        >>>model = UBPPhase3(V, output_shape, n_components, weights_initializer, hidden_layer_sizes, hidden_activation, l1_penalty, l2_penalty, nlpca, phase=3, num_classes=3, phase2_weights=phase2_weights)
+        >>>model = UBPPhase3(V, output_shape, n_components, weights_initializer, hidden_layer_sizes, hidden_activation, l1_penalty, l2_penalty, dropout_probability, phase=3, num_classes=3)
         >>>model.compile(optimizer=optimizer, loss=loss_func, metrics=[my_metrics], run_eagerly=True)
         >>>history = model.fit(X, y, batch_size=batch_size, epochs=epochs, callbacks=[MyCallback()], validation_split=validation_split, shuffle=False)
     """
@@ -1961,6 +1977,7 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
         hidden_activation,
         l1_penalty,
         l2_penalty,
+        dropout_probability,
         phase=3,
         num_classes=3,
     ):
@@ -1978,9 +1995,9 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
         self._n_batches = 0
         self._V_latent = self._V.copy()
 
-        kernel_regularizer = None
+        kernel_regularizer = l1_l2(l1_penalty, l2_penalty)
         self.kernel_regularizer = kernel_regularizer
-        kernel_initializer = None
+        kernel_initializer = weights_initializer
 
         if len(hidden_layer_sizes) > 5:
             raise ValueError("The maximum number of hidden layers is 5.")
@@ -2040,18 +2057,19 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
 
         # Expand dims to 3d of shape (batch_size, n_features, num_classes).
         self.lmda = Lambda(lambda x: tf.expand_dims(x, -1))
-        self.output1 = Dense(
-            num_classes,
-            activation="softmax",
-        )
+        self.output1 = Dense(num_classes, activation="softmax",)
 
-    def call(self, inputs):
+        self.dropout_layer = Dropout(rate=dropout_probability)
+
+    def call(self, inputs, training=None):
         """Forward propagates inputs through the model defined in __init__().
 
         Model varies depending on which phase UBP is in.
 
         Args:
             inputs (tf.keras.Input): Input tensor to forward propagate through the model.
+    
+            training (bool or None): Whether in training mode or not. Affects whether dropout is used.
 
         Returns:
             tf.keras.Model: Output tensor from forward propagation.
@@ -2059,13 +2077,19 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
         x = self.dense1(inputs)
         if self.dense2 is not None:
             x = self.dense2(x)
+            x = self.dropout_layer(x, training=training)
         if self.dense3 is not None:
             x = self.dense3(x)
+            x = self.dropout_layer(x, training=training)
         if self.dense4 is not None:
             x = self.dense4(x)
+            x = self.dropout_layer(x, training=training)
         if self.dense5 is not None:
             x = self.dense5(x)
+            x = self.dropout_layer(x, training=training)
         x = self.dense6(x)
+        x = self.dropout_layer(x, training=training)
+
         x = self.lmda(x)
         return self.output1(x)
 
@@ -2110,7 +2134,7 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
 
         # override v_batch. This model refines the input to fit the output, so
         # v_batch has to be overridden.
-        v_batch = self._V_latent[batch_start:batch_end, :]
+        v_batch = self._V_latent[batch_start:batch_end, :].copy()
 
         # NOTE: Moved self.set_weights(self._phase2_weights[self._batch_idx])
         # to custom callback because it threw an error when it was here.
@@ -2149,7 +2173,7 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
             tf.convert_to_tensor(y_true, dtype=tf.float32), y_pred
         )
 
-        self._V_latent[batch_start:batch_end, :] = v.numpy()
+        self._V_latent[batch_start:batch_end, :] = v.numpy().copy()
 
         # history object that gets returned from fit().
         return {m.name: m.result() for m in self.metrics}
@@ -2176,7 +2200,7 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
         batch_end = (self._batch_idx + 1) * batch_size
 
         # Get the input that's being refined.
-        v_batch = self._V_latent[batch_start:batch_end, :]
+        v_batch = self._V_latent[batch_start:batch_end, :].copy()
 
         v = tf.Variable(
             tf.zeros([batch_size, self.n_components]),
@@ -2706,6 +2730,8 @@ class UBP(NeuralNetwork):
 
         l2_penalty (float): L2 regularization penalty to apply to reduce overfitting. Defaults to 0.01.
 
+        dropout_probability (float, optional): Dropout rate during training to reduce overfitting. Must be a float between 0 and 1. Defaults to 0.2.
+
         kwargs (Any): Unsupported kwargs intended for other imputation methods.
     """
 
@@ -2731,6 +2757,7 @@ class UBP(NeuralNetwork):
         weights_initializer="glorot_normal",
         l1_penalty=0.01,
         l2_penalty=0.01,
+        dropout_probability=0.2,
         cv=5,  # TODO: Add to docstrings
         ga=False,  # TODO: Add below GA arguments to docstrings
         early_stop_gen=25,
@@ -2769,6 +2796,7 @@ class UBP(NeuralNetwork):
         self.weights_initializer = weights_initializer
         self.l1_penalty = l1_penalty
         self.l2_penalty = l2_penalty
+        self.dropout_probability = dropout_probability
 
         # TODO: Make estimators compatible with variable number of classes.
         # E.g., with morphologial data.
@@ -2835,7 +2863,7 @@ class UBP(NeuralNetwork):
         tf.compat.v1.reset_default_graph()
         self.reset_seeds()
 
-        lr_patience = self.early_stop_gen // 2
+        lr_patience = 5
 
         callbacks = [
             UBPCallbacks(),
@@ -2855,14 +2883,12 @@ class UBP(NeuralNetwork):
                 self.hidden_activation,
                 self.l1_penalty,
                 self.l2_penalty,
+                self.dropout_probability,
                 num_classes=3,
             )
 
             callbacks3 = [
-                UBPEarlyStopping(
-                    patience=self.early_stop_gen,
-                    phase=None,
-                ),
+                UBPEarlyStopping(patience=self.early_stop_gen, phase=None,),
             ]
 
             callbacks3.extend(callbacks)
@@ -2891,10 +2917,7 @@ class UBP(NeuralNetwork):
             )
 
             callbacks1 = [
-                UBPEarlyStopping(
-                    patience=self.early_stop_gen,
-                    phase=1,
-                ),
+                UBPEarlyStopping(patience=self.early_stop_gen, phase=1,),
             ]
 
             callbacks1.extend(callbacks)
@@ -2915,11 +2938,11 @@ class UBP(NeuralNetwork):
 
             V2 = model1.V.copy()
 
-            # Reset model states
-            K.clear_session()
-            tf.keras.backend.clear_session()
-            tf.compat.v1.reset_default_graph()
-            self.reset_seeds()
+            # # Reset model states
+            # K.clear_session()
+            # tf.keras.backend.clear_session()
+            # tf.compat.v1.reset_default_graph()
+            # self.reset_seeds()
 
             model2 = UBPPhase2(
                 y_train.shape[1],
@@ -2929,6 +2952,7 @@ class UBP(NeuralNetwork):
                 self.hidden_activation,
                 self.l1_penalty,
                 self.l2_penalty,
+                self.dropout_probability,
                 num_classes=3,
                 phase=2,
             )
@@ -2941,10 +2965,7 @@ class UBP(NeuralNetwork):
             )
 
             callbacks2 = [
-                UBPEarlyStopping(
-                    patience=self.early_stop_gen,
-                    phase=2,
-                ),
+                UBPEarlyStopping(patience=self.early_stop_gen, phase=2,),
             ]
 
             callbacks2.extend(callbacks)
@@ -2961,16 +2982,18 @@ class UBP(NeuralNetwork):
 
             # model2.model().summary()
 
-            # w = model2.phase2_weights
-            w = model2.get_weights()
+            # # w = model2.phase2_weights
+            # w = model2.get_weights()
+
+            # print(w)
 
             histories.append(history2.history)
 
-            # Reset model states
-            K.clear_session()
-            tf.keras.backend.clear_session()
-            tf.compat.v1.reset_default_graph()
-            self.reset_seeds()
+            # # Reset model states
+            # K.clear_session()
+            # tf.keras.backend.clear_session()
+            # tf.compat.v1.reset_default_graph()
+            # self.reset_seeds()
 
             model3 = UBPPhase3(
                 V2,
@@ -2981,9 +3004,12 @@ class UBP(NeuralNetwork):
                 self.hidden_activation,
                 self.l1_penalty,
                 self.l2_penalty,
+                self.dropout_probability,
                 num_classes=3,
                 phase=3,
             )
+
+            model3.build((None, self.n_components))
 
             model3.compile(
                 optimizer=self.set_optimizer(),
@@ -2992,14 +3018,10 @@ class UBP(NeuralNetwork):
                 run_eagerly=True,
             )
 
-            model3.build((None, self.n_components))
-            model3.set_weights(w)
+            model3.set_weights(model2.get_weights())
 
             callbacks3 = [
-                UBPEarlyStopping(
-                    patience=self.early_stop_gen,
-                    phase=3,
-                ),
+                UBPEarlyStopping(patience=self.early_stop_gen, phase=3,),
             ]
 
             callbacks3.extend(callbacks)
@@ -3020,6 +3042,7 @@ class UBP(NeuralNetwork):
         tf.compat.v1.reset_default_graph()
         self.reset_seeds()
 
+        # For debugging.
         # model.model().summary()
 
         histories.append(history3.history)
@@ -3340,22 +3363,16 @@ class UBP(NeuralNetwork):
                             if counter == self.early_stop_gen:
                                 counter = 0
                                 if phase == 1:
-                                    model_single_layer = (
-                                        tf.keras.models.load_model(
-                                            model_dir1, compile=False
-                                        )
+                                    model_single_layer = tf.keras.models.load_model(
+                                        model_dir1, compile=False
                                     )
                                 elif phase == 2:
-                                    model_mlp_phase2 = (
-                                        tf.keras.models.load_model(
-                                            model_dir2, compile=False
-                                        )
+                                    model_mlp_phase2 = tf.keras.models.load_model(
+                                        model_dir2, compile=False
                                     )
                                 elif phase == 3:
-                                    model_mlp_phase3 = (
-                                        tf.keras.models.load_model(
-                                            model_dir3, compile=False
-                                        )
+                                    model_mlp_phase3 = tf.keras.models.load_model(
+                                        model_dir3, compile=False
                                     )
                                 final_s = s_prime
                                 final_acc = acc_prime

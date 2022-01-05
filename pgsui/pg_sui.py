@@ -328,7 +328,7 @@ def main():
         cv=3,
         column_subset=1.0,
         validation_only=1.0,
-        learning_rate=0.05,
+        learning_rate=0.01,
     )
 
     # nlpca_data = nlpca.imputed
