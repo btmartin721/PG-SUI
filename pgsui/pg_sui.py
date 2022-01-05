@@ -320,7 +320,7 @@ def main():
         "n_components": n_components,
     }
 
-    ubp = ImputeUBP(
+    ubp = ImputeNLPCA(
         data,
         # gridparams=grid_params,
         initial_strategy="populations",
