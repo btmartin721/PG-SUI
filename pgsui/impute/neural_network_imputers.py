@@ -379,23 +379,20 @@ class NeuralNetwork:
 class UBPCallbacks(tf.keras.callbacks.Callback):
     def on_train_begin(self, logs=None):
         self.model.n_batches = self.params.get("steps")
-        if self.model.phase == 3 and not self.model.nlpca:
-            self.model.set_weights(self.model.phase2_weights)
-
-        # if self.model.phase == 3 and not self.model.nlpca:
-        #     for i, layer in enumerate(self.model.layers):
-        #         layer.set_weights(self.model.phase2_weights[i])
+        # if self.model.phase == 3:
+        #     self.model.set_weights(self.model.phase2_weights)
 
     def on_train_batch_begin(self, batch, logs=None):
         self.model.batch_idx = batch
 
-    def on_train_end(self, logs=None):
-        if self.model.phase == 2 and not self.model.nlpca:
-            # UBP model and phase == 2: Save the weights from  Phase 2.
-            # weights = list()
-            # for layer in self.model.layers:
-            #     weights.append(layer.get_weights())
-            self.model.phase2_weights = self.model.get_weights()
+    # def on_train_batch_end(self, batch, logs=None):
+    #     if self.model.phase != 2:
+    #         batch_size = self.model.batch_size
+
+    # def on_train_end(self, logs=None):
+    #     if self.model.phase == 2:
+    #         # UBP model phase == 2: Save the weights from Phase 2.
+    #         self.model.phase2_weights = self.model.get_weights()
 
     def on_test_batch_begin(self, batch, logs=None):
         self.model.batch_idx = batch
@@ -449,10 +446,6 @@ class UBPEarlyStopping(tf.keras.callbacks.Callback):
 
                 if self.phase != 2:
                     self.model.V = self.best_input
-
-    def on_train_end(self, logs=None):
-        if self.stopped_epoch > 0:
-            print("Epoch %05d: early stopping" % (self.stopped_epoch + 1))
 
 
 class UBPDense(tf.keras.layers.Layer):
@@ -572,7 +565,6 @@ class UBPModel(tf.keras.Model, NeuralNetwork):
     def __init__(
         self,
         V,
-        X_train,
         output_shape,
         n_components,
         weights_initializer,
@@ -581,7 +573,6 @@ class UBPModel(tf.keras.Model, NeuralNetwork):
         l1_penalty,
         l2_penalty,
         nlpca,
-        observed_mask,
         phase=3,
         num_classes=3,
         phase2_weights=None,
@@ -589,11 +580,9 @@ class UBPModel(tf.keras.Model, NeuralNetwork):
         super(UBPModel, self).__init__()
 
         self._V = V
-        self.X_train = X_train
+        self.nlpca = nlpca
         self.phase = phase
         self.hidden_layer_sizes = hidden_layer_sizes
-        self.nlpca = nlpca
-        self.observed_mask = observed_mask
         self.n_components = n_components
         self.weights_initializer = weights_initializer
         self._phase2_weights = phase2_weights
@@ -633,7 +622,6 @@ class UBPModel(tf.keras.Model, NeuralNetwork):
             # Add hidden layers dynamically.
             self.dense1 = Dense(
                 hidden_layer_sizes[0],
-                input_shape=(n_components,),
                 activation=hidden_activation,
                 kernel_initializer=kernel_initializer,
                 kernel_regularizer=kernel_regularizer,
@@ -678,7 +666,10 @@ class UBPModel(tf.keras.Model, NeuralNetwork):
             )
 
             self.lmda = Lambda(lambda x: tf.expand_dims(x, -1))
-            self.output1 = Dense(num_classes, activation="softmax",)
+            self.output1 = Dense(
+                num_classes,
+                activation="softmax",
+            )
 
         else:
             # phase == 1.
@@ -693,7 +684,10 @@ class UBPModel(tf.keras.Model, NeuralNetwork):
             )
 
             self.lmda = Lambda(lambda x: tf.expand_dims(x, -1))
-            self.output1 = Dense(num_classes, activation="softmax",)
+            self.output1 = Dense(
+                num_classes,
+                activation="softmax",
+            )
 
     def call(self, inputs):
         """Forward propagates inputs through the model defined in __init__().
@@ -725,6 +719,10 @@ class UBPModel(tf.keras.Model, NeuralNetwork):
         x = self.lmda(x)
         return self.output1(x)
 
+    def model(self):
+        x = tf.keras.Input(shape=(self.n_components,))
+        return tf.keras.Model(inputs=[x], outputs=self.call(x))
+
     def mle(self, row):
         """Get the Maximum Likelihood Estimation for the best prediction. Basically, it sets the index of the maxiumum value in a vector (row) to 1.0, since it is one-hot encoded.
 
@@ -737,48 +735,6 @@ class UBPModel(tf.keras.Model, NeuralNetwork):
         res = np.zeros(row.shape[0])
         res[np.argmax(row)] = 1
         return res
-
-    def predict_step(self, data):
-        """Predict imputations for one batch based on a trained UBP or NLPCA model.
-
-        Args:
-            X (numpy.ndarray(float)): Original data to impute.
-
-            V (numpy.ndarray(float)): Refined reduced-dimensional input for predicting imputations.
-
-            model (tf.keras.Sequential): Trained model (phase 3 if doing UBP).
-
-            observed_mask (numpy.ndarray(bool)): Mask with True as non-missing values and False as missing.
-
-        Returns:
-            numpy.ndarray: Imputation predictions.
-
-        Raises:
-            TypeError: V cannot be NoneType.
-            TypeError: model cannot be NoneType.
-        """
-        v_batch, x_batch = data
-
-        batch_size = x_batch.numpy().shape[0]
-
-        # self._batch_idx is set in the UBPCallbacks() callback
-        # on_test_batch_begin() method.
-        batch_start = self._batch_idx * batch_size
-        batch_end = (self._batch_idx + 1) * batch_size
-
-        predictions = model(self._V, training=False)
-        Xprob = predictions.numpy()
-        Xt = np.apply_along_axis(self.mle, axis=2, arr=Xprob)
-        Xpred = np.argmax(Xt, axis=2)
-        Xdecoded = np.zeros((Xpred.shape[0], Xpred.shape[1]))
-        for idx, row in enumerate(Xdecoded):
-            imputed_vals = np.zeros(len(row))
-            known_vals = np.zeros(len(row))
-            imputed_idx = np.where(observed_mask[idx] == 0)
-            known_idx = np.nonzero(observed_mask[idx])
-            Xdecoded[idx, imputed_idx] = Xpred[idx, imputed_idx]
-            Xdecoded[idx, known_idx] = X[idx, known_idx]
-        return Xdecoded
 
     @property
     def V(self):
@@ -911,6 +867,7 @@ class UBPModel(tf.keras.Model, NeuralNetwork):
             if phase != 2:
                 tape.watch(v)
             pred = self(v, training=True)
+
             loss = self.compiled_loss(
                 tf.convert_to_tensor(x_batch, dtype=tf.float32),
                 pred,
@@ -920,7 +877,7 @@ class UBPModel(tf.keras.Model, NeuralNetwork):
         if phase != 2:
             # Phase == 1 or 3.
             src.extend(self.trainable_variables)
-        elif phase == 2:
+        else:
             # Phase == 2.
             src = self.trainable_variables
 
@@ -938,6 +895,1356 @@ class UBPModel(tf.keras.Model, NeuralNetwork):
 
         # history object that gets returned from fit().
         return {m.name: m.result() for m in self.metrics}
+
+    def test_step(self, data):
+        """Validation step for one batch in a single epoch.
+
+        Custom logic for the test step that gets sent back to on_train_batch_end() callback.
+
+        Args:
+            Tuple[tf.EagerTensor, tf.EagerTensor]: Batches of input data V and X.
+
+        Returns:
+            A dict containing values that will be passed to ``tf.keras.callbacks.CallbackList.on_train_batch_end``. Typically, the values of the Model's metrics are returned.
+        """
+        # Unpack the data. Don't need V here. Just X (y_true).
+        x_batch = data[1]
+
+        batch_size = x_batch.numpy().shape[0]
+
+        # self._batch_idx is set in the UBPCallbacks() callback
+        # on_train_batch_begin() method.
+        batch_start = self._batch_idx * batch_size
+        batch_end = (self._batch_idx + 1) * batch_size
+
+        # Get the input that's being refined.
+        v_batch = self._V[batch_start:batch_end, :]
+
+        v = tf.Variable(
+            tf.zeros([x_batch.shape[0], self.n_components]),
+            trainable=False,
+            dtype=tf.float32,
+        )
+
+        # Assign current batch to v.
+        v.assign(v_batch)
+
+        # Compute predictions
+        pred = self(v, training=False)
+
+        # Updates the metrics tracking the loss
+        self.compiled_loss(
+            tf.convert_to_tensor(x_batch, dtype=tf.float32),
+            pred,
+            regularization_losses=self.losses,
+        )
+
+        # Update the metrics.
+        self.compiled_metrics.update_state(
+            tf.convert_to_tensor(x_batch, dtype=tf.float32), pred
+        )
+
+        # Return a dict mapping metric names to current value.
+        # Note that it will include the loss (tracked in self.metrics).
+        return {m.name: m.result() for m in self.metrics}
+
+
+class NLPCAModel(tf.keras.Model, NeuralNetwork):
+    """NLPCA model to train and use to predict imputations.
+
+    UBPModel subclasses the tf.keras.Model and overrides the train_step() function, which does training for one batch in a single epoch.
+
+    Args:
+        V (numpy.ndarray(float)): If phase == 1 or nlpca == True, then V is randomly initialized and used as the input data that gets refined during training.
+
+        output_shape (int): Output units for n_features dimension. Output will be of shape (batch_size, output_shape, num_classes).
+
+        n_components (int): Number of principal components for V.
+
+        weights_initializer (str): Kernel initializer to use for initializing model weights.
+
+        hidden_layer_sizes (List[int]): Output units for each hidden layer. List should be of same length as the number of hidden layers.
+
+        hidden_activation (str): Activation function to use for hidden layers.
+
+        l1_penalty (float): L1 regularization penalty to use to reduce overfitting.
+
+        l2_penalty (float): L2 regularization penalty to use to reduce overfitting.
+
+        num_classes (int, optional): Number of classes in output. Corresponds to the 3rd dimension of the output shape (batch_size, n_features, num_classes). Defaults to 3.
+
+        phase (NoneType): Here for compatibility with UBP.
+
+
+    Methods:
+        call: Does forward pass for model.
+        train_step: Does training for one batch in a single epoch.
+        test_step: Does evaluation for one batch in a single epoch.
+
+    Attributes:
+        _V (numpy.ndarray(float)): Randomly initialized input that gets refined during training.
+
+        hidden_layer_sizes (List[Union[int, str]]): Output units for each hidden layer. Length should be the same as the number of hidden layers.
+
+        n_components (int): Number of principal components to use with _V.
+
+        _batch_size (int): Batch size to use per epoch.
+
+        _batch_idx (int): Index of current batch.
+
+        _n_batches (int): Total number of batches per epoch.
+
+    Example:
+        >>>model = NLPCAModel(V, output_shape, n_components, weights_initializer, hidden_layer_sizes, hidden_activation, l1_penalty, l2_penalty, num_classes=3)
+        >>>model.compile(optimizer=optimizer, loss=loss_func, metrics=[my_metrics], run_eagerly=True)
+        >>>history = model.fit(X, y, batch_size=batch_size, epochs=epochs, callbacks=[MyCallback()], validation_split=validation_split, shuffle=False)
+    """
+
+    def __init__(
+        self,
+        V,
+        output_shape,
+        n_components,
+        weights_initializer,
+        hidden_layer_sizes,
+        hidden_activation,
+        l1_penalty,
+        l2_penalty,
+        num_classes=3,
+        phase=None,
+    ):
+        super(NLPCAModel, self).__init__()
+
+        self._V = V
+        self.hidden_layer_sizes = hidden_layer_sizes
+        self.n_components = n_components
+        self.weights_initializer = weights_initializer
+        self.phase = phase
+
+        # Initialize parameters that are set via callbacks during fit().
+        self._batch_size = 0
+        self._batch_idx = 0
+        self._n_batches = 0
+        self._V_latent = self._V.copy()
+
+        kernel_regularizer = l1_l2(l1_penalty, l2_penalty)
+        self.kernel_regularizer = kernel_regularizer
+        kernel_initializer = weights_initializer
+
+        if len(hidden_layer_sizes) > 5:
+            raise ValueError("The maximum number of hidden layers is 5.")
+
+        self.dense2 = None
+        self.dense3 = None
+        self.dense4 = None
+        self.dense5 = None
+
+        # Construct multi-layer perceptron.
+        # Add hidden layers dynamically.
+        self.dense1 = Dense(
+            hidden_layer_sizes[0],
+            input_shape=(n_components,),
+            activation=hidden_activation,
+            kernel_initializer=kernel_initializer,
+            kernel_regularizer=kernel_regularizer,
+        )
+
+        if len(hidden_layer_sizes) >= 2:
+            self.dense2 = Dense(
+                hidden_layer_sizes[1],
+                activation=hidden_activation,
+                kernel_initializer=kernel_initializer,
+                kernel_regularizer=kernel_regularizer,
+            )
+
+        if len(hidden_layer_sizes) >= 3:
+            self.dense3 = Dense(
+                hidden_layer_sizes[2],
+                activation=hidden_activation,
+                kernel_initializer=kernel_initializer,
+                kernel_regularizer=kernel_regularizer,
+            )
+
+        if len(hidden_layer_sizes) >= 4:
+            self.dense4 = Dense(
+                hidden_layer_sizes[3],
+                activation=hidden_activation,
+                kernel_initializer=kernel_initializer,
+                kernel_regularizer=kernel_regularizer,
+            )
+
+        if len(hidden_layer_sizes) == 5:
+            self.dense5 = Dense(
+                hidden_layer_sizes[4],
+                activation=hidden_activation,
+                kernel_initializer=kernel_initializer,
+                kernel_regularizer=kernel_regularizer,
+            )
+
+        self.dense6 = Dense(
+            output_shape,
+            kernel_initializer=kernel_initializer,
+            kernel_regularizer=kernel_regularizer,
+        )
+
+        # Expand dims to 3d to shape (batch_size, n_features, num_classes).
+        self.lmda = Lambda(lambda x: tf.expand_dims(x, -1))
+        self.output1 = Dense(
+            num_classes,
+            activation="softmax",
+        )
+
+    def call(self, inputs):
+        """Forward propagates inputs through the model defined in __init__().
+
+        Args:
+            inputs (tf.keras.Input): Input tensor to forward propagate through the model.
+
+        Returns:
+            tf.keras.Model: Output tensor from forward propagation.
+        """
+        x = self.dense1(inputs)
+        if self.dense2 is not None:
+            x = self.dense2(x)
+        if self.dense3 is not None:
+            x = self.dense3(x)
+        if self.dense4 is not None:
+            x = self.dense4(x)
+        if self.dense5 is not None:
+            x = self.dense5(x)
+        x = self.dense6(x)
+        x = self.lmda(x)
+        return self.output1(x)
+
+    def model(self):
+        x = tf.keras.Input(shape=(self.n_components,))
+        return tf.keras.Model(inputs=[x], outputs=self.call(x))
+
+    def train_step(self, data):
+        """Custom training loop for one step (=batch) in a single epoch.
+
+        GradientTape records the weights and watched
+        variables (usually tf.Variable objects), which
+        in this case are the weights and the input (x),
+        during the forward pass.
+        This allows us to run gradient descent during
+        backpropagation to refine the watched variables.
+
+        This function will train on a batch of samples (rows), which can be adjusted with the ``batch_size`` parameter from the estimator.
+
+        Args:
+            data (Tuple[tf.EagerTensor, tf.EagerTensor]): Input tensorflow variables of shape (batch_size, n_components) and (batch_size, n_features, num_classes).
+
+        Returns:
+            Dict[str, float]: History object that gets returned from fit(). Contains the loss and any metrics specified in compile().
+
+        ToDo:
+            Obtain batch_size without using run_eagerly option in compile(). This will allow the step to be run in graph mode, thereby speeding up computation.
+        """
+        y_true = data[1]
+
+        # Get current batch_size.
+        # NOTE: run_eagerly must be set to True in the compile() method for this
+        # to work. Otherwise it can't convert a Tensor object to a numpy array.
+        # There is really no other way to get the batch_size in graph
+        # mode as far as I know. eager execution is slower, so it would be nice
+        # to find a way to obtain batch_size without converting to numpy.
+        batch_size = y_true.numpy().shape[0]
+
+        # self._batch_idx is set in the UBPCallbacks() callback
+        # on_train_batch_begin() method.
+        batch_start = self._batch_idx * batch_size
+        batch_end = (self._batch_idx + 1) * batch_size
+
+        # override v_batch. This model refines the input to fit the output, so
+        # v_batch has to be overridden.
+        v_batch = self._V_latent[batch_start:batch_end, :]
+
+        # NOTE: Moved self.set_weights(self._phase2_weights[self._batch_idx])
+        # to custom callback because it threw an error when it was here.
+
+        # Initialize variable v as tensorflow variable.
+        v = tf.Variable(
+            tf.zeros([batch_size, self.n_components]),
+            trainable=True,
+            dtype=tf.float32,
+        )
+
+        # Assign current batch to v.
+        v.assign(v_batch)
+
+        src = [v]
+
+        with tf.GradientTape() as tape:
+            # Forward pass
+            tape.watch(v)
+            y_pred = self(v, training=True)
+
+            loss = self.compiled_loss(
+                tf.convert_to_tensor(y_true, dtype=tf.float32),
+                y_pred,
+                regularization_losses=self.losses,
+            )
+
+        src.extend(self.trainable_variables)
+
+        # Refine the watched variables with
+        # gradient descent backpropagation
+        gradients = tape.gradient(loss, src)
+        self.optimizer.apply_gradients(zip(gradients, src))
+
+        self.compiled_metrics.update_state(
+            tf.convert_to_tensor(y_true, dtype=tf.float32), y_pred
+        )
+
+        self._V_latent[batch_start:batch_end, :] = v.numpy()
+
+        # history object that gets returned from fit().
+        return {m.name: m.result() for m in self.metrics}
+
+    def test_step(self, data):
+        """Validation step for one batch in a single epoch.
+
+        Custom logic for the test step that gets sent back to on_train_batch_end() callback.
+
+        Args:
+            Tuple[tf.EagerTensor, tf.EagerTensor]: Batches of input data V and y_true.
+
+        Returns:
+            A dict containing values that will be passed to ``tf.keras.callbacks.CallbackList.on_train_batch_end``. Typically, the values of the Model's metrics are returned.
+        """
+        # Unpack the data. Don't need V here. Just X (y_true).
+        y_true = data[1]
+
+        batch_size = y_true.numpy().shape[0]
+
+        # self._batch_idx is set in the UBPCallbacks() callback
+        # on_train_batch_begin() method.
+        batch_start = self._batch_idx * batch_size
+        batch_end = (self._batch_idx + 1) * batch_size
+
+        # Get the input that's being refined.
+        v_batch = self._V_latent[batch_start:batch_end, :]
+
+        v = tf.Variable(
+            tf.zeros([batch_size, self.n_components]),
+            trainable=False,
+            dtype=tf.float32,
+        )
+
+        # Assign current batch to v.
+        v.assign(v_batch)
+
+        # Compute predictions
+        y_pred = self(v, training=False)
+
+        # Updates the metrics tracking the loss
+        self.compiled_loss(
+            tf.convert_to_tensor(y_true, dtype=tf.float32),
+            y_pred,
+            regularization_losses=self.losses,
+        )
+
+        # Update the metrics.
+        self.compiled_metrics.update_state(
+            tf.convert_to_tensor(y_true, dtype=tf.float32), t_pred
+        )
+
+        # Return a dict mapping metric names to current value.
+        # Note that it will include the loss (tracked in self.metrics).
+        return {m.name: m.result() for m in self.metrics}
+
+    @property
+    def V(self):
+        """Randomly initialized input variable that gets refined during training."""
+        return self._V_latent
+
+    @property
+    def batch_size(self):
+        """Batch (=step) size per epoch."""
+        return self._batch_size
+
+    @property
+    def batch_idx(self):
+        """Current batch (=step) index."""
+        return self._batch_idx
+
+    @property
+    def n_batches(self):
+        """Total number of batches per epoch."""
+        return self._n_batches
+
+    @V.setter
+    def V(self, value):
+        """Set randomly initialized input variable. Gets refined during training."""
+        self._V = value
+
+    @batch_size.setter
+    def batch_size(self, value):
+        """Set batch_size parameter."""
+        self._batch_size = int(value)
+
+    @batch_idx.setter
+    def batch_idx(self, value):
+        """Set current batch (=step) index."""
+        self._batch_idx = int(value)
+
+    @n_batches.setter
+    def n_batches(self, value):
+        """Set total number of batches (=steps) per epoch."""
+        self._n_batches = int(value)
+
+
+class UBPPhase1(tf.keras.Model, NeuralNetwork):
+    """UBP Phase 1 single layer perceptron model to train predict imputations.
+
+    UBPPhase1 subclasses the tf.keras.Model and overrides the train_step() and test_step() functions, which do training and evalutation for one batch in a single epoch.
+
+    Args:
+        V (numpy.ndarray(float)): If phase == 1 or nlpca == True, then V is randomly initialized and used as the input data that gets refined during training.
+
+        output_shape (int): Output units for n_features dimension. Output will be of shape (batch_size, output_shape, num_classes).
+
+        n_components (int): Number of principal components for V.
+
+        weights_initializer (str): Kernel initializer to use for initializing model weights.
+
+        hidden_layer_sizes (List[int]): Output units for each hidden layer. List should be of same length as the number of hidden layers.
+
+        hidden_activation (str): Activation function to use for hidden layers.
+
+        l1_penalty (float): L1 regularization penalty to use to reduce overfitting.
+
+        l2_penalty (float): L2 regularization penalty to use to reduce overfitting.
+
+        phase (int, optional): Current phase if doing UBP model. Defaults to 3.
+
+        num_classes (int, optional): Number of classes in output. Corresponds to the 3rd dimension of the output shape (batch_size, n_features, num_classes). Defaults to 3.
+
+    Methods:
+        call: Does forward pass for model.
+        train_step: Does training for one batch in a single epoch.
+        test_step: Does evaluation for one batch in a single epoch.
+
+    Attributes:
+        _V (numpy.ndarray(float)): Randomly initialized input that gets refined during training.
+
+        phase (int): Current phase if doing UBP model. Ignored if doing NLPCA model.
+
+        hidden_layer_sizes (List[Union[int, str]]): Output units for each hidden layer. Length should be the same as the number of hidden layers.
+
+        n_components (int): Number of principal components to use with _V.
+
+        _batch_size (int): Batch size to use per epoch.
+
+        _batch_idx (int): Index of current batch.
+
+        _n_batches (int): Total number of batches per epoch.
+
+    Example:
+        >>>model = UBPPhase1(V, output_shape, n_components, weights_initializer, hidden_layer_sizes, hidden_activation, l1_penalty, l2_penalty, phase=3, num_classes=3)
+        >>>model.compile(optimizer=optimizer, loss=loss_func, metrics=[my_metrics], run_eagerly=True)
+        >>>history = model.fit(X, y, batch_size=batch_size, epochs=epochs, callbacks=[MyCallback()], validation_split=validation_split, shuffle=False)
+    """
+
+    def __init__(
+        self,
+        V,
+        output_shape,
+        n_components,
+        weights_initializer,
+        hidden_layer_sizes,
+        hidden_activation,
+        l1_penalty,
+        l2_penalty,
+        phase=3,
+        num_classes=3,
+    ):
+        super(UBPPhase1, self).__init__()
+
+        self._V = V
+        self.phase = phase
+        self.hidden_layer_sizes = hidden_layer_sizes
+        self.n_components = n_components
+        self.weights_initializer = weights_initializer
+
+        ### NOTE: I tried using just _V as the input to be refined, but it
+        # wasn't getting updated. So I copy it here and it works.
+        self._V_latent = self._V.copy()
+
+        # Initialize parameters that are set via callbacks during fit().
+        self._batch_size = 0
+        self._batch_idx = 0
+        self._n_batches = 0
+
+        kernel_regularizer = l1_l2(l1_penalty, l2_penalty)
+        self.kernel_regularizer = kernel_regularizer
+        kernel_initializer = weights_initializer
+
+        # Construct single-layer perceptron.
+        self.dense1 = Dense(
+            output_shape,
+            input_shape=(n_components,),
+            kernel_initializer=kernel_initializer,
+            kernel_regularizer=kernel_regularizer,
+            activation=hidden_activation,
+        )
+
+        # Expand dims to 3d (batch_size, n_features, num_classes)
+        self.lmda = Lambda(lambda x: tf.expand_dims(x, -1))
+        self.output1 = Dense(
+            num_classes,
+            activation="softmax",
+        )
+
+    def call(self, inputs):
+        """Forward propagates inputs through the model defined in __init__().
+
+        Args:
+            inputs (tf.keras.Input): Input tensor to forward propagate through the model.
+
+        Returns:
+            tf.keras.Model: Output tensor from forward propagation.
+        """
+        x = self.dense1(inputs)
+        x = self.lmda(x)
+        return self.output1(x)
+
+    def model(self):
+        """Build the model."""
+        x = tf.keras.Input(shape=(self.n_components,))
+        return tf.keras.Model(inputs=[x], outputs=self.call(x))
+
+    def train_step(self, data):
+        """Custom training loop for one step (=batch) in a single epoch.
+
+        GradientTape records the weights and watched variables (usually tf.Variable objects), which in this case are the weights and the input (x), during the forward pass. This allows us to run gradient descent during backpropagation to refine the watched variables.
+
+        This function will train on a batch of samples (rows), which can be adjusted with the ``batch_size`` parameter from the estimator.
+
+        Args:
+            data (Tuple[tf.EagerTensor, tf.EagerTensor]): Tuple of input tensors of shape (batch_size, n_components) and (batch_size, n_features, num_classes).
+
+        Returns:
+            Dict[str, float]: History object that gets returned from fit(). Contains the loss and any metrics specified in compile().
+
+        ToDo:
+            Obtain batch_size without using run_eagerly option in compile(). This will allow the step to be run in graph mode, thereby speeding up computation.
+        """
+        # y_true. Actual dataset that gets used to refine X.
+        y_true = data[1]
+
+        # Get current batch_size.
+        # NOTE: run_eagerly must be set to True in the compile() method for this
+        # to work. Otherwise it can't convert a Tensor object to a numpy array.
+        # There is really no other way to get the batch_size in graph
+        # mode as far as I know. eager execution is slower, so it would be nice
+        # to find a way to obtain batch_size without converting to numpy.
+        batch_size = y_true.numpy().shape[0]
+
+        # self._batch_idx is set in the UBPCallbacks() callback
+        # on_train_batch_begin() method.
+        batch_start = self._batch_idx * batch_size
+        batch_end = (self._batch_idx + 1) * batch_size
+
+        # override v_batch. This model refines the input to fit the output, so
+        # v_batch has to be overridden.
+        v_batch = self._V_latent[batch_start:batch_end, :]
+
+        # NOTE: Moved self.set_weights(self._phase2_weights[self._batch_idx])
+        # to custom callback because it threw an error when it was here.
+
+        v = tf.Variable(
+            tf.zeros([batch_size, self.n_components]),
+            trainable=True,
+            dtype=tf.float32,
+        )
+
+        # Assign current batch to tf.Variable v.
+        v.assign(v_batch)
+        src = [v]
+
+        with tf.GradientTape() as tape:
+            # Forward pass
+            tape.watch(v)
+            y_pred = self(v, training=True)
+            loss = self.compiled_loss(
+                tf.convert_to_tensor(y_true, dtype=tf.float32),
+                y_pred,
+                regularization_losses=self.losses,
+            )
+
+        src.extend(self.trainable_variables)
+
+        # Refine the watched variables with
+        # gradient descent backpropagation
+        gradients = tape.gradient(loss, src)
+        self.optimizer.apply_gradients(zip(gradients, src))
+
+        self.compiled_metrics.update_state(
+            tf.convert_to_tensor(y_true, dtype=tf.float32), y_pred
+        )
+
+        self._V_latent[batch_start:batch_end, :] = v.numpy()
+
+        # history object that gets returned from fit().
+        return {m.name: m.result() for m in self.metrics}
+
+    def test_step(self, data):
+        """Validation step for one batch in a single epoch.
+
+        Custom logic for the test step that gets sent back to on_train_batch_end() callback.
+
+        Args:
+            Tuple[tf.EagerTensor, tf.EagerTensor]: Batches of input data V and y_true.
+
+        Returns:
+            A dict containing values that will be passed to ``tf.keras.callbacks.CallbackList.on_train_batch_end``. Typically, the values of the Model's metrics are returned.
+        """
+        # Unpack the data. Don't need V here. Just X (y_true).
+        y_true = data[1]
+        batch_size = y_true.numpy().shape[0]
+
+        # self._batch_idx is set in the UBPCallbacks() callback
+        # on_train_batch_begin() method.
+        batch_start = self._batch_idx * batch_size
+        batch_end = (self._batch_idx + 1) * batch_size
+
+        # Get the input that's being refined.
+        v_batch = self._V_latent[batch_start:batch_end, :]
+
+        v = tf.Variable(
+            tf.zeros([batch_size, self.n_components]),
+            trainable=False,
+            dtype=tf.float32,
+        )
+
+        # Assign current batch to v.
+        v.assign(v_batch)
+
+        # Compute predictions
+        y_pred = self(v, training=False)
+
+        # Updates the metrics tracking the loss
+        self.compiled_loss(
+            tf.convert_to_tensor(y_true, dtype=tf.float32),
+            y_pred,
+            regularization_losses=self.losses,
+        )
+
+        # Update the metrics.
+        self.compiled_metrics.update_state(
+            tf.convert_to_tensor(y_true, dtype=tf.float32), y_pred
+        )
+
+        # Return a dict mapping metric names to current value.
+        # Note that it will include the loss (tracked in self.metrics).
+        return {m.name: m.result() for m in self.metrics}
+
+    @property
+    def V(self):
+        """Randomly initialized input variable that gets refined during training."""
+        return self._V_latent
+
+    @property
+    def batch_size(self):
+        """Batch (=step) size per epoch."""
+        return self._batch_size
+
+    @property
+    def batch_idx(self):
+        """Current batch (=step) index."""
+        return self._batch_idx
+
+    @property
+    def n_batches(self):
+        """Total number of batches per epoch."""
+        return self._n_batches
+
+    @V.setter
+    def V(self, value):
+        """Set randomly initialized input variable. Gets refined during training."""
+        self._V = value
+
+    @batch_size.setter
+    def batch_size(self, value):
+        """Set batch_size parameter."""
+        self._batch_size = int(value)
+
+    @batch_idx.setter
+    def batch_idx(self, value):
+        """Set current batch (=step) index."""
+        self._batch_idx = int(value)
+
+    @n_batches.setter
+    def n_batches(self, value):
+        """Set total number of batches (=steps) per epoch."""
+        self._n_batches = int(value)
+
+
+class UBPPhase2(tf.keras.Model, NeuralNetwork):
+    """UBP Phase 2 model to train and use to predict imputations.
+
+    UBPModel subclasses the tf.keras.Model and overrides the train_step() and test_step() functions, which do training for one batch in a single epoch.
+
+    Args:
+        output_shape (int): Output units for n_features dimension. Output will be of shape (batch_size, output_shape, num_classes).
+
+        n_components (int): Number of principal components for V.
+
+        weights_initializer (str): Kernel initializer to use for initializing model weights.
+
+        hidden_layer_sizes (List[int]): Output units for each hidden layer. List should be of same length as the number of hidden layers.
+
+        hidden_activation (str): Activation function to use for hidden layers.
+
+        l1_penalty (float): L1 regularization penalty to use to reduce overfitting.
+
+        l2_penalty (float): L2 regularization penalty to use to reduce overfitting.
+
+        phase (int, optional): Current phase if doing UBP model. Defaults to 3.
+
+        num_classes (int, optional): Number of classes in output. Corresponds to the 3rd dimension of the output shape (batch_size, n_features, num_classes). Defaults to 3.
+
+    Methods:
+        call: Does forward pass for model.
+        train_step: Does training for one batch in a single epoch.
+        test_step: Does evalutation for one batch in a single epoch.
+
+    Attributes:
+        phase (int): Current phase if doing UBP model. Ignored if doing NLPCA model.
+
+        hidden_layer_sizes (List[Union[int, str]]): Output units for each hidden layer. Length should be the same as the number of hidden layers.
+
+        n_components (int): Number of principal components to use with _V.
+
+        _batch_size (int): Batch size to use per epoch.
+
+        _batch_idx (int): Index of current batch.
+
+        _n_batches (int): Total number of batches per epoch.
+
+    Example:
+        >>>model = UBPPhase2(output_shape, n_components, weights_initializer, hidden_layer_sizes, hidden_activation, l1_penalty, l2_penalty, phase=3, num_classes=3)
+        >>>model.compile(optimizer=optimizer, loss=loss_func, metrics=[my_metrics], run_eagerly=True)
+        >>>history = model.fit(X, y, batch_size=batch_size, epochs=epochs, callbacks=[MyCallback()], validation_split=validation_split, shuffle=False)
+    """
+
+    def __init__(
+        self,
+        output_shape,
+        n_components,
+        weights_initializer,
+        hidden_layer_sizes,
+        hidden_activation,
+        l1_penalty,
+        l2_penalty,
+        phase=3,
+        num_classes=3,
+    ):
+        super(UBPPhase2, self).__init__()
+
+        self.hidden_layer_sizes = hidden_layer_sizes
+        self.n_components = n_components
+        self.weights_initializer = weights_initializer
+        self.phase = phase
+
+        # Initialize parameters that are set via callbacks during fit().
+        self._batch_size = 0
+        self._batch_idx = 0
+        self._n_batches = 0
+
+        kernel_regularizer = l1_l2(l1_penalty, l2_penalty)
+        self.kernel_regularizer = kernel_regularizer
+        kernel_initializer = weights_initializer
+
+        if len(hidden_layer_sizes) > 5:
+            raise ValueError("The maximum number of hidden layers is 5.")
+
+        self.dense2 = None
+        self.dense3 = None
+        self.dense4 = None
+        self.dense5 = None
+
+        # Construct multi-layer perceptron.
+        # Add hidden layers dynamically.
+        self.dense1 = Dense(
+            hidden_layer_sizes[0],
+            input_shape=(n_components,),
+            activation=hidden_activation,
+            kernel_initializer=kernel_initializer,
+            kernel_regularizer=kernel_regularizer,
+        )
+
+        if len(hidden_layer_sizes) >= 2:
+            self.dense2 = Dense(
+                hidden_layer_sizes[1],
+                activation=hidden_activation,
+                kernel_initializer=kernel_initializer,
+                kernel_regularizer=kernel_regularizer,
+            )
+
+        if len(hidden_layer_sizes) >= 3:
+            self.dense3 = Dense(
+                hidden_layer_sizes[2],
+                activation=hidden_activation,
+                kernel_initializer=kernel_initializer,
+                kernel_regularizer=kernel_regularizer,
+            )
+
+        if len(hidden_layer_sizes) >= 4:
+            self.dense4 = Dense(
+                hidden_layer_sizes[3],
+                activation=hidden_activation,
+                kernel_initializer=kernel_initializer,
+                kernel_regularizer=kernel_regularizer,
+            )
+
+        if len(hidden_layer_sizes) == 5:
+            self.dense5 = Dense(
+                hidden_layer_sizes[4],
+                activation=hidden_activation,
+                kernel_initializer=kernel_initializer,
+                kernel_regularizer=kernel_regularizer,
+            )
+
+        self.dense6 = Dense(
+            output_shape,
+            kernel_initializer=kernel_initializer,
+            kernel_regularizer=kernel_regularizer,
+        )
+
+        # Expand dims to 3d with shape (batch_size, n_features, num_classes)
+        self.lmda = Lambda(lambda x: tf.expand_dims(x, -1))
+        self.output1 = Dense(
+            num_classes,
+            activation="softmax",
+        )
+
+    def call(self, inputs):
+        """Forward propagates inputs through the model defined in __init__().
+
+        Args:
+            inputs (tf.keras.Input): Input tensor to forward propagate through the model.
+
+        Returns:
+            tf.keras.Model: Output tensor from forward propagation.
+        """
+        x = self.dense1(inputs)
+        if self.dense2 is not None:
+            x = self.dense2(x)
+        if self.dense3 is not None:
+            x = self.dense3(x)
+        if self.dense4 is not None:
+            x = self.dense4(x)
+        if self.dense5 is not None:
+            x = self.dense5(x)
+        x = self.dense6(x)
+        x = self.lmda(x)
+        return self.output1(x)
+
+    def model(self):
+        x = tf.keras.Input(shape=(self.n_components,))
+        return tf.keras.Model(inputs=[x], outputs=self.call(x))
+
+    def train_step(self, data):
+        """Custom training loop for one step (=batch) in a single epoch.
+
+        GradientTape records the weights and watched
+        variables (usually tf.Variable objects), which
+        in this case are the weights, during the forward pass.
+        This allows us to run gradient descent during
+        backpropagation to refine the watched variables.
+
+        This function will train on a batch of samples (rows), which can be adjusted with the ``batch_size`` parameter from the estimator.
+
+        Args:
+            data (Tuple[tf.EagerTensor, tf.EagerTensor]): Input tensorflow tensors of shape (batch_size, n_components) and (batch_size, n_features, num_classes).
+
+        Returns:
+            Dict[str, float]: History object that gets returned from fit(). Contains the loss and any metrics specified in compile().
+
+        ToDo:
+            Obtain batch_size without using run_eagerly option in compile(). This will allow the step to be run in graph mode, thereby speeding up computation.
+        """
+        v_batch, y_true = data
+
+        # Get current batch_size.
+        # NOTE: run_eagerly must be set to True in the compile() method for this
+        # to work. Otherwise it can't convert a Tensor object to a numpy array.
+        # There is really no other way to get the batch_size in graph
+        # mode as far as I know. eager execution is slower, so it would be nice
+        # to find a way to obtain batch_size without converting to numpy.
+        batch_size = y_true.numpy().shape[0]
+
+        # self._batch_idx is set in the UBPCallbacks() callback
+        # on_train_batch_begin() method.
+        batch_start = self._batch_idx * batch_size
+        batch_end = (self._batch_idx + 1) * batch_size
+
+        # NOTE: Moved self.set_weights(self._phase2_weights[self._batch_idx])
+        # to custom callback because it threw an error when it was here.
+
+        # v doesn't get refined in phase 2, so set trainable=False.
+        v = tf.Variable(
+            tf.zeros([batch_size, self.n_components]),
+            trainable=False,
+            dtype=tf.float32,
+        )
+
+        # Assign current batch to v.
+        v.assign(v_batch)
+
+        with tf.GradientTape() as tape:
+            # Forward pass
+            y_pred = self(v, training=True)
+            loss = self.compiled_loss(
+                tf.convert_to_tensor(y_true, dtype=tf.float32),
+                y_pred,
+                regularization_losses=self.losses,
+            )
+
+        # Phase == 2.
+        src = self.trainable_variables
+
+        # Refine the watched variables with
+        # gradient descent backpropagation
+        gradients = tape.gradient(loss, src)
+        self.optimizer.apply_gradients(zip(gradients, src))
+
+        self.compiled_metrics.update_state(
+            tf.convert_to_tensor(y_true, dtype=tf.float32), y_pred
+        )
+
+        # history object that gets returned from fit().
+        return {m.name: m.result() for m in self.metrics}
+
+    def test_step(self, data):
+        """Validation step for one batch in a single epoch.
+
+        Custom logic for the test step that gets sent back to on_train_batch_end() callback.
+
+        Args:
+            Tuple[tf.EagerTensor, tf.EagerTensor]: Batches of input data V and y.
+
+        Returns:
+            A dict containing values that will be passed to ``tf.keras.callbacks.CallbackList.on_train_batch_end``. Typically, the values of the Model's metrics are returned.
+        """
+        # Unpack the data. Don't need V here. Just X (y_true).
+        v_batch, y_true = data
+
+        batch_size = y_true.numpy().shape[0]
+
+        # self._batch_idx is set in the UBPCallbacks() callback
+        # on_train_batch_begin() method.
+        batch_start = self._batch_idx * batch_size
+        batch_end = (self._batch_idx + 1) * batch_size
+
+        v = tf.Variable(
+            tf.zeros([batch_size, self.n_components]),
+            trainable=False,
+            dtype=tf.float32,
+        )
+
+        # Assign current batch to v.
+        v.assign(v_batch)
+
+        # Compute predictions
+        y_pred = self(v, training=False)
+
+        # Updates the metrics tracking the loss
+        self.compiled_loss(
+            tf.convert_to_tensor(y_true, dtype=tf.float32),
+            y_pred,
+            regularization_losses=self.losses,
+        )
+
+        # Update the metrics.
+        self.compiled_metrics.update_state(
+            tf.convert_to_tensor(y_true, dtype=tf.float32), y_pred
+        )
+
+        # Return a dict mapping metric names to current value.
+        # Note that it will include the loss (tracked in self.metrics).
+        return {m.name: m.result() for m in self.metrics}
+
+    @property
+    def batch_size(self):
+        """Batch (=step) size per epoch."""
+        return self._batch_size
+
+    @property
+    def batch_idx(self):
+        """Current batch (=step) index."""
+        return self._batch_idx
+
+    @property
+    def n_batches(self):
+        """Total number of batches per epoch."""
+        return self._n_batches
+
+    @batch_size.setter
+    def batch_size(self, value):
+        """Set batch_size parameter."""
+        self._batch_size = int(value)
+
+    @batch_idx.setter
+    def batch_idx(self, value):
+        """Set current batch (=step) index."""
+        self._batch_idx = int(value)
+
+    @n_batches.setter
+    def n_batches(self, value):
+        """Set total number of batches (=steps) per epoch."""
+        self._n_batches = int(value)
+
+
+class UBPPhase3(tf.keras.Model, NeuralNetwork):
+    """UBP Phase 3 model to train and use to predict imputations.
+
+    UBPModel subclasses the tf.keras.Model and overrides the train_step() and test_step() functions, which do training and evaluation for one batch in a single epoch.
+
+    Args:
+        V (numpy.ndarray(float)): V is randomly initialized in UBPPhase3 and used as the input data to Phase 3. It gets refined during training.
+
+        output_shape (int): Output units for n_features dimension. Output will be of shape (batch_size, output_shape, num_classes).
+
+        n_components (int): Number of principal components for V.
+
+        weights_initializer (str): Kernel initializer to use for initializing model weights.
+
+        hidden_layer_sizes (List[int]): Output units for each hidden layer. List should be of same length as the number of hidden layers.
+
+        hidden_activation (str): Activation function to use for hidden layers.
+
+        l1_penalty (float): L1 regularization penalty to use to reduce overfitting.
+
+        l2_penalty (float): L2 regularization penalty to use to reduce overfitting.
+
+        phase (int, optional): Current phase if doing UBP model. Defaults to 3.
+
+        num_classes (int, optional): Number of classes in output. Corresponds to the 3rd dimension of the output shape (batch_size, n_features, num_classes). Defaults to 3.
+
+    Methods:
+        call: Does forward pass for model.
+        train_step: Does training for one batch in a single epoch.
+        test_step: Does evaluation for one batch in a single epoch.
+
+    Attributes:
+        _V (numpy.ndarray(float)): Randomly initialized input that gets refined during training.
+
+        phase (int): Current phase if doing UBP model. Ignored if doing NLPCA model.
+
+        hidden_layer_sizes (List[Union[int, str]]): Output units for each hidden layer. Length should be the same as the number of hidden layers.
+
+        n_components (int): Number of principal components to use with _V.
+
+        _batch_size (int): Batch size to use per epoch.
+
+        _batch_idx (int): Index of current batch.
+
+        _n_batches (int): Total number of batches per epoch.
+
+    Example:
+        >>>model = UBPPhase3(V, output_shape, n_components, weights_initializer, hidden_layer_sizes, hidden_activation, l1_penalty, l2_penalty, nlpca, phase=3, num_classes=3, phase2_weights=phase2_weights)
+        >>>model.compile(optimizer=optimizer, loss=loss_func, metrics=[my_metrics], run_eagerly=True)
+        >>>history = model.fit(X, y, batch_size=batch_size, epochs=epochs, callbacks=[MyCallback()], validation_split=validation_split, shuffle=False)
+    """
+
+    def __init__(
+        self,
+        V,
+        output_shape,
+        n_components,
+        weights_initializer,
+        hidden_layer_sizes,
+        hidden_activation,
+        l1_penalty,
+        l2_penalty,
+        phase=3,
+        num_classes=3,
+    ):
+        super(UBPPhase3, self).__init__()
+
+        self._V = V
+        self.hidden_layer_sizes = hidden_layer_sizes
+        self.n_components = n_components
+        self.weights_initializer = weights_initializer
+        self.phase = phase
+
+        # Initialize parameters that are set via callbacks during fit().
+        self._batch_size = 0
+        self._batch_idx = 0
+        self._n_batches = 0
+        self._V_latent = self._V.copy()
+
+        kernel_regularizer = None
+        self.kernel_regularizer = kernel_regularizer
+        kernel_initializer = None
+
+        if len(hidden_layer_sizes) > 5:
+            raise ValueError("The maximum number of hidden layers is 5.")
+
+        self.dense2 = None
+        self.dense3 = None
+        self.dense4 = None
+        self.dense5 = None
+
+        # Construct multi-layer perceptron.
+        # Add hidden layers dynamically.
+        self.dense1 = Dense(
+            hidden_layer_sizes[0],
+            input_shape=(n_components,),
+            activation=hidden_activation,
+            kernel_initializer=kernel_initializer,
+            kernel_regularizer=kernel_regularizer,
+        )
+
+        if len(hidden_layer_sizes) >= 2:
+            self.dense2 = Dense(
+                hidden_layer_sizes[1],
+                activation=hidden_activation,
+                kernel_initializer=kernel_initializer,
+                kernel_regularizer=kernel_regularizer,
+            )
+
+        if len(hidden_layer_sizes) >= 3:
+            self.dense3 = Dense(
+                hidden_layer_sizes[2],
+                activation=hidden_activation,
+                kernel_initializer=kernel_initializer,
+                kernel_regularizer=kernel_regularizer,
+            )
+
+        if len(hidden_layer_sizes) >= 4:
+            self.dense4 = Dense(
+                hidden_layer_sizes[3],
+                activation=hidden_activation,
+                kernel_initializer=kernel_initializer,
+                kernel_regularizer=kernel_regularizer,
+            )
+
+        if len(hidden_layer_sizes) == 5:
+            self.dense5 = Dense(
+                hidden_layer_sizes[4],
+                activation=hidden_activation,
+                kernel_initializer=kernel_initializer,
+                kernel_regularizer=kernel_regularizer,
+            )
+
+        self.dense6 = Dense(
+            output_shape,
+            kernel_initializer=kernel_initializer,
+            kernel_regularizer=kernel_regularizer,
+        )
+
+        # Expand dims to 3d of shape (batch_size, n_features, num_classes).
+        self.lmda = Lambda(lambda x: tf.expand_dims(x, -1))
+        self.output1 = Dense(
+            num_classes,
+            activation="softmax",
+        )
+
+    def call(self, inputs):
+        """Forward propagates inputs through the model defined in __init__().
+
+        Model varies depending on which phase UBP is in.
+
+        Args:
+            inputs (tf.keras.Input): Input tensor to forward propagate through the model.
+
+        Returns:
+            tf.keras.Model: Output tensor from forward propagation.
+        """
+        x = self.dense1(inputs)
+        if self.dense2 is not None:
+            x = self.dense2(x)
+        if self.dense3 is not None:
+            x = self.dense3(x)
+        if self.dense4 is not None:
+            x = self.dense4(x)
+        if self.dense5 is not None:
+            x = self.dense5(x)
+        x = self.dense6(x)
+        x = self.lmda(x)
+        return self.output1(x)
+
+    def model(self):
+        x = tf.keras.Input(shape=(self.n_components,))
+        return tf.keras.Model(inputs=[x], outputs=self.call(x))
+
+    def train_step(self, data):
+        """Custom training loop for one step (=batch) in a single epoch.
+
+        GradientTape records the weights and watched
+        variables (usually tf.Variable objects), which
+        in this case are the weights and the input (y_true), during the forward pass.
+        This allows us to run gradient descent during
+        backpropagation to refine the watched variables.
+
+        This function will train on a batch of samples (rows), which can be adjusted with the ``batch_size`` parameter from the estimator.
+
+        Args:
+            data (Tuple[tf.EagerTensor, tf.EagerTensor]): Input tensors of shape (batch_size, n_components) and (batch_size, n_features, num_classes).
+
+        Returns:
+            Dict[str, float]: History object that gets returned from fit(). Contains the loss and any metrics specified in compile().
+
+        ToDo:
+            Obtain batch_size without using run_eagerly option in compile(). This will allow the step to be run in graph mode, thereby speeding up computation.
+        """
+        y_true = data[1]
+
+        # Get current batch_size.
+        # NOTE: run_eagerly must be set to True in the compile() method for this
+        # to work. Otherwise it can't convert a Tensor object to a numpy array.
+        # There is really no other way to get the batch_size in graph
+        # mode as far as I know. eager execution is slower, so it would be nice
+        # to find a way to obtain batch_size without converting to numpy.
+        batch_size = y_true.numpy().shape[0]
+
+        # self._batch_idx is set in the UBPCallbacks() callback
+        # on_train_batch_begin() method.
+        batch_start = self._batch_idx * batch_size
+        batch_end = (self._batch_idx + 1) * batch_size
+
+        # override v_batch. This model refines the input to fit the output, so
+        # v_batch has to be overridden.
+        v_batch = self._V_latent[batch_start:batch_end, :]
+
+        # NOTE: Moved self.set_weights(self._phase2_weights[self._batch_idx])
+        # to custom callback because it threw an error when it was here.
+
+        # Initialize variable v as tensorflow variable.
+        v = tf.Variable(
+            tf.zeros([batch_size, self.n_components]),
+            trainable=True,
+            dtype=tf.float32,
+        )
+
+        # Assign current batch to v.
+        v.assign(v_batch)
+
+        src = [v]
+
+        with tf.GradientTape() as tape:
+            # Forward pass
+            tape.watch(v)
+            y_pred = self(v, training=True)
+
+            loss = self.compiled_loss(
+                tf.convert_to_tensor(y_true, dtype=tf.float32),
+                y_pred,
+                regularization_losses=self.losses,
+            )
+
+        src.extend(self.trainable_variables)
+
+        # Refine the watched variables with
+        # gradient descent backpropagation
+        gradients = tape.gradient(loss, src)
+        self.optimizer.apply_gradients(zip(gradients, src))
+
+        self.compiled_metrics.update_state(
+            tf.convert_to_tensor(y_true, dtype=tf.float32), y_pred
+        )
+
+        self._V_latent[batch_start:batch_end, :] = v.numpy()
+
+        # history object that gets returned from fit().
+        return {m.name: m.result() for m in self.metrics}
+
+    def test_step(self, data):
+        """Validation step for one batch in a single epoch.
+
+        Custom logic for the test step that gets sent back to on_train_batch_end() callback.
+
+        Args:
+            Tuple[tf.EagerTensor, tf.EagerTensor]: Batches of input data V and y_true.
+
+        Returns:
+            A dict containing values that will be passed to ``tf.keras.callbacks.CallbackList.on_train_batch_end``. Typically, the values of the Model's metrics are returned.
+        """
+        # Unpack the data. Don't need V here. Just X (y_true).
+        y_true = data[1]
+
+        batch_size = y_true.numpy().shape[0]
+
+        # self._batch_idx is set in the UBPCallbacks() callback
+        # on_train_batch_begin() method.
+        batch_start = self._batch_idx * batch_size
+        batch_end = (self._batch_idx + 1) * batch_size
+
+        # Get the input that's being refined.
+        v_batch = self._V_latent[batch_start:batch_end, :]
+
+        v = tf.Variable(
+            tf.zeros([batch_size, self.n_components]),
+            trainable=False,
+            dtype=tf.float32,
+        )
+
+        # Assign current batch to v.
+        v.assign(v_batch)
+
+        # Compute predictions
+        y_pred = self(v, training=False)
+
+        # Updates the metrics tracking the loss
+        self.compiled_loss(
+            tf.convert_to_tensor(y_true, dtype=tf.float32),
+            y_pred,
+            regularization_losses=self.losses,
+        )
+
+        # Update the metrics.
+        self.compiled_metrics.update_state(
+            tf.convert_to_tensor(y_true, dtype=tf.float32), y_pred
+        )
+
+        # Return a dict mapping metric names to current value.
+        # Note that it will include the loss (tracked in self.metrics).
+        return {m.name: m.result() for m in self.metrics}
+
+    @property
+    def V(self):
+        """Randomly initialized input variable that gets refined during training."""
+        return self._V_latent
+
+    @property
+    def batch_size(self):
+        """Batch (=step) size per epoch."""
+        return self._batch_size
+
+    @property
+    def batch_idx(self):
+        """Current batch (=step) index."""
+        return self._batch_idx
+
+    @property
+    def n_batches(self):
+        """Total number of batches per epoch."""
+        return self._n_batches
+
+    @V.setter
+    def V(self, value):
+        """Set randomly initialized input variable. Gets refined during training."""
+        self._V = value
+
+    @batch_size.setter
+    def batch_size(self, value):
+        """Set batch_size parameter."""
+        self._batch_size = int(value)
+
+    @batch_idx.setter
+    def batch_idx(self, value):
+        """Set current batch (=step) index."""
+        self._batch_idx = int(value)
+
+    @n_batches.setter
+    def n_batches(self, value):
+        """Set total number of batches (=steps) per epoch."""
+        self._n_batches = int(value)
 
 
 class VAE(NeuralNetwork):
@@ -1501,7 +2808,7 @@ class UBP(NeuralNetwork):
         y = self.validate_input(y)
 
         # Initialize small random values.
-        X = self._init_weights(y.shape[0], self.n_components)
+        V = self._init_weights(y.shape[0], self.n_components)
 
         hl_sizes = self._get_hidden_layer_sizes(
             y.shape[1], self.n_components, self.hidden_layer_sizes
@@ -1516,25 +2823,31 @@ class UBP(NeuralNetwork):
         # Define neural network models.
         if self.nlpca:
             # If using NLPCA model: Don't need phases 1 and 2.
-            start_phase = 3
             logfile = f"{self.prefix}_nlpca_log.csv"
         else:
-            start_phase = 1
             logfile = f"{self.prefix}_ubp_log.csv"
 
-        models = list()
         histories = list()
-        w = None
-        for phase in range(start_phase, 4):
 
-            # Reset model states
-            K.clear_session()
-            tf.keras.backend.clear_session()
-            tf.compat.v1.reset_default_graph()
-            self.reset_seeds()
+        # Reset model states
+        K.clear_session()
+        tf.keras.backend.clear_session()
+        tf.compat.v1.reset_default_graph()
+        self.reset_seeds()
 
-            model = UBPModel(
-                X,
+        lr_patience = self.early_stop_gen // 2
+
+        callbacks = [
+            UBPCallbacks(),
+            CSVLogger(filename=logfile),
+            ReduceLROnPlateau(patience=lr_patience),
+        ]
+
+        if self.nlpca:
+            model1 = None
+            model2 = None
+            model3 = NLPCAModel(
+                V,
                 y_train.shape[1],
                 self.n_components,
                 self.weights_initializer,
@@ -1542,52 +2855,176 @@ class UBP(NeuralNetwork):
                 self.hidden_activation,
                 self.l1_penalty,
                 self.l2_penalty,
-                self.nlpca,
-                phase=phase,
                 num_classes=3,
-                phase2_weights=w,
             )
 
-            model.build((None, X.shape[1]))
+            callbacks3 = [
+                UBPEarlyStopping(
+                    patience=self.early_stop_gen,
+                    phase=None,
+                ),
+            ]
 
-            model.compile(
+            callbacks3.extend(callbacks)
+
+            V2 = V.copy()
+
+        else:
+            model1 = UBPPhase1(
+                V,
+                y_train.shape[1],
+                self.n_components,
+                self.weights_initializer,
+                hl_sizes,
+                self.hidden_activation,
+                self.l1_penalty,
+                self.l2_penalty,
+                num_classes=3,
+                phase=1,
+            )
+
+            model1.compile(
                 optimizer=self.set_optimizer(),
                 loss=self.categorical_crossentropy_masked,
                 metrics=[self.categorical_accuracy_masked],
                 run_eagerly=True,
             )
 
-            callbacks = [
-                UBPCallbacks(),
-                UBPEarlyStopping(patience=self.early_stop_gen, phase=phase,),
-                ReduceLROnPlateau(
-                    monitor="val_loss", factor=0.2, patience=self.early_stop_gen
+            callbacks1 = [
+                UBPEarlyStopping(
+                    patience=self.early_stop_gen,
+                    phase=1,
                 ),
-                CSVLogger(filename=logfile),
             ]
 
-            history = model.fit(
-                x=X,
+            callbacks1.extend(callbacks)
+
+            history1 = model1.fit(
+                x=V,
                 y=y_train,
                 batch_size=self.batch_size,
                 epochs=self.max_epochs,
-                callbacks=callbacks,
+                callbacks=callbacks1,
                 validation_split=self.validation_size,
                 shuffle=False,
             )
 
-            histories.append(history.history)
+            # model1.model().summary()
 
-            if phase != 2:
-                X = model.V.copy()
-            else:
-                w = model.phase2_weights
+            histories.append(history1.history)
 
-            models.append(model)
+            V2 = model1.V.copy()
 
-            del model
+            # Reset model states
+            K.clear_session()
+            tf.keras.backend.clear_session()
+            tf.compat.v1.reset_default_graph()
+            self.reset_seeds()
 
-        pred = self.predict(X, y, models[-1], observed_mask)
+            model2 = UBPPhase2(
+                y_train.shape[1],
+                self.n_components,
+                self.weights_initializer,
+                hl_sizes,
+                self.hidden_activation,
+                self.l1_penalty,
+                self.l2_penalty,
+                num_classes=3,
+                phase=2,
+            )
+
+            model2.compile(
+                optimizer=self.set_optimizer(),
+                loss=self.categorical_crossentropy_masked,
+                metrics=[self.categorical_accuracy_masked],
+                run_eagerly=True,
+            )
+
+            callbacks2 = [
+                UBPEarlyStopping(
+                    patience=self.early_stop_gen,
+                    phase=2,
+                ),
+            ]
+
+            callbacks2.extend(callbacks)
+
+            history2 = model2.fit(
+                x=V2,
+                y=y_train,
+                batch_size=self.batch_size,
+                epochs=self.max_epochs,
+                callbacks=callbacks2,
+                validation_split=self.validation_size,
+                shuffle=False,
+            )
+
+            # model2.model().summary()
+
+            # w = model2.phase2_weights
+            w = model2.get_weights()
+
+            histories.append(history2.history)
+
+            # Reset model states
+            K.clear_session()
+            tf.keras.backend.clear_session()
+            tf.compat.v1.reset_default_graph()
+            self.reset_seeds()
+
+            model3 = UBPPhase3(
+                V2,
+                y_train.shape[1],
+                self.n_components,
+                self.weights_initializer,
+                hl_sizes,
+                self.hidden_activation,
+                self.l1_penalty,
+                self.l2_penalty,
+                num_classes=3,
+                phase=3,
+            )
+
+            model3.compile(
+                optimizer=self.set_optimizer(),
+                loss=self.categorical_crossentropy_masked,
+                metrics=[self.categorical_accuracy_masked],
+                run_eagerly=True,
+            )
+
+            model3.build((None, self.n_components))
+            model3.set_weights(w)
+
+            callbacks3 = [
+                UBPEarlyStopping(
+                    patience=self.early_stop_gen,
+                    phase=3,
+                ),
+            ]
+
+            callbacks3.extend(callbacks)
+
+        history3 = model3.fit(
+            x=V2,
+            y=y_train,
+            batch_size=self.batch_size,
+            epochs=self.max_epochs,
+            callbacks=callbacks3,
+            validation_split=self.validation_size,
+            shuffle=False,
+        )
+
+        # Reset model states
+        K.clear_session()
+        tf.keras.backend.clear_session()
+        tf.compat.v1.reset_default_graph()
+        self.reset_seeds()
+
+        # model.model().summary()
+
+        histories.append(history3.history)
+
+        y_pred = self.predict(V, y, model3, observed_mask)
         self._plot_history(histories)
 
         sys.exit()
@@ -1903,16 +3340,22 @@ class UBP(NeuralNetwork):
                             if counter == self.early_stop_gen:
                                 counter = 0
                                 if phase == 1:
-                                    model_single_layer = tf.keras.models.load_model(
-                                        model_dir1, compile=False
+                                    model_single_layer = (
+                                        tf.keras.models.load_model(
+                                            model_dir1, compile=False
+                                        )
                                     )
                                 elif phase == 2:
-                                    model_mlp_phase2 = tf.keras.models.load_model(
-                                        model_dir2, compile=False
+                                    model_mlp_phase2 = (
+                                        tf.keras.models.load_model(
+                                            model_dir2, compile=False
+                                        )
                                     )
                                 elif phase == 3:
-                                    model_mlp_phase3 = tf.keras.models.load_model(
-                                        model_dir3, compile=False
+                                    model_mlp_phase3 = (
+                                        tf.keras.models.load_model(
+                                            model_dir3, compile=False
+                                        )
                                     )
                                 final_s = s_prime
                                 final_acc = acc_prime
