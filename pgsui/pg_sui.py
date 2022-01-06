@@ -327,8 +327,9 @@ def main():
         disable_progressbar=True,
         cv=3,
         column_subset=1.0,
-        validation_only=1.0,
-        learning_rate=0.01,
+        validation_size=0.3,
+        learning_rate=0.1,
+        num_hidden_layers=1,
     )
 
     # nlpca_data = nlpca.imputed
