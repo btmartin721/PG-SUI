@@ -152,7 +152,7 @@ class Impute:
             self.scoring_metric,
             self.early_stop_gen,
             self.chunk_size,
-            self.validation_only,
+            self.do_validation,
         ) = self._gather_impute_settings(kwargs)
 
         if self.gridparams is not None:
@@ -492,7 +492,7 @@ class Impute:
     ) -> Tuple[pd.DataFrame, pd.DataFrame, None]:
         """Run IterativeImputer without a grid search.
 
-        Will do a different type of validation if ``validation_only != None``\.
+        Will do a different type of validation if ``do_validation == True``\.
 
         Args:
             df (pandas.DataFrame): DataFrame of 012-encoded genotypes.
@@ -510,7 +510,7 @@ class Impute:
         else:
             clf = self.clf(**self.clf_kwargs)
 
-        if self.validation_only is not None:
+        if self.do_validation:
             print(f"Estimating {self.clf.__name__} validation scores...")
 
             if self.disable_progressbar:
@@ -561,9 +561,7 @@ class Impute:
         # Only used if initial_strategy == 'phylogeny'
         if self.invalid_indexes is not None:
             df.drop(
-                labels=self.invalid_indexes,
-                axis=1,
-                inplace=True,
+                labels=self.invalid_indexes, axis=1, inplace=True,
             )
 
         if self.disable_progressbar:
@@ -932,8 +930,7 @@ class Impute:
                     imputer = self.clf(**self.clf_kwargs)
                     if self.clf == UBP:
                         df_imp = pd.DataFrame(
-                            imputer.fit_predict(Xchunk),
-                            dtype="Int8",
+                            imputer.fit_predict(Xchunk), dtype="Int8",
                         )
                     else:
                         df_imp = pd.DataFrame(imputer.fit_transform(Xchunk))
@@ -951,10 +948,7 @@ class Impute:
             else:
                 # Regressor. Needs to be rounded to integer first.
                 df_imp = pd.DataFrame(
-                    imputer.fit_transform(
-                        Xchunk,
-                        valid_cols=cols_to_keep,
-                    )
+                    imputer.fit_transform(Xchunk, valid_cols=cols_to_keep,)
                 )
                 df_imp = df_imp.round(0).astype("Int8")
 
@@ -1130,6 +1124,7 @@ class Impute:
         Optional[int],
         Optional[Union[int, float]],
         Optional[float],
+        Optional[bool],
     ]:
         """Gather impute settings from kwargs object.
 
@@ -1154,7 +1149,7 @@ class Impute:
             str: Scoring metric to use with grid search. Can be any of the sklearn classifier metrics in string format.
             int: Number of generations without improvement before Early Stopping criterion is called.
             int or float: Chunk sizes for doing full imputation following grid search. If int, then splits into chunks of ``chunk_size``\. If float, then splits into chunks of ``n_features * chunk_size``\.
-            float or None: Proportion of loci to use for validation if grid search is not used. If None, then doesn't do validation.
+            bool: Whether to do validation if ``gridparams is None``.
         """
         gridparams = kwargs.pop("gridparams", None)
         cv = kwargs.pop("cv", None)
@@ -1167,8 +1162,8 @@ class Impute:
         scoring_metric = kwargs.pop("scoring_metric", None)
         early_stop_gen = kwargs.pop("early_stop_gen", None)
         chunk_size = kwargs.pop("chunk_size", None)
-        validation_only = kwargs.pop("validation_only", None)
         progress_update_percent = kwargs.pop("progress_update_percent", None)
+        do_validation = kwargs.pop("do_validation", None)
 
         if prefix is None:
             prefix = "output"
@@ -1252,7 +1247,7 @@ class Impute:
             scoring_metric,
             early_stop_gen,
             chunk_size,
-            validation_only,
+            do_validation,
         )
 
     def _format_features(
@@ -1443,7 +1438,7 @@ class Impute:
         # Code adapted from:
         # https://medium.com/analytics-vidhya/using-scikit-learns-iterative-imputer-694c3cca34de
         df_known, df_unknown, cols = self._defile_dataset(
-            df, col_selection_rate=self.validation_only
+            df, col_selection_rate=self.column_subset
         )
 
         df_known_slice = df_known[cols]
@@ -1462,8 +1457,7 @@ class Impute:
 
             if self.clf == VAE:
                 df_imp = pd.DataFrame(
-                    imputer.fit_transform(df_stg.to_numpy()),
-                    columns=cols,
+                    imputer.fit_transform(df_stg.to_numpy()), columns=cols,
                 )
 
                 df_imp = df_imp.astype("float")
