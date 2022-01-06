@@ -638,23 +638,45 @@ class Impute:
                     print(f"Doing {self.clf.__name__} grid search...\n")
 
         if self.algorithm == "nn":
-            clf = self.clf(**self.clf_kwargs, **ga_kwargs, **self.imp_kwargs)
-            # X_train = self.imp_kwargs["genotype_data"].genotypes012_array
-            # y_train = clf.y_train
-
-            search = self._nn_grid_search(
-                X_train,
-                y_train,
-                clf,
-                self.cv,
-                self.ga,
-                self.early_stop_gen,
-                self.scoring_metric,
-                self.grid_iter,
-                self.gridparams,
-                self.n_jobs,
-                self.ga_kwargs,
+            imputer = self.clf(
+                self.genotype_data,
+                gridparams=self.gridparams,
+                **self.clf_kwargs,
+                ga_kwargs=self.ga_kwargs,
             )
+
+            if self.clf == VAE:
+                df_imp = pd.DataFrame(
+                    imputer.fit_transform(df_subset.to_numpy()),
+                    columns=cols_to_keep,
+                )
+
+                df_imp = df_imp.astype("float")
+                df_imp = df_imp.astype("int64")
+
+            else:
+                df_imp = pd.DataFrame(
+                    imputer.fit_predict(df_subset.to_numpy()),
+                    columns=cols_to_keep,
+                    dtype="int64",
+                )
+            # clf = self.clf(**self.clf_kwargs, **ga_kwargs, **self.imp_kwargs)
+            # # X_train = self.imp_kwargs["genotype_data"].genotypes012_array
+            # # y_train = clf.y_train
+
+            # search = self._nn_grid_search(
+            #     X_train,
+            #     y_train,
+            #     clf,
+            #     self.cv,
+            #     self.ga,
+            #     self.early_stop_gen,
+            #     self.scoring_metric,
+            #     self.grid_iter,
+            #     self.gridparams,
+            #     self.n_jobs,
+            #     self.ga_kwargs,
+            # )
 
         else:
             imputer = self._define_iterative_imputer(

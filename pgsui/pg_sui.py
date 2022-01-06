@@ -330,6 +330,8 @@ def main():
         validation_size=0.3,
         learning_rate=0.1,
         num_hidden_layers=1,
+        verbose=1,
+        gridparams=grid_params,
     )
 
     # nlpca_data = nlpca.imputed

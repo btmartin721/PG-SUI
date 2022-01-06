@@ -328,6 +328,7 @@ class NeuralNetwork:
         X_train,
         y_train,
         estimator,
+        sk_params,
         grid_cv,
         ga,
         early_stop_gen,
@@ -340,7 +341,10 @@ class NeuralNetwork:
         # Modified code
         cross_val = StratifiedKFold(n_splits=grid_cv, shuffle=False)
 
+        model = KerasClassifier(build_fn=estimator, **sk_params)
+
         if ga:
+            # Stop searching if GA sees no improvement.
             callback = ConsecutiveStopping(
                 generations=early_stop_gen, metric="fitness"
             )
@@ -348,7 +352,7 @@ class NeuralNetwork:
             # Do genetic algorithm
             with HiddenPrints():
                 search = GASearchCV(
-                    estimator=estimator,
+                    estimator=model,
                     cv=cross_val,
                     scoring=scoring_metric,
                     generations=grid_n_iter,
@@ -363,7 +367,7 @@ class NeuralNetwork:
         else:
             # Do randomized grid search
             search = RandomizedSearchCV(
-                estimator,
+                model,
                 param_distributions=search_space,
                 n_iter=grid_n_iter,
                 scoring=scoring_metric,
@@ -503,19 +507,28 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
 
     def __init__(
         self,
-        V,
-        output_shape,
-        n_components,
-        weights_initializer,
-        hidden_layer_sizes,
-        hidden_activation,
-        l1_penalty,
-        l2_penalty,
-        dropout_rate,
+        V=None,
+        output_shape=None,
+        n_components=3,
+        weights_initializer="glorot_normal",
+        hidden_layer_sizes=None,
+        hidden_activation="elu",
+        l1_penalty=0.01,
+        l2_penalty=0.01,
+        dropout_rate=0.2,
         num_classes=3,
         phase=None,
     ):
         super(NLPCAModel, self).__init__()
+
+        if V is None:
+            raise TypeError("V must not be NoneType.")
+
+        if output_shape is None:
+            raise TypeError("output_shape must not be NoneType.")
+
+        if hidden_layer_sizes is None:
+            raise TypeError("hidden_layer_sizes must not be NoneType.")
 
         self._V = V
         self.hidden_layer_sizes = hidden_layer_sizes
@@ -2252,17 +2265,7 @@ class UBP(NeuralNetwork):
 
         ga (bool, optional): Whether to use a genetic algorithm for the grid search. If False, a RandomizedSearchCV is done instead. Defaults to False.
 
-        population_size (int, optional): For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. See GASearchCV documentation. Defaults to 10.
-
-        tournament_size (int, optional): For genetic algorithm grid search: Number of individuals to perform tournament selection. See GASearchCV documentation. Defaults to 3.
-
-        elitism (bool, optional): For genetic algorithm grid search:     If True takes the tournament_size best solution to the next generation. See GASearchCV documentation. Defaults to True.
-
-        crossover_probability (float, optional): For genetic algorithm grid search: Probability of crossover operation between two individuals. See GASearchCV documentation. Defaults to 0.8.
-
-        mutation_probability (float, optional): For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation. Defaults to 0.1.
-
-        algorithm (str, optional): For genetic algorithm grid search: Evolutionary algorithm to use. See more details in the deap algorithms documentation. Defaults to "eaMuPlusLambda".
+        ga_kwargs (Dict[str, Any] or None): Keyword arguments to be passed to a Genetic Algorithm grid search. Only used if ``ga==True``\.
 
         scoring_metric (str, optional): Scoring metric to use for randomized or genetic algorithm grid searches. See https://scikit-learn.org/stable/modules/model_evaluation.html for supported options. Defaults to "accuracy".
 
@@ -2299,12 +2302,7 @@ class UBP(NeuralNetwork):
         cv=5,
         grid_iter=50,
         ga=False,
-        population_size=10,
-        tournament_size=3,
-        elitism=True,
-        crossover_probability=0.8,
-        mutation_probability=0.1,
-        algorithm="eaMuPlusLambda",
+        ga_kwargs=None,
         scoring_metric="accuracy",
         n_jobs=1,
         verbose=0,
@@ -2335,6 +2333,7 @@ class UBP(NeuralNetwork):
         self.l1_penalty = l1_penalty
         self.l2_penalty = l2_penalty
         self.dropout_rate = dropout_rate
+        self.cv = cv
         self.verbose = verbose
 
         # TODO: Make estimators compatible with variable number of classes.
@@ -2346,12 +2345,7 @@ class UBP(NeuralNetwork):
         self.scoring_metric = scoring_metric
         self.grid_iter = grid_iter
         self.n_jobs = n_jobs
-        self.population_size = population_size
-        self.tournament_size = tournament_size
-        self.elitism = elitism
-        self.crossover_probability = crossover_probability
-        self.mutation_probability = mutation_probability
-        self.algorithm = algorithm
+        self.ga_kwargs = ga_kwargs
 
     @timer
     def fit_predict(self, y):
@@ -2410,28 +2404,53 @@ class UBP(NeuralNetwork):
             ReduceLROnPlateau(patience=lr_patience),
         ]
 
+        optimizer = self.set_optimizer()
+
+        compile_params = {
+            "optimizer": optimizer,
+            "loss": self.categorical_crossentropy_masked,
+            "metrics": [self.categorical_accuracy_masked],
+            "run_eagerly": True,
+        }
+
+        # ga_kwargs = {"population_size": self.population_size,
+        # "tournament_size": self.tournament_size,
+        # "elitism": self.elitism,
+        # "crossover_probability": self.crossover_probability,
+        # "mutation_probability": self.mutation_probability,
+        # "algorithm": self.algorithm,
+        # }
+
+        if self.gridparams is not None:
+            do_gridsearch = True
+
         if self.nlpca:
             model1 = None
             model2 = None
-            model3 = NLPCAModel(
-                V,
-                y_train.shape[1],
-                self.n_components,
-                self.weights_initializer,
-                hl_sizes,
-                self.hidden_activation,
-                self.l1_penalty,
-                self.l2_penalty,
-                self.dropout_rate,
-                num_classes=3,
+
+            model3_params = {
+                "V": V,
+                "output_shape": y_train.shape[1],
+                "n_components": self.n_components,
+                "weights_initializer": self.weights_initializer,
+                "hidden_layer_sizes": hl_sizes,
+                "hidden_activation": self.hidden_activation,
+                "l1_penalty": self.l1_penalty,
+                "l2_penalty": self.l2_penalty,
+                "dropout_rate": self.dropout_rate,
+                "num_classes": self.num_classes,
+            }
+
+            model3 = self.create_model(
+                NLPCAModel, model3_params, compile_params
             )
 
-            model3.compile(
-                optimizer=self.set_optimizer(),
-                loss=self.categorical_crossentropy_masked,
-                metrics=[self.categorical_accuracy_masked],
-                run_eagerly=True,
-            )
+            # model3.compile(
+            #     optimizer=self.set_optimizer(),
+            #     loss=self.categorical_crossentropy_masked,
+            #     metrics=[self.categorical_accuracy_masked],
+            #     run_eagerly=True,
+            # )
 
             callbacks3 = [
                 UBPEarlyStopping(patience=self.early_stop_gen, phase=None,),
@@ -2440,6 +2459,36 @@ class UBP(NeuralNetwork):
             callbacks3.extend(callbacks)
 
             V2 = V.copy()
+
+            sk_params3 = {
+                "batch_size": self.batch_size,
+                "epochs": self.train_epochs,
+                "callbacks": callbacks3,
+                "validation_split": self.validation_size,
+                "shuffle": False,
+                "verbose": self.verbose,
+            }
+
+            if do_gridsearch:
+                search3 = self.grid_search(
+                    V2,
+                    y_train,
+                    model3,
+                    sk_params3,
+                    self.cv,
+                    self.ga,
+                    self.early_stop_gen,
+                    self.scoring_metric,
+                    self.grid_iter,
+                    self.gridparams,
+                    self.n_jobs,
+                    self.ga_kwargs,
+                )
+
+                print(search3.best_params_)
+                print(search3.best_score_)
+
+                sys.exit()
 
         else:
             model1 = UBPPhase1(
@@ -2574,6 +2623,22 @@ class UBP(NeuralNetwork):
 
             callbacks3.extend(callbacks)
 
+            if do_gridsearch:
+                search3 = self.grid_search(
+                    V,
+                    y_train,
+                    estimator,
+                    sk_params,
+                    grid_cv,
+                    ga,
+                    early_stop_gen,
+                    scoring_metric,
+                    grid_n_iter,
+                    search_space,
+                    grid_n_jobs,
+                    ga_kwargs,
+                )
+
         history3 = model3.fit(
             x=V2,
             y=y_train,
@@ -2600,6 +2665,11 @@ class UBP(NeuralNetwork):
         self._plot_history(histories)
 
         sys.exit()
+
+    def create_model(self, estimator, model_params, compile_params):
+        model = estimator(**model_params)
+        model.compile(**compile_params)
+        return model
 
     def predict(self, V, X, model, observed_mask):
         """Predict imputations based on input X.
