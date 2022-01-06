@@ -470,7 +470,7 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
 
         l2_penalty (float): L2 regularization penalty to use to reduce overfitting.
 
-        dropout_probability (float): Dropout rate during training to reduce overfitting. Must be a float between 0 and 1.
+        dropout_rate (float): Dropout rate during training to reduce overfitting. Must be a float between 0 and 1.
 
         num_classes (int, optional): Number of classes in output. Corresponds to the 3rd dimension of the output shape (batch_size, n_features, num_classes). Defaults to 3.
 
@@ -496,7 +496,7 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
         _n_batches (int): Total number of batches per epoch.
 
     Example:
-        >>>model = NLPCAModel(V, output_shape, n_components, weights_initializer, hidden_layer_sizes, hidden_activation, l1_penalty, l2_penalty, dropout_probability, num_classes=3)
+        >>>model = NLPCAModel(V, output_shape, n_components, weights_initializer, hidden_layer_sizes, hidden_activation, l1_penalty, l2_penalty, dropout_rate, num_classes=3)
         >>>model.compile(optimizer=optimizer, loss=loss_func, metrics=[my_metrics], run_eagerly=True)
         >>>history = model.fit(X, y, batch_size=batch_size, epochs=epochs, callbacks=[MyCallback()], validation_split=validation_split, shuffle=False)
     """
@@ -511,7 +511,7 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
         hidden_activation,
         l1_penalty,
         l2_penalty,
-        dropout_probability,
+        dropout_rate,
         num_classes=3,
         phase=None,
     ):
@@ -593,7 +593,7 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
         self.lmda = Lambda(lambda x: tf.expand_dims(x, -1))
         self.output1 = Dense(num_classes, activation="softmax",)
 
-        self.dropout_layer = Dropout(rate=dropout_probability)
+        self.dropout_layer = Dropout(rate=dropout_rate)
 
     def call(self, inputs, training=None):
         """Forward propagates inputs through the model defined in __init__().
@@ -758,7 +758,7 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
 
         # Update the metrics.
         self.compiled_metrics.update_state(
-            tf.convert_to_tensor(y_true, dtype=tf.float32), t_pred
+            tf.convert_to_tensor(y_true, dtype=tf.float32), y_pred
         )
 
         # Return a dict mapping metric names to current value.
@@ -1111,7 +1111,7 @@ class UBPPhase2(tf.keras.Model, NeuralNetwork):
 
         l2_penalty (float): L2 regularization penalty to use to reduce overfitting.
 
-        dropout_probability (float): Dropout rate during training to reduce overfitting. Must be a float between 0 and 1.
+        dropout_rate (float): Dropout rate during training to reduce overfitting. Must be a float between 0 and 1.
 
         phase (int, optional): Current phase if doing UBP model. Defaults to 3.
 
@@ -1136,7 +1136,7 @@ class UBPPhase2(tf.keras.Model, NeuralNetwork):
         _n_batches (int): Total number of batches per epoch.
 
     Example:
-        >>>model = UBPPhase2(output_shape, n_components, weights_initializer, hidden_layer_sizes, hidden_activation, l1_penalty, l2_penalty, dropout_probability, phase=3, num_classes=3)
+        >>>model = UBPPhase2(output_shape, n_components, weights_initializer, hidden_layer_sizes, hidden_activation, l1_penalty, l2_penalty, dropout_rate, phase=3, num_classes=3)
         >>>model.compile(optimizer=optimizer, loss=loss_func, metrics=[my_metrics], run_eagerly=True)
         >>>history = model.fit(X, y, batch_size=batch_size, epochs=epochs, callbacks=[MyCallback()], validation_split=validation_split, shuffle=False)
     """
@@ -1150,7 +1150,7 @@ class UBPPhase2(tf.keras.Model, NeuralNetwork):
         hidden_activation,
         l1_penalty,
         l2_penalty,
-        dropout_probability,
+        dropout_rate,
         phase=3,
         num_classes=3,
     ):
@@ -1229,7 +1229,7 @@ class UBPPhase2(tf.keras.Model, NeuralNetwork):
         # Expand dims to 3d with shape (batch_size, n_features, num_classes)
         self.lmda = Lambda(lambda x: tf.expand_dims(x, -1))
         self.output1 = Dense(num_classes, activation="softmax",)
-        self.dropout_layer = Dropout(rate=dropout_probability)
+        self.dropout_layer = Dropout(rate=dropout_rate)
 
     def call(self, inputs, training=None):
         """Forward propagates inputs through the model defined in __init__().
@@ -1445,7 +1445,7 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
 
         l2_penalty (float): L2 regularization penalty to use to reduce overfitting.
 
-        dropout_probability (float): Dropout rate during training to reduce overfitting. Must be a float between 0 and 1.
+        dropout_rate (float): Dropout rate during training to reduce overfitting. Must be a float between 0 and 1.
 
         phase (int, optional): Current phase if doing UBP model. Defaults to 3.
 
@@ -1472,7 +1472,7 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
         _n_batches (int): Total number of batches per epoch.
 
     Example:
-        >>>model = UBPPhase3(V, output_shape, n_components, weights_initializer, hidden_layer_sizes, hidden_activation, l1_penalty, l2_penalty, dropout_probability, phase=3, num_classes=3)
+        >>>model = UBPPhase3(V, output_shape, n_components, weights_initializer, hidden_layer_sizes, hidden_activation, l1_penalty, l2_penalty, dropout_rate, phase=3, num_classes=3)
         >>>model.compile(optimizer=optimizer, loss=loss_func, metrics=[my_metrics], run_eagerly=True)
         >>>history = model.fit(X, y, batch_size=batch_size, epochs=epochs, callbacks=[MyCallback()], validation_split=validation_split, shuffle=False)
     """
@@ -1487,7 +1487,7 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
         hidden_activation,
         l1_penalty,
         l2_penalty,
-        dropout_probability,
+        dropout_rate,
         phase=3,
         num_classes=3,
     ):
@@ -1569,7 +1569,7 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
         self.lmda = Lambda(lambda x: tf.expand_dims(x, -1))
         self.output1 = Dense(num_classes, activation="softmax",)
 
-        self.dropout_layer = Dropout(rate=dropout_probability)
+        self.dropout_layer = Dropout(rate=dropout_rate)
 
     def call(self, inputs, training=None):
         """Forward propagates inputs through the model defined in __init__().
@@ -1793,11 +1793,11 @@ class VAE(NeuralNetwork):
 
         prefix (str): Prefix for output files. Defaults to "output".
 
-        cv (int): Number of cross-validation replicates to perform. Only used if ``validation_only`` is not None. Defaults to 5.
+        cv (int): Number of cross-validation replicates to perform. Only used if ``validation_size`` is not None. Defaults to 5.
 
         initial_strategy (str): Initial strategy to impute missing data with for validation. Possible options include: "populations", "most_frequent", and "phylogeny", where "populations" imputes by the mode of each population at each site, "most_frequent" imputes by the overall mode of each site, and "phylogeny" uses an input phylogeny to inform the imputation. "populations" requires a population map file as input in the GenotypeData object, and "phylogeny" requires an input phylogeny and Rate Matrix Q (also instantiated in the GenotypeData object). Defaults to "populations".
 
-        validation_only (float or None): Proportion of sites to use for the validation. If ``validation_only`` is None, then does not perform validation. Defaults to 0.2.
+        validation_size (float or None): Proportion of sites to use for the validation. If ``validation_size`` is None, then does not perform validation. Defaults to 0.2.
 
         disable_progressbar (bool): Whether to disable the tqdm progress bar. Useful if you are doing the imputation on e.g. a high-performance computing cluster, where sometimes tqdm does not work correctly. If False, uses tqdm progress bar. If True, does not use tqdm. Defaults to False.
 
@@ -1809,7 +1809,7 @@ class VAE(NeuralNetwork):
 
         optimizer (str): Gradient descent optimizer to use. See tf.keras.optimizers for more info. Defaults to "adam".
 
-        dropout_probability (float): Dropout rate for neurons in the network. Can adjust to reduce overfitting. Defaults to 0.2.
+        dropout_rate (float): Dropout rate for neurons in the network. Can adjust to reduce overfitting. Defaults to 0.2.
 
         hidden_activation (str): Activation function to use for hidden layers. See tf.keras.activations for more info. Defaults to "relu".
 
@@ -1830,13 +1830,13 @@ class VAE(NeuralNetwork):
         prefix="output",
         cv=5,
         initial_strategy="populations",
-        validation_only=0.2,
+        validation_size=0.2,
         disable_progressbar=False,
         train_epochs=100,
         batch_size=32,
         recurrent_weight=0.5,
         optimizer="adam",
-        dropout_probability=0.2,
+        dropout_rate=0.2,
         hidden_activation="relu",
         output_activation="sigmoid",
         kernel_initializer="glorot_normal",
@@ -1851,7 +1851,7 @@ class VAE(NeuralNetwork):
         self.initial_batch_size = batch_size
         self.recurrent_weight = recurrent_weight
         self.optimizer = optimizer
-        self.dropout_probability = dropout_probability
+        self.dropout_rate = dropout_rate
         self.hidden_activation = hidden_activation
         self.output_activation = output_activation
         self.kernel_initializer = kernel_initializer
@@ -1859,7 +1859,7 @@ class VAE(NeuralNetwork):
         self.l2_penalty = l2_penalty
 
         self.cv = cv
-        self.validation_only = validation_only
+        self.validation_size = validation_size
         self.disable_progressbar = disable_progressbar
         self.num_classes = 1
 
@@ -2158,7 +2158,7 @@ class VAE(NeuralNetwork):
             )
         )
 
-        model.add(Dropout(self.dropout_probability))
+        model.add(Dropout(self.dropout_rate))
 
         for layer_size in hidden_layer_sizes[1:]:
             model.add(
@@ -2170,7 +2170,7 @@ class VAE(NeuralNetwork):
                 )
             )
 
-            model.add(Dropout(self.dropout_probability))
+            model.add(Dropout(self.dropout_rate))
 
         model.add(
             Dense(
@@ -2200,51 +2200,73 @@ class UBP(NeuralNetwork):
     """Class to impute missing data using unsupervised backpropagation (UBP) or inverse non-linear principal component analysis (NLPCA).
 
     Args:
-        genotype_data (GenotypeData object or None): Input GenotypeData object. If this value is None, ``gt`` must be supplied instead. Defaults to None.
+        genotype_data (GenotypeData): Input GenotypeData instance.
 
-        gt (numpy.ndarray or None): Input genotypes directly as a numpy array. If this value is None, ``genotype_data`` must be supplied instead. Defaults to None.
+        prefix (str, optional): Prefix for output files. Defaults to "output".
 
-        prefix (str): Prefix for output files. Defaults to "output".
+        gridparams (Dict[str, Any] or None, optional): Dictionary with keys=keyword arguments for the specified estimator and values=lists of parameter values or distributions. If using RandomizedSearchCV, distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). ``gridparams`` will be used for a randomized grid search with cross-validation. If using the genetic algorithm grid search (GASearchCV) by setting ``ga=True``\, the parameters can be specified as ``sklearn_genetic.space`` objects. The grid search will determine the optimal parameters as those that maximize accuracy (or minimize root mean squared error for BayesianRidge regressor). NOTE: Takes a long time, so run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. If ``gridparams=None``\, a grid search is not performed. Defaults to None.
 
-        cv (int): Number of cross-validation replicates to perform. Only used if ``validation_only`` is not None. Defaults to 5.
+        do_validation (bool): Whether to validate the imputation if not doing a grid search. This validation method randomly replaces between 15% and 50% of the known, non-missing genotypes in ``n_features * column_subset`` of the features. It then imputes the newly missing genotypes for which we know the true values and calculates validation scores. This procedure is replicated ``cv`` times and a mean, median, minimum, maximum, lower 95% confidence interval (CI) of the mean, and the upper 95% CI are calculated and saved to a CSV file. ``gridparams`` must be set to None for ``do_validation`` to work. Calculating a validation score can be turned off altogether by setting ``do_validation`` to False. Defaults to True.
 
-        initial_strategy (str): Initial strategy to impute missing data with for validation. Possible options include: "populations", "most_frequent", and "phylogeny", where "populations" imputes by the mode of each population at each site, "most_frequent" imputes by the overall mode of each site, and "phylogeny" uses an input phylogeny to inform the imputation. "populations" requires a population map file as input in the GenotypeData object, and "phylogeny" requires an input phylogeny and Rate Matrix Q (also instantiated in the GenotypeData object). Defaults to "populations".
+        write_output (bool, optional): If True, writes imputed data to file on disk. Otherwise just stores it as a class attribute.
 
-        validation_only (float or None): Proportion of sites to use for the validation. If ``validation_only`` is None, then does not perform validation. Defaults to 0.2.
+        disable_progressbar (bool, optional): Whether to disable the tqdm progress bar. Useful if you are doing the imputation on e.g. a high-performance computing cluster, where sometimes tqdm does not work correctly. If False, uses tqdm progress bar. If True, does not use tqdm. Defaults to False.
 
-        disable_progressbar (bool): Whether to disable the tqdm progress bar. Useful if you are doing the imputation on e.g. a high-performance computing cluster, where sometimes tqdm does not work correctly. If False, uses tqdm progress bar. If True, does not use tqdm. Defaults to False.
+        nlpca (bool, optional): If True, then uses NLPCA model instead of UBP. Otherwise uses UBP. Defaults to False.
 
-        nlpca (bool): If True, then uses NLPCA model instead of UBP. Otherwise uses UBP. Defaults to False.
+        batch_size (int, optional): Batch size per epoch to train the model with.
 
-        batch_size (int): Batch size per epoch to train the model with.
+        validation_size (float or None, optional): Proportion of samples (=rows) between 0 and 1 to use for the neural network training validation. Defaults to 0.3.
 
-        n_components (int): Number of components to use as the input data. Defaults to 3.
+        n_components (int, optional): Number of components to use as the input data. Defaults to 3.
 
-        early_stop_gen (int): Early stopping criterion for epochs. Training will stop if the loss (error) does not decrease past the tolerance level ``tol`` for ``early_stop_gen`` epochs. Will save the optimal model and reload it once ``early_stop_gen`` has been reached. Defaults to 50.
+        early_stop_gen (int, optional): Early stopping criterion for epochs. Training will stop if the loss (error) does not decrease past the tolerance level ``tol`` for ``early_stop_gen`` epochs. Will save the optimal model and reload it once ``early_stop_gen`` has been reached. Defaults to 25.
 
-        num_hidden_layers (int): Number of hidden layers to use in the model. Adjust if overfitting occurs. Defaults to 3.
+        num_hidden_layers (int, optional): Number of hidden layers to use in the model. Adjust if overfitting occurs. Defaults to 3.
 
-        hidden_layer_sizes (str, List[int], List[str], or int): Number of neurons to use in hidden layers. If string or a list of strings is supplied, the strings must be either "midpoint", "sqrt", or "log2". "midpoint" will calculate the midpoint as ``(n_features + n_components) / 2``. If "sqrt" is supplied, the square root of the number of features will be used to calculate the output units. If "log2" is supplied, the units will be calculated as ``log2(n_features)``. hidden_layer_sizes will calculate and set the number of output units for each hidden layer. If one string or integer is supplied, the model will use the same number of output units for each hidden layer. If a list of integers or strings is supplied, the model will use the values supplied in the list, which can differ. The list length must be equal to the ``num_hidden_layers``. Defaults to "midpoint".
+        hidden_layer_sizes (str, List[int], List[str], or int, optional): Number of neurons to use in hidden layers. If string or a list of strings is supplied, the strings must be either "midpoint", "sqrt", or "log2". "midpoint" will calculate the midpoint as ``(n_features + n_components) / 2``. If "sqrt" is supplied, the square root of the number of features will be used to calculate the output units. If "log2" is supplied, the units will be calculated as ``log2(n_features)``. hidden_layer_sizes will calculate and set the number of output units for each hidden layer. If one string or integer is supplied, the model will use the same number of output units for each hidden layer. If a list of integers or strings is supplied, the model will use the values supplied in the list, which can differ. The list length must be equal to the ``num_hidden_layers``. Defaults to "midpoint".
 
-        optimizer (str): The optimizer to use with gradient descent. Possible value include: "adam", "sgd", and "adagrad" are supported. See tf.keras.optimizers for more info. Defaults to "adam".
+        optimizer (str, optional): The optimizer to use with gradient descent. Possible value include: "adam", "sgd", and "adagrad" are supported. See tf.keras.optimizers for more info. Defaults to "adam".
 
-        hidden_activation (str): The activation function to use for the hidden layers. See tf.keras.activations for more info. Commonly used activation functions include "elu", "relu", and "sigmoid". Defaults to "elu".
+        hidden_activation (str, optional): The activation function to use for the hidden layers. See tf.keras.activations for more info. Commonly used activation functions include "elu", "relu", and "sigmoid". Defaults to "elu".
 
-        learning_rate (float): The learning rate for the optimizers. Adjust if the loss is learning too slowly. Defaults to 0.1.
+        learning_rate (float, optional): The learning rate for the optimizers. Adjust if the loss is learning too slowly. Defaults to 0.1.
 
-        max_epochs (int): Maximum number of epochs to run if the ``early_stop_gen`` criterion is not met.
+        train_epochs (int, optional): Maximum number of epochs to run if the ``early_stop_gen`` criterion is not met.
 
-        tol (float): Tolerance level to use for the early stopping criterion. If the loss does not improve past the tolerance level after ``early_stop_gen`` epochs, then training will halt. Defaults to 1e-3.
+        tol (float, optional): Tolerance level to use for the early stopping criterion. If the loss does not improve past the tolerance level after ``early_stop_gen`` epochs, then training will halt. Defaults to 1e-3.
 
-        weights_initializer (str): Initializer to use for the model weights. See tf.keras.initializers for more info. Defaults to "glorot_normal".
+        weights_initializer (str, optional): Initializer to use for the model weights. See tf.keras.initializers for more info. Defaults to "glorot_normal".
 
-        l1_penalty (float): L1 regularization penalty to apply to reduce overfitting. Defaults to 0.01.
+        l1_penalty (float, optional): L1 regularization penalty to apply to reduce overfitting. Defaults to 0.01.
 
-        l2_penalty (float): L2 regularization penalty to apply to reduce overfitting. Defaults to 0.01.
+        l2_penalty (float, optional): L2 regularization penalty to apply to reduce overfitting. Defaults to 0.01.
 
-        dropout_probability (float, optional): Dropout rate during training to reduce overfitting. Must be a float between 0 and 1. Defaults to 0.2.
+        dropout_rate (float, optional): Dropout rate during training to reduce overfitting. Must be a float between 0 and 1. Defaults to 0.2.
 
-        kwargs (Any): Unsupported kwargs intended for other imputation methods.
+        verbose (int, optional): Verbosity setting ranging from 0 to 3 (least to most verbose). Defaults to 0.
+
+        cv (int, optional): Number of cross-validation replicates to perform. Defaults to 5.
+
+        grid_iter (int, optional): Number of iterations for grid search. Defaults to 50.
+
+        ga (bool, optional): Whether to use a genetic algorithm for the grid search. If False, a RandomizedSearchCV is done instead. Defaults to False.
+
+        population_size (int, optional): For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. See GASearchCV documentation. Defaults to 10.
+
+        tournament_size (int, optional): For genetic algorithm grid search: Number of individuals to perform tournament selection. See GASearchCV documentation. Defaults to 3.
+
+        elitism (bool, optional): For genetic algorithm grid search:     If True takes the tournament_size best solution to the next generation. See GASearchCV documentation. Defaults to True.
+
+        crossover_probability (float, optional): For genetic algorithm grid search: Probability of crossover operation between two individuals. See GASearchCV documentation. Defaults to 0.8.
+
+        mutation_probability (float, optional): For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation. Defaults to 0.1.
+
+        algorithm (str, optional): For genetic algorithm grid search: Evolutionary algorithm to use. See more details in the deap algorithms documentation. Defaults to "eaMuPlusLambda".
+
+        scoring_metric (str, optional): Scoring metric to use for randomized or genetic algorithm grid searches. See https://scikit-learn.org/stable/modules/model_evaluation.html for supported options. Defaults to "accuracy".
+
+        n_jobs (int, optional): Number of parallel jobs to use in the grid search if ``gridparams`` is not None. -1 means use all available processors. Defaults to 1.
     """
 
     def __init__(
@@ -2252,37 +2274,38 @@ class UBP(NeuralNetwork):
         genotype_data,
         *,
         prefix="output",
-        gridparams=None,  # TODO: Add to docstrings
-        validation_size=0.3,  # TODO: Add to docstrings
+        gridparams=None,
+        do_validation=True,
         write_output=True,
         disable_progressbar=False,
         nlpca=False,
         batch_size=32,
+        validation_size=0.3,
         n_components=3,
+        early_stop_gen=25,
         num_hidden_layers=3,
         hidden_layer_sizes="midpoint",
         optimizer="adam",
         hidden_activation="elu",
         learning_rate=0.1,
-        max_epochs=100,
+        train_epochs=100,
         tol=1e-3,
         weights_initializer="glorot_normal",
         l1_penalty=0.01,
         l2_penalty=0.01,
-        dropout_probability=0.2,
-        cv=5,  # TODO: Add to docstrings
-        ga=False,  # TODO: Add below GA arguments to docstrings
-        early_stop_gen=25,
-        scoring_metric="neg_mean_squared_error",
+        dropout_rate=0.2,
+        verbose=0,
+        cv=5,
         grid_iter=50,
-        n_jobs=1,
+        ga=False,
         population_size=10,
         tournament_size=3,
         elitism=True,
         crossover_probability=0.8,
         mutation_probability=0.1,
         algorithm="eaMuPlusLambda",
-        **kwargs,
+        scoring_metric="accuracy",
+        n_jobs=1,
     ):
 
         super().__init__()
@@ -2291,11 +2314,12 @@ class UBP(NeuralNetwork):
         self.genotype_data = genotype_data
         self.prefix = prefix
         self.gridparams = gridparams
-        self.validation_size = validation_size
+        self.do_validation = do_validation
         self.write_output = write_output
         self.disable_progressbar = disable_progressbar
         self.nlpca = nlpca
         self.batch_size = batch_size
+        self.validation_size = validation_size
         self.n_components = n_components
         self.early_stop_gen = early_stop_gen
         self.num_hidden_layers = num_hidden_layers
@@ -2303,12 +2327,12 @@ class UBP(NeuralNetwork):
         self.optimizer = optimizer
         self.hidden_activation = hidden_activation
         self.learning_rate = learning_rate
-        self.max_epochs = max_epochs
+        self.train_epochs = train_epochs
         self.tol = tol
         self.weights_initializer = weights_initializer
         self.l1_penalty = l1_penalty
         self.l2_penalty = l2_penalty
-        self.dropout_probability = dropout_probability
+        self.dropout_rate = dropout_rate
 
         # TODO: Make estimators compatible with variable number of classes.
         # E.g., with morphologial data.
@@ -2395,7 +2419,7 @@ class UBP(NeuralNetwork):
                 self.hidden_activation,
                 self.l1_penalty,
                 self.l2_penalty,
-                self.dropout_probability,
+                self.dropout_rate,
                 num_classes=3,
             )
 
@@ -2445,7 +2469,7 @@ class UBP(NeuralNetwork):
                 x=V,
                 y=y_train,
                 batch_size=self.batch_size,
-                epochs=self.max_epochs,
+                epochs=self.train_epochs,
                 callbacks=callbacks1,
                 validation_split=self.validation_size,
                 shuffle=False,
@@ -2471,7 +2495,7 @@ class UBP(NeuralNetwork):
                 self.hidden_activation,
                 self.l1_penalty,
                 self.l2_penalty,
-                self.dropout_probability,
+                self.dropout_rate,
                 num_classes=3,
                 phase=2,
             )
@@ -2493,7 +2517,7 @@ class UBP(NeuralNetwork):
                 x=V2,
                 y=y_train,
                 batch_size=self.batch_size,
-                epochs=self.max_epochs,
+                epochs=self.train_epochs,
                 callbacks=callbacks2,
                 validation_split=self.validation_size,
                 shuffle=False,
@@ -2523,7 +2547,7 @@ class UBP(NeuralNetwork):
                 self.hidden_activation,
                 self.l1_penalty,
                 self.l2_penalty,
-                self.dropout_probability,
+                self.dropout_rate,
                 num_classes=3,
                 phase=3,
             )
@@ -2549,7 +2573,7 @@ class UBP(NeuralNetwork):
             x=V2,
             y=y_train,
             batch_size=self.batch_size,
-            epochs=self.max_epochs,
+            epochs=self.train_epochs,
             callbacks=callbacks3,
             validation_split=self.validation_size,
             shuffle=False,
@@ -2651,6 +2675,7 @@ class UBP(NeuralNetwork):
             ax1.set_title("Model Accuracy")
             ax1.set_ylabel("Accuracy")
             ax1.set_xlabel("Epoch")
+            ax1.set_ylim(bottom=0.0, top=1.0)
             ax1.set_yticks([0.0, 0.25, 0.5, 0.75, 1.0])
             ax1.legend(["Train", "Validation"], loc="best")
 
@@ -2660,7 +2685,6 @@ class UBP(NeuralNetwork):
             ax2.set_title("Model Loss")
             ax2.set_ylabel("Loss (MSE)")
             ax2.set_xlabel("Epoch")
-            ax2.set_yticks([0.0, 0.25, 0.5, 0.75, 1.0])
             ax2.legend(["Train", "Validation"], loc="best")
             fig.savefig(fn, bbox_inches="tight")
 
@@ -2684,6 +2708,8 @@ class UBP(NeuralNetwork):
                 plt.title(f"{title} Accuracy")
                 plt.ylabel("Accuracy")
                 plt.xlabel("Epoch")
+                plt.ylim((0.0, 1.0))
+                plt.yticks([0.0, 0.25, 0.5, 0.75, 1.0])
                 plt.legend(["Train", "Validation"], loc="best")
 
                 # Plot model loss
@@ -2780,7 +2806,8 @@ class UBP(NeuralNetwork):
 
             # While stopping criterion not met: keep doing more epochs.
             while (
-                counter < self.early_stop_gen and num_epochs <= self.max_epochs
+                counter < self.early_stop_gen
+                and num_epochs <= self.train_epochs
             ):
                 # Train per epoch
                 # s is error (loss)
