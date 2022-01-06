@@ -599,7 +599,6 @@ class GenotypeData:
 
         if self.verbose:
             print("Done!")
-
             print("\nConverting genotypes to 012 encoding...")
 
         # Convert snp_data to 012 format
@@ -1112,10 +1111,7 @@ class GenotypeData:
 
             if write_output:
                 df_decoded.to_csv(
-                    of,
-                    sep="\t",
-                    header=False,
-                    index=False,
+                    of, sep="\t", header=False, index=False,
                 )
 
         elif ft.startswith("phylip"):

@@ -134,6 +134,7 @@ class Impute:
             self.pops = None
 
         self.genotype_data = kwargs["genotype_data"]
+        self.verbose = kwargs["verbose"]
 
         # Separate local variables into settings objects
         (
@@ -219,21 +220,22 @@ class Impute:
         else:
             imputed_df, df_scores, best_params = self._impute_gridsearch(X)
 
-            print("Grid Search Results:")
-            if self.clf_type == "regressor":
-                for col in df_scores:
-                    print(
-                        f"{self.scoring_metric} {col} (best parameters): "
-                        f"{df_scores[col].iloc[0]}"
-                    )
-            else:
-                for col in df_scores:
-                    print(
-                        f"{self.scoring_metric} {col} (best parameters): "
-                        f"{df_scores[col].iloc[0]}"
-                    )
+            if self.verbose > 0:
+                print("Grid Search Results:")
+                if self.clf_type == "regressor":
+                    for col in df_scores:
+                        print(
+                            f"{self.scoring_metric} {col} (best parameters): "
+                            f"{df_scores[col].iloc[0]}"
+                        )
+                else:
+                    for col in df_scores:
+                        print(
+                            f"{self.scoring_metric} {col} (best parameters): "
+                            f"{df_scores[col].iloc[0]}"
+                        )
 
-            print(f"Best Parameters: {best_params}\n")
+                print(f"Best Parameters: {best_params}\n")
 
         imp_data = self._imputed2genotypedata(imputed_df, self.genotype_data)
 
@@ -337,10 +339,11 @@ class Impute:
                 elif chunk_size == 1.0:
                     # All data in one chunk
                     chunks.append(df_cp)
-                    print(
-                        "Imputing all features at once since chunk_size is "
-                        "set to 1.0"
-                    )
+                    if self.verbose > 0:
+                        print(
+                            "Imputing all features at once since chunk_size is "
+                            "set to 1.0"
+                        )
 
                     return chunks
 
@@ -362,7 +365,10 @@ class Impute:
 
         chunk_len = ",".join([str(x) for x in chunk_len_list])
 
-        print(f"Data split into {num_chunks} chunks with {chunk_len} features")
+        if self.verbose > 0:
+            print(
+                f"Data split into {num_chunks} chunks with {chunk_len} features"
+            )
 
         return chunks
 
@@ -439,9 +445,10 @@ class Impute:
         col_arr = np.array(df.columns)
 
         if n > len(df.columns):
-            print(
-                "Warning: Column_subset is greater than remaining columns following filtering. Using all columns"
-            )
+            if self.verbose > 0:
+                print(
+                    "Warning: Column_subset is greater than remaining columns following filtering. Using all columns"
+                )
 
             df_sub = df.copy()
             cols = col_arr.copy()
@@ -460,9 +467,9 @@ class Impute:
         Args:
             df (pandas.DataFrame): DataFrame with score statistics.
         """
-
-        print("Validation scores:")
-        print(df_scores)
+        if self.verbose > 0:
+            print("Validation scores:")
+            print(df_scores)
 
     def _write_imputed_params_score(
         self, df_scores: pd.DataFrame, best_params: Dict[str, Any]
@@ -502,7 +509,10 @@ class Impute:
             pandas.DataFrame: DataFrame with validation scores.
             NoneType: Only used with _impute_gridsearch. Set to None here for compatibility.
         """
-        print(f"Doing {self.clf.__name__} imputation without grid search...")
+        if self.verbose > 0:
+            print(
+                f"Doing {self.clf.__name__} imputation without grid search..."
+            )
 
         if self.algorithm == "nn":
             clf = None
@@ -511,31 +521,37 @@ class Impute:
             clf = self.clf(**self.clf_kwargs)
 
         if self.do_validation:
-            print(f"Estimating {self.clf.__name__} validation scores...")
+            if self.verbose > 0:
+                print(f"Estimating {self.clf.__name__} validation scores...")
 
             if self.disable_progressbar:
-                with open(self.logfilepath, "a") as fout:
-                    # Redirect to progress logfile
-                    with redirect_stdout(fout):
-                        print(
-                            f"Doing {self.clf.__name__} imputation "
-                            f"without grid search...\n"
-                        )
+                if self.verbose > 0:
+                    with open(self.logfilepath, "a") as fout:
+                        # Redirect to progress logfile
+                        with redirect_stdout(fout):
+                            print(
+                                f"Doing {self.clf.__name__} imputation "
+                                f"without grid search...\n"
+                            )
 
-                        print(
-                            f"Estimating {self.clf.__name__} "
-                            f"validation scores...\n"
-                        )
+                            print(
+                                f"Estimating {self.clf.__name__} "
+                                f"validation scores...\n"
+                            )
 
             df_scores = self._imputer_validation(df, clf)
 
-            print(f"\nDone with {self.clf.__name__} validation!\n")
+            if self.verbose > 0:
+                print(f"\nDone with {self.clf.__name__} validation!\n")
 
             if self.disable_progressbar:
-                with open(self.logfilepath, "a") as fout:
-                    # Redirect to progress logfile
-                    with redirect_stdout(fout):
-                        print(f"\nDone with {self.clf.__name__} validation!\n")
+                if self.verbose > 0:
+                    with open(self.logfilepath, "a") as fout:
+                        # Redirect to progress logfile
+                        with redirect_stdout(fout):
+                            print(
+                                f"\nDone with {self.clf.__name__} validation!\n"
+                            )
 
         else:
             df_scores = None
@@ -565,19 +581,21 @@ class Impute:
             )
 
         if self.disable_progressbar:
-            with open(self.logfilepath, "a") as fout:
-                # Redirect to progress logfile
-                with redirect_stdout(fout):
-                    print(f"Doing {self.clf.__name__} imputation...\n")
+            if self.verbose > 0:
+                with open(self.logfilepath, "a") as fout:
+                    # Redirect to progress logfile
+                    with redirect_stdout(fout):
+                        print(f"Doing {self.clf.__name__} imputation...\n")
 
         df_chunks = self._df2chunks(df, self.chunk_size)
         imputed_df = self._impute_df(df_chunks, imputer)
 
         if self.disable_progressbar:
-            with open(self.logfilepath, "a") as fout:
-                # Redirect to progress logfile
-                with redirect_stdout(fout):
-                    print(f"\nDone with {self.clf.__name__} imputation!\n")
+            if self.verbose > 0:
+                with open(self.logfilepath, "a") as fout:
+                    # Redirect to progress logfile
+                    with redirect_stdout(fout):
+                        print(f"\nDone with {self.clf.__name__} imputation!\n")
 
         lst2del = [df_chunks]
         del lst2del
@@ -585,7 +603,9 @@ class Impute:
 
         self._validate_imputed(imputed_df)
 
-        print(f"\nDone with {self.clf.__name__} imputation!\n")
+        if self.verbose > 0:
+            print(f"\nDone with {self.clf.__name__} imputation!\n")
+
         return imputed_df, df_scores, None
 
     def _impute_gridsearch(
@@ -606,18 +626,21 @@ class Impute:
             df, self.column_subset, original_num_cols
         )
 
-        print(f"Validation dataset size: {len(df_subset.columns)}\n")
+        if self.verbose > 0:
+            print(f"Validation dataset size: {len(df_subset.columns)}\n")
 
         if self.algorithm == "ii":
             clf = self.clf()
 
-        print(f"Doing {self.clf.__name__} grid search...")
+        if self.verbose > 0:
+            print(f"Doing {self.clf.__name__} grid search...")
 
         if self.disable_progressbar:
-            with open(self.logfilepath, "a") as fout:
-                # Redirect to progress logfile
-                with redirect_stdout(fout):
-                    print(f"Doing {self.clf.__name__} grid search...\n")
+            if self.verbose > 0:
+                with open(self.logfilepath, "a") as fout:
+                    # Redirect to progress logfile
+                    with redirect_stdout(fout):
+                        print(f"Doing {self.clf.__name__} grid search...\n")
 
         if self.algorithm == "nn":
             clf = self.clf(**self.clf_kwargs, **ga_kwargs, **self.imp_kwargs)
@@ -665,13 +688,15 @@ class Impute:
                 df_subset, cols_to_keep
             )
 
-        print(f"\nDone with {self.clf.__name__} grid search!")
+        if self.verbose > 0:
+            print(f"\nDone with {self.clf.__name__} grid search!")
 
         if self.disable_progressbar:
-            with open(self.logfilepath, "a") as fout:
-                # Redirect to progress logfile
-                with redirect_stdout(fout):
-                    print(f"\nDone with {self.clf.__name__} grid search!")
+            if self.verbose > 0:
+                with open(self.logfilepath, "a") as fout:
+                    # Redirect to progress logfile
+                    with redirect_stdout(fout):
+                        print(f"\nDone with {self.clf.__name__} grid search!")
 
         if self.algorithm == "ii":
             del imputer
@@ -728,19 +753,21 @@ class Impute:
         del test
         gc.collect()
 
-        print(
-            f"\nDoing {self.clf.__name__} imputation "
-            f"with best found parameters...\n"
-        )
+        if self.verbose > 0:
+            print(
+                f"\nDoing {self.clf.__name__} imputation "
+                f"with best found parameters...\n"
+            )
 
         if self.disable_progressbar:
-            with open(self.logfilepath, "a") as fout:
-                # Redirect to progress logfile
-                with redirect_stdout(fout):
-                    print(
-                        f"\nDoing {self.clf.__name__} imputation "
-                        f"with best found parameters...\n"
-                    )
+            if self.verbose > 0:
+                with open(self.logfilepath, "a") as fout:
+                    # Redirect to progress logfile
+                    with redirect_stdout(fout):
+                        print(
+                            f"\nDoing {self.clf.__name__} imputation "
+                            f"with best found parameters...\n"
+                        )
 
         if self.algorithm == "ii":
             best_imputer = self._define_iterative_imputer(
@@ -768,13 +795,15 @@ class Impute:
 
         self._validate_imputed(imputed_df)
 
-        print(f"Done with {self.clf.__name__} imputation!\n")
+        if self.verbose > 0:
+            print(f"Done with {self.clf.__name__} imputation!\n")
 
         if self.disable_progressbar:
-            with open(self.logfilepath, "a") as fout:
-                # Redirect to progress logfile
-                with redirect_stdout(fout):
-                    print(f"Done with {self.clf.__name__} imputation!\n")
+            if self.verbose > 0:
+                with open(self.logfilepath, "a") as fout:
+                    # Redirect to progress logfile
+                    with redirect_stdout(fout):
+                        print(f"Done with {self.clf.__name__} imputation!\n")
 
         return imputed_df, df_scores, best_params
 
@@ -809,12 +838,15 @@ class Impute:
 
             if self.disable_progressbar:
                 perc = int((cnt / self.cv) * 100)
-                print(f"Validation replicate {cnt}/{self.cv} ({perc}%)")
+                if self.verbose > 0:
+                    print(f"Validation replicate {cnt}/{self.cv} ({perc}%)")
 
-                with open(self.logfilepath, "a") as fout:
-                    # Redirect to progress logfile
-                    with redirect_stdout(fout):
-                        print(f"Validation replicate {cnt}/{self.cv} ({perc}%)")
+                    with open(self.logfilepath, "a") as fout:
+                        # Redirect to progress logfile
+                        with redirect_stdout(fout):
+                            print(
+                                f"Validation replicate {cnt}/{self.cv} ({perc}%)"
+                            )
 
             scores = self._impute_eval(df, clf)
 
@@ -1310,10 +1342,11 @@ class Impute:
             valid_cols = cols.copy()
 
         elif initial_strategy == "phylogeny":
-            print(
-                "Doing initial imputation with initial_strategy == "
-                "'phylogeny'..."
-            )
+            if self.verbose > 0:
+                print(
+                    "Doing initial imputation with initial_strategy == "
+                    "'phylogeny'..."
+                )
 
             # NOTE: non-biallelic sites are removed with ImputePhylo
             simple_imputer = simple_imputers.ImputePhylo(

@@ -2267,6 +2267,8 @@ class UBP(NeuralNetwork):
         scoring_metric (str, optional): Scoring metric to use for randomized or genetic algorithm grid searches. See https://scikit-learn.org/stable/modules/model_evaluation.html for supported options. Defaults to "accuracy".
 
         n_jobs (int, optional): Number of parallel jobs to use in the grid search if ``gridparams`` is not None. -1 means use all available processors. Defaults to 1.
+
+        verbose (int, optional): Verbosity setting. Can be 0, 1, or 2. 0 is the least and 2 is the most verbose. Defaults to 0.
     """
 
     def __init__(
@@ -2294,7 +2296,6 @@ class UBP(NeuralNetwork):
         l1_penalty=0.01,
         l2_penalty=0.01,
         dropout_rate=0.2,
-        verbose=0,
         cv=5,
         grid_iter=50,
         ga=False,
@@ -2306,6 +2307,7 @@ class UBP(NeuralNetwork):
         algorithm="eaMuPlusLambda",
         scoring_metric="accuracy",
         n_jobs=1,
+        verbose=0,
     ):
 
         super().__init__()
@@ -2333,6 +2335,7 @@ class UBP(NeuralNetwork):
         self.l1_penalty = l1_penalty
         self.l2_penalty = l2_penalty
         self.dropout_rate = dropout_rate
+        self.verbose = verbose
 
         # TODO: Make estimators compatible with variable number of classes.
         # E.g., with morphologial data.
@@ -2473,6 +2476,7 @@ class UBP(NeuralNetwork):
                 callbacks=callbacks1,
                 validation_split=self.validation_size,
                 shuffle=False,
+                verbose=self.verbose,
             )
 
             # model1.model().summary()
@@ -2521,6 +2525,7 @@ class UBP(NeuralNetwork):
                 callbacks=callbacks2,
                 validation_split=self.validation_size,
                 shuffle=False,
+                verbose=self.verbose,
             )
 
             # model2.model().summary()
@@ -2577,6 +2582,7 @@ class UBP(NeuralNetwork):
             callbacks=callbacks3,
             validation_split=self.validation_size,
             shuffle=False,
+            verbose=self.verbose,
         )
 
         # Reset model states

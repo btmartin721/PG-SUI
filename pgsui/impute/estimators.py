@@ -1399,6 +1399,8 @@ class ImputeUBP(Impute):
 
         n_jobs (int, optional): Number of parallel jobs to use in the grid search if ``gridparams`` is not None. -1 means use all available processors. Defaults to 1.
 
+        verbose (int, optional): Verbosity flag, controls the debug messages that are issued as functions are evaluated. The higher, the more verbose. Possible values are 0, 1, or 2. Defaults to 0.
+
     Attributes:
         nlpca (bool): If True, does NLPCA model. Otherwise does UBP.
         clf (sklearn or neural network classifier): Estimator to use.
@@ -1468,6 +1470,7 @@ class ImputeUBP(Impute):
         disable_progressbar=False,
         chunk_size=1.0,
         n_jobs=1,
+        verbose=0,
     ):
 
         # Get local variables into dictionary object
@@ -1573,6 +1576,9 @@ class ImputeNLPCA(ImputeUBP):
         chunk_size (int or float, optional): Number of loci for which to perform IterativeImputer at one time. Useful for reducing the memory usage if you are running out of RAM. If integer is specified, selects ``chunk_size`` loci at a time. If a float is specified, selects ``math.ceil(total_loci * chunk_size)`` loci at a time. Defaults to 1.0 (all features).
 
         n_jobs (int, optional): Number of parallel jobs to use in the grid search if ``gridparams`` is not None. -1 means use all available processors. Defaults to 1.
+
+        verbose (int, optional): Verbosity flag, controls the debug messages that are issued as functions are evaluated. The higher, the more verbose. Possible values are 0, 1, or 2. Defaults to 0.
+        
     Example:
         >>> data = GenotypeData(
         >>>    filename="test.str",
