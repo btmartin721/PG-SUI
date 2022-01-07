@@ -12,7 +12,12 @@ from sklearn_genetic.space import Continuous, Categorical, Integer
 
 # from pgsui import GenotypeData
 from read_input.read_input import GenotypeData
-from impute.estimators import ImputeNLPCA, ImputeUBP, ImputeRandomForest
+from impute.estimators import (
+    ImputeNLPCA,
+    ImputeUBP,
+    ImputeRandomForest,
+    ImputeVAE,
+)
 from impute.simple_imputers import ImputePhylo
 
 # from read_input.read_input import GenotypeData
@@ -331,8 +336,22 @@ def main():
         learning_rate=0.1,
         num_hidden_layers=1,
         verbose=1,
-        gridparams=grid_params,
+        # gridparams=grid_params,
     )
+
+    # ubp = ImputeVAE(
+    #     data,
+    #     # gridparams=grid_params,
+    #     # initial_strategy="populations",
+    #     # disable_progressbar=True,
+    #     # cv=3,
+    #     # column_subset=1.0,
+    #     # validation_size=0.3,
+    #     # learning_rate=0.1,
+    #     # num_hidden_layers=1,
+    #     # verbose=1,
+    #     # gridparams=grid_params,
+    # )
 
     # nlpca_data = nlpca.imputed
     # print(nlpca_data.genotypes012_df)

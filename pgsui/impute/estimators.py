@@ -1251,6 +1251,8 @@ class ImputeVAE(Impute):
 
         l2_penalty (float): L2 regularization penalty to apply. Adjust if overfitting is occurring. Defaults to 0.
 
+        verbose (int): Verbosity mode, ranging from 0 (=silent) to 2 (=most verbose).
+
     Attributes:
         clf (sklearn or neural network classifier): Estimator to use.
 
@@ -1296,6 +1298,7 @@ class ImputeVAE(Impute):
         kernel_initializer="glorot_normal",
         l1_penalty=0,
         l2_penalty=0,
+        verbose=0,
     ):
 
         # Get local variables into dictionary object
