@@ -2726,8 +2726,14 @@ class UBP(NeuralNetwork):
                 "num_classes": self.num_classes,
             }
 
+            other_params = {"num_hidden_layers": self.num_hidden_layers}
+
             model3 = self.create_model(
-                NLPCAModel, model3_params, compile_params
+                NLPCAModel,
+                model3_params,
+                compile_params,
+                **model3_params,
+                **other_params,
             )
 
             # model3.compile(
@@ -2968,7 +2974,7 @@ class UBP(NeuralNetwork):
         yt = self.fill(y, missing_mask, missing_val, self.num_classes)
         return yt, missing_mask, observed_mask
 
-    def create_model(self, estimator, model_params, compile_params):
+    def create_model(self, estimator, model_params, compile_params, **kwargs):
         model = estimator(**model_params)
         model.compile(**compile_params)
         return model
