@@ -336,7 +336,12 @@ def main():
         learning_rate=0.1,
         num_hidden_layers=1,
         verbose=1,
-        # gridparams=grid_params,
+        dropout_rate=0.2,
+        hidden_activation="elu",
+        batch_size=32,
+        l1_penalty=0.01,
+        l2_penalty=0.01,
+        gridparams=grid_params,
     )
 
     # ubp = ImputeVAE(

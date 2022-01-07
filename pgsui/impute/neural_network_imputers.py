@@ -15,7 +15,7 @@ from sklearn.base import BaseEstimator
 from sklearn.model_selection import train_test_split
 
 # Grid search imports
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import StratifiedKFold, KFold
 
 # Randomized grid search imports
 from sklearn.model_selection import RandomizedSearchCV
@@ -129,6 +129,79 @@ class NeuralNetwork:
 
         return df_incomplete
 
+    def predict(self, X, complete_encoded):
+        """Evaluate VAE predictions by calculating the highest predicted value.
+
+        Calucalates highest predicted value for each row vector and each class, setting the most likely class to 1.0.
+
+        Args:
+            X (numpy.ndarray): Input one-hot encoded data.
+
+            complete_encoded (numpy.ndarray): Output one-hot encoded data with the maximum predicted values for each class set to 1.0.
+
+        Returns:
+            numpy.ndarray: Imputed one-hot encoded values.
+
+            pandas.DataFrame: One-hot encoded pandas DataFrame with no missing values.
+        """
+
+        df = self.encode_categorical(X)
+
+        # Had to add dropna() to count unique classes while ignoring np.nan
+        col_classes = [len(df[c].dropna().unique()) for c in df.columns]
+        df_dummies = pd.get_dummies(df)
+        mle_complete = None
+        for i, cnt in enumerate(col_classes):
+            start_idx = int(sum(col_classes[0:i]))
+            col_completed = complete_encoded[:, start_idx : start_idx + cnt]
+
+            mle_completed = np.apply_along_axis(
+                self.mle, axis=1, arr=col_completed
+            )
+
+            if mle_complete is None:
+                mle_complete = mle_completed
+
+            else:
+                mle_complete = np.hstack([mle_complete, mle_completed])
+
+        return mle_complete, df_dummies
+
+    def decode_onehot(self, df_dummies):
+        """Decode one-hot format to 012-encoded genotypes.
+
+        Args:
+            df_dummies (pandas.DataFrame): One-hot encoded imputed data.
+
+        Returns:
+            pandas.DataFrame: 012-encoded imputed data.
+        """
+        pos = defaultdict(list)
+        vals = defaultdict(list)
+
+        for i, c in enumerate(df_dummies.columns):
+            if "_" in c:
+                k, v = c.split("_", 1)
+                pos[k].append(i)
+                vals[k].append(v)
+
+            else:
+                pos["_"].append(i)
+
+        df = pd.DataFrame(
+            {
+                k: pd.Categorical.from_codes(
+                    np.argmax(df_dummies.iloc[:, pos[k]].values, axis=1),
+                    vals[k],
+                )
+                for k in vals
+            }
+        )
+
+        df[df_dummies.columns[pos["_"]]] = df_dummies.iloc[:, pos["_"]]
+
+        return df
+
     def create_missing_mask(self, data):
         """Creates a missing data mask with boolean values.
 
@@ -176,19 +249,27 @@ class NeuralNetwork:
             Returns:
                 float: Mean squared error loss value with missing data masked.
             """
-            X_values = input_and_mask[:, :n_features]
-            missing_mask = input_and_mask[:, n_features:]
-            observed_mask = 1 - missing_mask
-            X_values_observed = X_values * observed_mask
-            pred_observed = y_pred * observed_mask
+            true_indices = range(n_features)
+            missing_indices = range(n_features, n_features * 2)
+
+            # Split features and missing mask.
+            y_true = tf.gather(input_and_mask, true_indices, axis=1)
+            missing_mask = tf.gather(input_and_mask, missing_indices, axis=1)
+
+            observed_mask = tf.subtract(1.0, missing_mask)
+            y_true_observed = tf.multiply(y_true, observed_mask)
+            pred_observed = tf.multiply(y_pred, observed_mask)
+
+            # loss_fn = tf.keras.losses.CategoricalCrossentropy()
+            # return loss_fn(y_true_observed, pred_observed)
 
             return tf.keras.metrics.mean_squared_error(
-                y_true=X_values_observed, y_pred=pred_observed
+                y_true=y_true_observed, y_pred=pred_observed
             )
 
         return reconstruction_loss
 
-    def make_reconstruction_acc(self, n_features):
+    def make_acc(self, n_features):
         """Make loss function for use with a keras model.
 
         Args:
@@ -198,7 +279,7 @@ class NeuralNetwork:
             callable: Function that calculates loss.
         """
 
-        def reconstruction_acc(input_and_mask, y_pred):
+        def accuracy_masked(input_and_mask, y_pred):
             """Custom loss function for neural network model with missing mask.
 
             Ignores missing data in the calculation of the loss function.
@@ -213,17 +294,22 @@ class NeuralNetwork:
             Returns:
                 float: Mean squared error loss value with missing data masked.
             """
-            X_values = input_and_mask[:, :n_features]
-            missing_mask = input_and_mask[:, n_features:]
-            observed_mask = 1 - missing_mask
-            X_values_observed = X_values * observed_mask
-            pred_observed = y_pred * observed_mask
+            true_indices = range(n_features)
+            missing_indices = range(n_features, n_features * 2)
 
-            return tf.keras.metrics.Accuracy(
-                y_true=X_values_observed, y_pred=pred_observed
-            )
+            # Split features and missing mask.
+            y_true = tf.gather(input_and_mask, true_indices, axis=1)
+            missing_mask = tf.gather(input_and_mask, missing_indices, axis=1)
 
-        return reconstruction_acc
+            observed_mask = tf.subtract(1.0, missing_mask)
+            y_true_observed = tf.multiply(y_true, observed_mask)
+            pred_observed = tf.multiply(y_pred, observed_mask)
+
+            metric = tf.keras.metrics.BinaryAccuracy(name="accuracy_masked")
+            metric.update_state(y_true_observed, pred_observed)
+            return metric.result()
+
+        return accuracy_masked
 
     def masked_mse(self, X_true, X_pred, mask):
         """Calculates mean squared error with missing values ignored.
@@ -400,11 +486,11 @@ class NeuralNetwork:
         Raises:
             ValueError: Unsupported optimizer specified.
         """
-        if self.optimizer == "adam":
+        if self.optimizer.lower() == "adam":
             return tf.keras.optimizers.Adam(learning_rate=self.learning_rate)
-        elif self.optimizer == "sgd":
+        elif self.optimizer.lower() == "sgd":
             return tf.keras.optimizers.SGD(learning_rate=self.learning_rate)
-        elif self.optimizer == "adagrad":
+        elif self.optimizer.lower() == "adagrad":
             return tf.keras.optimizers.Adagrad(learning_rate=self.learning_rate)
         else:
             raise ValueError(
@@ -428,11 +514,11 @@ class NeuralNetwork:
         ga_kwargs,
     ):
         # Modified code
-        cross_val = StratifiedKFold(n_splits=grid_cv, shuffle=False)
+        cross_val = KFold(n_splits=grid_cv, shuffle=False)
 
-        sk_callbacks = {"callbacks": sk_params.pop("callbacks")}
+        sk_fit_params = {"callbacks": sk_params.pop("callbacks"), "y": y_train}
 
-        model = KerasClassifier(build_fn=estimator, **sk_params)
+        model = KerasClassifier(build_fn=estimator)
 
         if ga:
             # Stop searching if GA sees no improvement.
@@ -467,17 +553,27 @@ class NeuralNetwork:
             )
 
             search.fit(
-                X_train,
-                y_train,
-                fit_params=sk_callbacks,
+                X_train, y=y_train, fit_params=sk_fit_params,
             )
 
         return search
 
 
 class UBPCallbacks(tf.keras.callbacks.Callback):
+    def __init__(self):
+        self.indices = None
+
     def on_train_begin(self, logs=None):
         self.model.n_batches = self.params.get("steps")
+
+    def on_epoch_begin(self, epoch, logs=None):
+        # Shuffle input and target at start of epoch.
+        input_with_mask = np.hstack([self.model.y, self.model.missing_mask])
+        # n_samples = len(input_with_mask)
+        # self.indices = np.arange(n_samples)
+        # np.random.shuffle(self.indices)
+        self.model.input_with_mask = input_with_mask  # [self.indices]
+        # self.model.V = self.model.V[self.indices]
 
     def on_train_batch_begin(self, batch, logs=None):
         self.model.batch_idx = batch
@@ -486,11 +582,17 @@ class UBPCallbacks(tf.keras.callbacks.Callback):
         self.model.batch_idx = batch
 
     def on_epoch_end(self, epoch, logs=None):
-        old_weight = 0.5
+        y_pred = self.model.predict(self.model.V)
+        y_true = self.model.y.copy()
         mm = self.model.missing_mask
-        self.model.y[mm] *= old_weight
-        pred_missing = y_pred[mm]
-        self.model.y[mm] += 0.5 * pred_missing
+        old_weight = 0.5
+        y_true[mm] *= old_weight
+        y_pred_missing = y_pred[mm]
+        y_true[mm] += 0.5 * y_pred_missing
+        self.model.y = y_true.copy()
+
+        # Unsort the row indices.
+        self.model.V = self.model.V[np.argsort(self.indices)]
 
 
 class UBPEarlyStopping(tf.keras.callbacks.Callback):
@@ -604,6 +706,7 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
         self,
         V=None,
         y=None,
+        batch_size=32,
         missing_mask=None,
         output_shape=None,
         n_components=3,
@@ -646,6 +749,8 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
         self._batch_idx = 0
         self._n_batches = 0
         self._V_latent = self._V.copy()
+        self._batch_size = batch_size
+        self._input_with_mask = None
 
         kernel_regularizer = l1_l2(l1_penalty, l2_penalty)
         self.kernel_regularizer = kernel_regularizer
@@ -709,10 +814,7 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
 
         # # Expand dims to 3d to shape (batch_size, n_features, num_classes).
         # self.lmda = Lambda(lambda x: tf.expand_dims(x, -1))
-        self.output1 = Dense(
-            output_shape,
-            activation="softmax",
-        )
+        self.output1 = Dense(output_shape, activation="sigmoid")
 
         self.dropout_layer = Dropout(rate=dropout_rate)
 
@@ -728,7 +830,7 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
             tf.keras.Model: Output tensor from forward propagation.
         """
         x = self.dense1(inputs)
-        x = self.dropout_layer(x, training=training)
+        # x = self.dropout_layer(x, training=training)
         if self.dense2 is not None:
             x = self.dense2(x)
             x = self.dropout_layer(x, training=training)
@@ -773,7 +875,19 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
         ToDo:
             Obtain batch_size without using run_eagerly option in compile(). This will allow the step to be run in graph mode, thereby speeding up computation.
         """
-        y_true = data[1].numpy()
+        # y_true = data[1]
+        y = self._input_with_mask
+
+        # self._batch_idx is set in the UBPCallbacks() callback
+        # on_train_batch_begin() method.
+        batch_size = self._batch_size
+        n_samples = y.shape[0]
+
+        batch_start = self._batch_idx * batch_size
+        batch_end = (self._batch_idx + 1) * batch_size
+        if batch_end > n_samples:
+            batch_end = n_samples - 1
+            batch_size = batch_end - batch_start
 
         # Get current batch_size.
         # NOTE: run_eagerly must be set to True in the compile() method for this
@@ -781,23 +895,11 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
         # There is really no other way to get the batch_size in graph
         # mode as far as I know. eager execution is slower, so it would be nice
         # to find a way to obtain batch_size without converting to numpy.
-        batch_size = n_samples
 
-        # self._batch_idx is set in the UBPCallbacks() callback
-        # on_train_batch_begin() method.
-        batch_start = self._batch_idx * batch_size
-        batch_end = (self._batch_idx + 1) * batch_size
-
-        input_with_mask = np.hstack([y_true, missmask])
-        n_samples = len(input_with_mask)
-        indices = np.arange(n_samples)
-        np.random.shuffle(indices)
-        y_true_shuffled = input_with_mask[indices]
-
-        # override v_batch. This model refines the input to fit the output, so
+        # override batches. This model refines the input to fit the output, so
         # v_batch has to be overridden.
+        y_true = y[batch_start:batch_end, :]
         v_batch = self._V_latent[batch_start:batch_end, :]
-        v_batch_shuffled = v_batch[indices]
 
         # NOTE: Moved self.set_weights(self._phase2_weights[self._batch_idx])
         # to custom callback because it threw an error when it was here.
@@ -810,7 +912,7 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
         )
 
         # Assign current batch to v.
-        v.assign(v_batch_shuffled)
+        v.assign(v_batch)
 
         src = [v]
 
@@ -836,9 +938,7 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
             tf.convert_to_tensor(y_true, dtype=tf.float32), y_pred
         )
 
-        refined_v = v.numpy()
-        sorted_v = refined_v[indices.argsort()]
-        self._V_latent[batch_start:batch_end, :] = sorted_v
+        self._V_latent[batch_start:batch_end, :] = v.numpy()
 
         # history object that gets returned from fit().
         return {m.name: m.result() for m in self.metrics}
@@ -855,21 +955,44 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
             A dict containing values that will be passed to ``tf.keras.callbacks.CallbackList.on_train_batch_end``. Typically, the values of the Model's metrics are returned.
         """
         # Unpack the data. Don't need V here. Just X (y_true).
-        y_true = data[1].numpy()
-
-        input_with_mask = np.hstack([y_true, self._missing_mask])
-        n_samples = len(input_with_mask)
-        indices = np.arange(n_samples)
-        np.random.shuffle(indices)
-        y_true_shuffled = input_with_mask[indices]
-        batch_size = y_true.numpy().shape[0]
+        # y_true = data[1]
+        y = self._input_with_mask
 
         # self._batch_idx is set in the UBPCallbacks() callback
         # on_train_batch_begin() method.
+        batch_size = self._batch_size
+        n_samples = y.shape[0]
+
         batch_start = self._batch_idx * batch_size
         batch_end = (self._batch_idx + 1) * batch_size
+        if batch_end > n_samples:
+            batch_end = n_samples - 1
+            batch_size = batch_end - batch_start
+
+        # y = self._y
+        # batch_size = y.shape[0]
+
+        # # self._batch_idx is set in the UBPCallbacks() callback
+        # # on_train_batch_begin() method.
+        # batch_start = self._batch_idx * batch_size
+        # batch_end = (self._batch_idx + 1) * batch_size
+
+        # # y_true = data[1].numpy()
+
+        # # input_with_mask = np.hstack([y_true, self._missing_mask])
+        # # n_samples = len(input_with_mask)
+        # # indices = np.arange(n_samples)
+        # # np.random.shuffle(indices)
+        # # y_true_shuffled = input_with_mask[indices]
+        # # batch_size = y_true.numpy().shape[0]
+
+        # # self._batch_idx is set in the UBPCallbacks() callback
+        # # on_train_batch_begin() method.
+        # batch_start = self._batch_idx * batch_size
+        # batch_end = (self._batch_idx + 1) * batch_size
 
         # Get the input that's being refined.
+        y_true = y[batch_start:batch_end, :]
         v_batch = self._V_latent[batch_start:batch_end, :]
 
         v = tf.Variable(
@@ -921,12 +1044,20 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
         return self._n_batches
 
     @property
+    def batch_size(self):
+        return self._batch_size
+
+    @property
     def y(self):
         return self._y
 
     @property
     def missing_mask(self):
         return self._missing_mask
+
+    @property
+    def input_with_mask(self):
+        return self._input_with_mask
 
     @V.setter
     def V(self, value):
@@ -948,6 +1079,10 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
         """Set total number of batches (=steps) per epoch."""
         self._n_batches = int(value)
 
+    @batch_size.setter
+    def batch_size(self, value):
+        self._batch_size = batch_size
+
     @y.setter
     def y(self, value):
         """Set y after each epoch."""
@@ -957,6 +1092,10 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
     def missing_mask(self, value):
         """Set y after each epoch."""
         self._missing_mask = value
+
+    @input_with_mask.setter
+    def input_with_mask(self, value):
+        self._input_with_mask = value
 
 
 class UBPPhase1(tf.keras.Model, NeuralNetwork):
@@ -1383,10 +1522,7 @@ class UBPPhase2(tf.keras.Model, NeuralNetwork):
 
         # Expand dims to 3d with shape (batch_size, n_features, num_classes)
         # self.lmda = Lambda(lambda x: tf.expand_dims(x, -1))
-        self.output1 = Dense(
-            output_shape,
-            activation="softmax",
-        )
+        self.output1 = Dense(output_shape, activation="softmax",)
         self.dropout_layer = Dropout(rate=dropout_rate)
 
     def call(self, inputs, training=None):
@@ -1725,10 +1861,7 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
 
         # Expand dims to 3d of shape (batch_size, n_features, num_classes).
         # self.lmda = Lambda(lambda x: tf.expand_dims(x, -1))
-        self.output1 = Dense(
-            output_shape,
-            activation="softmax",
-        )
+        self.output1 = Dense(output_shape, activation="softmax",)
 
         self.dropout_layer = Dropout(rate=dropout_rate)
 
@@ -2518,20 +2651,9 @@ class UBP(NeuralNetwork):
         # y = y.astype(np.int)
 
         df = self.encode_onehot(y)
-        y = df.copy().values
+        y_train = df.copy().values
 
-        test_size = self.validation_size * 0.5
-
-        y_train, y_test = train_test_split(
-            y, test_size=test_size, shuffle=False
-        )
-
-        missing_mask_train = self.create_missing_mask(y_train)
-        missing_mask_test = self.create_missing_mask(y_test)
-        observed_mask_train = ~missing_mask_train
-        observed_mask_test = ~missing_mask_test
-        y_train = self.fill(y_train, missing_mask_train, -1, self.num_classes)
-        y_test = self.fill(y_test, missing_mask_test, -1, self.num_classes)
+        y_train, missing_mask, observed_mask = self._format_data(y_train, -1)
 
         # Initialize small random values.
         V = self._init_weights(y.shape[0], self.n_components)
@@ -2570,7 +2692,7 @@ class UBP(NeuralNetwork):
         compile_params = {
             "optimizer": optimizer,
             "loss": self.make_reconstruction_loss(y_train.shape[1]),
-            "metrics": self.make_reconstruction_acc(y_train.shape[1]),
+            "metrics": [self.make_acc(y_train.shape[1])],
             "run_eagerly": True,
         }
 
@@ -2591,7 +2713,8 @@ class UBP(NeuralNetwork):
             model3_params = {
                 "V": V,
                 "y": y_train,
-                "missing_mask": missing_mask_train,
+                "batch_size": self.batch_size,
+                "missing_mask": missing_mask,
                 "output_shape": y_train.shape[1],
                 "n_components": self.n_components,
                 "weights_initializer": self.weights_initializer,
@@ -2614,21 +2737,18 @@ class UBP(NeuralNetwork):
             #     run_eagerly=True,
             # )
 
-            callbacks3 = [
-                UBPEarlyStopping(
-                    patience=self.early_stop_gen,
-                    phase=None,
-                ),
-            ]
+            # callbacks3 = [
+            #     UBPEarlyStopping(patience=self.early_stop_gen, phase=None,),
+            # ]
 
-            callbacks3.extend(callbacks)
+            # callbacks3.extend(callbacks)
 
             V2 = V.copy()
 
             sk_params3 = {
                 "batch_size": self.batch_size,
                 "epochs": self.train_epochs,
-                "callbacks": callbacks3,
+                "callbacks": callbacks,
                 "validation_split": self.validation_size,
                 "shuffle": False,
                 "verbose": self.verbose,
@@ -2677,10 +2797,7 @@ class UBP(NeuralNetwork):
             )
 
             callbacks1 = [
-                UBPEarlyStopping(
-                    patience=self.early_stop_gen,
-                    phase=1,
-                ),
+                UBPEarlyStopping(patience=self.early_stop_gen, phase=1,),
             ]
 
             callbacks1.extend(callbacks)
@@ -2729,10 +2846,7 @@ class UBP(NeuralNetwork):
             )
 
             callbacks2 = [
-                UBPEarlyStopping(
-                    patience=self.early_stop_gen,
-                    phase=2,
-                ),
+                UBPEarlyStopping(patience=self.early_stop_gen, phase=2,),
             ]
 
             callbacks2.extend(callbacks)
@@ -2789,10 +2903,7 @@ class UBP(NeuralNetwork):
             model3.set_weights(model2.get_weights())
 
             callbacks3 = [
-                UBPEarlyStopping(
-                    patience=self.early_stop_gen,
-                    phase=3,
-                ),
+                UBPEarlyStopping(patience=self.early_stop_gen, phase=3,),
             ]
 
             callbacks3.extend(callbacks)
@@ -2818,7 +2929,7 @@ class UBP(NeuralNetwork):
             y=y_train,
             batch_size=self.batch_size,
             epochs=self.train_epochs,
-            callbacks=callbacks3,
+            callbacks=callbacks,
             validation_split=self.validation_size,
             shuffle=False,
             verbose=self.verbose,
@@ -2835,42 +2946,59 @@ class UBP(NeuralNetwork):
 
         histories.append(history3.history)
 
-        y_pred = self.predict(V, y, model3, observed_mask_train)
+        # y_pred = self.predict(V, y, model3, observed_mask)
+        V3 = model3.V.copy()
+
+        imputed_enc = model3.y.copy()
+
+        imputed_enc, dummy_df = self.predict(y, imputed_enc)
+
+        imputed_df = self.decode_onehot(
+            pd.DataFrame(data=imputed_enc, columns=dummy_df.columns)
+        )
+
+        # y_pred = model3.predict(V3)
         self._plot_history(histories)
 
         sys.exit()
+
+    def _format_data(self, y, missing_val):
+        missing_mask = self.create_missing_mask(y)
+        observed_mask = ~missing_mask
+        yt = self.fill(y, missing_mask, missing_val, self.num_classes)
+        return yt, missing_mask, observed_mask
 
     def create_model(self, estimator, model_params, compile_params):
         model = estimator(**model_params)
         model.compile(**compile_params)
         return model
 
-    def predict(self, V, X, model, observed_mask):
-        """Predict imputations based on input X.
+    # def predict(self, V, X, model, observed_mask):
+    #     """Predict imputations based on input X.
 
-        Args:
-            V (numpy.ndarray(float)): Refined reduced-dimensional random input of shape (n_samples, n_components).
+    #     Args:
+    #         V (numpy.ndarray(float)): Refined reduced-dimensional random input of shape (n_samples, n_components).
 
-            X (numpy.ndarray(float), pandas.DataFrame, or List[List[int]]): Original data to impute.
+    #         X (numpy.ndarray(float), pandas.DataFrame, or List[List[int]]): Original data to impute.
 
-            model (tf.keras.Model): Trained Keras model to predict with.
+    #         model (tf.keras.Model): Trained Keras model to predict with.
 
-            observed_mask (numpy.ndarray(bool)): Mask with True as non-missing values and False as missing.
+    #         observed_mask (numpy.ndarray(bool)): Mask with True as non-missing values and False as missing.
 
-        Returns:
-            numpy.ndarray: Imputation predictions.
-        """
-        if X is None:
-            if self.genotype_data is None:
-                raise TypeError(
-                    "genotype_data argument must be provided if X is "
-                    "not provided in fit()"
-                )
-            else:
-                X = self.genotype_data.genotypes012_array
+    #     Returns:
+    #         numpy.ndarray: Imputation predictions.
+    #     """
+    #     if X is None:
+    #         if self.genotype_data is None:
+    #             raise TypeError(
+    #                 "genotype_data argument must be provided if X is "
+    #                 "not provided in fit()"
+    #             )
+    #         else:
+    #             X = self.genotype_data.genotypes012_array
 
-        X = self.validate_input(X)
-        return self._predict_imputed(X, V, model, observed_mask)
+    #     X = self.validate_input(X)
+    #     return self._predict_imputed(X, V, model, observed_mask)
 
     def _predict_imputed(self, X, V, model, observed_mask):
         """Predict imputations based on a trained UBP or NLPCA model.
@@ -2920,8 +3048,8 @@ class UBP(NeuralNetwork):
             history = lod[0]
 
             # Plot accuracy
-            ax1.plot(history["categorical_accuracy_masked"])
-            ax1.plot(history["val_categorical_accuracy_masked"])
+            ax1.plot(history["accuracy_masked"])
+            ax1.plot(history["val_accuracy_masked"])
             ax1.set_title("Model Accuracy")
             ax1.set_ylabel("Accuracy")
             ax1.set_xlabel("Epoch")
@@ -2953,8 +3081,8 @@ class UBP(NeuralNetwork):
                 title = f"Phase {i}"
 
                 # Plot model accuracy
-                plt.plot(history["categorical_accuracy_masked"])
-                plt.plot(history["val_categorical_accuracy_masked"])
+                plt.plot(history["accuracy_masked"])
+                plt.plot(history["val_accuracy_masked"])
                 plt.title(f"{title} Accuracy")
                 plt.ylabel("Accuracy")
                 plt.xlabel("Epoch")
@@ -3159,22 +3287,16 @@ class UBP(NeuralNetwork):
                             if counter == self.early_stop_gen:
                                 counter = 0
                                 if phase == 1:
-                                    model_single_layer = (
-                                        tf.keras.models.load_model(
-                                            model_dir1, compile=False
-                                        )
+                                    model_single_layer = tf.keras.models.load_model(
+                                        model_dir1, compile=False
                                     )
                                 elif phase == 2:
-                                    model_mlp_phase2 = (
-                                        tf.keras.models.load_model(
-                                            model_dir2, compile=False
-                                        )
+                                    model_mlp_phase2 = tf.keras.models.load_model(
+                                        model_dir2, compile=False
                                     )
                                 elif phase == 3:
-                                    model_mlp_phase3 = (
-                                        tf.keras.models.load_model(
-                                            model_dir3, compile=False
-                                        )
+                                    model_mlp_phase3 = tf.keras.models.load_model(
+                                        model_dir3, compile=False
                                     )
                                 final_s = s_prime
                                 final_acc = acc_prime
