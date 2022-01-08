@@ -325,7 +325,7 @@ def main():
         "n_components": n_components,
     }
 
-    ubp = ImputeNLPCA(
+    ubp = ImputeUBP(
         data,
         # gridparams=grid_params,
         initial_strategy="populations",
@@ -339,9 +339,9 @@ def main():
         dropout_rate=0.2,
         hidden_activation="elu",
         batch_size=32,
-        l1_penalty=0.01,
-        l2_penalty=0.01,
-        gridparams=grid_params,
+        l1_penalty=0.0,
+        l2_penalty=0.0,
+        # gridparams=grid_params,
     )
 
     # ubp = ImputeVAE(

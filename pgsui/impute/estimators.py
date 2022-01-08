@@ -1362,6 +1362,8 @@ class ImputeUBP(Impute):
 
         learning_rate (float, optional): The learning rate for the optimizers. Adjust if the loss is learning too slowly. Defaults to 0.1.
 
+        lr_patience (int, optional): Number of epochs with no loss improvement to wait before reducing the learning rate.
+
         train_epochs (int, optional): Number of epochs to run if the ``early_stop_gen`` criterion is not met.
 
         tol (float, optional): Tolerance level to use for the early stopping criterion. If the loss does not improve past the tolerance level after ``early_stop_gen`` epochs, then training will halt. Defaults to 1e-3.
@@ -1540,6 +1542,8 @@ class ImputeNLPCA(ImputeUBP):
         hidden_activation (str, optional): The activation function to use for the hidden layers. See tf.keras.activations for more info. Commonly used activation functions include "elu", "relu", and "sigmoid". Defaults to "elu".
 
         learning_rate (float, optional): The learning rate for the optimizers. Adjust if the loss is learning too slowly. Defaults to 0.1.
+
+        lr_patience (int, optional): Number of epochs with no loss improvement to wait before reducing the learning rate.
 
         train_epochs (int, optional): Number of epochs to run if the ``early_stop_gen`` criterion is not met.
 
