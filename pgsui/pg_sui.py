@@ -336,7 +336,7 @@ def main():
         learning_rate=0.1,
         num_hidden_layers=1,
         verbose=1,
-        dropout_rate=0.2,
+        dropout_rate=0.0,
         hidden_activation="elu",
         batch_size=32,
         l1_penalty=0.0,

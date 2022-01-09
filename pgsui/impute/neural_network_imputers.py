@@ -162,6 +162,41 @@ class NeuralNetwork:
         if hidden_layer_sizes is None:
             raise TypeError("hidden_layer_sizes must not be NoneType.")
 
+    def create_model(
+        self,
+        estimator,
+        model_params,
+        compile_params,
+        n_components=3,
+        build=False,
+        **kwargs,
+    ):
+        """Create a neural network model using the estimator to initialize.
+
+        Model will be initialized, compiled, and built if ``build=True``\.
+
+        Args:
+            estimator (tf.keras.Model): Model to create. Can be a subclassed model.
+
+            model_params (Dict[str, Any]): Dictionary with parameters passed to the model class instantiation. Key-value pairs should be the parameter names and their corresponding values.
+
+            compile_params (Dict[str, Any]): Parameters passed to model.compile(). Key-value pairs should be the parameter names and their corresponding values.
+
+            n_components (int): The number of principal components to use with NLPCA or UBP models. Not used if doing VAE. Defaults to 3.
+
+            build (bool): Whether to build the model. Defaults to False.
+
+        Returns:
+            tf.keras.Model: Instantiated, compiled, and optionally built model.
+        """
+        model = estimator(**model_params)
+
+        if build:
+            model.build((None, n_components))
+
+        model.compile(**compile_params)
+        return model
+
     def prepare_training_batches(
         self, V, y, batch_size, batch_idx, trainable, n_components
     ):
@@ -657,11 +692,11 @@ class UBPCallbacks(tf.keras.callbacks.Callback):
     def on_epoch_begin(self, epoch, logs=None):
         # Shuffle input and target at start of epoch.
         input_with_mask = np.hstack([self.model.y, self.model.missing_mask])
-        # n_samples = len(input_with_mask)
-        # self.indices = np.arange(n_samples)
-        # np.random.shuffle(self.indices)
-        self.model.input_with_mask = input_with_mask  # [self.indices]
-        # self.model.V = self.model.V[self.indices]
+        n_samples = len(input_with_mask)
+        self.indices = np.arange(n_samples)
+        np.random.shuffle(self.indices)
+        self.model.input_with_mask = input_with_mask[self.indices]
+        self.model.V = self.model.V[self.indices]
 
     def on_train_batch_begin(self, batch, logs=None):
         self.model.batch_idx = batch
@@ -842,7 +877,10 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
         self._batch_size = batch_size
         self._input_with_mask = None
 
-        kernel_regularizer = l1_l2(l1_penalty, l2_penalty)
+        if l1_penalty == 0.0 and l2_penalty == 0.0:
+            kernel_regularizer = None
+        else:
+            kernel_regularizer = l1_l2(l1_penalty, l2_penalty)
         self.kernel_regularizer = kernel_regularizer
         kernel_initializer = weights_initializer
 
@@ -896,7 +934,12 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
                 kernel_regularizer=kernel_regularizer,
             )
 
-        self.output1 = Dense(output_shape, activation="sigmoid")
+        self.output1 = Dense(
+            output_shape,
+            kernel_initializer=kernel_initializer,
+            kernel_regularizer=kernel_regularizer,
+            activation="sigmoid",
+        )
         self.dropout_layer = Dropout(rate=dropout_rate)
 
     def call(self, inputs, training=None):
@@ -1078,7 +1121,7 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
     @V.setter
     def V(self, value):
         """Set randomly initialized input variable. Gets refined during training."""
-        self._V = value
+        self._V_latent = value
 
     @batch_size.setter
     def batch_size(self, value):
@@ -1222,7 +1265,10 @@ class UBPPhase1(tf.keras.Model, NeuralNetwork):
         self._batch_size = batch_size
         self._input_with_mask = None
 
-        kernel_regularizer = l1_l2(l1_penalty, l2_penalty)
+        if l1_penalty == 0.0 and l2_penalty == 0.0:
+            kernel_regularizer = None
+        else:
+            kernel_regularizer = l1_l2(l1_penalty, l2_penalty)
         self.kernel_regularizer = kernel_regularizer
         kernel_initializer = weights_initializer
 
@@ -1390,7 +1436,7 @@ class UBPPhase1(tf.keras.Model, NeuralNetwork):
     @V.setter
     def V(self, value):
         """Set randomly initialized input variable. Gets refined during training."""
-        self._V = value
+        self._V_latent = value
 
     @batch_size.setter
     def batch_size(self, value):
@@ -1531,7 +1577,10 @@ class UBPPhase2(tf.keras.Model, NeuralNetwork):
         self._batch_size = batch_size
         self._input_with_mask = None
 
-        kernel_regularizer = l1_l2(l1_penalty, l2_penalty)
+        if l1_penalty == 0.0 and l2_penalty == 0.0:
+            kernel_regularizer = None
+        else:
+            kernel_regularizer = l1_l2(l1_penalty, l2_penalty)
         self.kernel_regularizer = kernel_regularizer
         kernel_initializer = weights_initializer
 
@@ -1587,6 +1636,8 @@ class UBPPhase2(tf.keras.Model, NeuralNetwork):
 
         self.output1 = Dense(
             output_shape,
+            kernel_initializer=kernel_initializer,
+            kernel_regularizer=kernel_regularizer,
             activation="sigmoid",
         )
 
@@ -1760,7 +1811,7 @@ class UBPPhase2(tf.keras.Model, NeuralNetwork):
     @V.setter
     def V(self, value):
         """Set randomly initialized input variable. Gets refined during training."""
-        self._V = value
+        self._V_latent = value
 
     @batch_size.setter
     def batch_size(self, value):
@@ -1889,7 +1940,6 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
         self.phase = phase
         self.hidden_layer_sizes = hidden_layer_sizes
         self.n_components = n_components
-        self.weights_initializer = weights_initializer
         self.dropout_rate = dropout_rate
 
         ### NOTE: I tried using just _V as the input to be refined, but it
@@ -1904,9 +1954,12 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
         self._batch_size = batch_size
         self._input_with_mask = None
 
-        kernel_regularizer = l1_l2(l1_penalty, l2_penalty)
+        if l1_penalty == 0.0 and l2_penalty == 0.0:
+            kernel_regularizer = None
+        else:
+            kernel_regularizer = l1_l2(l1_penalty, l2_penalty)
         self.kernel_regularizer = kernel_regularizer
-        kernel_initializer = weights_initializer
+        kernel_initializer = None
 
         if len(hidden_layer_sizes) > 5:
             raise ValueError("The maximum number of hidden layers is 5.")
@@ -1960,6 +2013,8 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
 
         self.output1 = Dense(
             output_shape,
+            kernel_initializer=kernel_initializer,
+            kernel_regularizer=kernel_regularizer,
             activation="sigmoid",
         )
 
@@ -2140,7 +2195,7 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
     @V.setter
     def V(self, value):
         """Set randomly initialized input variable. Gets refined during training."""
-        self._V = value
+        self._V_latent = value
 
     @batch_size.setter
     def batch_size(self, value):
@@ -2867,7 +2922,12 @@ class UBP(NeuralNetwork):
             build = True if i == 3 else False
 
             model = self.create_model(
-                phase, model_params, compile_params, build, **other_params
+                phase,
+                model_params,
+                compile_params,
+                n_components=self.n_components,
+                build=build,
+                **other_params,
             )
 
             if i == 3:
@@ -2911,7 +2971,12 @@ class UBP(NeuralNetwork):
                 models.append(model)
 
             if i == 1:
+                print(model_params["V"])
                 model_params["V"] = model.V.copy()
+                print(model_params["V"])
+
+            if i == 3:
+                print(models[2].V.copy())
 
         return models, histories
 
@@ -2953,13 +3018,21 @@ class UBP(NeuralNetwork):
 
         if self.nlpca:
             # For CSVLogger() callback.
+            append = False
             logfile = f"{self.prefix}_nlpca_log.csv"
         else:
+            append = True
             logfile = f"{self.prefix}_ubp_log.csv"
+
+            # Remove logfile if exists, because UBP writes in append mode.
+            try:
+                os.remove(logfile)
+            except:
+                pass
 
         callbacks = [
             UBPCallbacks(),
-            CSVLogger(filename=logfile),
+            CSVLogger(filename=logfile, append=append),
             ReduceLROnPlateau(patience=self.lr_patience),
         ]
 
@@ -3010,89 +3083,36 @@ class UBP(NeuralNetwork):
         )
 
     def _summarize_model(self, model):
-        """Print model summary for debugging purposes."""
+        """Print model summary for debugging purposes.
+
+        Args:
+            model (tf.keras.Model): Model to summarize.
+        """
         # For debugging.
         model.model().summary()
 
-    def _format_data(self, y, missing_val):
+    def _format_data(self, y, missing_val=-1):
+        """Format the provided target data for use with UBP/NLPCA.
+
+        Args:
+            y (numpy.ndarray(float)): Input data that will be used as the target.
+
+            missing_val (int, optional): Missing value to use to fill in the reformatted data. Defaults to -1.
+
+        Returns:
+            numpy.ndarray(float): Target data with missing values filled in as ``missing_val``\.
+
+            numpy.ndarray(float): Missing data mask, with missing values encoded as 1's and non-missing as 0's.
+
+            numpy.ndarray(float): Observed data mask, with non-missing values encoded as 1's and missing values as 0's.
+        """
         missing_mask = self.create_missing_mask(y)
         observed_mask = ~missing_mask
         yt = self.fill(y, missing_mask, missing_val, self.num_classes)
         return yt, missing_mask, observed_mask
 
-    def create_model(
-        self, estimator, model_params, compile_params, build=False, **kwargs
-    ):
-        model = estimator(**model_params)
-
-        if build:
-            model.build((None, self.n_components))
-
-        model.compile(**compile_params)
-        return model
-
-    # def predict(self, V, X, model, observed_mask):
-    #     """Predict imputations based on input X.
-
-    #     Args:
-    #         V (numpy.ndarray(float)): Refined reduced-dimensional random input of shape (n_samples, n_components).
-
-    #         X (numpy.ndarray(float), pandas.DataFrame, or List[List[int]]): Original data to impute.
-
-    #         model (tf.keras.Model): Trained Keras model to predict with.
-
-    #         observed_mask (numpy.ndarray(bool)): Mask with True as non-missing values and False as missing.
-
-    #     Returns:
-    #         numpy.ndarray: Imputation predictions.
-    #     """
-    #     if X is None:
-    #         if self.genotype_data is None:
-    #             raise TypeError(
-    #                 "genotype_data argument must be provided if X is "
-    #                 "not provided in fit()"
-    #             )
-    #         else:
-    #             X = self.genotype_data.genotypes012_array
-
-    #     X = self.validate_input(X)
-    #     return self._predict_imputed(X, V, model, observed_mask)
-
-    def _predict_imputed(self, X, V, model, observed_mask):
-        """Predict imputations based on a trained UBP or NLPCA model.
-
-        Args:
-            X (numpy.ndarray(float)): Original data to impute.
-
-            V (numpy.ndarray(float)): Refined reduced-dimensional input for predicting imputations.
-
-            model (tf.keras.Sequential): Trained model (phase 3 if doing UBP).
-
-            observed_mask (numpy.ndarray(bool)): Mask with True as non-missing values and False as missing.
-
-        Returns:
-            numpy.ndarray: Imputation predictions.
-
-        Raises:
-            TypeError: V cannot be NoneType.
-            TypeError: model cannot be NoneType.
-        """
-        predictions = model(V, training=False)
-        Xprob = predictions.numpy()
-        Xt = np.apply_along_axis(self.mle, axis=2, arr=Xprob)
-        Xpred = np.argmax(Xt, axis=2)
-        Xdecoded = np.zeros((Xpred.shape[0], Xpred.shape[1]))
-        for idx, row in enumerate(Xdecoded):
-            imputed_vals = np.zeros(len(row))
-            known_vals = np.zeros(len(row))
-            imputed_idx = np.where(observed_mask[idx] == 0)
-            known_idx = np.nonzero(observed_mask[idx])
-            Xdecoded[idx, imputed_idx] = Xpred[idx, imputed_idx]
-            Xdecoded[idx, known_idx] = X[idx, known_idx]
-        return Xdecoded
-
     def _plot_history(self, lod):
-        """Plot model history traces.
+        """Plot model history traces. Will be saved to file.
 
         Args:
             lod (List[tf.keras.callbacks.History]): List of history objects.
@@ -3139,23 +3159,24 @@ class UBP(NeuralNetwork):
                 title = f"Phase {i}"
 
                 # Plot model accuracy
-                plt.plot(history["accuracy_masked"])
-                plt.plot(history["val_accuracy_masked"])
-                plt.title(f"{title} Accuracy")
-                plt.ylabel("Accuracy")
-                plt.xlabel("Epoch")
-                plt.ylim((0.0, 1.0))
-                plt.yticks([0.0, 0.25, 0.5, 0.75, 1.0])
-                plt.legend(["Train", "Validation"], loc="best")
+                ax = plt.gca()
+                ax.plot(history["accuracy_masked"])
+                ax.plot(history["val_accuracy_masked"])
+                ax.set_title(f"{title} Accuracy")
+                ax.set_ylabel("Accuracy")
+                ax.set_xlabel("Epoch")
+                ax.set_yticks([0.0, 0.25, 0.5, 0.75, 1.0])
+                ax.legend(["Train", "Validation"], loc="best")
 
                 # Plot model loss
                 plt.subplot(3, 2, idx + 1)
-                plt.plot(history["loss"])
-                plt.plot(history["val_loss"])
-                plt.title(f"{title} Loss")
-                plt.ylabel("Loss (MSE)")
-                plt.xlabel("Epoch")
-                plt.legend(["Train", "Validation"], loc="best")
+                ax = plt.gca()
+                ax.plot(history["loss"])
+                ax.plot(history["val_loss"])
+                ax.set_title(f"{title} Loss")
+                ax.set_ylabel("Loss (MSE)")
+                ax.set_xlabel("Epoch")
+                ax.legend(["Train", "Validation"], loc="best")
 
                 idx += 2
 
@@ -3163,480 +3184,6 @@ class UBP(NeuralNetwork):
 
             plt.close()
             plt.clf()
-
-    def train(self):
-        """Train an unsupervised backpropagation (UBP) or NLPCA model.
-
-        UBP runs over three phases.
-
-        1. Train a single-layer perceptron to refine the input, V_latent.
-        2. Train a multi-layer perceptron (MLP) to refine only the weights
-        3. Train an MLP to refine both the weights and input, V_latent.
-
-        NLPCA just does phase 3.
-
-        Returns:
-            numpy.ndarray(float): Predicted values as numpy array.
-        """
-        missing_mask = self._create_missing_mask()
-        self.observed_mask = ~missing_mask
-        self.fill(missing_mask, -1, self.num_classes)
-
-        # Reset model states
-        K.clear_session()
-        tf.compat.v1.reset_default_graph()
-        self.reset_seeds()
-
-        # Define neural network models.
-        if self.nlpca:
-            # If using NLPCA model: Don't need phases 1 and 2.
-            model_single_layer = None
-            model_mlp_phase2 = None
-            start_phase = 3
-
-        else:
-            # Using UBP model over three phases
-            phase1model = self._build_ubp(phase=1)
-            phase2model = self._build_ubp(phase=2)
-
-            # Initialize new model with new random weights.
-            model_single_layer = tf.keras.models.clone_model(phase1model)
-            model_mlp_phase2 = tf.keras.models.clone_model(phase2model)
-
-            del phase1model
-            del phase2model
-
-            start_phase = 1
-
-        phase3model = self._build_ubp(phase=3)
-        model_mlp_phase3 = tf.keras.models.clone_model(phase3model)
-        del phase3model
-
-        # Number of batches based on rows in X and V_latent.
-        n_batches = int(np.ceil(self.data.shape[0] / self.batch_size))
-
-        if self.nlpca:
-            model_dir3 = "optimal_nlpca"
-            self._remove_dir(model_dir3)
-        else:
-            model_dir1 = f"{self.prefix}_optimal_ubp_phase1"
-            model_dir2 = f"{self.prefix}_optimal_ubp_phase2"
-            model_dir3 = f"{self.prefix}_optimal_ubp_phase3"
-            self._remove_dir(model_dir1)
-            self._remove_dir(model_dir2)
-            self._remove_dir(model_dir3)
-
-        # self._initialise_parameters()
-
-        for phase in range(start_phase, 4):
-
-            s_delta = None
-            s_prime = np.inf
-            acc_prime = np.inf
-            final_s = 0
-            final_acc = 0
-            num_epochs = 0
-            counter = 0
-            checkpoint = 1
-            criterion_met = False
-
-            # While stopping criterion not met: keep doing more epochs.
-            while (
-                counter < self.early_stop_gen
-                and num_epochs <= self.train_epochs
-            ):
-                # Train per epoch
-                # s is error (loss)
-                s, train_acc = self._train_epoch(
-                    model_single_layer,
-                    model_mlp_phase2,
-                    model_mlp_phase3,
-                    n_batches,
-                    phase=phase,
-                )
-
-                num_epochs += 1
-
-                if num_epochs % 50 == 0:
-                    print(f"Epoch {num_epochs}...")
-                    print(
-                        f"Observed MSE: {s} (Accuracy: {round(train_acc * 100, 2)}%)"
-                    )
-
-                if num_epochs == 1:
-                    s_prime = s
-                    acc_prime = train_acc
-
-                    if self.nlpca:
-                        print("\nBeginning NLPCA training...\n")
-                    else:
-                        print(f"\nBeginning UBP Phase {phase} training...\n")
-                    print(
-                        f"Initial MSE: {s} (Accuracy: {round(train_acc * 100, 2)}%)"
-                    )
-
-                if not criterion_met and num_epochs > 1:
-                    if s < s_prime:
-                        s_delta = abs(s_prime - s)
-                        if s_delta <= self.tol:
-                            criterion_met = True
-                            if phase == 1:
-                                tf.keras.models.save_model(
-                                    model_single_layer,
-                                    model_dir1,
-                                    include_optimizer=False,
-                                    overwrite=True,
-                                )
-                            elif phase == 2:
-                                tf.keras.models.save_model(
-                                    model_mlp_phase2,
-                                    model_dir2,
-                                    include_optimizer=False,
-                                    overwrite=True,
-                                )
-                            elif phase == 3:
-                                tf.keras.models.save_model(
-                                    model_mlp_phase3,
-                                    model_dir3,
-                                    include_optimizer=False,
-                                    overwrite=True,
-                                )
-                            checkpoint = num_epochs
-                        else:
-                            counter = 0
-                            s_prime = s
-                            acc_prime = train_acc
-
-                    else:
-                        if phase == 1 and not os.path.isdir(model_dir1):
-                            tf.keras.models.save_model(
-                                model_single_layer,
-                                model_dir1,
-                                include_optimizer=False,
-                                overwrite=True,
-                            )
-                        elif phase == 2 and not os.path.isdir(model_dir2):
-                            tf.keras.models.save_model(
-                                model_mlp_phase2,
-                                model_dir2,
-                                include_optimizer=False,
-                                overwrite=True,
-                            )
-                        elif phase == 3 and not os.path.isdir(model_dir3):
-                            tf.keras.models.save_model(
-                                model_mlp_phase3,
-                                model_dir3,
-                                include_optimizer=False,
-                                overwrite=True,
-                            )
-                        criterion_met = True
-                        checkpoint = num_epochs
-
-                elif criterion_met and num_epochs > 1:
-                    if s < s_prime:
-                        s_delta = abs(s_prime - s)
-                        if s_delta > self.tol:
-                            criterion_met = False
-                            s_prime = s
-                            acc_prime = train_acc
-                            counter = 0
-                        else:
-                            counter += 1
-                            if counter == self.early_stop_gen:
-                                counter = 0
-                                if phase == 1:
-                                    model_single_layer = (
-                                        tf.keras.models.load_model(
-                                            model_dir1, compile=False
-                                        )
-                                    )
-                                elif phase == 2:
-                                    model_mlp_phase2 = (
-                                        tf.keras.models.load_model(
-                                            model_dir2, compile=False
-                                        )
-                                    )
-                                elif phase == 3:
-                                    model_mlp_phase3 = (
-                                        tf.keras.models.load_model(
-                                            model_dir3, compile=False
-                                        )
-                                    )
-                                final_s = s_prime
-                                final_acc = acc_prime
-                                break
-                    else:
-                        counter += 1
-                        if counter == self.early_stop_gen:
-                            counter = 0
-                            if phase == 1:
-                                model_single_layer = tf.keras.models.load_model(
-                                    model_dir1, compile=False
-                                )
-                            elif phase == 2:
-                                model_mlp_phase2 = tf.keras.models.load_model(
-                                    model_dir2, compile=False
-                                )
-                            elif phase == 3:
-                                model_mlp_phase3 = tf.keras.models.load_model(
-                                    model_dir3, compile=False
-                                )
-                            final_s = s_prime
-                            final_acc = acc_prime
-                            break
-
-            print(f"Number of epochs used to train: {checkpoint}")
-            print(
-                f"Final MSE: {final_s} (Accuracy: {round(final_acc * 100, 2)}%)"
-            )
-
-        if not self.nlpca:
-            self._remove_dir(model_dir1)
-            self._remove_dir(model_dir2)
-        self._remove_dir(model_dir3)
-
-        del model_single_layer
-        del model_mlp_phase2
-
-        return model_mlp_phase3
-
-    def _train_epoch(
-        self,
-        model_single_layer,
-        model_mlp_phase2,
-        model_mlp_phase3,
-        n_batches,
-        phase=3,
-        num_classes=3,
-    ):
-        """Train UBP or NLPCA over one epoch.
-
-        Args:
-            model (tf.keras.models.Sequential): Keras model to train.
-
-            n_batches (int): Number of batches to train.
-
-            phase (int): Current phase. UBP has three phases. If doing NLPCA, it only does phase 3.
-
-            num_classes (int): Number of categorical classes to predict (three for 012 encoding). Defaults to 3.
-        """
-        if phase > 3:
-            raise ValueError(
-                f"There can only be maximum 3 phases, but phase={phase}"
-            )
-
-        # Randomize the order the of the samples in the batches.
-        indices = np.arange(self.data.shape[0])
-        np.random.shuffle(indices)
-
-        losses = list()
-        train_acc = list()
-        val_loss = list()
-        val_acc = list()
-        for batch_idx in range(n_batches):
-            if phase == 3 and not self.nlpca:
-                # Set the refined weights from model 2.
-                model_mlp_phase3.set_weights(self.phase2_model[batch_idx])
-
-            batch_start = batch_idx * self.batch_size
-            batch_end = (batch_idx + 1) * self.batch_size
-            x_batch = self.data[batch_start:batch_end, :]
-            v_batch = self.V_latent[batch_start:batch_end, :]
-
-            # Initialize variable v as tensorflow variable.
-            if phase != 2:
-                v = tf.Variable(
-                    tf.zeros([x_batch.shape[0], self.n_components]),
-                    trainable=True,
-                    dtype=tf.float32,
-                )
-
-            elif phase == 2:
-                v = tf.Variable(
-                    tf.zeros([x_batch.shape[0], self.n_components]),
-                    trainable=False,
-                    dtype=tf.float32,
-                )
-
-            # Assign current batch to v.
-            v.assign(v_batch)
-
-            if phase == 1:
-                loss, refined, train_accuracy = self._train_on_batch(
-                    v, x_batch, model_single_layer, phase
-                )
-            elif phase == 2:
-                loss, refined, train_accuracy = self._train_on_batch(
-                    v, x_batch, model_mlp_phase2, phase
-                )
-            elif phase == 3:
-                loss, refined, train_accuracy = self._train_on_batch(
-                    v, x_batch, model_mlp_phase3, phase
-                )
-
-            losses.append(loss.numpy())
-            train_acc.append(train_accuracy)
-
-            if phase != 2:
-                self.V_latent[batch_start:batch_end, :] = refined.numpy()
-            else:
-                self.phase2_model.append(refined)
-
-        return np.mean(losses), np.mean(train_acc)
-
-    def _train_on_batch(self, x, y, model, phase):
-        """Custom training loop for neural network.
-
-        GradientTape records the weights and watched
-        variables (usually tf.Variable objects), which
-        in this case are the weights and the input (x)
-        (if not phase 2), during the forward pass.
-        This allows us to run gradient descent during
-        backpropagation to refine the watched variables.
-
-        This function will train on a batch of samples (rows).
-
-        Args:
-            x (tf.Variable): Input tensorflow variable of shape (batch_size, n_features).
-
-            y (tf.Variable): Target variable to calculate loss.
-
-            model (tf.keras.models.Sequential): Keras model to use.
-
-            phase (int): UBP phase to run.
-
-        Returns:
-            tf.Tensor: Calculated loss of current batch.
-
-            tf.Variable, conditional: Input refined by gradient descent. Only returned if phase != 2.
-
-            List[np.ndarray], conditional: Refined weights from keras model, as returned with the tf.keras.models.Sequential.get_weights() function. Only returned if phase == 2.
-
-            float: Training CategoricalAccuracy.
-
-        """
-        if phase != 2:
-            src = [x]
-
-        with tf.GradientTape() as tape:
-            # Forward pass
-            if phase != 2:
-                tape.watch(x)
-            pred = model(x, training=True)
-            loss = self.categorical_crossentropy_masked(
-                tf.convert_to_tensor(y, dtype=tf.float32), pred
-            )
-
-        if phase != 2:
-            # Phase == 1 or 3.
-            src.extend(model.trainable_variables)
-        elif phase == 2:
-            # Phase == 2.
-            src = model.trainable_variables
-
-        # Refine the watched variables with
-        # gradient descent backpropagation
-        gradients = tape.gradient(loss, src)
-        self.opt.apply_gradients(zip(gradients, src))
-
-        train_accuracy = self.categorical_accuracy_masked(
-            tf.convert_to_tensor(y, dtype=tf.float32), pred
-        )
-
-        if phase != 2:
-            return loss, x, train_accuracy
-        elif phase == 2:
-            return loss, model.get_weights(), train_accuracy
-
-    def _remove_dir(self, dir_path):
-        """Remove directory from disk.
-
-        Will pass if directory doesn't exist.
-
-        Args:
-            dir_path (str): The directory to remove.
-        """
-        try:
-            shutil.rmtree(dir_path)
-        except OSError as e:
-            pass
-
-    def _build_ubp(self, phase=3, num_classes=3):
-        """Create and train a UBP neural network model.
-
-        If we are implementing a single layer perceptron, we want exactly one dense layer. So in that case, X_hat = v * w, where w is the weights of that one dense layer. If we are implementing NLPCA or UBP, then we should add more layers and x = f(v, w) in a multi-layer perceptron (MLP).
-
-        Creates a network with the following structure:
-
-        If phase > 1:
-            InputLayer (V) -> DenseLayer1 -> ActivationFunction1 ... HiddenLayerN -> ActivationFunctionN ... DenseLayerN+1 -> Lambda (to expand shape) -> DenseOutputLayer -> Softmax
-
-        If Phase == 1:
-            InputLayer (V) -> DenseLayer1 -> Lambda (to expand shape) -> DenseOutputLayer -> Softmax
-
-        Args:
-            num_classes (int, optional): The number of classes in the vector. Defaults to 3.
-
-        Returns:
-            tf.keras.Sequential object: Keras model.
-        """
-
-        if phase == 1 or phase == 2:
-            kernel_regularizer = l1_l2(self.l1_penalty, self.l2_penalty)
-        elif phase == 3:
-            kernel_regularizer = None
-        else:
-            raise ValueError(f"Phase must equal 1, 2, or 3, but got {phase}")
-
-        if phase == 3:
-            # Phase 3 uses weights from phase 2.
-            kernel_initializer = None
-        else:
-            kernel_initializer = self.weights_initializer
-
-        model = Sequential()
-
-        model.add(tf.keras.Input(shape=(self.n_components,)))
-
-        if phase > 1:
-            # Construct multi-layer perceptron.
-            # Add hidden layers dynamically.
-            for layer_size in self.hidden_layer_sizes:
-                model.add(
-                    Dense(
-                        layer_size,
-                        activation=self.hidden_activation,
-                        kernel_initializer=kernel_initializer,
-                        kernel_regularizer=kernel_regularizer,
-                    )
-                )
-
-            model.add(
-                Dense(
-                    self.data.shape[1],
-                    kernel_initializer=kernel_initializer,
-                    kernel_regularizer=kernel_regularizer,
-                )
-            )
-
-            model.add(Lambda(lambda x: tf.expand_dims(x, -1)))
-            model.add(Dense(num_classes, activation="softmax"))
-
-        else:
-            # phase == 1.
-            # Construct single-layer perceptron.
-            model.add(
-                Dense(
-                    self.data.shape[1],
-                    input_shape=(self.n_components,),
-                    kernel_initializer=kernel_initializer,
-                    kernel_regularizer=kernel_regularizer,
-                )
-            )
-            model.add(Lambda(lambda x: tf.expand_dims(x, -1)))
-            model.add(Dense(num_classes, activation="softmax"))
-
-        return model
 
     def _validate_hidden_layers(self, hidden_layer_sizes, num_hidden_layers):
         """Validate hidden_layer_sizes and verify that it is in the correct format.
@@ -3676,41 +3223,6 @@ class UBP(NeuralNetwork):
         ), "num_hidden_layers must be the length of hidden_layer_sizes."
 
         return hidden_layer_sizes, num_hidden_layers
-
-    def _init_weights(self, dim1, dim2, w_mean=0, w_stddev=0.01):
-        """Initialize random weights to use with the model.
-
-        Args:
-            dim1 (int): Size of first dimension.
-
-            dim2 (int): Size of second dimension.
-
-            w_mean (float, optional): Mean of normal distribution. Defaults to 0.
-
-            w_stddev (float, optional): Standard deviation of normal distribution. Defaults to 0.01.
-        """
-        # Get reduced-dimension dataset.
-        return np.random.normal(loc=w_mean, scale=w_stddev, size=(dim1, dim2))
-
-    def _encode_onehot(self, X):
-        """Convert 012-encoded data to one-hot encodings.
-
-        Args:
-            X (numpy.ndarray): Input array with 012-encoded data and -9 as the missing data value.
-
-        Returns:
-            pandas.DataFrame: One-hot encoded data, ignoring missing values (np.nan).
-        """
-        Xt = np.zeros(shape=(X.shape[0], X.shape[1], 3))
-        mappings = {
-            0: np.array([1, 0, 0]),
-            1: np.array([0, 1, 0]),
-            2: np.array([0, 0, 1]),
-            -9: np.array([np.nan, np.nan, np.nan]),
-        }
-        for row in np.arange(X.shape[0]):
-            Xt[row] = [mappings[enc] for enc in X[row]]
-        return Xt
 
     def _get_hidden_layer_sizes(self, n_dims, n_components, hl_func):
         """Get dimensions of hidden layers.
@@ -3752,6 +3264,21 @@ class UBP(NeuralNetwork):
 
             layers.append(units)
         return layers
+
+    def _init_weights(self, dim1, dim2, w_mean=0, w_stddev=0.01):
+        """Initialize random weights to use with the model.
+
+        Args:
+            dim1 (int): Size of first dimension.
+
+            dim2 (int): Size of second dimension.
+
+            w_mean (float, optional): Mean of normal distribution. Defaults to 0.
+
+            w_stddev (float, optional): Standard deviation of normal distribution. Defaults to 0.01.
+        """
+        # Get reduced-dimension dataset.
+        return np.random.normal(loc=w_mean, scale=w_stddev, size=(dim1, dim2))
 
     def _create_missing_mask(self, data, missing_value):
         """Creates a missing data mask with boolean values.
