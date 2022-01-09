@@ -1,3 +1,7 @@
+
+<img src="url" alt="PG-SUI Logo" width="100%" height="100%">
+
+
 # PG-SUI
 
 Population Genomic Supervised and Unsupervised Imputation
