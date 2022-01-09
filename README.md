@@ -1,5 +1,5 @@
 
-<img src="url" alt="PG-SUI Logo" width="100%" height="100%">
+<img src="https://github.com/btmartin721/PG-SUI/blob/master/img/pgsui-logo-faded.png" alt="PG-SUI Logo" width="100%" height="100%">
 
 
 # PG-SUI
