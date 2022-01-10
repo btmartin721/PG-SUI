@@ -47,10 +47,6 @@ from tensorflow.keras.layers import Dropout, Dense, Lambda
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.regularizers import l1_l2
 
-import keras.backend as K
-
-# from keras.objectives import mse
-
 # Custom Modules
 try:
     from ..read_input.read_input import GenotypeData
@@ -222,7 +218,6 @@ class NeuralNetwork:
             int: Batch ending index.
         """
         # on_train_batch_begin() method.
-        batch_size = batch_size
         n_samples = y.shape[0]
 
         # Get current batch size and range.
@@ -705,6 +700,9 @@ class UBPCallbacks(tf.keras.callbacks.Callback):
         self.model.batch_idx = batch
 
     def on_epoch_end(self, epoch, logs=None):
+        # Unsort the row indices.
+        self.model.V = self.model.V[np.argsort(self.indices)]
+
         y_pred = self.model.predict(self.model.V)
         y_true = self.model.y.copy()
         mm = self.model.missing_mask
@@ -713,9 +711,6 @@ class UBPCallbacks(tf.keras.callbacks.Callback):
         y_pred_missing = y_pred[mm]
         y_true[mm] += 0.5 * y_pred_missing
         self.model.y = y_true.copy()
-
-        # Unsort the row indices.
-        self.model.V = self.model.V[np.argsort(self.indices)]
 
 
 class UBPEarlyStopping(tf.keras.callbacks.Callback):
@@ -1011,23 +1006,29 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
 
         src = [v]
 
-        with tf.GradientTape() as tape:
-            # Forward pass. Watch input v.
+        # NOTE: Earlier model architectures incorrectly
+        # applied one gradient to all the variables, including
+        # the weights and v. Here we apply them separately, per
+        # the UBP manuscript.
+        with tf.GradientTape(persistent=True) as tape:
+            # Forward pass. Watch input tensor v.
             tape.watch(v)
             y_pred = self(v, training=True)
-
             loss = self.compiled_loss(
                 tf.convert_to_tensor(y_true, dtype=tf.float32),
                 y_pred,
-                regularization_losses=self.losses,
             )
-
-        src.extend(self.trainable_variables)
 
         # Refine the watched variables with
         # gradient descent backpropagation
-        gradients = tape.gradient(loss, src)
-        self.optimizer.apply_gradients(zip(gradients, src))
+        gradients = tape.gradient(loss, self.trainable_variables)
+        self.optimizer.apply_gradients(zip(gradients, self.trainable_variables))
+
+        # Apply separate gradients to v.
+        vgrad = tape.gradient(loss, src)
+        self.optimizer.apply_gradients(zip(vgrad, src))
+
+        del tape
 
         self.compiled_metrics.update_state(
             tf.convert_to_tensor(y_true, dtype=tf.float32), y_pred
@@ -1327,7 +1328,11 @@ class UBPPhase1(tf.keras.Model, NeuralNetwork):
 
         src = [v]
 
-        with tf.GradientTape() as tape:
+        # NOTE: Earlier model architectures incorrectly
+        # applied one gradient to all the variables, including
+        # the weights and v. Here we apply them separately, per
+        # the UBP manuscript.
+        with tf.GradientTape(persistent=True) as tape:
             # Forward pass. Watch input tensor v.
             tape.watch(v)
             y_pred = self(v, training=True)
@@ -1337,12 +1342,16 @@ class UBPPhase1(tf.keras.Model, NeuralNetwork):
                 regularization_losses=self.losses,
             )
 
-        src.extend(self.trainable_variables)
-
         # Refine the watched variables with
         # gradient descent backpropagation
-        gradients = tape.gradient(loss, src)
-        self.optimizer.apply_gradients(zip(gradients, src))
+        gradients = tape.gradient(loss, self.trainable_variables)
+        self.optimizer.apply_gradients(zip(gradients, self.trainable_variables))
+
+        # Apply separate gradients to v.
+        vgrad = tape.gradient(loss, src)
+        self.optimizer.apply_gradients(zip(vgrad, src))
+
+        del tape
 
         self.compiled_metrics.update_state(
             tf.convert_to_tensor(y_true, dtype=tf.float32), y_pred
@@ -1954,10 +1963,7 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
         self._batch_size = batch_size
         self._input_with_mask = None
 
-        if l1_penalty == 0.0 and l2_penalty == 0.0:
-            kernel_regularizer = None
-        else:
-            kernel_regularizer = l1_l2(l1_penalty, l2_penalty)
+        kernel_regularizer = None
         self.kernel_regularizer = kernel_regularizer
         kernel_initializer = None
 
@@ -1976,7 +1982,6 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
             input_shape=(n_components,),
             activation=hidden_activation,
             kernel_initializer=kernel_initializer,
-            kernel_regularizer=kernel_regularizer,
         )
 
         if len(hidden_layer_sizes) >= 2:
@@ -1984,7 +1989,6 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
                 hidden_layer_sizes[1],
                 activation=hidden_activation,
                 kernel_initializer=kernel_initializer,
-                kernel_regularizer=kernel_regularizer,
             )
 
         if len(hidden_layer_sizes) >= 3:
@@ -1992,7 +1996,6 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
                 hidden_layer_sizes[2],
                 activation=hidden_activation,
                 kernel_initializer=kernel_initializer,
-                kernel_regularizer=kernel_regularizer,
             )
 
         if len(hidden_layer_sizes) >= 4:
@@ -2000,7 +2003,6 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
                 hidden_layer_sizes[3],
                 activation=hidden_activation,
                 kernel_initializer=kernel_initializer,
-                kernel_regularizer=kernel_regularizer,
             )
 
         if len(hidden_layer_sizes) == 5:
@@ -2008,17 +2010,15 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
                 hidden_layer_sizes[4],
                 activation=hidden_activation,
                 kernel_initializer=kernel_initializer,
-                kernel_regularizer=kernel_regularizer,
             )
 
         self.output1 = Dense(
             output_shape,
             kernel_initializer=kernel_initializer,
-            kernel_regularizer=kernel_regularizer,
             activation="sigmoid",
         )
 
-        self.dropout_layer = Dropout(rate=dropout_rate)
+        # self.dropout_layer = Dropout(rate=dropout_rate)
 
     def call(self, inputs, training=None):
         """Forward propagates inputs through the model defined in __init__().
@@ -2033,22 +2033,22 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
         Returns:
             tf.keras.Model: Output tensor from forward propagation.
         """
-        if self.dropout_rate == 0.0:
-            training = False
+        # if self.dropout_rate == 0.0:
+        #     training = False
         x = self.dense1(inputs)
         # x = self.dropout_layer(x, training=training)
         if self.dense2 is not None:
             x = self.dense2(x)
-            x = self.dropout_layer(x, training=training)
+            # x = self.dropout_layer(x, training=training)
         if self.dense3 is not None:
             x = self.dense3(x)
-            x = self.dropout_layer(x, training=training)
+            # x = self.dropout_layer(x, training=training)
         if self.dense4 is not None:
             x = self.dense4(x)
-            x = self.dropout_layer(x, training=training)
+            # x = self.dropout_layer(x, training=training)
         if self.dense5 is not None:
             x = self.dense5(x)
-            x = self.dropout_layer(x, training=training)
+            # x = self.dropout_layer(x, training=training)
         return self.output1(x)
 
     def model(self):
@@ -2090,23 +2090,29 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
 
         src = [v]
 
-        with tf.GradientTape() as tape:
-            # Forward pass
+        # NOTE: Earlier model architectures incorrectly
+        # applied one gradient to all the variables, including
+        # the weights and v. Here we apply them separately, per
+        # the UBP manuscript.
+        with tf.GradientTape(persistent=True) as tape:
+            # Forward pass. Watch input tensor v.
             tape.watch(v)
             y_pred = self(v, training=True)
-
             loss = self.compiled_loss(
                 tf.convert_to_tensor(y_true, dtype=tf.float32),
                 y_pred,
-                regularization_losses=self.losses,
             )
-
-        src.extend(self.trainable_variables)
 
         # Refine the watched variables with
         # gradient descent backpropagation
-        gradients = tape.gradient(loss, src)
-        self.optimizer.apply_gradients(zip(gradients, src))
+        gradients = tape.gradient(loss, self.trainable_variables)
+        self.optimizer.apply_gradients(zip(gradients, self.trainable_variables))
+
+        # Apply separate gradients to v.
+        vgrad = tape.gradient(loss, src)
+        self.optimizer.apply_gradients(zip(vgrad, src))
+
+        del tape
 
         self.compiled_metrics.update_state(
             tf.convert_to_tensor(y_true, dtype=tf.float32), y_pred
@@ -2725,13 +2731,13 @@ class UBP(NeuralNetwork):
         hidden_layer_sizes="midpoint",
         optimizer="adam",
         hidden_activation="elu",
-        learning_rate=0.1,
-        lr_patience=10,
+        learning_rate=0.01,
+        lr_patience=1,
         train_epochs=100,
         tol=1e-3,
         weights_initializer="glorot_normal",
-        l1_penalty=0.01,
-        l2_penalty=0.01,
+        l1_penalty=0.0001,
+        l2_penalty=0.0001,
         dropout_rate=0.2,
         cv=5,
         grid_iter=50,
@@ -2860,6 +2866,14 @@ class UBP(NeuralNetwork):
         histories = list()
         models = list()
 
+        # This reduces memory usage.
+        # tensorflow builds graphs that
+        # will stack if not cleared before
+        # building a new model.
+        tf.keras.backend.set_learning_phase(1)
+        tf.keras.backend.clear_session()
+        self.reset_seeds()
+
         model = self.create_model(
             NLPCAModel,
             model_params,
@@ -2917,8 +2931,16 @@ class UBP(NeuralNetwork):
         models = list()
         w = None
         for i, phase in enumerate(phases, start=1):
-            model = None
 
+            # This reduces memory usage.
+            # tensorflow builds graphs that
+            # will stack if not cleared before
+            # building a new model.
+            tf.keras.backend.set_learning_phase(1)
+            tf.keras.backend.clear_session()
+            self.reset_seeds()
+
+            model = None
             build = True if i == 3 else False
 
             model = self.create_model(
@@ -2932,6 +2954,7 @@ class UBP(NeuralNetwork):
 
             if i == 3:
                 # Set the refined weights if doing phase 3.
+                # Phase 3 gets the refined weights from Phase 2.
                 model.set_weights(models[1].get_weights())
 
             if do_gridsearch:
@@ -2971,12 +2994,9 @@ class UBP(NeuralNetwork):
                 models.append(model)
 
             if i == 1:
-                print(model_params["V"])
                 model_params["V"] = model.V.copy()
-                print(model_params["V"])
 
-            if i == 3:
-                print(models[2].V.copy())
+            del model
 
         return models, histories
 
@@ -3033,7 +3053,9 @@ class UBP(NeuralNetwork):
         callbacks = [
             UBPCallbacks(),
             CSVLogger(filename=logfile, append=append),
-            ReduceLROnPlateau(patience=self.lr_patience),
+            ReduceLROnPlateau(
+                patience=self.lr_patience, min_lr=1e-4, min_delta=1e-5
+            ),
         ]
 
         compile_params = {

@@ -325,22 +325,22 @@ def main():
         "n_components": n_components,
     }
 
-    ubp = ImputeUBP(
+    ubp = ImputeNLPCA(
         data,
         # gridparams=grid_params,
         initial_strategy="populations",
         disable_progressbar=True,
         cv=3,
         column_subset=1.0,
-        validation_size=0.3,
-        learning_rate=0.1,
+        validation_size=0.5,
+        learning_rate=0.01,
         num_hidden_layers=1,
         verbose=1,
-        dropout_rate=0.0,
+        dropout_rate=0.6,
         hidden_activation="elu",
         batch_size=32,
         l1_penalty=0.0,
-        l2_penalty=0.0,
+        l2_penalty=0.00001,
         # gridparams=grid_params,
     )
 
