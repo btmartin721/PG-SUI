@@ -1221,17 +1221,17 @@ class ImputeVAE(Impute):
 
         prefix (str): Prefix for output files. Defaults to "output".
 
-        cv (int): Number of cross-validation replicates to perform. Only used if ``validation_size`` is not None. Defaults to 5.
+        cv (int): Number of cross-validation replicates to perform. Only used if ``validation_split`` is not None. Defaults to 5.
 
         initial_strategy (str): Initial strategy to impute missing data with for validation. Possible options include: "populations", "most_frequent", and "phylogeny", where "populations" imputes by the mode of each population at each site, "most_frequent" imputes by the overall mode of each site, and "phylogeny" uses an input phylogeny to inform the imputation. "populations" requires a population map file as input in the GenotypeData object, and "phylogeny" requires an input phylogeny and Rate Matrix Q (also instantiated in the GenotypeData object). Defaults to "populations".
 
-        validation_size (float or None): Proportion of sites to use for the validation. If ``validation_size`` is None, then does not perform validation. Defaults to 0.2.
+        validation_split (float or None): Proportion of sites to use for the validation. If ``validation_split`` is None, then does not perform validation. Defaults to 0.2.
 
         disable_progressbar (bool): Whether to disable the tqdm progress bar. Useful if you are doing the imputation on e.g. a high-performance computing cluster, where sometimes tqdm does not work correctly. If False, uses tqdm progress bar. If True, does not use tqdm. Defaults to False.
 
         chunk_size (int or float, optional): Number of loci for which to perform IterativeImputer at one time. Useful for reducing the memory usage if you are running out of RAM. If integer is specified, selects ``chunk_size`` loci at a time. If a float is specified, selects ``math.ceil(total_loci * chunk_size)`` loci at a time. Defaults to 1.0 (all features).
 
-        train_epochs (int): Number of epochs to train the VAE model with. Defaults to 100.
+        epochs (int): Number of epochs to train the VAE model with. Defaults to 100.
 
         batch_size (int): Batch size to train the model with.
 
@@ -1272,7 +1272,7 @@ class ImputeVAE(Impute):
         >>>     genotype_data=data,
         >>>     cv=5,
         >>>     learning_rate=0.05,
-        >>>     validation_size=0.3
+        >>>     validation_split=0.3
         >>>)
         >>>
         >>>vae_gtdata = vae.imputed
@@ -1285,10 +1285,10 @@ class ImputeVAE(Impute):
         prefix="output",
         cv=5,
         initial_strategy="populations",
-        validation_size=0.2,
+        validation_split=0.2,
         disable_progressbar=False,
         chunk_size=1.0,
-        train_epochs=100,
+        epochs=100,
         batch_size=32,
         recurrent_weight=0.5,
         optimizer="adam",
@@ -1346,7 +1346,7 @@ class ImputeUBP(Impute):
 
         batch_size (int, optional): Batch size per epoch to train the model with.
 
-        validation_size (float, optional): Proportion of samples (=rows) between 0 and 1 to use for the neural network training validation. Defaults to 0.3.
+        validation_split (float, optional): Proportion of samples (=rows) between 0 and 1 to use for the neural network training validation. Defaults to 0.3.
 
         n_components (int, optional): Number of components to use as the input data. Defaults to 3.
 
@@ -1364,7 +1364,7 @@ class ImputeUBP(Impute):
 
         lr_patience (int, optional): Number of epochs with no loss improvement to wait before reducing the learning rate.
 
-        train_epochs (int, optional): Number of epochs to run if the ``early_stop_gen`` criterion is not met.
+        epochs (int, optional): Number of epochs to run if the ``early_stop_gen`` criterion is not met.
 
         tol (float, optional): Tolerance level to use for the early stopping criterion. If the loss does not improve past the tolerance level after ``early_stop_gen`` epochs, then training will halt. Defaults to 1e-3.
 
@@ -1425,7 +1425,7 @@ class ImputeUBP(Impute):
         >>>     genotype_data=data,
         >>>     cv=5,
         >>>     learning_rate=0.05,
-        >>>     validation_size=0.3
+        >>>     validation_split=0.3
         >>> )
         >>>
         >>> ubp_gtdata = ubp.imputed
@@ -1447,7 +1447,7 @@ class ImputeUBP(Impute):
         do_validation=True,
         column_subset=0.1,
         batch_size=32,
-        validation_size=0.3,
+        validation_split=0.3,
         n_components=3,
         early_stop_gen=25,
         num_hidden_layers=3,
@@ -1455,7 +1455,7 @@ class ImputeUBP(Impute):
         optimizer="adam",
         hidden_activation="elu",
         learning_rate=0.1,
-        train_epochs=100,
+        epochs=100,
         tol=1e-3,
         weights_initializer="glorot_normal",
         l1_penalty=0.01,
@@ -1527,7 +1527,7 @@ class ImputeNLPCA(ImputeUBP):
 
         batch_size (int, optional): Batch size per epoch to train the model with.
 
-        validation_size (float, optional): Proportion of samples (=rows) between 0 and 1 to use for the neural network training validation. Defaults to 0.3.
+        validation_split (float, optional): Proportion of samples (=rows) between 0 and 1 to use for the neural network training validation. Defaults to 0.3.
 
         n_components (int, optional): Number of components to use as the input data. Defaults to 3.
 
@@ -1545,7 +1545,7 @@ class ImputeNLPCA(ImputeUBP):
 
         lr_patience (int, optional): Number of epochs with no loss improvement to wait before reducing the learning rate.
 
-        train_epochs (int, optional): Number of epochs to run if the ``early_stop_gen`` criterion is not met.
+        epochs (int, optional): Number of epochs to run if the ``early_stop_gen`` criterion is not met.
 
         tol (float, optional): Tolerance level to use for the early stopping criterion. If the loss does not improve past the tolerance level after ``early_stop_gen`` epochs, then training will halt. Defaults to 1e-3.
 
@@ -1599,7 +1599,7 @@ class ImputeNLPCA(ImputeUBP):
         >>>     genotype_data=data,
         >>>     cv=5,
         >>>     learning_rate=0.05,
-        >>>     validation_size=0.3
+        >>>     validation_split=0.3
         >>> )
         >>>
         >>> nlpca_gtdata = nlpca.imputed

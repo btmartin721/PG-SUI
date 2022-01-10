@@ -160,12 +160,26 @@ class NeuralNetwork:
 
     def create_model(
         self,
-        estimator,
-        model_params,
-        compile_params,
+        estimator=None,
+        V=None,
+        y=None,
+        batch_size=32,
+        missing_mask=None,
+        output_shape=None,
+        weights_initializer="glorot_normal",
+        hidden_layer_sizes=None,
+        hidden_activation="elu",
+        l1_penalty=0.01,
+        l2_penalty=0.01,
+        dropout_rate=0.2,
+        num_classes=1,
+        phase=None,
         n_components=3,
         build=False,
-        **kwargs,
+        optimizer="adam",
+        loss=None,
+        metrics=None,
+        run_eagerly=True,
     ):
         """Create a neural network model using the estimator to initialize.
 
@@ -174,23 +188,43 @@ class NeuralNetwork:
         Args:
             estimator (tf.keras.Model): Model to create. Can be a subclassed model.
 
-            model_params (Dict[str, Any]): Dictionary with parameters passed to the model class instantiation. Key-value pairs should be the parameter names and their corresponding values.
-
             compile_params (Dict[str, Any]): Parameters passed to model.compile(). Key-value pairs should be the parameter names and their corresponding values.
 
             n_components (int): The number of principal components to use with NLPCA or UBP models. Not used if doing VAE. Defaults to 3.
 
             build (bool): Whether to build the model. Defaults to False.
 
+            kwargs (Dict[str, Any]): Keyword arguments to pass to KerasClassifier.
+
         Returns:
             tf.keras.Model: Instantiated, compiled, and optionally built model.
         """
-        model = estimator(**model_params)
+        model = estimator(
+            V,
+            y,
+            batch_size,
+            missing_mask,
+            output_shape,
+            weights_initializer,
+            hidden_layer_sizes,
+            hidden_activation,
+            l1_penalty,
+            l2_penalty,
+            dropout_rate,
+            num_classes,
+            phase,
+        )
 
         if build:
             model.build((None, n_components))
 
-        model.compile(**compile_params)
+        model.compile(
+            optimizer=optimizer,
+            loss=loss,
+            metrics=metrics,
+            run_eagerly=run_eagerly,
+        )
+
         return model
 
     def prepare_training_batches(
@@ -619,6 +653,10 @@ class NeuralNetwork:
         y_train,
         estimator,
         model_params,
+        compile_params,
+        build,
+        epochs,
+        validation_split,
         callbacks,
         grid_cv,
         ga,
@@ -630,11 +668,38 @@ class NeuralNetwork:
         ga_kwargs,
     ):
         # Modified code
+        # Cannot do StratifiedKFold here.
         cross_val = KFold(n_splits=grid_cv, shuffle=False)
 
-        sk_fit_params = {"callbacks": callbacks, "y": y_train}
+        fit_params = {"callbacks": callbacks}
 
-        model = KerasClassifier(build_fn=estimator)
+        if "batch_size" not in search_space:
+            fit_params["batch_size"] = model_params["batch_size"]
+        if "epochs" not in search_space:
+            fit_params["epochs"] = epochs
+        if validation_split in search_space:
+            fit_params["validation_split"] = validation_split
+
+        model_params["V"] = model_params["V"].tolist()
+        for i, v in enumerate(model_params["V"]):
+            model_params["V"][i] = tuple(v)
+
+        model = KerasClassifier(
+            self.create_model,
+            estimator=estimator,
+            **model_params,
+            **compile_params,
+            n_components=model_params.pop("n_components"),
+            build=build,
+        )
+
+        # tmp = dict()
+        # for k, v in model_params.items():
+        #     tmp[k] = [v]
+        # for k, v in compile_params.items():
+        #     tmp[k] = [v]
+
+        # search_space.update(tmp)
 
         if ga:
             # Stop searching if GA sees no improvement.
@@ -668,11 +733,7 @@ class NeuralNetwork:
                 cv=cross_val,
             )
 
-            search.fit(
-                X_train,
-                y=y_train,
-                fit_params=sk_fit_params,
-            )
+            search.fit(X_train, y=y_train, fit_params=fit_params)
 
         return search
 
@@ -691,7 +752,7 @@ class UBPCallbacks(tf.keras.callbacks.Callback):
         self.indices = np.arange(n_samples)
         np.random.shuffle(self.indices)
         self.model.input_with_mask = input_with_mask[self.indices]
-        self.model.V = self.model.V[self.indices]
+        self.model.V_latent = self.model.V_latent[self.indices]
 
     def on_train_batch_begin(self, batch, logs=None):
         self.model.batch_idx = batch
@@ -701,9 +762,9 @@ class UBPCallbacks(tf.keras.callbacks.Callback):
 
     def on_epoch_end(self, epoch, logs=None):
         # Unsort the row indices.
-        self.model.V = self.model.V[np.argsort(self.indices)]
+        self.model.V_latent = self.model.V_latent[np.argsort(self.indices)]
 
-        y_pred = self.model.predict(self.model.V)
+        y_pred = self.model.predict(self.model.V_latent)
         y_true = self.model.y.copy()
         mm = self.model.missing_mask
         old_weight = 0.5
@@ -751,7 +812,7 @@ class UBPEarlyStopping(tf.keras.callbacks.Callback):
 
             if self.phase != 2:
                 # Only refine input in phase 2.
-                self.best_input = self.model.V
+                self.best_input = self.model.V_latent
         else:
             self.wait += 1
             if self.wait >= self.patience:
@@ -760,7 +821,7 @@ class UBPEarlyStopping(tf.keras.callbacks.Callback):
                 self.model.set_weights(self.best_weights)
 
                 if self.phase != 2:
-                    self.model.V = self.best_input
+                    self.model.V_latent = self.best_input
 
 
 class NLPCAModel(tf.keras.Model, NeuralNetwork):
@@ -835,14 +896,13 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
         batch_size=32,
         missing_mask=None,
         output_shape=None,
-        n_components=3,
         weights_initializer="glorot_normal",
         hidden_layer_sizes=None,
         hidden_activation="elu",
         l1_penalty=0.01,
         l2_penalty=0.01,
         dropout_rate=0.2,
-        num_classes=3,
+        num_classes=1,
         phase=None,
     ):
         super(NLPCAModel, self).__init__()
@@ -851,11 +911,13 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
             V, y, missing_mask, output_shape, hidden_layer_sizes
         )
 
-        self._V = V
+        if isinstance(V, list):
+            self._V = np.array(V)
+        else:
+            self._V = V
         self._y = y
         self._missing_mask = missing_mask
         self.hidden_layer_sizes = hidden_layer_sizes
-        self.n_components = n_components
         self.weights_initializer = weights_initializer
         self.phase = phase
         self.dropout_rate = dropout_rate
@@ -871,6 +933,7 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
         self._n_batches = 0
         self._batch_size = batch_size
         self._input_with_mask = None
+        self.n_components = self._V.shape[1]
 
         if l1_penalty == 0.0 and l2_penalty == 0.0:
             kernel_regularizer = None
@@ -951,7 +1014,7 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
         if self.dropout_rate == 0.0:
             training = False
         x = self.dense1(inputs)
-        # x = self.dropout_layer(x, training=training)
+        x = self.dropout_layer(x, training=training)
         if self.dense2 is not None:
             x = self.dense2(x)
             x = self.dropout_layer(x, training=training)
@@ -1015,8 +1078,7 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
             tape.watch(v)
             y_pred = self(v, training=True)
             loss = self.compiled_loss(
-                tf.convert_to_tensor(y_true, dtype=tf.float32),
-                y_pred,
+                tf.convert_to_tensor(y_true, dtype=tf.float32), y_pred,
             )
 
         # Refine the watched variables with
@@ -1036,9 +1098,9 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
 
         # NOTE: run_eagerly must be set to True in the compile() method for this
         # to work. Otherwise it can't convert a Tensor object to a numpy array.
-        # There is really no other way to get the batch_size in graph
+        # There is really no other way to set v back to _V_latent in graph
         # mode as far as I know. eager execution is slower, so it would be nice
-        # to find a way to obtain batch_size without converting to numpy.
+        # to find a way to do this without converting to numpy.
         self._V_latent[batch_start:batch_end, :] = v.numpy()
 
         # history object that gets returned from fit().
@@ -1088,7 +1150,7 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
         return {m.name: m.result() for m in self.metrics}
 
     @property
-    def V(self):
+    def V_latent(self):
         """Randomly initialized input variable that gets refined during training."""
         return self._V_latent
 
@@ -1119,7 +1181,7 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
     def input_with_mask(self):
         return self._input_with_mask
 
-    @V.setter
+    @V_latent.setter
     def V(self, value):
         """Set randomly initialized input variable. Gets refined during training."""
         self._V_latent = value
@@ -1230,14 +1292,13 @@ class UBPPhase1(tf.keras.Model, NeuralNetwork):
         batch_size=32,
         missing_mask=None,
         output_shape=None,
-        n_components=3,
         weights_initializer="glorot_normal",
         hidden_layer_sizes=None,
         hidden_activation="elu",
         l1_penalty=0.01,
         l2_penalty=0.01,
         dropout_rate=0.2,
-        num_classes=3,
+        num_classes=1,
         phase=1,
     ):
         super(UBPPhase1, self).__init__()
@@ -1265,6 +1326,7 @@ class UBPPhase1(tf.keras.Model, NeuralNetwork):
         self._n_batches = 0
         self._batch_size = batch_size
         self._input_with_mask = None
+        self.n_components = V.shape[1]
 
         if l1_penalty == 0.0 and l2_penalty == 0.0:
             kernel_regularizer = None
@@ -1359,9 +1421,9 @@ class UBPPhase1(tf.keras.Model, NeuralNetwork):
 
         # NOTE: run_eagerly must be set to True in the compile() method for this
         # to work. Otherwise it can't convert a Tensor object to a numpy array.
-        # There is really no other way to get the batch_size in graph
+        # There is really no other way to set v back to _V_latent in graph
         # mode as far as I know. eager execution is slower, so it would be nice
-        # to find a way to obtain batch_size without converting to numpy.
+        # to find a way to do this without converting to numpy.
         self._V_latent[batch_start:batch_end, :] = v.numpy()
 
         # history object that gets returned from model.fit().
@@ -1549,14 +1611,13 @@ class UBPPhase2(tf.keras.Model, NeuralNetwork):
         batch_size=32,
         missing_mask=None,
         output_shape=None,
-        n_components=3,
         weights_initializer="glorot_normal",
         hidden_layer_sizes=None,
         hidden_activation="elu",
         l1_penalty=0.01,
         l2_penalty=0.01,
         dropout_rate=0.2,
-        num_classes=3,
+        num_classes=1,
         phase=2,
     ):
         super(UBPPhase2, self).__init__()
@@ -1585,6 +1646,7 @@ class UBPPhase2(tf.keras.Model, NeuralNetwork):
         self._n_batches = 0
         self._batch_size = batch_size
         self._input_with_mask = None
+        self.n_components = V.shape[1]
 
         if l1_penalty == 0.0 and l2_penalty == 0.0:
             kernel_regularizer = None
@@ -1666,7 +1728,7 @@ class UBPPhase2(tf.keras.Model, NeuralNetwork):
         if self.dropout_rate == 0.0:
             training = False
         x = self.dense1(inputs)
-        # x = self.dropout_layer(x, training=training)
+        x = self.dropout_layer(x, training=training)
         if self.dense2 is not None:
             x = self.dense2(x)
             x = self.dropout_layer(x, training=training)
@@ -1927,14 +1989,13 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
         batch_size=32,
         missing_mask=None,
         output_shape=None,
-        n_components=3,
         weights_initializer="glorot_normal",
         hidden_layer_sizes=None,
         hidden_activation="elu",
         l1_penalty=0.01,
         l2_penalty=0.01,
         dropout_rate=0.2,
-        num_classes=3,
+        num_classes=1,
         phase=3,
     ):
         super(UBPPhase3, self).__init__()
@@ -1962,6 +2023,7 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
         self._n_batches = 0
         self._batch_size = batch_size
         self._input_with_mask = None
+        self.n_components = V.shape[1]
 
         kernel_regularizer = None
         self.kernel_regularizer = kernel_regularizer
@@ -2018,8 +2080,6 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
             activation="sigmoid",
         )
 
-        # self.dropout_layer = Dropout(rate=dropout_rate)
-
     def call(self, inputs, training=None):
         """Forward propagates inputs through the model defined in __init__().
 
@@ -2033,22 +2093,15 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
         Returns:
             tf.keras.Model: Output tensor from forward propagation.
         """
-        # if self.dropout_rate == 0.0:
-        #     training = False
         x = self.dense1(inputs)
-        # x = self.dropout_layer(x, training=training)
         if self.dense2 is not None:
             x = self.dense2(x)
-            # x = self.dropout_layer(x, training=training)
         if self.dense3 is not None:
             x = self.dense3(x)
-            # x = self.dropout_layer(x, training=training)
         if self.dense4 is not None:
             x = self.dense4(x)
-            # x = self.dropout_layer(x, training=training)
         if self.dense5 is not None:
             x = self.dense5(x)
-            # x = self.dropout_layer(x, training=training)
         return self.output1(x)
 
     def model(self):
@@ -2099,8 +2152,7 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
             tape.watch(v)
             y_pred = self(v, training=True)
             loss = self.compiled_loss(
-                tf.convert_to_tensor(y_true, dtype=tf.float32),
-                y_pred,
+                tf.convert_to_tensor(y_true, dtype=tf.float32), y_pred,
             )
 
         # Refine the watched variables with
@@ -2243,15 +2295,15 @@ class VAE(NeuralNetwork):
 
         prefix (str): Prefix for output files. Defaults to "output".
 
-        cv (int): Number of cross-validation replicates to perform. Only used if ``validation_size`` is not None. Defaults to 5.
+        cv (int): Number of cross-validation replicates to perform. Only used if ``validation_split`` is not None. Defaults to 5.
 
         initial_strategy (str): Initial strategy to impute missing data with for validation. Possible options include: "populations", "most_frequent", and "phylogeny", where "populations" imputes by the mode of each population at each site, "most_frequent" imputes by the overall mode of each site, and "phylogeny" uses an input phylogeny to inform the imputation. "populations" requires a population map file as input in the GenotypeData object, and "phylogeny" requires an input phylogeny and Rate Matrix Q (also instantiated in the GenotypeData object). Defaults to "populations".
 
-        validation_size (float or None): Proportion of sites to use for the validation. If ``validation_size`` is None, then does not perform validation. Defaults to 0.2.
+        validation_split (float or None): Proportion of sites to use for the validation. If ``validation_split`` is None, then does not perform validation. Defaults to 0.2.
 
         disable_progressbar (bool): Whether to disable the tqdm progress bar. Useful if you are doing the imputation on e.g. a high-performance computing cluster, where sometimes tqdm does not work correctly. If False, uses tqdm progress bar. If True, does not use tqdm. Defaults to False.
 
-        train_epochs (int): Number of epochs to train the VAE model with. Defaults to 100.
+        epochs (int): Number of epochs to train the VAE model with. Defaults to 100.
 
         batch_size (int): Batch size to train the model with.
 
@@ -2280,9 +2332,9 @@ class VAE(NeuralNetwork):
         prefix="output",
         cv=5,
         initial_strategy="populations",
-        validation_size=0.2,
+        validation_split=0.2,
         disable_progressbar=False,
-        train_epochs=100,
+        epochs=100,
         batch_size=32,
         recurrent_weight=0.5,
         optimizer="adam",
@@ -2297,7 +2349,7 @@ class VAE(NeuralNetwork):
 
         self.prefix = prefix
 
-        self.train_epochs = train_epochs
+        self.epochs = epochs
         self.initial_batch_size = batch_size
         self.recurrent_weight = recurrent_weight
         self.optimizer = optimizer
@@ -2309,7 +2361,7 @@ class VAE(NeuralNetwork):
         self.l2_penalty = l2_penalty
 
         self.cv = cv
-        self.validation_size = validation_size
+        self.validation_split = validation_split
         self.disable_progressbar = disable_progressbar
         self.num_classes = 1
 
@@ -2337,9 +2389,7 @@ class VAE(NeuralNetwork):
         # VAE needs a numpy array, not a dataframe
         self.data = self.df.copy().values
 
-        imputed_enc = self.fit(
-            train_epochs=self.train_epochs, batch_size=self.batch_size
-        )
+        imputed_enc = self.fit(epochs=self.epochs, batch_size=self.batch_size)
 
         imputed_enc, dummy_df = self.predict(X, imputed_enc)
 
@@ -2349,13 +2399,13 @@ class VAE(NeuralNetwork):
 
         return imputed_df.to_numpy()
 
-    def fit(self, batch_size=256, train_epochs=100):
+    def fit(self, batch_size=256, epochs=100):
         """Train a variational autoencoder model to impute missing data.
 
         Args:
             batch_size (int, optional): Number of data splits to train on per epoch. Defaults to 256.
 
-            train_epochs (int, optional): Number of epochs (cycles through the data) to use. Defaults to 100.
+            epochs (int, optional): Number of epochs (cycles through the data) to use. Defaults to 100.
 
         Returns:
             numpy.ndarray(float): Predicted values as numpy array.
@@ -2367,7 +2417,7 @@ class VAE(NeuralNetwork):
 
         observed_mask = ~missing_mask
 
-        for epoch in range(1, train_epochs + 1):
+        for epoch in range(1, epochs + 1):
             X_pred = self._train_epoch(self.model, missing_mask, batch_size)
             observed_mse = self.masked_mse(
                 X_true=self.data, X_pred=X_pred, mask=observed_mask
@@ -2378,7 +2428,7 @@ class VAE(NeuralNetwork):
 
             elif epoch % 50 == 0:
                 print(
-                    f"Observed MSE ({epoch}/{train_epochs} epochs): "
+                    f"Observed MSE ({epoch}/{epochs} epochs): "
                     f"{observed_mse}"
                 )
 
@@ -2666,7 +2716,7 @@ class UBP(NeuralNetwork):
 
         batch_size (int, optional): Batch size per epoch to train the model with.
 
-        validation_size (float or None, optional): Proportion of samples (=rows) between 0 and 1 to use for the neural network training validation. Defaults to 0.3.
+        validation_split (float or None, optional): Proportion of samples (=rows) between 0 and 1 to use for the neural network training validation. Defaults to 0.3.
 
         n_components (int, optional): Number of components to use as the input data. Defaults to 3.
 
@@ -2684,7 +2734,7 @@ class UBP(NeuralNetwork):
 
         lr_patience (int, optional): Number of epochs with no loss improvement to wait before reducing the learning rate.
 
-        train_epochs (int, optional): Maximum number of epochs to run if the ``early_stop_gen`` criterion is not met.
+        epochs (int, optional): Maximum number of epochs to run if the ``early_stop_gen`` criterion is not met.
 
         tol (float, optional): Tolerance level to use for the early stopping criterion. If the loss does not improve past the tolerance level after ``early_stop_gen`` epochs, then training will halt. Defaults to 1e-3.
 
@@ -2724,7 +2774,7 @@ class UBP(NeuralNetwork):
         disable_progressbar=False,
         nlpca=False,
         batch_size=32,
-        validation_size=0.3,
+        validation_split=0.3,
         n_components=3,
         early_stop_gen=25,
         num_hidden_layers=3,
@@ -2733,7 +2783,7 @@ class UBP(NeuralNetwork):
         hidden_activation="elu",
         learning_rate=0.01,
         lr_patience=1,
-        train_epochs=100,
+        epochs=100,
         tol=1e-3,
         weights_initializer="glorot_normal",
         l1_penalty=0.0001,
@@ -2759,7 +2809,7 @@ class UBP(NeuralNetwork):
         self.disable_progressbar = disable_progressbar
         self.nlpca = nlpca
         self.batch_size = batch_size
-        self.validation_size = validation_size
+        self.validation_split = validation_split
         self.n_components = n_components
         self.early_stop_gen = early_stop_gen
         self.num_hidden_layers = num_hidden_layers
@@ -2768,7 +2818,7 @@ class UBP(NeuralNetwork):
         self.hidden_activation = hidden_activation
         self.learning_rate = learning_rate
         self.lr_patience = lr_patience
-        self.train_epochs = train_epochs
+        self.epochs = epochs
         self.tol = tol
         self.weights_initializer = weights_initializer
         self.l1_penalty = l1_penalty
@@ -2874,19 +2924,16 @@ class UBP(NeuralNetwork):
         tf.keras.backend.clear_session()
         self.reset_seeds()
 
-        model = self.create_model(
-            NLPCAModel,
-            model_params,
-            compile_params,
-            **other_params,
-        )
-
         if do_gridsearch:
             search = self.grid_search(
                 V,
                 y_train,
-                model,
+                NLPCAModel,
                 model_params,
+                compile_params,
+                False,
+                self.epochs,
+                self.validation_split,
                 callbacks,
                 self.cv,
                 self.ga,
@@ -2904,13 +2951,21 @@ class UBP(NeuralNetwork):
             sys.exit()
 
         else:
+            model = self.create_model(
+                NLPCAModel,
+                **model_params,
+                **compile_params,
+                n_components=self.n_components,
+                phase=None,
+            )
+
             history = model.fit(
                 x=V,
                 y=y_train,
                 batch_size=self.batch_size,
-                epochs=self.train_epochs,
+                epochs=self.epochs,
                 callbacks=callbacks,
-                validation_split=self.validation_size,
+                validation_split=self.validation_split,
                 shuffle=False,
                 verbose=self.verbose,
             )
@@ -2940,22 +2995,7 @@ class UBP(NeuralNetwork):
             tf.keras.backend.clear_session()
             self.reset_seeds()
 
-            model = None
             build = True if i == 3 else False
-
-            model = self.create_model(
-                phase,
-                model_params,
-                compile_params,
-                n_components=self.n_components,
-                build=build,
-                **other_params,
-            )
-
-            if i == 3:
-                # Set the refined weights if doing phase 3.
-                # Phase 3 gets the refined weights from Phase 2.
-                model.set_weights(models[1].get_weights())
 
             if do_gridsearch:
                 search = self.grid_search(
@@ -2963,6 +3003,10 @@ class UBP(NeuralNetwork):
                     y_train,
                     phase,
                     model_params,
+                    compile_params,
+                    build,
+                    self.epochs,
+                    self.validation_split,
                     callbacks,
                     self.cv,
                     self.ga,
@@ -2978,14 +3022,29 @@ class UBP(NeuralNetwork):
                 sys.exit()
 
             else:
+                model = None
+
+                model = self.create_model(
+                    phase,
+                    **model_params,
+                    **compile_params,
+                    n_components=self.n_components,
+                    build=build,
+                    phase=i,
+                )
+
+                if i == 3:
+                    # Set the refined weights if doing phase 3.
+                    # Phase 3 gets the refined weights from Phase 2.
+                    model.set_weights(models[1].get_weights())
 
                 history = model.fit(
                     x=model_params["V"],
                     y=y_train,
                     batch_size=self.batch_size,
-                    epochs=self.train_epochs,
+                    epochs=self.epochs,
                     callbacks=callbacks,
-                    validation_split=self.validation_size,
+                    validation_split=self.validation_split,
                     shuffle=False,
                     verbose=self.verbose,
                 )
@@ -2994,7 +3053,7 @@ class UBP(NeuralNetwork):
                 models.append(model)
 
             if i == 1:
-                model_params["V"] = model.V.copy()
+                model_params["V"] = model.V_latent.copy()
 
             del model
 
@@ -3071,8 +3130,8 @@ class UBP(NeuralNetwork):
             "batch_size": self.batch_size,
             "missing_mask": missing_mask,
             "output_shape": y_train.shape[1],
-            "n_components": self.n_components,
             "weights_initializer": self.weights_initializer,
+            "n_components": self.n_components,
             "hidden_layer_sizes": hl_sizes,
             "hidden_activation": self.hidden_activation,
             "l1_penalty": self.l1_penalty,
@@ -3085,9 +3144,9 @@ class UBP(NeuralNetwork):
 
         fit_params = {
             "batch_size": self.batch_size,
-            "epochs": self.train_epochs,
+            "epochs": self.epochs,
             "callbacks": callbacks,
-            "validation_split": self.validation_size,
+            "validation_split": self.validation_split,
             "shuffle": False,
             "verbose": self.verbose,
         }
