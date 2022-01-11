@@ -25,7 +25,7 @@ from sklearn_genetic import GASearchCV
 from sklearn_genetic.callbacks import ConsecutiveStopping
 from sklearn_genetic.plots import plot_fitness_evolution
 
-from keras.wrappers.scikit_learn import KerasClassifier
+from scikeras.wrappers import KerasClassifier
 
 # For development purposes
 # from memory_profiler import memory_usage
@@ -168,7 +168,9 @@ class NeuralNetwork:
         output_shape=None,
         weights_initializer="glorot_normal",
         hidden_layer_sizes=None,
+        num_hidden_layers=1,
         hidden_activation="elu",
+        learning_rate=0.01,
         l1_penalty=0.01,
         l2_penalty=0.01,
         dropout_rate=0.2,
@@ -176,10 +178,7 @@ class NeuralNetwork:
         phase=None,
         n_components=3,
         build=False,
-        optimizer="adam",
-        loss=None,
-        metrics=None,
-        run_eagerly=True,
+        compile_kwargs=None,
     ):
         """Create a neural network model using the estimator to initialize.
 
@@ -200,31 +199,26 @@ class NeuralNetwork:
             tf.keras.Model: Instantiated, compiled, and optionally built model.
         """
         model = estimator(
-            V,
-            y,
-            batch_size,
-            missing_mask,
-            output_shape,
-            weights_initializer,
-            hidden_layer_sizes,
-            hidden_activation,
-            l1_penalty,
-            l2_penalty,
-            dropout_rate,
-            num_classes,
-            phase,
+            V=V,
+            y=y,
+            batch_size=batch_size,
+            missing_mask=missing_mask,
+            output_shape=output_shape,
+            weights_initializer=weights - initializer,
+            hidden_layer_sizes=hidden_layer_sizes,
+            num_hidden_layers=num_hidden_layers,
+            hidden_activation=hidden_activation,
+            l1_penalty=l1_penalty,
+            l2_penalty=l2_penalty,
+            dropout_rate=dropout_rate,
+            num_classes=num_classes,
+            phase=phase,
         )
 
         if build:
             model.build((None, n_components))
 
-        model.compile(
-            optimizer=optimizer,
-            loss=loss,
-            metrics=metrics,
-            run_eagerly=run_eagerly,
-        )
-
+        model.compile(**compile_kwargs)
         return model
 
     def prepare_training_batches(
@@ -651,9 +645,10 @@ class NeuralNetwork:
         self,
         X_train,
         y_train,
+        model,
         estimator,
         model_params,
-        compile_params,
+        compile_kwargs,
         build,
         epochs,
         validation_split,
@@ -671,26 +666,30 @@ class NeuralNetwork:
         # Cannot do StratifiedKFold here.
         cross_val = KFold(n_splits=grid_cv, shuffle=False)
 
-        fit_params = {"callbacks": callbacks}
+        fit_params = {"callbacks__callbacks": callbacks}
 
         if "batch_size" not in search_space:
-            fit_params["batch_size"] = model_params["batch_size"]
+            fit_params["fit__batch_size"] = model_params["batch_size"]
         if "epochs" not in search_space:
-            fit_params["epochs"] = epochs
+            fit_params["fit__epochs"] = epochs
         if validation_split in search_space:
-            fit_params["validation_split"] = validation_split
+            fit_params["fit__validation_split"] = validation_split
 
-        model_params["V"] = model_params["V"].tolist()
-        for i, v in enumerate(model_params["V"]):
-            model_params["V"][i] = tuple(v)
+        model_params = {f"model__{k}": v for k, v in model_params.items()}
+
+        # model_params["V"] = model_params["V"].tolist()
+        # for i, v in enumerate(model_params["V"]):
+        #     model_params["V"][i] = tuple(v)
+
+        compile_kwargs = {f"optimizer__{k}": v for k, v in model_params.items()}
 
         model = KerasClassifier(
-            self.create_model,
-            estimator=estimator,
+            model,
+            model__estimator=estimator,
             **model_params,
-            **compile_params,
-            n_components=model_params.pop("n_components"),
+            n_components=model_params.pop("model__n_components"),
             build=build,
+            compile_kwargs=compile_kwargs,
         )
 
         # tmp = dict()
@@ -733,7 +732,7 @@ class NeuralNetwork:
                 cv=cross_val,
             )
 
-            search.fit(X_train, y=y_train, fit_params=fit_params)
+            search.fit(X_train, y=y_train)
 
         return search
 
@@ -898,6 +897,7 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
         output_shape=None,
         weights_initializer="glorot_normal",
         hidden_layer_sizes=None,
+        num_hidden_layers=1,
         hidden_activation="elu",
         l1_penalty=0.01,
         l2_penalty=0.01,
@@ -918,6 +918,7 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
         self._y = y
         self._missing_mask = missing_mask
         self.hidden_layer_sizes = hidden_layer_sizes
+        self.num_hidden_layers = num_hidden_layers
         self.weights_initializer = weights_initializer
         self.phase = phase
         self.dropout_rate = dropout_rate
@@ -941,6 +942,13 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
             kernel_regularizer = l1_l2(l1_penalty, l2_penalty)
         self.kernel_regularizer = kernel_regularizer
         kernel_initializer = weights_initializer
+
+        if num_hidden_layers != len(hidden_layer_sizes):
+            raise ValueError(
+                f"num_hidden_layers must be equal to len(hidden_layer_sizes), "
+                f"but got num_hidden_layers={num_hidden_layers} and "
+                f"len(hidden_layer_sizes)={len(hidden_layer_sizes)}"
+            )
 
         if len(hidden_layer_sizes) > 5:
             raise ValueError("The maximum number of hidden layers is 5.")
@@ -1078,7 +1086,8 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
             tape.watch(v)
             y_pred = self(v, training=True)
             loss = self.compiled_loss(
-                tf.convert_to_tensor(y_true, dtype=tf.float32), y_pred,
+                tf.convert_to_tensor(y_true, dtype=tf.float32),
+                y_pred,
             )
 
         # Refine the watched variables with
@@ -1294,6 +1303,7 @@ class UBPPhase1(tf.keras.Model, NeuralNetwork):
         output_shape=None,
         weights_initializer="glorot_normal",
         hidden_layer_sizes=None,
+        num_hidden_layers=1,
         hidden_activation="elu",
         l1_penalty=0.01,
         l2_penalty=0.01,
@@ -1613,6 +1623,7 @@ class UBPPhase2(tf.keras.Model, NeuralNetwork):
         output_shape=None,
         weights_initializer="glorot_normal",
         hidden_layer_sizes=None,
+        num_hidden_layers=1,
         hidden_activation="elu",
         l1_penalty=0.01,
         l2_penalty=0.01,
@@ -1654,6 +1665,13 @@ class UBPPhase2(tf.keras.Model, NeuralNetwork):
             kernel_regularizer = l1_l2(l1_penalty, l2_penalty)
         self.kernel_regularizer = kernel_regularizer
         kernel_initializer = weights_initializer
+
+        if num_hidden_layers != len(hidden_layer_sizes):
+            raise ValueError(
+                f"num_hidden_layers must be equal to len(hidden_layer_sizes), "
+                f"but got num_hidden_layers={num_hidden_layers} and "
+                f"len(hidden_layer_sizes)={len(hidden_layer_sizes)}"
+            )
 
         if len(hidden_layer_sizes) > 5:
             raise ValueError("The maximum number of hidden layers is 5.")
@@ -1991,6 +2009,7 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
         output_shape=None,
         weights_initializer="glorot_normal",
         hidden_layer_sizes=None,
+        num_hidden_layers=1,
         hidden_activation="elu",
         l1_penalty=0.01,
         l2_penalty=0.01,
@@ -2028,6 +2047,13 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
         kernel_regularizer = None
         self.kernel_regularizer = kernel_regularizer
         kernel_initializer = None
+
+        if num_hidden_layers != len(hidden_layer_sizes):
+            raise ValueError(
+                f"num_hidden_layers must be equal to len(hidden_layer_sizes), "
+                f"but got num_hidden_layers={num_hidden_layers} and "
+                f"len(hidden_layer_sizes)={len(hidden_layer_sizes)}"
+            )
 
         if len(hidden_layer_sizes) > 5:
             raise ValueError("The maximum number of hidden layers is 5.")
@@ -2152,7 +2178,8 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
             tape.watch(v)
             y_pred = self(v, training=True)
             loss = self.compiled_loss(
-                tf.convert_to_tensor(y_true, dtype=tf.float32), y_pred,
+                tf.convert_to_tensor(y_true, dtype=tf.float32),
+                y_pred,
             )
 
         # Refine the watched variables with
@@ -2928,6 +2955,7 @@ class UBP(NeuralNetwork):
             search = self.grid_search(
                 V,
                 y_train,
+                self.create_model,
                 NLPCAModel,
                 model_params,
                 compile_params,
@@ -3133,6 +3161,7 @@ class UBP(NeuralNetwork):
             "weights_initializer": self.weights_initializer,
             "n_components": self.n_components,
             "hidden_layer_sizes": hl_sizes,
+            "num_hidden_layers": self.num_hidden_layers,
             "hidden_activation": self.hidden_activation,
             "l1_penalty": self.l1_penalty,
             "l2_penalty": self.l2_penalty,
@@ -3140,7 +3169,8 @@ class UBP(NeuralNetwork):
             "num_classes": self.num_classes,
         }
 
-        other_params = {"num_hidden_layers": self.num_hidden_layers}
+        other_params = {}
+        # other_params = {"num_hidden_layers": self.num_hidden_layers}
 
         fit_params = {
             "batch_size": self.batch_size,

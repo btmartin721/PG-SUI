@@ -311,14 +311,14 @@ def main():
     # print(vae_data.genotypes012_df)
 
     # For randomizedsearchcv. Generate parameters to sample from.
-    learning_rate = list([float(10) ** x for x in np.arange(-6, -1)])
-    l1_penalty = list([float(10) ** x for x in np.arange(-6, -1)])
-    l2_penalty = list([float(10) ** x for x in np.arange(-6, -1)])
+    learning_rate = [float(10) ** x for x in np.arange(-6, -1)]
+    l1_penalty = [float(10) ** x for x in np.arange(-6, -1)]
+    l2_penalty = [float(10) ** x for x in np.arange(-6, -1)]
     hidden_activation = ["elu", "relu"]
     num_hidden_layers = [1, 2, 3, 4, 5]
     hidden_layer_sizes = ["sqrt", "midpoint"]
     n_components = [2, 3]
-    dropout_rate = list([round(x, 1) for x in np.arange(0.0, 1.0, 0.1)])
+    dropout_rate = [round(x, 1) for x in np.arange(0.0, 1.0, 0.1)]
     batch_size = list(range(8, 65, 8))
     optimizer = ["adam", "sgd", "adagrad"]
 
@@ -327,7 +327,6 @@ def main():
         "l1_penalty": l1_penalty,
         "l2_penalty": l2_penalty,
         "hidden_activation": hidden_activation,
-        "num_hidden_layers": num_hidden_layers,
         "hidden_layer_sizes": hidden_layer_sizes,
         "n_components": n_components,
         "dropout_rate": dropout_rate,

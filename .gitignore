@@ -46,3 +46,5 @@ output*
 *.egg-info
 *.egg
 build/
+venv/
+venv/*
