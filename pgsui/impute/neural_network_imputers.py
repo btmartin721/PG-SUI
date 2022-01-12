@@ -16,6 +16,8 @@ from sklearn.model_selection import train_test_split
 
 # Grid search imports
 from sklearn.model_selection import StratifiedKFold, KFold
+from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.preprocessing import FunctionTransformer
 
 # Randomized grid search imports
 from sklearn.model_selection import RandomizedSearchCV
@@ -67,6 +69,17 @@ if is_notebook:
     from tqdm.notebook import tqdm as progressbar
 else:
     from tqdm import tqdm as progressbar
+
+
+class DisabledCV:
+    def __init__(self):
+        self.n_splits = 1
+
+    def split(self, X, y, groups=None):
+        yield (np.arange(len(X)), np.arange(len(y)))
+
+    def get_n_splits(self, X, y, groups=None):
+        return self.n_splits
 
 
 class NeuralNetwork:
@@ -219,7 +232,7 @@ class NeuralNetwork:
         # Get reduced-dimension dataset.
         return np.random.normal(loc=w_mean, scale=w_stddev, size=(dim1, dim2))
 
-    def validate_model_inputs(self, V, y, missing_mask, output_shape):
+    def validate_model_inputs(self, y, missing_mask, output_shape):
         """Validate inputs to Keras subclass model.
 
         Args:
@@ -233,9 +246,6 @@ class NeuralNetwork:
         Raises:
             TypeError: V, y, missing_mask, output_shape must not be NoneType.
         """
-        if V is None:
-            raise TypeError("V must not be NoneType.")
-
         if y is None:
             raise TypeError("y must not be NoneType.")
 
@@ -268,20 +278,13 @@ class NeuralNetwork:
         search_mode=True,
     ):
         """Create a neural network model using the estimator to initialize.
-
         Model will be initialized, compiled, and built if ``build=True``\.
-
         Args:
             estimator (tf.keras.Model): Model to create. Can be a subclassed model.
-
             compile_params (Dict[str, Any]): Parameters passed to model.compile(). Key-value pairs should be the parameter names and their corresponding values.
-
             n_components (int): The number of principal components to use with NLPCA or UBP models. Not used if doing VAE. Defaults to 3.
-
             build (bool): Whether to build the model. Defaults to False.
-
             kwargs (Dict[str, Any]): Keyword arguments to pass to KerasClassifier.
-
         Returns:
             tf.keras.Model: Instantiated, compiled, and optionally built model.
         """
@@ -292,7 +295,7 @@ class NeuralNetwork:
             missing_mask=missing_mask,
             output_shape=output_shape,
             n_components=n_components,
-            weights_initializer=weights - initializer,
+            weights_initializer=weights_initializer,
             hidden_layer_sizes=hidden_layer_sizes,
             num_hidden_layers=num_hidden_layers,
             hidden_activation=hidden_activation,
@@ -301,7 +304,6 @@ class NeuralNetwork:
             dropout_rate=dropout_rate,
             num_classes=num_classes,
             phase=phase,
-            search_mode=True,
         )
 
         if build:
@@ -458,11 +460,8 @@ class NeuralNetwork:
         else:
             tf.set_random_seed(seed3)
 
-    def make_reconstruction_loss(self, n_features):
+    def make_reconstruction_loss(self):
         """Make loss function for use with a keras model.
-
-        Args:
-            n_features (int): Number of features in input dataset.
 
         Returns:
             callable: Function that calculates loss.
@@ -474,8 +473,6 @@ class NeuralNetwork:
             Ignores missing data in the calculation of the loss function.
 
             Args:
-                n_features (int): Number of features (columns) in the dataset.
-
                 input_and_mask (numpy.ndarray): Input one-hot encoded array with missing values also one-hot encoded and h-stacked.
 
                 y_pred (numpy.ndarray): Predicted values.
@@ -483,6 +480,8 @@ class NeuralNetwork:
             Returns:
                 float: Mean squared error loss value with missing data masked.
             """
+            n_features = y_pred.numpy().shape[1]
+
             true_indices = range(n_features)
             missing_indices = range(n_features, n_features * 2)
 
@@ -503,11 +502,41 @@ class NeuralNetwork:
 
         return reconstruction_loss
 
-    def make_acc(self, n_features):
-        """Make loss function for use with a keras model.
+    def custom_loss(self, input_and_mask, y_pred):
+        """Custom loss function for neural network model with missing mask.
+
+        Ignores missing data in the calculation of the loss function.
 
         Args:
-            n_features (int): Number of features in input dataset.
+            input_and_mask (numpy.ndarray): Input one-hot encoded array with missing values also one-hot encoded and h-stacked.
+
+            y_pred (numpy.ndarray): Predicted values.
+
+        Returns:
+            float: Mean squared error loss value with missing data masked.
+        """
+        n_features = y_pred.numpy().shape[1]
+
+        true_indices = range(n_features)
+        missing_indices = range(n_features, n_features * 2)
+
+        # Split features and missing mask.
+        y_true = tf.gather(input_and_mask, true_indices, axis=1)
+        missing_mask = tf.gather(input_and_mask, missing_indices, axis=1)
+
+        observed_mask = tf.subtract(1.0, missing_mask)
+        y_true_observed = tf.multiply(y_true, observed_mask)
+        pred_observed = tf.multiply(y_pred, observed_mask)
+
+        # loss_fn = tf.keras.losses.CategoricalCrossentropy()
+        # return loss_fn(y_true_observed, pred_observed)
+
+        return tf.keras.metrics.mean_squared_error(
+            y_true=y_true_observed, y_pred=pred_observed
+        )
+
+    def make_acc(self):
+        """Make loss function for use with a keras model.
 
         Returns:
             callable: Function that calculates loss.
@@ -519,8 +548,6 @@ class NeuralNetwork:
             Ignores missing data in the calculation of the loss function.
 
             Args:
-                n_features (int): Number of features (columns) in the dataset.
-
                 input_and_mask (numpy.ndarray): Input one-hot encoded array with missing values also one-hot encoded and h-stacked.
 
                 y_pred (numpy.ndarray): Predicted values.
@@ -528,6 +555,8 @@ class NeuralNetwork:
             Returns:
                 float: Mean squared error loss value with missing data masked.
             """
+            n_features = y_pred.numpy().shape[1]
+
             true_indices = range(n_features)
             missing_indices = range(n_features, n_features * 2)
 
@@ -544,6 +573,36 @@ class NeuralNetwork:
             return metric.result()
 
         return accuracy_masked
+
+    def custom_acc(self, input_and_mask, y_pred):
+        """Custom loss function for neural network model with missing mask.
+
+        Ignores missing data in the calculation of the loss function.
+
+        Args:
+            input_and_mask (numpy.ndarray): Input one-hot encoded array with missing values also one-hot encoded and h-stacked.
+
+            y_pred (numpy.ndarray): Predicted values.
+
+        Returns:
+            float: Mean squared error loss value with missing data masked.
+        """
+        n_features = y_pred.numpy().shape[1]
+
+        true_indices = range(n_features)
+        missing_indices = range(n_features, n_features * 2)
+
+        # Split features and missing mask.
+        y_true = tf.gather(input_and_mask, true_indices, axis=1)
+        missing_mask = tf.gather(input_and_mask, missing_indices, axis=1)
+
+        observed_mask = tf.subtract(1.0, missing_mask)
+        y_true_observed = tf.multiply(y_true, observed_mask)
+        pred_observed = tf.multiply(y_pred, observed_mask)
+
+        metric = tf.keras.metrics.BinaryAccuracy(name="accuracy_masked")
+        metric.update_state(y_true_observed, pred_observed)
+        return metric.result()
 
     def masked_mse(self, X_true, X_pred, mask):
         """Calculates mean squared error with missing values ignored.
@@ -757,11 +816,10 @@ class NeuralNetwork:
         self,
         X_train,
         y_train,
+        phase,
         model,
-        estimator,
         model_params,
         compile_params,
-        build,
         epochs,
         validation_split,
         callbacks,
@@ -776,7 +834,8 @@ class NeuralNetwork:
     ):
         # Cannot do StratifiedKFold here because
         # it doesn't work with multioutput targets.
-        cross_val = KFold(n_splits=grid_cv, shuffle=False)
+        # cross_val = KFold(n_splits=grid_cv, shuffle=False)
+        cross_val = DisabledCV()
 
         # Set KerasClassifier paramters.
         # model_params = {f"model__{k}": v for k, v in model_params.items()}
@@ -788,8 +847,6 @@ class NeuralNetwork:
 
         kc_params = dict(
             model=model,
-            estimator=estimator,
-            build=build,
             callbacks=callbacks,
             **model_params,
             **compile_kwargs,
@@ -798,9 +855,11 @@ class NeuralNetwork:
         if has_fitparams:
             kc_params.update(fit_params)
 
+        print(model)
+        sys.exit()
+
         clf = KerasClassifier(
             model=model,
-            estimator=estimator,
             V=X_train,
             y=y_train,
             batch_size=model_params["batch_size"],
@@ -815,7 +874,6 @@ class NeuralNetwork:
             l2_penalty=model_params["l2_penalty"],
             dropout_rate=model_params["dropout_rate"],
             num_classes=model_params["num_classes"],
-            build=build,
             optimizer=compile_params["optimizer"],
             optimizer__learning_rate=compile_params["learning_rate"],
             loss=compile_params["loss"],
@@ -897,6 +955,334 @@ class NeuralNetwork:
         compile_kwargs["metrics__n_features"] = y_train.shape[1]
         compile_kwargs["run_eagerly"] = compile_params["run_eagerly"]
         return compile_kwargs
+
+
+class MultiOutputTransformer(BaseEstimator, TransformerMixin):
+    def fit(self, y):
+        self.n_outputs_expected_ = 1
+        return self
+
+    def transform(self, y):
+        return y
+
+    def inverse_transform(self, y):
+        return y
+
+
+class MLPClassifier(KerasClassifier):
+    def __init__(
+        self,
+        V=None,
+        y_decoded=None,
+        y=None,
+        batch_size=32,
+        missing_mask=None,
+        output_shape=None,
+        weights_initializer="glorot_normal",
+        hidden_layer_sizes=None,
+        num_hidden_layers=1,
+        hidden_activation="elu",
+        l1_penalty=0.01,
+        l2_penalty=0.01,
+        dropout_rate=0.2,
+        num_classes=1,
+        phase=None,
+        n_components=3,
+        search_mode=True,
+        optimizer="adam",
+        learning_rate=0.01,
+        optimizer__learning_rate=0.01,
+        loss="binary_crossentropy",
+        loss__n_features=0,
+        metrics="accuracy",
+        metrics__n_features=0,
+        epochs=100,
+        verbose=0,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self.V = V
+        self.y_decoded = y_decoded
+        self.y = y
+        self.batch_size = batch_size
+        self.missing_mask = missing_mask
+        self.output_shape = output_shape
+        self.weights_initializer = weights_initializer
+        self.hidden_layer_sizes = hidden_layer_sizes
+        self.num_hidden_layers = num_hidden_layers
+        self.hidden_activation = hidden_activation
+        self.l1_penalty = l1_penalty
+        self.l2_penalty = l2_penalty
+        self.dropout_rate = dropout_rate
+        self.num_classes = num_classes
+        self.phase = phase
+        self.n_components = n_components
+        self.search_mode = search_mode
+        self.optimizer = optimizer
+        self.learning_rate = learning_rate
+        self.loss = loss
+        self.metrics = metrics
+        self.epochs = epochs
+        self.verbose = verbose
+
+    def _keras_build_fn(self, compile_kwargs):
+        if self.phase is None:
+            model = NLPCAModel(
+                V=self.V,
+                y=self.y,
+                batch_size=self.batch_size,
+                missing_mask=self.missing_mask,
+                output_shape=self.output_shape,
+                n_components=self.n_components,
+                weights_initializer=self.weights_initializer,
+                hidden_layer_sizes=self.hidden_layer_sizes,
+                num_hidden_layers=self.num_hidden_layers,
+                hidden_activation=self.hidden_activation,
+                l1_penalty=self.l1_penalty,
+                l2_penalty=self.l2_penalty,
+                dropout_rate=self.dropout_rate,
+                num_classes=self.num_classes,
+                phase=self.phase,
+            )
+
+        elif self.phase == 1:
+            model = UBPPhase1(
+                V=self.V,
+                y=self.y,
+                batch_size=self.batch_size,
+                missing_mask=self.missing_mask,
+                output_shape=self.output_shape,
+                n_components=self.n_components,
+                weights_initializer=self.weights_initializer,
+                hidden_layer_sizes=self.hidden_layer_sizes,
+                num_hidden_layers=self.num_hidden_layers,
+                hidden_activation=self.hidden_activation,
+                l1_penalty=self.l1_penalty,
+                l2_penalty=self.l2_penalty,
+                dropout_rate=self.dropout_rate,
+                num_classes=self.num_classes,
+                phase=self.phase,
+            )
+
+        elif self.phase == 2:
+            model = UBPPhase2(
+                V=self.V,
+                y=self.y,
+                batch_size=self.batch_size,
+                missing_mask=self.missing_mask,
+                output_shape=self.output_shape,
+                n_components=self.n_components,
+                weights_initializer=self.weights_initializer,
+                hidden_layer_sizes=self.hidden_layer_sizes,
+                num_hidden_layers=self.num_hidden_layers,
+                hidden_activation=self.hidden_activation,
+                l1_penalty=self.l1_penalty,
+                l2_penalty=self.l2_penalty,
+                dropout_rate=self.dropout_rate,
+                num_classes=self.num_classes,
+                phase=self.phase,
+            )
+
+        elif self.phase == 3:
+            model = UBPPhase3(
+                V=self.V,
+                y=self.y,
+                batch_size=self.batch_size,
+                missing_mask=self.missing_mask,
+                output_shape=self.output_shape,
+                n_components=self.n_components,
+                weights_initializer=self.weights_initializer,
+                hidden_layer_sizes=self.hidden_layer_sizes,
+                num_hidden_layers=self.num_hidden_layers,
+                hidden_activation=self.hidden_activation,
+                l1_penalty=self.l1_penalty,
+                l2_penalty=self.l2_penalty,
+                dropout_rate=self.dropout_rate,
+                num_classes=self.num_classes,
+                phase=self.phase,
+            )
+
+            model.build((None, self.n_components))
+
+        model.compile(
+            optimizer=compile_kwargs["optimizer"],
+            loss=compile_kwargs["loss"],
+            metrics=compile_kwargs["metrics"],
+            run_eagerly=True,
+        )
+
+        model.set_model_inputs_outputs()
+        return model
+
+    @staticmethod
+    def scorer(
+        y_true,
+        y_pred,
+        **kwargs,
+    ):
+        y_true_orig = self.y_decoded
+        y_true_orig[y_true_orig == -9] = np.nan
+        y_true_missingmask = np.isnan(y_true_orig)
+
+        imputed_enc = y_pred.copy()
+        imputed_enc, dummy_df = self._predict(y_pred, imputed_enc)
+
+        imputed_df = self.decode_onehot(
+            pd.DataFrame(data=imputed_enc, columns=dummy_df.columns)
+        )
+
+        y_pred_observed = imputed_df.to_numpy()
+        y_pred_observed = y_pred_pbserved[~y_true_missingmask]
+        y_true_observed = y_true_orig[~y_true_missingmask]
+
+        return accuracy_score(y_true_observed, y_pred_observed)
+
+    @property
+    def feature_encoder(self):
+        return FunctionTransformer(func=self.input_parser)
+
+    def input_parser(self, X):
+        if isinstance(X, dict):
+            return X[self.n_components]
+        else:
+            return X
+
+    @property
+    def target_encoder(self):
+        return MultiOutputTransformer()
+
+    def _predict(self, X, complete_encoded):
+        """Evaluate VAE predictions by calculating the highest predicted value.
+
+        Calucalates highest predicted value for each row vector and each class, setting the most likely class to 1.0.
+
+        Args:
+            X (numpy.ndarray): Input one-hot encoded data.
+
+            complete_encoded (numpy.ndarray): Output one-hot encoded data with the maximum predicted values for each class set to 1.0.
+
+        Returns:
+            numpy.ndarray: Imputed one-hot encoded values.
+
+            pandas.DataFrame: One-hot encoded pandas DataFrame with no missing values.
+        """
+
+        df = self.encode_categorical(X)
+
+        # Had to add dropna() to count unique classes while ignoring np.nan
+        col_classes = [len(df[c].dropna().unique()) for c in df.columns]
+        df_dummies = pd.get_dummies(df)
+        mle_complete = None
+        for i, cnt in enumerate(col_classes):
+            start_idx = int(sum(col_classes[0:i]))
+            col_completed = complete_encoded[:, start_idx : start_idx + cnt]
+
+            mle_completed = np.apply_along_axis(
+                self.mle, axis=1, arr=col_completed
+            )
+
+            if mle_complete is None:
+                mle_complete = mle_completed
+
+            else:
+                mle_complete = np.hstack([mle_complete, mle_completed])
+
+        return mle_complete, df_dummies
+
+    def encode_categorical(self, X):
+        """Encode -9 encoded missing values as np.nan.
+
+        Args:
+            X (numpy.ndarray): 012-encoded genotypes with -9 as missing values.
+
+        Returns:
+            pandas.DataFrame: DataFrame with missing values encoded as np.nan.
+        """
+        np.nan_to_num(X, copy=False, nan=-9.0)
+        X = X.astype(str)
+        X[(X == "-9.0") | (X == "-9")] = "none"
+
+        df = pd.DataFrame(X)
+        df_incomplete = df.copy()
+
+        # Replace 'none' with np.nan
+        for row in df.index:
+            for col in df.columns:
+                if df_incomplete.iat[row, col] == "none":
+                    df_incomplete.iat[row, col] = np.nan
+
+        return df_incomplete
+
+    def decode_onehot(self, df_dummies):
+        """Decode one-hot format to 012-encoded genotypes.
+
+        Args:
+            df_dummies (pandas.DataFrame): One-hot encoded imputed data.
+
+        Returns:
+            pandas.DataFrame: 012-encoded imputed data.
+        """
+        pos = defaultdict(list)
+        vals = defaultdict(list)
+
+        for i, c in enumerate(df_dummies.columns):
+            if "_" in c:
+                k, v = c.split("_", 1)
+                pos[k].append(i)
+                vals[k].append(v)
+
+            else:
+                pos["_"].append(i)
+
+        df = pd.DataFrame(
+            {
+                k: pd.Categorical.from_codes(
+                    np.argmax(df_dummies.iloc[:, pos[k]].values, axis=1),
+                    vals[k],
+                )
+                for k in vals
+            }
+        )
+
+        df[df_dummies.columns[pos["_"]]] = df_dummies.iloc[:, pos["_"]]
+
+        return df
+
+    def fit(self, X, y, sample_weight=None, **kwargs):
+        """Constructs a new classifier with ``model`` & fit the model to ``(X, y)``.
+        Parameters
+        ----------
+        X : Union[array-like, sparse matrix, dataframe] of shape (n_samples, n_features)
+            Training samples, where n_samples is the number of samples
+            and n_features is the number of features.
+        y : Union[array-like, sparse matrix, dataframe] of shape (n_samples,) or (n_samples, n_outputs)
+            True labels for X.
+        sample_weight : array-like of shape (n_samples,), default=None
+            Array of weights that are assigned to individual samples.
+            If not provided, then each sample is given unit weight.
+        **kwargs : Dict[str, Any]
+            Extra arguments to route to ``Model.fit``.
+        Warnings
+        --------
+            Passing estimator parameters as keyword arguments (aka as ``**kwargs``) to ``fit`` is not supported by the Scikit-Learn API,
+            and will be removed in a future version of SciKeras.
+            These parameters can also be specified by prefixing ``fit__`` to a parameter at initialization
+            (``KerasClassifier(..., fit__batch_size=32, predict__batch_size=1000)``)
+            or by using ``set_params`` (``est.set_params(fit__batch_size=32, predict__batch_size=1000)``).
+        Returns
+        -------
+        KerasClassifier
+            A reference to the instance that can be chain called (``est.fit(X,y).transform(X)``).
+        """
+        self.classes_ = None
+        if self.class_weight is not None:
+            sample_weight = 1 if sample_weight is None else sample_weight
+            sample_weight *= compute_sample_weight(
+                class_weight=self.class_weight, y=y
+            )
+
+        super().fit(X=X, y=y, sample_weight=sample_weight, **kwargs)
+        return self
 
 
 class UBPCallbacks(tf.keras.callbacks.Callback):
@@ -985,7 +1371,7 @@ class UBPEarlyStopping(tf.keras.callbacks.Callback):
                     self.model.V_latent = self.best_input
 
 
-class NLPCAModel(tf.keras.Model, NeuralNetwork):
+class NLPCAModel(tf.keras.Model):
     """NLPCA model to train and use to predict imputations.
 
     NLPCAModel subclasses the tf.keras.Model and overrides the train_step() and test_step() functions, which do training and evaluation for each batch in each epoch.
@@ -1070,18 +1456,27 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
     ):
         super(NLPCAModel, self).__init__()
 
-        self._V = self._init_weights(y.shape[0], n_components)
+        nn = NeuralNetwork()
+        self.nn = nn
+
+        if V is None:
+            self._V = nn.init_weights(y.shape[0], n_components)
+        else:
+            self._V = V[n_components]
+
+        print(n_components)
+
         self._y = y
 
-        hidden_layer_sizes = self.validate_hidden_layers(
+        hidden_layer_sizes = nn.validate_hidden_layers(
             hidden_layer_sizes, num_hidden_layers
         )
 
-        hidden_layer_sizes = self.get_hidden_layer_sizes(
-            y.shape[1], V.shape[1], hidden_layer_sizes
+        hidden_layer_sizes = nn.get_hidden_layer_sizes(
+            y.shape[1], self._V.shape[1], hidden_layer_sizes
         )
 
-        self.validate_model_inputs(V, y, missing_mask, output_shape)
+        nn.validate_model_inputs(y, missing_mask, output_shape)
 
         self._missing_mask = missing_mask
         self.weights_initializer = weights_initializer
@@ -1209,6 +1604,12 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
         x = tf.keras.Input(shape=(self.n_components,))
         return tf.keras.Model(inputs=[x], outputs=self.call(x))
 
+    def set_model_inputs_outputs(self):
+        x = tf.keras.Input(shape=(self.n_components,))
+        model = tf.keras.Model(inputs=[x], outputs=self.call(x))
+        self.inputs = tf.convert_to_tensor(self.V_latent_)
+        self.outputs = model.outputs
+
     def train_step(self, data):
         """Custom training loop for one step (=batch) in a single epoch.
 
@@ -1233,7 +1634,7 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
         # Set in the UBPCallbacks() callback.
         y = self.input_with_mask_
 
-        v, y_true, batch_start, batch_end = self.prepare_training_batches(
+        v, y_true, batch_start, batch_end = self.nn.prepare_training_batches(
             self.V_latent_,
             y,
             self._batch_size,
@@ -1255,6 +1656,7 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
             loss = self.compiled_loss(
                 tf.convert_to_tensor(y_true, dtype=tf.float32),
                 y_pred,
+                regularization_losses=self.losses,
             )
 
         # Refine the watched variables with
@@ -1269,7 +1671,8 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
         del tape
 
         self.compiled_metrics.update_state(
-            tf.convert_to_tensor(y_true, dtype=tf.float32), y_pred
+            tf.convert_to_tensor(y_true, dtype=tf.float32),
+            y_pred,
         )
 
         # NOTE: run_eagerly must be set to True in the compile() method for this
@@ -1294,10 +1697,9 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
             A dict containing values that will be passed to ``tf.keras.callbacks.CallbackList.on_train_batch_end``. Typically, the values of the Model's metrics are returned.
         """
         # Unpack the data. Don't need V here. Just X (y_true).
-        # y_true = data[1]
         y = self.input_with_mask_
 
-        v, y_true, batch_start, batch_end = self.prepare_training_batches(
+        v, y_true, batch_start, batch_end = self.nn.prepare_training_batches(
             self.V_latent_,
             y,
             self._batch_size,
@@ -1318,7 +1720,8 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
 
         # Update the metrics.
         self.compiled_metrics.update_state(
-            tf.convert_to_tensor(y_true, dtype=tf.float32), y_pred
+            tf.convert_to_tensor(y_true, dtype=tf.float32),
+            y_pred,
         )
 
         # Return a dict mapping metric names to current value.
@@ -1358,7 +1761,7 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
         return self.input_with_mask_
 
     @V_latent.setter
-    def V(self, value):
+    def V_latent(self, value):
         """Set randomly initialized input variable. Gets refined during training."""
         self.V_latent_ = value
 
@@ -1483,10 +1886,14 @@ class UBPPhase1(tf.keras.Model, NeuralNetwork):
     ):
         super(UBPPhase1, self).__init__()
 
-        self._V = self._init_weights(y.shape[0], n_components)
+        if V is None:
+            self._V = nn.init_weights(y.shape[0], n_components)
+        else:
+            self._V = V
+
         self._y = y
 
-        self.validate_model_inputs(V, y, missing_mask, output_shape)
+        self.validate_model_inputs(y, missing_mask, output_shape)
 
         self._missing_mask = missing_mask
         self.phase = phase
@@ -1652,7 +2059,7 @@ class UBPPhase1(tf.keras.Model, NeuralNetwork):
         return {m.name: m.result() for m in self.metrics}
 
     @property
-    def V(self):
+    def V_latent(self):
         """Randomly initialized input variable that gets refined during training."""
         return self.V_latent_
 
@@ -1683,8 +2090,8 @@ class UBPPhase1(tf.keras.Model, NeuralNetwork):
     def input_with_mask(self):
         return self.input_with_mask_
 
-    @V.setter
-    def V(self, value):
+    @V_latent.setter
+    def V_latent(self, value):
         """Set randomly initialized input variable. Gets refined during training."""
         self.V_latent_ = value
 
@@ -1805,6 +2212,10 @@ class UBPPhase2(tf.keras.Model, NeuralNetwork):
         super(UBPPhase2, self).__init__()
 
         self._V = V
+
+        if self._V is None:
+            raise TypeError("V cannot be NoneType in UBP Phases 2 and 3.")
+
         self._y = y
 
         hidden_layer_sizes = self.validate_hidden_layers(
@@ -1815,7 +2226,7 @@ class UBPPhase2(tf.keras.Model, NeuralNetwork):
             y.shape[1], V.shape[1], hidden_layer_sizes
         )
 
-        self.validate_model_inputs(V, y, missing_mask, output_shape)
+        self.validate_model_inputs(y, missing_mask, output_shape)
 
         self._missing_mask = missing_mask
         self.phase = phase
@@ -2043,7 +2454,7 @@ class UBPPhase2(tf.keras.Model, NeuralNetwork):
         return {m.name: m.result() for m in self.metrics}
 
     @property
-    def V(self):
+    def V_latent(self):
         """Randomly initialized input variable that gets refined during training."""
         return self.V_latent_
 
@@ -2074,8 +2485,8 @@ class UBPPhase2(tf.keras.Model, NeuralNetwork):
     def input_with_mask(self):
         return self.input_with_mask_
 
-    @V.setter
-    def V(self, value):
+    @V_latent.setter
+    def V_latent(self, value):
         """Set randomly initialized input variable. Gets refined during training."""
         self.V_latent_ = value
 
@@ -2200,6 +2611,10 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
         super(UBPPhase3, self).__init__()
 
         self._V = V
+
+        if self._V is None:
+            raise TypeError("V cannot be NoneType in UBP Phases 2 and 3.")
+
         self._y = y
 
         hidden_layer_sizes = self.validate_hidden_layers(
@@ -2210,7 +2625,7 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
             y.shape[1], V.shape[1], hidden_layer_sizes
         )
 
-        self.validate_model_inputs(V, y, missing_mask, output_shape)
+        self.validate_model_inputs(y, missing_mask, output_shape)
 
         self._missing_mask = missing_mask
         self.phase = phase
@@ -2427,7 +2842,7 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
         return {m.name: m.result() for m in self.metrics}
 
     @property
-    def V(self):
+    def V_latent(self):
         """Randomly initialized input variable that gets refined during training."""
         return self.V_latent_
 
@@ -2458,8 +2873,8 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
     def input_with_mask(self):
         return self.input_with_mask_
 
-    @V.setter
-    def V(self, value):
+    @V_latent.setter
+    def V_latent(self, value):
         """Set randomly initialized input variable. Gets refined during training."""
         self.V_latent_ = value
 
@@ -3135,31 +3550,116 @@ class UBP(NeuralNetwork):
         if do_gridsearch:
             compile_params["learning_rate"] = self.learning_rate
 
-            search = self.grid_search(
-                V,
-                y_train,
-                self.create_model,
-                NLPCAModel,
-                model_params,
-                compile_params,
-                False,
-                self.epochs,
-                self.validation_split,
-                callbacks,
-                self.cv,
-                self.ga,
-                self.early_stop_gen,
-                self.scoring_metric,
-                self.grid_iter,
-                self.gridparams,
-                self.n_jobs,
-                self.ga_kwargs,
+            # search = self.grid_search(
+            #     V,
+            #     y_train,
+            #     None,
+            #     self.create_model,
+            #     model_params,
+            #     compile_params,
+            #     self.epochs,
+            #     self.validation_split,
+            #     callbacks,
+            #     self.cv,
+            #     self.ga,
+            #     self.early_stop_gen,
+            #     self.scoring_metric,
+            #     self.grid_iter,
+            #     self.gridparams,
+            #     self.n_jobs,
+            #     self.ga_kwargs,
+            # )
+
+            # Cannot do StratifiedKFold here because
+            # it doesn't work with multioutput targets.
+            # cross_val = KFold(n_splits=grid_cv, shuffle=False)
+            cross_val = DisabledCV()
+
+            # Set KerasClassifier paramters.
+            # model_params = {f"model__{k}": v for k, v in model_params.items()}
+
+            # fit_params, has_fitparams = self._format_fit_params(
+            #     search_space, model_params, epochs, validation_split
+            # )
+            # compile_kwargs = self._format_compile_kwargs(
+            #     compile_params, y_train
+            # )
+
+            # kc_params = dict(
+            #     model=model,
+            #     callbacks=callbacks,
+            #     **model_params,
+            #     compile_kwargs,
+            # )
+
+            # if has_fitparams:
+            #     kc_params.update(fit_params)
+
+            # loss = self.make_reconstruction_loss(y_train.shape[1])
+            # metrics = [self.make_acc(y_train.shape[1])]
+
+            # compile_params["optimizer"] = self.set_optimizer(search_mode=False)
+            # compile_params["loss"] = loss
+            # compile_params["metrics"] = metrics
+            # compile_params.pop("learning_rate")
+
+            # model = self.create_model(
+            #     **model_params,
+            #     compile_kwargs=compile_params,
+            # )
+
+            clf = MLPClassifier(
+                **model_params,
+                optimizer=compile_params["optimizer"],
+                learning_rate=compile_params["learning_rate"],
+                optimizer__learning_rate=compile_params["learning_rate"],
+                loss=self.custom_loss,
+                metrics=[self.custom_acc],
+                epochs=self.epochs,
+                phase=None,
+                callbacks=callbacks,
+                validation_split=self.validation_split,
+                verbose=0,
             )
 
-            print(search.best_params_)
-            print(search.best_score_)
+            if self.ga:
+                # Stop searching if GA sees no improvement.
+                callback = ConsecutiveStopping(
+                    generations=self.early_stop_gen, metric="fitness"
+                )
 
-            sys.exit()
+                # Do genetic algorithm
+                with HiddenPrints():
+                    search = GASearchCV(
+                        estimator=clf,
+                        cv=cross_val,
+                        scoring=self.scoring_metric,
+                        generations=self.grid_iter,
+                        param_grid=self.gridparams,
+                        n_jobs=self.n_jobs,
+                        verbose=False,
+                        **self.ga_kwargs,
+                    )
+
+                    search.fit(V, y_train, callbacks=callback)
+
+            else:
+                # Do randomized grid search
+                search = RandomizedSearchCV(
+                    clf,
+                    param_distributions=self.gridparams,
+                    n_iter=self.grid_iter,
+                    scoring=self.scoring_metric,
+                    n_jobs=self.n_jobs,
+                    cv=cross_val,
+                )
+
+                search.fit(V, y_train)
+
+                print(search.best_params_)
+                print(search.best_score_)
+
+                sys.exit()
 
         else:
             model = self.create_model(
@@ -3206,18 +3706,16 @@ class UBP(NeuralNetwork):
             tf.keras.backend.clear_session()
             self.reset_seeds()
 
-            build = True if i == 3 else False
-
             if do_gridsearch:
                 compile_params["learning_rate"] = self.learning_rate
 
                 search = self.grid_search(
                     model_params["V"],
                     y_train,
-                    phase,
+                    i,
+                    self.create_model,
                     model_params,
                     compile_params,
-                    build,
                     self.epochs,
                     self.validation_split,
                     callbacks,
@@ -3241,7 +3739,6 @@ class UBP(NeuralNetwork):
                     phase,
                     **model_params,
                     compile_kwargs=compile_params,
-                    build=build,
                     phase=i,
                     search_mode=False,
                 )
@@ -3323,8 +3820,8 @@ class UBP(NeuralNetwork):
         ]
 
         if self.gridparams is None:
-            loss = self.make_reconstruction_loss(y_train.shape[1])
-            metrics = [self.make_acc(y_train.shape[1])]
+            loss = self.make_reconstruction_loss()
+            metrics = [self.make_acc()]
         else:
             loss = self.make_reconstruction_loss
             metrics = [self.make_acc]
@@ -3336,8 +3833,22 @@ class UBP(NeuralNetwork):
             "run_eagerly": True,
         }
 
+        if self.gridparams is None:
+            vinput = self.init_weights(y_train.shape[0], self.n_components)
+
+        else:
+            vinput = dict()
+            if self.n_components < 2:
+                raise ValueError("n_components must be >= 2.")
+            elif self.n_components == 2:
+                vinput = self.init_weights(y_train.shape[0], self.n_components)
+            else:
+                for i in range(2, self.n_components + 1):
+                    vinput[i] = self.init_weights(y_train.shape[0], i)
+
         model_params = {
-            "V": V,
+            "V": vinput,
+            "y_decoded": y,
             "y": y_train,
             "batch_size": self.batch_size,
             "missing_mask": missing_mask,
