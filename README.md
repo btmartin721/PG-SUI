@@ -76,10 +76,12 @@ The requirements can be installed with conda and pip. sklearn-genetic-opt and sc
 conda create -n pg-sui python=3.8
 conda activate pg-sui
 
-conda install matplotlib seaborn jupyterlab scikit-learn=1.0 tqdm pandas=1.2.5 numpy=1.20.2 scipy=1.6.2 xgboost lightgbm toytree
+conda install matplotlib seaborn jupyterlab scikit-learn=1.0 tqdm pandas=1.2.5 numpy=1.20.2 scipy=1.6.2 xgboost lightgbm
 
 # Only works if using Intel CPUs; speeds up processing
 conda install scikit-learn-intelex
+
+conda install -c conda-forge toytree
 
 # For genetic algorithm plotting functions
 pip install sklearn-genetic-opt[all]
