@@ -125,9 +125,101 @@ class NeuralNetwork:
 
         return df_incomplete
 
-    def validate_model_inputs(
-        self, V, y, missing_mask, output_shape, hidden_layer_sizes
-    ):
+    def validate_hidden_layers(self, hidden_layer_sizes, num_hidden_layers):
+        """Validate hidden_layer_sizes and verify that it is in the correct format.
+
+        Args:
+            hidden_layer_sizes (str, int, List[str], or List[int]): Output units for all the hidden layers.
+
+            num_hidden_layers (int): Number of hidden layers to use.
+
+        Returns:
+            List[int] or List[str]: List of hidden layer sizes.
+        """
+        if isinstance(hidden_layer_sizes, (str, int)):
+            hidden_layer_sizes = [hidden_layer_sizes] * num_hidden_layers
+
+        # If not all integers
+        elif isinstance(hidden_layer_sizes, list):
+            if not all([isinstance(x, (str, int)) for x in hidden_layer_sizes]):
+                ls = list(set([type(item) for item in hidden_layer_sizes]))
+                raise TypeError(
+                    f"Variable hidden_layer_sizes must either be None, "
+                    f"an integer or string, or a list of integers or "
+                    f"strings, but got the following type(s): {ls}"
+                )
+
+        else:
+            raise TypeError(
+                f"Variable hidden_layer_sizes must either be, "
+                f"an integer, a string, or a list of integers or strings, "
+                f"but got the following type: {type(hidden_layer_sizes)}"
+            )
+
+        assert (
+            num_hidden_layers == len(hidden_layer_sizes)
+            and num_hidden_layers > 0
+        ), "num_hidden_layers must be the length of hidden_layer_sizes."
+
+        return hidden_layer_sizes
+
+    def get_hidden_layer_sizes(self, n_dims, n_components, hl_func):
+        """Get dimensions of hidden layers.
+
+        Args:
+            n_dims (int): The number of feature dimensions (columns) (d).
+
+            n_components (int): The number of reduced dimensions (t).
+
+            hl_func (str): The function to use to calculate the hidden layer sizes. Possible options: "midpoint", "sqrt", "log2".
+
+        Returns:
+            [int, int, int, ...]: [Number of dimensions in hidden layers].
+        """
+        layers = list()
+        if not isinstance(hl_func, list):
+            raise TypeError("hl_func must be of type list.")
+
+        for func in hl_func:
+            if func == "midpoint":
+                units = round((n_dims + n_components) / 2)
+            elif func == "sqrt":
+                units = round(math.sqrt(n_dims))
+            elif func == "log2":
+                units = round(math.log(n_dims, 2))
+            elif isinstance(func, int):
+                units = func
+            else:
+                raise ValueError(
+                    f"hidden_layer_sizes must be either integers or any of "
+                    f"the following strings: 'midpoint', "
+                    f"'sqrt', or 'log2', but got {func} of type {type(func)}"
+                )
+
+            assert units > 0 and units < n_dims, (
+                f"The hidden layer sizes must be > 0 and < the number of "
+                f"features (i.e., columns) in the dataset, but size was {units}"
+            )
+
+            layers.append(units)
+        return layers
+
+    def init_weights(self, dim1, dim2, w_mean=0, w_stddev=0.01):
+        """Initialize random weights to use with the model.
+
+        Args:
+            dim1 (int): Size of first dimension.
+
+            dim2 (int): Size of second dimension.
+
+            w_mean (float, optional): Mean of normal distribution. Defaults to 0.
+
+            w_stddev (float, optional): Standard deviation of normal distribution. Defaults to 0.01.
+        """
+        # Get reduced-dimension dataset.
+        return np.random.normal(loc=w_mean, scale=w_stddev, size=(dim1, dim2))
+
+    def validate_model_inputs(self, V, y, missing_mask, output_shape):
         """Validate inputs to Keras subclass model.
 
         Args:
@@ -138,10 +230,8 @@ class NeuralNetwork:
 
             output_shape (int): Output shape for hidden layers.
 
-            hidden_layer_sizes (List[int]): Hidden layer units of same length as the number of hidden layers.
-
         Raises:
-            TypeError: V, y, missing_mask, output_shape, hidden_layer_sizes must not be NoneType.
+            TypeError: V, y, missing_mask, output_shape must not be NoneType.
         """
         if V is None:
             raise TypeError("V must not be NoneType.")
@@ -155,9 +245,6 @@ class NeuralNetwork:
         if output_shape is None:
             raise TypeError("output_shape must not be NoneType.")
 
-        if hidden_layer_sizes is None:
-            raise TypeError("hidden_layer_sizes must not be NoneType.")
-
     def create_model(
         self,
         estimator=None,
@@ -170,7 +257,6 @@ class NeuralNetwork:
         hidden_layer_sizes=None,
         num_hidden_layers=1,
         hidden_activation="elu",
-        learning_rate=0.01,
         l1_penalty=0.01,
         l2_penalty=0.01,
         dropout_rate=0.2,
@@ -179,6 +265,7 @@ class NeuralNetwork:
         n_components=3,
         build=False,
         compile_kwargs=None,
+        search_mode=True,
     ):
         """Create a neural network model using the estimator to initialize.
 
@@ -204,6 +291,7 @@ class NeuralNetwork:
             batch_size=batch_size,
             missing_mask=missing_mask,
             output_shape=output_shape,
+            n_components=n_components,
             weights_initializer=weights - initializer,
             hidden_layer_sizes=hidden_layer_sizes,
             num_hidden_layers=num_hidden_layers,
@@ -213,12 +301,15 @@ class NeuralNetwork:
             dropout_rate=dropout_rate,
             num_classes=num_classes,
             phase=phase,
+            search_mode=True,
         )
 
         if build:
             model.build((None, n_components))
 
-        model.compile(**compile_kwargs)
+        if not search_mode:
+            model.compile(**compile_kwargs)
+
         return model
 
     def prepare_training_batches(
@@ -620,7 +711,7 @@ class NeuralNetwork:
 
         return X
 
-    def set_optimizer(self):
+    def set_optimizer(self, search_mode=False):
         """Set optimizer to use.
 
         Returns:
@@ -629,17 +720,38 @@ class NeuralNetwork:
         Raises:
             ValueError: Unsupported optimizer specified.
         """
-        if self.optimizer.lower() == "adam":
-            return tf.keras.optimizers.Adam(learning_rate=self.learning_rate)
-        elif self.optimizer.lower() == "sgd":
-            return tf.keras.optimizers.SGD(learning_rate=self.learning_rate)
-        elif self.optimizer.lower() == "adagrad":
-            return tf.keras.optimizers.Adagrad(learning_rate=self.learning_rate)
+        if search_mode:
+            if self.optimizer.lower() == "adam":
+                return tf.keras.optimizers.Adam
+            elif self.optimizer.lower() == "sgd":
+                return tf.keras.optimizers.SGD
+            elif self.optimizer.lower() == "adagrad":
+                return tf.keras.optimizers.Adagrad
+            else:
+                raise ValueError(
+                    f"Only 'adam', 'sgd', and 'adagrad' optimizers are supported, "
+                    f"but got {self.optimizer}."
+                )
+
         else:
-            raise ValueError(
-                f"Only 'adam', 'sgd', and 'adagrad' optimizers are supported, "
-                f"but got {self.optimizer}."
-            )
+            if self.optimizer.lower() == "adam":
+                return tf.keras.optimizers.Adam(
+                    learning_rate=self.learning_rate
+                )
+
+            elif self.optimizer.lower() == "sgd":
+                return tf.keras.optimizers.SGD(learning_rate=self.learning_rate)
+
+            elif self.optimizer.lower() == "adagrad":
+                return tf.keras.optimizers.Adagrad(
+                    learning_rate=self.learning_rate
+                )
+
+            else:
+                raise ValueError(
+                    f"Only 'adam', 'sgd', and 'adagrad' optimizers are supported, "
+                    f"but got {self.optimizer}."
+                )
 
     def grid_search(
         self,
@@ -648,7 +760,7 @@ class NeuralNetwork:
         model,
         estimator,
         model_params,
-        compile_kwargs,
+        compile_params,
         build,
         epochs,
         validation_split,
@@ -662,43 +774,60 @@ class NeuralNetwork:
         grid_n_jobs,
         ga_kwargs,
     ):
-        # Modified code
-        # Cannot do StratifiedKFold here.
+        # Cannot do StratifiedKFold here because
+        # it doesn't work with multioutput targets.
         cross_val = KFold(n_splits=grid_cv, shuffle=False)
 
-        fit_params = {"callbacks__callbacks": callbacks}
+        # Set KerasClassifier paramters.
+        # model_params = {f"model__{k}": v for k, v in model_params.items()}
 
-        if "batch_size" not in search_space:
-            fit_params["fit__batch_size"] = model_params["batch_size"]
-        if "epochs" not in search_space:
-            fit_params["fit__epochs"] = epochs
-        if validation_split in search_space:
-            fit_params["fit__validation_split"] = validation_split
+        fit_params, has_fitparams = self._format_fit_params(
+            search_space, model_params, epochs, validation_split
+        )
+        compile_kwargs = self._format_compile_kwargs(compile_params, y_train)
 
-        model_params = {f"model__{k}": v for k, v in model_params.items()}
-
-        # model_params["V"] = model_params["V"].tolist()
-        # for i, v in enumerate(model_params["V"]):
-        #     model_params["V"][i] = tuple(v)
-
-        compile_kwargs = {f"optimizer__{k}": v for k, v in model_params.items()}
-
-        model = KerasClassifier(
-            model,
-            model__estimator=estimator,
-            **model_params,
-            n_components=model_params.pop("model__n_components"),
+        kc_params = dict(
+            model=model,
+            estimator=estimator,
             build=build,
-            compile_kwargs=compile_kwargs,
+            callbacks=callbacks,
+            **model_params,
+            **compile_kwargs,
         )
 
-        # tmp = dict()
-        # for k, v in model_params.items():
-        #     tmp[k] = [v]
-        # for k, v in compile_params.items():
-        #     tmp[k] = [v]
+        if has_fitparams:
+            kc_params.update(fit_params)
 
-        # search_space.update(tmp)
+        clf = KerasClassifier(
+            model=model,
+            estimator=estimator,
+            V=X_train,
+            y=y_train,
+            batch_size=model_params["batch_size"],
+            missing_mask=model_params["missing_mask"],
+            output_shape=y_train.shape[1],
+            n_components=model_params["n_components"],
+            weights_initializer=model_params["weights_initializer"],
+            hidden_layer_sizes=model_params["hidden_layer_sizes"],
+            num_hidden_layers=model_params["num_hidden_layers"],
+            hidden_activation=model_params["hidden_activation"],
+            l1_penalty=model_params["l1_penalty"],
+            l2_penalty=model_params["l2_penalty"],
+            dropout_rate=model_params["dropout_rate"],
+            num_classes=model_params["num_classes"],
+            build=build,
+            optimizer=compile_params["optimizer"],
+            optimizer__learning_rate=compile_params["learning_rate"],
+            loss=compile_params["loss"],
+            loss__n_features=y_train.shape[1],
+            metrics=compile_params["metrics"],
+            metrics__n_features=y_train.shape[1],
+            callbacks=callbacks,
+            epochs=epochs,
+            validation_split=validation_split,
+            verbose=0,
+            learning_rate=compile_params["learning_rate"],
+        )
 
         if ga:
             # Stop searching if GA sees no improvement.
@@ -709,7 +838,7 @@ class NeuralNetwork:
             # Do genetic algorithm
             with HiddenPrints():
                 search = GASearchCV(
-                    estimator=model,
+                    estimator=clf,
                     cv=cross_val,
                     scoring=scoring_metric,
                     generations=grid_n_iter,
@@ -724,7 +853,7 @@ class NeuralNetwork:
         else:
             # Do randomized grid search
             search = RandomizedSearchCV(
-                model,
+                clf,
                 param_distributions=search_space,
                 n_iter=grid_n_iter,
                 scoring=scoring_metric,
@@ -735,6 +864,39 @@ class NeuralNetwork:
             search.fit(X_train, y=y_train)
 
         return search
+
+    def _format_fit_params(
+        self, search_space, model_params, epochs, validation_split
+    ):
+        fit_params = dict()
+        has_fitparams = False
+
+        if "batch_size" not in search_space:
+            fit_params["fit__batch_size"] = model_params["batch_size"]
+            has_fitparams = True
+        if "epochs" not in search_space:
+            fit_params["fit__epochs"] = epochs
+            has_fitparams = True
+        if validation_split not in search_space:
+            fit_params["fit__validation_split"] = validation_split
+            has_fitparams = True
+
+        return fit_params, has_fitparams
+
+    def _format_compile_kwargs(self, compile_params, y_train):
+        compile_kwargs = dict()
+        compile_kwargs["optimizer"] = compile_params["optimizer"]
+
+        compile_kwargs["optimizer__learning_rate"] = compile_params[
+            "learning_rate"
+        ]
+
+        compile_kwargs["loss"] = compile_params["loss"]
+        compile_kwargs["loss__n_features"] = y_train.shape[1]
+        compile_kwargs["metrics"] = compile_params["metrics"]
+        compile_kwargs["metrics__n_features"] = y_train.shape[1]
+        compile_kwargs["run_eagerly"] = compile_params["run_eagerly"]
+        return compile_kwargs
 
 
 class UBPCallbacks(tf.keras.callbacks.Callback):
@@ -829,31 +991,31 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
     NLPCAModel subclasses the tf.keras.Model and overrides the train_step() and test_step() functions, which do training and evaluation for each batch in each epoch.
 
     Args:
-        V (numpy.ndarray(float)): V should have been randomly initialized and will be used as the input data that gets refined during training.
+        V (numpy.ndarray(float)): V should have been randomly initialized and will be used as the input data that gets refined during training. Defaults to None.
 
-        y (numpy.ndarray): Target values to predict. Actual input data.
+        y (numpy.ndarray): Target values to predict. Actual input data. Defaults to None.
 
-        batch_size (int, optional): Batch size per epoch.
+        batch_size (int, optional): Batch size per epoch. Defaults to 32.
 
-        missing_mask (numpy.ndarray): Missing data mask for y.
+        missing_mask (numpy.ndarray): Missing data mask for y. Defaults to None.
 
-        output_shape (int): Output units for n_features dimension. Output will be of shape (batch_size, n_features).
+        output_shape (int): Output units for n_features dimension. Output will be of shape (batch_size, n_features). Defaults to None.
 
-        n_components (int): Number of principal components for V.
+        weights_initializer (str, optional): Kernel initializer to use for initializing model weights. Defaults to "glorot_normal".
 
-        weights_initializer (str): Kernel initializer to use for initializing model weights.
+        hidden_layer_sizes (List[int], optional): Output units for each hidden layer. List should be of same length as the number of hidden layers. Defaults to "midpoint".
 
-        hidden_layer_sizes (List[int]): Output units for each hidden layer. List should be of same length as the number of hidden layers.
+        num_hidden_layers (int, optional): Number of hidden layers to use. Defaults to 1.
 
-        hidden_activation (str): Activation function to use for hidden layers.
+        hidden_activation (str, optional): Activation function to use for hidden layers. Defaults to "elu".
 
-        l1_penalty (float): L1 regularization penalty to use to reduce overfitting.
+        l1_penalty (float, optional): L1 regularization penalty to use to reduce overfitting. Defaults to 0.01.
 
-        l2_penalty (float): L2 regularization penalty to use to reduce overfitting.
+        l2_penalty (float, optional): L2 regularization penalty to use to reduce overfitting. Defaults to 0.01.
 
-        dropout_rate (float): Dropout rate during training to reduce overfitting. Must be a float between 0 and 1.
+        dropout_rate (float, optional): Dropout rate during training to reduce overfitting. Must be a float between 0 and 1. Defaults to 0.2.
 
-        num_classes (int, optional): Number of classes in output. Corresponds to the 3rd dimension of the output shape (batch_size, n_features, num_classes). Defaults to 3.
+        num_classes (int, optional): Number of classes in output. Corresponds to the 3rd dimension of the output shape (batch_size, n_features, num_classes). Defaults to 1.
 
         phase (NoneType): Here for compatibility with UBP.
 
@@ -863,7 +1025,7 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
         test_step: Does evaluation for one batch in a single epoch.
 
     Attributes:
-        _V_latent (numpy.ndarray(float)): Randomly initialized input that gets refined during training to better predict the targets.
+        V_latent_ (numpy.ndarray(float)): Randomly initialized input that gets refined during training to better predict the targets.
 
         hidden_layer_sizes (List[Union[int, str]]): Output units for each hidden layer. Length should be the same as the number of hidden layers.
 
@@ -875,15 +1037,15 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
 
         _n_batches (int): Total number of batches per epoch.
 
-        _input_with_mask (numpy.ndarray): Target y with the missing data mask horizontally concatenated and shape (n_samples, n_features * 2). Gets refined in the UBPCallbacks() callback.
+        input_with_mask_ (numpy.ndarray): Target y with the missing data mask horizontally concatenated and shape (n_samples, n_features * 2). Gets refined in the UBPCallbacks() callback.
 
     Example:
-        >>>model = NLPCAModel(V=V, y=y, batch_size=32, missing_mask=missing_mask, output_shape, n_components, weights_initializer, hidden_layer_sizes, hidden_activation, l1_penalty, l2_penalty, dropout_rate, num_classes=3)
+        >>>model = NLPCAModel(V=V, y=y, batch_size=32, missing_mask=missing_mask, output_shape, n_components, weights_initializer, hidden_layer_sizes, num_hidden_layers, hidden_activation, l1_penalty, l2_penalty, dropout_rate, num_classes=3)
         >>>model.compile(optimizer=optimizer, loss=loss_func, metrics=[my_metrics], run_eagerly=True)
         >>>history = model.fit(X, y, batch_size=batch_size, epochs=epochs, callbacks=[MyCallback()], validation_split=validation_split, shuffle=False)
 
     Raises:
-        TypeError: V, y, missing_mask, output_shape, hidden_layer_sizes must not be NoneType.
+        TypeError: V, y, missing_mask, output_shape must not be NoneType.
         ValueError: Maximum of 5 hidden layers.
 
     """
@@ -895,8 +1057,9 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
         batch_size=32,
         missing_mask=None,
         output_shape=None,
+        n_components=3,
         weights_initializer="glorot_normal",
-        hidden_layer_sizes=None,
+        hidden_layer_sizes="midpoint",
         num_hidden_layers=1,
         hidden_activation="elu",
         l1_penalty=0.01,
@@ -907,18 +1070,20 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
     ):
         super(NLPCAModel, self).__init__()
 
-        self.validate_model_inputs(
-            V, y, missing_mask, output_shape, hidden_layer_sizes
+        self._V = self._init_weights(y.shape[0], n_components)
+        self._y = y
+
+        hidden_layer_sizes = self.validate_hidden_layers(
+            hidden_layer_sizes, num_hidden_layers
         )
 
-        if isinstance(V, list):
-            self._V = np.array(V)
-        else:
-            self._V = V
-        self._y = y
+        hidden_layer_sizes = self.get_hidden_layer_sizes(
+            y.shape[1], V.shape[1], hidden_layer_sizes
+        )
+
+        self.validate_model_inputs(V, y, missing_mask, output_shape)
+
         self._missing_mask = missing_mask
-        self.hidden_layer_sizes = hidden_layer_sizes
-        self.num_hidden_layers = num_hidden_layers
         self.weights_initializer = weights_initializer
         self.phase = phase
         self.dropout_rate = dropout_rate
@@ -926,32 +1091,29 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
         ### NOTE: I tried using just _V as the input to be refined, but it
         # wasn't getting updated. So I copy it here and it works.
         # V_latent is refined during train_step().
-        self._V_latent = self._V.copy()
+        self.V_latent_ = self._V.copy()
 
         # Initialize parameters used during train_step() and test_step().
-        # _input_with_mask is set during the UBPCallbacks() execution.
+        # input_with_mask_ is set during the UBPCallbacks() execution.
         self._batch_idx = 0
         self._n_batches = 0
         self._batch_size = batch_size
-        self._input_with_mask = None
-        self.n_components = self._V.shape[1]
+        self.input_with_mask_ = None
+        self.n_components = n_components
 
         if l1_penalty == 0.0 and l2_penalty == 0.0:
             kernel_regularizer = None
         else:
             kernel_regularizer = l1_l2(l1_penalty, l2_penalty)
+
         self.kernel_regularizer = kernel_regularizer
         kernel_initializer = weights_initializer
 
-        if num_hidden_layers != len(hidden_layer_sizes):
+        if num_hidden_layers > 5:
             raise ValueError(
-                f"num_hidden_layers must be equal to len(hidden_layer_sizes), "
-                f"but got num_hidden_layers={num_hidden_layers} and "
-                f"len(hidden_layer_sizes)={len(hidden_layer_sizes)}"
+                f"The maximum number of hidden layers is 5, but got "
+                f"{num_hidden_layers}"
             )
-
-        if len(hidden_layer_sizes) > 5:
-            raise ValueError("The maximum number of hidden layers is 5.")
 
         self.dense2 = None
         self.dense3 = None
@@ -968,7 +1130,7 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
             kernel_regularizer=kernel_regularizer,
         )
 
-        if len(hidden_layer_sizes) >= 2:
+        if num_hidden_layers >= 2:
             self.dense2 = Dense(
                 hidden_layer_sizes[1],
                 activation=hidden_activation,
@@ -976,7 +1138,7 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
                 kernel_regularizer=kernel_regularizer,
             )
 
-        if len(hidden_layer_sizes) >= 3:
+        if num_hidden_layers >= 3:
             self.dense3 = Dense(
                 hidden_layer_sizes[2],
                 activation=hidden_activation,
@@ -984,7 +1146,7 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
                 kernel_regularizer=kernel_regularizer,
             )
 
-        if len(hidden_layer_sizes) >= 4:
+        if num_hidden_layers >= 4:
             self.dense4 = Dense(
                 hidden_layer_sizes[3],
                 activation=hidden_activation,
@@ -992,7 +1154,7 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
                 kernel_regularizer=kernel_regularizer,
             )
 
-        if len(hidden_layer_sizes) == 5:
+        if num_hidden_layers == 5:
             self.dense5 = Dense(
                 hidden_layer_sizes[4],
                 activation=hidden_activation,
@@ -1022,19 +1184,24 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
         if self.dropout_rate == 0.0:
             training = False
         x = self.dense1(inputs)
-        x = self.dropout_layer(x, training=training)
+        if training:
+            x = self.dropout_layer(x, training=training)
         if self.dense2 is not None:
             x = self.dense2(x)
-            x = self.dropout_layer(x, training=training)
+            if training:
+                x = self.dropout_layer(x, training=training)
         if self.dense3 is not None:
             x = self.dense3(x)
-            x = self.dropout_layer(x, training=training)
+            if training:
+                x = self.dropout_layer(x, training=training)
         if self.dense4 is not None:
             x = self.dense4(x)
-            x = self.dropout_layer(x, training=training)
+            if training:
+                x = self.dropout_layer(x, training=training)
         if self.dense5 is not None:
             x = self.dense5(x)
-            x = self.dropout_layer(x, training=training)
+            if training:
+                x = self.dropout_layer(x, training=training)
         return self.output1(x)
 
     def model(self):
@@ -1064,10 +1231,10 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
             Obtain batch_size without using run_eagerly option in compile(). This will allow the step to be run in graph mode, thereby speeding up computation.
         """
         # Set in the UBPCallbacks() callback.
-        y = self._input_with_mask
+        y = self.input_with_mask_
 
         v, y_true, batch_start, batch_end = self.prepare_training_batches(
-            self._V_latent,
+            self.V_latent_,
             y,
             self._batch_size,
             self._batch_idx,
@@ -1107,10 +1274,10 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
 
         # NOTE: run_eagerly must be set to True in the compile() method for this
         # to work. Otherwise it can't convert a Tensor object to a numpy array.
-        # There is really no other way to set v back to _V_latent in graph
+        # There is really no other way to set v back to V_latent_ in graph
         # mode as far as I know. eager execution is slower, so it would be nice
         # to find a way to do this without converting to numpy.
-        self._V_latent[batch_start:batch_end, :] = v.numpy()
+        self.V_latent_[batch_start:batch_end, :] = v.numpy()
 
         # history object that gets returned from fit().
         return {m.name: m.result() for m in self.metrics}
@@ -1128,10 +1295,10 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
         """
         # Unpack the data. Don't need V here. Just X (y_true).
         # y_true = data[1]
-        y = self._input_with_mask
+        y = self.input_with_mask_
 
         v, y_true, batch_start, batch_end = self.prepare_training_batches(
-            self._V_latent,
+            self.V_latent_,
             y,
             self._batch_size,
             self._batch_idx,
@@ -1161,7 +1328,7 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
     @property
     def V_latent(self):
         """Randomly initialized input variable that gets refined during training."""
-        return self._V_latent
+        return self.V_latent_
 
     @property
     def batch_size(self):
@@ -1188,12 +1355,12 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
 
     @property
     def input_with_mask(self):
-        return self._input_with_mask
+        return self.input_with_mask_
 
     @V_latent.setter
     def V(self, value):
         """Set randomly initialized input variable. Gets refined during training."""
-        self._V_latent = value
+        self.V_latent_ = value
 
     @batch_size.setter
     def batch_size(self, value):
@@ -1222,7 +1389,7 @@ class NLPCAModel(tf.keras.Model, NeuralNetwork):
 
     @input_with_mask.setter
     def input_with_mask(self, value):
-        self._input_with_mask = value
+        self.input_with_mask_ = value
 
 
 class UBPPhase1(tf.keras.Model, NeuralNetwork):
@@ -1235,31 +1402,33 @@ class UBPPhase1(tf.keras.Model, NeuralNetwork):
     UBPPhase1 is a single-layer perceptron model used to initially refine V. After Phase 1 the Phase 1 weights are discarded.
 
     Args:
-        V (numpy.ndarray(float)): V should have been randomly initialized and will be used as the input data that gets refined during training.
+        V (numpy.ndarray(float)): V should have been randomly initialized and will be used as the input data that gets refined during training. Defaults to None.
 
-        y (numpy.ndarray): Target values to predict. Actual input data.
+        y (numpy.ndarray): Target values to predict. Actual input data. Defaults to None.
 
-        batch_size (int, optional): Batch size per epoch.
+        batch_size (int, optional): Batch size per epoch. Defaults to 32.
 
-        missing_mask (numpy.ndarray): Missing data mask for y.
+        missing_mask (numpy.ndarray): Missing data mask for y. Defaults to None.
 
-        output_shape (int): Output units for n_features dimension. Output will be of shape (batch_size, output_shape).
+        output_shape (int): Output units for n_features dimension. Output will be of shape (batch_size, n_features). Defaults to None.
 
-        n_components (int): Number of principal components for V.
+        weights_initializer (str, optional): Kernel initializer to use for initializing model weights. Defaults to "glorot_normal".
 
-        weights_initializer (str): Kernel initializer to use for initializing model weights.
+        hidden_layer_sizes (NoneType, optional): Output units for each hidden layer. List should be of same length as the number of hidden layers. Not used for UBP Phase 1, but is here for compatibility. Defaults to None.
 
-        hidden_layer_sizes (List[int]): Output units for each hidden layer. List should be of same length as the number of hidden layers.
+        num_hidden_layers (int, optional): Number of hidden layers to use. Not used in UBP Phase 1, but is here for compatibility. Defaults to 0.
 
-        hidden_activation (str): Activation function to use for hidden layers.
+        hidden_activation (str, optional): Activation function to use for hidden layers. Defaults to "elu".
 
-        l1_penalty (float): L1 regularization penalty to use to reduce overfitting.
+        l1_penalty (float, optional): L1 regularization penalty to use to reduce overfitting. Defaults to 0.01.
 
-        l2_penalty (float): L2 regularization penalty to use to reduce overfitting.
+        l2_penalty (float, optional): L2 regularization penalty to use to reduce overfitting. Defaults to 0.01.
 
-        num_classes (int, optional): Number of classes in output. Corresponds to the 3rd dimension of the output shape (batch_size, n_features, num_classes). Defaults to 3.
+        dropout_rate (float, optional): Dropout rate during training to reduce overfitting. Must be a float between 0 and 1. Defaults to 0.2.
 
-        phase (int, optional): Current phase if doing UBP model. Defaults to 3.
+        num_classes (int, optional): Number of classes in output. Corresponds to the 3rd dimension of the output shape (batch_size, n_features, num_classes). Defaults to 1.
+
+        phase (int, optional): Current phase if doing UBP model. Defaults to 1.
 
     Methods:
         call: Does forward pass for model.
@@ -1267,7 +1436,7 @@ class UBPPhase1(tf.keras.Model, NeuralNetwork):
         test_step: Does evaluation for one batch in a single epoch.
 
     Attributes:
-        _V_latent (numpy.ndarray(float)): Randomly initialized input that gets refined during training.
+        V_latent_ (numpy.ndarray(float)): Randomly initialized input that gets refined during training.
 
         phase (int): Current phase if doing UBP model. Ignored if doing NLPCA model.
 
@@ -1281,15 +1450,15 @@ class UBPPhase1(tf.keras.Model, NeuralNetwork):
 
         _n_batches (int): Total number of batches per epoch.
 
-        _input_with_mask (numpy.ndarray): Target y with the missing data mask horizontally concatenated and shape (n_samples, n_features * 2). Gets refined in the UBPCallbacks() callback.
+        input_with_mask_ (numpy.ndarray): Target y with the missing data mask horizontally concatenated and shape (n_samples, n_features * 2). Gets refined in the UBPCallbacks() callback.
 
     Example:
-        >>>model = UBPPhase1(V=V, y=y, batch_size=32, missing_mask=missing_mask, output_shape, n_components, weights_initializer, hidden_layer_sizes, hidden_activation, l1_penalty, l2_penalty, num_classes=3, phase=3)
+        >>>model = UBPPhase1(V=V, y=y, batch_size=32, missing_mask=missing_mask, output_shape, n_components, weights_initializer, hidden_layer_sizes, num_hidden_layers, hidden_activation, l1_penalty, l2_penalty, num_classes=3, phase=3)
         >>>model.compile(optimizer=optimizer, loss=loss_func, metrics=[my_metrics], run_eagerly=True)
         >>>history = model.fit(X, y, batch_size=batch_size, epochs=epochs, callbacks=[MyCallback()], validation_split=validation_split, shuffle=False)
 
     Raises:
-        TypeError: V, y, missing_mask, output_shape, hidden_layer_sizes must not be NoneType.
+        TypeError: V, y, missing_mask, output_shape must not be NoneType.
         ValueError: Maximum of 5 hidden layers.
 
     """
@@ -1301,9 +1470,10 @@ class UBPPhase1(tf.keras.Model, NeuralNetwork):
         batch_size=32,
         missing_mask=None,
         output_shape=None,
+        n_components=3,
         weights_initializer="glorot_normal",
         hidden_layer_sizes=None,
-        num_hidden_layers=1,
+        num_hidden_layers=0,
         hidden_activation="elu",
         l1_penalty=0.01,
         l2_penalty=0.01,
@@ -1313,12 +1483,11 @@ class UBPPhase1(tf.keras.Model, NeuralNetwork):
     ):
         super(UBPPhase1, self).__init__()
 
-        self.validate_model_inputs(
-            V, y, missing_mask, output_shape, hidden_layer_sizes
-        )
-
-        self._V = V
+        self._V = self._init_weights(y.shape[0], n_components)
         self._y = y
+
+        self.validate_model_inputs(V, y, missing_mask, output_shape)
+
         self._missing_mask = missing_mask
         self.phase = phase
         self.hidden_layer_sizes = hidden_layer_sizes
@@ -1328,15 +1497,15 @@ class UBPPhase1(tf.keras.Model, NeuralNetwork):
         ### NOTE: I tried using just _V as the input to be refined, but it
         # wasn't getting updated. So I copy it here and it works.
         # V_latent is refined during train_step().
-        self._V_latent = self._V.copy()
+        self.V_latent_ = self._V.copy()
 
         # Initialize parameters used during train_step() and test_step().
-        # _input_with_mask is set during the UBPCallbacks() execution.
+        # input_with_mask_ is set during the UBPCallbacks() execution.
         self._batch_idx = 0
         self._n_batches = 0
         self._batch_size = batch_size
-        self._input_with_mask = None
-        self.n_components = V.shape[1]
+        self.input_with_mask_ = None
+        self.n_components = n_components
 
         if l1_penalty == 0.0 and l2_penalty == 0.0:
             kernel_regularizer = None
@@ -1387,10 +1556,10 @@ class UBPPhase1(tf.keras.Model, NeuralNetwork):
             Obtain batch_size without using run_eagerly option in compile(). This will allow the step to be run in graph mode, thereby speeding up computation.
         """
         # Set in the UBPCallbacks() callback.
-        y = self._input_with_mask
+        y = self.input_with_mask_
 
         v, y_true, batch_start, batch_end = self.prepare_training_batches(
-            self._V_latent,
+            self.V_latent_,
             y,
             self._batch_size,
             self._batch_idx,
@@ -1431,10 +1600,10 @@ class UBPPhase1(tf.keras.Model, NeuralNetwork):
 
         # NOTE: run_eagerly must be set to True in the compile() method for this
         # to work. Otherwise it can't convert a Tensor object to a numpy array.
-        # There is really no other way to set v back to _V_latent in graph
+        # There is really no other way to set v back to V_latent_ in graph
         # mode as far as I know. eager execution is slower, so it would be nice
         # to find a way to do this without converting to numpy.
-        self._V_latent[batch_start:batch_end, :] = v.numpy()
+        self.V_latent_[batch_start:batch_end, :] = v.numpy()
 
         # history object that gets returned from model.fit().
         return {m.name: m.result() for m in self.metrics}
@@ -1452,10 +1621,10 @@ class UBPPhase1(tf.keras.Model, NeuralNetwork):
         """
         # Unpack the data. Don't need V here. Just X (y_true).
         # y_true = data[1]
-        y = self._input_with_mask
+        y = self.input_with_mask_
 
         v, y_true, batch_start, batch_end = self.prepare_training_batches(
-            self._V_latent,
+            self.V_latent_,
             y,
             self._batch_size,
             self._batch_idx,
@@ -1485,7 +1654,7 @@ class UBPPhase1(tf.keras.Model, NeuralNetwork):
     @property
     def V(self):
         """Randomly initialized input variable that gets refined during training."""
-        return self._V_latent
+        return self.V_latent_
 
     @property
     def batch_size(self):
@@ -1512,12 +1681,12 @@ class UBPPhase1(tf.keras.Model, NeuralNetwork):
 
     @property
     def input_with_mask(self):
-        return self._input_with_mask
+        return self.input_with_mask_
 
     @V.setter
     def V(self, value):
         """Set randomly initialized input variable. Gets refined during training."""
-        self._V_latent = value
+        self.V_latent_ = value
 
     @batch_size.setter
     def batch_size(self, value):
@@ -1546,7 +1715,7 @@ class UBPPhase1(tf.keras.Model, NeuralNetwork):
 
     @input_with_mask.setter
     def input_with_mask(self, value):
-        self._input_with_mask = value
+        self.input_with_mask_ = value
 
 
 class UBPPhase2(tf.keras.Model, NeuralNetwork):
@@ -1557,32 +1726,33 @@ class UBPPhase2(tf.keras.Model, NeuralNetwork):
     Phase 2 does not refine V, it just refines the weights.
 
     Args:
-        V (numpy.ndarray(float)): V should have been randomly initialized and will be used as the input data. It does not get refined in Phase 2.
+        V (numpy.ndarray(float)): V should have been randomly initialized and will be used as the input data that gets refined during training. Defaults to None.
 
-        y (numpy.ndarray): Target values to predict. Actual input data.
+        y (numpy.ndarray): Target values to predict. Actual input data. Defaults to None.
 
-        batch_size (int, optional): Batch size per epoch.
+        batch_size (int, optional): Batch size per epoch. Defaults to 32.
 
-        missing_mask (numpy.ndarray): Missing data mask for y.
-        output_shape (int): Output units for n_features dimension. Output will be of shape (batch_size, output_shape).
+        missing_mask (numpy.ndarray): Missing data mask for y. Defaults to None.
 
-        n_components (int): Number of principal components for V.
+        output_shape (int): Output units for n_features dimension. Output will be of shape (batch_size, n_features). Defaults to None.
 
-        weights_initializer (str): Kernel initializer to use for initializing model weights.
+        weights_initializer (str, optional): Kernel initializer to use for initializing model weights. Defaults to "glorot_normal".
 
-        hidden_layer_sizes (List[int]): Output units for each hidden layer. List should be of same length as the number of hidden layers.
+        hidden_layer_sizes (List[int], optional): Output units for each hidden layer. List should be of same length as the number of hidden layers. Defaults to "midpoint".
 
-        hidden_activation (str): Activation function to use for hidden layers.
+        num_hidden_layers (int, optional): Number of hidden layers to use. Defaults to 1.
 
-        l1_penalty (float): L1 regularization penalty to use to reduce overfitting.
+        hidden_activation (str, optional): Activation function to use for hidden layers. Defaults to "elu".
 
-        l2_penalty (float): L2 regularization penalty to use to reduce overfitting.
+        l1_penalty (float, optional): L1 regularization penalty to use to reduce overfitting. Defaults to 0.01.
 
-        dropout_rate (float): Dropout rate during training to reduce overfitting. Must be a float between 0 and 1.
+        l2_penalty (float, optional): L2 regularization penalty to use to reduce overfitting. Defaults to 0.01.
 
-        num_classes (int, optional): Number of classes in output. Corresponds to the 3rd dimension of the output shape (batch_size, n_features, num_classes). Defaults to 3.
+        dropout_rate (float, optional): Dropout rate during training to reduce overfitting. Must be a float between 0 and 1. Defaults to 0.2.
 
-        phase (int, optional): Current phase if doing UBP model. Defaults to 3.
+        num_classes (int, optional): Number of classes in output. Corresponds to the 3rd dimension of the output shape (batch_size, n_features, num_classes). Defaults to 1.
+
+        phase (int, optional): Current phase if doing UBP model. Defaults to 2.
 
 
     Methods:
@@ -1604,12 +1774,12 @@ class UBPPhase2(tf.keras.Model, NeuralNetwork):
         _n_batches (int): Total number of batches per epoch.
 
     Example:
-        >>>model = UBPPhase2(V=V, y=y, batch_size=32, missing_mask=missing_mask, output_shape, n_components, weights_initializer, hidden_layer_sizes, hidden_activation, l1_penalty, l2_penalty, dropout_rate, num_classes=3, phase=3)
+        >>>model = UBPPhase2(V=V, y=y, batch_size=32, missing_mask=missing_mask, output_shape, n_components, weights_initializer, hidden_layer_sizes, num_hidden_layers, hidden_activation, l1_penalty, l2_penalty, dropout_rate, num_classes=3, phase=3)
         >>>model.compile(optimizer=optimizer, loss=loss_func, metrics=[my_metrics], run_eagerly=True)
         >>>history = model.fit(X, y, batch_size=batch_size, epochs=epochs, callbacks=[MyCallback()], validation_split=validation_split, shuffle=False)
 
     Raises:
-        TypeError: V, y, missing_mask, output_shape, hidden_layer_sizes must not be NoneType.
+        TypeError: V, y, missing_mask, output_shape must not be NoneType.
         ValueError: Maximum of 5 hidden layers.
 
     """
@@ -1621,8 +1791,9 @@ class UBPPhase2(tf.keras.Model, NeuralNetwork):
         batch_size=32,
         missing_mask=None,
         output_shape=None,
+        n_components=3,
         weights_initializer="glorot_normal",
-        hidden_layer_sizes=None,
+        hidden_layer_sizes="midpoint",
         num_hidden_layers=1,
         hidden_activation="elu",
         l1_penalty=0.01,
@@ -1633,12 +1804,19 @@ class UBPPhase2(tf.keras.Model, NeuralNetwork):
     ):
         super(UBPPhase2, self).__init__()
 
-        self.validate_model_inputs(
-            V, y, missing_mask, output_shape, hidden_layer_sizes
-        )
-
         self._V = V
         self._y = y
+
+        hidden_layer_sizes = self.validate_hidden_layers(
+            hidden_layer_sizes, num_hidden_layers
+        )
+
+        hidden_layer_sizes = self.get_hidden_layer_sizes(
+            y.shape[1], V.shape[1], hidden_layer_sizes
+        )
+
+        self.validate_model_inputs(V, y, missing_mask, output_shape)
+
         self._missing_mask = missing_mask
         self.phase = phase
         self.hidden_layer_sizes = hidden_layer_sizes
@@ -1649,29 +1827,23 @@ class UBPPhase2(tf.keras.Model, NeuralNetwork):
         ### NOTE: I tried using just _V as the input to be refined, but it
         # wasn't getting updated. So I copy it here and it works.
         # V_latent is refined during train_step().
-        self._V_latent = self._V.copy()
+        self.V_latent_ = self._V.copy()
 
         # Initialize parameters used during train_step() and test_step().
-        # _input_with_mask is set during the UBPCallbacks() execution.
+        # input_with_mask_ is set during the UBPCallbacks() execution.
         self._batch_idx = 0
         self._n_batches = 0
         self._batch_size = batch_size
-        self._input_with_mask = None
-        self.n_components = V.shape[1]
+        self.input_with_mask_ = None
+        self.n_components = n_components
 
         if l1_penalty == 0.0 and l2_penalty == 0.0:
             kernel_regularizer = None
         else:
             kernel_regularizer = l1_l2(l1_penalty, l2_penalty)
+
         self.kernel_regularizer = kernel_regularizer
         kernel_initializer = weights_initializer
-
-        if num_hidden_layers != len(hidden_layer_sizes):
-            raise ValueError(
-                f"num_hidden_layers must be equal to len(hidden_layer_sizes), "
-                f"but got num_hidden_layers={num_hidden_layers} and "
-                f"len(hidden_layer_sizes)={len(hidden_layer_sizes)}"
-            )
 
         if len(hidden_layer_sizes) > 5:
             raise ValueError("The maximum number of hidden layers is 5.")
@@ -1691,7 +1863,7 @@ class UBPPhase2(tf.keras.Model, NeuralNetwork):
             kernel_regularizer=kernel_regularizer,
         )
 
-        if len(hidden_layer_sizes) >= 2:
+        if num_hidden_layers >= 2:
             self.dense2 = Dense(
                 hidden_layer_sizes[1],
                 activation=hidden_activation,
@@ -1699,7 +1871,7 @@ class UBPPhase2(tf.keras.Model, NeuralNetwork):
                 kernel_regularizer=kernel_regularizer,
             )
 
-        if len(hidden_layer_sizes) >= 3:
+        if num_hidden_layers >= 3:
             self.dense3 = Dense(
                 hidden_layer_sizes[2],
                 activation=hidden_activation,
@@ -1707,7 +1879,7 @@ class UBPPhase2(tf.keras.Model, NeuralNetwork):
                 kernel_regularizer=kernel_regularizer,
             )
 
-        if len(hidden_layer_sizes) >= 4:
+        if num_hidden_layers >= 4:
             self.dense4 = Dense(
                 hidden_layer_sizes[3],
                 activation=hidden_activation,
@@ -1715,7 +1887,7 @@ class UBPPhase2(tf.keras.Model, NeuralNetwork):
                 kernel_regularizer=kernel_regularizer,
             )
 
-        if len(hidden_layer_sizes) == 5:
+        if num_hidden_layers == 5:
             self.dense5 = Dense(
                 hidden_layer_sizes[4],
                 activation=hidden_activation,
@@ -1746,19 +1918,24 @@ class UBPPhase2(tf.keras.Model, NeuralNetwork):
         if self.dropout_rate == 0.0:
             training = False
         x = self.dense1(inputs)
-        x = self.dropout_layer(x, training=training)
+        if training:
+            x = self.dropout_layer(x, training=training)
         if self.dense2 is not None:
             x = self.dense2(x)
-            x = self.dropout_layer(x, training=training)
+            if training:
+                x = self.dropout_layer(x, training=training)
         if self.dense3 is not None:
             x = self.dense3(x)
-            x = self.dropout_layer(x, training=training)
+            if training:
+                x = self.dropout_layer(x, training=training)
         if self.dense4 is not None:
             x = self.dense4(x)
-            x = self.dropout_layer(x, training=training)
+            if training:
+                x = self.dropout_layer(x, training=training)
         if self.dense5 is not None:
             x = self.dense5(x)
-            x = self.dropout_layer(x, training=training)
+            if training:
+                x = self.dropout_layer(x, training=training)
         return self.output1(x)
 
     def model(self):
@@ -1788,12 +1965,12 @@ class UBPPhase2(tf.keras.Model, NeuralNetwork):
         """
 
         # Set in the UBPCallbacks() callback.
-        y = self._input_with_mask
+        y = self.input_with_mask_
 
         # v should not be trainable here in Phase 2.
         # Doesn't get refined in Phase 2.
         v, y_true, batch_start, batch_end = self.prepare_training_batches(
-            self._V_latent,
+            self.V_latent_,
             y,
             self._batch_size,
             self._batch_idx,
@@ -1835,10 +2012,10 @@ class UBPPhase2(tf.keras.Model, NeuralNetwork):
             A dict containing values that will be passed to ``tf.keras.callbacks.CallbackList.on_train_batch_end``. Typically, the values of the Model's metrics are returned.
         """
         # Set in the UBPCallbacks() callback.
-        y = self._input_with_mask
+        y = self.input_with_mask_
 
         v, y_true, batch_start, batch_end = self.prepare_training_batches(
-            self._V_latent,
+            self.V_latent_,
             y,
             self._batch_size,
             self._batch_idx,
@@ -1868,7 +2045,7 @@ class UBPPhase2(tf.keras.Model, NeuralNetwork):
     @property
     def V(self):
         """Randomly initialized input variable that gets refined during training."""
-        return self._V_latent
+        return self.V_latent_
 
     @property
     def batch_size(self):
@@ -1895,12 +2072,12 @@ class UBPPhase2(tf.keras.Model, NeuralNetwork):
 
     @property
     def input_with_mask(self):
-        return self._input_with_mask
+        return self.input_with_mask_
 
     @V.setter
     def V(self, value):
         """Set randomly initialized input variable. Gets refined during training."""
-        self._V_latent = value
+        self.V_latent_ = value
 
     @batch_size.setter
     def batch_size(self, value):
@@ -1929,7 +2106,7 @@ class UBPPhase2(tf.keras.Model, NeuralNetwork):
 
     @input_with_mask.setter
     def input_with_mask(self, value):
-        self._input_with_mask = value
+        self.input_with_mask_ = value
 
 
 class UBPPhase3(tf.keras.Model, NeuralNetwork):
@@ -1940,29 +2117,31 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
     Phase 3 Refines both the weights and V.
 
     Args:
-        V (numpy.ndarray(float)): V is randomly initialized, refined in UBPPhase3, and the refined V is input here into UBPPhase3. It gets refined again here during training.
+        V (numpy.ndarray(float)): V should have been randomly initialized and will be used as the input data that gets refined during training. Defaults to None.
 
-        y (numpy.ndarray): Target values to predict. Actual input data.
+        y (numpy.ndarray): Target values to predict. Actual input data. Defaults to None.
 
-        batch_size (int, optional): Batch size per epoch.
+        batch_size (int, optional): Batch size per epoch. Defaults to 32.
 
-        missing_mask (numpy.ndarray): Missing data mask for y.
+        missing_mask (numpy.ndarray): Missing data mask for y. Defaults to None.
 
-        output_shape (int): Output units for n_features dimension. Output will be of shape (batch_size, output_shape).
+        output_shape (int): Output units for n_features dimension. Output will be of shape (batch_size, n_features). Defaults to None.
 
-        n_components (int): Number of principal components for V.
+        weights_initializer (str, optional): Kernel initializer to use for initializing model weights. Defaults to "glorot_normal".
 
-        weights_initializer (str): Kernel initializer to use for initializing model weights.
+        hidden_layer_sizes (List[int], optional): Output units for each hidden layer. List should be of same length as the number of hidden layers. Defaults to "midpoint".
 
-        hidden_layer_sizes (List[int]): Output units for each hidden layer. List should be of same length as the number of hidden layers.
+        num_hidden_layers (int, optional): Number of hidden layers to use. Defaults to 1.
 
-        hidden_activation (str): Activation function to use for hidden layers.
+        hidden_activation (str, optional): Activation function to use for hidden layers. Defaults to "elu".
 
-        l1_penalty (float): L1 regularization penalty to use to reduce overfitting.
+        l1_penalty (float, optional): L1 regularization penalty to use to reduce overfitting. Defaults to 0.01.
 
-        l2_penalty (float): L2 regularization penalty to use to reduce overfitting.
+        l2_penalty (float, optional): L2 regularization penalty to use to reduce overfitting. Defaults to 0.01.
 
-        num_classes (int, optional): Number of classes in output. Corresponds to the 3rd dimension of the output shape (batch_size, n_features, num_classes). Defaults to 3.
+        dropout_rate (float, optional): Dropout rate during training to reduce overfitting. Must be a float between 0 and 1. Defaults to 0.2.
+
+        num_classes (int, optional): Number of classes in output. Corresponds to the 3rd dimension of the output shape (batch_size, n_features, num_classes). Defaults to 1.
 
         phase (int, optional): Current phase if doing UBP model. Defaults to 3.
 
@@ -1972,7 +2151,7 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
         test_step: Does evaluation for one batch in a single epoch.
 
     Attributes:
-        _V_latent (numpy.ndarray(float)): Randomly initialized input that gets refined during training.
+        V_latent_ (numpy.ndarray(float)): Randomly initialized input that gets refined during training.
 
         phase (int): Current phase if doing UBP model. Ignored if doing NLPCA model.
 
@@ -1986,17 +2165,17 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
 
         _n_batches (int): Total number of batches per epoch.
 
-        _input_with_mask (numpy.ndarray): Target y with the missing data mask horizontally concatenated and shape (n_samples, n_features * 2). Gets refined in the UBPCallbacks() callback.
+        input_with_mask_ (numpy.ndarray): Target y with the missing data mask horizontally concatenated and shape (n_samples, n_features * 2). Gets refined in the UBPCallbacks() callback.
 
     Example:
-        >>>model3 = UBPPhase3(V=V, y=y, batch_size=32, missing_mask=missing_mask, output_shape, n_components, weights_initializer, hidden_layer_sizes, hidden_activation, l1_penalty, l2_penalty, num_classes=3, phase=3)
+        >>>model3 = UBPPhase3(V=V, y=y, batch_size=32, missing_mask=missing_mask, output_shape, n_components, weights_initializer, hidden_layer_sizes, num_hidden_layers, hidden_activation, l1_penalty, l2_penalty, num_classes=3, phase=3)
         >>>model3.build((None, n_features))
         >>>model3.set_weights(model2.get_weights())
         >>>model3.compile(optimizer=optimizer, loss=loss_func, metrics=[my_metrics], run_eagerly=True)
         >>>history = model3.fit(X, y, batch_size=batch_size, epochs=epochs, callbacks=[MyCallback()], validation_split=validation_split, shuffle=False)
 
     Raises:
-        TypeError: V, y, missing_mask, output_shape, hidden_layer_sizes must not be NoneType.
+        TypeError: V, y, missing_mask, output_shape must not be NoneType.
         ValueError: Maximum of 5 hidden layers.
     """
 
@@ -2007,8 +2186,9 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
         batch_size=32,
         missing_mask=None,
         output_shape=None,
+        n_components=3,
         weights_initializer="glorot_normal",
-        hidden_layer_sizes=None,
+        hidden_layer_sizes="midpoint",
         num_hidden_layers=1,
         hidden_activation="elu",
         l1_penalty=0.01,
@@ -2019,12 +2199,19 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
     ):
         super(UBPPhase3, self).__init__()
 
-        self.validate_model_inputs(
-            V, y, missing_mask, output_shape, hidden_layer_sizes
-        )
-
         self._V = V
         self._y = y
+
+        hidden_layer_sizes = self.validate_hidden_layers(
+            hidden_layer_sizes, num_hidden_layers
+        )
+
+        hidden_layer_sizes = self.get_hidden_layer_sizes(
+            y.shape[1], V.shape[1], hidden_layer_sizes
+        )
+
+        self.validate_model_inputs(V, y, missing_mask, output_shape)
+
         self._missing_mask = missing_mask
         self.phase = phase
         self.hidden_layer_sizes = hidden_layer_sizes
@@ -2034,26 +2221,20 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
         ### NOTE: I tried using just _V as the input to be refined, but it
         # wasn't getting updated. So I copy it here and it works.
         # V_latent is refined during train_step().
-        self._V_latent = self._V.copy()
+        self.V_latent_ = self._V.copy()
 
         # Initialize parameters used during train_step() and test_step().
-        # _input_with_mask is set during the UBPCallbacks() execution.
+        # input_with_mask_ is set during the UBPCallbacks() execution.
         self._batch_idx = 0
         self._n_batches = 0
         self._batch_size = batch_size
-        self._input_with_mask = None
-        self.n_components = V.shape[1]
+        self.input_with_mask_ = None
+        self.n_components = n_components
 
+        # No regularization in phase 3.
         kernel_regularizer = None
         self.kernel_regularizer = kernel_regularizer
         kernel_initializer = None
-
-        if num_hidden_layers != len(hidden_layer_sizes):
-            raise ValueError(
-                f"num_hidden_layers must be equal to len(hidden_layer_sizes), "
-                f"but got num_hidden_layers={num_hidden_layers} and "
-                f"len(hidden_layer_sizes)={len(hidden_layer_sizes)}"
-            )
 
         if len(hidden_layer_sizes) > 5:
             raise ValueError("The maximum number of hidden layers is 5.")
@@ -2072,28 +2253,28 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
             kernel_initializer=kernel_initializer,
         )
 
-        if len(hidden_layer_sizes) >= 2:
+        if num_hidden_layers >= 2:
             self.dense2 = Dense(
                 hidden_layer_sizes[1],
                 activation=hidden_activation,
                 kernel_initializer=kernel_initializer,
             )
 
-        if len(hidden_layer_sizes) >= 3:
+        if num_hidden_layers >= 3:
             self.dense3 = Dense(
                 hidden_layer_sizes[2],
                 activation=hidden_activation,
                 kernel_initializer=kernel_initializer,
             )
 
-        if len(hidden_layer_sizes) >= 4:
+        if num_hidden_layers >= 4:
             self.dense4 = Dense(
                 hidden_layer_sizes[3],
                 activation=hidden_activation,
                 kernel_initializer=kernel_initializer,
             )
 
-        if len(hidden_layer_sizes) == 5:
+        if num_hidden_layers == 5:
             self.dense5 = Dense(
                 hidden_layer_sizes[4],
                 activation=hidden_activation,
@@ -2156,10 +2337,10 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
             Obtain batch_size without using run_eagerly option in compile(). This will allow the step to be run in graph mode, thereby speeding up computation.
         """
         # Set in the UBPCallbacks() callback.
-        y = self._input_with_mask
+        y = self.input_with_mask_
 
         v, y_true, batch_start, batch_end = self.prepare_training_batches(
-            self._V_latent,
+            self.V_latent_,
             y,
             self._batch_size,
             self._batch_idx,
@@ -2197,7 +2378,7 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
             tf.convert_to_tensor(y_true, dtype=tf.float32), y_pred
         )
 
-        self._V_latent[batch_start:batch_end, :] = v.numpy()
+        self.V_latent_[batch_start:batch_end, :] = v.numpy()
 
         # history object that gets returned from fit().
         return {m.name: m.result() for m in self.metrics}
@@ -2215,10 +2396,10 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
         """
         # Unpack the data. Don't need V here. Just X (y_true).
         # y_true = data[1]
-        y = self._input_with_mask
+        y = self.input_with_mask_
 
         v, y_true, batch_start, batch_end = self.prepare_training_batches(
-            self._V_latent,
+            self.V_latent_,
             y,
             self._batch_size,
             self._batch_idx,
@@ -2248,7 +2429,7 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
     @property
     def V(self):
         """Randomly initialized input variable that gets refined during training."""
-        return self._V_latent
+        return self.V_latent_
 
     @property
     def batch_size(self):
@@ -2275,12 +2456,12 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
 
     @property
     def input_with_mask(self):
-        return self._input_with_mask
+        return self.input_with_mask_
 
     @V.setter
     def V(self, value):
         """Set randomly initialized input variable. Gets refined during training."""
-        self._V_latent = value
+        self.V_latent_ = value
 
     @batch_size.setter
     def batch_size(self, value):
@@ -2309,7 +2490,7 @@ class UBPPhase3(tf.keras.Model, NeuralNetwork):
 
     @input_with_mask.setter
     def input_with_mask(self, value):
-        self._input_with_mask = value
+        self.input_with_mask_ = value
 
 
 class VAE(NeuralNetwork):
@@ -2882,11 +3063,11 @@ class UBP(NeuralNetwork):
         df = self.encode_onehot(y)
         y_train = df.copy().values
         y_train, missing_mask, observed_mask = self._format_data(y_train, -1)
-        V = self._init_weights(y.shape[0], self.n_components)
+
+        # Placeholder for V. Gets replaced in model.
+        V = self.init_weights(y.shape[0], self.n_components)
 
         (
-            hl_sizes,
-            num_hidden_layers,
             optimizer,
             logfile,
             callbacks,
@@ -2952,6 +3133,8 @@ class UBP(NeuralNetwork):
         self.reset_seeds()
 
         if do_gridsearch:
+            compile_params["learning_rate"] = self.learning_rate
+
             search = self.grid_search(
                 V,
                 y_train,
@@ -2982,9 +3165,9 @@ class UBP(NeuralNetwork):
             model = self.create_model(
                 NLPCAModel,
                 **model_params,
-                **compile_params,
-                n_components=self.n_components,
+                compile_kwargs=compile_params,
                 phase=None,
+                search_mode=False,
             )
 
             history = model.fit(
@@ -3026,6 +3209,8 @@ class UBP(NeuralNetwork):
             build = True if i == 3 else False
 
             if do_gridsearch:
+                compile_params["learning_rate"] = self.learning_rate
+
                 search = self.grid_search(
                     model_params["V"],
                     y_train,
@@ -3055,10 +3240,10 @@ class UBP(NeuralNetwork):
                 model = self.create_model(
                     phase,
                     **model_params,
-                    **compile_params,
-                    n_components=self.n_components,
+                    compile_kwargs=compile_params,
                     build=build,
                     phase=i,
+                    search_mode=False,
                 )
 
                 if i == 3:
@@ -3112,14 +3297,6 @@ class UBP(NeuralNetwork):
             Dict[str, Any]: Other parameters to pass to KerasClassifier().
             Dict[str, Any]: Parameters to pass to fit_params() in grid search.
         """
-        (hl_sizes, num_hidden_layers) = self._validate_hidden_layers(
-            self.hidden_layer_sizes, self.num_hidden_layers
-        )
-
-        hl_sizes = self._get_hidden_layer_sizes(
-            y.shape[1], self.n_components, hl_sizes
-        )
-
         # Gradient descent optimizer.
         optimizer = self.set_optimizer()
 
@@ -3145,10 +3322,17 @@ class UBP(NeuralNetwork):
             ),
         ]
 
+        if self.gridparams is None:
+            loss = self.make_reconstruction_loss(y_train.shape[1])
+            metrics = [self.make_acc(y_train.shape[1])]
+        else:
+            loss = self.make_reconstruction_loss
+            metrics = [self.make_acc]
+
         compile_params = {
             "optimizer": optimizer,
-            "loss": self.make_reconstruction_loss(y_train.shape[1]),
-            "metrics": [self.make_acc(y_train.shape[1])],
+            "loss": loss,
+            "metrics": metrics,
             "run_eagerly": True,
         }
 
@@ -3160,7 +3344,7 @@ class UBP(NeuralNetwork):
             "output_shape": y_train.shape[1],
             "weights_initializer": self.weights_initializer,
             "n_components": self.n_components,
-            "hidden_layer_sizes": hl_sizes,
+            "hidden_layer_sizes": self.hidden_layer_sizes,
             "num_hidden_layers": self.num_hidden_layers,
             "hidden_activation": self.hidden_activation,
             "l1_penalty": self.l1_penalty,
@@ -3182,8 +3366,6 @@ class UBP(NeuralNetwork):
         }
 
         return (
-            hl_sizes,
-            num_hidden_layers,
             optimizer,
             logfile,
             callbacks,
@@ -3295,101 +3477,6 @@ class UBP(NeuralNetwork):
 
             plt.close()
             plt.clf()
-
-    def _validate_hidden_layers(self, hidden_layer_sizes, num_hidden_layers):
-        """Validate hidden_layer_sizes and verify that it is in the correct format.
-
-        Args:
-            hidden_layer_sizes (str, int, List[str], or List[int]): Output units for all the hidden layers.
-
-            num_hidden_layers (int): Number of hidden layers to use.
-
-        Returns:
-            List[int] or List[str]: List of hidden layer sizes.
-            int: Number of hidden layers to use.
-        """
-        if isinstance(hidden_layer_sizes, (str, int)):
-            hidden_layer_sizes = [hidden_layer_sizes] * num_hidden_layers
-
-        # If not all integers
-        elif isinstance(hidden_layer_sizes, list):
-            if not all([isinstance(x, (str, int)) for x in hidden_layer_sizes]):
-                ls = list(set([type(item) for item in hidden_layer_sizes]))
-                raise TypeError(
-                    f"Variable hidden_layer_sizes must either be None, "
-                    f"an integer or string, or a list of integers or "
-                    f"strings, but got the following type(s): {ls}"
-                )
-
-        else:
-            raise TypeError(
-                f"Variable hidden_layer_sizes must either be, "
-                f"an integer, a string, or a list of integers or strings, "
-                f"but got the following type: {type(hidden_layer_sizes)}"
-            )
-
-        assert (
-            num_hidden_layers == len(hidden_layer_sizes)
-            and num_hidden_layers > 0
-        ), "num_hidden_layers must be the length of hidden_layer_sizes."
-
-        return hidden_layer_sizes, num_hidden_layers
-
-    def _get_hidden_layer_sizes(self, n_dims, n_components, hl_func):
-        """Get dimensions of hidden layers.
-
-        Args:
-            n_dims (int): The number of feature dimensions (columns) (d).
-
-            n_components (int): The number of reduced dimensions (t).
-
-            hl_func (str): The function to use to calculate the hidden layer sizes. Possible options: "midpoint", "sqrt", "log2".
-
-        Returns:
-            [int, int, int]: [Number of dimensions in hidden layers]
-        """
-        layers = list()
-        if not isinstance(hl_func, list):
-            raise TypeError("hl_func must be of type list.")
-
-        for func in hl_func:
-            if func == "midpoint":
-                units = round((n_dims + n_components) / 2)
-            elif func == "sqrt":
-                units = round(math.sqrt(n_dims))
-            elif func == "log2":
-                units = round(math.log(n_dims, 2))
-            elif isinstance(func, int):
-                units = func
-            else:
-                raise ValueError(
-                    f"hidden_layer_sizes must be either integers or any of "
-                    f"the following strings: 'midpoint', "
-                    f"'sqrt', or 'log2', but got {func} of type {type(func)}"
-                )
-
-            assert units > 0 and units < n_dims, (
-                f"The hidden layer sizes must be > 0 and < the number of "
-                f"features (i.e., columns) in the dataset, but size was {units}"
-            )
-
-            layers.append(units)
-        return layers
-
-    def _init_weights(self, dim1, dim2, w_mean=0, w_stddev=0.01):
-        """Initialize random weights to use with the model.
-
-        Args:
-            dim1 (int): Size of first dimension.
-
-            dim2 (int): Size of second dimension.
-
-            w_mean (float, optional): Mean of normal distribution. Defaults to 0.
-
-            w_stddev (float, optional): Standard deviation of normal distribution. Defaults to 0.01.
-        """
-        # Get reduced-dimension dataset.
-        return np.random.normal(loc=w_mean, scale=w_stddev, size=(dim1, dim2))
 
     def _create_missing_mask(self, data, missing_value):
         """Creates a missing data mask with boolean values.
