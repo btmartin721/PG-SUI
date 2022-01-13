@@ -575,7 +575,7 @@ class NeuralNetwork:
 
         return accuracy_masked
 
-    def custom_acc(self, input_and_mask, y_pred):
+    def accuracy(self, input_and_mask, y_pred):
         """Custom loss function for neural network model with missing mask.
 
         Ignores missing data in the calculation of the loss function.
@@ -771,158 +771,49 @@ class NeuralNetwork:
 
         return X
 
-    def set_optimizer(self, search_mode=False):
-        """Set optimizer to use.
+    def set_compile_params(self, search_mode=False):
+        """Set compile parameters to use.
 
         Returns:
-            tf.keras.optimizers: Initialized optimizer.
+            Dict[str, callable] or Dict[str, Any]: Callables if search_mode is True, otherwise instantiated objects.
 
         Raises:
             ValueError: Unsupported optimizer specified.
         """
+        if self.optimizer.lower() == "adam":
+            opt = tf.keras.optimizers.Adam
+        elif self.optimizer.lower() == "sgd":
+            opt = tf.keras.optimizers.SGD
+        elif self.optimizer.lower() == "adagrad":
+            opt = tf.keras.optimizers.Adagrad
+        elif self.optimizer.lower() == "adadelta":
+            opt = tf.keras.optimizers.Adadelta
+        elif self.optimizer.lower() == "adamax":
+            opt = tf.keras.optimizers.Adamax
+        elif self.optimizer.lower() == "ftrl":
+            opt = tf.keras.optimizers.Ftrl
+        elif self.optimizer.lower() == "nadam":
+            opt = tf.keras.optimizers.Nadam
+        elif self.optimizer.lower() == "rmsprop":
+            opt = tf.keras.optimizers.RMSProp
+
         if search_mode:
-            if self.optimizer.lower() == "adam":
-                return tf.keras.optimizers.Adam
-            elif self.optimizer.lower() == "sgd":
-                return tf.keras.optimizers.SGD
-            elif self.optimizer.lower() == "adagrad":
-                return tf.keras.optimizers.Adagrad
-            else:
-                raise ValueError(
-                    f"Only 'adam', 'sgd', and 'adagrad' optimizers are supported, "
-                    f"but got {self.optimizer}."
-                )
-
+            # Doing grid search. Params are callables.
+            optimizer = opt
+            loss = self.custom_loss
+            metrics = [self.accuracy]
         else:
-            if self.optimizer.lower() == "adam":
-                return tf.keras.optimizers.Adam(
-                    learning_rate=self.learning_rate
-                )
+            # No grid search. Optimizer params are initialized.
+            optimizer = opt(learning_rate=self.learning_rate)
+            loss = self.make_reconstruction_loss()
+            metrics = [self.make_acc()]
 
-            elif self.optimizer.lower() == "sgd":
-                return tf.keras.optimizers.SGD(learning_rate=self.learning_rate)
-
-            elif self.optimizer.lower() == "adagrad":
-                return tf.keras.optimizers.Adagrad(
-                    learning_rate=self.learning_rate
-                )
-
-            else:
-                raise ValueError(
-                    f"Only 'adam', 'sgd', and 'adagrad' optimizers are supported, "
-                    f"but got {self.optimizer}."
-                )
-
-    def grid_search(
-        self,
-        X_train,
-        y_train,
-        phase,
-        model,
-        model_params,
-        compile_params,
-        epochs,
-        validation_split,
-        callbacks,
-        grid_cv,
-        ga,
-        early_stop_gen,
-        scoring_metric,
-        grid_n_iter,
-        search_space,
-        grid_n_jobs,
-        ga_kwargs,
-    ):
-        # Cannot do StratifiedKFold here because
-        # it doesn't work with multioutput targets.
-        # cross_val = KFold(n_splits=grid_cv, shuffle=False)
-        cross_val = DisabledCV()
-
-        # Set KerasClassifier paramters.
-        # model_params = {f"model__{k}": v for k, v in model_params.items()}
-
-        fit_params, has_fitparams = self._format_fit_params(
-            search_space, model_params, epochs, validation_split
-        )
-        compile_kwargs = self._format_compile_kwargs(compile_params, y_train)
-
-        kc_params = dict(
-            model=model,
-            callbacks=callbacks,
-            **model_params,
-            **compile_kwargs,
-        )
-
-        if has_fitparams:
-            kc_params.update(fit_params)
-
-        print(model)
-        sys.exit()
-
-        clf = KerasClassifier(
-            model=model,
-            V=X_train,
-            y=y_train,
-            batch_size=model_params["batch_size"],
-            missing_mask=model_params["missing_mask"],
-            output_shape=y_train.shape[1],
-            n_components=model_params["n_components"],
-            weights_initializer=model_params["weights_initializer"],
-            hidden_layer_sizes=model_params["hidden_layer_sizes"],
-            num_hidden_layers=model_params["num_hidden_layers"],
-            hidden_activation=model_params["hidden_activation"],
-            l1_penalty=model_params["l1_penalty"],
-            l2_penalty=model_params["l2_penalty"],
-            dropout_rate=model_params["dropout_rate"],
-            num_classes=model_params["num_classes"],
-            optimizer=compile_params["optimizer"],
-            optimizer__learning_rate=compile_params["learning_rate"],
-            loss=compile_params["loss"],
-            loss__n_features=y_train.shape[1],
-            metrics=compile_params["metrics"],
-            metrics__n_features=y_train.shape[1],
-            callbacks=callbacks,
-            epochs=epochs,
-            validation_split=validation_split,
-            verbose=0,
-            learning_rate=compile_params["learning_rate"],
-        )
-
-        if ga:
-            # Stop searching if GA sees no improvement.
-            callback = ConsecutiveStopping(
-                generations=early_stop_gen, metric="fitness"
-            )
-
-            # Do genetic algorithm
-            with HiddenPrints():
-                search = GASearchCV(
-                    estimator=clf,
-                    cv=cross_val,
-                    scoring=scoring_metric,
-                    generations=grid_n_iter,
-                    param_grid=search_space,
-                    n_jobs=grid_n_jobs,
-                    verbose=False,
-                    **ga_kwargs,
-                )
-
-                search.fit(X_train, y_train, callbacks=callback)
-
-        else:
-            # Do randomized grid search
-            search = RandomizedSearchCV(
-                clf,
-                param_distributions=search_space,
-                n_iter=grid_n_iter,
-                scoring=scoring_metric,
-                n_jobs=grid_n_jobs,
-                cv=cross_val,
-            )
-
-            search.fit(X_train, y=y_train)
-
-        return search
+        return {
+            "optimizer": optimizer,
+            "loss": loss,
+            "metrics": metrics,
+            "run_eagerly": True,
+        }
 
     def _format_fit_params(
         self, search_space, model_params, epochs, validation_split
@@ -957,23 +848,113 @@ class NeuralNetwork:
         compile_kwargs["run_eagerly"] = compile_params["run_eagerly"]
         return compile_kwargs
 
+    def plot_grid_search(self, grid):
+        """
+        Params:
+            grid: A trained GridSearchCV object.
+        """
+        ## Results from grid search
+        results = grid.cv_results_
+        means_test = results["mean_test_score"]
+        stds_test = results["std_test_score"]
+
+        ## Getting indexes of values per hyper-parameter
+        masks = []
+        masks_names = list(grid.best_params_.keys())
+        for p_k, p_v in grid.best_params_.items():
+            masks.append(list(results["param_" + p_k].data == p_v))
+
+        params = grid.param_grid
+
+        ## Ploting results
+        fig, ax = plt.subplots(
+            1, len(params), sharex="none", sharey="all", figsize=(20, 5)
+        )
+        fig.suptitle("Score per parameter")
+        fig.text(0.04, 0.5, "Mean Score", va="center", rotation="vertical")
+        pram_preformace_in_best = {}
+        for i, p in enumerate(masks_names):
+            m = np.stack(masks[:i] + masks[i + 1 :])
+            pram_preformace_in_best
+            best_parms_mask = m.all(axis=0)
+            best_index = np.where(best_parms_mask)[0]
+            x = np.array(params[p])
+            y_1 = np.array(means_test[best_index])
+            ax[i].set_xlabel(p.upper())
+
+        plt.legend()
+        fig.savefig("gridsearch.pdf", bbox_inches="tight")
+        # # Get Test Scores Mean and std for each grid search
+        # scores_mean = cv_results["mean_test_score"]
+        # params = cv_results["params"]
+        # params_df = pd.DataFrame(params)
+        # param_names = [cv_results[x] for x in params_df.keys()]
+
+        # # Plot Grid search scores
+        # fig, ax = plt.subplots(1, 1)
+
+        # for idx, name in enumerate(param_names):
+        #     ax.plot(cv_results[name], scores_mean, "-o", label=name)
+
+        # ax.set_title("Grid Search Scores", fontsize=20, fontweight="bold")
+        # ax.set_xlabel(name_param_1, fontsize=16)
+        # ax.set_ylabel("CV Average Score", fontsize=16)
+        # ax.legend(loc="best", fontsize=15)
+        # ax.grid("on")
+
 
 class OutputTransformer(BaseEstimator, TransformerMixin):
+    """Transformer to format target data both before and after model fitting.
+
+    Args:
+        y_decoded (numpy.ndarray): Original input data that is 012-encoded.
+    """
+
     def __init__(self, y_decoded):
         self.y_decoded = y_decoded
 
     def fit(self, y):
+        """Fit to target data.
+
+        Args:
+            y (numpy.ndarray): Target data that is one-hot encoded.
+
+        Returns:
+            self: Class instance.
+        """
         self.n_outputs_expected_ = 1
         return self
 
     def transform(self, y):
+        """Transform y_true. Here to accomodate multiclass-multioutput targets.
+
+        Args:
+            y (numpy.ndarray): One-hot encoded target data.
+
+        Returns:
+            numpy.ndarray: y_true target data. No formatting necessary, but here to accomodate multiclass-multioutput targets.
+        """
         return y
 
     def inverse_transform(self, y):
+        """Transform y_pred to same format as y_true.
+
+        This allows sklearn.metrics to be used.
+
+        Args:
+            y (numpy.ndarray): Predicted probabilities after model fitting.
+
+        Returns:
+            numpy.ndarray: y predictions in same format as y_true.
+        """
         y_pred_proba = y  # Rename for clarity, Keras gives probs
-        imputed_enc = y_pred_proba.copy()
-        imputed_enc, dummy_df = self._predict(self.y_decoded, imputed_enc)
-        return imputed_enc
+        imputed_enc, dummy_df = self._predict(self.y_decoded, y_pred_proba)
+
+        y_pred_df = self._decode_onehot(
+            pd.DataFrame(data=imputed_enc, columns=dummy_df.columns)
+        )
+
+        return y_pred_df.to_numpy()
 
     def _mle(self, row):
         """Get the Maximum Likelihood Estimation for the best prediction. Basically, it sets the index of the maxiumum value in a vector (row) to 1.0, since it is one-hot encoded.
@@ -1050,18 +1031,78 @@ class OutputTransformer(BaseEstimator, TransformerMixin):
 
         return df_incomplete
 
+    def _decode_onehot(self, df_dummies):
+        """Decode one-hot format to 012-encoded genotypes.
+
+        Args:
+            df_dummies (pandas.DataFrame): One-hot encoded imputed data.
+
+        Returns:
+            pandas.DataFrame: 012-encoded imputed data.
+        """
+        pos = defaultdict(list)
+        vals = defaultdict(list)
+
+        for i, c in enumerate(df_dummies.columns):
+            if "_" in c:
+                k, v = c.split("_", 1)
+                pos[k].append(i)
+                vals[k].append(v)
+
+            else:
+                pos["_"].append(i)
+
+        df = pd.DataFrame(
+            {
+                k: pd.Categorical.from_codes(
+                    np.argmax(df_dummies.iloc[:, pos[k]].values, axis=1),
+                    vals[k],
+                )
+                for k in vals
+            }
+        )
+
+        df[df_dummies.columns[pos["_"]]] = df_dummies.iloc[:, pos["_"]]
+
+        return df
+
 
 class InputTransformer(BaseEstimator, TransformerMixin):
+    """Transform input X prior to estimator fitting.
+
+    Args:
+        phase (int or None): current phase if doing UBP or None if doing NLPCA.
+        n_components (int): Number of principal components currently being used in V.
+
+        V (numpy.ndarray or Dict[str, Any]): If doing grid search, should be a dictionary with current_component: numpy.ndarray. If not doing grid search, then it should be a numpy.ndarray.
+    """
+
     def __init__(self, phase, n_components, V):
         self.phase = phase
         self.n_components = n_components
         self.V = V
 
     def fit(self, X):
+        """Fit transformer to input data X.
+
+        Args:
+            X (numpy.ndarray): Input data to fit. If numpy.ndarray, then should be of shape (n_samples, n_components). If dictionary, then should be component: numpy.ndarray.
+
+        Returns:
+            self: Class instance.
+        """
         self.n_features_in_ = self.n_components
         return self
 
     def transform(self, X):
+        """Transform input data X to the needed format.
+
+        Args:
+            X (numpy.ndarray): Input data to fit. If numpy.ndarray, then should be of shape (n_samples, n_components). If dictionary, then should be component: numpy.ndarray.
+
+        Returns:
+            numpy.ndarray: Formatted input data with correct component.
+        """
         if self.phase == None or self.phase == 1:
             if not isinstance(self.V, dict):
                 raise TypeError("X must be a dictionary if phase == None or 1.")
@@ -1071,6 +1112,56 @@ class InputTransformer(BaseEstimator, TransformerMixin):
 
 
 class MLPClassifier(KerasClassifier):
+    """Estimator to be used with the scikit-learn API.
+
+    Args:
+        V (numpy.ndarray or Dict[str, Any]): Input X values of shape (n_samples, n_components). If a dictionary is passed, each key: value pair should have randomly initialized values for n_components: V. self.feature_encoder() will parse it and select the key: value pair with the current n_components. This allows n_components to be grid searched using GridSearchCV. Otherwise, it throws an error that the dimensions are off. Defaults to None.
+
+        y_decoded (numpy.ndarray): Original target data, y, that is not one-hot encoded. Should have shape (n_samples, n_features). Should be 012-encoded. Defaults to None.
+
+        y (numpy.ndarray): One-hot encoded target data. Defaults to None.
+
+        batch_size (int): Batch size to train with. Defaults to 32.
+
+        missing_mask (np.ndarray): Missing mask with missing values set to False (0) and observed values as True (1). Defaults to None. Defaults to None.
+
+        output_shape (int): Number of units in model output layer. Defaults to None.
+
+        weights_initializer (str): Kernel initializer to use for model weights. Defaults to "glorot_normal".
+
+        hidden_layer_sizes (List[int]): Output unit size for each hidden layer. Should be list of length num_hidden_layers. Defaults to None.
+
+        num_hidden_layers (int): Number of hidden layers to use. Defaults to 1.
+
+        hidden_activation (str): Hidden activation function to use. Defaults to "elu".
+
+        l1_penalty (float): L1 regularization penalty to use to reduce overfitting. Defautls to 0.01.
+
+        l2_penalty (float): L2 regularization penalty to use to reduce overfitting. Defaults to 0.01.
+
+        dropout_rate (float): Dropout rate for each hidden layer to reduce overfitting. Defaults to 0.2.
+
+        num_classes (int): Number of classes in output predictions. Defaults to 1.
+
+        phase (int or None): Current phase (if doing UBP), or None if doing NLPCA. Defults to None.
+
+        n_components (int): Number of components to use for input V. Defaults to 3.
+
+        serach_mode (bool): Whether in grid search mode (True) or single estimator mode (False). Defaults to True.
+
+        optimizer (str or callable): Optimizer to use during training. Should be either a str or tf.keras.optimizers callable. Defaults to "adam".
+
+        loss (str or callable): Loss function to use. Should be a string or a callable if using a custom loss function. Defaults to "binary_crossentropy".
+
+        metrics (List[Union[str, callable]]): Metrics to use. Should be a sstring or a callable if using a custom metrics function. Defaults to "accuracy".
+
+        epochs (int): Number of epochs to train over. Defaults to 100.
+
+        verbose (int): Verbosity mode ranging from 0 - 2. 0 = silent, 2 = most verbose.
+
+        kwargs (Any): Other keyword arguments to route to fit, compile, callbacks, etc. Should have the routing prefix (e.g., optimizer__learning_rate=0.01).
+    """
+
     def __init__(
         self,
         V=None,
@@ -1122,6 +1213,14 @@ class MLPClassifier(KerasClassifier):
         self.verbose = verbose
 
     def _keras_build_fn(self, compile_kwargs):
+        """Build model with custom parameters.
+
+        Args:
+            compile_kwargs (Dict[str, Any]): Dictionary with parameters: values. The parameters should be passed to the class constructor, but should be captured as kwargs. They should also have the routing prefix (e.g., optimizer__learning_rate=0.01). compile_kwargs will automatically be parsed from **kwargs by KerasClassifier and sent here.
+
+        Returns:
+            tf.keras.Model: Model instance. The chosen model depends on which phase is passed to the class constructor.
+        """
         if self.phase is None:
             model = NLPCAModel(
                 V=self.V,
@@ -1216,131 +1315,56 @@ class MLPClassifier(KerasClassifier):
         y_pred,
         **kwargs,
     ):
-        observed_mask = 1 - self.missing_mask
-        y_true_observed = y_true * observed_mask
-        y_pred_observed = y_pred * observed_mask
+        """Scorer for grid search that masks missing data.
+
+        To use this, do not specify a scoring metric when initializing the grid search object. By default if the scoring_metric option is left as None, then it uses the estimator's scoring metric (this one).
+
+        Args:
+            y_true (numpy.ndarray): True target values input to fit().
+            y_pred (numpy.ndarray): Predicted target values from estimator. The predictions are modified by self.target_encoder().inverse_transform() before being sent here.
+            kwargs (Any): Other parameters sent to sklearn scoring metric.
+
+        Returns:
+            float: Calculated score.
+        """
+        y_true_nan = np.where(self.y_decoded == -9, np.nan, self.y_decoded)
+        missing_mask = np.isnan(y_true_nan)
+
+        # Subset to only observed values.
+        y_true_observed = y_true_nan[~missing_mask]
+        y_true_observed = y_true_observed.astype(np.int)
+        y_true_observed = y_true_observed.astype(str)
+
+        # Subset to only values observed in y_true.
+        y_pred_observed = y_pred[~missing_mask]
+
         return accuracy_score(y_true_observed, y_pred_observed, **kwargs)
 
     @property
     def feature_encoder(self):
+        """Handles feature input, X, before training.
+
+        Returns:
+            InputTransformer: InputTransformer object that includes fit() and  transform() methods to transform input before estimator fitting.
+        """
         return InputTransformer(self.phase, self.n_components, self.V)
 
     @property
     def target_encoder(self):
+        """Handles target input and output, y_true and y_pred, both before and after training.
+
+        Returns:
+            OutputTransformer: OutputTransformer object that includes fit(), transform(), and inverse_transform() methods.
+        """
         return OutputTransformer(self.y_decoded)
-
-    def _mle(self, row):
-        """Get the Maximum Likelihood Estimation for the best prediction. Basically, it sets the index of the maxiumum value in a vector (row) to 1.0, since it is one-hot encoded.
-
-        Args:
-            row (numpy.ndarray(float)): Row vector with predicted values as floating points.
-
-        Returns:
-            numpy.ndarray(float): Row vector with the highest prediction set to 1.0 and the others set to 0.0.
-        """
-        res = np.zeros(row.shape[0])
-        res[np.argmax(row)] = 1
-        return res
-
-    def _predict(self, X, complete_encoded):
-        """Evaluate VAE predictions by calculating the highest predicted value.
-
-        Calucalates highest predicted value for each row vector and each class, setting the most likely class to 1.0.
-
-        Args:
-            X (numpy.ndarray): Input one-hot encoded data.
-
-            complete_encoded (numpy.ndarray): Output one-hot encoded data with the maximum predicted values for each class set to 1.0.
-
-        Returns:
-            numpy.ndarray: Imputed one-hot encoded values.
-
-            pandas.DataFrame: One-hot encoded pandas DataFrame with no missing values.
-        """
-
-        df = self.encode_categorical(X)
-
-        # Had to add dropna() to count unique classes while ignoring np.nan
-        col_classes = [len(df[c].dropna().unique()) for c in df.columns]
-        df_dummies = pd.get_dummies(df)
-        mle_complete = None
-        for i, cnt in enumerate(col_classes):
-            start_idx = int(sum(col_classes[0:i]))
-            col_completed = complete_encoded[:, start_idx : start_idx + cnt]
-
-            mle_completed = np.apply_along_axis(
-                self.mle, axis=1, arr=col_completed
-            )
-
-            if mle_complete is None:
-                mle_complete = mle_completed
-
-            else:
-                mle_complete = np.hstack([mle_complete, mle_completed])
-
-        return mle_complete, df_dummies
-
-    def _encode_categorical(self, X):
-        """Encode -9 encoded missing values as np.nan.
-
-        Args:
-            X (numpy.ndarray): 012-encoded genotypes with -9 as missing values.
-
-        Returns:
-            pandas.DataFrame: DataFrame with missing values encoded as np.nan.
-        """
-        np.nan_to_num(X, copy=False, nan=-9.0)
-        X = X.astype(str)
-        X[(X == "-9.0") | (X == "-9")] = "none"
-
-        df = pd.DataFrame(X)
-        df_incomplete = df.copy()
-
-        # Replace 'none' with np.nan
-        for row in df.index:
-            for col in df.columns:
-                if df_incomplete.iat[row, col] == "none":
-                    df_incomplete.iat[row, col] = np.nan
-
-        return df_incomplete
-
-    def _decode_onehot(self, df_dummies):
-        """Decode one-hot format to 012-encoded genotypes.
-
-        Args:
-            df_dummies (pandas.DataFrame): One-hot encoded imputed data.
-
-        Returns:
-            pandas.DataFrame: 012-encoded imputed data.
-        """
-        pos = defaultdict(list)
-        vals = defaultdict(list)
-
-        for i, c in enumerate(df_dummies.columns):
-            if "_" in c:
-                k, v = c.split("_", 1)
-                pos[k].append(i)
-                vals[k].append(v)
-
-            else:
-                pos["_"].append(i)
-
-        df = pd.DataFrame(
-            {
-                k: pd.Categorical.from_codes(
-                    np.argmax(df_dummies.iloc[:, pos[k]].values, axis=1),
-                    vals[k],
-                )
-                for k in vals
-            }
-        )
-
-        df[df_dummies.columns[pos["_"]]] = df_dummies.iloc[:, pos["_"]]
-
-        return df
 
 
 class UBPCallbacks(tf.keras.callbacks.Callback):
+    """Custom callbacks to use with subclassed NLPCA/ UBP Keras models.
+
+    See tf.keras.callbacks.Callback documentation.
+    """
+
     def __init__(self):
         self.indices = None
 
@@ -1518,8 +1542,6 @@ class NLPCAModel(tf.keras.Model):
             self._V = nn.init_weights(y.shape[0], n_components)
         else:
             self._V = V[n_components]
-
-        print(n_components)
 
         self._y = y
 
@@ -3538,24 +3560,31 @@ class UBP(NeuralNetwork):
         V = self.init_weights(y.shape[0], self.n_components)
 
         (
-            optimizer,
             logfile,
             callbacks,
             compile_params,
             model_params,
-            other_params,
             fit_params,
         ) = self._initialize_parameters(V, y, y_train, missing_mask)
 
         if self.nlpca:
-            models, histories = self._run_nlpca(
+            (
+                models,
+                histories,
+                best_params,
+                best_score,
+                search,
+            ) = self._run_nlpca(
                 V,
                 y_train,
                 model_params,
                 compile_params,
-                callbacks,
-                other_params,
+                fit_params,
             )
+
+            print(best_params)
+            print(best_score)
+            self.plot_grid_search(search)
 
         else:
             models, histories = self._run_ubp(
@@ -3563,8 +3592,7 @@ class UBP(NeuralNetwork):
                 y_train,
                 model_params,
                 compile_params,
-                callbacks,
-                other_params,
+                fit_params,
             )
 
         if len(models) == 1:
@@ -3583,9 +3611,7 @@ class UBP(NeuralNetwork):
 
         sys.exit()
 
-    def _run_nlpca(
-        self, V, y_train, model_params, compile_params, callbacks, other_params
-    ):
+    def _run_nlpca(self, V, y_train, model_params, compile_params, fit_params):
         """Run NLPCA Model using custom subclassed model."""
 
         # Whether to do grid search.
@@ -3605,63 +3631,12 @@ class UBP(NeuralNetwork):
         if do_gridsearch:
             compile_params["learning_rate"] = self.learning_rate
 
-            # search = self.grid_search(
-            #     V,
-            #     y_train,
-            #     None,
-            #     self.create_model,
-            #     model_params,
-            #     compile_params,
-            #     self.epochs,
-            #     self.validation_split,
-            #     callbacks,
-            #     self.cv,
-            #     self.ga,
-            #     self.early_stop_gen,
-            #     self.scoring_metric,
-            #     self.grid_iter,
-            #     self.gridparams,
-            #     self.n_jobs,
-            #     self.ga_kwargs,
-            # )
-
-            # Cannot do StratifiedKFold here because
-            # it doesn't work with multioutput targets.
-            # cross_val = KFold(n_splits=grid_cv, shuffle=False)
+            # Cannot do CV because there is no way to use test splits
+            # given that the input gets refined. If using a test split,
+            # then it would just be the randomly initialized values and
+            # would not accurately represent the model.
+            # Thus, we disable cross-validation for the grid searches.
             cross_val = DisabledCV()
-
-            # Set KerasClassifier paramters.
-            # model_params = {f"model__{k}": v for k, v in model_params.items()}
-
-            # fit_params, has_fitparams = self._format_fit_params(
-            #     search_space, model_params, epochs, validation_split
-            # )
-            # compile_kwargs = self._format_compile_kwargs(
-            #     compile_params, y_train
-            # )
-
-            # kc_params = dict(
-            #     model=model,
-            #     callbacks=callbacks,
-            #     **model_params,
-            #     compile_kwargs,
-            # )
-
-            # if has_fitparams:
-            #     kc_params.update(fit_params)
-
-            # loss = self.make_reconstruction_loss(y_train.shape[1])
-            # metrics = [self.make_acc(y_train.shape[1])]
-
-            # compile_params["optimizer"] = self.set_optimizer(search_mode=False)
-            # compile_params["loss"] = loss
-            # compile_params["metrics"] = metrics
-            # compile_params.pop("learning_rate")
-
-            # model = self.create_model(
-            #     **model_params,
-            #     compile_kwargs=compile_params,
-            # )
 
             if "learning_rate" in self.gridparams:
                 self.gridparams["optimizer__learning_rate"] = self.gridparams[
@@ -3671,14 +3646,14 @@ class UBP(NeuralNetwork):
 
             clf = MLPClassifier(
                 **model_params,
-                optimizer=tf.keras.optimizers.Adam,
+                optimizer=compile_params["optimizer"],
                 optimizer__learning_rate=compile_params["learning_rate"],
-                loss=self.custom_loss,
-                metrics=[self.custom_acc],
-                epochs=self.epochs,
+                loss=compile_params["loss"],
+                metrics=compile_params["metrics"],
+                epochs=fit_params["epochs"],
                 phase=None,
-                callbacks=callbacks,
-                validation_split=0.0,
+                callbacks=fit_params["callbacks"],
+                validation_split=fit_params["validation_split"],
                 verbose=0,
             )
 
@@ -3711,14 +3686,22 @@ class UBP(NeuralNetwork):
                     n_iter=self.grid_iter,
                     n_jobs=self.n_jobs,
                     cv=cross_val,
+                    refit=True,
                 )
 
                 search.fit(V, y_train)
 
-                print(search.best_params_)
-                print(search.best_score_)
+            best_params = search.best_params_
+            best_score = search.best_score_
+            best_index = search.best_index_
 
-                sys.exit()
+            print(best_index)
+
+            cv_results = pd.DataFrame(search.cv_results_)
+            cv_results.to_csv("testcvresults.csv", index=False)
+
+            model = search.best_estimator_
+            histories.append(model.history_)
 
         else:
             model = self.create_model(
@@ -3740,13 +3723,16 @@ class UBP(NeuralNetwork):
                 verbose=self.verbose,
             )
 
-            models.append(model)
-            histories.append(history.history)
-            return models, histories
+            best_params = None
+            best_score = None
+            search = None
 
-    def _run_ubp(
-        self, V, y_train, model_params, compile_params, callbacks, other_params
-    ):
+            histories.append(history.history)
+
+        models.append(model)
+        return models, histories, best_params, best_score, search
+
+    def _run_ubp(self, V, y_train, model_params, compile_params, fit_params):
 
         # Whether to do grid search.
         do_gridsearch = False if self.gridparams is None else True
@@ -3875,26 +3861,11 @@ class UBP(NeuralNetwork):
             ),
         ]
 
-        if self.gridparams is None:
-            loss = self.make_reconstruction_loss()
-            metrics = [self.make_acc()]
-            optimizer = self.set_optimizer(search_mode=True)
-        else:
-            loss = self.make_reconstruction_loss
-            metrics = [self.make_acc]
-            optimizer = self.set_optimizer(search_mode=False)
+        search_mode = False if self.gridparams is None else True
 
-        compile_params = {
-            "optimizer": optimizer,
-            "loss": loss,
-            "metrics": metrics,
-            "run_eagerly": True,
-        }
+        compile_params = self.set_compile_params(search_mode=search_mode)
 
-        if self.gridparams is None:
-            vinput = self.init_weights(y_train.shape[0], self.n_components)
-
-        else:
+        if search_mode:
             vinput = dict()
             if self.n_components < 2:
                 raise ValueError("n_components must be >= 2.")
@@ -3903,6 +3874,8 @@ class UBP(NeuralNetwork):
             else:
                 for i in range(2, self.n_components + 1):
                     vinput[i] = self.init_weights(y_train.shape[0], i)
+        else:
+            vinput = self.init_weights(y_train.shape[0], self.n_components)
 
         model_params = {
             "V": vinput,
@@ -3922,25 +3895,20 @@ class UBP(NeuralNetwork):
             "num_classes": self.num_classes,
         }
 
-        other_params = {}
-        # other_params = {"num_hidden_layers": self.num_hidden_layers}
-
         fit_params = {
             "batch_size": self.batch_size,
             "epochs": self.epochs,
             "callbacks": callbacks,
-            "validation_split": self.validation_split,
+            "validation_split": 0.0,
             "shuffle": False,
             "verbose": self.verbose,
         }
 
         return (
-            optimizer,
             logfile,
             callbacks,
             compile_params,
             model_params,
-            other_params,
             fit_params,
         )
 
@@ -3988,22 +3956,20 @@ class UBP(NeuralNetwork):
             history = lod[0]
 
             # Plot accuracy
-            ax1.plot(history["accuracy_masked"])
-            ax1.plot(history["val_accuracy_masked"])
+            ax1.plot(history["accuracy"])
             ax1.set_title("Model Accuracy")
             ax1.set_ylabel("Accuracy")
             ax1.set_xlabel("Epoch")
             ax1.set_ylim(bottom=0.0, top=1.0)
             ax1.set_yticks([0.0, 0.25, 0.5, 0.75, 1.0])
-            ax1.legend(["Train", "Validation"], loc="best")
+            ax1.legend(["Train"], loc="best")
 
             # Plot model loss
             ax2.plot(history["loss"])
-            ax2.plot(history["val_loss"])
             ax2.set_title("Model Loss")
             ax2.set_ylabel("Loss (MSE)")
             ax2.set_xlabel("Epoch")
-            ax2.legend(["Train", "Validation"], loc="best")
+            ax2.legend(["Training"], loc="best")
             fig.savefig(fn, bbox_inches="tight")
 
             plt.close()
@@ -4022,23 +3988,21 @@ class UBP(NeuralNetwork):
 
                 # Plot model accuracy
                 ax = plt.gca()
-                ax.plot(history["accuracy_masked"])
-                ax.plot(history["val_accuracy_masked"])
+                ax.plot(history["accuracy"])
                 ax.set_title(f"{title} Accuracy")
                 ax.set_ylabel("Accuracy")
                 ax.set_xlabel("Epoch")
                 ax.set_yticks([0.0, 0.25, 0.5, 0.75, 1.0])
-                ax.legend(["Train", "Validation"], loc="best")
+                ax.legend(["Training"], loc="best")
 
                 # Plot model loss
                 plt.subplot(3, 2, idx + 1)
                 ax = plt.gca()
                 ax.plot(history["loss"])
-                ax.plot(history["val_loss"])
                 ax.set_title(f"{title} Loss")
                 ax.set_ylabel("Loss (MSE)")
                 ax.set_xlabel("Epoch")
-                ax.legend(["Train", "Validation"], loc="best")
+                ax.legend(["Train"], loc="best")
 
                 idx += 2
 

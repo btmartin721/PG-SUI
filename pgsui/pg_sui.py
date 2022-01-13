@@ -311,9 +311,9 @@ def main():
     # print(vae_data.genotypes012_df)
 
     # For randomizedsearchcv. Generate parameters to sample from.
-    learning_rate = [float(10) ** x for x in np.arange(-6, -1)]
-    l1_penalty = [float(10) ** x for x in np.arange(-6, -1)]
-    l2_penalty = [float(10) ** x for x in np.arange(-6, -1)]
+    learning_rate = [float(10) ** x for x in np.arange(-3, -1)]
+    l1_penalty = [float(10) ** x for x in np.arange(-3, -1)]
+    l2_penalty = [float(10) ** x for x in np.arange(-3, -1)]
     hidden_activation = ["elu", "relu"]
     num_hidden_layers = [1, 2, 3, 4, 5]
     hidden_layer_sizes = ["sqrt", "midpoint"]
@@ -326,11 +326,11 @@ def main():
         "learning_rate": learning_rate,
         "l1_penalty": l1_penalty,
         "l2_penalty": l2_penalty,
-        "hidden_activation": hidden_activation,
-        "hidden_layer_sizes": hidden_layer_sizes,
-        "n_components": n_components,
-        "dropout_rate": dropout_rate,
-        "batch_size": [16, 32],
+        # "hidden_activation": hidden_activation,
+        # "hidden_layer_sizes": hidden_layer_sizes,
+        # "n_components": n_components,
+        # "dropout_rate": dropout_rate,
+        # "batch_size": [16, 32],
     }
 
     ubp = ImputeNLPCA(
@@ -350,6 +350,8 @@ def main():
         l1_penalty=0.000001,
         l2_penalty=0.000001,
         gridparams=grid_params,
+        n_jobs=1,
+        grid_iter=5,
     )
 
     # ubp = ImputeVAE(
