@@ -13,6 +13,7 @@ from matplotlib import pyplot as plt
 
 from sklearn.base import BaseEstimator
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score
 
 # Grid search imports
 from sklearn.model_selection import StratifiedKFold, KFold
@@ -957,7 +958,10 @@ class NeuralNetwork:
         return compile_kwargs
 
 
-class MultiOutputTransformer(BaseEstimator, TransformerMixin):
+class OutputTransformer(BaseEstimator, TransformerMixin):
+    def __init__(self, y_decoded):
+        self.y_decoded = y_decoded
+
     def fit(self, y):
         self.n_outputs_expected_ = 1
         return self
@@ -966,7 +970,104 @@ class MultiOutputTransformer(BaseEstimator, TransformerMixin):
         return y
 
     def inverse_transform(self, y):
-        return y
+        y_pred_proba = y  # Rename for clarity, Keras gives probs
+        imputed_enc = y_pred_proba.copy()
+        imputed_enc, dummy_df = self._predict(self.y_decoded, imputed_enc)
+        return imputed_enc
+
+    def _mle(self, row):
+        """Get the Maximum Likelihood Estimation for the best prediction. Basically, it sets the index of the maxiumum value in a vector (row) to 1.0, since it is one-hot encoded.
+
+        Args:
+            row (numpy.ndarray(float)): Row vector with predicted values as floating points.
+
+        Returns:
+            numpy.ndarray(float): Row vector with the highest prediction set to 1.0 and the others set to 0.0.
+        """
+        res = np.zeros(row.shape[0])
+        res[np.argmax(row)] = 1
+        return res
+
+    def _predict(self, X, complete_encoded):
+        """Evaluate VAE predictions by calculating the highest predicted value.
+
+        Calucalates highest predicted value for each row vector and each class, setting the most likely class to 1.0.
+
+        Args:
+            X (numpy.ndarray): Input one-hot encoded data.
+
+            complete_encoded (numpy.ndarray): Output one-hot encoded data with the maximum predicted values for each class set to 1.0.
+
+        Returns:
+            numpy.ndarray: Imputed one-hot encoded values.
+
+            pandas.DataFrame: One-hot encoded pandas DataFrame with no missing values.
+        """
+
+        df = self._encode_categorical(X)
+
+        # Had to add dropna() to count unique classes while ignoring np.nan
+        col_classes = [len(df[c].dropna().unique()) for c in df.columns]
+        df_dummies = pd.get_dummies(df)
+        mle_complete = None
+        for i, cnt in enumerate(col_classes):
+            start_idx = int(sum(col_classes[0:i]))
+            col_completed = complete_encoded[:, start_idx : start_idx + cnt]
+
+            mle_completed = np.apply_along_axis(
+                self._mle, axis=1, arr=col_completed
+            )
+
+            if mle_complete is None:
+                mle_complete = mle_completed
+
+            else:
+                mle_complete = np.hstack([mle_complete, mle_completed])
+
+        return mle_complete, df_dummies
+
+    def _encode_categorical(self, X):
+        """Encode -9 encoded missing values as np.nan.
+
+        Args:
+            X (numpy.ndarray): 012-encoded genotypes with -9 as missing values.
+
+        Returns:
+            pandas.DataFrame: DataFrame with missing values encoded as np.nan.
+        """
+        np.nan_to_num(X, copy=False, nan=-9.0)
+        X = X.astype(str)
+        X[(X == "-9.0") | (X == "-9")] = "none"
+
+        df = pd.DataFrame(X)
+        df_incomplete = df.copy()
+
+        # Replace 'none' with np.nan
+        for row in df.index:
+            for col in df.columns:
+                if df_incomplete.iat[row, col] == "none":
+                    df_incomplete.iat[row, col] = np.nan
+
+        return df_incomplete
+
+
+class InputTransformer(BaseEstimator, TransformerMixin):
+    def __init__(self, phase, n_components, V):
+        self.phase = phase
+        self.n_components = n_components
+        self.V = V
+
+    def fit(self, X):
+        self.n_features_in_ = self.n_components
+        return self
+
+    def transform(self, X):
+        if self.phase == None or self.phase == 1:
+            if not isinstance(self.V, dict):
+                raise TypeError("X must be a dictionary if phase == None or 1.")
+            return self.V[self.n_components]
+        else:
+            return self.V
 
 
 class MLPClassifier(KerasClassifier):
@@ -990,12 +1091,8 @@ class MLPClassifier(KerasClassifier):
         n_components=3,
         search_mode=True,
         optimizer="adam",
-        learning_rate=0.01,
-        optimizer__learning_rate=0.01,
         loss="binary_crossentropy",
-        loss__n_features=0,
         metrics="accuracy",
-        metrics__n_features=0,
         epochs=100,
         verbose=0,
         **kwargs,
@@ -1019,7 +1116,6 @@ class MLPClassifier(KerasClassifier):
         self.n_components = n_components
         self.search_mode = search_mode
         self.optimizer = optimizer
-        self.learning_rate = learning_rate
         self.loss = loss
         self.metrics = metrics
         self.epochs = epochs
@@ -1111,45 +1207,40 @@ class MLPClassifier(KerasClassifier):
             run_eagerly=True,
         )
 
-        model.set_model_inputs_outputs()
+        model.set_model_outputs()
         return model
 
-    @staticmethod
     def scorer(
+        self,
         y_true,
         y_pred,
         **kwargs,
     ):
-        y_true_orig = self.y_decoded
-        y_true_orig[y_true_orig == -9] = np.nan
-        y_true_missingmask = np.isnan(y_true_orig)
-
-        imputed_enc = y_pred.copy()
-        imputed_enc, dummy_df = self._predict(y_pred, imputed_enc)
-
-        imputed_df = self.decode_onehot(
-            pd.DataFrame(data=imputed_enc, columns=dummy_df.columns)
-        )
-
-        y_pred_observed = imputed_df.to_numpy()
-        y_pred_observed = y_pred_pbserved[~y_true_missingmask]
-        y_true_observed = y_true_orig[~y_true_missingmask]
-
-        return accuracy_score(y_true_observed, y_pred_observed)
+        observed_mask = 1 - self.missing_mask
+        y_true_observed = y_true * observed_mask
+        y_pred_observed = y_pred * observed_mask
+        return accuracy_score(y_true_observed, y_pred_observed, **kwargs)
 
     @property
     def feature_encoder(self):
-        return FunctionTransformer(func=self.input_parser)
-
-    def input_parser(self, X):
-        if isinstance(X, dict):
-            return X[self.n_components]
-        else:
-            return X
+        return InputTransformer(self.phase, self.n_components, self.V)
 
     @property
     def target_encoder(self):
-        return MultiOutputTransformer()
+        return OutputTransformer(self.y_decoded)
+
+    def _mle(self, row):
+        """Get the Maximum Likelihood Estimation for the best prediction. Basically, it sets the index of the maxiumum value in a vector (row) to 1.0, since it is one-hot encoded.
+
+        Args:
+            row (numpy.ndarray(float)): Row vector with predicted values as floating points.
+
+        Returns:
+            numpy.ndarray(float): Row vector with the highest prediction set to 1.0 and the others set to 0.0.
+        """
+        res = np.zeros(row.shape[0])
+        res[np.argmax(row)] = 1
+        return res
 
     def _predict(self, X, complete_encoded):
         """Evaluate VAE predictions by calculating the highest predicted value.
@@ -1189,7 +1280,7 @@ class MLPClassifier(KerasClassifier):
 
         return mle_complete, df_dummies
 
-    def encode_categorical(self, X):
+    def _encode_categorical(self, X):
         """Encode -9 encoded missing values as np.nan.
 
         Args:
@@ -1213,7 +1304,7 @@ class MLPClassifier(KerasClassifier):
 
         return df_incomplete
 
-    def decode_onehot(self, df_dummies):
+    def _decode_onehot(self, df_dummies):
         """Decode one-hot format to 012-encoded genotypes.
 
         Args:
@@ -1247,42 +1338,6 @@ class MLPClassifier(KerasClassifier):
         df[df_dummies.columns[pos["_"]]] = df_dummies.iloc[:, pos["_"]]
 
         return df
-
-    def fit(self, X, y, sample_weight=None, **kwargs):
-        """Constructs a new classifier with ``model`` & fit the model to ``(X, y)``.
-        Parameters
-        ----------
-        X : Union[array-like, sparse matrix, dataframe] of shape (n_samples, n_features)
-            Training samples, where n_samples is the number of samples
-            and n_features is the number of features.
-        y : Union[array-like, sparse matrix, dataframe] of shape (n_samples,) or (n_samples, n_outputs)
-            True labels for X.
-        sample_weight : array-like of shape (n_samples,), default=None
-            Array of weights that are assigned to individual samples.
-            If not provided, then each sample is given unit weight.
-        **kwargs : Dict[str, Any]
-            Extra arguments to route to ``Model.fit``.
-        Warnings
-        --------
-            Passing estimator parameters as keyword arguments (aka as ``**kwargs``) to ``fit`` is not supported by the Scikit-Learn API,
-            and will be removed in a future version of SciKeras.
-            These parameters can also be specified by prefixing ``fit__`` to a parameter at initialization
-            (``KerasClassifier(..., fit__batch_size=32, predict__batch_size=1000)``)
-            or by using ``set_params`` (``est.set_params(fit__batch_size=32, predict__batch_size=1000)``).
-        Returns
-        -------
-        KerasClassifier
-            A reference to the instance that can be chain called (``est.fit(X,y).transform(X)``).
-        """
-        self.classes_ = None
-        if self.class_weight is not None:
-            sample_weight = 1 if sample_weight is None else sample_weight
-            sample_weight *= compute_sample_weight(
-                class_weight=self.class_weight, y=y
-            )
-
-        super().fit(X=X, y=y, sample_weight=sample_weight, **kwargs)
-        return self
 
 
 class UBPCallbacks(tf.keras.callbacks.Callback):
@@ -1604,10 +1659,10 @@ class NLPCAModel(tf.keras.Model):
         x = tf.keras.Input(shape=(self.n_components,))
         return tf.keras.Model(inputs=[x], outputs=self.call(x))
 
-    def set_model_inputs_outputs(self):
+    def set_model_outputs(self):
         x = tf.keras.Input(shape=(self.n_components,))
         model = tf.keras.Model(inputs=[x], outputs=self.call(x))
-        self.inputs = tf.convert_to_tensor(self.V_latent_)
+        # self.inputs = tf.convert_to_tensor(self.V_latent_)
         self.outputs = model.outputs
 
     def train_step(self, data):
@@ -3608,17 +3663,22 @@ class UBP(NeuralNetwork):
             #     compile_kwargs=compile_params,
             # )
 
+            if "learning_rate" in self.gridparams:
+                self.gridparams["optimizer__learning_rate"] = self.gridparams[
+                    "learning_rate"
+                ]
+                self.gridparams.pop("learning_rate")
+
             clf = MLPClassifier(
                 **model_params,
-                optimizer=compile_params["optimizer"],
-                learning_rate=compile_params["learning_rate"],
+                optimizer=tf.keras.optimizers.Adam,
                 optimizer__learning_rate=compile_params["learning_rate"],
                 loss=self.custom_loss,
                 metrics=[self.custom_acc],
                 epochs=self.epochs,
                 phase=None,
                 callbacks=callbacks,
-                validation_split=self.validation_split,
+                validation_split=0.0,
                 verbose=0,
             )
 
@@ -3649,7 +3709,6 @@ class UBP(NeuralNetwork):
                     clf,
                     param_distributions=self.gridparams,
                     n_iter=self.grid_iter,
-                    scoring=self.scoring_metric,
                     n_jobs=self.n_jobs,
                     cv=cross_val,
                 )
@@ -3794,9 +3853,6 @@ class UBP(NeuralNetwork):
             Dict[str, Any]: Other parameters to pass to KerasClassifier().
             Dict[str, Any]: Parameters to pass to fit_params() in grid search.
         """
-        # Gradient descent optimizer.
-        optimizer = self.set_optimizer()
-
         if self.nlpca:
             # For CSVLogger() callback.
             append = False
@@ -3822,9 +3878,11 @@ class UBP(NeuralNetwork):
         if self.gridparams is None:
             loss = self.make_reconstruction_loss()
             metrics = [self.make_acc()]
+            optimizer = self.set_optimizer(search_mode=True)
         else:
             loss = self.make_reconstruction_loss
             metrics = [self.make_acc]
+            optimizer = self.set_optimizer(search_mode=False)
 
         compile_params = {
             "optimizer": optimizer,

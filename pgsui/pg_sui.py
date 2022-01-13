@@ -330,6 +330,7 @@ def main():
         "hidden_layer_sizes": hidden_layer_sizes,
         "n_components": n_components,
         "dropout_rate": dropout_rate,
+        "batch_size": [16, 32],
     }
 
     ubp = ImputeNLPCA(
