@@ -574,7 +574,9 @@ class Impute:
         # Only used if initial_strategy == 'phylogeny'
         if self.invalid_indexes is not None:
             df.drop(
-                labels=self.invalid_indexes, axis=1, inplace=True,
+                labels=self.invalid_indexes,
+                axis=1,
+                inplace=True,
             )
 
         if self.disable_progressbar:
@@ -643,6 +645,8 @@ class Impute:
                 gridparams=self.gridparams,
                 **self.clf_kwargs,
                 ga_kwargs=self.ga_kwargs,
+                initial_strategy=self.imp_kwargs["initial_strategy"],
+                str_encodings=self.imp_kwargs["str_encodings"],
             )
 
             if self.clf == VAE:
@@ -977,7 +981,8 @@ class Impute:
                     imputer = self.clf(**self.clf_kwargs)
                     if self.clf == UBP:
                         df_imp = pd.DataFrame(
-                            imputer.fit_predict(Xchunk), dtype="Int8",
+                            imputer.fit_predict(Xchunk),
+                            dtype="Int8",
                         )
                     else:
                         df_imp = pd.DataFrame(imputer.fit_transform(Xchunk))
@@ -995,7 +1000,10 @@ class Impute:
             else:
                 # Regressor. Needs to be rounded to integer first.
                 df_imp = pd.DataFrame(
-                    imputer.fit_transform(Xchunk, valid_cols=cols_to_keep,)
+                    imputer.fit_transform(
+                        Xchunk,
+                        valid_cols=cols_to_keep,
+                    )
                 )
                 df_imp = df_imp.round(0).astype("Int8")
 
@@ -1505,7 +1513,8 @@ class Impute:
 
             if self.clf == VAE:
                 df_imp = pd.DataFrame(
-                    imputer.fit_transform(df_stg.to_numpy()), columns=cols,
+                    imputer.fit_transform(df_stg.to_numpy()),
+                    columns=cols,
                 )
 
                 df_imp = df_imp.astype("float")

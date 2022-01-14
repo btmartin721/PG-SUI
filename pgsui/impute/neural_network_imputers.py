@@ -9,9 +9,9 @@ from collections import defaultdict
 # Third-party Imports
 import numpy as np
 import pandas as pd
+import seaborn as sns
 from matplotlib import pyplot as plt
 
-from sklearn.base import BaseEstimator
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
 
@@ -55,10 +55,28 @@ try:
     from ..read_input.read_input import GenotypeData
     from ..utils.misc import timer
     from ..utils.misc import isnotebook
+    from .neural_network_methods import NeuralNetworkMethods
+    from .nlpca_model import NLPCAModel
+    from .ubp_model import UBPPhase1, UBPPhase2, UBPPhase3
+    from ..data_processing.transformers import (
+        UBPInputTransformer,
+        NNInputTransformer,
+        NNOutputTransformer,
+        RandomizeMissingTransformer,
+    )
 except (ModuleNotFoundError, ValueError):
     from read_input.read_input import GenotypeData
     from utils.misc import timer
     from utils.misc import isnotebook
+    from impute.neural_network_methods import NeuralNetworkMethods
+    from impute.nlpca_model import NLPCAModel
+    from impute.ubp_model import UBPPhase1, UBPPhase2, UBPPhase3
+    from data_processing.transformers import (
+        UBPInputTransformer,
+        NNInputTransformer,
+        NNOutputTransformer,
+        RandomizeMissingTransformer,
+    )
 
 # Ignore warnings, but still print errors.
 deprecation._PRINT_DEPRECATION_WARNINGS = False
@@ -83,1032 +101,95 @@ class DisabledCV:
         return self.n_splits
 
 
-class NeuralNetwork:
-    """Methods common to all neural network imputer classes and loss functions"""
+class UBPCallbacks(tf.keras.callbacks.Callback):
+    """Custom callbacks to use with subclassed NLPCA/ UBP Keras models.
+
+    See tf.keras.callbacks.Callback documentation.
+    """
 
     def __init__(self):
-        self.data = None
-
-    def encode_onehot(self, X):
-        """Convert 012-encoded data to one-hot encodings.
-
-        Args:
-            X (numpy.ndarray): Input array with 012-encoded data and -9 as the missing data value.
-
-        Returns:
-            pandas.DataFrame: One-hot encoded data, ignoring missing values (np.nan).
-        """
-
-        df = self.encode_categorical(X)
-        df_incomplete = df.copy()
-
-        missing_encoded = pd.get_dummies(df_incomplete)
-
-        for col in df.columns:
-            missing_cols = missing_encoded.columns.str.startswith(
-                str(col) + "_"
-            )
-
-            missing_encoded.loc[
-                df_incomplete[col].isnull(), missing_cols
-            ] = np.nan
-
-        return missing_encoded
-
-    def encode_categorical(self, X):
-        """Encode -9 encoded missing values as np.nan.
-
-        Args:
-            X (numpy.ndarray): 012-encoded genotypes with -9 as missing values.
-
-        Returns:
-            pandas.DataFrame: DataFrame with missing values encoded as np.nan.
-        """
-        np.nan_to_num(X, copy=False, nan=-9.0)
-        X = X.astype(str)
-        X[(X == "-9.0") | (X == "-9")] = "none"
-
-        df = pd.DataFrame(X)
-        df_incomplete = df.copy()
-
-        # Replace 'none' with np.nan
-        for row in df.index:
-            for col in df.columns:
-                if df_incomplete.iat[row, col] == "none":
-                    df_incomplete.iat[row, col] = np.nan
-
-        return df_incomplete
-
-    def validate_hidden_layers(self, hidden_layer_sizes, num_hidden_layers):
-        """Validate hidden_layer_sizes and verify that it is in the correct format.
-
-        Args:
-            hidden_layer_sizes (str, int, List[str], or List[int]): Output units for all the hidden layers.
-
-            num_hidden_layers (int): Number of hidden layers to use.
-
-        Returns:
-            List[int] or List[str]: List of hidden layer sizes.
-        """
-        if isinstance(hidden_layer_sizes, (str, int)):
-            hidden_layer_sizes = [hidden_layer_sizes] * num_hidden_layers
-
-        # If not all integers
-        elif isinstance(hidden_layer_sizes, list):
-            if not all([isinstance(x, (str, int)) for x in hidden_layer_sizes]):
-                ls = list(set([type(item) for item in hidden_layer_sizes]))
-                raise TypeError(
-                    f"Variable hidden_layer_sizes must either be None, "
-                    f"an integer or string, or a list of integers or "
-                    f"strings, but got the following type(s): {ls}"
-                )
-
-        else:
-            raise TypeError(
-                f"Variable hidden_layer_sizes must either be, "
-                f"an integer, a string, or a list of integers or strings, "
-                f"but got the following type: {type(hidden_layer_sizes)}"
-            )
-
-        assert (
-            num_hidden_layers == len(hidden_layer_sizes)
-            and num_hidden_layers > 0
-        ), "num_hidden_layers must be the length of hidden_layer_sizes."
-
-        return hidden_layer_sizes
-
-    def get_hidden_layer_sizes(self, n_dims, n_components, hl_func):
-        """Get dimensions of hidden layers.
-
-        Args:
-            n_dims (int): The number of feature dimensions (columns) (d).
-
-            n_components (int): The number of reduced dimensions (t).
-
-            hl_func (str): The function to use to calculate the hidden layer sizes. Possible options: "midpoint", "sqrt", "log2".
-
-        Returns:
-            [int, int, int, ...]: [Number of dimensions in hidden layers].
-        """
-        layers = list()
-        if not isinstance(hl_func, list):
-            raise TypeError("hl_func must be of type list.")
-
-        for func in hl_func:
-            if func == "midpoint":
-                units = round((n_dims + n_components) / 2)
-            elif func == "sqrt":
-                units = round(math.sqrt(n_dims))
-            elif func == "log2":
-                units = round(math.log(n_dims, 2))
-            elif isinstance(func, int):
-                units = func
-            else:
-                raise ValueError(
-                    f"hidden_layer_sizes must be either integers or any of "
-                    f"the following strings: 'midpoint', "
-                    f"'sqrt', or 'log2', but got {func} of type {type(func)}"
-                )
-
-            assert units > 0 and units < n_dims, (
-                f"The hidden layer sizes must be > 0 and < the number of "
-                f"features (i.e., columns) in the dataset, but size was {units}"
-            )
-
-            layers.append(units)
-        return layers
-
-    def init_weights(self, dim1, dim2, w_mean=0, w_stddev=0.01):
-        """Initialize random weights to use with the model.
-
-        Args:
-            dim1 (int): Size of first dimension.
-
-            dim2 (int): Size of second dimension.
-
-            w_mean (float, optional): Mean of normal distribution. Defaults to 0.
-
-            w_stddev (float, optional): Standard deviation of normal distribution. Defaults to 0.01.
-        """
-        # Get reduced-dimension dataset.
-        return np.random.normal(loc=w_mean, scale=w_stddev, size=(dim1, dim2))
-
-    def validate_model_inputs(self, y, missing_mask, output_shape):
-        """Validate inputs to Keras subclass model.
-
-        Args:
-            V (numpy.ndarray): Input to refine. Shape: (n_samples, n_components).
-            y (numpy.ndarray): Target (but actual input data). Shape: (n_samples, n_features).
-
-            missing_mask (numpy.ndarray): Missing data mask.
-
-            output_shape (int): Output shape for hidden layers.
-
-        Raises:
-            TypeError: V, y, missing_mask, output_shape must not be NoneType.
-        """
-        if y is None:
-            raise TypeError("y must not be NoneType.")
-
-        if missing_mask is None:
-            raise TypeError("missing_mask must not be NoneType.")
-
-        if output_shape is None:
-            raise TypeError("output_shape must not be NoneType.")
-
-    def create_model(
-        self,
-        estimator=None,
-        V=None,
-        y=None,
-        batch_size=32,
-        missing_mask=None,
-        output_shape=None,
-        weights_initializer="glorot_normal",
-        hidden_layer_sizes=None,
-        num_hidden_layers=1,
-        hidden_activation="elu",
-        l1_penalty=0.01,
-        l2_penalty=0.01,
-        dropout_rate=0.2,
-        num_classes=1,
-        phase=None,
-        n_components=3,
-        build=False,
-        compile_kwargs=None,
-        search_mode=True,
-    ):
-        """Create a neural network model using the estimator to initialize.
-        Model will be initialized, compiled, and built if ``build=True``\.
-        Args:
-            estimator (tf.keras.Model): Model to create. Can be a subclassed model.
-            compile_params (Dict[str, Any]): Parameters passed to model.compile(). Key-value pairs should be the parameter names and their corresponding values.
-            n_components (int): The number of principal components to use with NLPCA or UBP models. Not used if doing VAE. Defaults to 3.
-            build (bool): Whether to build the model. Defaults to False.
-            kwargs (Dict[str, Any]): Keyword arguments to pass to KerasClassifier.
-        Returns:
-            tf.keras.Model: Instantiated, compiled, and optionally built model.
-        """
-        model = estimator(
-            V=V,
-            y=y,
-            batch_size=batch_size,
-            missing_mask=missing_mask,
-            output_shape=output_shape,
-            n_components=n_components,
-            weights_initializer=weights_initializer,
-            hidden_layer_sizes=hidden_layer_sizes,
-            num_hidden_layers=num_hidden_layers,
-            hidden_activation=hidden_activation,
-            l1_penalty=l1_penalty,
-            l2_penalty=l2_penalty,
-            dropout_rate=dropout_rate,
-            num_classes=num_classes,
-            phase=phase,
-        )
-
-        if build:
-            model.build((None, n_components))
-
-        if not search_mode:
-            model.compile(**compile_kwargs)
-
-        return model
-
-    def prepare_training_batches(
-        self, V, y, batch_size, batch_idx, trainable, n_components
-    ):
-        """Prepare training batches in the custom training loop.
-
-        Args:
-            V (numpy.ndarray): Input to batch subset and refine, of shape (n_samples, n_components).
-
-            y (numpy.ndarray): Target to use to refine input V. Has missing data mask horizontally concatenated (with np.hstack); shape (n_samples, n_features * 2).
-
-            batch_size (int): Batch size to subset.
-
-            batch_idx (int): Current batch index.
-
-            trainable (bool): Whether tensor v should be trainable.
-
-            n_components (int): Number of principal components used in V.
-
-        Returns:
-            tf.Variable: Input tensor v with current batch assigned.
-            numpy.ndarray: Current batch of arget data (actual input) used to refine v.
-            int: Batch starting index.
-            int: Batch ending index.
-        """
-        # on_train_batch_begin() method.
-        n_samples = y.shape[0]
-
-        # Get current batch size and range.
-        # self._batch_idx is set in the UBPCallbacks() callback
-        batch_start = batch_idx * batch_size
-        batch_end = (batch_idx + 1) * batch_size
-        if batch_end > n_samples:
-            batch_end = n_samples - 1
-            batch_size = batch_end - batch_start
-
-        # override batches. This model refines the input to fit the output, so
-        # v_batch and y_true have to be overridden.
-        y_true = y[batch_start:batch_end, :]
-        v_batch = V[batch_start:batch_end, :]
-
-        v = tf.Variable(
-            tf.zeros([batch_size, n_components]),
-            trainable=trainable,
-            dtype=tf.float32,
-        )
-
-        # Assign current batch to tf.Variable v.
-        v.assign(v_batch)
-
-        return v, y_true, batch_start, batch_end
-
-    def predict(self, X, complete_encoded):
-        """Evaluate VAE predictions by calculating the highest predicted value.
-
-        Calucalates highest predicted value for each row vector and each class, setting the most likely class to 1.0.
-
-        Args:
-            X (numpy.ndarray): Input one-hot encoded data.
-
-            complete_encoded (numpy.ndarray): Output one-hot encoded data with the maximum predicted values for each class set to 1.0.
-
-        Returns:
-            numpy.ndarray: Imputed one-hot encoded values.
-
-            pandas.DataFrame: One-hot encoded pandas DataFrame with no missing values.
-        """
-
-        df = self.encode_categorical(X)
-
-        # Had to add dropna() to count unique classes while ignoring np.nan
-        col_classes = [len(df[c].dropna().unique()) for c in df.columns]
-        df_dummies = pd.get_dummies(df)
-        mle_complete = None
-        for i, cnt in enumerate(col_classes):
-            start_idx = int(sum(col_classes[0:i]))
-            col_completed = complete_encoded[:, start_idx : start_idx + cnt]
-
-            mle_completed = np.apply_along_axis(
-                self.mle, axis=1, arr=col_completed
-            )
-
-            if mle_complete is None:
-                mle_complete = mle_completed
-
-            else:
-                mle_complete = np.hstack([mle_complete, mle_completed])
-
-        return mle_complete, df_dummies
-
-    def decode_onehot(self, df_dummies):
-        """Decode one-hot format to 012-encoded genotypes.
-
-        Args:
-            df_dummies (pandas.DataFrame): One-hot encoded imputed data.
-
-        Returns:
-            pandas.DataFrame: 012-encoded imputed data.
-        """
-        pos = defaultdict(list)
-        vals = defaultdict(list)
-
-        for i, c in enumerate(df_dummies.columns):
-            if "_" in c:
-                k, v = c.split("_", 1)
-                pos[k].append(i)
-                vals[k].append(v)
-
-            else:
-                pos["_"].append(i)
-
-        df = pd.DataFrame(
-            {
-                k: pd.Categorical.from_codes(
-                    np.argmax(df_dummies.iloc[:, pos[k]].values, axis=1),
-                    vals[k],
-                )
-                for k in vals
-            }
-        )
-
-        df[df_dummies.columns[pos["_"]]] = df_dummies.iloc[:, pos["_"]]
-
-        return df
-
-    def create_missing_mask(self, data):
-        """Creates a missing data mask with boolean values.
-
-        Returns:
-            numpy.ndarray(bool): Boolean mask of missing values, with True corresponding to a missing data point.
-        """
-        if data.dtype != "f" and data.dtype != "d":
-            data = data.astype(float)
-        return np.isnan(data)
-
-    def reset_seeds(self):
-        """Reset random seeds for initializing weights."""
-        seed1 = np.random.randint(1, 1e6)
-        seed2 = np.random.randint(1, 1e6)
-        seed3 = np.random.randint(1, 1e6)
-        np.random.seed(seed1)
-        random.seed(seed2)
-        if tf.__version__[0] == "2":
-            tf.random.set_seed(seed3)
-        else:
-            tf.set_random_seed(seed3)
-
-    def make_reconstruction_loss(self):
-        """Make loss function for use with a keras model.
-
-        Returns:
-            callable: Function that calculates loss.
-        """
-
-        def reconstruction_loss(input_and_mask, y_pred):
-            """Custom loss function for neural network model with missing mask.
-
-            Ignores missing data in the calculation of the loss function.
-
-            Args:
-                input_and_mask (numpy.ndarray): Input one-hot encoded array with missing values also one-hot encoded and h-stacked.
-
-                y_pred (numpy.ndarray): Predicted values.
-
-            Returns:
-                float: Mean squared error loss value with missing data masked.
-            """
-            n_features = y_pred.numpy().shape[1]
-
-            true_indices = range(n_features)
-            missing_indices = range(n_features, n_features * 2)
-
-            # Split features and missing mask.
-            y_true = tf.gather(input_and_mask, true_indices, axis=1)
-            missing_mask = tf.gather(input_and_mask, missing_indices, axis=1)
-
-            observed_mask = tf.subtract(1.0, missing_mask)
-            y_true_observed = tf.multiply(y_true, observed_mask)
-            pred_observed = tf.multiply(y_pred, observed_mask)
-
-            # loss_fn = tf.keras.losses.CategoricalCrossentropy()
-            # return loss_fn(y_true_observed, pred_observed)
-
-            return tf.keras.metrics.mean_squared_error(
-                y_true=y_true_observed, y_pred=pred_observed
-            )
-
-        return reconstruction_loss
-
-    def custom_loss(self, input_and_mask, y_pred):
-        """Custom loss function for neural network model with missing mask.
-
-        Ignores missing data in the calculation of the loss function.
-
-        Args:
-            input_and_mask (numpy.ndarray): Input one-hot encoded array with missing values also one-hot encoded and h-stacked.
-
-            y_pred (numpy.ndarray): Predicted values.
-
-        Returns:
-            float: Mean squared error loss value with missing data masked.
-        """
-        n_features = y_pred.numpy().shape[1]
-
-        true_indices = range(n_features)
-        missing_indices = range(n_features, n_features * 2)
-
-        # Split features and missing mask.
-        y_true = tf.gather(input_and_mask, true_indices, axis=1)
-        missing_mask = tf.gather(input_and_mask, missing_indices, axis=1)
-
-        observed_mask = tf.subtract(1.0, missing_mask)
-        y_true_observed = tf.multiply(y_true, observed_mask)
-        pred_observed = tf.multiply(y_pred, observed_mask)
-
-        # loss_fn = tf.keras.losses.CategoricalCrossentropy()
-        # return loss_fn(y_true_observed, pred_observed)
-
-        return tf.keras.metrics.mean_squared_error(
-            y_true=y_true_observed, y_pred=pred_observed
-        )
-
-    def make_acc(self):
-        """Make loss function for use with a keras model.
-
-        Returns:
-            callable: Function that calculates loss.
-        """
-
-        def accuracy_masked(input_and_mask, y_pred):
-            """Custom loss function for neural network model with missing mask.
-
-            Ignores missing data in the calculation of the loss function.
-
-            Args:
-                input_and_mask (numpy.ndarray): Input one-hot encoded array with missing values also one-hot encoded and h-stacked.
-
-                y_pred (numpy.ndarray): Predicted values.
-
-            Returns:
-                float: Mean squared error loss value with missing data masked.
-            """
-            n_features = y_pred.numpy().shape[1]
-
-            true_indices = range(n_features)
-            missing_indices = range(n_features, n_features * 2)
-
-            # Split features and missing mask.
-            y_true = tf.gather(input_and_mask, true_indices, axis=1)
-            missing_mask = tf.gather(input_and_mask, missing_indices, axis=1)
-
-            observed_mask = tf.subtract(1.0, missing_mask)
-            y_true_observed = tf.multiply(y_true, observed_mask)
-            pred_observed = tf.multiply(y_pred, observed_mask)
-
-            metric = tf.keras.metrics.BinaryAccuracy(name="accuracy_masked")
-            metric.update_state(y_true_observed, pred_observed)
-            return metric.result()
-
-        return accuracy_masked
-
-    def accuracy(self, input_and_mask, y_pred):
-        """Custom loss function for neural network model with missing mask.
-
-        Ignores missing data in the calculation of the loss function.
-
-        Args:
-            input_and_mask (numpy.ndarray): Input one-hot encoded array with missing values also one-hot encoded and h-stacked.
-
-            y_pred (numpy.ndarray): Predicted values.
-
-        Returns:
-            float: Mean squared error loss value with missing data masked.
-        """
-        n_features = y_pred.numpy().shape[1]
-
-        true_indices = range(n_features)
-        missing_indices = range(n_features, n_features * 2)
-
-        # Split features and missing mask.
-        y_true = tf.gather(input_and_mask, true_indices, axis=1)
-        missing_mask = tf.gather(input_and_mask, missing_indices, axis=1)
-
-        observed_mask = tf.subtract(1.0, missing_mask)
-        y_true_observed = tf.multiply(y_true, observed_mask)
-        pred_observed = tf.multiply(y_pred, observed_mask)
-
-        metric = tf.keras.metrics.BinaryAccuracy(name="accuracy_masked")
-        metric.update_state(y_true_observed, pred_observed)
-        return metric.result()
-
-    def masked_mse(self, X_true, X_pred, mask):
-        """Calculates mean squared error with missing values ignored.
-
-        Args:
-            X_true (numpy.ndarray): One-hot encoded input data.
-            X_pred (numpy.ndarray): Predicted values.
-            mask (numpy.ndarray): One-hot encoded missing data mask.
-
-        Returns:
-            float: Mean squared error calculation.
-        """
-        return np.square(np.subtract(X_true[mask], X_pred[mask])).mean()
-
-    def sparse_categorical_crossentropy_masked(self, y_true, y_pred):
-        """Calculates sparse categorical crossentropy while ignoring (masking) missing values.
-
-        Used for UBP and NLPCA.
-
-        Args:
-            y_true (tf.Tensor): Known values from input data.
-            y_pred (tf.Tensor): Values predicted from model.
-
-        Returns:
-            float: Loss value.
-        """
-        y_true_masked = tf.boolean_mask(y_true, tf.not_equal(y_true, -1))
-
-        y_pred_masked = tf.boolean_mask(y_pred, tf.not_equal(y_true, -1))
-
-        loss_fn = tf.keras.losses.SparseCategoricalCrossentropy()
-        return loss_fn(y_true_masked, y_pred_masked)
-
-    def categorical_accuracy_masked(self, y_true, y_pred):
-        y_true_masked = tf.boolean_mask(y_true, tf.not_equal(y_true, -1))
-        y_pred_masked = tf.boolean_mask(y_pred, tf.not_equal(y_true, -1))
-
-        metric = tf.keras.metrics.CategoricalAccuracy()
-        metric.update_state(y_true_masked, y_pred_masked)
-
-        return metric.result().numpy()
-
-    def categorical_mse_masked(self, y_true, y_pred):
-        y_true_masked = tf.boolean_mask(
-            y_true, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
-        )
-
-        y_pred_masked = tf.boolean_mask(
-            y_pred, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
-        )
-
-        return mse(y_true_masked, y_pred_masked)
-
-    def validate_batch_size(self, X, batch_size):
-        """Validate the batch size, and adjust as necessary.
-
-        If the specified batch_size is greater than the number of samples in the input data, it will divide batch_size by 2 until it is less than n_samples.
-
-        Args:
-            X (numpy.ndarray): Input data of shape (n_samples, n_features).
-            batch_size (int): Batch size to use.
-
-        Returns:
-            int: Batch size (adjusted if necessary).
-        """
-        if batch_size > X.shape[0]:
-            while batch_size > X.shape[0]:
-                print(
-                    "Batch size is larger than the number of samples. "
-                    "Dividing batch_size by 2."
-                )
-                batch_size //= 2
-        return batch_size
-
-    def mle(self, row):
-        """Get the Maximum Likelihood Estimation for the best prediction. Basically, it sets the index of the maxiumum value in a vector (row) to 1.0, since it is one-hot encoded.
-
-        Args:
-            row (numpy.ndarray(float)): Row vector with predicted values as floating points.
-
-        Returns:
-            numpy.ndarray(float): Row vector with the highest prediction set to 1.0 and the others set to 0.0.
-        """
-        res = np.zeros(row.shape[0])
-        res[np.argmax(row)] = 1
-        return res
-
-    def fill(self, data, missing_mask, missing_value, num_classes):
-        """Mask missing data as ``missing_value``.
-
-        Args:
-            data (numpy.ndarray): Input with missing values of shape (n_samples, n_features, num_classes).
-
-            missing_mask (np.ndarray(bool)): Missing data mask with True corresponding to a missing value.
-
-            missing_value (int): Value to set missing data to. If a list is provided, then its length should equal the number of one-hot classes.
-        """
-        if num_classes > 1:
-            missing_value = [missing_value] * num_classes
-        data[missing_mask] = missing_value
-        return data
-
-    def validate_extrakwargs(self, d):
-        """Validate extra keyword arguments.
-
-        Args:
-            d (Dict[str, Any]): Dictionary with keys=keywords and values=passed setting.
-
-        Returns:
-            numpy.ndarray: Test categorical dataset.
-
-        Raises:
-            ValueError: If not a supported keyword argument.
-        """
-        supported_kwargs = ["test_categorical"]
-        if kwargs is not None:
-            for k in kwargs.keys():
-                if k not in supported_kwargs:
-                    raise ValueError(f"{k} is not a valid argument.")
-
-        test_cat = kwargs.get("test_categorical", None)
-        return test_cat
-
-    def validate_input(self, input_data, out_type="numpy"):
-        """Validate input data and ensure that it is of correct type.
-
-        Args:
-            input_data (List[List[int]], numpy.ndarray, or pandas.DataFrame): Input data to validate.
-
-            out_type (str, optional): Type of object to convert input data to. Possible options include "numpy" and "pandas". Defaults to "numpy".
-
-        Returns:
-            numpy.ndarray: Input data as numpy array.
-
-        Raises:
-            TypeError: Must be of type pandas.DataFrame, numpy.ndarray, or List[List[int]].
-
-            ValueError: astype must be either "numpy" or "pandas".
-        """
-        if out_type == "numpy":
-            if isinstance(input_data, pd.DataFrame):
-                X = input_data.to_numpy()
-            elif isinstance(input_data, list):
-                X = np.array(input_data)
-            elif isinstance(input_data, np.ndarray):
-                X = input_data.copy()
-            else:
-                raise TypeError(
-                    f"input_data must be of type pd.DataFrame, np.ndarray, or "
-                    f"list(list(int)), but got {type(input_data)}"
-                )
-
-        elif out_type == "pandas":
-            if isinstance(input_data, pd.DataFrame):
-                X = input_data.copy()
-            elif isinstance(input_data, (list, np.ndarray)):
-                X = pd.DataFrame(input_data)
-            else:
-                raise TypeError(
-                    f"input_data must be of type pd.DataFrame, np.ndarray, or "
-                    f"list(list(int)), but got {type(input_data)}"
-                )
-        else:
-            raise ValueError("astype must be either 'numpy' or 'pandas'.")
-
-        return X
-
-    def set_compile_params(self, search_mode=False):
-        """Set compile parameters to use.
-
-        Returns:
-            Dict[str, callable] or Dict[str, Any]: Callables if search_mode is True, otherwise instantiated objects.
-
-        Raises:
-            ValueError: Unsupported optimizer specified.
-        """
-        if self.optimizer.lower() == "adam":
-            opt = tf.keras.optimizers.Adam
-        elif self.optimizer.lower() == "sgd":
-            opt = tf.keras.optimizers.SGD
-        elif self.optimizer.lower() == "adagrad":
-            opt = tf.keras.optimizers.Adagrad
-        elif self.optimizer.lower() == "adadelta":
-            opt = tf.keras.optimizers.Adadelta
-        elif self.optimizer.lower() == "adamax":
-            opt = tf.keras.optimizers.Adamax
-        elif self.optimizer.lower() == "ftrl":
-            opt = tf.keras.optimizers.Ftrl
-        elif self.optimizer.lower() == "nadam":
-            opt = tf.keras.optimizers.Nadam
-        elif self.optimizer.lower() == "rmsprop":
-            opt = tf.keras.optimizers.RMSProp
-
-        if search_mode:
-            # Doing grid search. Params are callables.
-            optimizer = opt
-            loss = self.custom_loss
-            metrics = [self.accuracy]
-        else:
-            # No grid search. Optimizer params are initialized.
-            optimizer = opt(learning_rate=self.learning_rate)
-            loss = self.make_reconstruction_loss()
-            metrics = [self.make_acc()]
-
-        return {
-            "optimizer": optimizer,
-            "loss": loss,
-            "metrics": metrics,
-            "run_eagerly": True,
-        }
-
-    def _format_fit_params(
-        self, search_space, model_params, epochs, validation_split
-    ):
-        fit_params = dict()
-        has_fitparams = False
-
-        if "batch_size" not in search_space:
-            fit_params["fit__batch_size"] = model_params["batch_size"]
-            has_fitparams = True
-        if "epochs" not in search_space:
-            fit_params["fit__epochs"] = epochs
-            has_fitparams = True
-        if validation_split not in search_space:
-            fit_params["fit__validation_split"] = validation_split
-            has_fitparams = True
-
-        return fit_params, has_fitparams
-
-    def _format_compile_kwargs(self, compile_params, y_train):
-        compile_kwargs = dict()
-        compile_kwargs["optimizer"] = compile_params["optimizer"]
-
-        compile_kwargs["optimizer__learning_rate"] = compile_params[
-            "learning_rate"
-        ]
-
-        compile_kwargs["loss"] = compile_params["loss"]
-        compile_kwargs["loss__n_features"] = y_train.shape[1]
-        compile_kwargs["metrics"] = compile_params["metrics"]
-        compile_kwargs["metrics__n_features"] = y_train.shape[1]
-        compile_kwargs["run_eagerly"] = compile_params["run_eagerly"]
-        return compile_kwargs
-
-    def plot_grid_search(self, grid):
-        """
-        Params:
-            grid: A trained GridSearchCV object.
-        """
-        ## Results from grid search
-        results = grid.cv_results_
-        means_test = results["mean_test_score"]
-        stds_test = results["std_test_score"]
-
-        ## Getting indexes of values per hyper-parameter
-        masks = []
-        masks_names = list(grid.best_params_.keys())
-        for p_k, p_v in grid.best_params_.items():
-            masks.append(list(results["param_" + p_k].data == p_v))
-
-        params = grid.param_grid
-
-        ## Ploting results
-        fig, ax = plt.subplots(
-            1, len(params), sharex="none", sharey="all", figsize=(20, 5)
-        )
-        fig.suptitle("Score per parameter")
-        fig.text(0.04, 0.5, "Mean Score", va="center", rotation="vertical")
-        pram_preformace_in_best = {}
-        for i, p in enumerate(masks_names):
-            m = np.stack(masks[:i] + masks[i + 1 :])
-            pram_preformace_in_best
-            best_parms_mask = m.all(axis=0)
-            best_index = np.where(best_parms_mask)[0]
-            x = np.array(params[p])
-            y_1 = np.array(means_test[best_index])
-            ax[i].set_xlabel(p.upper())
-
-        plt.legend()
-        fig.savefig("gridsearch.pdf", bbox_inches="tight")
-        # # Get Test Scores Mean and std for each grid search
-        # scores_mean = cv_results["mean_test_score"]
-        # params = cv_results["params"]
-        # params_df = pd.DataFrame(params)
-        # param_names = [cv_results[x] for x in params_df.keys()]
-
-        # # Plot Grid search scores
-        # fig, ax = plt.subplots(1, 1)
-
-        # for idx, name in enumerate(param_names):
-        #     ax.plot(cv_results[name], scores_mean, "-o", label=name)
-
-        # ax.set_title("Grid Search Scores", fontsize=20, fontweight="bold")
-        # ax.set_xlabel(name_param_1, fontsize=16)
-        # ax.set_ylabel("CV Average Score", fontsize=16)
-        # ax.legend(loc="best", fontsize=15)
-        # ax.grid("on")
-
-
-class OutputTransformer(BaseEstimator, TransformerMixin):
-    """Transformer to format target data both before and after model fitting.
-
-    Args:
-        y_decoded (numpy.ndarray): Original input data that is 012-encoded.
+        self.indices = None
+
+    def on_train_begin(self, logs=None):
+        self.model.n_batches = self.params.get("steps")
+
+    def on_epoch_begin(self, epoch, logs=None):
+        # Shuffle input and target at start of epoch.
+        input_with_mask = np.hstack([self.model.y, self.model.missing_mask])
+        n_samples = len(input_with_mask)
+        self.indices = np.arange(n_samples)
+        np.random.shuffle(self.indices)
+        self.model.input_with_mask = input_with_mask[self.indices]
+        self.model.V_latent = self.model.V_latent[self.indices]
+
+    def on_train_batch_begin(self, batch, logs=None):
+        self.model.batch_idx = batch
+
+    def on_test_batch_begin(self, batch, logs=None):
+        self.model.batch_idx = batch
+
+    def on_epoch_end(self, epoch, logs=None):
+        # Unsort the row indices.
+        self.model.V_latent = self.model.V_latent[np.argsort(self.indices)]
+
+        y_pred = self.model.predict(self.model.V_latent)
+        y_true = self.model.y.copy()
+        mm = self.model.missing_mask
+        old_weight = 0.5
+        y_true[mm] *= old_weight
+        y_pred_missing = y_pred[mm]
+        y_true[mm] += 0.5 * y_pred_missing
+        self.model.y = y_true.copy()
+
+
+class UBPEarlyStopping(tf.keras.callbacks.Callback):
+    """Stop training when the loss is at its min, i.e. the loss stops decreasing.
+
+    Arguments:
+        patience: Number of epochs to wait after min has been hit. After this
+        number of no improvement, training stops.
     """
 
-    def __init__(self, y_decoded):
-        self.y_decoded = y_decoded
-
-    def fit(self, y):
-        """Fit to target data.
-
-        Args:
-            y (numpy.ndarray): Target data that is one-hot encoded.
-
-        Returns:
-            self: Class instance.
-        """
-        self.n_outputs_expected_ = 1
-        return self
-
-    def transform(self, y):
-        """Transform y_true. Here to accomodate multiclass-multioutput targets.
-
-        Args:
-            y (numpy.ndarray): One-hot encoded target data.
-
-        Returns:
-            numpy.ndarray: y_true target data. No formatting necessary, but here to accomodate multiclass-multioutput targets.
-        """
-        return y
-
-    def inverse_transform(self, y):
-        """Transform y_pred to same format as y_true.
-
-        This allows sklearn.metrics to be used.
-
-        Args:
-            y (numpy.ndarray): Predicted probabilities after model fitting.
-
-        Returns:
-            numpy.ndarray: y predictions in same format as y_true.
-        """
-        y_pred_proba = y  # Rename for clarity, Keras gives probs
-        imputed_enc, dummy_df = self._predict(self.y_decoded, y_pred_proba)
-
-        y_pred_df = self._decode_onehot(
-            pd.DataFrame(data=imputed_enc, columns=dummy_df.columns)
-        )
-
-        return y_pred_df.to_numpy()
-
-    def _mle(self, row):
-        """Get the Maximum Likelihood Estimation for the best prediction. Basically, it sets the index of the maxiumum value in a vector (row) to 1.0, since it is one-hot encoded.
-
-        Args:
-            row (numpy.ndarray(float)): Row vector with predicted values as floating points.
-
-        Returns:
-            numpy.ndarray(float): Row vector with the highest prediction set to 1.0 and the others set to 0.0.
-        """
-        res = np.zeros(row.shape[0])
-        res[np.argmax(row)] = 1
-        return res
-
-    def _predict(self, X, complete_encoded):
-        """Evaluate VAE predictions by calculating the highest predicted value.
-
-        Calucalates highest predicted value for each row vector and each class, setting the most likely class to 1.0.
-
-        Args:
-            X (numpy.ndarray): Input one-hot encoded data.
-
-            complete_encoded (numpy.ndarray): Output one-hot encoded data with the maximum predicted values for each class set to 1.0.
-
-        Returns:
-            numpy.ndarray: Imputed one-hot encoded values.
-
-            pandas.DataFrame: One-hot encoded pandas DataFrame with no missing values.
-        """
-
-        df = self._encode_categorical(X)
-
-        # Had to add dropna() to count unique classes while ignoring np.nan
-        col_classes = [len(df[c].dropna().unique()) for c in df.columns]
-        df_dummies = pd.get_dummies(df)
-        mle_complete = None
-        for i, cnt in enumerate(col_classes):
-            start_idx = int(sum(col_classes[0:i]))
-            col_completed = complete_encoded[:, start_idx : start_idx + cnt]
-
-            mle_completed = np.apply_along_axis(
-                self._mle, axis=1, arr=col_completed
-            )
-
-            if mle_complete is None:
-                mle_complete = mle_completed
-
-            else:
-                mle_complete = np.hstack([mle_complete, mle_completed])
-
-        return mle_complete, df_dummies
-
-    def _encode_categorical(self, X):
-        """Encode -9 encoded missing values as np.nan.
-
-        Args:
-            X (numpy.ndarray): 012-encoded genotypes with -9 as missing values.
-
-        Returns:
-            pandas.DataFrame: DataFrame with missing values encoded as np.nan.
-        """
-        np.nan_to_num(X, copy=False, nan=-9.0)
-        X = X.astype(str)
-        X[(X == "-9.0") | (X == "-9")] = "none"
-
-        df = pd.DataFrame(X)
-        df_incomplete = df.copy()
-
-        # Replace 'none' with np.nan
-        for row in df.index:
-            for col in df.columns:
-                if df_incomplete.iat[row, col] == "none":
-                    df_incomplete.iat[row, col] = np.nan
-
-        return df_incomplete
-
-    def _decode_onehot(self, df_dummies):
-        """Decode one-hot format to 012-encoded genotypes.
-
-        Args:
-            df_dummies (pandas.DataFrame): One-hot encoded imputed data.
-
-        Returns:
-            pandas.DataFrame: 012-encoded imputed data.
-        """
-        pos = defaultdict(list)
-        vals = defaultdict(list)
-
-        for i, c in enumerate(df_dummies.columns):
-            if "_" in c:
-                k, v = c.split("_", 1)
-                pos[k].append(i)
-                vals[k].append(v)
-
-            else:
-                pos["_"].append(i)
-
-        df = pd.DataFrame(
-            {
-                k: pd.Categorical.from_codes(
-                    np.argmax(df_dummies.iloc[:, pos[k]].values, axis=1),
-                    vals[k],
-                )
-                for k in vals
-            }
-        )
-
-        df[df_dummies.columns[pos["_"]]] = df_dummies.iloc[:, pos["_"]]
-
-        return df
-
-
-class InputTransformer(BaseEstimator, TransformerMixin):
-    """Transform input X prior to estimator fitting.
-
-    Args:
-        phase (int or None): current phase if doing UBP or None if doing NLPCA.
-        n_components (int): Number of principal components currently being used in V.
-
-        V (numpy.ndarray or Dict[str, Any]): If doing grid search, should be a dictionary with current_component: numpy.ndarray. If not doing grid search, then it should be a numpy.ndarray.
-    """
-
-    def __init__(self, phase, n_components, V):
+    def __init__(self, patience=0, phase=3):
+        super(UBPEarlyStopping, self).__init__()
+        self.patience = patience
         self.phase = phase
-        self.n_components = n_components
-        self.V = V
 
-    def fit(self, X):
-        """Fit transformer to input data X.
+        # best_weights to store the weights at which the minimum loss occurs.
+        self.best_weights = None
 
-        Args:
-            X (numpy.ndarray): Input data to fit. If numpy.ndarray, then should be of shape (n_samples, n_components). If dictionary, then should be component: numpy.ndarray.
+        # In UBP, the input gets refined during training.
+        # So we have to revert it too.
+        self.best_input = None
 
-        Returns:
-            self: Class instance.
-        """
-        self.n_features_in_ = self.n_components
-        return self
+    def on_train_begin(self, logs=None):
+        # The number of epoch it has waited when loss is no longer minimum.
+        self.wait = 0
+        # The epoch the training stops at.
+        self.stopped_epoch = 0
+        # Initialize the best as infinity.
+        self.best = np.Inf
 
-    def transform(self, X):
-        """Transform input data X to the needed format.
+    def on_epoch_end(self, epoch, logs=None):
+        current = logs.get("loss")
+        if np.less(current, self.best):
+            self.best = current
+            self.wait = 0
+            # Record the best weights if current results is better (less).
+            self.best_weights = self.model.get_weights()
 
-        Args:
-            X (numpy.ndarray): Input data to fit. If numpy.ndarray, then should be of shape (n_samples, n_components). If dictionary, then should be component: numpy.ndarray.
-
-        Returns:
-            numpy.ndarray: Formatted input data with correct component.
-        """
-        if self.phase == None or self.phase == 1:
-            if not isinstance(self.V, dict):
-                raise TypeError("X must be a dictionary if phase == None or 1.")
-            return self.V[self.n_components]
+            if self.phase != 2:
+                # Only refine input in phase 2.
+                self.best_input = self.model.V_latent
         else:
-            return self.V
+            self.wait += 1
+            if self.wait >= self.patience:
+                self.stopped_epoch = epoch
+                self.model.stop_training = True
+                self.model.set_weights(self.best_weights)
+
+                if self.phase != 2:
+                    self.model.V_latent = self.best_input
 
 
 class MLPClassifier(KerasClassifier):
@@ -1309,8 +390,8 @@ class MLPClassifier(KerasClassifier):
         model.set_model_outputs()
         return model
 
+    @staticmethod
     def scorer(
-        self,
         y_true,
         y_pred,
         **kwargs,
@@ -1327,7 +408,8 @@ class MLPClassifier(KerasClassifier):
         Returns:
             float: Calculated score.
         """
-        y_true_nan = np.where(self.y_decoded == -9, np.nan, self.y_decoded)
+        y_decoded = kwargs.get("y_decoded")
+        y_true_nan = np.where(y_decoded == -9, np.nan, y_decoded)
         missing_mask = np.isnan(y_true_nan)
 
         # Subset to only observed values.
@@ -1338,1654 +420,28 @@ class MLPClassifier(KerasClassifier):
         # Subset to only values observed in y_true.
         y_pred_observed = y_pred[~missing_mask]
 
-        return accuracy_score(y_true_observed, y_pred_observed, **kwargs)
+        return accuracy_score(y_true_observed, y_pred_observed)
 
     @property
     def feature_encoder(self):
         """Handles feature input, X, before training.
 
         Returns:
-            InputTransformer: InputTransformer object that includes fit() and  transform() methods to transform input before estimator fitting.
+            UBPInputTransformer: InputTransformer object that includes fit() and transform() methods to transform input before estimator fitting.
         """
-        return InputTransformer(self.phase, self.n_components, self.V)
+        return UBPInputTransformer(self.phase, self.n_components, self.V)
 
     @property
     def target_encoder(self):
         """Handles target input and output, y_true and y_pred, both before and after training.
 
         Returns:
-            OutputTransformer: OutputTransformer object that includes fit(), transform(), and inverse_transform() methods.
+            NNOutputTransformer: NNOutputTransformer object that includes fit(), transform(), and inverse_transform() methods.
         """
-        return OutputTransformer(self.y_decoded)
+        return NNOutputTransformer(self.y_decoded)
 
 
-class UBPCallbacks(tf.keras.callbacks.Callback):
-    """Custom callbacks to use with subclassed NLPCA/ UBP Keras models.
-
-    See tf.keras.callbacks.Callback documentation.
-    """
-
-    def __init__(self):
-        self.indices = None
-
-    def on_train_begin(self, logs=None):
-        self.model.n_batches = self.params.get("steps")
-
-    def on_epoch_begin(self, epoch, logs=None):
-        # Shuffle input and target at start of epoch.
-        input_with_mask = np.hstack([self.model.y, self.model.missing_mask])
-        n_samples = len(input_with_mask)
-        self.indices = np.arange(n_samples)
-        np.random.shuffle(self.indices)
-        self.model.input_with_mask = input_with_mask[self.indices]
-        self.model.V_latent = self.model.V_latent[self.indices]
-
-    def on_train_batch_begin(self, batch, logs=None):
-        self.model.batch_idx = batch
-
-    def on_test_batch_begin(self, batch, logs=None):
-        self.model.batch_idx = batch
-
-    def on_epoch_end(self, epoch, logs=None):
-        # Unsort the row indices.
-        self.model.V_latent = self.model.V_latent[np.argsort(self.indices)]
-
-        y_pred = self.model.predict(self.model.V_latent)
-        y_true = self.model.y.copy()
-        mm = self.model.missing_mask
-        old_weight = 0.5
-        y_true[mm] *= old_weight
-        y_pred_missing = y_pred[mm]
-        y_true[mm] += 0.5 * y_pred_missing
-        self.model.y = y_true.copy()
-
-
-class UBPEarlyStopping(tf.keras.callbacks.Callback):
-    """Stop training when the loss is at its min, i.e. the loss stops decreasing.
-
-    Arguments:
-        patience: Number of epochs to wait after min has been hit. After this
-        number of no improvement, training stops.
-    """
-
-    def __init__(self, patience=0, phase=3):
-        super(UBPEarlyStopping, self).__init__()
-        self.patience = patience
-        self.phase = phase
-
-        # best_weights to store the weights at which the minimum loss occurs.
-        self.best_weights = None
-
-        # In UBP, the input gets refined during training.
-        # So we have to revert it too.
-        self.best_input = None
-
-    def on_train_begin(self, logs=None):
-        # The number of epoch it has waited when loss is no longer minimum.
-        self.wait = 0
-        # The epoch the training stops at.
-        self.stopped_epoch = 0
-        # Initialize the best as infinity.
-        self.best = np.Inf
-
-    def on_epoch_end(self, epoch, logs=None):
-        current = logs.get("loss")
-        if np.less(current, self.best):
-            self.best = current
-            self.wait = 0
-            # Record the best weights if current results is better (less).
-            self.best_weights = self.model.get_weights()
-
-            if self.phase != 2:
-                # Only refine input in phase 2.
-                self.best_input = self.model.V_latent
-        else:
-            self.wait += 1
-            if self.wait >= self.patience:
-                self.stopped_epoch = epoch
-                self.model.stop_training = True
-                self.model.set_weights(self.best_weights)
-
-                if self.phase != 2:
-                    self.model.V_latent = self.best_input
-
-
-class NLPCAModel(tf.keras.Model):
-    """NLPCA model to train and use to predict imputations.
-
-    NLPCAModel subclasses the tf.keras.Model and overrides the train_step() and test_step() functions, which do training and evaluation for each batch in each epoch.
-
-    Args:
-        V (numpy.ndarray(float)): V should have been randomly initialized and will be used as the input data that gets refined during training. Defaults to None.
-
-        y (numpy.ndarray): Target values to predict. Actual input data. Defaults to None.
-
-        batch_size (int, optional): Batch size per epoch. Defaults to 32.
-
-        missing_mask (numpy.ndarray): Missing data mask for y. Defaults to None.
-
-        output_shape (int): Output units for n_features dimension. Output will be of shape (batch_size, n_features). Defaults to None.
-
-        weights_initializer (str, optional): Kernel initializer to use for initializing model weights. Defaults to "glorot_normal".
-
-        hidden_layer_sizes (List[int], optional): Output units for each hidden layer. List should be of same length as the number of hidden layers. Defaults to "midpoint".
-
-        num_hidden_layers (int, optional): Number of hidden layers to use. Defaults to 1.
-
-        hidden_activation (str, optional): Activation function to use for hidden layers. Defaults to "elu".
-
-        l1_penalty (float, optional): L1 regularization penalty to use to reduce overfitting. Defaults to 0.01.
-
-        l2_penalty (float, optional): L2 regularization penalty to use to reduce overfitting. Defaults to 0.01.
-
-        dropout_rate (float, optional): Dropout rate during training to reduce overfitting. Must be a float between 0 and 1. Defaults to 0.2.
-
-        num_classes (int, optional): Number of classes in output. Corresponds to the 3rd dimension of the output shape (batch_size, n_features, num_classes). Defaults to 1.
-
-        phase (NoneType): Here for compatibility with UBP.
-
-    Methods:
-        call: Does forward pass for model.
-        train_step: Does training for one batch in a single epoch.
-        test_step: Does evaluation for one batch in a single epoch.
-
-    Attributes:
-        V_latent_ (numpy.ndarray(float)): Randomly initialized input that gets refined during training to better predict the targets.
-
-        hidden_layer_sizes (List[Union[int, str]]): Output units for each hidden layer. Length should be the same as the number of hidden layers.
-
-        n_components (int): Number of principal components to use with _V.
-
-        _batch_size (int): Batch size to use per epoch.
-
-        _batch_idx (int): Index of current batch.
-
-        _n_batches (int): Total number of batches per epoch.
-
-        input_with_mask_ (numpy.ndarray): Target y with the missing data mask horizontally concatenated and shape (n_samples, n_features * 2). Gets refined in the UBPCallbacks() callback.
-
-    Example:
-        >>>model = NLPCAModel(V=V, y=y, batch_size=32, missing_mask=missing_mask, output_shape, n_components, weights_initializer, hidden_layer_sizes, num_hidden_layers, hidden_activation, l1_penalty, l2_penalty, dropout_rate, num_classes=3)
-        >>>model.compile(optimizer=optimizer, loss=loss_func, metrics=[my_metrics], run_eagerly=True)
-        >>>history = model.fit(X, y, batch_size=batch_size, epochs=epochs, callbacks=[MyCallback()], validation_split=validation_split, shuffle=False)
-
-    Raises:
-        TypeError: V, y, missing_mask, output_shape must not be NoneType.
-        ValueError: Maximum of 5 hidden layers.
-
-    """
-
-    def __init__(
-        self,
-        V=None,
-        y=None,
-        batch_size=32,
-        missing_mask=None,
-        output_shape=None,
-        n_components=3,
-        weights_initializer="glorot_normal",
-        hidden_layer_sizes="midpoint",
-        num_hidden_layers=1,
-        hidden_activation="elu",
-        l1_penalty=0.01,
-        l2_penalty=0.01,
-        dropout_rate=0.2,
-        num_classes=1,
-        phase=None,
-    ):
-        super(NLPCAModel, self).__init__()
-
-        nn = NeuralNetwork()
-        self.nn = nn
-
-        if V is None:
-            self._V = nn.init_weights(y.shape[0], n_components)
-        else:
-            self._V = V[n_components]
-
-        self._y = y
-
-        hidden_layer_sizes = nn.validate_hidden_layers(
-            hidden_layer_sizes, num_hidden_layers
-        )
-
-        hidden_layer_sizes = nn.get_hidden_layer_sizes(
-            y.shape[1], self._V.shape[1], hidden_layer_sizes
-        )
-
-        nn.validate_model_inputs(y, missing_mask, output_shape)
-
-        self._missing_mask = missing_mask
-        self.weights_initializer = weights_initializer
-        self.phase = phase
-        self.dropout_rate = dropout_rate
-
-        ### NOTE: I tried using just _V as the input to be refined, but it
-        # wasn't getting updated. So I copy it here and it works.
-        # V_latent is refined during train_step().
-        self.V_latent_ = self._V.copy()
-
-        # Initialize parameters used during train_step() and test_step().
-        # input_with_mask_ is set during the UBPCallbacks() execution.
-        self._batch_idx = 0
-        self._n_batches = 0
-        self._batch_size = batch_size
-        self.input_with_mask_ = None
-        self.n_components = n_components
-
-        if l1_penalty == 0.0 and l2_penalty == 0.0:
-            kernel_regularizer = None
-        else:
-            kernel_regularizer = l1_l2(l1_penalty, l2_penalty)
-
-        self.kernel_regularizer = kernel_regularizer
-        kernel_initializer = weights_initializer
-
-        if num_hidden_layers > 5:
-            raise ValueError(
-                f"The maximum number of hidden layers is 5, but got "
-                f"{num_hidden_layers}"
-            )
-
-        self.dense2 = None
-        self.dense3 = None
-        self.dense4 = None
-        self.dense5 = None
-
-        # Construct multi-layer perceptron.
-        # Add hidden layers dynamically.
-        self.dense1 = Dense(
-            hidden_layer_sizes[0],
-            input_shape=(n_components,),
-            activation=hidden_activation,
-            kernel_initializer=kernel_initializer,
-            kernel_regularizer=kernel_regularizer,
-        )
-
-        if num_hidden_layers >= 2:
-            self.dense2 = Dense(
-                hidden_layer_sizes[1],
-                activation=hidden_activation,
-                kernel_initializer=kernel_initializer,
-                kernel_regularizer=kernel_regularizer,
-            )
-
-        if num_hidden_layers >= 3:
-            self.dense3 = Dense(
-                hidden_layer_sizes[2],
-                activation=hidden_activation,
-                kernel_initializer=kernel_initializer,
-                kernel_regularizer=kernel_regularizer,
-            )
-
-        if num_hidden_layers >= 4:
-            self.dense4 = Dense(
-                hidden_layer_sizes[3],
-                activation=hidden_activation,
-                kernel_initializer=kernel_initializer,
-                kernel_regularizer=kernel_regularizer,
-            )
-
-        if num_hidden_layers == 5:
-            self.dense5 = Dense(
-                hidden_layer_sizes[4],
-                activation=hidden_activation,
-                kernel_initializer=kernel_initializer,
-                kernel_regularizer=kernel_regularizer,
-            )
-
-        self.output1 = Dense(
-            output_shape,
-            kernel_initializer=kernel_initializer,
-            kernel_regularizer=kernel_regularizer,
-            activation="sigmoid",
-        )
-        self.dropout_layer = Dropout(rate=dropout_rate)
-
-    def call(self, inputs, training=None):
-        """Forward propagates inputs through the model defined in __init__().
-
-        Args:
-            inputs (tf.keras.Input): Input tensor to forward propagate through the model.
-
-            training (bool or None): Whether in training mode or not. Affects whether dropout is used.
-
-        Returns:
-            tf.keras.Model: Output tensor from forward propagation.
-        """
-        if self.dropout_rate == 0.0:
-            training = False
-        x = self.dense1(inputs)
-        if training:
-            x = self.dropout_layer(x, training=training)
-        if self.dense2 is not None:
-            x = self.dense2(x)
-            if training:
-                x = self.dropout_layer(x, training=training)
-        if self.dense3 is not None:
-            x = self.dense3(x)
-            if training:
-                x = self.dropout_layer(x, training=training)
-        if self.dense4 is not None:
-            x = self.dense4(x)
-            if training:
-                x = self.dropout_layer(x, training=training)
-        if self.dense5 is not None:
-            x = self.dense5(x)
-            if training:
-                x = self.dropout_layer(x, training=training)
-        return self.output1(x)
-
-    def model(self):
-        """Here so that mymodel.model().summary() can be called for debugging."""
-        x = tf.keras.Input(shape=(self.n_components,))
-        return tf.keras.Model(inputs=[x], outputs=self.call(x))
-
-    def set_model_outputs(self):
-        x = tf.keras.Input(shape=(self.n_components,))
-        model = tf.keras.Model(inputs=[x], outputs=self.call(x))
-        # self.inputs = tf.convert_to_tensor(self.V_latent_)
-        self.outputs = model.outputs
-
-    def train_step(self, data):
-        """Custom training loop for one step (=batch) in a single epoch.
-
-        GradientTape records the weights and watched
-        variables (usually tf.Variable objects), which
-        in this case are the weights and the input (x),
-        during the forward pass.
-        This allows us to run gradient descent during
-        backpropagation to refine the watched variables.
-
-        This function will train on a batch of samples (rows), which can be adjusted with the ``batch_size`` parameter from the estimator.
-
-        Args:
-            data (Tuple[tf.EagerTensor, tf.EagerTensor]): Input tensorflow variables of shape (batch_size, n_components) and (batch_size, n_features, num_classes).
-
-        Returns:
-            Dict[str, float]: History object that gets returned from fit(). Contains the loss and any metrics specified in compile().
-
-        ToDo:
-            Obtain batch_size without using run_eagerly option in compile(). This will allow the step to be run in graph mode, thereby speeding up computation.
-        """
-        # Set in the UBPCallbacks() callback.
-        y = self.input_with_mask_
-
-        v, y_true, batch_start, batch_end = self.nn.prepare_training_batches(
-            self.V_latent_,
-            y,
-            self._batch_size,
-            self._batch_idx,
-            True,
-            self.n_components,
-        )
-
-        src = [v]
-
-        # NOTE: Earlier model architectures incorrectly
-        # applied one gradient to all the variables, including
-        # the weights and v. Here we apply them separately, per
-        # the UBP manuscript.
-        with tf.GradientTape(persistent=True) as tape:
-            # Forward pass. Watch input tensor v.
-            tape.watch(v)
-            y_pred = self(v, training=True)
-            loss = self.compiled_loss(
-                tf.convert_to_tensor(y_true, dtype=tf.float32),
-                y_pred,
-                regularization_losses=self.losses,
-            )
-
-        # Refine the watched variables with
-        # gradient descent backpropagation
-        gradients = tape.gradient(loss, self.trainable_variables)
-        self.optimizer.apply_gradients(zip(gradients, self.trainable_variables))
-
-        # Apply separate gradients to v.
-        vgrad = tape.gradient(loss, src)
-        self.optimizer.apply_gradients(zip(vgrad, src))
-
-        del tape
-
-        self.compiled_metrics.update_state(
-            tf.convert_to_tensor(y_true, dtype=tf.float32),
-            y_pred,
-        )
-
-        # NOTE: run_eagerly must be set to True in the compile() method for this
-        # to work. Otherwise it can't convert a Tensor object to a numpy array.
-        # There is really no other way to set v back to V_latent_ in graph
-        # mode as far as I know. eager execution is slower, so it would be nice
-        # to find a way to do this without converting to numpy.
-        self.V_latent_[batch_start:batch_end, :] = v.numpy()
-
-        # history object that gets returned from fit().
-        return {m.name: m.result() for m in self.metrics}
-
-    def test_step(self, data):
-        """Validation step for one batch in a single epoch.
-
-        Custom logic for the test step that gets sent back to on_train_batch_end() callback.
-
-        Args:
-            data (Tuple[tf.EagerTensor, tf.EagerTensor]): Batches of input data V and y_true.
-
-        Returns:
-            A dict containing values that will be passed to ``tf.keras.callbacks.CallbackList.on_train_batch_end``. Typically, the values of the Model's metrics are returned.
-        """
-        # Unpack the data. Don't need V here. Just X (y_true).
-        y = self.input_with_mask_
-
-        v, y_true, batch_start, batch_end = self.nn.prepare_training_batches(
-            self.V_latent_,
-            y,
-            self._batch_size,
-            self._batch_idx,
-            False,
-            self.n_components,
-        )
-
-        # Compute predictions
-        y_pred = self(v, training=False)
-
-        # Updates the metrics tracking the loss
-        self.compiled_loss(
-            tf.convert_to_tensor(y_true, dtype=tf.float32),
-            y_pred,
-            regularization_losses=self.losses,
-        )
-
-        # Update the metrics.
-        self.compiled_metrics.update_state(
-            tf.convert_to_tensor(y_true, dtype=tf.float32),
-            y_pred,
-        )
-
-        # Return a dict mapping metric names to current value.
-        # Note that it will include the loss (tracked in self.metrics).
-        return {m.name: m.result() for m in self.metrics}
-
-    @property
-    def V_latent(self):
-        """Randomly initialized input variable that gets refined during training."""
-        return self.V_latent_
-
-    @property
-    def batch_size(self):
-        """Batch (=step) size per epoch."""
-        return self._batch_size
-
-    @property
-    def batch_idx(self):
-        """Current batch (=step) index."""
-        return self._batch_idx
-
-    @property
-    def n_batches(self):
-        """Total number of batches per epoch."""
-        return self._n_batches
-
-    @property
-    def y(self):
-        return self._y
-
-    @property
-    def missing_mask(self):
-        return self._missing_mask
-
-    @property
-    def input_with_mask(self):
-        return self.input_with_mask_
-
-    @V_latent.setter
-    def V_latent(self, value):
-        """Set randomly initialized input variable. Gets refined during training."""
-        self.V_latent_ = value
-
-    @batch_size.setter
-    def batch_size(self, value):
-        """Set batch_size parameter."""
-        self._batch_size = int(value)
-
-    @batch_idx.setter
-    def batch_idx(self, value):
-        """Set current batch (=step) index."""
-        self._batch_idx = int(value)
-
-    @n_batches.setter
-    def n_batches(self, value):
-        """Set total number of batches (=steps) per epoch."""
-        self._n_batches = int(value)
-
-    @y.setter
-    def y(self, value):
-        """Set y after each epoch."""
-        self._y = value
-
-    @missing_mask.setter
-    def missing_mask(self, value):
-        """Set y after each epoch."""
-        self._missing_mask = value
-
-    @input_with_mask.setter
-    def input_with_mask(self, value):
-        self.input_with_mask_ = value
-
-
-class UBPPhase1(tf.keras.Model, NeuralNetwork):
-    """UBP Phase 1 single layer perceptron model to train predict imputations.
-
-    This model is subclassed from the tensorflow/ Keras framework.
-
-    UBPPhase1 subclasses the tf.keras.Model and overrides the train_step() and test_step() functions, which do training and evalutation for each batch in each epoch.
-
-    UBPPhase1 is a single-layer perceptron model used to initially refine V. After Phase 1 the Phase 1 weights are discarded.
-
-    Args:
-        V (numpy.ndarray(float)): V should have been randomly initialized and will be used as the input data that gets refined during training. Defaults to None.
-
-        y (numpy.ndarray): Target values to predict. Actual input data. Defaults to None.
-
-        batch_size (int, optional): Batch size per epoch. Defaults to 32.
-
-        missing_mask (numpy.ndarray): Missing data mask for y. Defaults to None.
-
-        output_shape (int): Output units for n_features dimension. Output will be of shape (batch_size, n_features). Defaults to None.
-
-        weights_initializer (str, optional): Kernel initializer to use for initializing model weights. Defaults to "glorot_normal".
-
-        hidden_layer_sizes (NoneType, optional): Output units for each hidden layer. List should be of same length as the number of hidden layers. Not used for UBP Phase 1, but is here for compatibility. Defaults to None.
-
-        num_hidden_layers (int, optional): Number of hidden layers to use. Not used in UBP Phase 1, but is here for compatibility. Defaults to 0.
-
-        hidden_activation (str, optional): Activation function to use for hidden layers. Defaults to "elu".
-
-        l1_penalty (float, optional): L1 regularization penalty to use to reduce overfitting. Defaults to 0.01.
-
-        l2_penalty (float, optional): L2 regularization penalty to use to reduce overfitting. Defaults to 0.01.
-
-        dropout_rate (float, optional): Dropout rate during training to reduce overfitting. Must be a float between 0 and 1. Defaults to 0.2.
-
-        num_classes (int, optional): Number of classes in output. Corresponds to the 3rd dimension of the output shape (batch_size, n_features, num_classes). Defaults to 1.
-
-        phase (int, optional): Current phase if doing UBP model. Defaults to 1.
-
-    Methods:
-        call: Does forward pass for model.
-        train_step: Does training for one batch in a single epoch.
-        test_step: Does evaluation for one batch in a single epoch.
-
-    Attributes:
-        V_latent_ (numpy.ndarray(float)): Randomly initialized input that gets refined during training.
-
-        phase (int): Current phase if doing UBP model. Ignored if doing NLPCA model.
-
-        hidden_layer_sizes (List[Union[int, str]]): Output units for each hidden layer. Length should be the same as the number of hidden layers.
-
-        n_components (int): Number of principal components to use with _V.
-
-        _batch_size (int): Batch size to use per epoch.
-
-        _batch_idx (int): Index of current batch.
-
-        _n_batches (int): Total number of batches per epoch.
-
-        input_with_mask_ (numpy.ndarray): Target y with the missing data mask horizontally concatenated and shape (n_samples, n_features * 2). Gets refined in the UBPCallbacks() callback.
-
-    Example:
-        >>>model = UBPPhase1(V=V, y=y, batch_size=32, missing_mask=missing_mask, output_shape, n_components, weights_initializer, hidden_layer_sizes, num_hidden_layers, hidden_activation, l1_penalty, l2_penalty, num_classes=3, phase=3)
-        >>>model.compile(optimizer=optimizer, loss=loss_func, metrics=[my_metrics], run_eagerly=True)
-        >>>history = model.fit(X, y, batch_size=batch_size, epochs=epochs, callbacks=[MyCallback()], validation_split=validation_split, shuffle=False)
-
-    Raises:
-        TypeError: V, y, missing_mask, output_shape must not be NoneType.
-        ValueError: Maximum of 5 hidden layers.
-
-    """
-
-    def __init__(
-        self,
-        V=None,
-        y=None,
-        batch_size=32,
-        missing_mask=None,
-        output_shape=None,
-        n_components=3,
-        weights_initializer="glorot_normal",
-        hidden_layer_sizes=None,
-        num_hidden_layers=0,
-        hidden_activation="elu",
-        l1_penalty=0.01,
-        l2_penalty=0.01,
-        dropout_rate=0.2,
-        num_classes=1,
-        phase=1,
-    ):
-        super(UBPPhase1, self).__init__()
-
-        if V is None:
-            self._V = nn.init_weights(y.shape[0], n_components)
-        else:
-            self._V = V
-
-        self._y = y
-
-        self.validate_model_inputs(y, missing_mask, output_shape)
-
-        self._missing_mask = missing_mask
-        self.phase = phase
-        self.hidden_layer_sizes = hidden_layer_sizes
-        self.n_components = n_components
-        self.weights_initializer = weights_initializer
-
-        ### NOTE: I tried using just _V as the input to be refined, but it
-        # wasn't getting updated. So I copy it here and it works.
-        # V_latent is refined during train_step().
-        self.V_latent_ = self._V.copy()
-
-        # Initialize parameters used during train_step() and test_step().
-        # input_with_mask_ is set during the UBPCallbacks() execution.
-        self._batch_idx = 0
-        self._n_batches = 0
-        self._batch_size = batch_size
-        self.input_with_mask_ = None
-        self.n_components = n_components
-
-        if l1_penalty == 0.0 and l2_penalty == 0.0:
-            kernel_regularizer = None
-        else:
-            kernel_regularizer = l1_l2(l1_penalty, l2_penalty)
-        self.kernel_regularizer = kernel_regularizer
-        kernel_initializer = weights_initializer
-
-        # Construct single-layer perceptron.
-        self.dense1 = Dense(
-            output_shape,
-            input_shape=(n_components,),
-            kernel_initializer=kernel_initializer,
-            kernel_regularizer=kernel_regularizer,
-            activation="sigmoid",
-        )
-
-    def call(self, inputs):
-        """Forward propagates inputs through the model defined in __init__().
-
-        Args:
-            inputs (tf.keras.Input): Input tensor to forward propagate through the model.
-
-        Returns:
-            tf.keras.Model: Output tensor from forward propagation.
-        """
-        return self.dense1(inputs)
-
-    def model(self):
-        """Here so that mymodel.model().summary() can be called for debugging"""
-        x = tf.keras.Input(shape=(self.n_components,))
-        return tf.keras.Model(inputs=[x], outputs=self.call(x))
-
-    def train_step(self, data):
-        """Custom training loop for one step (=batch) in a single epoch.
-
-        GradientTape records the weights and watched variables (usually tf.Variable objects), which in this case are the weights and the input (x), during the forward pass. This allows us to run gradient descent during backpropagation to refine the watched variables.
-
-        This function will train on a batch of samples (rows), which can be adjusted with the ``batch_size`` parameter from the estimator.
-
-        Args:
-            data (Tuple[tf.EagerTensor, tf.EagerTensor]): Tuple of input tensors of shape (batch_size, n_components) and (batch_size, n_features, num_classes).
-
-        Returns:
-            Dict[str, float]: History object that gets returned from fit(). Contains the loss and any metrics specified in compile().
-
-        ToDo:
-            Obtain batch_size without using run_eagerly option in compile(). This will allow the step to be run in graph mode, thereby speeding up computation.
-        """
-        # Set in the UBPCallbacks() callback.
-        y = self.input_with_mask_
-
-        v, y_true, batch_start, batch_end = self.prepare_training_batches(
-            self.V_latent_,
-            y,
-            self._batch_size,
-            self._batch_idx,
-            True,
-            self.n_components,
-        )
-
-        src = [v]
-
-        # NOTE: Earlier model architectures incorrectly
-        # applied one gradient to all the variables, including
-        # the weights and v. Here we apply them separately, per
-        # the UBP manuscript.
-        with tf.GradientTape(persistent=True) as tape:
-            # Forward pass. Watch input tensor v.
-            tape.watch(v)
-            y_pred = self(v, training=True)
-            loss = self.compiled_loss(
-                tf.convert_to_tensor(y_true, dtype=tf.float32),
-                y_pred,
-                regularization_losses=self.losses,
-            )
-
-        # Refine the watched variables with
-        # gradient descent backpropagation
-        gradients = tape.gradient(loss, self.trainable_variables)
-        self.optimizer.apply_gradients(zip(gradients, self.trainable_variables))
-
-        # Apply separate gradients to v.
-        vgrad = tape.gradient(loss, src)
-        self.optimizer.apply_gradients(zip(vgrad, src))
-
-        del tape
-
-        self.compiled_metrics.update_state(
-            tf.convert_to_tensor(y_true, dtype=tf.float32), y_pred
-        )
-
-        # NOTE: run_eagerly must be set to True in the compile() method for this
-        # to work. Otherwise it can't convert a Tensor object to a numpy array.
-        # There is really no other way to set v back to V_latent_ in graph
-        # mode as far as I know. eager execution is slower, so it would be nice
-        # to find a way to do this without converting to numpy.
-        self.V_latent_[batch_start:batch_end, :] = v.numpy()
-
-        # history object that gets returned from model.fit().
-        return {m.name: m.result() for m in self.metrics}
-
-    def test_step(self, data):
-        """Validation step for one batch in a single epoch.
-
-        Custom logic for the test step that gets sent back to on_train_batch_end() callback.
-
-        Args:
-            data (Tuple[tf.EagerTensor, tf.EagerTensor]): Batches of input data V and y_true.
-
-        Returns:
-            A dict containing values that will be passed to ``tf.keras.callbacks.CallbackList.on_train_batch_end``. Typically, the values of the Model's metrics are returned.
-        """
-        # Unpack the data. Don't need V here. Just X (y_true).
-        # y_true = data[1]
-        y = self.input_with_mask_
-
-        v, y_true, batch_start, batch_end = self.prepare_training_batches(
-            self.V_latent_,
-            y,
-            self._batch_size,
-            self._batch_idx,
-            False,
-            self.n_components,
-        )
-
-        # Compute predictions
-        y_pred = self(v, training=False)
-
-        # Updates the metrics tracking the loss
-        self.compiled_loss(
-            tf.convert_to_tensor(y_true, dtype=tf.float32),
-            y_pred,
-            regularization_losses=self.losses,
-        )
-
-        # Update the metrics.
-        self.compiled_metrics.update_state(
-            tf.convert_to_tensor(y_true, dtype=tf.float32), y_pred
-        )
-
-        # Return a dict mapping metric names to current value.
-        # Note that it will include the loss (tracked in self.metrics).
-        return {m.name: m.result() for m in self.metrics}
-
-    @property
-    def V_latent(self):
-        """Randomly initialized input variable that gets refined during training."""
-        return self.V_latent_
-
-    @property
-    def batch_size(self):
-        """Batch (=step) size per epoch."""
-        return self._batch_size
-
-    @property
-    def batch_idx(self):
-        """Current batch (=step) index."""
-        return self._batch_idx
-
-    @property
-    def n_batches(self):
-        """Total number of batches per epoch."""
-        return self._n_batches
-
-    @property
-    def y(self):
-        return self._y
-
-    @property
-    def missing_mask(self):
-        return self._missing_mask
-
-    @property
-    def input_with_mask(self):
-        return self.input_with_mask_
-
-    @V_latent.setter
-    def V_latent(self, value):
-        """Set randomly initialized input variable. Gets refined during training."""
-        self.V_latent_ = value
-
-    @batch_size.setter
-    def batch_size(self, value):
-        """Set batch_size parameter."""
-        self._batch_size = int(value)
-
-    @batch_idx.setter
-    def batch_idx(self, value):
-        """Set current batch (=step) index."""
-        self._batch_idx = int(value)
-
-    @n_batches.setter
-    def n_batches(self, value):
-        """Set total number of batches (=steps) per epoch."""
-        self._n_batches = int(value)
-
-    @y.setter
-    def y(self, value):
-        """Set y after each epoch."""
-        self._y = value
-
-    @missing_mask.setter
-    def missing_mask(self, value):
-        """Set y after each epoch."""
-        self._missing_mask = value
-
-    @input_with_mask.setter
-    def input_with_mask(self, value):
-        self.input_with_mask_ = value
-
-
-class UBPPhase2(tf.keras.Model, NeuralNetwork):
-    """UBP Phase 2 model to train and use to predict imputations.
-
-    UBPPhase2 subclasses the tf.keras.Model and overrides the train_step() and test_step() functions, which do training for each batch in each epoch.
-
-    Phase 2 does not refine V, it just refines the weights.
-
-    Args:
-        V (numpy.ndarray(float)): V should have been randomly initialized and will be used as the input data that gets refined during training. Defaults to None.
-
-        y (numpy.ndarray): Target values to predict. Actual input data. Defaults to None.
-
-        batch_size (int, optional): Batch size per epoch. Defaults to 32.
-
-        missing_mask (numpy.ndarray): Missing data mask for y. Defaults to None.
-
-        output_shape (int): Output units for n_features dimension. Output will be of shape (batch_size, n_features). Defaults to None.
-
-        weights_initializer (str, optional): Kernel initializer to use for initializing model weights. Defaults to "glorot_normal".
-
-        hidden_layer_sizes (List[int], optional): Output units for each hidden layer. List should be of same length as the number of hidden layers. Defaults to "midpoint".
-
-        num_hidden_layers (int, optional): Number of hidden layers to use. Defaults to 1.
-
-        hidden_activation (str, optional): Activation function to use for hidden layers. Defaults to "elu".
-
-        l1_penalty (float, optional): L1 regularization penalty to use to reduce overfitting. Defaults to 0.01.
-
-        l2_penalty (float, optional): L2 regularization penalty to use to reduce overfitting. Defaults to 0.01.
-
-        dropout_rate (float, optional): Dropout rate during training to reduce overfitting. Must be a float between 0 and 1. Defaults to 0.2.
-
-        num_classes (int, optional): Number of classes in output. Corresponds to the 3rd dimension of the output shape (batch_size, n_features, num_classes). Defaults to 1.
-
-        phase (int, optional): Current phase if doing UBP model. Defaults to 2.
-
-
-    Methods:
-        call: Does forward pass for model.
-        train_step: Does training for one batch in a single epoch.
-        test_step: Does evalutation for one batch in a single epoch.
-
-    Attributes:
-        phase (int): Current phase if doing UBP model. Ignored if doing NLPCA model.
-
-        hidden_layer_sizes (List[Union[int, str]]): Output units for each hidden layer. Length should be the same as the number of hidden layers.
-
-        n_components (int): Number of principal components to use with _V.
-
-        _batch_size (int): Batch size to use per epoch.
-
-        _batch_idx (int): Index of current batch.
-
-        _n_batches (int): Total number of batches per epoch.
-
-    Example:
-        >>>model = UBPPhase2(V=V, y=y, batch_size=32, missing_mask=missing_mask, output_shape, n_components, weights_initializer, hidden_layer_sizes, num_hidden_layers, hidden_activation, l1_penalty, l2_penalty, dropout_rate, num_classes=3, phase=3)
-        >>>model.compile(optimizer=optimizer, loss=loss_func, metrics=[my_metrics], run_eagerly=True)
-        >>>history = model.fit(X, y, batch_size=batch_size, epochs=epochs, callbacks=[MyCallback()], validation_split=validation_split, shuffle=False)
-
-    Raises:
-        TypeError: V, y, missing_mask, output_shape must not be NoneType.
-        ValueError: Maximum of 5 hidden layers.
-
-    """
-
-    def __init__(
-        self,
-        V=None,
-        y=None,
-        batch_size=32,
-        missing_mask=None,
-        output_shape=None,
-        n_components=3,
-        weights_initializer="glorot_normal",
-        hidden_layer_sizes="midpoint",
-        num_hidden_layers=1,
-        hidden_activation="elu",
-        l1_penalty=0.01,
-        l2_penalty=0.01,
-        dropout_rate=0.2,
-        num_classes=1,
-        phase=2,
-    ):
-        super(UBPPhase2, self).__init__()
-
-        self._V = V
-
-        if self._V is None:
-            raise TypeError("V cannot be NoneType in UBP Phases 2 and 3.")
-
-        self._y = y
-
-        hidden_layer_sizes = self.validate_hidden_layers(
-            hidden_layer_sizes, num_hidden_layers
-        )
-
-        hidden_layer_sizes = self.get_hidden_layer_sizes(
-            y.shape[1], V.shape[1], hidden_layer_sizes
-        )
-
-        self.validate_model_inputs(y, missing_mask, output_shape)
-
-        self._missing_mask = missing_mask
-        self.phase = phase
-        self.hidden_layer_sizes = hidden_layer_sizes
-        self.n_components = n_components
-        self.weights_initializer = weights_initializer
-        self.dropout_rate = dropout_rate
-
-        ### NOTE: I tried using just _V as the input to be refined, but it
-        # wasn't getting updated. So I copy it here and it works.
-        # V_latent is refined during train_step().
-        self.V_latent_ = self._V.copy()
-
-        # Initialize parameters used during train_step() and test_step().
-        # input_with_mask_ is set during the UBPCallbacks() execution.
-        self._batch_idx = 0
-        self._n_batches = 0
-        self._batch_size = batch_size
-        self.input_with_mask_ = None
-        self.n_components = n_components
-
-        if l1_penalty == 0.0 and l2_penalty == 0.0:
-            kernel_regularizer = None
-        else:
-            kernel_regularizer = l1_l2(l1_penalty, l2_penalty)
-
-        self.kernel_regularizer = kernel_regularizer
-        kernel_initializer = weights_initializer
-
-        if len(hidden_layer_sizes) > 5:
-            raise ValueError("The maximum number of hidden layers is 5.")
-
-        self.dense2 = None
-        self.dense3 = None
-        self.dense4 = None
-        self.dense5 = None
-
-        # Construct multi-layer perceptron.
-        # Add hidden layers dynamically.
-        self.dense1 = Dense(
-            hidden_layer_sizes[0],
-            input_shape=(n_components,),
-            activation=hidden_activation,
-            kernel_initializer=kernel_initializer,
-            kernel_regularizer=kernel_regularizer,
-        )
-
-        if num_hidden_layers >= 2:
-            self.dense2 = Dense(
-                hidden_layer_sizes[1],
-                activation=hidden_activation,
-                kernel_initializer=kernel_initializer,
-                kernel_regularizer=kernel_regularizer,
-            )
-
-        if num_hidden_layers >= 3:
-            self.dense3 = Dense(
-                hidden_layer_sizes[2],
-                activation=hidden_activation,
-                kernel_initializer=kernel_initializer,
-                kernel_regularizer=kernel_regularizer,
-            )
-
-        if num_hidden_layers >= 4:
-            self.dense4 = Dense(
-                hidden_layer_sizes[3],
-                activation=hidden_activation,
-                kernel_initializer=kernel_initializer,
-                kernel_regularizer=kernel_regularizer,
-            )
-
-        if num_hidden_layers == 5:
-            self.dense5 = Dense(
-                hidden_layer_sizes[4],
-                activation=hidden_activation,
-                kernel_initializer=kernel_initializer,
-                kernel_regularizer=kernel_regularizer,
-            )
-
-        self.output1 = Dense(
-            output_shape,
-            kernel_initializer=kernel_initializer,
-            kernel_regularizer=kernel_regularizer,
-            activation="sigmoid",
-        )
-
-        self.dropout_layer = Dropout(rate=dropout_rate)
-
-    def call(self, inputs, training=None):
-        """Forward propagates inputs through the model defined in __init__().
-
-        Args:
-            inputs (tf.keras.Input): Input tensor to forward propagate through the model.
-
-            training (bool or None): Whether in training mode or not. Affects whether dropout is used.
-
-        Returns:
-            tf.keras.Model: Output tensor from forward propagation.
-        """
-        if self.dropout_rate == 0.0:
-            training = False
-        x = self.dense1(inputs)
-        if training:
-            x = self.dropout_layer(x, training=training)
-        if self.dense2 is not None:
-            x = self.dense2(x)
-            if training:
-                x = self.dropout_layer(x, training=training)
-        if self.dense3 is not None:
-            x = self.dense3(x)
-            if training:
-                x = self.dropout_layer(x, training=training)
-        if self.dense4 is not None:
-            x = self.dense4(x)
-            if training:
-                x = self.dropout_layer(x, training=training)
-        if self.dense5 is not None:
-            x = self.dense5(x)
-            if training:
-                x = self.dropout_layer(x, training=training)
-        return self.output1(x)
-
-    def model(self):
-        """Here so that mymodel.model().summary() can be called for debugging"""
-        x = tf.keras.Input(shape=(self.n_components,))
-        return tf.keras.Model(inputs=[x], outputs=self.call(x))
-
-    def train_step(self, data):
-        """Custom training loop for one step (=batch) in a single epoch.
-
-        GradientTape records the weights and watched
-        variables (usually tf.Variable objects), which
-        in this case are the weights, during the forward pass.
-        This allows us to run gradient descent during
-        backpropagation to refine the watched variables.
-
-        This function will train on a batch of samples (rows), which can be adjusted with the ``batch_size`` parameter from the estimator.
-
-        Args:
-            data (Tuple[tf.EagerTensor, tf.EagerTensor]): Input tensorflow tensors of shape (batch_size, n_components) and (batch_size, n_features, num_classes).
-
-        Returns:
-            Dict[str, float]: History object that gets returned from fit(). Contains the loss and any metrics specified in compile().
-
-        ToDo:
-            Obtain batch_size without using run_eagerly option in compile(). This will allow the step to be run in graph mode, thereby speeding up computation.
-        """
-
-        # Set in the UBPCallbacks() callback.
-        y = self.input_with_mask_
-
-        # v should not be trainable here in Phase 2.
-        # Doesn't get refined in Phase 2.
-        v, y_true, batch_start, batch_end = self.prepare_training_batches(
-            self.V_latent_,
-            y,
-            self._batch_size,
-            self._batch_idx,
-            False,
-            self.n_components,
-        )
-
-        with tf.GradientTape() as tape:
-            # Forward pass
-            y_pred = self(v, training=True)
-            loss = self.compiled_loss(
-                tf.convert_to_tensor(y_true, dtype=tf.float32),
-                y_pred,
-                regularization_losses=self.losses,
-            )
-
-        src = self.trainable_variables
-
-        # Refine the watched variables with backpropagation
-        gradients = tape.gradient(loss, src)
-        self.optimizer.apply_gradients(zip(gradients, src))
-
-        self.compiled_metrics.update_state(
-            tf.convert_to_tensor(y_true, dtype=tf.float32), y_pred
-        )
-
-        # history object that gets returned from fit().
-        return {m.name: m.result() for m in self.metrics}
-
-    def test_step(self, data):
-        """Validation step for one batch in a single epoch.
-
-        Custom logic for the test step that gets sent back to on_train_batch_end() callback.
-
-        Args:
-            data (Tuple[tf.EagerTensor, tf.EagerTensor]): Batches of input data V and y.
-
-        Returns:
-            A dict containing values that will be passed to ``tf.keras.callbacks.CallbackList.on_train_batch_end``. Typically, the values of the Model's metrics are returned.
-        """
-        # Set in the UBPCallbacks() callback.
-        y = self.input_with_mask_
-
-        v, y_true, batch_start, batch_end = self.prepare_training_batches(
-            self.V_latent_,
-            y,
-            self._batch_size,
-            self._batch_idx,
-            False,
-            self.n_components,
-        )
-
-        # Compute predictions
-        y_pred = self(v, training=False)
-
-        # Updates the metrics tracking the loss
-        self.compiled_loss(
-            tf.convert_to_tensor(y_true, dtype=tf.float32),
-            y_pred,
-            regularization_losses=self.losses,
-        )
-
-        # Update the metrics.
-        self.compiled_metrics.update_state(
-            tf.convert_to_tensor(y_true, dtype=tf.float32), y_pred
-        )
-
-        # Return a dict mapping metric names to current value.
-        # Note that it will include the loss (tracked in self.metrics).
-        return {m.name: m.result() for m in self.metrics}
-
-    @property
-    def V_latent(self):
-        """Randomly initialized input variable that gets refined during training."""
-        return self.V_latent_
-
-    @property
-    def batch_size(self):
-        """Batch (=step) size per epoch."""
-        return self._batch_size
-
-    @property
-    def batch_idx(self):
-        """Current batch (=step) index."""
-        return self._batch_idx
-
-    @property
-    def n_batches(self):
-        """Total number of batches per epoch."""
-        return self._n_batches
-
-    @property
-    def y(self):
-        return self._y
-
-    @property
-    def missing_mask(self):
-        return self._missing_mask
-
-    @property
-    def input_with_mask(self):
-        return self.input_with_mask_
-
-    @V_latent.setter
-    def V_latent(self, value):
-        """Set randomly initialized input variable. Gets refined during training."""
-        self.V_latent_ = value
-
-    @batch_size.setter
-    def batch_size(self, value):
-        """Set batch_size parameter."""
-        self._batch_size = int(value)
-
-    @batch_idx.setter
-    def batch_idx(self, value):
-        """Set current batch (=step) index."""
-        self._batch_idx = int(value)
-
-    @n_batches.setter
-    def n_batches(self, value):
-        """Set total number of batches (=steps) per epoch."""
-        self._n_batches = int(value)
-
-    @y.setter
-    def y(self, value):
-        """Set y after each epoch."""
-        self._y = value
-
-    @missing_mask.setter
-    def missing_mask(self, value):
-        """Set y after each epoch."""
-        self._missing_mask = value
-
-    @input_with_mask.setter
-    def input_with_mask(self, value):
-        self.input_with_mask_ = value
-
-
-class UBPPhase3(tf.keras.Model, NeuralNetwork):
-    """UBP Phase 3 model to train and use to predict imputations.
-
-    UBPPhase3 subclasses the tf.keras.Model and overrides the train_step() and test_step() functions, which do training and evaluation for each batch in each single epoch.
-
-    Phase 3 Refines both the weights and V.
-
-    Args:
-        V (numpy.ndarray(float)): V should have been randomly initialized and will be used as the input data that gets refined during training. Defaults to None.
-
-        y (numpy.ndarray): Target values to predict. Actual input data. Defaults to None.
-
-        batch_size (int, optional): Batch size per epoch. Defaults to 32.
-
-        missing_mask (numpy.ndarray): Missing data mask for y. Defaults to None.
-
-        output_shape (int): Output units for n_features dimension. Output will be of shape (batch_size, n_features). Defaults to None.
-
-        weights_initializer (str, optional): Kernel initializer to use for initializing model weights. Defaults to "glorot_normal".
-
-        hidden_layer_sizes (List[int], optional): Output units for each hidden layer. List should be of same length as the number of hidden layers. Defaults to "midpoint".
-
-        num_hidden_layers (int, optional): Number of hidden layers to use. Defaults to 1.
-
-        hidden_activation (str, optional): Activation function to use for hidden layers. Defaults to "elu".
-
-        l1_penalty (float, optional): L1 regularization penalty to use to reduce overfitting. Defaults to 0.01.
-
-        l2_penalty (float, optional): L2 regularization penalty to use to reduce overfitting. Defaults to 0.01.
-
-        dropout_rate (float, optional): Dropout rate during training to reduce overfitting. Must be a float between 0 and 1. Defaults to 0.2.
-
-        num_classes (int, optional): Number of classes in output. Corresponds to the 3rd dimension of the output shape (batch_size, n_features, num_classes). Defaults to 1.
-
-        phase (int, optional): Current phase if doing UBP model. Defaults to 3.
-
-    Methods:
-        call: Does forward pass for model.
-        train_step: Does training for one batch in a single epoch.
-        test_step: Does evaluation for one batch in a single epoch.
-
-    Attributes:
-        V_latent_ (numpy.ndarray(float)): Randomly initialized input that gets refined during training.
-
-        phase (int): Current phase if doing UBP model. Ignored if doing NLPCA model.
-
-        hidden_layer_sizes (List[Union[int, str]]): Output units for each hidden layer. Length should be the same as the number of hidden layers.
-
-        n_components (int): Number of principal components to use with _V.
-
-        _batch_size (int): Batch size to use per epoch.
-
-        _batch_idx (int): Index of current batch.
-
-        _n_batches (int): Total number of batches per epoch.
-
-        input_with_mask_ (numpy.ndarray): Target y with the missing data mask horizontally concatenated and shape (n_samples, n_features * 2). Gets refined in the UBPCallbacks() callback.
-
-    Example:
-        >>>model3 = UBPPhase3(V=V, y=y, batch_size=32, missing_mask=missing_mask, output_shape, n_components, weights_initializer, hidden_layer_sizes, num_hidden_layers, hidden_activation, l1_penalty, l2_penalty, num_classes=3, phase=3)
-        >>>model3.build((None, n_features))
-        >>>model3.set_weights(model2.get_weights())
-        >>>model3.compile(optimizer=optimizer, loss=loss_func, metrics=[my_metrics], run_eagerly=True)
-        >>>history = model3.fit(X, y, batch_size=batch_size, epochs=epochs, callbacks=[MyCallback()], validation_split=validation_split, shuffle=False)
-
-    Raises:
-        TypeError: V, y, missing_mask, output_shape must not be NoneType.
-        ValueError: Maximum of 5 hidden layers.
-    """
-
-    def __init__(
-        self,
-        V=None,
-        y=None,
-        batch_size=32,
-        missing_mask=None,
-        output_shape=None,
-        n_components=3,
-        weights_initializer="glorot_normal",
-        hidden_layer_sizes="midpoint",
-        num_hidden_layers=1,
-        hidden_activation="elu",
-        l1_penalty=0.01,
-        l2_penalty=0.01,
-        dropout_rate=0.2,
-        num_classes=1,
-        phase=3,
-    ):
-        super(UBPPhase3, self).__init__()
-
-        self._V = V
-
-        if self._V is None:
-            raise TypeError("V cannot be NoneType in UBP Phases 2 and 3.")
-
-        self._y = y
-
-        hidden_layer_sizes = self.validate_hidden_layers(
-            hidden_layer_sizes, num_hidden_layers
-        )
-
-        hidden_layer_sizes = self.get_hidden_layer_sizes(
-            y.shape[1], V.shape[1], hidden_layer_sizes
-        )
-
-        self.validate_model_inputs(y, missing_mask, output_shape)
-
-        self._missing_mask = missing_mask
-        self.phase = phase
-        self.hidden_layer_sizes = hidden_layer_sizes
-        self.n_components = n_components
-        self.dropout_rate = dropout_rate
-
-        ### NOTE: I tried using just _V as the input to be refined, but it
-        # wasn't getting updated. So I copy it here and it works.
-        # V_latent is refined during train_step().
-        self.V_latent_ = self._V.copy()
-
-        # Initialize parameters used during train_step() and test_step().
-        # input_with_mask_ is set during the UBPCallbacks() execution.
-        self._batch_idx = 0
-        self._n_batches = 0
-        self._batch_size = batch_size
-        self.input_with_mask_ = None
-        self.n_components = n_components
-
-        # No regularization in phase 3.
-        kernel_regularizer = None
-        self.kernel_regularizer = kernel_regularizer
-        kernel_initializer = None
-
-        if len(hidden_layer_sizes) > 5:
-            raise ValueError("The maximum number of hidden layers is 5.")
-
-        self.dense2 = None
-        self.dense3 = None
-        self.dense4 = None
-        self.dense5 = None
-
-        # Construct multi-layer perceptron.
-        # Add hidden layers dynamically.
-        self.dense1 = Dense(
-            hidden_layer_sizes[0],
-            input_shape=(n_components,),
-            activation=hidden_activation,
-            kernel_initializer=kernel_initializer,
-        )
-
-        if num_hidden_layers >= 2:
-            self.dense2 = Dense(
-                hidden_layer_sizes[1],
-                activation=hidden_activation,
-                kernel_initializer=kernel_initializer,
-            )
-
-        if num_hidden_layers >= 3:
-            self.dense3 = Dense(
-                hidden_layer_sizes[2],
-                activation=hidden_activation,
-                kernel_initializer=kernel_initializer,
-            )
-
-        if num_hidden_layers >= 4:
-            self.dense4 = Dense(
-                hidden_layer_sizes[3],
-                activation=hidden_activation,
-                kernel_initializer=kernel_initializer,
-            )
-
-        if num_hidden_layers == 5:
-            self.dense5 = Dense(
-                hidden_layer_sizes[4],
-                activation=hidden_activation,
-                kernel_initializer=kernel_initializer,
-            )
-
-        self.output1 = Dense(
-            output_shape,
-            kernel_initializer=kernel_initializer,
-            activation="sigmoid",
-        )
-
-    def call(self, inputs, training=None):
-        """Forward propagates inputs through the model defined in __init__().
-
-        Model varies depending on which phase UBP is in.
-
-        Args:
-            inputs (tf.keras.Input): Input tensor to forward propagate through the model.
-
-            training (bool or None): Whether in training mode or not. Affects whether dropout is used.
-
-        Returns:
-            tf.keras.Model: Output tensor from forward propagation.
-        """
-        x = self.dense1(inputs)
-        if self.dense2 is not None:
-            x = self.dense2(x)
-        if self.dense3 is not None:
-            x = self.dense3(x)
-        if self.dense4 is not None:
-            x = self.dense4(x)
-        if self.dense5 is not None:
-            x = self.dense5(x)
-        return self.output1(x)
-
-    def model(self):
-        """Here so that mymodel.model().summary() can be called for debugging"""
-        x = tf.keras.Input(shape=(self.n_components,))
-        return tf.keras.Model(inputs=[x], outputs=self.call(x))
-
-    def train_step(self, data):
-        """Custom training loop for one step (=batch) in a single epoch.
-
-        GradientTape records the weights and watched
-        variables (usually tf.Variable objects), which
-        in this case are the weights and the input (y_true), during the forward pass.
-        This allows us to run gradient descent during
-        backpropagation to refine the watched variables.
-
-        This function will train on a batch of samples (rows), which can be adjusted with the ``batch_size`` parameter from the estimator.
-
-        Args:
-            data (Tuple[tf.EagerTensor, tf.EagerTensor]): Input tensors of shape (batch_size, n_components) and (batch_size, n_features, num_classes).
-
-        Returns:
-            Dict[str, float]: History object that gets returned from fit(). Contains the loss and any metrics specified in compile().
-
-        ToDo:
-            Obtain batch_size without using run_eagerly option in compile(). This will allow the step to be run in graph mode, thereby speeding up computation.
-        """
-        # Set in the UBPCallbacks() callback.
-        y = self.input_with_mask_
-
-        v, y_true, batch_start, batch_end = self.prepare_training_batches(
-            self.V_latent_,
-            y,
-            self._batch_size,
-            self._batch_idx,
-            True,
-            self.n_components,
-        )
-
-        src = [v]
-
-        # NOTE: Earlier model architectures incorrectly
-        # applied one gradient to all the variables, including
-        # the weights and v. Here we apply them separately, per
-        # the UBP manuscript.
-        with tf.GradientTape(persistent=True) as tape:
-            # Forward pass. Watch input tensor v.
-            tape.watch(v)
-            y_pred = self(v, training=True)
-            loss = self.compiled_loss(
-                tf.convert_to_tensor(y_true, dtype=tf.float32),
-                y_pred,
-            )
-
-        # Refine the watched variables with
-        # gradient descent backpropagation
-        gradients = tape.gradient(loss, self.trainable_variables)
-        self.optimizer.apply_gradients(zip(gradients, self.trainable_variables))
-
-        # Apply separate gradients to v.
-        vgrad = tape.gradient(loss, src)
-        self.optimizer.apply_gradients(zip(vgrad, src))
-
-        del tape
-
-        self.compiled_metrics.update_state(
-            tf.convert_to_tensor(y_true, dtype=tf.float32), y_pred
-        )
-
-        self.V_latent_[batch_start:batch_end, :] = v.numpy()
-
-        # history object that gets returned from fit().
-        return {m.name: m.result() for m in self.metrics}
-
-    def test_step(self, data):
-        """Validation step for one batch in a single epoch.
-
-        Custom logic for the test step that gets sent back to on_train_batch_end() callback.
-
-        Args:
-            data (Tuple[tf.EagerTensor, tf.EagerTensor]): Batches of input data V and y_true.
-
-        Returns:
-            A dict containing values that will be passed to ``tf.keras.callbacks.CallbackList.on_train_batch_end``. Typically, the values of the Model's metrics are returned.
-        """
-        # Unpack the data. Don't need V here. Just X (y_true).
-        # y_true = data[1]
-        y = self.input_with_mask_
-
-        v, y_true, batch_start, batch_end = self.prepare_training_batches(
-            self.V_latent_,
-            y,
-            self._batch_size,
-            self._batch_idx,
-            False,
-            self.n_components,
-        )
-
-        # Compute predictions
-        y_pred = self(v, training=False)
-
-        # Updates the metrics tracking the loss
-        self.compiled_loss(
-            tf.convert_to_tensor(y_true, dtype=tf.float32),
-            y_pred,
-            regularization_losses=self.losses,
-        )
-
-        # Update the metrics.
-        self.compiled_metrics.update_state(
-            tf.convert_to_tensor(y_true, dtype=tf.float32), y_pred
-        )
-
-        # Return a dict mapping metric names to current value.
-        # Note that it will include the loss (tracked in self.metrics).
-        return {m.name: m.result() for m in self.metrics}
-
-    @property
-    def V_latent(self):
-        """Randomly initialized input variable that gets refined during training."""
-        return self.V_latent_
-
-    @property
-    def batch_size(self):
-        """Batch (=step) size per epoch."""
-        return self._batch_size
-
-    @property
-    def batch_idx(self):
-        """Current batch (=step) index."""
-        return self._batch_idx
-
-    @property
-    def n_batches(self):
-        """Total number of batches per epoch."""
-        return self._n_batches
-
-    @property
-    def y(self):
-        return self._y
-
-    @property
-    def missing_mask(self):
-        return self._missing_mask
-
-    @property
-    def input_with_mask(self):
-        return self.input_with_mask_
-
-    @V_latent.setter
-    def V_latent(self, value):
-        """Set randomly initialized input variable. Gets refined during training."""
-        self.V_latent_ = value
-
-    @batch_size.setter
-    def batch_size(self, value):
-        """Set batch_size parameter."""
-        self._batch_size = int(value)
-
-    @batch_idx.setter
-    def batch_idx(self, value):
-        """Set current batch (=step) index."""
-        self._batch_idx = int(value)
-
-    @n_batches.setter
-    def n_batches(self, value):
-        """Set total number of batches (=steps) per epoch."""
-        self._n_batches = int(value)
-
-    @y.setter
-    def y(self, value):
-        """Set y after each epoch."""
-        self._y = value
-
-    @missing_mask.setter
-    def missing_mask(self, value):
-        """Set y after each epoch."""
-        self._missing_mask = value
-
-    @input_with_mask.setter
-    def input_with_mask(self, value):
-        self.input_with_mask_ = value
-
-
-class VAE(NeuralNetwork):
+class VAE(NeuralNetworkMethods):
     """Class to impute missing data using a Variational Autoencoder neural network.
 
     Args:
@@ -3396,7 +852,7 @@ class VAE(NeuralNetwork):
         return np.isnan(self.data)
 
 
-class UBP(NeuralNetwork):
+class UBP(NeuralNetworkMethods):
     """Class to impute missing data using unsupervised backpropagation (UBP) or inverse non-linear principal component analysis (NLPCA).
 
     Args:
@@ -3458,6 +914,10 @@ class UBP(NeuralNetwork):
 
         scoring_metric (str, optional): Scoring metric to use for randomized or genetic algorithm grid searches. See https://scikit-learn.org/stable/modules/model_evaluation.html for supported options. Defaults to "accuracy".
 
+        initial_strategy (str, optional): Initial strategy to impute missing data with for validation. Possible options include: "populations", "most_frequent", and "phylogeny", where "populations" imputes by the mode of each population at each site, "most_frequent" imputes by the overall mode of each site, and "phylogeny" uses an input phylogeny to inform the imputation. "populations" requires a population map file as input in the GenotypeData object, and "phylogeny" requires an input phylogeny and Rate Matrix Q (also instantiated in the GenotypeData object). Defaults to "populations".
+
+        str_encodings (Dict[str, int], optional): Integer encodings for nucleotides if input file was in STRUCTURE format. Only used if ``initial_strategy="phylogeny"``\. Defaults to {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}.
+
         n_jobs (int, optional): Number of parallel jobs to use in the grid search if ``gridparams`` is not None. -1 means use all available processors. Defaults to 1.
 
         verbose (int, optional): Verbosity setting. Can be 0, 1, or 2. 0 is the least and 2 is the most verbose. Defaults to 0.
@@ -3494,6 +954,14 @@ class UBP(NeuralNetwork):
         ga=False,
         ga_kwargs=None,
         scoring_metric="accuracy",
+        initial_strategy="populations",
+        str_encodings={
+            "A": 1,
+            "C": 2,
+            "G": 3,
+            "T": 4,
+            "N": -9,
+        },
         n_jobs=1,
         verbose=0,
     ):
@@ -3534,6 +1002,8 @@ class UBP(NeuralNetwork):
         # Grid search settings.
         self.ga = ga
         self.scoring_metric = scoring_metric
+        self.initial_strategy = initial_strategy
+        self.str_encodings = str_encodings
         self.grid_iter = grid_iter
         self.n_jobs = n_jobs
         self.ga_kwargs = ga_kwargs
@@ -3551,13 +1021,32 @@ class UBP(NeuralNetwork):
         # X is the randomly initialized model input (V)
         # V is initialized with small, random values.
         # y is the actual input data.
-        y = self.validate_input(y)
-        df = self.encode_onehot(y)
-        y_train = df.copy().values
-        y_train, missing_mask, observed_mask = self._format_data(y_train, -1)
+        nnit = NNInputTransformer()
+        y_train = nnit.fit_transform(y)
+        missing_mask = nnit.missing_mask_
+        observed_mask = nnit.observed_mask_
+
+        rmt = RandomizeMissingTransformer(
+            self.initial_strategy,
+            self.genotype_data,
+            self.str_encodings,
+            self.genotype_data.populations,
+        )
+
+        df = pd.DataFrame(y)
+
+        y_test = rmt.fit_transform(df)
+
+        print(y_test)
+        sys.exit()
+
+        nn = NeuralNetworkMethods()
+        # testresults = pd.read_csv("testcvresults.csv")
+        # self.plot_grid_search(testresults)
+        # sys.exit()
 
         # Placeholder for V. Gets replaced in model.
-        V = self.init_weights(y.shape[0], self.n_components)
+        V = nn.init_weights(y.shape[0], self.n_components)
 
         (
             logfile,
@@ -3565,7 +1054,7 @@ class UBP(NeuralNetwork):
             compile_params,
             model_params,
             fit_params,
-        ) = self._initialize_parameters(V, y, y_train, missing_mask)
+        ) = self._initialize_parameters(V, y, y_train, missing_mask, nn)
 
         if self.nlpca:
             (
@@ -3580,19 +1069,16 @@ class UBP(NeuralNetwork):
                 model_params,
                 compile_params,
                 fit_params,
+                nn,
             )
 
             print(best_params)
             print(best_score)
-            self.plot_grid_search(search)
+            nn.plot_grid_search(search.cv_results_)
 
         else:
             models, histories = self._run_ubp(
-                V,
-                y_train,
-                model_params,
-                compile_params,
-                fit_params,
+                V, y_train, model_params, compile_params, fit_params, nn
             )
 
         if len(models) == 1:
@@ -3611,7 +1097,9 @@ class UBP(NeuralNetwork):
 
         sys.exit()
 
-    def _run_nlpca(self, V, y_train, model_params, compile_params, fit_params):
+    def _run_nlpca(
+        self, V, y_train, model_params, compile_params, fit_params, nn
+    ):
         """Run NLPCA Model using custom subclassed model."""
 
         # Whether to do grid search.
@@ -3626,7 +1114,7 @@ class UBP(NeuralNetwork):
         # building a new model.
         tf.keras.backend.set_learning_phase(1)
         tf.keras.backend.clear_session()
-        self.reset_seeds()
+        nn.reset_seeds()
 
         if do_gridsearch:
             compile_params["learning_rate"] = self.learning_rate
@@ -3655,6 +1143,7 @@ class UBP(NeuralNetwork):
                 callbacks=fit_params["callbacks"],
                 validation_split=fit_params["validation_split"],
                 verbose=0,
+                score__y_decoded=model_params["y_decoded"],
             )
 
             if self.ga:
@@ -3704,7 +1193,7 @@ class UBP(NeuralNetwork):
             histories.append(model.history_)
 
         else:
-            model = self.create_model(
+            model = self._create_model(
                 NLPCAModel,
                 **model_params,
                 compile_kwargs=compile_params,
@@ -3732,7 +1221,9 @@ class UBP(NeuralNetwork):
         models.append(model)
         return models, histories, best_params, best_score, search
 
-    def _run_ubp(self, V, y_train, model_params, compile_params, fit_params):
+    def _run_ubp(
+        self, V, y_train, model_params, compile_params, fit_params, nn
+    ):
 
         # Whether to do grid search.
         do_gridsearch = False if self.gridparams is None else True
@@ -3749,7 +1240,7 @@ class UBP(NeuralNetwork):
             # building a new model.
             tf.keras.backend.set_learning_phase(1)
             tf.keras.backend.clear_session()
-            self.reset_seeds()
+            nn.reset_seeds()
 
             if do_gridsearch:
                 compile_params["learning_rate"] = self.learning_rate
@@ -3758,7 +1249,7 @@ class UBP(NeuralNetwork):
                     model_params["V"],
                     y_train,
                     i,
-                    self.create_model,
+                    self._create_model,
                     model_params,
                     compile_params,
                     self.epochs,
@@ -3780,7 +1271,7 @@ class UBP(NeuralNetwork):
             else:
                 model = None
 
-                model = self.create_model(
+                model = self._create_model(
                     phase,
                     **model_params,
                     compile_kwargs=compile_params,
@@ -3814,7 +1305,7 @@ class UBP(NeuralNetwork):
 
         return models, histories
 
-    def _initialize_parameters(self, V, y, y_train, missing_mask):
+    def _initialize_parameters(self, V, y, y_train, missing_mask, nn):
         """Initialize important parameters.
 
         Args:
@@ -3863,19 +1354,21 @@ class UBP(NeuralNetwork):
 
         search_mode = False if self.gridparams is None else True
 
-        compile_params = self.set_compile_params(search_mode=search_mode)
+        compile_params = nn.set_compile_params(
+            self.optimizer, self.learning_rate, search_mode=search_mode
+        )
 
         if search_mode:
             vinput = dict()
             if self.n_components < 2:
                 raise ValueError("n_components must be >= 2.")
             elif self.n_components == 2:
-                vinput = self.init_weights(y_train.shape[0], self.n_components)
+                vinput = nn.init_weights(y_train.shape[0], self.n_components)
             else:
                 for i in range(2, self.n_components + 1):
-                    vinput[i] = self.init_weights(y_train.shape[0], i)
+                    vinput[i] = nn.init_weights(y_train.shape[0], i)
         else:
-            vinput = self.init_weights(y_train.shape[0], self.n_components)
+            vinput = nn.init_weights(y_train.shape[0], self.n_components)
 
         model_params = {
             "V": vinput,
@@ -3912,6 +1405,65 @@ class UBP(NeuralNetwork):
             fit_params,
         )
 
+    def _create_model(
+        self,
+        estimator=None,
+        V=None,
+        y=None,
+        batch_size=32,
+        missing_mask=None,
+        output_shape=None,
+        weights_initializer="glorot_normal",
+        hidden_layer_sizes=None,
+        num_hidden_layers=1,
+        hidden_activation="elu",
+        l1_penalty=0.01,
+        l2_penalty=0.01,
+        dropout_rate=0.2,
+        num_classes=1,
+        phase=None,
+        n_components=3,
+        build=False,
+        compile_kwargs=None,
+        search_mode=True,
+    ):
+        """Create a neural network model using the estimator to initialize.
+        Model will be initialized, compiled, and built if ``build=True``\.
+        Args:
+            estimator (tf.keras.Model): Model to create. Can be a subclassed model.
+            compile_params (Dict[str, Any]): Parameters passed to model.compile(). Key-value pairs should be the parameter names and their corresponding values.
+            n_components (int): The number of principal components to use with NLPCA or UBP models. Not used if doing VAE. Defaults to 3.
+            build (bool): Whether to build the model. Defaults to False.
+            kwargs (Dict[str, Any]): Keyword arguments to pass to KerasClassifier.
+        Returns:
+            tf.keras.Model: Instantiated, compiled, and optionally built model.
+        """
+        model = estimator(
+            V=V,
+            y=y,
+            batch_size=batch_size,
+            missing_mask=missing_mask,
+            output_shape=output_shape,
+            n_components=n_components,
+            weights_initializer=weights_initializer,
+            hidden_layer_sizes=hidden_layer_sizes,
+            num_hidden_layers=num_hidden_layers,
+            hidden_activation=hidden_activation,
+            l1_penalty=l1_penalty,
+            l2_penalty=l2_penalty,
+            dropout_rate=dropout_rate,
+            num_classes=num_classes,
+            phase=phase,
+        )
+
+        if build:
+            model.build((None, n_components))
+
+        if not search_mode:
+            model.compile(**compile_kwargs)
+
+        return model
+
     def _summarize_model(self, model):
         """Print model summary for debugging purposes.
 
@@ -3920,26 +1472,6 @@ class UBP(NeuralNetwork):
         """
         # For debugging.
         model.model().summary()
-
-    def _format_data(self, y, missing_val=-1):
-        """Format the provided target data for use with UBP/NLPCA.
-
-        Args:
-            y (numpy.ndarray(float)): Input data that will be used as the target.
-
-            missing_val (int, optional): Missing value to use to fill in the reformatted data. Defaults to -1.
-
-        Returns:
-            numpy.ndarray(float): Target data with missing values filled in as ``missing_val``\.
-
-            numpy.ndarray(float): Missing data mask, with missing values encoded as 1's and non-missing as 0's.
-
-            numpy.ndarray(float): Observed data mask, with non-missing values encoded as 1's and missing values as 0's.
-        """
-        missing_mask = self.create_missing_mask(y)
-        observed_mask = ~missing_mask
-        yt = self.fill(y, missing_mask, missing_val, self.num_classes)
-        return yt, missing_mask, observed_mask
 
     def _plot_history(self, lod):
         """Plot model history traces. Will be saved to file.
@@ -4010,16 +1542,3 @@ class UBP(NeuralNetwork):
 
             plt.close()
             plt.clf()
-
-    def _create_missing_mask(self, data, missing_value):
-        """Creates a missing data mask with boolean values.
-
-        Args:
-            data (numpy.ndarray): Data to generate missing mask from, of shape (n_samples, n_features, n_classes).
-
-            missing_value (int): Missing value to return True for.
-
-        Returns:
-            numpy.ndarray(bool): Boolean mask of missing values of shape (n_samples, n_features), with True corresponding to a missing data point.
-        """
-        return np.equal(data, missing_value)
