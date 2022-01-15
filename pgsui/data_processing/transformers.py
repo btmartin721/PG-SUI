@@ -363,12 +363,13 @@ class RandomizeMissingTransformer(BaseEstimator, TransformerMixin):
         col_selection_rate (float): Number of columns for which to randomly introduce missing data. Defaults to 1.0 (all columns).
 
     Attributes:
-        cols_ (numpy.ndarray): Columns to extract.
-        initial_strategy_ (str): Initial strategy used to impute.
-        simple_imputer_ (ImputePhylo, ImputeAlleleFreq, ImputeNMF, or SimpleImputer): Simple imputer instance.
-        original_num_cols_ (int): Original number of columns in X.
-        invalid_indexes_ (numpy.ndarray): Invalid indexes.
+        cols_ (numpy.ndarray): Columns to introduce missing data to. The number of columns with missing data are determined with the ``col_selection_rate`` argument.
+
+        simple_imputer_ (ImputePhylo, ImputeAlleleFreq, ImputeNMF, or SimpleImputer): Simple imputer instance. The type depends on ``initial_strategy``\.
+
         input_params_ (Dict[str, Any]): Parameters to input into self.simple_imputer_.
+
+        df_filled_ (pandas.DataFrame): DataFrame with values imputed initially with sklearn.impute.SimpleImputer, ImputeAlleleFreq (by populations) or ImputePhylo.
     """
 
     def __init__(
@@ -378,12 +379,16 @@ class RandomizeMissingTransformer(BaseEstimator, TransformerMixin):
         str_encodings,
         pops,
         col_selection_rate=1.0,
+        min_missing_prop=0.15,
+        max_missing_prop=0.5,
     ):
         self.initial_strategy = initial_strategy
         self.genotype_data = genotype_data
         self.str_encodings = str_encodings
         self.pops = pops
         self.col_selection_rate = col_selection_rate
+        self.min_missing_prop = min_missing_prop
+        self.max_missing_prop = max_missing_prop
 
     def fit(self, X):
         """Fit to input data.
@@ -399,10 +404,10 @@ class RandomizeMissingTransformer(BaseEstimator, TransformerMixin):
         """
         # Code adapted from: https://medium.com/analytics-vidhya/using-scikit-learns-iterative-imputer-694c3cca34de
 
-        df = X.copy()
-
-        if not isinstance(df, pd.DataFrame):
-            raise TypeError("X must be a pandas.DataFrame object.")
+        if not isinstance(X, pd.DataFrame):
+            df = pd.DataFrame(X)
+        else:
+            df = X.copy()
 
         self.cols_ = np.random.choice(
             df.columns,
@@ -410,10 +415,8 @@ class RandomizeMissingTransformer(BaseEstimator, TransformerMixin):
             replace=False,
         )
 
-        self.initial_strategy_ = self.initial_strategy
-
-        if self.initial_strategy_ == "populations":
-            self.simple_imputer_ = ImputeAlleleFreq
+        if self.initial_strategy == "populations":
+            simple_imputer = ImputeAlleleFreq
             self.input_params_ = dict(
                 genotype_data=self.genotype_data,
                 pops=self.pops,
@@ -424,8 +427,8 @@ class RandomizeMissingTransformer(BaseEstimator, TransformerMixin):
                 validation_mode=True,
             )
 
-        elif self.initial_strategy_ == "phylogeny":
-            self.simple_imputer_ = ImputePhylo
+        elif self.initial_strategy == "phylogeny":
+            simple_imputer = ImputePhylo
             self.input_params_ = dict(
                 genotype_data=self.genotype_data,
                 str_encodings=self.str_encodings,
@@ -435,7 +438,7 @@ class RandomizeMissingTransformer(BaseEstimator, TransformerMixin):
             )
 
         elif self.initial_strategy == "nmf":
-            self.simple_imputer_ = ImputeNMF
+            simple_imputer = ImputeNMF
             self.input_params_ = dict(
                 gt=df.fillna(-9).to_numpy(),
                 missing=-9,
@@ -446,115 +449,60 @@ class RandomizeMissingTransformer(BaseEstimator, TransformerMixin):
 
         else:
             # Fill in unknown values with sklearn.impute.SimpleImputer
-            self.simple_imputer_ = SimpleImputer
+            simple_imputer = SimpleImputer
             self.input_params_ = dict(strategy=self.initial_strategy_)
 
-        self.original_num_cols_ = len(df.columns)
+        self.simple_imputer_ = simple_imputer(**self.input_params_)
+
+        # initialize.
+        self.df_filled_ = None
 
         return self
 
     def transform(self, X):
         """Transform input data X.
 
+        Randomly introduces missing data into the self.df_filled_ DataFrame.
+
         Args:
             X (pandas.DataFrame): 012-encoded DataFrame.
 
         Returns:
-            pandas.DataFrame: DataFrame with values imputed initially with sklearn.impute.SimpleImputer, ImputeAlleleFreq (by populations) or ImputePhylo.
-
-            pandas.DataFrame: DataFrame with randomly missing values.
-
-            numpy.ndarray: Columns that were extracted via random sampling.
+            pandas.DataFrame: DataFrame with randomly introduced missing values.
         """
-        simple_imputer = self.simple_imputer_(**self.input_params_)
-
-        if self.initial_strategy_ == "populations":
-            df_defiled = simple_imputer.imputed
-            valid_cols = self.cols_.copy()
-
-        elif initial_strategy == "phylogeny":
-            # NOTE: non-biallelic sites were once removed with ImputePhylo, but
-            # no longer are. This is deprecated.
-            valid_mask = np.flatnonzero(
-                np.logical_not(np.isnan(simple_imputer.valid_sites))
-            )
-
-            # ImputePhylo resets the column names
-            # So here I switch them back
-            # and remove any columns that were non-biallelic
-            valid_cols = np.sort(
-                self._remove_invalid_cols(self.cols_, valid_mask)
-            )
-            new_colnames = self._remove_invalid_cols(
-                np.array(df.columns), valid_mask
-            )
-
-            invalid_indexes = self._remove_invalid_cols(
-                np.array(df.columns), valid_mask, validation_mode=False
-            )
-
-            df_defiled = simple_imputer.imputed
-            old_colnames = list(df_defiled.columns)
-            df_defiled.rename(
-                columns={i: j for i, j in zip(old_colnames, new_colnames)},
-                inplace=True,
-            )
-
-        elif initial_strategy == "nmf":
-            df_defiled = simple_imputer.imputed
-            valid_cols = self.cols_.copy()
-
+        if not isinstance(X, pd.DataFrame):
+            df = pd.DataFrame(X)
         else:
-            # Fill in unknown values with sklearn.impute.SimpleImputer
-            simple_imputer = SimpleImputer(
-                strategy=self.imp_kwargs["initial_strategy"]
-            )
+            df = X.copy()
 
-            df_defiled = pd.DataFrame(
+        if self.initial_strategy == "most_frequent":
+            self.df_filled_ = pd.DataFrame(
                 simple_imputer.fit_transform(df.fillna(-9).values)
             )
-            valid_cols = self.cols_.copy()
 
-        df_filled = df_defiled.copy()
+        else:
+            self.df_filled_ = self.simple_imputer_.imputed
+            if self.initial_strategy == "populations":
+                # For some reason the df gets converted to integers with
+                # pd.NA values instead of np.nan. Bandaid fix here.
+                self.df_filled_ = self.df_filled_.astype(np.float)
+                self.df_filled_.replace(pd.NA, np.nan, inplace=True)
 
         # Randomly choose rows (samples) to introduce missing data to
-        for col in valid_cols:
-            data_drop_rate = np.random.choice(np.arange(0.15, 0.5, 0.02), 1)[0]
+        df_defiled = self.df_filled_.copy()
+
+        for col in self.cols_:
+            data_drop_rate = np.random.choice(
+                np.arange(self.min_missing_prop, self.max_missing_prop, 0.02), 1
+            )[0]
 
             drop_ind = np.random.choice(
-                np.arange(len(df_defiled[col])),
-                size=int(len(df_defiled[col]) * data_drop_rate),
+                np.arange(len(self.df_filled_[col])),
+                size=int(len(self.df_filled_[col]) * data_drop_rate),
                 replace=False,
             )
 
             # Introduce random np.nan values
             df_defiled.loc[drop_ind, col] = np.nan
 
-        return df_filled, df_defiled, valid_cols
-
-    def _remove_invalid_cols(self, arr1, arr2, validation_mode=True):
-        """Finds set difference between two numpy arrays and returns the values unique to arr1 that are not found in arr2.
-
-        Args:
-            arr1 (numpy.ndarray): 1D Array that contains input values.
-            arr2 (numpy.ndarray): 1D Comparison array.
-            validation_mode (bool, optional): If False, returns indexes to remove. If True, returns numpy.ndarray of remaining column labels.
-
-        Returns:
-            List[int], np.ndarray, or None: List of Bad indexes to remove, numpy.ndarray with invalid column labels removed, or None if no bad columns were found.
-        """
-        bad_idx = list()
-        for i, item in enumerate(arr1):
-            if not np.any(arr2 == item):
-                bad_idx.append(i)
-
-        if not validation_mode:
-            if bad_idx:
-                return bad_idx
-            else:
-                return None
-
-        if bad_idx:
-            return np.delete(arr1, bad_idx)
-        else:
-            return arr1.copy()
+        return df_defiled

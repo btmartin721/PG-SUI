@@ -64,6 +64,8 @@ try:
         NNOutputTransformer,
         RandomizeMissingTransformer,
     )
+    from ..read_input.simgenodata import SimGenotypeDataTransformer
+    from .simple_imputers import ImputePhyloTransformer
 except (ModuleNotFoundError, ValueError):
     from read_input.read_input import GenotypeData
     from utils.misc import timer
@@ -77,6 +79,9 @@ except (ModuleNotFoundError, ValueError):
         NNOutputTransformer,
         RandomizeMissingTransformer,
     )
+    from read_input.simgenodata import SimGenotypeDataTransformer
+    from impute.simple_imputers import ImputePhyloTransformer
+
 
 # Ignore warnings, but still print errors.
 deprecation._PRINT_DEPRECATION_WARNINGS = False
@@ -1026,16 +1031,19 @@ class UBP(NeuralNetworkMethods):
         missing_mask = nnit.missing_mask_
         observed_mask = nnit.observed_mask_
 
-        rmt = RandomizeMissingTransformer(
-            self.initial_strategy,
-            self.genotype_data,
-            self.str_encodings,
-            self.genotype_data.populations,
-        )
+        # simple_imputer = ImputeAlleleFreq(
+        #     genotype_data=self.genotype_data,
+        #     by_populations=True,
+        #     pops=self.genotype_data.pops,
+        #     prefix="output",
+        #     output_format="array",
+        #     verbose=False,
+        # )
 
-        df = pd.DataFrame(y)
-
-        y_test = rmt.fit_transform(df)
+        simple = ImputePhyloTransformer(disable_progressbar=True)
+        imputed = simple.fit_transform(self.genotype_data)
+        sim = SimGenotypeDataTransformer(prop_missing=0.4)
+        y_test = sim.fit_transform(imputed)
 
         print(y_test)
         sys.exit()
