@@ -63,9 +63,11 @@ try:
         NNInputTransformer,
         NNOutputTransformer,
         RandomizeMissingTransformer,
+        ImputePhyloTransformer,
+        ImputeAlleleFreqTransformer,
+        ImputeNMFTransformer,
+        SimGenotypeDataTransformer,
     )
-    from ..read_input.simgenodata import SimGenotypeDataTransformer
-    from .simple_imputers import ImputePhyloTransformer
 except (ModuleNotFoundError, ValueError):
     from read_input.read_input import GenotypeData
     from utils.misc import timer
@@ -78,9 +80,11 @@ except (ModuleNotFoundError, ValueError):
         NNInputTransformer,
         NNOutputTransformer,
         RandomizeMissingTransformer,
+        ImputePhyloTransformer,
+        ImputeAlleleFreqTransformer,
+        ImputeNMFTransformer,
+        SimGenotypeDataTransformer,
     )
-    from read_input.simgenodata import SimGenotypeDataTransformer
-    from impute.simple_imputers import ImputePhyloTransformer
 
 
 # Ignore warnings, but still print errors.
@@ -919,7 +923,7 @@ class UBP(NeuralNetworkMethods):
 
         scoring_metric (str, optional): Scoring metric to use for randomized or genetic algorithm grid searches. See https://scikit-learn.org/stable/modules/model_evaluation.html for supported options. Defaults to "accuracy".
 
-        initial_strategy (str, optional): Initial strategy to impute missing data with for validation. Possible options include: "populations", "most_frequent", and "phylogeny", where "populations" imputes by the mode of each population at each site, "most_frequent" imputes by the overall mode of each site, and "phylogeny" uses an input phylogeny to inform the imputation. "populations" requires a population map file as input in the GenotypeData object, and "phylogeny" requires an input phylogeny and Rate Matrix Q (also instantiated in the GenotypeData object). Defaults to "populations".
+        initial_strategy (str, optional): Initial strategy to impute missing data for validation. Possible options include: "populations", "most_frequent", "phylogeny", and "nmf", where "populations" imputes by the mode of each population at each site, "most_frequent" imputes by the overall mode of each site, "phylogeny" uses an input phylogeny to inform the imputation, and "nmf" imputes using matrix factorization. "populations" requires a population map file as input in the GenotypeData object, and "phylogeny" requires an input phylogeny and Rate Matrix Q (also instantiated in the GenotypeData object). Defaults to "populations".
 
         str_encodings (Dict[str, int], optional): Integer encodings for nucleotides if input file was in STRUCTURE format. Only used if ``initial_strategy="phylogeny"``\. Defaults to {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}.
 
@@ -1014,7 +1018,7 @@ class UBP(NeuralNetworkMethods):
         self.ga_kwargs = ga_kwargs
 
     @timer
-    def fit_predict(self, y):
+    def fit_transform(self, y):
         """Train a UBP or NLPCA model and predict the output.
 
         Uses input data from GenotypeData object.
@@ -1031,21 +1035,22 @@ class UBP(NeuralNetworkMethods):
         missing_mask = nnit.missing_mask_
         observed_mask = nnit.observed_mask_
 
-        # simple_imputer = ImputeAlleleFreq(
-        #     genotype_data=self.genotype_data,
-        #     by_populations=True,
-        #     pops=self.genotype_data.pops,
-        #     prefix="output",
-        #     output_format="array",
-        #     verbose=False,
-        # )
+        y_test_true = self._initial_imputation(
+            self.initial_strategy,
+            self.genotype_data,
+            self.str_encodings,
+            self.n_components,
+            self.learning_rate,
+            self.l2_penalty,
+            self.epochs,
+            self.tol,
+            output_format="array",
+        )
 
-        simple = ImputePhyloTransformer(disable_progressbar=True)
-        imputed = simple.fit_transform(self.genotype_data)
-        sim = SimGenotypeDataTransformer(prop_missing=0.4)
-        y_test = sim.fit_transform(imputed)
+        sim = SimGenotypeDataTransformer(self.genotype_data, prop_missing=0.4)
+        y_test_pred = sim.fit_transform(y_test_true)
 
-        print(y_test)
+        print(y_test_pred)
         sys.exit()
 
         nn = NeuralNetworkMethods()
@@ -1104,6 +1109,65 @@ class UBP(NeuralNetworkMethods):
         self._plot_history(histories)
 
         sys.exit()
+
+    def _initial_imputation(
+        self,
+        strategy,
+        genotype_data,
+        str_encodings,
+        latent_features,
+        learning_rate,
+        regularization_param,
+        max_iter,
+        tol,
+        output_format="df",
+    ):
+        """Instantiate and transform the initial imputation.
+
+        The initial imputer used will be the one specified by initial_strategy.
+
+        Args:
+            strategy (str): Initial strategy to use. Can be "most_frequent", "populations", "phylogeny", or "nmf".
+
+        Returns:
+            numpy.ndarray: Imputed array.
+
+        Raises:
+            ValueError: Unsupported strategy argument specified.
+        """
+        if strategy == "most_frequent" or strategy == "populations":
+            by_populations = True if strategy == "populations" else False
+            simple = ImputeAlleleFreqTransformer(
+                by_populations=by_populations,
+                output_format=output_format,
+                verbose=False,
+                iterative_mode=True,
+            )
+
+        elif strategy == "phylogeny":
+            simple = ImputePhyloTransformer(
+                str_encodings=str_encodings,
+                output_format=output_format,
+                disable_progressbar=True,
+                save_plots=False,
+            )
+
+        elif strategy == "nmf":
+            simple = ImputeNMFTransformer(
+                output_format=output_format,
+                verbose=False,
+                iterative_mode=True,
+                latent_features=latent_features,
+                learning_rate=learning_rate,
+                regularization_param=regularization_param,
+                max_iter=max_iter,
+                tol=tol,
+            )
+
+        else:
+            raise ValueError(f"Invalid strategy value specified: {strategy}")
+
+        return simple.fit_transform(genotype_data)
 
     def _run_nlpca(
         self, V, y_train, model_params, compile_params, fit_params, nn
@@ -1201,30 +1265,30 @@ class UBP(NeuralNetworkMethods):
             histories.append(model.history_)
 
         else:
-            model = self._create_model(
-                NLPCAModel,
+            clf = MLPClassifier(
                 **model_params,
-                compile_kwargs=compile_params,
+                optimizer=compile_params["optimizer"],
+                optimizer__learning_rate=compile_params["learning_rate"],
+                loss=compile_params["loss"],
+                metrics=compile_params["metrics"],
+                epochs=fit_params["epochs"],
                 phase=None,
-                search_mode=False,
+                callbacks=fit_params["callbacks"],
+                validation_split=fit_params["validation_split"],
+                verbose=0,
+                score__y_decoded=model_params["y_decoded"],
             )
 
-            history = model.fit(
+            clf.fit(
                 x=V,
                 y=y_train,
-                batch_size=self.batch_size,
-                epochs=self.epochs,
-                callbacks=callbacks,
-                validation_split=self.validation_split,
-                shuffle=False,
-                verbose=self.verbose,
             )
 
             best_params = None
             best_score = None
             search = None
 
-            histories.append(history.history)
+            histories.append(clf.history_)
 
         models.append(model)
         return models, histories, best_params, best_score, search
@@ -1281,10 +1345,8 @@ class UBP(NeuralNetworkMethods):
 
                 model = self._create_model(
                     phase,
-                    **model_params,
-                    compile_kwargs=compile_params,
-                    phase=i,
-                    search_mode=False,
+                    model_params,
+                    compile_params,
                 )
 
                 if i == 3:
@@ -1415,25 +1477,9 @@ class UBP(NeuralNetworkMethods):
 
     def _create_model(
         self,
-        estimator=None,
-        V=None,
-        y=None,
-        batch_size=32,
-        missing_mask=None,
-        output_shape=None,
-        weights_initializer="glorot_normal",
-        hidden_layer_sizes=None,
-        num_hidden_layers=1,
-        hidden_activation="elu",
-        l1_penalty=0.01,
-        l2_penalty=0.01,
-        dropout_rate=0.2,
-        num_classes=1,
-        phase=None,
-        n_components=3,
-        build=False,
-        compile_kwargs=None,
-        search_mode=True,
+        estimator,
+        model_kwargs,
+        compile_kwargs,
     ):
         """Create a neural network model using the estimator to initialize.
         Model will be initialized, compiled, and built if ``build=True``\.
@@ -1446,30 +1492,12 @@ class UBP(NeuralNetworkMethods):
         Returns:
             tf.keras.Model: Instantiated, compiled, and optionally built model.
         """
-        model = estimator(
-            V=V,
-            y=y,
-            batch_size=batch_size,
-            missing_mask=missing_mask,
-            output_shape=output_shape,
-            n_components=n_components,
-            weights_initializer=weights_initializer,
-            hidden_layer_sizes=hidden_layer_sizes,
-            num_hidden_layers=num_hidden_layers,
-            hidden_activation=hidden_activation,
-            l1_penalty=l1_penalty,
-            l2_penalty=l2_penalty,
-            dropout_rate=dropout_rate,
-            num_classes=num_classes,
-            phase=phase,
-        )
+        model = estimator(**model_kwargs)
 
         if build:
-            model.build((None, n_components))
+            model.build((None, model_kwargs["n_components"]))
 
-        if not search_mode:
-            model.compile(**compile_kwargs)
-
+        model.compile(**compile_kwargs)
         return model
 
     def _summarize_model(self, model):

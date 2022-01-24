@@ -660,7 +660,7 @@ class Impute:
 
             else:
                 df_imp = pd.DataFrame(
-                    imputer.fit_predict(df_subset.to_numpy()),
+                    imputer.fit_transform(df_subset.to_numpy()),
                     columns=cols_to_keep,
                     dtype="int64",
                 )
@@ -1522,7 +1522,7 @@ class Impute:
 
             else:
                 df_imp = pd.DataFrame(
-                    imputer.fit_predict(df_stg.to_numpy()),
+                    imputer.fit_transform(df_stg.to_numpy()),
                     columns=cols,
                     dtype="int64",
                 )
