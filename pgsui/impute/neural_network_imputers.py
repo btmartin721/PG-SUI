@@ -1030,15 +1030,6 @@ class UBP(NeuralNetworkMethods):
         Returns:
             pandas.DataFrame: Imputation predictions.
         """
-        # In NLPCA and UBP, X and y are flipped.
-        # X is the randomly initialized model input (V)
-        # V is initialized with small, random values.
-        # y is the actual input data.
-        nnit = NNInputTransformer()
-        y_train = nnit.fit_transform(y)
-        missing_mask = nnit.missing_mask_
-        observed_mask = nnit.observed_mask_
-
         y_test_true = self._initial_imputation(
             self.initial_strategy,
             self.genotype_data,
@@ -1053,20 +1044,30 @@ class UBP(NeuralNetworkMethods):
 
         strategy = "random" if self.genotype_data.tree is None else "nonrandom"
 
-        list_of_ypred = list()
-        if self.gridparams is None:
-            for i in range(self.cv):
-                list_of_ypred.append(
-                    SimGenotypeDataTransformer(
-                        self.genotype_data, prop_missing=0.4, strategy=strategy
-                    ).fit_transform(y_test_true)
-                )
-        else:
-            list_of_ypred.append(
-                SimGenotypeDataTransformer(
-                    self.genotype_data, prop_missing=0.4, strategy=strategy
-                ).fit_transform(y_test_true)
-            )
+        y_test_pred = SimGenotypeDataTransformer(
+            self.genotype_data, prop_missing=0.4, strategy=strategy
+        ).fit_transform(y_test_true)
+
+        y_val = SimGenotypeDataTransformer(
+            self.genotype_data, prop_missing=0.4, strategy=strategy
+        ).fit_transform(y_test_true)
+
+        # In NLPCA and UBP, X and y are flipped.
+        # X is the randomly initialized model input (V)
+        # V is initialized with small, random values.
+        # y is the actual input data.
+        nnit = NNInputTransformer()
+        y_train = nnit.fit_transform(y)
+        missing_mask = nnit.missing_mask_
+        observed_mask = nnit.observed_mask_
+
+        nnit_test = NNInputTransformer()
+        y_test_pred = nnit_test.fit_transform(y_test_pred)
+        missing_mask_test = nnit_test.missing_mask_
+
+        nnit_val = NNInputTransformer()
+        y_val = nnit_val.fit_transform(y_val)
+        missing_mask_val = nnit_val.missing_mask_
 
         nn = NeuralNetworkMethods()
         # testresults = pd.read_csv("testcvresults.csv")
@@ -1095,7 +1096,7 @@ class UBP(NeuralNetworkMethods):
                 V,
                 y_train,
                 y_test_true,
-                list_of_ypred,
+                list_of_ypred_test,
                 model_params,
                 compile_params,
                 fit_params,

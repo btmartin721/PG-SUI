@@ -106,14 +106,20 @@ class NeuralNetworkMethods:
         # Get reduced-dimension dataset.
         return np.random.normal(loc=w_mean, scale=w_stddev, size=(dim1, dim2))
 
-    def validate_model_inputs(self, y, missing_mask, output_shape):
+    def validate_model_inputs(
+        self, y, y_test, missing_mask, missing_mask_test, output_shape
+    ):
         """Validate inputs to Keras subclass model.
 
         Args:
             V (numpy.ndarray): Input to refine. Shape: (n_samples, n_components).
             y (numpy.ndarray): Target (but actual input data). Shape: (n_samples, n_features).
 
-            missing_mask (numpy.ndarray): Missing data mask.
+            y_test (numpy.ndarray): Target test dataset. Should have been imputed with simple imputer and missing data simulated using SimGenotypeData(). Shape: (n_samples, n_features).
+
+            missing_mask (numpy.ndarray): Missing data mask for y.
+
+            missing_mask_test (numpy.ndarray): Missing data mask for y_test.
 
             output_shape (int): Output shape for hidden layers.
 
@@ -123,8 +129,14 @@ class NeuralNetworkMethods:
         if y is None:
             raise TypeError("y must not be NoneType.")
 
+        if y_test is None:
+            raise TypeError("y_test must not be NoneType")
+
         if missing_mask is None:
             raise TypeError("missing_mask must not be NoneType.")
+
+        if missing_mask_test is None:
+            raise TypeError("missing_mask_test must not be NoneType.")
 
         if output_shape is None:
             raise TypeError("output_shape must not be NoneType.")
@@ -259,9 +271,6 @@ class NeuralNetworkMethods:
         observed_mask = tf.subtract(1.0, missing_mask)
         y_true_observed = tf.multiply(y_true, observed_mask)
         pred_observed = tf.multiply(y_pred, observed_mask)
-
-        # loss_fn = tf.keras.losses.CategoricalCrossentropy()
-        # return loss_fn(y_true_observed, pred_observed)
 
         return tf.keras.metrics.mean_squared_error(
             y_true=y_true_observed, y_pred=pred_observed

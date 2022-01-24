@@ -26,9 +26,13 @@ class NLPCAModel(tf.keras.Model):
 
         y (numpy.ndarray): Target values to predict. Actual input data. Defaults to None.
 
+        y_test (numpy.ndarray): Target values imputed with a simple imputer, with missing data then simulated using SimGenotypeData(). For validation. Defaults to None.
+
         batch_size (int, optional): Batch size per epoch. Defaults to 32.
 
         missing_mask (numpy.ndarray): Missing data mask for y. Defaults to None.
+
+        missing_mask_test (numpy.ndarray): Missing data mask for y_test (simulated with SimGenotypeData). Defaults to None.
 
         output_shape (int): Output units for n_features dimension. Output will be of shape (batch_size, n_features). Defaults to None.
 
@@ -85,8 +89,10 @@ class NLPCAModel(tf.keras.Model):
         self,
         V=None,
         y=None,
+        y_test=None,
         batch_size=32,
         missing_mask=None,
+        missing_mask_test=None,
         output_shape=None,
         n_components=3,
         weights_initializer="glorot_normal",
@@ -110,6 +116,7 @@ class NLPCAModel(tf.keras.Model):
             self._V = V[n_components]
 
         self._y = y
+        self._y_test = y_test
 
         hidden_layer_sizes = nn.validate_hidden_layers(
             hidden_layer_sizes, num_hidden_layers
@@ -119,9 +126,12 @@ class NLPCAModel(tf.keras.Model):
             y.shape[1], self._V.shape[1], hidden_layer_sizes
         )
 
-        nn.validate_model_inputs(y, missing_mask, output_shape)
+        nn.validate_model_inputs(
+            y, y_test, missing_mask, missing_mask_test, output_shape
+        )
 
         self._missing_mask = missing_mask
+        self._missing_mask_test = missing_mask_test
         self.weights_initializer = weights_initializer
         self.phase = phase
         self.dropout_rate = dropout_rate
@@ -137,6 +147,7 @@ class NLPCAModel(tf.keras.Model):
         self._n_batches = 0
         self._batch_size = batch_size
         self.input_with_mask_ = None
+        self.input_with_mask_test_ = None
         self.n_components = n_components
 
         if l1_penalty == 0.0 and l2_penalty == 0.0:
@@ -396,12 +407,24 @@ class NLPCAModel(tf.keras.Model):
         return self._y
 
     @property
+    def y_test(self):
+        return self._y_test
+
+    @property
     def missing_mask(self):
         return self._missing_mask
 
     @property
+    def missing_mask_test(self):
+        return self._missing_mask_test
+
+    @property
     def input_with_mask(self):
         return self.input_with_mask_
+
+    @property
+    def input_with_mask_test(self):
+        return self.input_with_mask_test_
 
     @V_latent.setter
     def V_latent(self, value):
@@ -433,6 +456,14 @@ class NLPCAModel(tf.keras.Model):
         """Set y after each epoch."""
         self._missing_mask = value
 
+    @missing_mask_test.setter
+    def missing_mask_test(self, value):
+        self._missing_mask_test = value
+
     @input_with_mask.setter
     def input_with_mask(self, value):
         self.input_with_mask_ = value
+
+    @input_with_mask_test.setter
+    def input_with_mask_test(self, value):
+        self.input_with_mask_test_ = value
