@@ -349,7 +349,7 @@ def main():
         batch_size=32,
         l1_penalty=0.000001,
         l2_penalty=0.000001,
-        gridparams=grid_params,
+        # gridparams=grid_params,
         n_jobs=4,
         grid_iter=5,
     )
