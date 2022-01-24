@@ -340,7 +340,7 @@ class NLPCAModel(tf.keras.Model):
             A dict containing values that will be passed to ``tf.keras.callbacks.CallbackList.on_train_batch_end``. Typically, the values of the Model's metrics are returned.
         """
         # Unpack the data. Don't need V here. Just X (y_true).
-        y = self.input_with_mask_
+        y = self.input_with_mask_test_
 
         v, y_true, batch_start, batch_end = self.nn.prepare_training_batches(
             self.V_latent_,

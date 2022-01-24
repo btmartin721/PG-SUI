@@ -125,10 +125,14 @@ class UBPCallbacks(tf.keras.callbacks.Callback):
     def on_epoch_begin(self, epoch, logs=None):
         # Shuffle input and target at start of epoch.
         input_with_mask = np.hstack([self.model.y, self.model.missing_mask])
+        input_with_mask_test = np.hstack(
+            [self.model.y_test, self.model.missing_mask_test]
+        )
         n_samples = len(input_with_mask)
         self.indices = np.arange(n_samples)
         np.random.shuffle(self.indices)
         self.model.input_with_mask = input_with_mask[self.indices]
+        self.model.input_with_mask_test = input_with_mask_test[self.indices]
         self.model.V_latent = self.model.V_latent[self.indices]
 
     def on_train_batch_begin(self, batch, logs=None):
@@ -1047,11 +1051,22 @@ class UBP(NeuralNetworkMethods):
             output_format="array",
         )
 
-        sim = SimGenotypeDataTransformer(self.genotype_data, prop_missing=0.4)
-        y_test_pred = sim.fit_transform(y_test_true)
+        strategy = "random" if self.genotype_data.tree is None else "nonrandom"
 
-        print(y_test_pred)
-        sys.exit()
+        list_of_ypred = list()
+        if self.gridparams is None:
+            for i in range(self.cv):
+                list_of_ypred.append(
+                    SimGenotypeDataTransformer(
+                        self.genotype_data, prop_missing=0.4, strategy=strategy
+                    ).fit_transform(y_test_true)
+                )
+        else:
+            list_of_ypred.append(
+                SimGenotypeDataTransformer(
+                    self.genotype_data, prop_missing=0.4, strategy=strategy
+                ).fit_transform(y_test_true)
+            )
 
         nn = NeuralNetworkMethods()
         # testresults = pd.read_csv("testcvresults.csv")
@@ -1079,6 +1094,8 @@ class UBP(NeuralNetworkMethods):
             ) = self._run_nlpca(
                 V,
                 y_train,
+                y_test_true,
+                list_of_ypred,
                 model_params,
                 compile_params,
                 fit_params,
@@ -1170,7 +1187,15 @@ class UBP(NeuralNetworkMethods):
         return simple.fit_transform(genotype_data)
 
     def _run_nlpca(
-        self, V, y_train, model_params, compile_params, fit_params, nn
+        self,
+        V,
+        y_train,
+        y_test_true,
+        list_of_ypred,
+        model_params,
+        compile_params,
+        fit_params,
+        nn,
     ):
         """Run NLPCA Model using custom subclassed model."""
 

@@ -1,3 +1,4 @@
+import copy
 import gc
 import sys
 import warnings
@@ -1708,7 +1709,7 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
     def __init__(
         self,
         genotype_data,
-        prop_missing=None,
+        prop_missing=0.1,
         strategy="random",
         subset=1.0,
         verbose=0,
@@ -1735,10 +1736,8 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
 
         if self.verbose > 0:
             print(
-                "\nAdding",
-                self.prop_missing,
-                "missing data using strategy:",
-                self.strategy,
+                f"\nAdding {self.prop_missing} missing data per column "
+                f"using strategy: {self.strategy}"
             )
 
         if self.strategy == "random":
@@ -1756,7 +1755,7 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
             self.strategy == "nonrandom"
             or self.strategy == "nonrandom_weighted"
         ):
-            if self.tree is None:
+            if self.genotype_data.tree is None:
                 raise TypeError(
                     'SimGenotypeData.tree cannot be NoneType when strategy="systematic"'
                 )
@@ -1768,7 +1767,7 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
                 weighted = False
 
             sample_map = dict()
-            for i, sample in enumerate(X.samples):
+            for i, sample in enumerate(self.genotype_data.samples):
                 sample_map[sample] = i
 
             # if no tolerance provided, set to 1 snp position
@@ -1786,14 +1785,14 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
                     internal_only=False, skip_root=True, weighted=weighted
                 )
 
-                # convert to row indices
+                # Convert to row indices
                 rows = [sample_map[i] for i in samples]
 
-                # randomly sample a column
+                # Randomly sample a column
                 col_idx = np.random.randint(0, mask.shape[1])
                 sampled_col = copy.copy(mask[:, col_idx])
 
-                # mask column
+                # Mask column
                 sampled_col[rows] = True
 
                 # check that column is not 100% missing now
@@ -1804,9 +1803,10 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
                 # if not, set values in mask matrix
                 else:
                     mask[:, col_idx] = sampled_col
+
                     # if this addition pushes missing % > self.prop_missing,
-                    # check previous prop_missing, remove masked samples from this
-                    # column until closest to target prop_missing
+                    # check previous prop_missing, remove masked samples from
+                    # this column until closest to target prop_missing
                     current_prop = np.sum(mask) / mask.size
                     if abs(current_prop - self.prop_missing) <= self.tol:
                         filled = True
@@ -1841,7 +1841,7 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
         """Function to generate masked sites in a SimGenotypeData object
 
         Args:
-            X (GenotypeData): Initialized GenotypeData object. No missing data should be present. It should have already been imputed with one of the non-machine learning simple imputers.
+            X (pandas.DataFrame, numpy.ndarray, or List[List[int]]): Data to transform. No missing data should be present in X. It should have already been imputed with one of the non-machine learning simple imputers.
 
         Returns:
             numpy.ndarray: Transformed data with missing data added.
@@ -1884,9 +1884,9 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
         # to only sample internal nodes add  if not i.is_leaf()
         node_dict = dict()
 
-        for i in self.genotype_data_.tree.treenode.traverse("preorder"):
+        for i in self.genotype_data.tree.treenode.traverse("preorder"):
             if skip_root:
-                if i.idx == self.genotype_data_.tree.nnodes - 1:
+                if i.idx == self.genotype_data.tree.nnodes - 1:
                     continue
             if tips_only:
                 if not i.is_leaf():
@@ -1901,7 +1901,7 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
             node_idx = np.random.choice(list(node_dict.keys()), size=1, p=p)[0]
         else:
             node_idx = np.random.choice(list(node_dict.keys()), size=1)[0]
-        return self.genotype_data_.tree.get_tip_labels(idx=node_idx)
+        return self.genotype_data.tree.get_tip_labels(idx=node_idx)
 
     def _validate_input(self, X):
         """Make sure there is no missing data in X and return a numpy array.
