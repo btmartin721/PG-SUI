@@ -1223,7 +1223,9 @@ class ImputeVAE(Impute):
 
         cv (int): Number of cross-validation replicates to perform. Only used if ``validation_split`` is not None. Defaults to 5.
 
-        initial_strategy (str, optional): Initial strategy to impute missing data for validation. Possible options include: "populations", "most_frequent", "phylogeny", and "nmf", where "populations" imputes by the mode of each population at each site, "most_frequent" imputes by the overall mode of each site, "phylogeny" uses an input phylogeny to inform the imputation, and "nmf" imputes using matrix factorization. "populations" requires a population map file as input in the GenotypeData object, and "phylogeny" requires an input phylogeny and Rate Matrix Q (also instantiated in the GenotypeData object). Defaults to "populations".
+        sim_strategy (str, optional): Strategy to use for simulating missing data. Only used to validate the accuracy of the imputation. The final model will be trained with the non-simulated dataset. Supported options include: "random", "nonrandom", and "nonrandom_weighted". "random" randomly simulates missing data. When set to "nonrandom", branches from ``GenotypeData.guidetree`` will be randomly sampled to generate missing data on descendant nodes. For "nonrandom_weighted", missing data will be placed on nodes proportionally to their branch lengths (e.g., to generate data distributed as might be the case with mutation-disruption of RAD sites). Defaults to "random".
+
+        sim_prop_missing (float, optional): Proportion of missing data to use with missing data simulation. Defaults to 0.1.
 
         validation_split (float or None): Proportion of sites to use for the validation. If ``validation_split`` is None, then does not perform validation. Defaults to 0.2.
 
@@ -1284,7 +1286,8 @@ class ImputeVAE(Impute):
         *,
         prefix="output",
         cv=5,
-        initial_strategy="populations",
+        sim_strategy="random",
+        sim_prop_missing=0.1,
         validation_split=0.2,
         disable_progressbar=False,
         chunk_size=1.0,
@@ -1396,7 +1399,9 @@ class ImputeUBP(Impute):
 
         scoring_metric (str, optional): Scoring metric to use for randomized or genetic algorithm grid searches. See https://scikit-learn.org/stable/modules/model_evaluation.html for supported options. Defaults to "accuracy".
 
-        initial_strategy (str, optional): Initial strategy to impute missing data for validation. Possible options include: "populations", "most_frequent", "phylogeny", and "nmf", where "populations" imputes by the mode of each population at each site, "most_frequent" imputes by the overall mode of each site, "phylogeny" uses an input phylogeny to inform the imputation, and "nmf" imputes using matrix factorization. "populations" requires a population map file as input in the GenotypeData object, and "phylogeny" requires an input phylogeny and Rate Matrix Q (also instantiated in the GenotypeData object). Defaults to "populations".
+        sim_strategy (str, optional): Strategy to use for simulating missing data. Only used to validate the accuracy of the imputation. The final model will be trained with the non-simulated dataset. Supported options include: "random", "nonrandom", and "nonrandom_weighted". "random" randomly simulates missing data. When set to "nonrandom", branches from ``GenotypeData.guidetree`` will be randomly sampled to generate missing data on descendant nodes. For "nonrandom_weighted", missing data will be placed on nodes proportionally to their branch lengths (e.g., to generate data distributed as might be the case with mutation-disruption of RAD sites). Defaults to "random".
+
+        sim_prop_missing (float, optional): Proportion of missing data to use with missing data simulation. Defaults to 0.1.
 
         str_encodings (Dict[str, int], optional): Integer encodings for nucleotides if input file was in STRUCTURE format. Only used if ``initial_strategy="phylogeny"``\. Defaults to {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}.
 
@@ -1473,7 +1478,8 @@ class ImputeUBP(Impute):
         mutation_probability=0.1,
         ga_algorithm="eaMuPlusLambda",
         scoring_metric="accuracy",
-        initial_strategy="populations",
+        sim_strategy="random",
+        sim_prop_missing=0.1,
         str_encodings={
             "A": 1,
             "C": 2,
@@ -1586,7 +1592,9 @@ class ImputeNLPCA(ImputeUBP):
 
         scoring_metric (str, optional): Scoring metric to use for randomized or genetic algorithm grid searches. See https://scikit-learn.org/stable/modules/model_evaluation.html for supported options. Defaults to "accuracy".
 
-        initial_strategy (str, optional): Initial strategy to impute missing data for validation. Possible options include: "populations", "most_frequent", "phylogeny", and "nmf", where "populations" imputes by the mode of each population at each site, "most_frequent" imputes by the overall mode of each site, "phylogeny" uses an input phylogeny to inform the imputation, and "nmf" imputes using matrix factorization. "populations" requires a population map file as input in the GenotypeData object, and "phylogeny" requires an input phylogeny and Rate Matrix Q (also instantiated in the GenotypeData object). Defaults to "populations".
+        sim_strategy (str, optional): Strategy to use for simulating missing data. Only used to validate the accuracy of the imputation. The final model will be trained with the non-simulated dataset. Supported options include: "random", "nonrandom", and "nonrandom_weighted". "random" randomly simulates missing data. When set to "nonrandom", branches from ``GenotypeData.guidetree`` will be randomly sampled to generate missing data on descendant nodes. For "nonrandom_weighted", missing data will be placed on nodes proportionally to their branch lengths (e.g., to generate data distributed as might be the case with mutation-disruption of RAD sites). Defaults to "random".
+
+        sim_prop_missing (float, optional): Proportion of missing data to use with missing data simulation. Defaults to 0.1.
 
         str_encodings (Dict[str, int], optional): Integer encodings for nucleotides if input file was in STRUCTURE format. Only used if ``initial_strategy="phylogeny"``\. Defaults to {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}.
 

@@ -6,6 +6,12 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 
+# Custom module imports
+try:
+    from ..data_processing.transformers import SimGenotypeDataTransformer
+except (ModuleNotFoundError, ValueError):
+    from data_processing.transformers import SimGenotypeDataTransformer
+
 
 class NeuralNetworkMethods:
     """Methods common to all neural network imputer classes and loss functions"""
@@ -124,6 +130,50 @@ class NeuralNetworkMethods:
             else:
                 mle_complete = np.hstack([mle_complete, mle_completed])
         return mle_complete, df_dummies
+
+    def simulate_missing(
+        self, X, genotype_data, prop_missing, strategy, missing=-9
+    ):
+        """Simulate missing data and generate missing masks.
+
+        Generates missing masks for original dataset, all missing values (simulated + original), and simulated missing values.
+
+        Args:
+            X (numpy.ndarray): Original dataset with original missing values.
+            genotype_data (GenotypeData): Initialized GenotypeData object.
+            prop_missing (float): Proportion of missing values to simulate.
+            strategy (str): Strategy to use for simulation. Supported options include "random", "nonrandom", and "nonrandom_weighted".
+            missing (int): Missing data value.
+
+        Returns:
+            numpy.ndarray: Dataset with simulated and original missing values.
+            numpy.ndarray: Boolean mask of original missing values.
+            numpy.ndarray: Boolean mask of simulated missing values.
+            numpy.ndarray: Boolean mask of original + simulated missing values.
+        """
+        # Get original missing values.
+        original_mask = (
+            pd.DataFrame(X).replace(missing, np.nan).isna().to_numpy()
+        )
+
+        Xt = SimGenotypeDataTransformer(
+            genotype_data,
+            prop_missing=prop_missing,
+            strategy=strategy,
+        ).fit_transform(X)
+
+        all_mask = pd.DataFrame(Xt).replace(missing, np.nan).isna().to_numpy()
+
+        # Get values where original value was not missing and simulated missing
+        # data is missing.
+        sim_mask = np.logical_and(all_mask, original_mask == False)
+
+        return (
+            Xt,
+            original_mask,
+            sim_mask,
+            all_mask,
+        )
 
     def validate_hidden_layers(self, hidden_layer_sizes, num_hidden_layers):
         """Validate hidden_layer_sizes and verify that it is in the correct format.
@@ -559,19 +609,17 @@ class NeuralNetworkMethods:
 
         # Get number of needed subplot rows.
         tot = len(filter_col)
+        tot = 10
         cols = 4
-        rows = tot / cols
-        rows += tot % cols
-        position = range(1, tot + 1)
+        rows = int(np.ceil(tot / cols))
+        remainder = tot % cols
 
         fig = plt.figure(1, figsize=(20, 10))
-
         fig.suptitle("Parameter Scores")
-
-        for i, p in enumerate(filter_col):
+        for i, p in enumerate(filter_col, start=1):
             x = np.array(params_df[p])
             y = np.array(means_test)
-            ax = fig.add_subplot(rows, cols, position[i])
+            ax = fig.add_subplot(rows, cols, i)
             ax.plot(x, y, "-o")
             ax.set_xlabel(p.lstrip("param_").lower())
             ax.set_ylabel("Mean Accuracy")

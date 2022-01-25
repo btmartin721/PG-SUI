@@ -174,6 +174,8 @@ class Impute:
             self.early_stop_gen,
             self.chunk_size,
             self.do_validation,
+            self.sim_strategy,
+            self.sim_prop_missing,
         ) = self._gather_impute_settings(kwargs)
 
         if self.gridparams is not None:
@@ -323,9 +325,9 @@ class Impute:
         Raises:
             ValueError: ``chunk_size`` must be of type int or float.
         """
-
         if (
-            self.imp_kwargs["initial_strategy"] == "phylogeny"
+            "initial_strategy" in self.imp_kwargs
+            and self.imp_kwargs["initial_strategy"] == "phylogeny"
             and chunk_size != 1.0
         ):
             print(
@@ -336,7 +338,11 @@ class Impute:
 
             chunk_size = 1.0
 
-        if self.imp_kwargs["initial_strategy"] == "nmf" and chunk_size != 1.0:
+        if (
+            "initial_strategy" in self.imp_kwargs
+            and self.imp_kwargs["initial_strategy"] == "nmf"
+            and chunk_size != 1.0
+        ):
             print(
                 "WARNING: Chunking is not supported with initial_strategy == "
                 "'nmf'; Setting chunk_size to 1.0 and imputing entire "
@@ -505,9 +511,17 @@ class Impute:
         best_score_outfile = f"{self.prefix}_imputed_best_score.csv"
         best_params_outfile = f"{self.prefix}_imputed_best_params.csv"
 
-        df_scores.to_csv(
-            best_score_outfile, header=True, index=False, float_format="%.2f"
-        )
+        if isinstance(df_scores, pd.DataFrame):
+            df_scores.to_csv(
+                best_score_outfile,
+                header=True,
+                index=False,
+                float_format="%.2f",
+            )
+
+        else:
+            with open(best_score_outfile, "w") as fout:
+                fout.write(f"accuracy,{df_scores}\n")
 
         with open(best_params_outfile, "w") as fout:
             fout.write("parameter,best_value\n")
@@ -650,9 +664,6 @@ class Impute:
         if self.verbose > 0:
             print(f"Validation dataset size: {len(df_subset.columns)}\n")
 
-        if self.algorithm == "ii":
-            clf = self.clf()
-
         if self.disable_progressbar:
             with open(self.logfilepath, "a") as fout:
                 # Redirect to progress logfile
@@ -660,59 +671,30 @@ class Impute:
                     print(f"Doing {self.clf.__name__} grid search...\n")
 
         if self.algorithm == "nn":
-            y_true = self._initial_imputation(
-                self.imp_kwargs["initial_strategy"],
-                self.imp_kwargs["genotype_data"],
-                self.imp_kwargs["str_encodings"],
-                output_format="df",
-            )
-
-            y_true = y_true[cols_to_keep]
-
             imputer = self.clf(
                 self.genotype_data,
-                y_true=y_true.to_numpy(),
                 gridparams=self.gridparams,
                 **self.clf_kwargs,
                 ga_kwargs=self.ga_kwargs,
-                initial_strategy=self.imp_kwargs["initial_strategy"],
+                sim_strategy=self.sim_strategy,
+                sim_prop_missing=self.sim_prop_missing,
                 str_encodings=self.imp_kwargs["str_encodings"],
+                verbose=self.verbose,
             )
 
-            if self.clf == VAE:
-                df_imp = pd.DataFrame(
-                    imputer.fit_transform(df_subset.to_numpy()),
-                    columns=cols_to_keep,
-                )
+            df_imp = pd.DataFrame(
+                imputer.fit_transform(df_subset),
+                columns=cols_to_keep,
+            )
 
-                df_imp = df_imp.astype("float")
-                df_imp = df_imp.astype("int64")
-
-            else:
-                df_imp = pd.DataFrame(
-                    imputer.fit_transform(df_subset.to_numpy()),
-                    columns=cols_to_keep,
-                    dtype="int64",
-                )
-            # clf = self.clf(**self.clf_kwargs, **ga_kwargs, **self.imp_kwargs)
-            # # X_train = self.imp_kwargs["genotype_data"].genotypes012_array
-            # # y_train = clf.y_train
-
-            # search = self._nn_grid_search(
-            #     X_train,
-            #     y_train,
-            #     clf,
-            #     self.cv,
-            #     self.ga,
-            #     self.early_stop_gen,
-            #     self.scoring_metric,
-            #     self.grid_iter,
-            #     self.gridparams,
-            #     self.n_jobs,
-            #     self.ga_kwargs,
-            # )
+            df_imp = df_imp.astype("float")
+            df_imp = df_imp.astype("int64")
 
         else:
+            clf = self.clf()
+            df_subset = df_subset.astype("float32")
+            df_subset.replace(-9.0, np.nan, inplace=True)
+
             imputer = self._define_iterative_imputer(
                 clf,
                 self.logfilepath,
@@ -772,19 +754,20 @@ class Impute:
                 index=[0],
             )
 
+            df_scores = df_scores.round(2)
+
             del avg_score
             del median_score
             del max_score
             del min_score
             gc.collect()
         else:
-            best_params = search.best_params_
-            df_scores = pd.DataFrame(search.best_score_)
+            best_params = imputer.best_params_
+            df_scores = imputer.best_score_
+            df_scores = round(df_scores, 2) * 100
 
-        if self.clf_type == "classifier":
+        if self.clf_type == "classifier" and self.algorithm != "nn":
             df_scores = df_scores.apply(lambda x: x * 100)
-
-        df_scores = df_scores.round(2)
 
         self._write_imputed_params_score(df_scores, best_params)
 
@@ -1209,6 +1192,8 @@ class Impute:
         Optional[Union[int, float]],
         Optional[float],
         Optional[bool],
+        Optional[str],
+        Optional[float],
     ]:
         """Gather impute settings from kwargs object.
 
@@ -1234,6 +1219,8 @@ class Impute:
             int: Number of generations without improvement before Early Stopping criterion is called.
             int or float: Chunk sizes for doing full imputation following grid search. If int, then splits into chunks of ``chunk_size``\. If float, then splits into chunks of ``n_features * chunk_size``\.
             bool: Whether to do validation if ``gridparams is None``.
+            str: Simulation strategy to use.
+            float: Proportion of missing data to use with missing data simulation.
         """
         gridparams = kwargs.pop("gridparams", None)
         cv = kwargs.pop("cv", None)
@@ -1248,6 +1235,8 @@ class Impute:
         chunk_size = kwargs.pop("chunk_size", None)
         progress_update_percent = kwargs.pop("progress_update_percent", None)
         do_validation = kwargs.pop("do_validation", None)
+        sim_strategy = kwargs.pop("sim_strategy", "random")
+        sim_prop_missing = kwargs.pop("sim_prop_missing", 0.1)
 
         if prefix is None:
             prefix = "output"
@@ -1332,6 +1321,8 @@ class Impute:
             early_stop_gen,
             chunk_size,
             do_validation,
+            sim_strategy,
+            sim_prop_missing,
         )
 
     def _format_features(
@@ -1526,34 +1517,21 @@ class Impute:
             replace=False,
         )
 
-        df_known = self._initial_imputation(
-            self.imp_kwargs["initial_strategy"],
-            self.imp_kwargs["genotype_data"],
-            self.imp_kwargs["str_encodings"],
-            output_format="df",
-        )
-
-        df_nan = df.replace(-9, np.nan)
-
-        missing_count = df_nan.isnull().sum().sum()
-        total = df_nan.count().sum()
-        prop_missing = missing_count / total
-
-        strategy = "random" if self.genotype_data.tree is None else "nonrandom"
-
         if self.verbose > 0:
             print(
                 f"\nSimulating validation data with missing data proportion "
-                f"{prop_missing} and strategy {strategy}"
+                f"{self.sim_prop_missing} and strategy {self.sim_strategy}"
             )
+
+        df_known = df.copy()
 
         df_unknown = pd.DataFrame(
             SimGenotypeDataTransformer(
-                self.genotype_data, prop_missing=prop_missing, strategy=strategy
+                self.genotype_data,
+                prop_missing=self.sim_prop_missing,
+                strategy=self.sim_strategy,
             ).fit_transform(df_known)
         )
-
-        df_unknown.replace(-9, np.nan, inplace=True)
 
         # Code adapted from:
         # https://medium.com/analytics-vidhya/using-scikit-learns-iterative-imputer-694c3cca34de
@@ -1562,9 +1540,7 @@ class Impute:
         #     df, col_selection_rate=self.column_subset
         # )
 
-        df_known_slice = df_known[cols]
         df_unknown_slice = df_unknown[cols]
-        df_missing_mask = df_unknown_slice.isnull()
 
         # Neural networks
         if self.algorithm == "nn":
@@ -1572,11 +1548,12 @@ class Impute:
 
             for col in df_stg.columns:
                 df_stg[col] = df_stg[col].replace({pd.NA: np.nan})
-            df_stg.fillna(-9, inplace=True)
+            # df_stg.fillna(-9, inplace=True)
 
             imputer = self.clf(
                 self.genotype_data,
-                y_true=df_known_slice.to_numpy(),
+                sim_strategy=self.sim_strategy,
+                sim_prop_missing=self.sim_prop_missing,
                 **self.clf_kwargs,
             )
 
@@ -1585,22 +1562,23 @@ class Impute:
                 columns=cols,
             )
 
+            df_unknown_slice = pd.DataFrame(imputer.y_simulated_, columns=cols)
+            df_known_slice = pd.DataFrame(imputer.y_original_, columns=cols)
+
+            df_missing_mask = pd.DataFrame(
+                imputer.sim_missing_mask_, columns=cols
+            )
+
             df_imp = df_imp.astype("float")
             df_imp = df_imp.astype("int64")
 
-            # else:
-            #     df_imp = pd.DataFrame(
-            #         imputer.fit_transform(df_stg.to_numpy()),
-            #         columns=cols,
-            #         # dtype="int64",
-            #     )
-
-            # print(df_imp)
-            # sys.exit()
-            # df_imp - df_imp.astype("float")
-            # df_imp = df_imp.astype("int64")
-
         else:
+            df_known_slice = df_known[cols]
+            df_known_slice = df_known[cols]
+            df_missing_mask = df_unknown_slice.isnull()
+
+            df_unknown.replace(-9, np.nan, inplace=True)
+
             # Using IterativeImputer
             df_stg = df_unknown.copy()
 

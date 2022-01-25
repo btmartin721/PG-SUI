@@ -26,13 +26,11 @@ try:
     from ..utils import misc
     from ..utils.misc import get_processor_name
     from .simple_imputers import ImputeAlleleFreq, ImputePhylo, ImputeNMF
-    from .neural_network_methods import NeuralNetworkMethods
 except (ModuleNotFoundError, ValueError):
     from read_input.read_input import GenotypeData
     from utils import misc
     from utils.misc import get_processor_name
     from impute.simple_imputers import ImputeAlleleFreq, ImputePhylo, ImputeNMF
-    from impute.neural_network_methods import NeuralNetworkMethods
 
 # Requires scikit-learn-intellex package
 if get_processor_name().strip().startswith("Intel"):
@@ -205,7 +203,7 @@ class UBPInputTransformer(BaseEstimator, TransformerMixin):
 
 class NNInputTransformer(BaseEstimator, TransformerMixin):
     def fit(self, X):
-        X = self._validate_input(X)
+        X = misc.validate_input_type(X, return_type="array")
         df = encode_onehot(X)
         X_train = df.copy().values
         self.missing_mask_, self.observed_mask_ = self._get_masks(X_train)
@@ -213,7 +211,7 @@ class NNInputTransformer(BaseEstimator, TransformerMixin):
         return self
 
     def transform(self, X):
-        X = self._validate_input(X)
+        X = misc.validate_input_type(X, return_type="array")
         df = encode_onehot(X)
         X_train = df.copy().values
         return self._fill(X_train, self.missing_mask_)
@@ -257,50 +255,6 @@ class NNInputTransformer(BaseEstimator, TransformerMixin):
         if data.dtype != "f" and data.dtype != "d":
             data = data.astype(float)
         return np.isnan(data)
-
-    def _validate_input(self, input_data, out_type="numpy"):
-        """Validate input data and ensure that it is of correct type.
-
-        Args:
-            input_data (List[List[int]], numpy.ndarray, or pandas.DataFrame): Input data to validate.
-
-            out_type (str, optional): Type of object to convert input data to. Possible options include "numpy" and "pandas". Defaults to "numpy".
-
-        Returns:
-            numpy.ndarray: Input data as numpy array.
-
-        Raises:
-            TypeError: Must be of type pandas.DataFrame, numpy.ndarray, or List[List[int]].
-
-            ValueError: astype must be either "numpy" or "pandas".
-        """
-        if out_type == "numpy":
-            if isinstance(input_data, pd.DataFrame):
-                X = input_data.to_numpy()
-            elif isinstance(input_data, list):
-                X = np.array(input_data)
-            elif isinstance(input_data, np.ndarray):
-                X = input_data.copy()
-            else:
-                raise TypeError(
-                    f"input_data must be of type pd.DataFrame, np.ndarray, or "
-                    f"list(list(int)), but got {type(input_data)}"
-                )
-
-        elif out_type == "pandas":
-            if isinstance(input_data, pd.DataFrame):
-                X = input_data.copy()
-            elif isinstance(input_data, (list, np.ndarray)):
-                X = pd.DataFrame(input_data)
-            else:
-                raise TypeError(
-                    f"input_data must be of type pd.DataFrame, np.ndarray, or "
-                    f"list(list(int)), but got {type(input_data)}"
-                )
-        else:
-            raise ValueError("astype must be either 'numpy' or 'pandas'.")
-
-        return X
 
 
 class NNOutputTransformer(BaseEstimator, TransformerMixin):
@@ -1715,6 +1669,7 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
     def __init__(
         self,
         genotype_data,
+        *,
         prop_missing=0.1,
         strategy="random",
         subset=1.0,
@@ -1737,8 +1692,13 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
 
         Args:
             X (pandas.DataFrame, numpy.ndarray, or List[List[int]]): Data with which to simulate missing data. It should have already been imputed with one of the non-machine learning simple imputers, and there should be no missing data present in X.
+
+        Raises:
+            TypeError: SimGenotypeData.tree must not be NoneType when using strategy="nonrandom" or "nonrandom_weighted".
+
+            ValueError: Invalid ``strategy`` parameter provided.
         """
-        X = self._validate_input(X)
+        X = misc.validate_input_type(X, return_type="array")
 
         if self.verbose > 0:
             print(
@@ -1763,8 +1723,10 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
         ):
             if self.genotype_data.tree is None:
                 raise TypeError(
-                    'SimGenotypeData.tree cannot be NoneType when strategy="systematic"'
+                    "SimGenotypeData.tree cannot be NoneType when "
+                    "strategy='nonrandom' or 'nonrandom_weighted'"
                 )
+
             mask = np.full_like(X, 0.0, dtype=bool)
 
             if self.strategy == "nonrandom_weighted":
@@ -1826,9 +1788,9 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
                             r = np.random.randint(0, mask.shape[0])
                             c = np.random.randint(0, mask.shape[1])
                             mask[r, c] = False
-                            tries = tries + 1
+                            tries += 1
                             current_prop = np.sum(mask) / mask.size
-                            # print("After removal:",(np.sum(mask)/mask.size))
+
                         filled = True
                     else:
                         continue
@@ -1852,7 +1814,7 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
         Returns:
             numpy.ndarray: Transformed data with missing data added.
         """
-        X = self._validate_input(X)
+        X = misc.validate_input_type(X, return_type="array")
 
         # mask 012-encoded and one-hot encoded genotypes.
         return self._mask_snps(X)
@@ -1908,30 +1870,6 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
         else:
             node_idx = np.random.choice(list(node_dict.keys()), size=1)[0]
         return self.genotype_data.tree.get_tip_labels(idx=node_idx)
-
-    def _validate_input(self, X):
-        """Make sure there is no missing data in X and return a numpy array.
-
-        Args:
-            X (pandas.DataFrame, numpy.ndarray, or List[List[int]]): Input data.
-
-        Returns:
-            numpy.ndarray: Input data as numpy array.
-        """
-        if isinstance(X, pd.DataFrame):
-            Xt = X.to_numpy()
-        if isinstance(X, list):
-            Xt = np.array(X)
-        if isinstance(X, np.ndarray):
-            Xt = X.copy()
-
-        array_sum = np.sum(Xt)
-        if np.isnan(array_sum):
-            raise ValueError(
-                "Found missing values in input. Use a simple imputer first."
-            )
-
-        return Xt
 
     def _validate_mask(self):
         """Make sure no entirely missing columns are simulated."""

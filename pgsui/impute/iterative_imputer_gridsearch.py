@@ -293,6 +293,7 @@ class IterativeImputerGridSearch(IterativeImputer):
         self.pops = pops
         self.scoring_metric = scoring_metric
         self.early_stop_gen = early_stop_gen
+        self.missing_values = missing_values
 
     def _initial_imputation(
         self, X: np.ndarray, cols_to_keep: np.ndarray, in_fit: bool = False

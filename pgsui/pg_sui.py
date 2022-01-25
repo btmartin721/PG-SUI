@@ -336,7 +336,6 @@ def main():
     ubp = ImputeNLPCA(
         data,
         # gridparams=grid_params,
-        initial_strategy="populations",
         disable_progressbar=True,
         cv=3,
         column_subset=0.3,
@@ -352,6 +351,8 @@ def main():
         gridparams=grid_params,
         n_jobs=4,
         grid_iter=5,
+        sim_strategy="nonrandom",
+        sim_prop_missing=0.2,
     )
 
     # ubp = ImputeVAE(

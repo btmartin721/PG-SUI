@@ -278,6 +278,7 @@ class IterativeImputerFixedParams(IterativeImputer):
         self.random_state = random_state
         self.genotype_data = genotype_data
         self.str_encodings = str_encodings
+        self.missing_values = missing_values
 
     def _initial_imputation(
         self, X: np.ndarray, cols_to_keep: np.ndarray, in_fit: bool = False

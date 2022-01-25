@@ -1,6 +1,7 @@
 # Standard Library Imports
 import math
 import os
+import pprint
 import random
 import shutil
 import sys
@@ -22,6 +23,7 @@ from sklearn.preprocessing import FunctionTransformer
 
 # Randomized grid search imports
 from sklearn.model_selection import RandomizedSearchCV
+from sklearn.model_selection import ParameterGrid
 
 # Genetic algorithm grid search imports
 from sklearn_genetic import GASearchCV
@@ -55,6 +57,7 @@ try:
     from ..read_input.read_input import GenotypeData
     from ..utils.misc import timer
     from ..utils.misc import isnotebook
+    from ..utils.misc import validate_input_type
     from .neural_network_methods import NeuralNetworkMethods
     from .nlpca_model import NLPCAModel
     from .ubp_model import UBPPhase1, UBPPhase2, UBPPhase3
@@ -72,6 +75,7 @@ except (ModuleNotFoundError, ValueError):
     from read_input.read_input import GenotypeData
     from utils.misc import timer
     from utils.misc import isnotebook
+    from utils.misc import validate_input_type
     from impute.neural_network_methods import NeuralNetworkMethods
     from impute.nlpca_model import NLPCAModel
     from impute.ubp_model import UBPPhase1, UBPPhase2, UBPPhase3
@@ -417,20 +421,16 @@ class MLPClassifier(KerasClassifier):
         Returns:
             float: Calculated score.
         """
-        y_decoded = kwargs.get("y_decoded")
-        missing_mask = kwargs.get("missing_mask")
-        y_true_nan = np.where(missing_mask, np.nan, y_decoded)
-        # missing_mask = np.isnan(y_true_nan)
+        y_true = kwargs.get("y_orig").astype("int8").ravel()
+        y_pred = y_pred.astype("int8").ravel()
 
-        # Subset to only observed values.
-        y_true_missing = y_true_nan[missing_mask]
-        y_true_missing = y_true_missing.astype(np.int)
-        y_true_missing = y_true_missing.astype(str)
+        # Should be only simulated missing values.
+        missing_mask = kwargs.get("missing_mask").ravel()
 
-        # Subset to only values observed in y_true.
-        y_pred_missing = y_pred[missing_mask]
-
-        return accuracy_score(y_true_missing, y_pred_missing)
+        # Get accuracy score.
+        acc = accuracy_score(y_true[missing_mask], y_pred[missing_mask])
+        print(acc)
+        return acc
 
     @property
     def feature_encoder(self):
@@ -864,7 +864,7 @@ class VAE(NeuralNetworkMethods):
         return np.isnan(self.data)
 
 
-class UBP(NeuralNetworkMethods):
+class UBP(BaseEstimator, TransformerMixin):
     """Class to impute missing data using unsupervised backpropagation (UBP) or inverse non-linear principal component analysis (NLPCA).
 
     Args:
@@ -926,7 +926,7 @@ class UBP(NeuralNetworkMethods):
 
         scoring_metric (str, optional): Scoring metric to use for randomized or genetic algorithm grid searches. See https://scikit-learn.org/stable/modules/model_evaluation.html for supported options. Defaults to "accuracy".
 
-        initial_strategy (str, optional): Initial strategy to impute missing data for validation. Possible options include: "populations", "most_frequent", "phylogeny", and "nmf", where "populations" imputes by the mode of each population at each site, "most_frequent" imputes by the overall mode of each site, "phylogeny" uses an input phylogeny to inform the imputation, and "nmf" imputes using matrix factorization. "populations" requires a population map file as input in the GenotypeData object, and "phylogeny" requires an input phylogeny and Rate Matrix Q (also instantiated in the GenotypeData object). Defaults to "populations".
+        sim_strategy (str, optional): Strategy to use for simulating missing data. Only used to validate the accuracy of the imputation. The final model will be trained with the non-simulated dataset. Supported options include: "random", "nonrandom", and "nonrandom_weighted". "random" randomly simulates missing data. When set to "nonrandom", branches from ``GenotypeData.guidetree`` will be randomly sampled to generate missing data on descendant nodes. For "nonrandom_weighted", missing data will be placed on nodes proportionally to their branch lengths (e.g., to generate data distributed as might be the case with mutation-disruption of RAD sites). Defaults to "random".
 
         str_encodings (Dict[str, int], optional): Integer encodings for nucleotides if input file was in STRUCTURE format. Only used if ``initial_strategy="phylogeny"``\. Defaults to {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}.
 
@@ -939,7 +939,6 @@ class UBP(NeuralNetworkMethods):
         self,
         genotype_data,
         *,
-        y_true=None,
         missing_mask_val=None,
         prefix="output",
         gridparams=None,
@@ -968,7 +967,8 @@ class UBP(NeuralNetworkMethods):
         ga=False,
         ga_kwargs=None,
         scoring_metric="accuracy",
-        initial_strategy="populations",
+        sim_strategy="random",
+        sim_prop_missing=0.1,
         str_encodings={
             "A": 1,
             "C": 2,
@@ -985,7 +985,6 @@ class UBP(NeuralNetworkMethods):
 
         # CLF parameters.
         self.genotype_data = genotype_data
-        self.y_true = y_true
         self.missing_mask_val = missing_mask_val
         self.prefix = prefix
         self.gridparams = gridparams
@@ -1020,41 +1019,59 @@ class UBP(NeuralNetworkMethods):
         # Grid search settings.
         self.ga = ga
         self.scoring_metric = scoring_metric
-        self.initial_strategy = initial_strategy
+        self.sim_strategy = sim_strategy
+        self.sim_prop_missing = sim_prop_missing
         self.str_encodings = str_encodings
         self.grid_iter = grid_iter
         self.n_jobs = n_jobs
         self.ga_kwargs = ga_kwargs
 
     @timer
-    def fit_transform(self, y):
+    def fit(self, X):
         """Train a UBP or NLPCA model and predict the output.
 
         Uses input data from GenotypeData object.
 
+        Args:
+            X (pandas.DataFrame, numpy.ndarray, or List[List[int]]): 012-encoded input data.
+
         Returns:
-            pandas.DataFrame: Imputation predictions.
+            pandas.DataFrame: Imputated data.
         """
+        y = X
+        y = validate_input_type(y, return_type="array")
+        self.y_original_ = y.copy()
+
+        nn = NeuralNetworkMethods()
+
+        # Simulate missing data and get missing masks.
+        (
+            self.y_simulated_,
+            self.original_missing_mask_,
+            self.sim_missing_mask_,
+            self.all_missing_,
+        ) = nn.simulate_missing(
+            self.y_original_,
+            self.genotype_data,
+            self.sim_prop_missing,
+            self.sim_strategy,
+        )
+
         # In NLPCA and UBP, X and y are flipped.
         # X is the randomly initialized model input (V)
         # V is initialized with small, random values.
         # y is the actual input data.
         nnit = NNInputTransformer()
-        y_train = nnit.fit_transform(y)
+        y_train = nnit.fit_transform(self.y_simulated_)
         missing_mask = nnit.missing_mask_
         observed_mask = nnit.observed_mask_
 
-        nn = NeuralNetworkMethods()
         # testresults = pd.read_csv("testcvresults.csv")
-        # self.plot_grid_search(testresults)
+        # nn.plot_grid_search(testresults)
         # sys.exit()
 
         # Placeholder for V. Gets replaced in model.
         V = nn.init_weights(y.shape[0], self.n_components)
-
-        y_true = y if self.y_true is None else self.y_true
-
-        self.missing_mask_decoded = pd.DataFrame(y).replace(-9, np.nan).isnull()
 
         (
             logfile,
@@ -1063,20 +1080,16 @@ class UBP(NeuralNetworkMethods):
             model_params,
             fit_params,
         ) = self._initialize_parameters(
-            V,
-            y_true,
-            y_train,
-            missing_mask,
-            nn,
+            V, self.y_simulated_, y_train, missing_mask, nn
         )
 
         if self.nlpca:
             (
-                models,
-                histories,
-                best_params,
-                best_score,
-                search,
+                self.models_,
+                self.histories_,
+                self.best_params_,
+                self.best_score_,
+                self.search_,
             ) = self._run_nlpca(
                 V,
                 y_train,
@@ -1086,97 +1099,49 @@ class UBP(NeuralNetworkMethods):
                 nn,
             )
 
-            if self.gridparams is not None:
-                print(best_params)
-                print(best_score)
-                nn.plot_grid_search(search.cv_results_)
+            # if self.gridparams is not None:
+            #     if self.verbose > 0:
+            #         print("\nBest found parameters:")
+            #         pprint.pprint(self.best_params_)
+            #         print(f"\nBest score: {self.best_score_}")
+            #     nn.plot_grid_search(self.search_.cv_results_)
 
         else:
-            models, histories = self._run_ubp(
+            self.models_, self.histories_ = self._run_ubp(
                 V, y_train, model_params, compile_params, fit_params, nn
             )
 
-        if len(models) == 1:
-            imputed_enc = models[0].y.copy()
-        else:
-            imputed_enc = models[-1].y.copy()
+        self._plot_history(self.histories_)
 
-        # print(y_true.shape)
-        # print(imputed_enc.shape)
-        # sys.exit()
+        return self
+
+    def transform(self, X):
+        """Predict and decode imputations and return transformed array.
+
+        Args:
+            X (pandas.DataFrame, numpy.ndarray, or List[List[int]]): Input data to transform.
+
+        Returns:
+            numpy.ndarray: Imputed data.
+        """
+        y = X
+        nn = NeuralNetworkMethods()
+
+        # Get last (i.e., most refined) model.
+        if len(self.models_) == 1:
+            imputed_enc = self.models_[0].y.copy()
+        else:
+            imputed_enc = self.models_[-1].y.copy()
 
         # Has to be y and not y_train because it's not supposed to be one-hot
         # encoded.
-        imputed_enc, dummy_df = nn.predict(y, imputed_enc)
+        imputed_enc, dummy_df = nn.predict(self.y_simulated_, imputed_enc)
 
         imputed_df = nn.decode_onehot(
             pd.DataFrame(data=imputed_enc, columns=dummy_df.columns)
         )
 
-        # y_pred = model3.predict(V3)
-
-        self._plot_history(histories)
-
         return imputed_df.to_numpy()
-
-    def _initial_imputation(
-        self,
-        strategy,
-        genotype_data,
-        str_encodings,
-        latent_features,
-        learning_rate,
-        regularization_param,
-        max_iter,
-        tol,
-        output_format="df",
-    ):
-        """Instantiate and transform the initial imputation.
-
-        The initial imputer used will be the one specified by initial_strategy.
-
-        Args:
-            strategy (str): Initial strategy to use. Can be "most_frequent", "populations", "phylogeny", or "nmf".
-
-        Returns:
-            numpy.ndarray: Imputed array.
-
-        Raises:
-            ValueError: Unsupported strategy argument specified.
-        """
-        if strategy == "most_frequent" or strategy == "populations":
-            by_populations = True if strategy == "populations" else False
-            simple = ImputeAlleleFreqTransformer(
-                by_populations=by_populations,
-                output_format=output_format,
-                verbose=False,
-                iterative_mode=True,
-            )
-
-        elif strategy == "phylogeny":
-            simple = ImputePhyloTransformer(
-                str_encodings=str_encodings,
-                output_format=output_format,
-                disable_progressbar=True,
-                save_plots=False,
-            )
-
-        elif strategy == "nmf":
-            simple = ImputeNMFTransformer(
-                output_format=output_format,
-                verbose=False,
-                iterative_mode=True,
-                latent_features=latent_features,
-                learning_rate=learning_rate,
-                regularization_param=regularization_param,
-                max_iter=max_iter,
-                tol=tol,
-            )
-
-        else:
-            raise ValueError(f"Invalid strategy value specified: {strategy}")
-
-        return simple.fit_transform(genotype_data)
 
     def _run_nlpca(
         self,
@@ -1219,20 +1184,20 @@ class UBP(NeuralNetworkMethods):
                 ]
                 self.gridparams.pop("learning_rate")
 
-            clf = MLPClassifier(
-                **model_params,
-                optimizer=compile_params["optimizer"],
-                optimizer__learning_rate=compile_params["learning_rate"],
-                loss=compile_params["loss"],
-                metrics=compile_params["metrics"],
-                epochs=fit_params["epochs"],
-                phase=None,
-                callbacks=fit_params["callbacks"],
-                validation_split=fit_params["validation_split"],
-                verbose=0,
-                score__y_decoded=self.y_true,
-                score__missing_mask=self.missing_mask_decoded,
-            )
+            # clf = MLPClassifier(
+            #     **model_params,
+            #     optimizer=compile_params["optimizer"],
+            #     optimizer__learning_rate=compile_params["learning_rate"],
+            #     loss=compile_params["loss"],
+            #     metrics=compile_params["metrics"],
+            #     epochs=fit_params["epochs"],
+            #     phase=None,
+            #     callbacks=fit_params["callbacks"],
+            #     validation_split=fit_params["validation_split"],
+            #     verbose=0,
+            #     score__y_orig=self.y_original_,
+            #     score__missing_mask=self.sim_missing_mask_,
+            # )
 
             if self.ga:
                 # Stop searching if GA sees no improvement.
@@ -1255,25 +1220,84 @@ class UBP(NeuralNetworkMethods):
 
                     search.fit(V, y_train, callbacks=callback)
 
+                best_params = search.best_params_
+                best_score = search.best_score_
+                best_index = search.best_index_
+
+                cv_results = pd.DataFrame(search.cv_results_)
+                cv_results.to_csv("testcvresults.csv", index=False)
+
             else:
-                # Do randomized grid search
-                search = RandomizedSearchCV(
-                    clf,
-                    param_distributions=self.gridparams,
-                    n_iter=self.grid_iter,
-                    n_jobs=self.n_jobs,
-                    cv=cross_val,
-                    refit=False,
-                )
+                grid = list(ParameterGrid(self.gridparams))
+                total_tests = len(grid)
 
-                search.fit(V, y_train)
+                print(compile_params)
+                print(grid)
 
-            best_params = search.best_params_
-            best_score = search.best_score_
-            best_index = search.best_index_
+                scores = list()
+                for i, perms in enumerate(grid, start=1):
+                    if self.verbose > 0:
+                        print(
+                            f"\nGrid search permutation {i} / {total_tests} {(i / total_tests) * 100}\n"
+                        )
 
-            cv_results = pd.DataFrame(search.cv_results_)
-            cv_results.to_csv("testcvresults.csv", index=False)
+                    perm_searched = {
+                        model_params.pop(k)
+                        for k in model_params.copy()
+                        if k in perms
+                    }
+
+                    if "optimizer__learning_rate" in perms:
+                        compile_params["learning_rate"] = perms[
+                            "optimizer__learning_rate"
+                        ]
+                        perms.pop("optimizer__learning_rate")
+
+                    clf = MLPClassifier(
+                        **model_params,
+                        **perms,
+                        optimizer=compile_params["optimizer"],
+                        optimizer__learning_rate=compile_params[
+                            "learning_rate"
+                        ],
+                        loss=compile_params["loss"],
+                        metrics=compile_params["metrics"],
+                        epochs=fit_params["epochs"],
+                        phase=None,
+                        callbacks=fit_params["callbacks"],
+                        validation_split=fit_params["validation_split"],
+                        verbose=0,
+                        # score__y_orig=self.y_original_,
+                        # score__missing_mask=self.sim_missing_mask_,
+                    )
+
+                    clf.fit(V, y_train)
+
+                    y_true = self.y_original_
+                    y_pred = clf.model_.y
+
+                    scores.append(
+                        self.search_predict_score(
+                            y_true, y_pred, self.sim_missing_mask_
+                        )
+                    )
+
+                best_index = np.argmax(scores)
+                best_score = scores[best_index]
+                best_params = perms[best_index]
+                search = None
+
+                # # Do randomized grid search
+                # search = RandomizedSearchCV(
+                #     clf,
+                #     param_distributions=self.gridparams,
+                #     n_iter=self.grid_iter,
+                #     n_jobs=self.n_jobs,
+                #     cv=[(slice(None), slice(None))],
+                #     refit=True,
+                # )
+
+                # search.fit(V, y_train)
 
             if "learning_rate" in best_params:
                 compile_params["optimizer"] = compile_params["optimizer"](
@@ -1291,11 +1315,7 @@ class UBP(NeuralNetworkMethods):
                 k: best_params[k] for k in best_params if k in model_params
             }
 
-            print(model_params)
-
             model_params.update(model_searched)
-
-            print(model_params)
 
             vinput = nn.init_weights(
                 y_train.shape[0], model_params["n_components"]
@@ -1391,7 +1411,7 @@ class UBP(NeuralNetworkMethods):
                     self.n_jobs,
                     self.ga_kwargs,
                 )
-                print(search.best_params_)
+                pprint.ppprint(search.best_params_)
                 print(search.best_score_)
                 sys.exit()
 
@@ -1429,6 +1449,23 @@ class UBP(NeuralNetworkMethods):
             del model
 
         return models, histories
+
+    def search_predict_score(self, y_true, y_pred, missing_mask):
+        nn = NeuralNetworkMethods()
+        y_pred_proba = y_true
+        imputed_enc, dummy_df = nn.predict(self.y_simulated_, y_pred_proba)
+
+        y_pred_df = nn.decode_onehot(
+            pd.DataFrame(data=imputed_enc, columns=dummy_df.columns)
+        )
+
+        y_true = y_true.astype("int8").ravel()
+        y_pred = y_pred_df.to_numpy().astype("int8").ravel()
+        missing_mask = missing_mask.ravel()
+
+        acc = accuracy_score(y_true[missing_mask], y_pred[missing_mask])
+        print(acc)
+        return acc
 
     def _initialize_parameters(self, V, y, y_train, missing_mask, nn):
         """Initialize important parameters.
