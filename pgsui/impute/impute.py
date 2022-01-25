@@ -47,6 +47,16 @@ try:
     from ..utils.misc import get_processor_name
     from ..utils.misc import isnotebook
     from ..utils.misc import timer
+    from ..data_processing.transformers import (
+        UBPInputTransformer,
+        NNInputTransformer,
+        NNOutputTransformer,
+        RandomizeMissingTransformer,
+        ImputePhyloTransformer,
+        ImputeAlleleFreqTransformer,
+        ImputeNMFTransformer,
+        SimGenotypeDataTransformer,
+    )
 except (ModuleNotFoundError, ValueError):
     from impute.iterative_imputer_gridsearch import IterativeImputerGridSearch
     from impute.iterative_imputer_fixedparams import IterativeImputerFixedParams
@@ -58,6 +68,16 @@ except (ModuleNotFoundError, ValueError):
     from utils.misc import get_processor_name
     from utils.misc import isnotebook
     from utils.misc import timer
+    from data_processing.transformers import (
+        UBPInputTransformer,
+        NNInputTransformer,
+        NNOutputTransformer,
+        RandomizeMissingTransformer,
+        ImputePhyloTransformer,
+        ImputeAlleleFreqTransformer,
+        ImputeNMFTransformer,
+        SimGenotypeDataTransformer,
+    )
 
 is_notebook = isnotebook()
 
@@ -640,8 +660,18 @@ class Impute:
                     print(f"Doing {self.clf.__name__} grid search...\n")
 
         if self.algorithm == "nn":
+            y_true = self._initial_imputation(
+                self.imp_kwargs["initial_strategy"],
+                self.imp_kwargs["genotype_data"],
+                self.imp_kwargs["str_encodings"],
+                output_format="df",
+            )
+
+            y_true = y_true[cols_to_keep]
+
             imputer = self.clf(
                 self.genotype_data,
+                y_true=y_true.to_numpy(),
                 gridparams=self.gridparams,
                 **self.clf_kwargs,
                 ga_kwargs=self.ga_kwargs,
@@ -978,16 +1008,15 @@ class Impute:
         for i, Xchunk in enumerate(df_chunks, start=1):
             if self.clf_type == "classifier":
                 if self.algorithm == "nn":
-                    imputer = self.clf(**self.clf_kwargs)
-                    if self.clf == UBP:
-                        df_imp = pd.DataFrame(
-                            imputer.fit_predict(Xchunk),
-                            dtype="Int8",
-                        )
-                    else:
-                        df_imp = pd.DataFrame(imputer.fit_transform(Xchunk))
-                        df_imp = df_imp.astype("float")
-                        df_imp = df_imp.astype("Int8")
+                    imputer = self.clf(
+                        self.imp_kwargs["genotype_data"], **self.clf_kwargs
+                    )
+                    df_imp = pd.DataFrame(
+                        imputer.fit_transform(Xchunk),
+                    )
+                    df_imp = pd.DataFrame(imputer.fit_transform(Xchunk))
+                    df_imp = df_imp.astype("float")
+                    df_imp = df_imp.astype("Int8")
 
                 else:
                     df_imp = pd.DataFrame(
@@ -1491,11 +1520,47 @@ class Impute:
         Returns:
             Dict[List[float or int]]: Validation scores for the current imputation.
         """
+        cols = np.random.choice(
+            df.columns,
+            int(len(df.columns) * self.column_subset),
+            replace=False,
+        )
+
+        df_known = self._initial_imputation(
+            self.imp_kwargs["initial_strategy"],
+            self.imp_kwargs["genotype_data"],
+            self.imp_kwargs["str_encodings"],
+            output_format="df",
+        )
+
+        df_nan = df.replace(-9, np.nan)
+
+        missing_count = df_nan.isnull().sum().sum()
+        total = df_nan.count().sum()
+        prop_missing = missing_count / total
+
+        strategy = "random" if self.genotype_data.tree is None else "nonrandom"
+
+        if self.verbose > 0:
+            print(
+                f"\nSimulating validation data with missing data proportion "
+                f"{prop_missing} and strategy {strategy}"
+            )
+
+        df_unknown = pd.DataFrame(
+            SimGenotypeDataTransformer(
+                self.genotype_data, prop_missing=prop_missing, strategy=strategy
+            ).fit_transform(df_known)
+        )
+
+        df_unknown.replace(-9, np.nan, inplace=True)
+
         # Code adapted from:
         # https://medium.com/analytics-vidhya/using-scikit-learns-iterative-imputer-694c3cca34de
-        df_known, df_unknown, cols = self._defile_dataset(
-            df, col_selection_rate=self.column_subset
-        )
+
+        # df_known, df_unknown, cols = self._defile_dataset(
+        #     df, col_selection_rate=self.column_subset
+        # )
 
         df_known_slice = df_known[cols]
         df_unknown_slice = df_unknown[cols]
@@ -1509,23 +1574,31 @@ class Impute:
                 df_stg[col] = df_stg[col].replace({pd.NA: np.nan})
             df_stg.fillna(-9, inplace=True)
 
-            imputer = self.clf(self.genotype_data, **self.clf_kwargs)
+            imputer = self.clf(
+                self.genotype_data,
+                y_true=df_known_slice.to_numpy(),
+                **self.clf_kwargs,
+            )
 
-            if self.clf == VAE:
-                df_imp = pd.DataFrame(
-                    imputer.fit_transform(df_stg.to_numpy()),
-                    columns=cols,
-                )
+            df_imp = pd.DataFrame(
+                imputer.fit_transform(df_stg.to_numpy()),
+                columns=cols,
+            )
 
-                df_imp = df_imp.astype("float")
-                df_imp = df_imp.astype("int64")
+            df_imp = df_imp.astype("float")
+            df_imp = df_imp.astype("int64")
 
-            else:
-                df_imp = pd.DataFrame(
-                    imputer.fit_transform(df_stg.to_numpy()),
-                    columns=cols,
-                    dtype="int64",
-                )
+            # else:
+            #     df_imp = pd.DataFrame(
+            #         imputer.fit_transform(df_stg.to_numpy()),
+            #         columns=cols,
+            #         # dtype="int64",
+            #     )
+
+            # print(df_imp)
+            # sys.exit()
+            # df_imp - df_imp.astype("float")
+            # df_imp = df_imp.astype("int64")
 
         else:
             # Using IterativeImputer
@@ -1552,17 +1625,24 @@ class Impute:
 
         # Get score of each column
         scores = defaultdict(list)
-        for i in range(len(df_known_slice.columns)):
+        for col in df_known_slice.columns:
             # Adapted from: https://medium.com/analytics-vidhya/using-scikit-learns-iterative-imputer-694c3cca34de
 
-            mask = df_missing_mask[df_known_slice.columns[i]]
-            y_true = df_known[df_known_slice.columns[i]]
+            mask = df_missing_mask[col]
+            y_true = df_known[col]
             y_true = y_true[mask]
 
-            y_pred = df_imp[df_known_slice.columns[i]]
+            y_pred = df_imp[col]
             y_pred = y_pred[mask]
 
             if self.clf_type == "classifier":
+                if y_pred.empty:
+                    scores["accuracy"].append(-9)
+                    scores["precision"].append(-9)
+                    scores["f1"].append(-9)
+                    scores["recall"].append(-9)
+                    scores["jaccard"].append(-9)
+                    continue
 
                 # Had to do this because get incompatible type error if using
                 # initial_imputation="populations"
@@ -1628,6 +1708,55 @@ class Impute:
         gc.collect()
 
         return scores
+
+    def _initial_imputation(
+        self,
+        strategy,
+        genotype_data,
+        str_encodings,
+        output_format="df",
+    ):
+        """Instantiate and transform the initial imputation.
+
+        The initial imputer used will be the one specified by initial_strategy.
+
+        Args:
+            strategy (str): Initial strategy to use. Can be "most_frequent", "populations", "phylogeny", or "nmf".
+
+        Returns:
+            numpy.ndarray: Imputed array.
+
+        Raises:
+            ValueError: Unsupported strategy argument specified.
+        """
+        if strategy == "most_frequent" or strategy == "populations":
+            by_populations = True if strategy == "populations" else False
+            simple = ImputeAlleleFreqTransformer(
+                by_populations=by_populations,
+                output_format=output_format,
+                verbose=False,
+                iterative_mode=True,
+            )
+
+        elif strategy == "phylogeny":
+            simple = ImputePhyloTransformer(
+                str_encodings=str_encodings,
+                output_format=output_format,
+                disable_progressbar=True,
+                save_plots=False,
+            )
+
+        elif strategy == "nmf":
+            simple = ImputeNMFTransformer(
+                output_format=output_format,
+                verbose=False,
+                iterative_mode=True,
+            )
+
+        else:
+            raise ValueError(f"Invalid strategy value specified: {strategy}")
+
+        return simple.fit_transform(genotype_data)
 
     def _define_iterative_imputer(
         self,

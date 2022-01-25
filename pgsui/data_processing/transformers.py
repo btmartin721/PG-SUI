@@ -160,10 +160,11 @@ class UBPInputTransformer(BaseEstimator, TransformerMixin):
         V (numpy.ndarray or Dict[str, Any]): If doing grid search, should be a dictionary with current_component: numpy.ndarray. If not doing grid search, then it should be a numpy.ndarray.
     """
 
-    def __init__(self, phase, n_components, V):
+    def __init__(self, phase, n_components, V, search_mode):
         self.phase = phase
         self.n_components = n_components
         self.V = V
+        self.search_mode = search_mode
 
     def fit(self, X):
         """Fit transformer to input data X.
@@ -189,10 +190,15 @@ class UBPInputTransformer(BaseEstimator, TransformerMixin):
         Raises:
             TypeError: V must be a dictionary if phase is None or phase == 1.
         """
-        if self.phase == None or self.phase == 1:
-            if not isinstance(self.V, dict):
-                raise TypeError("V must be a dictionary if phase == None or 1.")
-            return self.V[self.n_components]
+        if self.search_mode:
+            if self.phase == None or self.phase == 1:
+                if not isinstance(self.V, dict):
+                    raise TypeError(
+                        "V must be a dictionary if phase == None or 1."
+                    )
+                return self.V[self.n_components]
+            else:
+                return self.V
         else:
             return self.V
 
@@ -1912,18 +1918,20 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
         Returns:
             numpy.ndarray: Input data as numpy array.
         """
-        array_sum = np.sum(X)
+        if isinstance(X, pd.DataFrame):
+            Xt = X.to_numpy()
+        if isinstance(X, list):
+            Xt = np.array(X)
+        if isinstance(X, np.ndarray):
+            Xt = X.copy()
+
+        array_sum = np.sum(Xt)
         if np.isnan(array_sum):
             raise ValueError(
                 "Found missing values in input. Use a simple imputer first."
             )
 
-        if isinstance(X, pd.DataFrame):
-            return X.to_numpy()
-        if isinstance(X, list):
-            return np.array(X)
-        if isinstance(X, np.ndarray):
-            return X
+        return Xt
 
     def _validate_mask(self):
         """Make sure no entirely missing columns are simulated."""

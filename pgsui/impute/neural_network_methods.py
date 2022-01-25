@@ -1,4 +1,5 @@
 import random
+from collections import defaultdict
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -11,6 +12,118 @@ class NeuralNetworkMethods:
 
     def __init__(self):
         self.data = None
+
+    @staticmethod
+    def decode_onehot(df_dummies):
+        """Decode one-hot format to 012-encoded genotypes.
+
+        Args:
+            df_dummies (pandas.DataFrame): One-hot encoded imputed data.
+
+        Returns:
+            pandas.DataFrame: 012-encoded imputed data.
+        """
+        pos = defaultdict(list)
+        vals = defaultdict(list)
+
+        for i, c in enumerate(df_dummies.columns):
+            if "_" in c:
+                k, v = c.split("_", 1)
+                pos[k].append(i)
+                vals[k].append(v)
+
+            else:
+                pos["_"].append(i)
+
+        df = pd.DataFrame(
+            {
+                k: pd.Categorical.from_codes(
+                    np.argmax(df_dummies.iloc[:, pos[k]].values, axis=1),
+                    vals[k],
+                )
+                for k in vals
+            }
+        )
+
+        df[df_dummies.columns[pos["_"]]] = df_dummies.iloc[:, pos["_"]]
+
+        return df
+
+    @staticmethod
+    def encode_categorical(X):
+        """Encode -9 encoded missing values as np.nan.
+
+        Args:
+            X (numpy.ndarray): 012-encoded genotypes with -9 as missing values.
+
+        Returns:
+            pandas.DataFrame: DataFrame with missing values encoded as np.nan.
+        """
+        np.nan_to_num(X, copy=False, nan=-9.0)
+        X = X.astype(str)
+        X[(X == "-9.0") | (X == "-9")] = "none"
+
+        df = pd.DataFrame(X)
+        df_incomplete = df.copy()
+
+        # Replace 'none' with np.nan
+        for row in df.index:
+            for col in df.columns:
+                if df_incomplete.iat[row, col] == "none":
+                    df_incomplete.iat[row, col] = np.nan
+
+        return df_incomplete
+
+    @staticmethod
+    def mle(row):
+        """Get the Maximum Likelihood Estimation for the best prediction. Basically, it sets the index of the maxiumum value in a vector (row) to 1.0, since it is one-hot encoded.
+
+        Args:
+            row (numpy.ndarray(float)): Row vector with predicted values as floating points.
+
+        Returns:
+            numpy.ndarray(float): Row vector with the highest prediction set to 1.0 and the others set to 0.0.
+        """
+        res = np.zeros(row.shape[0])
+        res[np.argmax(row)] = 1
+        return res
+
+    @classmethod
+    def predict(cls, X, complete_encoded):
+        """Evaluate VAE predictions by calculating the highest predicted value.
+
+        Calucalates highest predicted value for each row vector and each class, setting the most likely class to 1.0.
+
+        Args:
+            X (numpy.ndarray): Input 012-encoded data.
+
+            complete_encoded (numpy.ndarray): Output one-hot encoded data with the maximum predicted values for each class set to 1.0.
+
+        Returns:
+            numpy.ndarray: Imputed one-hot encoded values.
+
+            pandas.DataFrame: One-hot encoded pandas DataFrame with no missing values.
+        """
+
+        df = cls.encode_categorical(X)
+
+        # Had to add dropna() to count unique classes while ignoring np.nan
+        col_classes = [len(df[c].dropna().unique()) for c in df.columns]
+        df_dummies = pd.get_dummies(df)
+        mle_complete = None
+        for i, cnt in enumerate(col_classes):
+            start_idx = int(sum(col_classes[0:i]))
+            col_completed = complete_encoded[:, start_idx : start_idx + cnt]
+            mle_completed = np.apply_along_axis(
+                cls.mle, axis=1, arr=col_completed
+            )
+
+            if mle_complete is None:
+                mle_complete = mle_completed
+
+            else:
+                mle_complete = np.hstack([mle_complete, mle_completed])
+        return mle_complete, df_dummies
 
     def validate_hidden_layers(self, hidden_layer_sizes, num_hidden_layers):
         """Validate hidden_layer_sizes and verify that it is in the correct format.
@@ -106,9 +219,7 @@ class NeuralNetworkMethods:
         # Get reduced-dimension dataset.
         return np.random.normal(loc=w_mean, scale=w_stddev, size=(dim1, dim2))
 
-    def validate_model_inputs(
-        self, y, y_test, missing_mask, missing_mask_test, output_shape
-    ):
+    def validate_model_inputs(self, y, missing_mask, output_shape):
         """Validate inputs to Keras subclass model.
 
         Args:
@@ -129,14 +240,8 @@ class NeuralNetworkMethods:
         if y is None:
             raise TypeError("y must not be NoneType.")
 
-        if y_test is None:
-            raise TypeError("y_test must not be NoneType")
-
         if missing_mask is None:
             raise TypeError("missing_mask must not be NoneType.")
-
-        if missing_mask_test is None:
-            raise TypeError("missing_mask_test must not be NoneType.")
 
         if output_shape is None:
             raise TypeError("output_shape must not be NoneType.")
@@ -276,6 +381,20 @@ class NeuralNetworkMethods:
             y_true=y_true_observed, y_pred=pred_observed
         )
 
+    def val_loss(self, input_and_mask, y_pred):
+        """Custom loss function for neural network model test dataset with missing mask.
+
+        Ignores missing data in the calculation of the loss function.
+
+        Args:
+            input_and_mask (numpy.ndarray): Input one-hot encoded array with missing values also one-hot encoded and h-stacked.
+
+            y_pred (numpy.ndarray): Predicted values.
+
+        Returns:
+            float: Mean squared error loss value with missing data masked.
+        """
+
     def make_acc(self):
         """Make loss function for use with a keras model.
 
@@ -413,8 +532,8 @@ class NeuralNetworkMethods:
         else:
             # No grid search. Optimizer params are initialized.
             optimizer = opt(learning_rate=learning_rate)
-            loss = self.make_reconstruction_loss()
-            metrics = [self.make_acc()]
+            loss = self.custom_loss
+            metrics = [self.accuracy]
 
         return {
             "optimizer": optimizer,
