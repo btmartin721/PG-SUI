@@ -75,6 +75,7 @@ try:
         ImputeAlleleFreqTransformer,
         ImputeNMFTransformer,
         SimGenotypeDataTransformer,
+        TargetTransformer,
     )
 except (ModuleNotFoundError, ValueError):
     from read_input.read_input import GenotypeData
@@ -93,6 +94,7 @@ except (ModuleNotFoundError, ValueError):
         ImputeAlleleFreqTransformer,
         ImputeNMFTransformer,
         SimGenotypeDataTransformer,
+        TargetTransformer,
     )
 
 
@@ -1066,10 +1068,10 @@ class UBP(BaseEstimator, TransformerMixin):
         # X is the randomly initialized model input (V)
         # V is initialized with small, random values.
         # y is the actual input data.
-        nnit = NNInputTransformer()
-        y_train = nnit.fit_transform(self.y_simulated_)
-        missing_mask = nnit.missing_mask_
-        observed_mask = nnit.observed_mask_
+        self.tt_ = TargetTransformer()
+        y_train = self.tt_.fit_transform(self.y_simulated_)
+        missing_mask_ohe = self.tt_.missing_mask_
+        observed_mask_ohe = self.tt_.observed_mask_
 
         # testresults = pd.read_csv("testcvresults.csv")
         # nn.plot_grid_search(testresults)
@@ -1085,7 +1087,7 @@ class UBP(BaseEstimator, TransformerMixin):
             model_params,
             fit_params,
         ) = self._initialize_parameters(
-            V, self.y_simulated_, y_train, missing_mask, nn
+            V, self.y_simulated_, y_train, missing_mask_ohe, nn
         )
 
         if self.nlpca:
@@ -1279,7 +1281,7 @@ class UBP(BaseEstimator, TransformerMixin):
                         NLPCAModel, model_params, compile_params, perms
                     )
 
-                    clf.fit(V, y_train, **fit_params)
+                    history = clf.fit(V, y_train, **fit_params)
 
                     # clf = MLPClassifier(
                     #     **model_params,
@@ -1301,12 +1303,12 @@ class UBP(BaseEstimator, TransformerMixin):
 
                     # clf.fit(V, y_train)
 
-                    y_true = self.y_simulated_
-                    y_pred_proba = clf.predict(clf.V_latent)
+                    y_true = self.y_original_
+                    y_pred = self.tt_.inverse_transform(clf.y.copy())
 
                     scores.append(
                         self.search_predict_score(
-                            y_true, y_pred_proba, self.sim_missing_mask_
+                            y_true, y_pred, self.sim_missing_mask_
                         )
                     )
 
@@ -1480,21 +1482,11 @@ class UBP(BaseEstimator, TransformerMixin):
 
         return models, histories
 
-    def search_predict_score(self, y_true, y_pred_proba, missing_mask):
-        nn = NeuralNetworkMethods()
-        imputed_enc, dummy_df = nn.predict(self.y_simulated_, y_pred_proba)
-
-        y_pred_df = nn.decode_onehot(
-            pd.DataFrame(data=imputed_enc, columns=dummy_df.columns)
-        )
-
-        y_true = y_true.astype("int8").ravel()
-        y_pred = y_pred_df.to_numpy().astype("int8").ravel()
-        missing_mask = missing_mask.ravel()
-
+    def search_predict_score(self, y_true, y_pred, missing_mask):
         print(y_true)
-        print(np.unique(y_pred))
-
+        print(y_pred)
+        print(y_true[missing_mask])
+        print(y_pred[missing_mask])
         acc = accuracy_score(y_true[missing_mask], y_pred[missing_mask])
         print(acc)
         sys.exit()
