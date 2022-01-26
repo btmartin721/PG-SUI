@@ -1,3 +1,4 @@
+import logging
 import os
 import sys
 
@@ -6,6 +7,10 @@ os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # or any {'0', '1', '2', '3'}
 import numpy as np
 import pandas as pd
 import tensorflow as tf
+
+tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
+tf.get_logger().setLevel(logging.ERROR)
+
 from tensorflow.keras.layers import Dropout, Dense, Lambda
 from tensorflow.keras.regularizers import l1_l2
 

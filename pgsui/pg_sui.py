@@ -342,7 +342,7 @@ def main():
         validation_split=0.0,
         learning_rate=0.01,
         num_hidden_layers=1,
-        verbose=1,
+        verbose=0,
         dropout_rate=0.2,
         hidden_activation="elu",
         batch_size=32,

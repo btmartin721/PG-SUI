@@ -1,4 +1,5 @@
 # Standard Library Imports
+import logging
 import math
 import os
 import pprint
@@ -41,6 +42,10 @@ os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # or any {'0', '1', '2', '3'}
 
 # Neural network imports
 import tensorflow as tf
+
+tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
+tf.get_logger().setLevel(logging.ERROR)
+
 from tensorflow.python.util import deprecation
 from tensorflow.keras.callbacks import (
     EarlyStopping,
@@ -1228,17 +1233,17 @@ class UBP(BaseEstimator, TransformerMixin):
                 cv_results.to_csv("testcvresults.csv", index=False)
 
             else:
+                # Get all possible permutations for grid search.
                 grid = list(ParameterGrid(self.gridparams))
                 total_tests = len(grid)
-
-                print(compile_params)
-                print(grid)
+                optimizer_callable = compile_params["optimizer"]
 
                 scores = list()
                 for i, perms in enumerate(grid, start=1):
                     if self.verbose > 0:
                         print(
-                            f"\nGrid search permutation {i} / {total_tests} {(i / total_tests) * 100}\n"
+                            f"\nGrid search permutation {i} / {total_tests} "
+                            f"({(i / total_tests) * 100})%\n"
                         )
 
                     perm_searched = {
@@ -1248,39 +1253,64 @@ class UBP(BaseEstimator, TransformerMixin):
                     }
 
                     if "optimizer__learning_rate" in perms:
-                        compile_params["learning_rate"] = perms[
-                            "optimizer__learning_rate"
-                        ]
+                        if "optimizer" in perms:
+                            compile_params["optimizer"] = perms["optimizer"](
+                                learning_rate=perms["optimizer__learning_rate"]
+                            )
+                        else:
+                            compile_params["optimizer"] = compile_params[
+                                "optimizer"
+                            ](learning_rate=perms["optimizer__learning_rate"])
+
                         perms.pop("optimizer__learning_rate")
 
-                    clf = MLPClassifier(
-                        **model_params,
-                        **perms,
-                        optimizer=compile_params["optimizer"],
-                        optimizer__learning_rate=compile_params[
-                            "learning_rate"
-                        ],
-                        loss=compile_params["loss"],
-                        metrics=compile_params["metrics"],
-                        epochs=fit_params["epochs"],
-                        phase=None,
-                        callbacks=fit_params["callbacks"],
-                        validation_split=fit_params["validation_split"],
-                        verbose=0,
-                        # score__y_orig=self.y_original_,
-                        # score__missing_mask=self.sim_missing_mask_,
+                    if "epochs" in perms:
+                        fit_params["epochs"] = perms.pop("epochs")
+
+                    if "batch_size" in perms:
+                        fit_params["batch_size"] = perms.pop("batch_size")
+
+                    if "y_decoded" in model_params:
+                        model_params.pop("y_decoded")
+                    if "learning_rate" in compile_params:
+                        compile_params.pop("learning_rate")
+
+                    clf = self._create_model(
+                        NLPCAModel, model_params, compile_params, perms
                     )
 
-                    clf.fit(V, y_train)
+                    clf.fit(V, y_train, **fit_params)
 
-                    y_true = self.y_original_
-                    y_pred = clf.model_.y
+                    # clf = MLPClassifier(
+                    #     **model_params,
+                    #     **perms,
+                    #     optimizer=compile_params["optimizer"],
+                    #     optimizer__learning_rate=compile_params[
+                    #         "learning_rate"
+                    #     ],
+                    #     loss=compile_params["loss"],
+                    #     metrics=compile_params["metrics"],
+                    #     epochs=fit_params["epochs"],
+                    #     phase=None,
+                    #     callbacks=fit_params["callbacks"],
+                    #     validation_split=fit_params["validation_split"],
+                    #     verbose=0,
+                    #     # score__y_orig=self.y_original_,
+                    #     # score__missing_mask=self.sim_missing_mask_,
+                    # )
+
+                    # clf.fit(V, y_train)
+
+                    y_true = self.y_simulated_
+                    y_pred_proba = clf.predict(clf.V_latent)
 
                     scores.append(
                         self.search_predict_score(
-                            y_true, y_pred, self.sim_missing_mask_
+                            y_true, y_pred_proba, self.sim_missing_mask_
                         )
                     )
+
+                    compile_params["optimizer"] = optimizer_callable
 
                 best_index = np.argmax(scores)
                 best_score = scores[best_index]
@@ -1450,9 +1480,8 @@ class UBP(BaseEstimator, TransformerMixin):
 
         return models, histories
 
-    def search_predict_score(self, y_true, y_pred, missing_mask):
+    def search_predict_score(self, y_true, y_pred_proba, missing_mask):
         nn = NeuralNetworkMethods()
-        y_pred_proba = y_true
         imputed_enc, dummy_df = nn.predict(self.y_simulated_, y_pred_proba)
 
         y_pred_df = nn.decode_onehot(
@@ -1463,8 +1492,12 @@ class UBP(BaseEstimator, TransformerMixin):
         y_pred = y_pred_df.to_numpy().astype("int8").ravel()
         missing_mask = missing_mask.ravel()
 
+        print(y_true)
+        print(np.unique(y_pred))
+
         acc = accuracy_score(y_true[missing_mask], y_pred[missing_mask])
         print(acc)
+        sys.exit()
         return acc
 
     def _initialize_parameters(self, V, y, y_train, missing_mask, nn):
@@ -1572,6 +1605,8 @@ class UBP(BaseEstimator, TransformerMixin):
         estimator,
         model_kwargs,
         compile_kwargs,
+        permutation_kwargs,
+        build=False,
     ):
         """Create a neural network model using the estimator to initialize.
         Model will be initialized, compiled, and built if ``build=True``\.
@@ -1584,7 +1619,7 @@ class UBP(BaseEstimator, TransformerMixin):
         Returns:
             tf.keras.Model: Instantiated, compiled, and optionally built model.
         """
-        model = estimator(**model_kwargs)
+        model = estimator(**model_kwargs, **permutation_kwargs)
 
         if build:
             model.build((None, model_kwargs["n_components"]))
