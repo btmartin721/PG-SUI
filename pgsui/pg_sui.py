@@ -345,7 +345,7 @@ def main():
         verbose=0,
         dropout_rate=0.2,
         hidden_activation="elu",
-        batch_size=32,
+        batch_size=64,
         l1_penalty=0.000001,
         l2_penalty=0.000001,
         gridparams=grid_params,

@@ -20,6 +20,9 @@ import toytree as tt
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.impute import SimpleImputer
 
+import tensorflow as tf
+from tensorflow.keras.utils import to_categorical
+
 # Custom Modules
 try:
     from ..read_input.read_input import GenotypeData
@@ -53,24 +56,43 @@ else:
 warnings.simplefilter(action="ignore", category=pd.errors.PerformanceWarning)
 
 
+# def encode_onehot(X):
+#     """Convert 012-encoded data to one-hot encodings.
+
+#     Args:
+#         X (numpy.ndarray): Input array with 012-encoded data and -9 as the missing data value.
+
+#     Returns:
+#         pandas.DataFrame: One-hot encoded data, ignoring missing values (np.nan).
+#     """
+
+#     df = encode_categorical(X)
+#     df_incomplete = df.copy()
+#     missing_encoded = pd.get_dummies(df_incomplete)
+
+#     for col in df.columns:
+#         missing_cols = missing_encoded.columns.str.startswith(str(col) + "_")
+#         missing_encoded.loc[df_incomplete[col].isnull(), missing_cols] = np.nan
+#     return missing_encoded
+
+
 def encode_onehot(X):
     """Convert 012-encoded data to one-hot encodings.
-
     Args:
         X (numpy.ndarray): Input array with 012-encoded data and -9 as the missing data value.
-
     Returns:
         pandas.DataFrame: One-hot encoded data, ignoring missing values (np.nan).
     """
-
-    df = encode_categorical(X)
-    df_incomplete = df.copy()
-    missing_encoded = pd.get_dummies(df_incomplete)
-
-    for col in df.columns:
-        missing_cols = missing_encoded.columns.str.startswith(str(col) + "_")
-        missing_encoded.loc[df_incomplete[col].isnull(), missing_cols] = np.nan
-    return missing_encoded
+    Xt = np.zeros(shape=(X.shape[0], X.shape[1], 3))
+    mappings = {
+        0: np.array([1, 0, 0]),
+        1: np.array([0, 1, 0]),
+        2: np.array([0, 0, 1]),
+        -9: np.array([np.nan, np.nan, np.nan]),
+    }
+    for row in np.arange(X.shape[0]):
+        Xt[row] = [mappings[enc] for enc in X[row]]
+    return Xt
 
 
 def encode_categorical(X):
@@ -101,6 +123,15 @@ def encode_categorical(X):
 def decode_onehot(df_dummies):
     """Decode one-hot format to 012-encoded genotypes.
 
+    One-hot encoded values (df_dummies) are formatted as:
+
+    0_0 0_1 0_2 1_0 1_1 1_2 2_0 2_1 ...
+    0.0 1.0 0.0 1.0 0.0 0.0 1.0 0.0 ...
+    0.0 1.0 0.0 0.0 1.0 0.0 1.0 0.0 ...
+    1.0 0.0 0.0 0.0 0.0 1.0 0.0 1.0 ...
+
+    with the prefix (before "_") being the column number and the suffix (after "_") being the decoded value. The values with the underscores will be the column names of the pandas DataFrame.
+
     Args:
         df_dummies (pandas.DataFrame): One-hot encoded imputed data.
 
@@ -111,9 +142,12 @@ def decode_onehot(df_dummies):
     vals = defaultdict(list)
 
     for i, c in enumerate(df_dummies.columns):
-        print(df_dummies[c])
-        if i == 15:
-            sys.exit()
+        # Get all columns that contain "_" and append each site to a dictionary
+        # of lists with the site number as the keys.
+        # pos is a dictionary of lists with the site position as key and the
+        # indexes for that site position (e.g., 0, 1, or 2) as the values. If a
+        # site only has e.g., 0 and 2, then it will only be of length 2.
+        # The values of vals are the actual one-hot values (0.0 or 1.0).
         if "_" in c:
             k, v = c.split("_", 1)
             pos[k].append(i)
@@ -122,6 +156,11 @@ def decode_onehot(df_dummies):
         else:
             pos["_"].append(i)
 
+    # Decode the one-hot values.
+    # np.argmax gets the index with the highest value (1.0).
+    # Will be 0, 1, or 2.
+    # So if vals[k] is 1.0 for a genotype of 2, then the index returned by
+    # np.argmax will be 2.
     df = pd.DataFrame(
         {
             k: pd.Categorical.from_codes(
@@ -365,9 +404,11 @@ class TargetTransformer(BaseEstimator, TransformerMixin):
         # Original 012-encoded y
         self.y_decoded_ = y
 
+        y_train = encode_onehot(y)
+
         # One-hot encode y
-        df = encode_onehot(y)
-        y_train = df.copy().values
+        # df = encode_onehot(y)
+        # y_train = df.copy().values
 
         # Get missing and observed data boolean masks.
         self.missing_mask_, self.observed_mask_ = self._get_masks(y_train)
@@ -389,8 +430,8 @@ class TargetTransformer(BaseEstimator, TransformerMixin):
             numpy.ndarray: y_true target data.
         """
         y = misc.validate_input_type(y, return_type="array")
-        df = encode_onehot(y)
-        y_train = df.copy().values
+        y_train = encode_onehot(y)
+        # y_train = df.copy().values
         return self._fill(y_train, self.missing_mask_)
 
     def inverse_transform(self, y):
@@ -404,22 +445,25 @@ class TargetTransformer(BaseEstimator, TransformerMixin):
         Returns:
             numpy.ndarray: y predictions in same format as y_true.
         """
-        y_pred_proba = y  # Rename for clarity, Keras gives probabilities.
-        imputed_enc, dummy_df = self._predict(self.y_decoded_, y_pred_proba)
+        y_pred_proba = y  # For clarity's sake. Keras outputs probabilities.
+        return self._decode(y_pred_proba)
 
-        y_pred = (
-            (
-                decode_onehot(
-                    pd.DataFrame(data=imputed_enc, columns=dummy_df.columns)
-                )
-            )
-            .astype("int8")
-            .to_numpy()
-        )
+    # def _fill(self, data, missing_mask, missing_value=-9, num_classes=1):
+    #     """Mask missing data as ``missing_value``.
 
-        return y_pred
+    #     Args:
+    #         data (numpy.ndarray): Input with missing values of shape (n_samples, n_features, num_classes).
 
-    def _fill(self, data, missing_mask, missing_value=-1, num_classes=1):
+    #         missing_mask (np.ndarray(bool)): Missing data mask with True corresponding to a missing value.
+
+    #         missing_value (int): Value to set missing data to. If a list is provided, then its length should equal the number of one-hot classes.
+    #     """
+    #     if num_classes > 1:
+    #         missing_value = [missing_value] * num_classes
+    #     data[missing_mask] = missing_value
+    #     return data
+
+    def _fill(self, data, missing_mask, missing_value=-1, num_classes=3):
         """Mask missing data as ``missing_value``.
 
         Args:
@@ -449,49 +493,196 @@ class TargetTransformer(BaseEstimator, TransformerMixin):
         observed_mask = ~missing_mask
         return missing_mask, observed_mask
 
+    # def _create_missing_mask(self, data):
+    #     """Creates a missing data mask with boolean values.
+
+    #     Returns:
+    #         numpy.ndarray(bool): Boolean mask of missing values, with True corresponding to a missing data point.
+    #     """
+    #     if data.dtype != "f" and data.dtype != "d":
+    #         data = data.astype(float)
+    #     return np.isnan(data)
     def _create_missing_mask(self, data):
         """Creates a missing data mask with boolean values.
-
+        Args:
+            data (numpy.ndarray): Data to generate missing mask from, of shape (n_samples, n_features, n_classes).
         Returns:
-            numpy.ndarray(bool): Boolean mask of missing values, with True corresponding to a missing data point.
+            numpy.ndarray(bool): Boolean mask of missing values of shape (n_samples, n_features), with True corresponding to a missing data point.
         """
-        if data.dtype != "f" and data.dtype != "d":
-            data = data.astype(float)
-        return np.isnan(data)
+        return np.isnan(data).all(axis=2)
 
-    def _predict(self, X, complete_encoded):
+    def _decode(self, y):
         """Evaluate VAE predictions by calculating the highest predicted value.
 
         Calucalates highest predicted value for each row vector and each class, setting the most likely class to 1.0.
 
         Args:
-            X (numpy.ndarray): Input one-hot encoded data.
-
-            complete_encoded (numpy.ndarray): Output one-hot encoded data with the maximum predicted values for each class set to 1.0.
+            y (numpy.ndarray): Input one-hot encoded data.
 
         Returns:
             numpy.ndarray: Imputed one-hot encoded values.
 
             pandas.DataFrame: One-hot encoded pandas DataFrame with no missing values.
         """
+        Xprob = y
+        Xt = np.apply_along_axis(mle, axis=2, arr=Xprob)
+        Xpred = np.argmax(Xt, axis=2)
+        Xtrue = np.argmax(y, axis=2)
+        Xdecoded = np.zeros((Xpred.shape[0], Xpred.shape[1]))
+        for idx, row in enumerate(Xdecoded):
+            imputed_vals = np.zeros(len(row))
+            known_vals = np.zeros(len(row))
+            imputed_idx = np.where(self.observed_mask_[idx] == 0)
+            known_idx = np.nonzero(self.observed_mask_[idx])
+            Xdecoded[idx, imputed_idx] = Xpred[idx, imputed_idx]
+            Xdecoded[idx, known_idx] = Xtrue[idx, known_idx]
+        return Xdecoded.astype("int8")
 
-        df = encode_categorical(X)
 
-        # Had to add dropna() to count unique classes while ignoring np.nan
-        col_classes = [len(df[c].dropna().unique()) for c in df.columns]
-        df_dummies = pd.get_dummies(df)
-        mle_complete = None
-        for i, cnt in enumerate(col_classes):
-            start_idx = int(sum(col_classes[0:i]))
-            col_completed = complete_encoded[:, start_idx : start_idx + cnt]
-            mle_completed = np.apply_along_axis(mle, axis=1, arr=col_completed)
+# class TargetTransformer(BaseEstimator, TransformerMixin):
+#     """Transformer to format target data both before and after model fitting."""
 
-            if mle_complete is None:
-                mle_complete = mle_completed
+#     def fit(self, y):
+#         """Fit 012-encoded target data.
 
-            else:
-                mle_complete = np.hstack([mle_complete, mle_completed])
-        return mle_complete, df_dummies
+#         Args:
+#             y (numpy.ndarray): Target data that is 012-encoded.
+
+#         Returns:
+#             self: Class instance.
+#         """
+#         y = misc.validate_input_type(y, return_type="array")
+
+#         # Original 012-encoded y
+#         self.y_decoded_ = y
+
+#         # One-hot encode y
+#         df = encode_onehot(y)
+#         y_train = df.copy().values
+
+#         # Get missing and observed data boolean masks.
+#         self.missing_mask_, self.observed_mask_ = self._get_masks(y_train)
+
+#         # To accomodate multiclass-multioutput.
+#         self.n_outputs_expected_ = 1
+
+#         return self
+
+#     def transform(self, y):
+#         """Transform y_true to one-hot encoded.
+
+#         Accomodates multiclass-multioutput targets.
+
+#         Args:
+#             y (numpy.ndarray): One-hot encoded target data.
+
+#         Returns:
+#             numpy.ndarray: y_true target data.
+#         """
+#         y = misc.validate_input_type(y, return_type="array")
+#         df = encode_onehot(y)
+#         y_train = df.copy().values
+#         return self._fill(y_train, self.missing_mask_)
+
+#     def inverse_transform(self, y):
+#         """Decode y_pred from one-hot to 012-based encoding.
+
+#         This allows sklearn.metrics to be used.
+
+#         Args:
+#             y (numpy.ndarray): One-hot encoded predicted probabilities after model fitting.
+
+#         Returns:
+#             numpy.ndarray: y predictions in same format as y_true.
+#         """
+#         y_pred_proba = y  # Rename for clarity, Keras gives probabilities.
+#         imputed_enc, dummy_df = self._predict(self.y_decoded_, y_pred_proba)
+
+#         y_pred = (
+#             (
+#                 decode_onehot(
+#                     pd.DataFrame(data=imputed_enc, columns=dummy_df.columns)
+#                 )
+#             )
+#             .astype("int8")
+#             .to_numpy()
+#         )
+
+#         return y_pred
+
+#     def _fill(self, data, missing_mask, missing_value=-1, num_classes=1):
+#         """Mask missing data as ``missing_value``.
+
+#         Args:
+#             data (numpy.ndarray): Input with missing values of shape (n_samples, n_features, num_classes).
+
+#             missing_mask (np.ndarray(bool)): Missing data mask with True corresponding to a missing value.
+
+#             missing_value (int): Value to set missing data to. If a list is provided, then its length should equal the number of one-hot classes.
+#         """
+#         if num_classes > 1:
+#             missing_value = [missing_value] * num_classes
+#         data[missing_mask] = missing_value
+#         return data
+
+#     def _get_masks(self, X):
+#         """Format the provided target data for use with UBP/NLPCA.
+
+#         Args:
+#             y (numpy.ndarray(float)): Input data that will be used as the target.
+
+#         Returns:
+#             numpy.ndarray(float): Missing data mask, with missing values encoded as 1's and non-missing as 0's.
+
+#             numpy.ndarray(float): Observed data mask, with non-missing values encoded as 1's and missing values as 0's.
+#         """
+#         missing_mask = self._create_missing_mask(X)
+#         observed_mask = ~missing_mask
+#         return missing_mask, observed_mask
+
+#     def _create_missing_mask(self, data):
+#         """Creates a missing data mask with boolean values.
+
+#         Returns:
+#             numpy.ndarray(bool): Boolean mask of missing values, with True corresponding to a missing data point.
+#         """
+#         if data.dtype != "f" and data.dtype != "d":
+#             data = data.astype(float)
+#         return np.isnan(data)
+
+#     def _predict(self, X, complete_encoded):
+#         """Evaluate VAE predictions by calculating the highest predicted value.
+
+#         Calucalates highest predicted value for each row vector and each class, setting the most likely class to 1.0.
+
+#         Args:
+#             X (numpy.ndarray): Input one-hot encoded data.
+
+#             complete_encoded (numpy.ndarray): Output one-hot encoded data with the maximum predicted values for each class set to 1.0.
+
+#         Returns:
+#             numpy.ndarray: Imputed one-hot encoded values.
+
+#             pandas.DataFrame: One-hot encoded pandas DataFrame with no missing values.
+#         """
+
+#         df = encode_categorical(X)
+
+#         # Had to add dropna() to count unique classes while ignoring np.nan
+#         col_classes = [len(df[c].dropna().unique()) for c in df.columns]
+#         df_dummies = pd.get_dummies(df)
+#         mle_complete = None
+#         for i, cnt in enumerate(col_classes):
+#             start_idx = int(sum(col_classes[0:i]))
+#             col_completed = complete_encoded[:, start_idx : start_idx + cnt]
+#             mle_completed = np.apply_along_axis(mle, axis=1, arr=col_completed)
+
+#             if mle_complete is None:
+#                 mle_complete = mle_completed
+
+#             else:
+#                 mle_complete = np.hstack([mle_complete, mle_completed])
+#         return mle_complete, df_dummies
 
 
 class RandomizeMissingTransformer(BaseEstimator, TransformerMixin):

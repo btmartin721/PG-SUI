@@ -16,6 +16,10 @@ from matplotlib import pyplot as plt
 
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
+from sklearn.utils.class_weight import (
+    compute_class_weight,
+    compute_sample_weight,
+)
 
 # Grid search imports
 from sklearn.model_selection import StratifiedKFold, KFold
@@ -135,12 +139,16 @@ class UBPCallbacks(tf.keras.callbacks.Callback):
 
     def on_epoch_begin(self, epoch, logs=None):
         # Shuffle input and target at start of epoch.
-        input_with_mask = np.hstack([self.model.y, self.model.missing_mask])
-        n_samples = len(input_with_mask)
+        # input_with_mask = np.hstack([self.model.y, self.model.missing_mask])
+        # n_samples = len(input_with_mask)
+        y = self.model.y.copy()
+        sample_weight = self.model.sample_weight
+        n_samples = len(y)
         self.indices = np.arange(n_samples)
         np.random.shuffle(self.indices)
-        self.model.input_with_mask = input_with_mask[self.indices]
+        self.model.y = y[self.indices]
         self.model.V_latent = self.model.V_latent[self.indices]
+        self.model.sample_weight = sample_weight[self.indices]
 
     def on_train_batch_begin(self, batch, logs=None):
         self.model.batch_idx = batch
@@ -150,16 +158,20 @@ class UBPCallbacks(tf.keras.callbacks.Callback):
 
     def on_epoch_end(self, epoch, logs=None):
         # Unsort the row indices.
+        self.model.y = self.model.y[np.argsort(self.indices)]
         self.model.V_latent = self.model.V_latent[np.argsort(self.indices)]
+        self.model.sample_weight = self.model.sample_weight[
+            np.argsort(self.indices)
+        ]
 
-        y_pred = self.model.predict(self.model.V_latent)
-        y_true = self.model.y.copy()
-        mm = self.model.missing_mask
-        old_weight = 0.5
-        y_true[mm] *= old_weight
-        y_pred_missing = y_pred[mm]
-        y_true[mm] += 0.5 * y_pred_missing
-        self.model.y = y_true.copy()
+        # y_pred = self.model.predict(self.model.V_latent)
+        # y_true = self.model.y.copy()
+        # mm = self.model.missing_mask
+        # old_weight = 0.5
+        # y_true[mm] *= old_weight
+        # y_pred_missing = y_pred[mm]
+        # y_true[mm] += 0.5 * y_pred_missing
+        # self.model.y = y_true.copy()
 
 
 class UBPEarlyStopping(tf.keras.callbacks.Callback):
@@ -1021,7 +1033,7 @@ class UBP(BaseEstimator, TransformerMixin):
 
         # TODO: Make estimators compatible with variable number of classes.
         # E.g., with morphological data.
-        self.num_classes = 1
+        self.num_classes = 3
 
         # Grid search settings.
         self.ga = ga
@@ -1067,11 +1079,9 @@ class UBP(BaseEstimator, TransformerMixin):
         # In NLPCA and UBP, X and y are flipped.
         # X is the randomly initialized model input (V)
         # V is initialized with small, random values.
-        # y is the actual input data.
+        # y is the actual input data, one-hot encoded.
         self.tt_ = TargetTransformer()
         y_train = self.tt_.fit_transform(self.y_simulated_)
-        missing_mask_ohe = self.tt_.missing_mask_
-        observed_mask_ohe = self.tt_.observed_mask_
 
         # testresults = pd.read_csv("testcvresults.csv")
         # nn.plot_grid_search(testresults)
@@ -1087,7 +1097,7 @@ class UBP(BaseEstimator, TransformerMixin):
             model_params,
             fit_params,
         ) = self._initialize_parameters(
-            V, self.y_simulated_, y_train, missing_mask_ohe, nn
+            V, self.y_simulated_, y_train, self.all_missing_, nn
         )
 
         if self.nlpca:
@@ -1149,6 +1159,15 @@ class UBP(BaseEstimator, TransformerMixin):
         )
 
         return imputed_df.to_numpy()
+
+    def dict_mean(self, dict_list):
+        keys = list({k for d in dict_list for k in d.keys()})
+        mean_dict = {}
+        for key in keys:
+            mean_dict[key] = float(
+                sum(d[key] for d in dict_list if key in d)
+            ) / len(dict_list)
+        return mean_dict
 
     def _run_nlpca(
         self,
@@ -1240,6 +1259,38 @@ class UBP(BaseEstimator, TransformerMixin):
                 total_tests = len(grid)
                 optimizer_callable = compile_params["optimizer"]
 
+                y_true = self.y_original_
+
+                class_weights = list()
+                for i in np.arange(y_true.shape[1]):
+                    mm = ~self.original_missing_mask_[:, i]
+                    classes = np.unique(y_true[mm, i])
+                    cw = compute_class_weight(
+                        "balanced",
+                        classes=classes,
+                        y=y_true[mm, i],
+                    )
+                    class_weights.append({k: v for k, v in zip(classes, cw)})
+
+                mean_class_weights = self.dict_mean(list(class_weights[0:3]))
+
+                sample_weight = compute_sample_weight(class_weights, y_true)
+
+                if "sample_weight" not in model_params:
+                    model_params["sample_weight"] = sample_weight
+
+                nn = NeuralNetworkMethods()
+                tmp = nn.set_compile_params(
+                    self.optimizer,
+                    self.learning_rate,
+                    self.all_missing_,
+                    sample_weight=sample_weight,
+                )
+
+                compile_params["loss"] = tmp["loss"]
+                compile_params["weighted_metrics"] = tmp["metrics"]
+                compile_params.pop("metrics")
+
                 scores = list()
                 for i, perms in enumerate(grid, start=1):
                     if self.verbose > 0:
@@ -1281,7 +1332,14 @@ class UBP(BaseEstimator, TransformerMixin):
                         NLPCAModel, model_params, compile_params, perms
                     )
 
-                    history = clf.fit(V, y_train, **fit_params)
+                    history = clf.fit(
+                        V,
+                        y_train,
+                        sample_weight=sample_weight,
+                        **fit_params,
+                    )
+
+                    y_pred_proba = clf(V, training=False)
 
                     # clf = MLPClassifier(
                     #     **model_params,
@@ -1303,12 +1361,13 @@ class UBP(BaseEstimator, TransformerMixin):
 
                     # clf.fit(V, y_train)
 
-                    y_true = self.y_original_
-                    y_pred = self.tt_.inverse_transform(clf.y.copy())
+                    y_pred = self.tt_.inverse_transform(y_pred_proba)
 
                     scores.append(
-                        self.search_predict_score(
-                            y_true, y_pred, self.sim_missing_mask_
+                        self.scorer(
+                            y_true,
+                            y_pred,
+                            missing_mask=self.sim_missing_mask_,
                         )
                     )
 
@@ -1482,7 +1541,13 @@ class UBP(BaseEstimator, TransformerMixin):
 
         return models, histories
 
-    def search_predict_score(self, y_true, y_pred, missing_mask):
+    @staticmethod
+    def scorer(y_true, y_pred, **kwargs):
+        # Get missing mask if provided.
+        # Otherwise default is no missing values (array all False).
+        missing_mask = kwargs.get(
+            "missing_mask", np.zeros(y_true.shape, dtype=bool)
+        )
         print(y_true)
         print(y_pred)
         print(y_true[missing_mask])
@@ -1542,7 +1607,10 @@ class UBP(BaseEstimator, TransformerMixin):
         search_mode = False if self.gridparams is None else True
 
         compile_params = nn.set_compile_params(
-            self.optimizer, self.learning_rate, search_mode=search_mode
+            self.optimizer,
+            self.learning_rate,
+            self.all_missing_,
+            search_mode=search_mode,
         )
 
         if search_mode:

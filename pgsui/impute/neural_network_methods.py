@@ -305,14 +305,21 @@ class NeuralNetworkMethods:
             raise TypeError("output_shape must not be NoneType.")
 
     def prepare_training_batches(
-        self, V, y, batch_size, batch_idx, trainable, n_components
+        self,
+        V,
+        y,
+        batch_size,
+        batch_idx,
+        trainable,
+        n_components,
+        sample_weight,
     ):
         """Prepare training batches in the custom training loop.
 
         Args:
             V (numpy.ndarray): Input to batch subset and refine, of shape (n_samples, n_components).
 
-            y (numpy.ndarray): Target to use to refine input V. Has missing data mask horizontally concatenated (with np.hstack); shape (n_samples, n_features * 2).
+            y (numpy.ndarray): Target to use to refine input V. shape (n_samples, n_features).
 
             batch_size (int): Batch size to subset.
 
@@ -322,9 +329,12 @@ class NeuralNetworkMethods:
 
             n_components (int): Number of principal components used in V.
 
+            sample_weight (List[float] or None): List of floats of shape (n_samples,) with sample weights. sample_weight argument must be passed to fit().
+
         Returns:
             tf.Variable: Input tensor v with current batch assigned.
             numpy.ndarray: Current batch of arget data (actual input) used to refine v.
+            List[float]: Sample weights
             int: Batch starting index.
             int: Batch ending index.
         """
@@ -343,6 +353,9 @@ class NeuralNetworkMethods:
         # v_batch and y_true have to be overridden.
         y_true = y[batch_start:batch_end, :]
         v_batch = V[batch_start:batch_end, :]
+        sample_weight_batch = sample_weight[batch_start:batch_end]
+        print(sample_weight_batch)
+        print(sample_weight_batch.shape)
 
         v = tf.Variable(
             tf.zeros([batch_size, n_components]),
@@ -353,7 +366,7 @@ class NeuralNetworkMethods:
         # Assign current batch to tf.Variable v.
         v.assign(v_batch)
 
-        return v, y_true, batch_start, batch_end
+        return v, y_true, sample_weight_batch, batch_start, batch_end
 
     def reset_seeds(self):
         """Reset random seeds for initializing weights."""
@@ -409,35 +422,125 @@ class NeuralNetworkMethods:
 
         return reconstruction_loss
 
-    def custom_loss(self, input_and_mask, y_pred):
-        """Custom loss function for neural network model with missing mask.
-
-        Ignores missing data in the calculation of the loss function.
+    def make_masked_loss(
+        self, missing_mask, sample_weight=None, class_weight=None
+    ):
+        """Make loss function for use with a keras model.
 
         Args:
-            input_and_mask (numpy.ndarray): Input one-hot encoded array with missing values also one-hot encoded and h-stacked.
-
-            y_pred (numpy.ndarray): Predicted values.
+            missing_mask (numpy.ndarray): Boolean missing mask of shape (n_samples, n_features).
+            sample_weight (tensorflow.tensor or None, optional): Sample weights to multiply loss by.
 
         Returns:
-            float: Mean squared error loss value with missing data masked.
+            callable: Function that calculates loss.
         """
-        n_features = y_pred.numpy().shape[1]
 
-        true_indices = range(n_features)
-        missing_indices = range(n_features, n_features * 2)
+        def masked_loss(y_true, y_pred):
+            """Custom loss function for neural network model with missing mask.
 
-        # Split features and missing mask.
-        y_true = tf.gather(input_and_mask, true_indices, axis=1)
-        missing_mask = tf.gather(input_and_mask, missing_indices, axis=1)
+            Ignores missing data in the calculation of the loss function.
 
-        observed_mask = tf.subtract(1.0, missing_mask)
-        y_true_observed = tf.multiply(y_true, observed_mask)
-        pred_observed = tf.multiply(y_pred, observed_mask)
+            Args:
+                y_true (tensorflow.tensor): Input one-hot encoded 3D tensor.
+                y_pred (tensorflow.tensor): Predicted values.
 
-        return tf.keras.metrics.mean_squared_error(
-            y_true=y_true_observed, y_pred=pred_observed
-        )
+
+            Returns:
+                float: Mean squared error loss value with missing data masked.
+            """
+            y_true_masked = tf.boolean_mask(
+                y_true, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
+            )
+
+            y_pred_masked = tf.boolean_mask(
+                y_pred, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
+            )
+
+            loss_fn = tf.keras.losses.CategoricalCrossentropy()
+
+            if sample_weight is not None:
+                return loss_fn(y_true_masked, y_pred_masked) * sample_weight
+            else:
+                return loss_fn(y_true_masked, y_pred_masked)
+
+        return masked_loss
+
+    def make_masked_acc(
+        self, missing_mask, sample_weight=None, class_weight=None
+    ):
+        """Make accuracy function for use with a keras model.
+
+        Args:
+            missing_mask (numpy.ndarray): Boolean missing mask of shape (n_samples, n_features).
+            sample_weight (tensorflow.tensor or None, optional): Sample weights to multiply loss by.
+
+        Returns:
+            callable: Function that calculates loss.
+        """
+
+        def masked_acc(y_true, y_pred):
+            """Custom loss function for neural network model with missing mask.
+
+            Ignores missing data in the calculation of the loss function.
+
+            Args:
+                y_true (tensorflow.tensor): Input one-hot encoded 3D tensor.
+                y_pred (tensorflow.tensor): Predicted values.
+
+            Returns:
+                float: Mean squared error loss value with missing data masked.
+            """
+
+            y_true_masked = tf.boolean_mask(
+                y_true, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
+            )
+
+            y_pred_masked = tf.boolean_mask(
+                y_pred, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
+            )
+
+            metric = tf.keras.metrics.CategoricalAccuracy(
+                name="masked_accuracy"
+            )
+            metric.update_state(
+                y_true_observed,
+                pred_observed,
+                sample_weight=sample_weight,
+                class_weight=class_weight,
+            )
+            return metric.result()
+
+        return masked_acc
+
+    # def custom_loss(self, input_and_mask, y_pred):
+    #     """Custom loss function for neural network model with missing mask.
+
+    #     Ignores missing data in the calculation of the loss function.
+
+    #     Args:
+    #         input_and_mask (numpy.ndarray): Input one-hot encoded array with missing values also one-hot encoded and h-stacked.
+
+    #         y_pred (numpy.ndarray): Predicted values.
+
+    #     Returns:
+    #         float: Mean squared error loss value with missing data masked.
+    #     """
+    #     n_features = y_pred.numpy().shape[1]
+
+    #     true_indices = range(n_features)
+    #     missing_indices = range(n_features, n_features * 2)
+
+    #     # Split features and missing mask.
+    #     y_true = tf.gather(input_and_mask, true_indices, axis=1)
+    #     missing_mask = tf.gather(input_and_mask, missing_indices, axis=1)
+
+    #     observed_mask = tf.subtract(1.0, missing_mask)
+    #     y_true_observed = tf.multiply(y_true, observed_mask)
+    #     pred_observed = tf.multiply(y_pred, observed_mask)
+
+    #     return tf.keras.metrics.mean_squared_error(
+    #         y_true=y_true_observed, y_pred=pred_observed
+    #     )
 
     def val_loss(self, input_and_mask, y_pred):
         """Custom loss function for neural network model test dataset with missing mask.
@@ -556,7 +659,15 @@ class NeuralNetworkMethods:
                 batch_size //= 2
         return batch_size
 
-    def set_compile_params(self, optimizer, learning_rate, search_mode=False):
+    def set_compile_params(
+        self,
+        optimizer,
+        learning_rate,
+        missing_mask,
+        sample_weight=None,
+        class_weight=None,
+        search_mode=False,
+    ):
         """Set compile parameters to use.
 
         Returns:
@@ -585,13 +696,21 @@ class NeuralNetworkMethods:
         if search_mode:
             # Doing grid search. Params are callables.
             optimizer = opt
-            loss = self.custom_loss
-            metrics = [self.accuracy]
+            loss = self.make_masked_loss(
+                missing_mask, sample_weight, class_weight
+            )
+            metrics = [
+                self.make_masked_acc(missing_mask, sample_weight, class_weight)
+            ]
         else:
             # No grid search. Optimizer params are initialized.
             optimizer = opt(learning_rate=learning_rate)
-            loss = self.custom_loss
-            metrics = [self.accuracy]
+            loss = self.make_masked_loss(
+                missing_mask, sample_weight, class_weight
+            )
+            metrics = [
+                self.make_masked_acc(missing_mask, sample_weight, class_weight)
+            ]
 
         return {
             "optimizer": optimizer,

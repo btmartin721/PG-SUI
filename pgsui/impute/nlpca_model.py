@@ -101,8 +101,9 @@ class NLPCAModel(tf.keras.Model):
         l1_penalty=0.01,
         l2_penalty=0.01,
         dropout_rate=0.2,
-        num_classes=1,
+        num_classes=3,
         phase=None,
+        sample_weight=None,
     ):
         super(NLPCAModel, self).__init__()
 
@@ -132,6 +133,7 @@ class NLPCAModel(tf.keras.Model):
         self.weights_initializer = weights_initializer
         self.phase = phase
         self.dropout_rate = dropout_rate
+        self._sample_weight = sample_weight
 
         ### NOTE: I tried using just _V as the input to be refined, but it
         # wasn't getting updated. So I copy it here and it works.
@@ -207,12 +209,22 @@ class NLPCAModel(tf.keras.Model):
                 kernel_regularizer=kernel_regularizer,
             )
 
-        self.output1 = Dense(
+        self.dense6 = Dense(
             output_shape,
             kernel_initializer=kernel_initializer,
             kernel_regularizer=kernel_regularizer,
-            activation="sigmoid",
+            activation="relu",
         )
+
+        self.lmbda = Lambda(lambda x: tf.expand_dims(x, -1))
+
+        self.output1 = Dense(
+            num_classes,
+            kernel_initializer=kernel_initializer,
+            kernel_regularizer=kernel_regularizer,
+            activation="softmax",
+        )
+
         self.dropout_layer = Dropout(rate=dropout_rate)
 
     def call(self, inputs, training=None):
@@ -247,6 +259,12 @@ class NLPCAModel(tf.keras.Model):
             x = self.dense5(x)
             if training:
                 x = self.dropout_layer(x, training=training)
+
+        x = self.dense6(x)
+        if training:
+            x = self.dropout_layer(x, training=training)
+
+        x = self.lmbda(x)
         return self.output1(x)
 
     def model(self):
@@ -281,16 +299,28 @@ class NLPCAModel(tf.keras.Model):
         ToDo:
             Obtain batch_size without using run_eagerly option in compile(). This will allow the step to be run in graph mode, thereby speeding up computation.
         """
-        # Set in the UBPCallbacks() callback.
-        y = self.input_with_mask_
+        # if len(data) == 3:
+        #     _, __, self._sample_weight = data
+        # else:
+        #     sample_weight = None
 
-        v, y_true, batch_start, batch_end = self.nn.prepare_training_batches(
+        # Set in the UBPCallbacks() callback.
+        y = self._y
+
+        (
+            v,
+            y_true,
+            sample_weight,
+            batch_start,
+            batch_end,
+        ) = self.nn.prepare_training_batches(
             self.V_latent_,
             y,
             self._batch_size,
             self._batch_idx,
             True,
             self.n_components,
+            self._sample_weight,
         )
 
         src = [v]
@@ -306,6 +336,9 @@ class NLPCAModel(tf.keras.Model):
             loss = self.compiled_loss(
                 tf.convert_to_tensor(y_true, dtype=tf.float32),
                 y_pred,
+                sample_weight=tf.convert_to_tensor(
+                    sample_weight, dtype=tf.float32
+                ),
                 regularization_losses=self.losses,
             )
 
@@ -323,6 +356,7 @@ class NLPCAModel(tf.keras.Model):
         self.compiled_metrics.update_state(
             tf.convert_to_tensor(y_true, dtype=tf.float32),
             y_pred,
+            sample_weight=sample_weight,
         )
 
         # NOTE: run_eagerly must be set to True in the compile() method for this
@@ -347,7 +381,7 @@ class NLPCAModel(tf.keras.Model):
             A dict containing values that will be passed to ``tf.keras.callbacks.CallbackList.on_train_batch_end``. Typically, the values of the Model's metrics are returned.
         """
         # Unpack the data. Don't need V here. Just X (y_true).
-        y = self.input_with_mask_
+        y = self._y
 
         v, y_true, batch_start, batch_end = self.nn.prepare_training_batches(
             self.V_latent_,
@@ -407,6 +441,10 @@ class NLPCAModel(tf.keras.Model):
         return self._missing_mask
 
     @property
+    def sample_weight(self):
+        return self._sample_weight
+
+    @property
     def input_with_mask(self):
         return self.input_with_mask_
 
@@ -439,6 +477,10 @@ class NLPCAModel(tf.keras.Model):
     def missing_mask(self, value):
         """Set y after each epoch."""
         self._missing_mask = value
+
+    @sample_weight.setter
+    def sample_weight(self, value):
+        self._sample_weight = value
 
     @input_with_mask.setter
     def input_with_mask(self, value):
