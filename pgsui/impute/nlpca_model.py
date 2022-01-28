@@ -300,9 +300,12 @@ class NLPCAModel(tf.keras.Model):
             Obtain batch_size without using run_eagerly option in compile(). This will allow the step to be run in graph mode, thereby speeding up computation.
         """
         # if len(data) == 3:
-        #     _, __, self._sample_weight = data
+        #     _, __, test = data
         # else:
-        #     sample_weight = None
+        #     test = None
+
+        # print(test)
+        # sys.exit(0)
 
         # Set in the UBPCallbacks() callback.
         y = self._y
@@ -311,6 +314,7 @@ class NLPCAModel(tf.keras.Model):
             v,
             y_true,
             sample_weight,
+            missing_mask,
             batch_start,
             batch_end,
         ) = self.nn.prepare_training_batches(
@@ -321,9 +325,19 @@ class NLPCAModel(tf.keras.Model):
             True,
             self.n_components,
             self._sample_weight,
+            self._missing_mask,
         )
 
         src = [v]
+
+        sample_weight_masked = tf.convert_to_tensor(
+            sample_weight[~missing_mask], dtype=tf.float32
+        )
+
+        y_true_masked = tf.boolean_mask(
+            tf.convert_to_tensor(y_true, dtype=tf.float32),
+            tf.reduce_any(tf.not_equal(y_true, -1), axis=2),
+        )
 
         # NOTE: Earlier model architectures incorrectly
         # applied one gradient to all the variables, including
@@ -333,12 +347,13 @@ class NLPCAModel(tf.keras.Model):
             # Forward pass. Watch input tensor v.
             tape.watch(v)
             y_pred = self(v, training=True)
+            y_pred_masked = tf.boolean_mask(
+                y_pred, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
+            )
             loss = self.compiled_loss(
-                tf.convert_to_tensor(y_true, dtype=tf.float32),
-                y_pred,
-                sample_weight=tf.convert_to_tensor(
-                    sample_weight, dtype=tf.float32
-                ),
+                y_true_masked,
+                y_pred_masked,
+                sample_weight=sample_weight_masked,
                 regularization_losses=self.losses,
             )
 
@@ -354,9 +369,9 @@ class NLPCAModel(tf.keras.Model):
         del tape
 
         self.compiled_metrics.update_state(
-            tf.convert_to_tensor(y_true, dtype=tf.float32),
-            y_pred,
-            sample_weight=sample_weight,
+            y_true_masked,
+            y_pred_masked,
+            sample_weight=sample_weight_masked,
         )
 
         # NOTE: run_eagerly must be set to True in the compile() method for this

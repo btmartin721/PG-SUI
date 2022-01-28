@@ -313,6 +313,7 @@ class NeuralNetworkMethods:
         trainable,
         n_components,
         sample_weight,
+        missing_mask,
     ):
         """Prepare training batches in the custom training loop.
 
@@ -330,6 +331,8 @@ class NeuralNetworkMethods:
             n_components (int): Number of principal components used in V.
 
             sample_weight (List[float] or None): List of floats of shape (n_samples,) with sample weights. sample_weight argument must be passed to fit().
+
+            missing_mask (numpy.ndarray): Boolean array with True for missing values and False for observed values.
 
         Returns:
             tf.Variable: Input tensor v with current batch assigned.
@@ -353,9 +356,8 @@ class NeuralNetworkMethods:
         # v_batch and y_true have to be overridden.
         y_true = y[batch_start:batch_end, :]
         v_batch = V[batch_start:batch_end, :]
-        sample_weight_batch = sample_weight[batch_start:batch_end]
-        print(sample_weight_batch)
-        print(sample_weight_batch.shape)
+        missing_mask_batch = missing_mask[batch_start:batch_end, :]
+        sample_weight_batch = sample_weight[batch_start:batch_end, :]
 
         v = tf.Variable(
             tf.zeros([batch_size, n_components]),
@@ -366,7 +368,14 @@ class NeuralNetworkMethods:
         # Assign current batch to tf.Variable v.
         v.assign(v_batch)
 
-        return v, y_true, sample_weight_batch, batch_start, batch_end
+        return (
+            v,
+            y_true,
+            sample_weight_batch,
+            missing_mask_batch,
+            batch_start,
+            batch_end,
+        )
 
     def reset_seeds(self):
         """Reset random seeds for initializing weights."""
@@ -422,14 +431,11 @@ class NeuralNetworkMethods:
 
         return reconstruction_loss
 
-    def make_masked_loss(
-        self, missing_mask, sample_weight=None, class_weight=None
-    ):
+    def make_masked_loss(self, missing_mask):
         """Make loss function for use with a keras model.
 
         Args:
             missing_mask (numpy.ndarray): Boolean missing mask of shape (n_samples, n_features).
-            sample_weight (tensorflow.tensor or None, optional): Sample weights to multiply loss by.
 
         Returns:
             callable: Function that calculates loss.
@@ -444,30 +450,24 @@ class NeuralNetworkMethods:
                 y_true (tensorflow.tensor): Input one-hot encoded 3D tensor.
                 y_pred (tensorflow.tensor): Predicted values.
 
-
             Returns:
                 float: Mean squared error loss value with missing data masked.
             """
-            y_true_masked = tf.boolean_mask(
-                y_true, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
-            )
+            # y_true_masked = tf.boolean_mask(
+            #     y_true, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
+            # )
 
-            y_pred_masked = tf.boolean_mask(
-                y_pred, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
-            )
+            # y_pred_masked = tf.boolean_mask(
+            #     y_pred, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
+            # )
 
             loss_fn = tf.keras.losses.CategoricalCrossentropy()
 
-            if sample_weight is not None:
-                return loss_fn(y_true_masked, y_pred_masked) * sample_weight
-            else:
-                return loss_fn(y_true_masked, y_pred_masked)
+            return loss_fn(y_true_masked, y_pred_masked)
 
         return masked_loss
 
-    def make_masked_acc(
-        self, missing_mask, sample_weight=None, class_weight=None
-    ):
+    def make_masked_acc(self, missing_mask):
         """Make accuracy function for use with a keras model.
 
         Args:
@@ -505,8 +505,6 @@ class NeuralNetworkMethods:
             metric.update_state(
                 y_true_observed,
                 pred_observed,
-                sample_weight=sample_weight,
-                class_weight=class_weight,
             )
             return metric.result()
 
@@ -696,21 +694,17 @@ class NeuralNetworkMethods:
         if search_mode:
             # Doing grid search. Params are callables.
             optimizer = opt
-            loss = self.make_masked_loss(
-                missing_mask, sample_weight, class_weight
-            )
-            metrics = [
-                self.make_masked_acc(missing_mask, sample_weight, class_weight)
-            ]
+            loss = "categorical_crossentropy"
+            # loss = self.make_masked_loss(missing_mask)
+            metrics = ["categorical_accuracy"]
+            # metrics = [self.make_masked_acc(missing_mask)]
         else:
             # No grid search. Optimizer params are initialized.
             optimizer = opt(learning_rate=learning_rate)
-            loss = self.make_masked_loss(
-                missing_mask, sample_weight, class_weight
-            )
-            metrics = [
-                self.make_masked_acc(missing_mask, sample_weight, class_weight)
-            ]
+            loss = "categorical_crossentropy"
+            # loss = self.make_masked_loss(missing_mask)
+            metrics = ["categorical_accuracy"]
+            # metrics = [self.make_masked_acc(missing_mask)]
 
         return {
             "optimizer": optimizer,

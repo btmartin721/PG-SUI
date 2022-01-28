@@ -143,11 +143,13 @@ class UBPCallbacks(tf.keras.callbacks.Callback):
         # n_samples = len(input_with_mask)
         y = self.model.y.copy()
         sample_weight = self.model.sample_weight
+        missing_mask = self.model.missing_mask
         n_samples = len(y)
         self.indices = np.arange(n_samples)
         np.random.shuffle(self.indices)
         self.model.y = y[self.indices]
         self.model.V_latent = self.model.V_latent[self.indices]
+        self.model.missing_mask = missing_mask[self.indices]
         self.model.sample_weight = sample_weight[self.indices]
 
     def on_train_batch_begin(self, batch, logs=None):
@@ -158,11 +160,11 @@ class UBPCallbacks(tf.keras.callbacks.Callback):
 
     def on_epoch_end(self, epoch, logs=None):
         # Unsort the row indices.
-        self.model.y = self.model.y[np.argsort(self.indices)]
-        self.model.V_latent = self.model.V_latent[np.argsort(self.indices)]
-        self.model.sample_weight = self.model.sample_weight[
-            np.argsort(self.indices)
-        ]
+        unshuffled = np.argsort(self.indices)
+        self.model.y = self.model.y[unshuffled]
+        self.model.V_latent = self.model.V_latent[unshuffled]
+        self.model.missing_mask = self.model.missing_mask[unshuffled]
+        self.model.sample_weight = self.model.sample_weight[unshuffled]
 
         # y_pred = self.model.predict(self.model.V_latent)
         # y_true = self.model.y.copy()
@@ -1081,7 +1083,7 @@ class UBP(BaseEstimator, TransformerMixin):
         # V is initialized with small, random values.
         # y is the actual input data, one-hot encoded.
         self.tt_ = TargetTransformer()
-        y_train = self.tt_.fit_transform(self.y_simulated_)
+        y_train = self.tt_.fit_transform(self.y_original_)
 
         # testresults = pd.read_csv("testcvresults.csv")
         # nn.plot_grid_search(testresults)
@@ -1097,7 +1099,7 @@ class UBP(BaseEstimator, TransformerMixin):
             model_params,
             fit_params,
         ) = self._initialize_parameters(
-            V, self.y_simulated_, y_train, self.all_missing_, nn
+            V, self.y_simulated_, y_train, self.original_missing_mask_, nn
         )
 
         if self.nlpca:
@@ -1261,6 +1263,7 @@ class UBP(BaseEstimator, TransformerMixin):
 
                 y_true = self.y_original_
 
+                # Get class_weights per column.
                 class_weights = list()
                 for i in np.arange(y_true.shape[1]):
                     mm = ~self.original_missing_mask_[:, i]
@@ -1272,24 +1275,42 @@ class UBP(BaseEstimator, TransformerMixin):
                     )
                     class_weights.append({k: v for k, v in zip(classes, cw)})
 
-                mean_class_weights = self.dict_mean(list(class_weights[0:3]))
+                row_weights = compute_sample_weight(class_weights, y_true)
 
-                sample_weight = compute_sample_weight(class_weights, y_true)
+                # Make sample_weight_matrix from per-column class_weights.
+                sample_weight = np.zeros(y_true.shape)
+                for i, w in enumerate(class_weights):
+                    for j in range(3):
+                        if j in w:
+                            sample_weight[self.y_original_[:, i] == j, i] = w[j]
 
-                if "sample_weight" not in model_params:
-                    model_params["sample_weight"] = sample_weight
+                    print(
+                        f"{sample_weight[np.argmax(self.y_original_[:, i] == 1), i]}: {sample_weight[np.argmax(self.y_original_[:, i] == 2), i]}"
+                    )
 
-                nn = NeuralNetworkMethods()
-                tmp = nn.set_compile_params(
-                    self.optimizer,
-                    self.learning_rate,
-                    self.all_missing_,
-                    sample_weight=sample_weight,
-                )
+                # test = np.multiply(sample_weight, row_weights[:, np.newaxis])
+                # print(test)
+                # sys.exit()
+                # print(sample_weight[self.y_original_[:, i] == 2, i])
 
-                compile_params["loss"] = tmp["loss"]
-                compile_params["weighted_metrics"] = tmp["metrics"]
-                compile_params.pop("metrics")
+                # sample_weight[self.y_simulated_ == 0] += mean_class_weights[0]
+                # sample_weight[self.y_simulated_ == 1] += mean_class_weights[1]
+                # sample_weight[self.y_simulated_ == 2] += mean_class_weights[2]
+
+                # if "sample_weight" not in model_params:
+                model_params["sample_weight"] = sample_weight
+
+                # nn = NeuralNetworkMethods()
+                # tmp = nn.set_compile_params(
+                #     self.optimizer,
+                #     self.learning_rate,
+                #     self.original_missing_,
+                #     sample_weight=sample_weight,
+                # )
+
+                # compile_params["loss"] = tmp["loss"]
+                # compile_params["weighted_metrics"] = tmp["metrics"]
+                # compile_params.pop("metrics")
 
                 scores = list()
                 for i, perms in enumerate(grid, start=1):
@@ -1548,11 +1569,12 @@ class UBP(BaseEstimator, TransformerMixin):
         missing_mask = kwargs.get(
             "missing_mask", np.zeros(y_true.shape, dtype=bool)
         )
-        print(y_true)
-        print(y_pred)
+        # print(y_true)
+        # print(y_pred)
         print(y_true[missing_mask])
         print(y_pred[missing_mask])
         acc = accuracy_score(y_true[missing_mask], y_pred[missing_mask])
+
         print(acc)
         sys.exit()
         return acc
