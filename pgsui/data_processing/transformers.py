@@ -1985,6 +1985,8 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
 
             strategy (str, optional): Strategy for simulating missing data. May be one of: \"nonrandom\", \"nonrandom_weighted\", or \"random\". When set to \"nonrandom\", branches from GenotypeData.guidetree will be randomly sampled to generate missing data on descendant nodes. For \"nonrandom_weighted\", missing data will be placed on nodes proportionally to their branch lengths (e.g., to generate data distributed as might be the case with mutation-disruption of RAD sites). Defaults to \"random\"
 
+            missing_val (int, optional): Value that represents missing data. Defaults to -9.
+
             subset (float): Proportion of sites to randomly subset from the input data. Defaults to 1.0 (i.e., all data retained)
 
             verbose (bool, optional): Verbosity level. Defaults to 0.
@@ -2012,6 +2014,7 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
         *,
         prop_missing=0.1,
         strategy="random",
+        missing_val=-9,
         subset=1.0,
         verbose=0,
         tol=None,
@@ -2020,6 +2023,7 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
         self.genotype_data = genotype_data
         self.prop_missing = prop_missing
         self.strategy = strategy
+        self.missing_val = missing_val
         self.subset = subset
         self.verbose = verbose
         self.tol = tol
@@ -2038,7 +2042,7 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
 
             ValueError: Invalid ``strategy`` parameter provided.
         """
-        X = misc.validate_input_type(X, return_type="array")
+        X = misc.validate_input_type(X, return_type="array").astype("float32")
 
         if self.verbose > 0:
             print(
@@ -2046,13 +2050,31 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
                 f"using strategy: {self.strategy}"
             )
 
+        if np.all(np.isnan(np.array([self.missing_val])) == False):
+            X[X == self.missing_val] = np.nan
+
+        self.original_missing_mask_ = np.isnan(X)
+
         if self.strategy == "random":
+            weights = ~self.original_missing_mask_ + 0  # Assign False=0, True=1
+            normalized = weights.ravel() / float(weights.sum())
+
+            Xobs = np.where(~self.original_missing_mask_.ravel())[0]
+            Xmiss = np.where(self.original_missing_mask_.ravel())[0]
+
             # Generate mask of 0's and 1's.
-            self.mask_ = np.random.choice(
+            obs_mask = np.random.choice(
                 [0, 1],
-                size=X.shape,
+                size=Xobs.size,
                 p=((1 - self.prop_missing), self.prop_missing),
             ).astype(np.bool)
+
+            self.mask_ = np.zeros(X.size)
+
+            self.mask_[Xobs] = obs_mask
+            self.mask_[Xmiss] = 1
+
+            self.mask_ = np.reshape(self.mask_, X.shape)
 
             # Make sure no entirely missing columns were simulated.
             self._validate_mask()
