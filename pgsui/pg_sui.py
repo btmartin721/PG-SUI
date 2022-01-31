@@ -311,9 +311,9 @@ def main():
     # print(vae_data.genotypes012_df)
 
     # For randomizedsearchcv. Generate parameters to sample from.
-    learning_rate = [float(10) ** x for x in np.arange(-3, -1)]
-    l1_penalty = [float(10) ** x for x in np.arange(-3, -1)]
-    l2_penalty = [float(10) ** x for x in np.arange(-3, -1)]
+    learning_rate = [float(10) ** x for x in np.arange(-6, -1)]
+    l1_penalty = [float(10) ** x for x in np.arange(-6, -1)]
+    l2_penalty = [float(10) ** x for x in np.arange(-6, -1)]
     hidden_activation = ["elu", "relu"]
     num_hidden_layers = [1, 2, 3, 4, 5]
     hidden_layer_sizes = ["sqrt", "midpoint"]
@@ -338,21 +338,21 @@ def main():
         # gridparams=grid_params,
         disable_progressbar=True,
         cv=3,
-        column_subset=0.3,
+        column_subset=1.0,
         validation_split=0.0,
         learning_rate=0.01,
         num_hidden_layers=1,
-        verbose=0,
+        verbose=1,
         dropout_rate=0.2,
         hidden_activation="elu",
         batch_size=64,
         l1_penalty=0.000001,
         l2_penalty=0.000001,
-        gridparams=grid_params,
+        # gridparams=grid_params,
         n_jobs=4,
         grid_iter=5,
-        sim_strategy="nonrandom",
-        sim_prop_missing=0.2,
+        sim_strategy="random",
+        sim_prop_missing=0.4,
     )
 
     # ubp = ImputeVAE(

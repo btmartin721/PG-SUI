@@ -711,6 +711,7 @@ class NeuralNetworkMethods:
             "loss": loss,
             "metrics": metrics,
             "run_eagerly": True,
+            "sample_weight_mode": "temporal",
         }
 
     @staticmethod
