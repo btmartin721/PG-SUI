@@ -351,7 +351,7 @@ def main():
         # gridparams=grid_params,
         n_jobs=4,
         grid_iter=5,
-        sim_strategy="random",
+        sim_strategy="nonrandom_weighted",
         sim_prop_missing=0.4,
     )
 

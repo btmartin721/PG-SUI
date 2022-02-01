@@ -1068,17 +1068,18 @@ class UBP(BaseEstimator, TransformerMixin):
         self.nn_ = nn
 
         # Simulate missing data and get missing masks.
-        (
-            self.y_simulated_,
-            self.original_missing_mask_,
-            self.sim_missing_mask_,
-            self.all_missing_,
-        ) = nn.simulate_missing(
-            self.y_original_,
+        sim = SimGenotypeDataTransformer(
             self.genotype_data,
-            self.sim_prop_missing,
-            self.sim_strategy,
+            prop_missing=self.sim_prop_missing,
+            strategy=self.sim_strategy,
+            mask_missing=True,
         )
+
+        self.y_simulated_ = sim.fit_transform(self.y_original_)
+
+        self.sim_missing_mask_ = sim.sim_missing_mask_
+        self.original_missing_mask_ = sim.original_missing_mask_
+        self.all_missing_ = sim.all_missing_mask_
 
         # In NLPCA and UBP, X and y are flipped.
         # X is the randomly initialized model input (V)
