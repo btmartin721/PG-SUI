@@ -1987,7 +1987,7 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
 
             missing_val (int, optional): Value that represents missing data. Defaults to -9.
 
-            subset (float): Proportion of sites to randomly subset from the input data. Defaults to 1.0 (i.e., all data retained)
+            mask_missing (bool, optional): True if you want to skip original missing values when simulating new missing data, False otherwise. Defaults to True.
 
             verbose (bool, optional): Verbosity level. Defaults to 0.
 
@@ -1996,9 +1996,12 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
             max_tries (int): Maximum number of tries to reach targeted missing data proportion within specified tol. Defaults to num_inds.
 
     Attributes:
-        mask_ (numpy.ndarray): Array with boolean mask for simulated missing locations.
 
-        genotype_data_ (GenotypeData): Initialized GenotypeData object. The data should have already been imputed with one of the non-machine learning simple imputers.
+        original_missing_mask_ (numpy.ndarray): Array with boolean mask for original missing locations.
+
+        simulated_missing_mask_ (numpy.ndarray): Array with boolean mask for simulated missing locations, excluding the original ones.
+
+        all_missing_mask_ (numpy.ndarray): Array with boolean mask for all missing locations, including both simulated and original.
 
     Properties:
         missing_count (int): Number of genotypes masked by chosen missing data strategy
@@ -2015,7 +2018,7 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
         prop_missing=0.1,
         strategy="random",
         missing_val=-9,
-        subset=1.0,
+        mask_missing=True,
         verbose=0,
         tol=None,
         max_tries=None,
@@ -2024,7 +2027,7 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
         self.prop_missing = prop_missing
         self.strategy = strategy
         self.missing_val = missing_val
-        self.subset = subset
+        self.mask_missing = mask_missing
         self.verbose = verbose
         self.tol = tol
         self.max_tries = max_tries
@@ -2056,25 +2059,34 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
         self.original_missing_mask_ = np.isnan(X)
 
         if self.strategy == "random":
-            weights = ~self.original_missing_mask_ + 0  # Assign False=0, True=1
-            normalized = weights.ravel() / float(weights.sum())
 
-            Xobs = np.where(~self.original_missing_mask_.ravel())[0]
-            Xmiss = np.where(self.original_missing_mask_.ravel())[0]
+            if self.mask_missing:
+                # Get indexes where non-missing (Xobs) and missing (Xmiss).
+                Xobs = np.where(~self.original_missing_mask_.ravel())[0]
+                Xmiss = np.where(self.original_missing_mask_.ravel())[0]
 
-            # Generate mask of 0's and 1's.
-            obs_mask = np.random.choice(
-                [0, 1],
-                size=Xobs.size,
-                p=((1 - self.prop_missing), self.prop_missing),
-            ).astype(np.bool)
+                # Generate mask of 0's (non-missing) and 1's (missing).
+                obs_mask = np.random.choice(
+                    [0, 1],
+                    size=Xobs.size,
+                    p=((1 - self.prop_missing), self.prop_missing),
+                ).astype(np.bool)
 
-            self.mask_ = np.zeros(X.size)
+                # Make missing data mask.
+                mask = np.zeros(X.size)
+                mask[Xobs] = obs_mask
+                mask[Xmiss] = 1
 
-            self.mask_[Xobs] = obs_mask
-            self.mask_[Xmiss] = 1
+                # Reshape from raveled to 2D.
+                self.mask_ = np.reshape(mask, X.shape)
 
-            self.mask_ = np.reshape(self.mask_, X.shape)
+            else:
+                # Generate mask of 0's (non-missing) and 1's (missing).
+                self.mask_ = np.random.choice(
+                    [0, 1],
+                    size=X.shape,
+                    p=((1 - self.prop_missing), self.prop_missing),
+                ).astype(np.bool)
 
             # Make sure no entirely missing columns were simulated.
             self._validate_mask()
@@ -2121,9 +2133,14 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
                 # Randomly sample a column
                 col_idx = np.random.randint(0, mask.shape[1])
                 sampled_col = copy.copy(mask[:, col_idx])
+                miss_mask = copy.copy(self.original_missing_mask_[:, col_idx])
 
                 # Mask column
                 sampled_col[rows] = True
+
+                # If original was missing, set back to False.
+                if self.mask_missing:
+                    sampled_col[miss_mask] = False
 
                 # check that column is not 100% missing now
                 # if yes, sample again
@@ -2158,11 +2175,37 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
                         continue
             # finish
             self.mask_ = mask
+
             self._validate_mask()
 
         else:
             raise ValueError(
                 "Invalid SimGenotypeData.strategy value:", self.strategy
+            )
+
+        if self.mask_missing and self.strategy != "random":
+
+            self.all_missing_mask_ = np.logical_or(
+                self.mask_, self.original_missing_mask_
+            )
+
+            self.sim_missing_mask_ = self.mask_.copy()
+
+        elif self.mask_missing and self.strategy == "random":
+            self.all_missing_mask_ = self.mask_.copy()
+
+            self.sim_missing_mask_ = np.logical_and(
+                self.mask_, self.original_missing_mask_ == False
+            )
+
+        elif not self.mask_missing:
+            self.all_missing_mask_ = np.logical_or(
+                self.mask_, self.original_missing_mask_
+            )
+            # Get values where original value was not missing and simulated.
+            # data is missing.
+            self.sim_missing_mask_ = np.logical_and(
+                self.mask_, self.original_missing_mask_ == False
             )
 
         return self
@@ -2193,19 +2236,19 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
         skip_root=True,
         weighted=False,
     ):
-        """Function for randomly sampling clades from SimGenotypeData.tree
+        """Function for randomly sampling clades from SimGenotypeData.tree.
 
         Args:
             internal_only (bool): Only sample from NON-TIPS. Defaults to False.
-
             tips_only (bool): Only sample from tips. Defaults to False.
-
             skip_root (bool): Exclude sampling of root node. Defaults to True.
-
             weighted (bool): Weight sampling by branch length. Defaults to False.
 
         Returns:
             List[str]: List of descendant tips from the sampled node.
+
+        Raises:
+            ValueError: ``tips_only`` and ``internal_only`` cannot both be True.
         """
 
         if tips_only and internal_only:
@@ -2214,22 +2257,33 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
         # to only sample internal nodes add  if not i.is_leaf()
         node_dict = dict()
 
-        for i in self.genotype_data.tree.treenode.traverse("preorder"):
+        for node in self.genotype_data.tree.treenode.traverse("preorder"):
+            ## node.idx is node indexes.
+            ## node.dist is branch lengths.
             if skip_root:
-                if i.idx == self.genotype_data.tree.nnodes - 1:
+                # If root node.
+                if node.idx == self.genotype_data.tree.nnodes - 1:
                     continue
+
+            if tips_only and internal_only:
+                raise ValueError(
+                    "tips_only and internal_only cannot both be True"
+                )
+
             if tips_only:
-                if not i.is_leaf():
+                if not node.is_leaf():
                     continue
             elif internal_only:
-                if i.is_leaf():
+                if node.is_leaf():
                     continue
-            node_dict[i.idx] = i.dist
+            node_dict[node.idx] = node.dist
         if weighted:
             s = sum(list(node_dict.values()))
+            # Node index / sum of node distances.
             p = [i / s for i in list(node_dict.values())]
             node_idx = np.random.choice(list(node_dict.keys()), size=1, p=p)[0]
         else:
+            # Get missing choice from random clade.
             node_idx = np.random.choice(list(node_dict.keys()), size=1)[0]
         return self.genotype_data.tree.get_tip_labels(idx=node_idx)
 
@@ -2237,7 +2291,7 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
         """Make sure no entirely missing columns are simulated."""
         for i, column in enumerate(self.mask_.T):
             if np.sum(column) == column.size:
-                self.mask_[np.random.randint(0, mask.shape[0]), i] = False
+                self.mask_[np.random.randint(0, self.mask_.shape[0]), i] = False
 
     def _mask_snps(self, X):
         """Mask positions in SimGenotypeData.snps and SimGenotypeData.onehot"""
