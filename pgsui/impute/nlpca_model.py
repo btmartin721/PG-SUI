@@ -11,7 +11,7 @@ import tensorflow as tf
 tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 tf.get_logger().setLevel(logging.ERROR)
 
-from tensorflow.keras.layers import Dropout, Dense, Lambda
+from tensorflow.keras.layers import Dropout, Dense, Lambda, Reshape
 from tensorflow.keras.regularizers import l1_l2
 
 # Custom Modules
@@ -209,21 +209,23 @@ class NLPCAModel(tf.keras.Model):
                 kernel_regularizer=kernel_regularizer,
             )
 
-        self.dense6 = Dense(
-            output_shape,
-            kernel_initializer=kernel_initializer,
-            kernel_regularizer=kernel_regularizer,
-            activation="relu",
-        )
-
-        self.lmbda = Lambda(lambda x: tf.expand_dims(x, -1))
-
         self.output1 = Dense(
-            num_classes,
+            output_shape * num_classes,
+            # activation=hidden_activation,
             kernel_initializer=kernel_initializer,
             kernel_regularizer=kernel_regularizer,
-            activation="softmax",
         )
+
+        self.rshp = Reshape((output_shape, num_classes))
+
+        # self.lmbda = Lambda(lambda x: tf.expand_dims(x, -1))
+
+        # self.output1 = Dense(
+        #     num_classes,
+        #     kernel_initializer=kernel_initializer,
+        #     kernel_regularizer=kernel_regularizer,
+        #     activation="softmax",
+        # )
 
         self.dropout_layer = Dropout(rate=dropout_rate)
 
@@ -260,12 +262,15 @@ class NLPCAModel(tf.keras.Model):
             if training:
                 x = self.dropout_layer(x, training=training)
 
-        x = self.dense6(x)
-        if training:
-            x = self.dropout_layer(x, training=training)
+        x = self.output1(x)
+        x = self.rshp(x)
+        # if training:
+        #     x = self.dropout_layer(x, training=training)
 
-        x = self.lmbda(x)
-        return self.output1(x)
+        return tf.keras.activations.softmax(x)
+
+        # x = self.lmbda(x)
+        # return self.output1(x)
 
     def model(self):
         """Here so that mymodel.model().summary() can be called for debugging."""
