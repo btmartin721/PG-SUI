@@ -721,14 +721,14 @@ class NeuralNetworkMethods:
             optimizer = opt
             loss = tf.keras.losses.CategoricalCrossentropy(label_smoothing=0.3)
             # loss = self.make_masked_loss()
-            metrics = ["categorical_accuracy"]
+            metrics = [tf.keras.metrics.CategoricalAccuracy()]
             # metrics = [self.make_masked_acc()]
         else:
             # No grid search. Optimizer params are initialized.
             optimizer = opt(learning_rate=learning_rate)
             loss = tf.keras.losses.CategoricalCrossentropy(label_smoothing=0.3)
             # loss = self.make_masked_loss()
-            metrics = ["categorical_accuracy"]
+            metrics = [tf.keras.metrics.CategoricalAccuracy()]
             # metrics = [self.make_masked_acc()]
 
         return {
