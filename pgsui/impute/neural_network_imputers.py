@@ -1062,10 +1062,11 @@ class UBP(BaseEstimator, TransformerMixin):
         """
         y = X
         y = validate_input_type(y, return_type="array")
-        self.y_original_ = y.copy()
 
-        nn = NeuralNetworkMethods()
-        self.nn_ = nn
+        self.nn_ = NeuralNetworkMethods()
+
+        # Placeholder for V. Gets replaced in model.
+        V = self.nn_.init_weights(y.shape[0], self.n_components)
 
         # Simulate missing data and get missing masks.
         sim = SimGenotypeDataTransformer(
@@ -1075,8 +1076,8 @@ class UBP(BaseEstimator, TransformerMixin):
             mask_missing=True,
         )
 
+        self.y_original_ = y.copy()
         self.y_simulated_ = sim.fit_transform(self.y_original_)
-
         self.sim_missing_mask_ = sim.sim_missing_mask_
         self.original_missing_mask_ = sim.original_missing_mask_
         self.all_missing_ = sim.all_missing_mask_
@@ -1092,9 +1093,6 @@ class UBP(BaseEstimator, TransformerMixin):
         # nn.plot_grid_search(testresults)
         # sys.exit()
 
-        # Placeholder for V. Gets replaced in model.
-        V = nn.init_weights(y.shape[0], self.n_components)
-
         (
             logfile,
             callbacks,
@@ -1102,7 +1100,7 @@ class UBP(BaseEstimator, TransformerMixin):
             model_params,
             fit_params,
         ) = self._initialize_parameters(
-            V, self.y_simulated_, y_train, self.original_missing_mask_, nn
+            V, self.y_simulated_, y_train, self.original_missing_mask_, self.nn_
         )
 
         if self.nlpca:
@@ -1118,7 +1116,7 @@ class UBP(BaseEstimator, TransformerMixin):
                 model_params,
                 compile_params,
                 fit_params,
-                nn,
+                self.nn_,
             )
 
             # if self.gridparams is not None:
@@ -1130,7 +1128,7 @@ class UBP(BaseEstimator, TransformerMixin):
 
         else:
             self.models_, self.histories_ = self._run_ubp(
-                V, y_train, model_params, compile_params, fit_params, nn
+                V, y_train, model_params, compile_params, fit_params, self.nn_
             )
 
         self._plot_history(self.histories_)
@@ -1148,7 +1146,6 @@ class UBP(BaseEstimator, TransformerMixin):
             numpy.ndarray: Imputed data.
         """
         y = X
-        nn = NeuralNetworkMethods()
 
         # Get last (i.e., most refined) model.
         if len(self.models_) == 1:
@@ -1158,9 +1155,9 @@ class UBP(BaseEstimator, TransformerMixin):
 
         # Has to be y and not y_train because it's not supposed to be one-hot
         # encoded.
-        imputed_enc, dummy_df = nn.predict(self.y_simulated_, imputed_enc)
+        imputed_enc, dummy_df = self.nn_.predict(self.y_simulated_, imputed_enc)
 
-        imputed_df = nn.decode_onehot(
+        imputed_df = self.nn_.decode_onehot(
             pd.DataFrame(data=imputed_enc, columns=dummy_df.columns)
         )
 
@@ -1204,9 +1201,20 @@ class UBP(BaseEstimator, TransformerMixin):
 
         # Get class weights for each column.
         sample_weights = self._get_class_weights(y_true)
+        sample_weights = self._normalize_data(sample_weights)
+
         model_params["sample_weight"] = sample_weights
 
         if do_gridsearch:
+
+            compile_params = self.nn_.set_compile_params(
+                self.optimizer,
+                self.learning_rate,
+                self.all_missing_,
+                sample_weight=sample_weights,
+                search_mode=True,
+            )
+
             compile_params["learning_rate"] = self.learning_rate
 
             # Cannot do CV because there is no way to use test splits
@@ -1306,7 +1314,11 @@ class UBP(BaseEstimator, TransformerMixin):
                 print(best_params)
 
             model_params, compile_params, fit_params = self._set_best_arguments(
-                model_params, compile_params, fit_params, best_params, y_train
+                model_params,
+                compile_params,
+                fit_params,
+                best_params,
+                y_train,
             )
 
             model = self._create_model(
@@ -1333,6 +1345,14 @@ class UBP(BaseEstimator, TransformerMixin):
             )
 
         else:
+            compile_params = self.nn_.set_compile_params(
+                self.optimizer,
+                self.learning_rate,
+                self.all_missing_,
+                sample_weight=sample_weights,
+                search_mode=False,
+            )
+
             model = self._create_model(NLPCAModel, model_params, compile_params)
 
             history = model.fit(
@@ -1443,6 +1463,9 @@ class UBP(BaseEstimator, TransformerMixin):
 
         return models, histories
 
+    def _normalize_data(self, data):
+        return (data - np.min(data)) / (np.max(data) - np.min(data))
+
     def _get_class_weights(self, y_true):
         """Get class weights for each column in a 2D matrix.
 
@@ -1456,7 +1479,8 @@ class UBP(BaseEstimator, TransformerMixin):
         class_weights = list()
         for i in np.arange(y_true.shape[1]):
             mm = ~self.original_missing_mask_[:, i]
-            classes = np.unique(y_true[mm, i]).astype(np.int)
+            classes = np.unique(y_true[mm, i])
+
             cw = compute_class_weight(
                 "balanced",
                 classes=classes,
@@ -1553,6 +1577,7 @@ class UBP(BaseEstimator, TransformerMixin):
         testing = kwargs.get("testing", False)
 
         if testing:
+            np.set_printoptions(threshold=np.inf)
             print(y_true[missing_mask])
             print(y_pred[missing_mask])
         acc = accuracy_score(y_true[missing_mask], y_pred[missing_mask])
