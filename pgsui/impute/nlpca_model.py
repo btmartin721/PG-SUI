@@ -350,6 +350,8 @@ class NLPCAModel(tf.keras.Model):
             y_pred_masked = tf.boolean_mask(
                 y_pred, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
             )
+            ### NOTE: If you get the error, "'tuple' object has no attribute
+            ### 'rank', then convert y_true to a tensor object."
             loss = self.compiled_loss(
                 y_true_masked,
                 y_pred_masked,
@@ -368,6 +370,8 @@ class NLPCAModel(tf.keras.Model):
 
         del tape
 
+        ### NOTE: If you get the error, "'tuple' object has no attribute
+        ### 'rank', then convert y_true to a tensor object."
         self.compiled_metrics.update_state(
             y_true_masked,
             y_pred_masked,
