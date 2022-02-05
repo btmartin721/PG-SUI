@@ -2059,7 +2059,6 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
         self.original_missing_mask_ = np.isnan(X)
 
         if self.strategy == "random":
-
             if self.mask_missing:
                 # Get indexes where non-missing (Xobs) and missing (Xmiss).
                 Xobs = np.where(~self.original_missing_mask_.ravel())[0]
@@ -2078,6 +2077,7 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
                 mask[Xmiss] = 1
 
                 # Reshape from raveled to 2D.
+                # With strategy=="random", mask_ is equal to all_missing_.
                 self.mask_ = np.reshape(mask, X.shape)
 
             else:
@@ -2173,7 +2173,10 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
                         filled = True
                     else:
                         continue
-            # finish
+
+            # With strategy=="nonrandom" or "nonrandom_weighted",
+            # mask_ is equal to sim_missing_mask_ if mask_missing is True.
+            # Otherwise it is equal to all_missing_.
             self.mask_ = mask
 
             self._validate_mask()
@@ -2183,30 +2186,17 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
                 "Invalid SimGenotypeData.strategy value:", self.strategy
             )
 
-        if self.mask_missing and self.strategy != "random":
+        # Get all missing values.
+        self.all_missing_mask_ = np.logical_or(
+            self.mask_, self.original_missing_mask_
+        )
+        # Get values where original value was not missing and simulated.
+        # data is missing.
+        self.sim_missing_mask_ = np.logical_and(
+            self.all_missing_mask_, self.original_missing_mask_ == False
+        )
 
-            self.all_missing_mask_ = np.logical_or(
-                self.mask_, self.original_missing_mask_
-            )
-
-            self.sim_missing_mask_ = self.mask_.copy()
-
-        elif self.mask_missing and self.strategy == "random":
-            self.all_missing_mask_ = self.mask_.copy()
-
-            self.sim_missing_mask_ = np.logical_and(
-                self.mask_, self.original_missing_mask_ == False
-            )
-
-        elif not self.mask_missing:
-            self.all_missing_mask_ = np.logical_or(
-                self.mask_, self.original_missing_mask_
-            )
-            # Get values where original value was not missing and simulated.
-            # data is missing.
-            self.sim_missing_mask_ = np.logical_and(
-                self.mask_, self.original_missing_mask_ == False
-            )
+        self._validate_mask(mask=self.mask_missing)
 
         return self
 
@@ -2287,11 +2277,21 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
             node_idx = np.random.choice(list(node_dict.keys()), size=1)[0]
         return self.genotype_data.tree.get_tip_labels(idx=node_idx)
 
-    def _validate_mask(self):
+    def _validate_mask(self, mask=False):
         """Make sure no entirely missing columns are simulated."""
         for i, column in enumerate(self.mask_.T):
-            if np.sum(column) == column.size:
-                self.mask_[np.random.randint(0, self.mask_.shape[0]), i] = False
+            if mask:
+                miss_mask = self.original_missing_mask_[:, i]
+                col = column[~miss_mask]
+                obs_idx = np.where(~miss_mask)
+                idx = obs_idx[np.random.choice(np.arange(len(obs_idx)))]
+                mask_subset = self.mask_[~self.original_missing_mask_[:, i], i]
+            else:
+                col = column
+                idx = np.random.choice(np.arange(col.shape[0]))
+                mask_subset = self.mask_[:, i]
+            if np.sum(col) == col.size:
+                self.mask_[idx, i] = False
 
     def _mask_snps(self, X):
         """Mask positions in SimGenotypeData.snps and SimGenotypeData.onehot"""
