@@ -1,5 +1,6 @@
 import logging
 import os
+import sys
 import random
 from collections import defaultdict
 
@@ -431,7 +432,7 @@ class NeuralNetworkMethods:
 
         return reconstruction_loss
 
-    def make_masked_loss(self, missing_mask):
+    def make_masked_loss(self):
         """Make loss function for use with a keras model.
 
         Args:
@@ -453,6 +454,15 @@ class NeuralNetworkMethods:
             Returns:
                 float: Mean squared error loss value with missing data masked.
             """
+
+            sample_weight = args[0]
+
+            if sample_weight is not None:
+                print("yes")
+            else:
+                print("no")
+            sys.exit()
+
             # y_true_masked = tf.boolean_mask(
             #     y_true, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
             # )
@@ -461,13 +471,20 @@ class NeuralNetworkMethods:
             #     y_pred, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
             # )
 
-            loss_fn = tf.keras.losses.CategoricalCrossentropy()
+            # sample_weight_masked = tf.boolean_mask(
+            #     tf.convert_to_tensor(sample_weight),
+            #     tf.reduce_any(tf.not_equal(y_true, -1), axis=2),
+            # )
 
-            return loss_fn(y_true_masked, y_pred_masked)
+            loss_fn = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
+
+            return loss_fn(
+                y_true_masked, y_pred_masked, sample_weight=sample_weight_masked
+            )
 
         return masked_loss
 
-    def make_masked_acc(self, missing_mask):
+    def make_masked_acc(self):
         """Make accuracy function for use with a keras model.
 
         Args:
@@ -491,20 +508,28 @@ class NeuralNetworkMethods:
                 float: Mean squared error loss value with missing data masked.
             """
 
-            y_true_masked = tf.boolean_mask(
-                y_true, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
-            )
+            sample_weight = args[0]
 
-            y_pred_masked = tf.boolean_mask(
-                y_pred, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
-            )
+            # y_true_masked = tf.boolean_mask(
+            #     y_true, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
+            # )
+
+            # y_pred_masked = tf.boolean_mask(
+            #     y_pred, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
+            # )
+
+            # sample_weight_masked = tf.boolean_mask(
+            #     tf.convert_to_tensor(sample_weight),
+            #     tf.reduce_any(tf.not_equal(y_true, -1), axis=2),
+            # )
 
             metric = tf.keras.metrics.CategoricalAccuracy(
                 name="masked_accuracy"
             )
             metric.update_state(
-                y_true_observed,
-                pred_observed,
+                y_true_masked,
+                y_pred_masked,
+                sample_weight=sample_weight_masked,
             )
             return metric.result()
 
@@ -694,24 +719,24 @@ class NeuralNetworkMethods:
         if search_mode:
             # Doing grid search. Params are callables.
             optimizer = opt
-            loss = "categorical_crossentropy"
-            # loss = self.make_masked_loss(missing_mask)
+            loss = tf.keras.losses.CategoricalCrossentropy(label_smoothing=0.3)
+            # loss = self.make_masked_loss()
             metrics = ["categorical_accuracy"]
-            # metrics = [self.make_masked_acc(missing_mask)]
+            # metrics = [self.make_masked_acc()]
         else:
             # No grid search. Optimizer params are initialized.
             optimizer = opt(learning_rate=learning_rate)
-            loss = "categorical_crossentropy"
-            # loss = self.make_masked_loss(missing_mask)
+            loss = tf.keras.losses.CategoricalCrossentropy(label_smoothing=0.3)
+            # loss = self.make_masked_loss()
             metrics = ["categorical_accuracy"]
-            # metrics = [self.make_masked_acc(missing_mask)]
+            # metrics = [self.make_masked_acc()]
 
         return {
             "optimizer": optimizer,
             "loss": loss,
             "metrics": metrics,
             "run_eagerly": True,
-            "sample_weight_mode": "temporal",
+            # "sample_weight_mode": "temporal",
         }
 
     @staticmethod
