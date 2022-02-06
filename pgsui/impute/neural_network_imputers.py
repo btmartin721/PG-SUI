@@ -1,10 +1,7 @@
 # Standard Library Imports
 import logging
-import math
 import os
 import pprint
-import random
-import shutil
 import sys
 from collections import defaultdict
 from itertools import cycle
@@ -12,20 +9,16 @@ from itertools import cycle
 # Third-party Imports
 import numpy as np
 import pandas as pd
-import seaborn as sns
 from matplotlib import pyplot as plt
 
-from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, roc_auc_score, roc_curve, auc
 from sklearn.utils.class_weight import (
     compute_class_weight,
-    compute_sample_weight,
 )
 
 # Grid search imports
-from sklearn.model_selection import StratifiedKFold, KFold
 from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.preprocessing import FunctionTransformer, label_binarize
+from sklearn.preprocessing import label_binarize
 
 # Randomized grid search imports
 from sklearn.model_selection import RandomizedSearchCV
@@ -58,7 +51,7 @@ from tensorflow.keras.callbacks import (
     ReduceLROnPlateau,
     CSVLogger,
 )
-from tensorflow.keras.layers import Dropout, Dense, Lambda
+from tensorflow.keras.layers import Dropout, Dense
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.regularizers import l1_l2
 
@@ -73,12 +66,7 @@ try:
     from .ubp_model import UBPPhase1, UBPPhase2, UBPPhase3
     from ..data_processing.transformers import (
         UBPInputTransformer,
-        NNInputTransformer,
         NNOutputTransformer,
-        RandomizeMissingTransformer,
-        ImputePhyloTransformer,
-        ImputeAlleleFreqTransformer,
-        ImputeNMFTransformer,
         SimGenotypeDataTransformer,
         TargetTransformer,
     )
@@ -92,12 +80,7 @@ except (ModuleNotFoundError, ValueError):
     from impute.ubp_model import UBPPhase1, UBPPhase2, UBPPhase3
     from data_processing.transformers import (
         UBPInputTransformer,
-        NNInputTransformer,
         NNOutputTransformer,
-        RandomizeMissingTransformer,
-        ImputePhyloTransformer,
-        ImputeAlleleFreqTransformer,
-        ImputeNMFTransformer,
         SimGenotypeDataTransformer,
         TargetTransformer,
     )
@@ -1205,18 +1188,11 @@ class UBP(BaseEstimator, TransformerMixin):
 
         model_params["sample_weight"] = sample_weights
 
+        fit_params["callbacks"].append(
+            UBPEarlyStopping(patience=self.early_stop_gen, phase=None)
+        )
+
         if do_gridsearch:
-
-            compile_params = self.nn_.set_compile_params(
-                self.optimizer,
-                self.learning_rate,
-                self.all_missing_,
-                sample_weight=sample_weights,
-                search_mode=True,
-            )
-
-            compile_params["learning_rate"] = self.learning_rate
-
             # Cannot do CV because there is no way to use test splits
             # given that the input gets refined. If using a test split,
             # then it would just be the randomly initialized values and
@@ -1262,33 +1238,58 @@ class UBP(BaseEstimator, TransformerMixin):
                 # Get all possible permutations for grid search.
                 grid = list(ParameterGrid(self.gridparams))
                 total_tests = len(grid)
-                optimizer_callable = compile_params["optimizer"]
+                # optimizer_callable = compile_params["optimizer"]
 
                 scores = list()
-                for i, perms in enumerate(grid, start=1):
-                    if self.verbose > 0:
+                params_list = list()
+
+                for i, permutation in enumerate(
+                    progressbar(
+                        grid,
+                        desc="Permutation: ",
+                        disable=self.disable_progressbar,
+                    ),
+                    start=1,
+                ):
+                    if self.verbose > 0 and self.disable_progressbar:
                         print(
                             f"\nGrid search permutation {i} / {total_tests} "
-                            f"({(i / total_tests) * 100})%\n"
+                            f"({round((i / total_tests) * 100, 2)})%\n"
                         )
+
+                    params_list.append(permutation)
+                    perms = permutation.copy()
+
+                    opt = (
+                        perms.pop("optimizer")
+                        if "optimizer" in perms
+                        else self.optimizer
+                    )
+
+                    current_compile_params = self.nn_.set_compile_params(
+                        opt,
+                        self.learning_rate,
+                        self.all_missing_,
+                        search_mode=True,
+                    )
 
                     (
                         model_params,
-                        compile_params,
+                        current_compile_params,
                         fit_params,
                         perms,
                     ) = self._prep_model_arguments(
-                        model_params, compile_params, fit_params, perms
+                        model_params, current_compile_params, fit_params, perms
                     )
 
                     clf = self._create_model(
-                        NLPCAModel, model_params, compile_params, perms
+                        NLPCAModel, model_params, current_compile_params, perms
                     )
 
                     history = clf.fit(
                         V,
                         y_train,
-                        sample_weight=sample_weights,
+                        # sample_weight=sample_weights,
                         **fit_params,
                     )
 
@@ -1304,14 +1305,22 @@ class UBP(BaseEstimator, TransformerMixin):
 
                     scores.append(metrics["roc_auc"]["macro"])
 
-                    # Reset optimizer to callable.
-                    compile_params["optimizer"] = optimizer_callable
-
                 best_index = np.argmax(scores)
                 best_score = scores[best_index]
-                best_params = grid[best_index]
-                print(best_index)
-                print(best_params)
+                best_params = params_list[best_index]
+
+            best_opt = (
+                best_params["optimizer"]
+                if "optimizer" in best_params
+                else self.optimizer
+            )
+
+            compile_params = self.nn_.set_compile_params(
+                best_opt,
+                self.learning_rate,
+                self.all_missing_,
+                search_mode=True,
+            )
 
             model_params, compile_params, fit_params = self._set_best_arguments(
                 model_params,
@@ -1321,14 +1330,12 @@ class UBP(BaseEstimator, TransformerMixin):
                 y_train,
             )
 
-            model = self._create_model(
-                NLPCAModel, model_params, compile_params, best_params
-            )
+            model = self._create_model(NLPCAModel, model_params, compile_params)
 
             history = model.fit(
                 V,
                 y_train,
-                sample_weight=sample_weights,
+                # sample_weight=sample_weights,
                 **fit_params,
             )
 
@@ -1342,6 +1349,7 @@ class UBP(BaseEstimator, TransformerMixin):
                 y_true,
                 y_pred,
                 missing_mask=self.sim_missing_mask_,
+                testing=True,
             )
 
         else:
@@ -1378,6 +1386,8 @@ class UBP(BaseEstimator, TransformerMixin):
                 testing=True,
             )
 
+        print(best_params)
+        print(best_score)
         models.append(model)
         return models, histories, best_params, best_score, best_metrics
 
@@ -1510,22 +1520,21 @@ class UBP(BaseEstimator, TransformerMixin):
         }
 
         if "optimizer__learning_rate" in perms:
-            if "optimizer" in perms:
-                compile_params["optimizer"] = perms["optimizer"](
-                    learning_rate=perms["optimizer__learning_rate"]
-                )
-            else:
-                compile_params["optimizer"] = compile_params["optimizer"](
-                    learning_rate=perms["optimizer__learning_rate"]
-                )
+            lr = perms["optimizer__learning_rate"]
+        else:
+            lr = self.learning_rate
 
-            perms.pop("optimizer__learning_rate")
+        compile_params["optimizer"] = compile_params["optimizer"](
+            learning_rate=lr
+        )
+
+        perms.pop("optimizer__learning_rate")
 
         if "epochs" in perms:
             fit_params["epochs"] = perms.pop("epochs")
 
-        if "batch_size" in perms:
-            fit_params["batch_size"] = perms.pop("batch_size")
+        # if "batch_size" in perms:
+        #     fit_params["batch_size"] = perms.pop("batch_size")
 
         if "learning_rate" in compile_params:
             compile_params.pop("learning_rate")
@@ -1536,21 +1545,18 @@ class UBP(BaseEstimator, TransformerMixin):
         self, model_params, compile_params, fit_params, best_params, y_train
     ):
         """Set model parameters to best found under grid search."""
-        if "learning_rate" in best_params:
-            compile_params["optimizer"] = compile_params["optimizer"](
-                learning_rate=best_params["learning_rate"]
-            )
 
+        if "optimizer__learning_rate" in best_params:
+            lr = best_params["optimizer__learning_rate"]
         else:
-            compile_params["optimizer"] = compile_params["optimizer"](
-                learning_rate=self.learning_rate
-            )
+            lr = self.learning_rate
+
+        compile_params["optimizer"] = compile_params["optimizer"](
+            learning_rate=lr
+        )
 
         if "epochs" in best_params:
             fit_params["epochs"] = best_params["epochs"]
-
-        if "batch_size" in best_params:
-            fit_params["batch_size"] = best_params["batch_size"]
 
         model_searched = {
             k: best_params[k] for k in best_params if k in model_params
