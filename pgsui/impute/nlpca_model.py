@@ -218,15 +218,6 @@ class NLPCAModel(tf.keras.Model):
 
         self.rshp = Reshape((output_shape, num_classes))
 
-        # self.lmbda = Lambda(lambda x: tf.expand_dims(x, -1))
-
-        # self.output1 = Dense(
-        #     num_classes,
-        #     kernel_initializer=kernel_initializer,
-        #     kernel_regularizer=kernel_regularizer,
-        #     activation="softmax",
-        # )
-
         self.dropout_layer = Dropout(rate=dropout_rate)
 
     def call(self, inputs, training=None):
@@ -263,14 +254,7 @@ class NLPCAModel(tf.keras.Model):
                 x = self.dropout_layer(x, training=training)
 
         x = self.output1(x)
-        x = self.rshp(x)
-        # if training:
-        #     x = self.dropout_layer(x, training=training)
-
-        return tf.keras.activations.softmax(x)
-
-        # x = self.lmbda(x)
-        # return self.output1(x)
+        return self.rshp(x)
 
     def model(self):
         """Here so that mymodel.model().summary() can be called for debugging."""
@@ -304,14 +288,6 @@ class NLPCAModel(tf.keras.Model):
         ToDo:
             Obtain batch_size without using run_eagerly option in compile(). This will allow the step to be run in graph mode, thereby speeding up computation.
         """
-        # if len(data) == 3:
-        #     _, __, test = data
-        # else:
-        #     test = None
-
-        # print(test)
-        # sys.exit(0)
-
         # Set in the UBPCallbacks() callback.
         y = self._y
 
@@ -360,7 +336,7 @@ class NLPCAModel(tf.keras.Model):
             loss = self.compiled_loss(
                 y_true_masked,
                 y_pred_masked,
-                sample_weight=sample_weight_masked,
+                # sample_weight=sample_weight_masked,
                 regularization_losses=self.losses,
             )
 
@@ -380,7 +356,7 @@ class NLPCAModel(tf.keras.Model):
         self.compiled_metrics.update_state(
             y_true_masked,
             y_pred_masked,
-            sample_weight=sample_weight_masked,
+            # sample_weight=sample_weight_masked,
         )
 
         # NOTE: run_eagerly must be set to True in the compile() method for this
