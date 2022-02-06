@@ -1,4 +1,5 @@
 import logging
+import math
 import os
 import sys
 import random
@@ -719,14 +720,14 @@ class NeuralNetworkMethods:
         if search_mode:
             # Doing grid search. Params are callables.
             optimizer = opt
-            loss = tf.keras.losses.CategoricalCrossentropy(label_smoothing=0.3)
+            loss = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
             # loss = self.make_masked_loss()
             metrics = [tf.keras.metrics.CategoricalAccuracy()]
             # metrics = [self.make_masked_acc()]
         else:
             # No grid search. Optimizer params are initialized.
             optimizer = opt(learning_rate=learning_rate)
-            loss = tf.keras.losses.CategoricalCrossentropy(label_smoothing=0.3)
+            loss = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
             # loss = self.make_masked_loss()
             metrics = [tf.keras.metrics.CategoricalAccuracy()]
             # metrics = [self.make_masked_acc()]
