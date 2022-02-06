@@ -311,7 +311,7 @@ def main():
     # print(vae_data.genotypes012_df)
 
     # For randomizedsearchcv. Generate parameters to sample from.
-    learning_rate = [float(10) ** x for x in np.arange(-6, -1)]
+    learning_rate = [float(10) ** x for x in np.arange(-6, -4)]
     l1_penalty = [float(10) ** x for x in np.arange(-6, -1)]
     l2_penalty = [float(10) ** x for x in np.arange(-6, -1)]
     hidden_activation = ["elu", "relu"]
@@ -319,28 +319,29 @@ def main():
     hidden_layer_sizes = ["sqrt", "midpoint"]
     n_components = [2, 3]
     dropout_rate = [round(x, 1) for x in np.arange(0.0, 1.0, 0.1)]
-    batch_size = list(range(8, 65, 8))
+    batch_size = [16, 32, 48, 64]
     optimizer = ["adam", "sgd", "adagrad"]
 
     grid_params = {
         "learning_rate": learning_rate,
         "l1_penalty": l1_penalty,
         "l2_penalty": l2_penalty,
-        # "hidden_activation": hidden_activation,
-        # "hidden_layer_sizes": hidden_layer_sizes,
-        # "n_components": n_components,
-        # "dropout_rate": dropout_rate,
-        # "batch_size": [16, 32],
+        "hidden_activation": hidden_activation,
+        "hidden_layer_sizes": hidden_layer_sizes,
+        "n_components": n_components,
+        "dropout_rate": dropout_rate,
+        "batch_size": batch_size,
+        "optimizer": optimizer,
     }
 
     ubp = ImputeNLPCA(
         data,
         # gridparams=grid_params,
-        disable_progressbar=True,
+        disable_progressbar=False,
         cv=3,
         column_subset=1.0,
         validation_split=0.0,
-        learning_rate=0.01,
+        learning_rate=0.1,
         num_hidden_layers=1,
         verbose=1,
         dropout_rate=0.2,
@@ -348,11 +349,12 @@ def main():
         batch_size=64,
         l1_penalty=0.000001,
         l2_penalty=0.000001,
-        # gridparams=grid_params,
+        gridparams=grid_params,
         n_jobs=4,
         grid_iter=5,
         sim_strategy="nonrandom_weighted",
         sim_prop_missing=0.4,
+        early_stop_gen=10,
     )
 
     # ubp = ImputeVAE(
