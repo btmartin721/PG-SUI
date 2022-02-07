@@ -688,15 +688,7 @@ class NeuralNetworkMethods:
                 batch_size //= 2
         return batch_size
 
-    def set_compile_params(
-        self,
-        optimizer,
-        learning_rate,
-        missing_mask,
-        sample_weight=None,
-        class_weight=None,
-        search_mode=False,
-    ):
+    def set_compile_params(self, optimizer):
         """Set compile parameters to use.
 
         Returns:
@@ -722,27 +714,15 @@ class NeuralNetworkMethods:
         elif optimizer.lower() == "rmsprop":
             opt = tf.keras.optimizers.RMSProp
 
-        if search_mode:
-            # Doing grid search. Params are callables.
-            optimizer = opt
-            loss = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
-            # loss = self.make_masked_loss()
-            metrics = [tf.keras.metrics.CategoricalAccuracy()]
-            # metrics = [self.make_masked_acc()]
-        else:
-            # No grid search. Optimizer params are initialized.
-            optimizer = opt(learning_rate=learning_rate)
-            loss = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
-            # loss = self.make_masked_loss()
-            metrics = [tf.keras.metrics.CategoricalAccuracy()]
-            # metrics = [self.make_masked_acc()]
+        # Doing grid search. Params are callables.
+        loss = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
+        metrics = [tf.keras.metrics.CategoricalAccuracy()]
 
         return {
-            "optimizer": optimizer,
+            "optimizer": opt,
             "loss": loss,
             "metrics": metrics,
             "run_eagerly": True,
-            # "sample_weight_mode": "temporal",
         }
 
     @staticmethod

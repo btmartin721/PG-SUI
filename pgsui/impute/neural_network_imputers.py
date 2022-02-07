@@ -237,7 +237,7 @@ class MLPClassifier(KerasClassifier):
 
         n_components (int): Number of components to use for input V. Defaults to 3.
 
-        serach_mode (bool): Whether in grid search mode (True) or single estimator mode (False). Defaults to True.
+        search_mode (bool): Whether in grid search mode (True) or single estimator mode (False). Defaults to True.
 
         optimizer (str or callable): Optimizer to use during training. Should be either a str or tf.keras.optimizers callable. Defaults to "adam".
 
@@ -271,7 +271,6 @@ class MLPClassifier(KerasClassifier):
         phase=None,
         sample_weight=None,
         n_components=3,
-        search_mode=True,
         optimizer="adam",
         loss="binary_crossentropy",
         epochs=100,
@@ -296,7 +295,6 @@ class MLPClassifier(KerasClassifier):
         self.phase = phase
         self.sample_weight = sample_weight
         self.n_components = n_components
-        self.search_mode = search_mode
         self.optimizer = optimizer
         self.loss = loss
         self.epochs = epochs
@@ -401,11 +399,7 @@ class MLPClassifier(KerasClassifier):
         return model
 
     @staticmethod
-    def scorer(
-        y_true,
-        y_pred,
-        **kwargs,
-    ):
+    def scorer(y_true, y_pred, **kwargs):
         """Scorer for grid search that masks missing data.
 
         To use this, do not specify a scoring metric when initializing the grid search object. By default if the scoring_metric option is left as None, then it uses the estimator's scoring metric (this one).
@@ -423,6 +417,7 @@ class MLPClassifier(KerasClassifier):
         missing_mask = kwargs.get(
             "missing_mask", np.zeros(y_true.shape, dtype=bool)
         )
+
         testing = kwargs.get("testing", False)
         scoring_metric = kwargs.get("scoring_metric", "accuracy")
 
@@ -452,9 +447,7 @@ class MLPClassifier(KerasClassifier):
         Returns:
             UBPInputTransformer: InputTransformer object that includes fit() and transform() methods to transform input before estimator fitting.
         """
-        return UBPInputTransformer(
-            self.phase, self.n_components, self.V, self.search_mode
-        )
+        return UBPInputTransformer(self.phase, self.n_components, self.V)
 
     @property
     def target_encoder(self):
@@ -464,6 +457,25 @@ class MLPClassifier(KerasClassifier):
             NNOutputTransformer: NNOutputTransformer object that includes fit(), transform(), and inverse_transform() methods.
         """
         return MLPTargetTransformer()
+
+    def predict(self, X, **kwargs):
+        """Returns predictions for the given test data.
+
+        Args:
+            X (Union[array-like, sparse matrix, dataframe] of shape (n_samples, n_features)): Training samples where n_samples is the number of samples and n_features is the number of features.
+        **kwargs (Dict[str, Any]): Extra arguments to route to ``Model.predict``\.
+
+        Warnings:
+            Passing estimator parameters as keyword arguments (aka as ``**kwargs``) to ``predict`` is not supported by the Scikit-Learn API, and will be removed in a future version of SciKeras. These parameters can also be specified by prefixing ``predict__`` to a parameter at initialization (``BaseWrapper(..., fit__batch_size=32, predict__batch_size=1000)``) or by using ``set_params`` (``est.set_params(fit__batch_size=32, predict__batch_size=1000)``\).
+
+        Returns:
+            array-like: Predictions, of shape shape (n_samples,) or (n_samples, n_outputs).
+
+        Notes:
+            Had to override predict() here in order to do the __call__ with the refined input, V_latent.
+        """
+        y_pred_proba = self.model_(self.model_.V_latent, training=False)
+        return self.target_encoder_.inverse_transform(y_pred_proba)
 
 
 class VAE(NeuralNetworkMethods):
@@ -1082,9 +1094,9 @@ class UBP(BaseEstimator, TransformerMixin):
         self.tt_ = TargetTransformer()
         y_train = self.tt_.fit_transform(self.y_original_)
 
-        # testresults = pd.read_csv("testcvresults.csv")
-        # nn.plot_grid_search(testresults)
-        # sys.exit()
+        testresults = pd.read_csv("testcvresults.csv")
+        self.nn_.plot_grid_search(testresults)
+        sys.exit()
 
         (
             logfile,
@@ -1092,9 +1104,7 @@ class UBP(BaseEstimator, TransformerMixin):
             compile_params,
             model_params,
             fit_params,
-        ) = self._initialize_parameters(
-            V, self.y_simulated_, y_train, self.original_missing_mask_, self.nn_
-        )
+        ) = self._initialize_parameters(y_train, self.original_missing_mask_)
 
         if self.nlpca:
             (
@@ -1105,12 +1115,11 @@ class UBP(BaseEstimator, TransformerMixin):
                 self.search_,
                 self.metrics_,
             ) = self._run_nlpca(
-                V,
+                self.y_original_,
                 y_train,
                 model_params,
                 compile_params,
                 fit_params,
-                self.nn_,
             )
 
             # if self.gridparams is not None:
@@ -1168,12 +1177,11 @@ class UBP(BaseEstimator, TransformerMixin):
 
     def _run_nlpca(
         self,
-        V,
+        y_true,
         y_train,
         model_params,
         compile_params,
         fit_params,
-        nn,
     ):
         """Run NLPCA Model using custom subclassed model."""
 
@@ -1189,9 +1197,7 @@ class UBP(BaseEstimator, TransformerMixin):
         # building a new model.
         tf.keras.backend.set_learning_phase(1)
         tf.keras.backend.clear_session()
-        nn.reset_seeds()
-
-        y_true = self.y_original_
+        self.nn_.reset_seeds()
 
         if self.sample_weights:
             # Get class weights for each column.
@@ -1202,13 +1208,7 @@ class UBP(BaseEstimator, TransformerMixin):
 
         model_params["sample_weight"] = sample_weights
 
-        # fit_params["callbacks"].append(
-        #     UBPEarlyStopping(patience=self.early_stop_gen, phase=None)
-        # )
-
         if do_gridsearch:
-            compile_params["learning_rate"] = self.learning_rate
-
             # Cannot do CV because there is no way to use test splits
             # given that the input gets refined. If using a test split,
             # then it would just be the randomly initialized values and
@@ -1222,8 +1222,10 @@ class UBP(BaseEstimator, TransformerMixin):
                 ]
                 self.gridparams.pop("learning_rate")
 
+            V = model_params.pop("V")
+
             clf = MLPClassifier(
-                model_params.pop("V"),
+                V,
                 model_params.pop("y_train"),
                 y_true,
                 **model_params,
@@ -1236,10 +1238,8 @@ class UBP(BaseEstimator, TransformerMixin):
                 callbacks=fit_params["callbacks"],
                 validation_split=fit_params["validation_split"],
                 verbose=0,
-                search_mode=True,
                 score__missing_mask=self.sim_missing_mask_,
                 score__scoring_metric=self.scoring_metric,
-                score__testing=True,
             )
 
             if self.ga:
@@ -1261,7 +1261,9 @@ class UBP(BaseEstimator, TransformerMixin):
                         **self.ga_kwargs,
                     )
 
-                    search.fit(V, y_train, callbacks=callback)
+                    search.fit(
+                        V[self.n_components], y_train, callbacks=callback
+                    )
 
             else:
                 # Do randomized grid search
@@ -1269,18 +1271,14 @@ class UBP(BaseEstimator, TransformerMixin):
                     clf,
                     param_grid=self.gridparams,
                     n_jobs=self.n_jobs,
-                    cv=[(slice(None), slice(None))],
+                    cv=cross_val,
                     refit=True,
                     verbose=self.verbose * 4,
                     return_train_score=True,
                     error_score="raise",
                 )
 
-                print("\n\n")
-                # search.set_params(**{"estimator__run_eagerly": True})
-                print(search.get_params())
-                sys.exit()
-                search.fit(V, y=y_true)
+                search.fit(V[self.n_components], y=y_true)
 
             best_params = search.best_params_
             best_score = search.best_score_
@@ -1304,20 +1302,10 @@ class UBP(BaseEstimator, TransformerMixin):
             )
 
         else:
-            compile_params = nn.set_compile_params(
-                self.optimizer,
-                self.learning_rate,
-                self.all_missing_,
-                search_mode=True,
-            )
-
-            compile_params["learning_rate"] = self.learning_rate
-
-            # print(compile_params)
-            # sys.exit()
+            V = model_params.pop("V")
 
             clf = MLPClassifier(
-                model_params.pop("V"),
+                V,
                 model_params.pop("y_train"),
                 y_true,
                 **model_params,
@@ -1330,21 +1318,12 @@ class UBP(BaseEstimator, TransformerMixin):
                 callbacks=fit_params["callbacks"],
                 validation_split=fit_params["validation_split"],
                 verbose=0,
-                search_mode=False,
                 score__missing_mask=self.sim_missing_mask_,
                 score__scoring_metric=self.scoring_metric,
                 score__testing=True,
             )
 
-            print("\n\n")
-            # search.set_params(**{"estimator__run_eagerly": True})
-            print(clf.get_params())
-            sys.exit()
-
-            clf.fit(
-                V,
-                y=y_true,
-            )
+            clf.fit(V[self.n_components], y=y_true)
 
             best_params = None
             best_score = None
@@ -1621,14 +1600,10 @@ class UBP(BaseEstimator, TransformerMixin):
 
         return roc_auc
 
-    def _initialize_parameters(self, V, y, y_train, missing_mask, nn):
+    def _initialize_parameters(self, y_train, missing_mask):
         """Initialize important parameters.
 
         Args:
-            V (numpy.ndarray): Initial V with randomly initialized values, of shape (n_samples, n_components).
-
-            y (numpy.ndarray): Original input data to be used as target.
-
             y_train (numpy.ndarray): Training subset of original input data to be used as target.
 
             missing_mask (numpy.ndarray): Training missing data mask.
@@ -1669,25 +1644,9 @@ class UBP(BaseEstimator, TransformerMixin):
         ]
 
         search_mode = False if self.gridparams is None else True
-
-        compile_params = nn.set_compile_params(
-            self.optimizer,
-            self.learning_rate,
-            self.all_missing_,
-            search_mode=search_mode,
-        )
-
-        if search_mode:
-            vinput = dict()
-            if self.n_components < 2:
-                raise ValueError("n_components must be >= 2.")
-            elif self.n_components == 2:
-                vinput[2] = nn.init_weights(y_train.shape[0], self.n_components)
-            else:
-                for i in range(2, self.n_components + 1):
-                    vinput[i] = nn.init_weights(y_train.shape[0], i)
-        else:
-            vinput = nn.init_weights(y_train.shape[0], self.n_components)
+        vinput = self._initV(y_train, search_mode)
+        compile_params = self.nn_.set_compile_params(self.optimizer)
+        compile_params["learning_rate"] = self.learning_rate
 
         model_params = {
             "V": vinput,
@@ -1724,6 +1683,41 @@ class UBP(BaseEstimator, TransformerMixin):
             model_params,
             fit_params,
         )
+
+    def _initV(self, y_train, search_mode):
+        """Initialize random input V as dictionary of numpy arrays.
+
+        Args:
+            y_train (numpy.ndarray): One-hot encoded training dataset (actual data).
+
+            search_mode (bool): Whether doing grid search.
+
+        Returns:
+            Dict[int, numpy.ndarray]: Dictionary with n_components: V as key-value pairs.
+
+        Raises:
+            ValueError: Number of components must be >= 2.
+        """
+        vinput = dict()
+        if search_mode:
+            if self.n_components < 2:
+                raise ValueError("n_components must be >= 2.")
+
+            elif self.n_components == 2:
+                vinput[2] = self.nn_.init_weights(
+                    y_train.shape[0], self.n_components
+                )
+
+            else:
+                for i in range(2, self.n_components + 1):
+                    vinput[i] = self.nn_.init_weights(y_train.shape[0], i)
+
+        else:
+            vinput[self.n_components] = self.nn_.init_weights(
+                y_train.shape[0], self.n_components
+            )
+
+        return vinput
 
     def _create_model(
         self,
