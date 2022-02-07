@@ -50,7 +50,7 @@ try:
     from ..data_processing.transformers import (
         UBPInputTransformer,
         NNInputTransformer,
-        NNOutputTransformer,
+        MLPTargetTransformer,
         RandomizeMissingTransformer,
         ImputePhyloTransformer,
         ImputeAlleleFreqTransformer,
@@ -71,7 +71,7 @@ except (ModuleNotFoundError, ValueError):
     from data_processing.transformers import (
         UBPInputTransformer,
         NNInputTransformer,
-        NNOutputTransformer,
+        MLPTargetTransformer,
         RandomizeMissingTransformer,
         ImputePhyloTransformer,
         ImputeAlleleFreqTransformer,
@@ -674,6 +674,7 @@ class Impute:
             imputer = self.clf(
                 self.genotype_data,
                 gridparams=self.gridparams,
+                scoring_metric=self.scoring_metric,
                 **self.clf_kwargs,
                 ga_kwargs=self.ga_kwargs,
                 sim_strategy=self.sim_strategy,
