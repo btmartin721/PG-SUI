@@ -200,11 +200,10 @@ class UBPInputTransformer(BaseEstimator, TransformerMixin):
         V (numpy.ndarray or Dict[str, Any]): If doing grid search, should be a dictionary with current_component: numpy.ndarray. If not doing grid search, then it should be a numpy.ndarray.
     """
 
-    def __init__(self, phase, n_components, V, search_mode):
+    def __init__(self, phase, n_components, V):
         self.phase = phase
         self.n_components = n_components
         self.V = V
-        self.search_mode = search_mode
 
     def fit(self, X):
         """Fit transformer to input data X.
@@ -229,17 +228,15 @@ class UBPInputTransformer(BaseEstimator, TransformerMixin):
 
         Raises:
             TypeError: V must be a dictionary if phase is None or phase == 1.
+            TypeError: V must be a numpy array if phase is 2 or 3.
         """
-        if self.search_mode:
-            if self.phase == None or self.phase == 1:
-                if not isinstance(self.V, dict):
-                    raise TypeError(
-                        "V must be a dictionary if phase == None or 1."
-                    )
-                return self.V[self.n_components]
-            else:
-                return self.V
+        if self.phase == None or self.phase == 1:
+            if not isinstance(self.V, dict):
+                raise TypeError(f"V must be a dictionary, but got {type(V)}")
+            return self.V[self.n_components]
         else:
+            if isinstance(self.V, dict):
+                raise TypeError(f"V must be a numpy array, but got {type(V)}")
             return self.V
 
 
@@ -348,7 +345,7 @@ class MLPTargetTransformer(BaseEstimator, TransformerMixin):
         """
         y = misc.validate_input_type(y, return_type="array")
         y_train = encode_onehot(y)
-        return self._fill(y_train, self.missing_mask_)
+        self._fill(y_train, self.missing_mask_)
 
     def inverse_transform(self, y):
         """Decode y_pred from one-hot to 012-based encoding.
