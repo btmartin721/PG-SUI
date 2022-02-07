@@ -311,7 +311,7 @@ def main():
     # print(vae_data.genotypes012_df)
 
     # For randomizedsearchcv. Generate parameters to sample from.
-    learning_rate = [float(10) ** x for x in np.arange(-2, 0)]
+    learning_rate = [float(10) ** x for x in np.arange(-4, 0)]
     l1_penalty = [float(10) ** x for x in np.arange(-6, -1)]
     l1_penalty.append(0.0)
     l2_penalty = [float(10) ** x for x in np.arange(-6, -1)]
@@ -351,12 +351,11 @@ def main():
         batch_size=64,
         l1_penalty=0.0,
         l2_penalty=0.0,
-        # gridparams=grid_params,
+        gridparams=grid_params,
         n_jobs=1,
         grid_iter=5,
         sim_strategy="nonrandom_weighted",
         sim_prop_missing=0.4,
-        early_stop_gen=5,
     )
 
     # ubp = ImputeVAE(
