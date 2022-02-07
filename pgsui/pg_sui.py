@@ -351,7 +351,7 @@ def main():
         batch_size=64,
         l1_penalty=0.0,
         l2_penalty=0.0,
-        gridparams=grid_params,
+        # gridparams=grid_params,
         n_jobs=1,
         grid_iter=5,
         sim_strategy="nonrandom_weighted",
