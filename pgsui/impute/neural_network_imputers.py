@@ -1222,10 +1222,6 @@ class UBP(BaseEstimator, TransformerMixin):
                 ]
                 self.gridparams.pop("learning_rate")
 
-            # print(model_params["V"][self.n_components])
-            # print(compile_params)
-            # sys.exit()
-
             clf = MLPClassifier(
                 model_params.pop("V"),
                 model_params.pop("y_train"),
@@ -1243,6 +1239,7 @@ class UBP(BaseEstimator, TransformerMixin):
                 search_mode=True,
                 score__missing_mask=self.sim_missing_mask_,
                 score__scoring_metric=self.scoring_metric,
+                score__testing=True,
             )
 
             if self.ga:
@@ -1275,8 +1272,14 @@ class UBP(BaseEstimator, TransformerMixin):
                     cv=[(slice(None), slice(None))],
                     refit=True,
                     verbose=self.verbose * 4,
+                    return_train_score=True,
+                    error_score="raise",
                 )
 
+                print("\n\n")
+                # search.set_params(**{"estimator__run_eagerly": True})
+                print(search.get_params())
+                sys.exit()
                 search.fit(V, y=y_true)
 
             best_params = search.best_params_
@@ -1301,7 +1304,6 @@ class UBP(BaseEstimator, TransformerMixin):
             )
 
         else:
-            print(model_params["V"][self.n_components])
             compile_params = nn.set_compile_params(
                 self.optimizer,
                 self.learning_rate,
@@ -1333,6 +1335,11 @@ class UBP(BaseEstimator, TransformerMixin):
                 score__scoring_metric=self.scoring_metric,
                 score__testing=True,
             )
+
+            print("\n\n")
+            # search.set_params(**{"estimator__run_eagerly": True})
+            print(clf.get_params())
+            sys.exit()
 
             clf.fit(
                 V,
