@@ -1477,7 +1477,7 @@ class ImputeUBP(Impute):
         crossover_probability=0.8,
         mutation_probability=0.1,
         ga_algorithm="eaMuPlusLambda",
-        scoring_metric="accuracy",
+        scoring_metric="auc_macro",
         sim_strategy="random",
         sim_prop_missing=0.1,
         str_encodings={
