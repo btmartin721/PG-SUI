@@ -345,7 +345,7 @@ class MLPTargetTransformer(BaseEstimator, TransformerMixin):
         """
         y = misc.validate_input_type(y, return_type="array")
         y_train = encode_onehot(y)
-        self._fill(y_train, self.missing_mask_)
+        return self._fill(y_train, self.missing_mask_)
 
     def inverse_transform(self, y):
         """Decode y_pred from one-hot to 012-based encoding.
