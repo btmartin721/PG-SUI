@@ -71,10 +71,6 @@ class NLPCAModel(tf.keras.Model):
 
         _batch_idx (int): Index of current batch.
 
-        _n_batches (int): Total number of batches per epoch.
-
-        input_with_mask_ (numpy.ndarray): Target y with the missing data mask horizontally concatenated and shape (n_samples, n_features * 2). Gets refined in the UBPCallbacks() callback.
-
     Example:
         >>>model = NLPCAModel(V=V, y=y, batch_size=32, missing_mask=missing_mask, output_shape, n_components, weights_initializer, hidden_layer_sizes, num_hidden_layers, hidden_activation, l1_penalty, l2_penalty, dropout_rate, num_classes=3)
         >>>model.compile(optimizer=optimizer, loss=loss_func, metrics=[my_metrics], run_eagerly=True)
@@ -140,12 +136,9 @@ class NLPCAModel(tf.keras.Model):
         # V_latent is refined during train_step().
         self.V_latent_ = self._V.copy()
 
-        # Initialize parameters used during train_step() and test_step().
-        # input_with_mask_ is set during the UBPCallbacks() execution.
+        # Initialize parameters used during train_step().
         self._batch_idx = 0
-        self._n_batches = 0
         self._batch_size = batch_size
-        self.input_with_mask_ = None
         self.n_components = n_components
 
         if l1_penalty == 0.0 and l2_penalty == 0.0:
@@ -311,9 +304,12 @@ class NLPCAModel(tf.keras.Model):
 
         src = [v]
 
-        sample_weight_masked = tf.convert_to_tensor(
-            sample_weight[~missing_mask], dtype=tf.float32
-        )
+        if sample_weight is not None:
+            sample_weight_masked = tf.convert_to_tensor(
+                sample_weight[~missing_mask], dtype=tf.float32
+            )
+        else:
+            sample_weight_masked = None
 
         y_true_masked = tf.boolean_mask(
             tf.convert_to_tensor(y_true, dtype=tf.float32),
@@ -336,7 +332,7 @@ class NLPCAModel(tf.keras.Model):
             loss = self.compiled_loss(
                 y_true_masked,
                 y_pred_masked,
-                # sample_weight=sample_weight_masked,
+                sample_weight=sample_weight_masked,
                 regularization_losses=self.losses,
             )
 
@@ -356,7 +352,7 @@ class NLPCAModel(tf.keras.Model):
         self.compiled_metrics.update_state(
             y_true_masked,
             y_pred_masked,
-            # sample_weight=sample_weight_masked,
+            sample_weight=sample_weight_masked,
         )
 
         # NOTE: run_eagerly must be set to True in the compile() method for this
@@ -367,49 +363,6 @@ class NLPCAModel(tf.keras.Model):
         self.V_latent_[batch_start:batch_end, :] = v.numpy()
 
         # history object that gets returned from fit().
-        return {m.name: m.result() for m in self.metrics}
-
-    def test_step(self, data):
-        """Validation step for one batch in a single epoch.
-
-        Custom logic for the test step that gets sent back to on_train_batch_end() callback.
-
-        Args:
-            data (Tuple[tf.EagerTensor, tf.EagerTensor]): Batches of input data V and y_true.
-
-        Returns:
-            A dict containing values that will be passed to ``tf.keras.callbacks.CallbackList.on_train_batch_end``. Typically, the values of the Model's metrics are returned.
-        """
-        # Unpack the data. Don't need V here. Just X (y_true).
-        y = self._y
-
-        v, y_true, batch_start, batch_end = self.nn.prepare_training_batches(
-            self.V_latent_,
-            y,
-            self._batch_size,
-            self._batch_idx,
-            False,
-            self.n_components,
-        )
-
-        # Compute predictions
-        y_pred = self(v, training=False)
-
-        # Updates the metrics tracking the loss
-        self.compiled_loss(
-            tf.convert_to_tensor(y_true, dtype=tf.float32),
-            y_pred,
-            regularization_losses=self.losses,
-        )
-
-        # Update the metrics.
-        self.compiled_metrics.update_state(
-            tf.convert_to_tensor(y_true, dtype=tf.float32),
-            y_pred,
-        )
-
-        # Return a dict mapping metric names to current value.
-        # Note that it will include the loss (tracked in self.metrics).
         return {m.name: m.result() for m in self.metrics}
 
     @property
@@ -428,11 +381,6 @@ class NLPCAModel(tf.keras.Model):
         return self._batch_idx
 
     @property
-    def n_batches(self):
-        """Total number of batches per epoch."""
-        return self._n_batches
-
-    @property
     def y(self):
         return self._y
 
@@ -443,10 +391,6 @@ class NLPCAModel(tf.keras.Model):
     @property
     def sample_weight(self):
         return self._sample_weight
-
-    @property
-    def input_with_mask(self):
-        return self.input_with_mask_
 
     @V_latent.setter
     def V_latent(self, value):
@@ -463,11 +407,6 @@ class NLPCAModel(tf.keras.Model):
         """Set current batch (=step) index."""
         self._batch_idx = int(value)
 
-    @n_batches.setter
-    def n_batches(self, value):
-        """Set total number of batches (=steps) per epoch."""
-        self._n_batches = int(value)
-
     @y.setter
     def y(self, value):
         """Set y after each epoch."""
@@ -481,7 +420,3 @@ class NLPCAModel(tf.keras.Model):
     @sample_weight.setter
     def sample_weight(self, value):
         self._sample_weight = value
-
-    @input_with_mask.setter
-    def input_with_mask(self, value):
-        self.input_with_mask_ = value
