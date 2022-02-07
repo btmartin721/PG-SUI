@@ -357,9 +357,14 @@ class NeuralNetworkMethods:
         # override batches. This model refines the input to fit the output, so
         # v_batch and y_true have to be overridden.
         y_true = y[batch_start:batch_end, :]
+
         v_batch = V[batch_start:batch_end, :]
         missing_mask_batch = missing_mask[batch_start:batch_end, :]
-        sample_weight_batch = sample_weight[batch_start:batch_end, :]
+
+        if sample_weight is not None:
+            sample_weight_batch = sample_weight[batch_start:batch_end, :]
+        else:
+            sample_weight_batch = None
 
         v = tf.Variable(
             tf.zeros([batch_size, n_components]),
