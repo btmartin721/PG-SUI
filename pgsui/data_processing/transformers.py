@@ -358,8 +358,10 @@ class MLPTargetTransformer(BaseEstimator, TransformerMixin):
         Returns:
             numpy.ndarray: y predictions in same format as y_true.
         """
-        y_pred_proba = y
-        return self._decode(y_pred_proba)
+        # Return predictions.
+        return y
+        # y_pred_proba = y
+        # return self._decode(y_pred_proba)
 
     def _fill(self, data, missing_mask, missing_value=-1, num_classes=3):
         """Mask missing data as ``missing_value``.

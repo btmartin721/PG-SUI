@@ -4,10 +4,20 @@ import os
 import sys
 import random
 from collections import defaultdict
+from itertools import cycle
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+
+from sklearn.metrics import (
+    roc_curve,
+    auc,
+    precision_recall_curve,
+    average_precision_score,
+)
+
+from sklearn.preprocessing import label_binarize
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # or any {'0', '1', '2', '3'}
 
@@ -726,36 +736,345 @@ class NeuralNetworkMethods:
         }
 
     @staticmethod
-    def plot_grid_search(cv_results):
-        """Plot cv_results_ from a grid search.
+    def plot_grid_search(cv_results, prefix):
+        """Plot cv_results_ from a grid search for each parameter.
 
         Saves a figure to disk.
 
         Args:
-            cv_results: the cv_results_ attribute from a trained grid search object.
+            cv_results (numpy.ndarray): the cv_results_ attribute from a trained grid search object.
+
+            prefix (str): Prefix to use for saving the plot to file.
         """
         ## Results from grid search
         results = pd.DataFrame(cv_results)
         means_test = results["mean_test_score"]
         filter_col = [col for col in results if col.startswith("param_")]
-        params_df = results[filter_col]
+        params_df = results[filter_col].astype(str)
+        params_df["score"] = np.array(means_test)
 
         # Get number of needed subplot rows.
         tot = len(filter_col)
-        tot = 10
         cols = 4
         rows = int(np.ceil(tot / cols))
         remainder = tot % cols
 
         fig = plt.figure(1, figsize=(20, 10))
-        fig.suptitle("Parameter Scores")
-        for i, p in enumerate(filter_col, start=1):
-            x = np.array(params_df[p])
-            y = np.array(means_test)
-            ax = fig.add_subplot(rows, cols, i)
-            ax.plot(x, y, "-o")
-            ax.set_xlabel(p.lstrip("param_").lower())
-            ax.set_ylabel("Mean Accuracy")
+        fig.tight_layout(pad=3.0)
 
-        # plt.legend()
-        fig.savefig("gridsearch.pdf", bbox_inches="tight")
+        # Set font properties.
+        font = {"size": 12}
+        plt.rc("font", **font)
+
+        for i, p in enumerate(filter_col, start=1):
+            # Get maximum score for each parameter setting.
+            df_plot = params_df.groupby(p)["score"].agg("max")
+
+            # Convert to float if not supposed to be string.
+            try:
+                df_plot.index = df_plot.index.astype(float)
+            except TypeError:
+                pass
+
+            df_plot = df_plot.sort_index()
+
+            ax = fig.add_subplot(rows, cols, i)
+            ax.plot(df_plot.index.astype(str), df_plot.values, "-o")
+            ax.set_xlabel(p.lstrip("param_").lower())
+            ax.set_ylabel("Max Score")
+            ax.set_ylim([0, 1])
+
+        fig.savefig(f"{prefix}_gridsearch.pdf", bbox_inches="tight")
+
+    @staticmethod
+    def compute_roc_auc_micro_macro(y_true, y_pred):
+        """Compute ROC curve with AUC scores.
+
+        ROC (Receiver Operating Characteristic) curves and AUC (area under curve) scores are computed per-class and for micro and macro averages.
+
+        Args:
+            y_true (numpy.ndarray): Ravelled numpy array of shape (n_samples * n_features,).
+
+            y_pred (numpy.ndarray): Ravelled numpy array of shape (n_samples * n_features,).
+
+        Returns:
+            Dict[str, Any]: Dictionary with true and false positive rates along probability threshold curve per class, micro and macro tpr and fpr curves averaged across classes, and AUC scores per-class and for micro and macro averages.
+        """
+        # Binarize the output fo use with ROC-AUC.
+        y_true_bin = label_binarize(y_true, classes=[0, 1, 2])
+        y_pred_bin = label_binarize(y_pred, classes=[0, 1, 2])
+        n_classes = y_true_bin.shape[1]
+
+        # Compute ROC curve and ROC area for each class.
+        fpr = dict()
+        tpr = dict()
+        roc_auc = dict()
+        for i in range(n_classes):
+            fpr[i], tpr[i], _ = roc_curve(y_true_bin[:, i], y_pred_bin[:, i])
+            roc_auc[i] = auc(fpr[i], tpr[i])
+
+        # Compute micro-average ROC curve and ROC area.
+        fpr["micro"], tpr["micro"], _ = roc_curve(
+            y_true_bin.ravel(), y_pred_bin.ravel()
+        )
+
+        roc_auc["micro"] = auc(fpr["micro"], tpr["micro"])
+
+        # Aggregate all false positive rates
+        all_fpr = np.unique(np.concatenate([fpr[i] for i in range(n_classes)]))
+
+        # Then interpolate all ROC curves at these points.
+        mean_tpr = np.zeros_like(all_fpr)
+        for i in range(n_classes):
+            mean_tpr += np.interp(all_fpr, fpr[i], tpr[i])
+
+        # Finally, average it and compute AUC.
+        mean_tpr /= n_classes
+
+        fpr["macro"] = all_fpr
+        tpr["macro"] = mean_tpr
+
+        roc_auc["macro"] = auc(fpr["macro"], tpr["macro"])
+
+        roc_auc["fpr_macro"] = fpr["macro"]
+        roc_auc["tpr_macro"] = tpr["macro"]
+        roc_auc["fpr_micro"] = fpr["micro"]
+        roc_auc["tpr_micro"] = tpr["micro"]
+        roc_auc["fpr_0"] = fpr[0]
+        roc_auc["fpr_1"] = fpr[1]
+        roc_auc["fpr_2"] = fpr[2]
+        roc_auc["tpr_0"] = tpr[0]
+        roc_auc["tpr_1"] = tpr[1]
+        roc_auc["tpr_2"] = tpr[2]
+
+        return roc_auc
+
+    @staticmethod
+    def compute_pr(y_true, y_pred):
+        """Compute precision-recall curve with Average Precision scores.
+
+        PR and AP scores are computed per-class and for micro and macro averages.
+
+        Args:
+            y_true (numpy.ndarray): Ravelled numpy array of shape (n_samples * n_features,).
+
+            y_pred (numpy.ndarray): Ravelled numpy array of shape (n_samples * n_features,).
+
+        Returns:
+            Dict[str, Any]: Dictionary with precision and recall curves per class and micro and macro averaged across classes, plus AP scores per-class and for micro and macro averages.
+        """
+        # Binarize the output fo use with ROC-AUC.
+        y_true_bin = label_binarize(y_true, classes=[0, 1, 2])
+        y_pred_bin = label_binarize(y_pred, classes=[0, 1, 2])
+        n_classes = y_true_bin.shape[1]
+
+        precision = dict()
+        recall = dict()
+        average_precision = dict()
+        for i in range(n_classes):
+            precision[i], recall[i], _ = precision_recall_curve(
+                y_true_bin[:, i], y_pred_bin[:, i]
+            )
+            average_precision[i] = average_precision_score(
+                y_true_bin[:, i], y_pred_bin[:, i]
+            )
+
+        # A "micro-average": quantifying score on all classes jointly.
+        precision["micro"], recall["micro"], _ = precision_recall_curve(
+            y_true_bin.ravel(), y_pred_bin.ravel()
+        )
+
+        average_precision["micro"] = average_precision_score(
+            y_true_bin, y_pred_bin, average="micro"
+        )
+
+        average_precision["macro"] = average_precision_score(
+            y_true_bin, y_pred_bin, average="macro"
+        )
+
+        # Aggregate all false positive rates
+        all_recall = np.unique(
+            np.concatenate([recall[i] for i in range(n_classes)])
+        )
+
+        # Then interpolate all ROC curves at these points.
+        mean_precision = np.zeros_like(all_recall)
+        for i in range(n_classes):
+            mean_precision += np.interp(all_recall, recall[i], precision[i])
+
+        # Finally, average it and compute AUC.
+        mean_precision /= n_classes
+
+        recall["macro"] = all_recall
+        precision["macro"] = mean_precision
+
+        results = dict()
+
+        results["micro"] = average_precision["micro"]
+        results["macro"] = average_precision["macro"]
+        results["recall_macro"] = recall["macro"]
+        results["precision_macro"] = precision["macro"]
+        results["recall_micro"] = recall["micro"]
+        results["precision_micro"] = precision["micro"]
+        results["recall_0"] = recall[0]
+        results["recall_1"] = recall[1]
+        results["recall_2"] = recall[2]
+        results["precision_0"] = precision[0]
+        results["precision_1"] = precision[1]
+        results["precision_2"] = precision[2]
+        results[0] = average_precision[0]
+        results[1] = average_precision[1]
+        results[2] = average_precision[2]
+
+        return results
+
+    @staticmethod
+    def plot_metrics(metrics, num_classes, prefix):
+        """Plot performance metrics for classifier.
+
+        Saves plot to PDF file on disk.
+
+        Args:
+            metrics (Dict[str, Any]): Per-class, micro, and macro-averaged metrics including accuracy, ROC-AUC, and Precision-Recall with Average Precision scores.
+
+            num_classes (int): Number of classes evaluated.
+
+            prefix (str): Prefix to use for output plot.
+        """
+        # Set font properties.
+        font = {"size": 12}
+        plt.rc("font", **font)
+
+        fn = f"{prefix}_metrics_plot.pdf"
+        fig = plt.figure(figsize=(20, 10))
+
+        acc = round(metrics["accuracy"] * 100, 2)
+
+        fig.suptitle(f"Performance Metrics\nAccuracy: {acc}")
+        axs = fig.subplots(nrows=1, ncols=2)
+        plt.subplots_adjust(hspace=0.5)
+
+        # Line weight
+        lw = 2
+
+        roc_auc = metrics["roc_auc"]
+        pr_ap = metrics["precision_recall"]
+
+        metric_list = [roc_auc, pr_ap]
+
+        for metric, ax in zip(metric_list, axs):
+
+            if "fpr_micro" in metric:
+                prefix1 = "fpr"
+                prefix2 = "tpr"
+                lab1 = "ROC"
+                lab2 = "AUC"
+                xlab = "False Positive Rate"
+                ylab = "True Positive Rate"
+                title = "Receiver Operating Characteristic (ROC)"
+                baseline = [0, 1]
+
+            elif "recall_micro" in metric:
+                prefix1 = "recall"
+                prefix2 = "precision"
+                lab1 = "Precision-Recall"
+                lab2 = "AP"
+                xlab = "Recall"
+                ylab = "Precision"
+                title = "Precision-Recall"
+
+                # Plot iso-f1 curves.
+                f_scores = np.linspace(0.2, 0.8, num=4)
+                for i, f_score in enumerate(f_scores):
+                    x = np.linspace(0.01, 1)
+                    y = f_score * x / (2 * x - f_score)
+                    ax.plot(
+                        x[y >= 0],
+                        y[y >= 0],
+                        color="gray",
+                        alpha=0.2,
+                        linewidth=lw,
+                        label="Iso-F1 Curves" if i == 0 else "",
+                    )
+                    ax.annotate(f"F1={f_score:0.1f}", xy=(0.9, y[45] + 0.02))
+
+            # Plot ROC curves.
+            ax.plot(
+                metric[f"{prefix1}_micro"],
+                metric[f"{prefix2}_micro"],
+                label=f"Micro-averaged {lab1} Curve ({lab2} = {metric['micro']:.2f})",
+                color="deeppink",
+                linestyle=":",
+                linewidth=4,
+            )
+
+            ax.plot(
+                metric[f"{prefix1}_macro"],
+                metric[f"{prefix2}_macro"],
+                label=f"Macro-averaged {lab1} Curve ({lab2} = {metric['macro']:.2f})",
+                color="navy",
+                linestyle=":",
+                linewidth=4,
+            )
+
+            colors = cycle(["aqua", "darkorange", "cornflowerblue"])
+            for i, color in zip(range(num_classes), colors):
+                ax.plot(
+                    metric[f"{prefix1}_{i}"],
+                    metric[f"{prefix2}_{i}"],
+                    color=color,
+                    lw=lw,
+                    label=f"{lab1} Curve of class {i} ({lab2} = {metric[i]:.2f})",
+                )
+
+            if "fpr_micro" in metric:
+                # Make center baseline
+                ax.plot(
+                    baseline,
+                    baseline,
+                    "k--",
+                    linewidth=lw,
+                    label="No Classification Skill",
+                )
+
+            ax.set_xlim(0.0, 1.0)
+            ax.set_ylim(0.0, 1.05)
+            ax.set_xlabel(f"{xlab}")
+            ax.set_ylabel(f"{ylab}")
+            ax.set_title(f"{title}")
+            ax.legend(loc="best")
+
+        fig.savefig(fn, bbox_inches="tight")
+        plt.close()
+        plt.clf()
+        plt.cla()
+
+    @staticmethod
+    def decode(y, missing_mask):
+        """Evaluate VAE predictions by calculating the highest predicted value.
+
+        Calucalates highest predicted value for each row vector and each class, setting the most likely class to 1.0.
+
+        Args:
+            y (numpy.ndarray): Input one-hot encoded data with predictions as last dimension.
+
+            missing_mask (numpy.ndarray): Boolean mask of missing values.
+
+        Returns:
+            numpy.ndarray: Imputed one-hot encoded values.
+
+            pandas.DataFrame: One-hot encoded pandas DataFrame with no missing values.
+        """
+        Xprob = y
+        Xt = np.apply_along_axis(mle, axis=2, arr=Xprob)
+        Xpred = np.argmax(Xt, axis=2)
+        Xtrue = np.argmax(y, axis=2)
+        Xdecoded = np.zeros((Xpred.shape[0], Xpred.shape[1]))
+        for idx, row in enumerate(Xdecoded):
+            imputed_vals = np.zeros(len(row))
+            known_vals = np.zeros(len(row))
+            imputed_idx = np.nonzero(missing_mask[idx])
+            known_idx = np.where(missing_mask[idx] == 0)
+            Xdecoded[idx, imputed_idx] = Xpred[idx, imputed_idx]
+            Xdecoded[idx, known_idx] = Xtrue[idx, known_idx]
+        return Xdecoded.astype("int8")

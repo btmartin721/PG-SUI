@@ -110,11 +110,11 @@ class ImputeKNN(Impute):
 
         random_state (int or None, optional): The seed of the pseudo random number generator to use for the iterative imputer. Randomizes selection of etimator features if n_nearest_features is not None or the imputation_order is "random". Use an integer for determinism. If None, then uses a different random seed each time. Defaults to None.
 
-        grid_iter (int, optional): Number of iterations for grid search. Defaults to 50.
+        grid_iter (int, optional): Number of iterations for grid search. Defaults to 80.
 
         ga (bool, optional): Whether to use a genetic algorithm for the grid search. If False, a RandomizedSearchCV is done instead. Defaults to False.
 
-        population_size (int, optional): For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. See GASearchCV documentation. Defaults to 10.
+        population_size (int, optional): For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. See GASearchCV documentation. Defaults to 50.
 
         tournament_size (int, optional): For genetic algorithm grid search: Number of individuals to perform tournament selection. See GASearchCV documentation. Defaults to 3.
 
@@ -122,7 +122,7 @@ class ImputeKNN(Impute):
 
         crossover_probability (float, optional): For genetic algorithm grid search: Probability of crossover operation between two individuals. See GASearchCV documentation. Defaults to 0.8.
 
-        mutation_probability (float, optional): For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation. Defaults to 0.1.
+        mutation_probability (float, optional): For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation. Defaults to 0.2.
 
         ga_algorithm (str, optional): For genetic algorithm grid search: Evolutionary algorithm to use. See more details in the deap algorithms documentation. Defaults to "eaMuPlusLambda".
 
@@ -205,13 +205,13 @@ class ImputeKNN(Impute):
         imputation_order: str = "ascending",
         skip_complete: bool = False,
         random_state: Optional[int] = None,
-        grid_iter: int = 50,
+        grid_iter: int = 80,
         ga: bool = False,
-        population_size: int = 10,
+        population_size: int = 50,
         tournament_size: int = 3,
         elitism: bool = True,
         crossover_probability: float = 0.8,
-        mutation_probability: float = 0.1,
+        mutation_probability: float = 0.2,
         ga_algorithm: str = "eaMuPlusLambda",
         early_stop_gen: int = 5,
         scoring_metric: str = "accuracy",
@@ -296,11 +296,11 @@ class ImputeRandomForest(Impute):
 
         random_state (int or None, optional): The seed of the pseudo random number generator to use for the iterative imputer. Randomizes selection of etimator features if n_nearest_features is not None or the imputation_order is "random". Use an integer for determinism. If None, then uses a different random seed each time. Defaults to None.
 
-        grid_iter (int, optional): Number of iterations for grid search. Defaults to 50.
+        grid_iter (int, optional): Number of iterations for grid search. Defaults to 80.
 
         ga (bool, optional): Whether to use a genetic algorithm for the grid search. If False, a RandomizedSearchCV is done instead. Defaults to False.
 
-        population_size (int, optional): For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. See GASearchCV documentation. Defaults to 10.
+        population_size (int, optional): For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. See GASearchCV documentation. Defaults to 50.
 
         tournament_size (int, optional): For genetic algorithm grid search: Number of individuals to perform tournament selection. See GASearchCV documentation. Defaults to 3.
 
@@ -308,7 +308,7 @@ class ImputeRandomForest(Impute):
 
         crossover_probability (float, optional): For genetic algorithm grid search: Probability of crossover operation between two individuals. See GASearchCV documentation. Defaults to 0.8.
 
-        mutation_probability (float, optional): For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation. Defaults to 0.1.
+        mutation_probability (float, optional): For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation. Defaults to 0.2.
 
         ga_algorithm (str, optional): For genetic algorithm grid search: Evolutionary algorithm to use. See more details in the deap algorithms documentation. Defaults to "eaMuPlusLambda".
 
@@ -401,13 +401,13 @@ class ImputeRandomForest(Impute):
         imputation_order: str = "ascending",
         skip_complete: bool = False,
         random_state: Optional[int] = None,
-        grid_iter: int = 50,
+        grid_iter: int = 80,
         ga: bool = False,
-        population_size: int = 10,
+        population_size: int = 50,
         tournament_size: int = 3,
         elitism: bool = True,
         crossover_probability: float = 0.8,
-        mutation_probability: float = 0.1,
+        mutation_probability: float = 0.2,
         ga_algorithm: str = "eaMuPlusLambda",
         early_stop_gen: int = 5,
         scoring_metric: str = "accuracy",
@@ -506,11 +506,11 @@ class ImputeGradientBoosting(Impute):
 
         random_state (int or None, optional): The seed of the pseudo random number generator to use for the iterative imputer. Randomizes selection of etimator features if ``n_nearest_features`` is not None or the imputation_order is "random". Use an integer for determinism. If None, then uses a different random seed each time. Defaults to None.
 
-        grid_iter (int, optional): Number of iterations for grid search. Defaults to 50.
+        grid_iter (int, optional): Number of iterations for grid search. Defaults to 80.
 
         ga (bool, optional): Whether to use a genetic algorithm for the grid search. If False, a RandomizedSearchCV is done instead. Defaults to False.
 
-        population_size (int, optional): For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. See GASearchCV documentation. Defaults to 10.
+        population_size (int, optional): For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. See GASearchCV documentation. Defaults to 50.
 
         tournament_size (int, optional): For genetic algorithm grid search: Number of individuals to perform tournament selection. See GASearchCV documentation. Defaults to 3.
 
@@ -518,7 +518,7 @@ class ImputeGradientBoosting(Impute):
 
         crossover_probability (float, optional): For genetic algorithm grid search: Probability of crossover operation between two individuals. See GASearchCV documentation. Defaults to 0.8.
 
-        mutation_probability (float, optional): For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation. Defaults to 0.1.
+        mutation_probability (float, optional): For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation. Defaults to 0.2.
 
         ga_algorithm (str, optional): For genetic algorithm grid search: Evolutionary algorithm to use. See more details in the deap algorithms documentation. Defaults to "eaMuPlusLambda".
 
@@ -610,13 +610,13 @@ class ImputeGradientBoosting(Impute):
         imputation_order: str = "ascending",
         skip_complete: bool = False,
         random_state: Optional[int] = None,
-        grid_iter: int = 50,
+        grid_iter: int = 80,
         ga: bool = False,
-        population_size: int = 10,
+        population_size: int = 50,
         tournament_size: int = 3,
         elitism: bool = True,
         crossover_probability: float = 0.8,
-        mutation_probability: float = 0.1,
+        mutation_probability: float = 0.2,
         ga_algorithm: str = "eaMuPlusLambda",
         early_stop_gen: int = 5,
         scoring_metric: str = "accuracy",
@@ -687,11 +687,11 @@ class ImputeBayesianRidge(Impute):
 
         random_state (int or None, optional): The seed of the pseudo random number generator to use for the iterative imputer. Randomizes selection of etimator features if ``n_nearest_features`` is not None or the imputation_order is "random". Use an integer for determinism. If None, then uses a different random seed each time. Defaults to None.
 
-        grid_iter (int, optional): Number of iterations for grid search. Defaults to 50.
+        grid_iter (int, optional): Number of iterations for grid search. Defaults to 80.
 
         ga (bool, optional): Whether to use a genetic algorithm for the grid search. If False, a RandomizedSearchCV is done instead. Defaults to False.
 
-        population_size (int, optional): For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. See GASearchCV documentation. Defaults to 10.
+        population_size (int, optional): For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. See GASearchCV documentation. Defaults to 50.
 
         tournament_size (int, optional): For genetic algorithm grid search: Number of individuals to perform tournament selection. See GASearchCV documentation. Defaults to 3.
 
@@ -699,7 +699,7 @@ class ImputeBayesianRidge(Impute):
 
         crossover_probability (float, optional): For genetic algorithm grid search: Probability of crossover operation between two individuals. See GASearchCV documentation. Defaults to 0.8.
 
-        mutation_probability (float, optional): For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation. Defaults to 0.1.
+        mutation_probability (float, optional): For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation. Defaults to 0.2.
 
         ga_algorithm (str, optional): For genetic algorithm grid search: Evolutionary algorithm to use. See more details in the deap algorithms documentation. Defaults to "eaMuPlusLambda".
 
@@ -790,13 +790,13 @@ class ImputeBayesianRidge(Impute):
         imputation_order: str = "ascending",
         skip_complete: bool = False,
         random_state: Optional[int] = None,
-        grid_iter: int = 50,
+        grid_iter: int = 80,
         ga: bool = False,
-        population_size: int = 10,
+        population_size: int = 50,
         tournament_size: int = 3,
         elitism: bool = True,
         crossover_probability: float = 0.8,
-        mutation_probability: float = 0.1,
+        mutation_probability: float = 0.2,
         ga_algorithm: str = "eaMuPlusLambda",
         early_stop_gen: int = 5,
         scoring_metric: str = "neg_mean_squared_error",
@@ -877,11 +877,11 @@ class ImputeXGBoost(Impute):
 
         random_state (int or None, optional): The seed of the pseudo random number generator to use for the iterative imputer. Randomizes selection of etimator features if ``n_nearest_features`` is not None or the imputation_order is "random". Use an integer for determinism. If None, then uses a different random seed each time. Defaults to None.
 
-        grid_iter (int, optional): Number of iterations for randomized grid search. Defaults to 50.
+        grid_iter (int, optional): Number of iterations for randomized grid search. Defaults to 80.
 
         ga (bool, optional): Whether to use a genetic algorithm for the grid search. If False, a RandomizedSearchCV is done instead. Defaults to False.
 
-        population_size (int, optional): For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. See GASearchCV documentation. Defaults to 10.
+        population_size (int, optional): For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. See GASearchCV documentation. Defaults to 50.
 
         tournament_size (int, optional): For genetic algorithm grid search: Number of individuals to perform tournament selection. See GASearchCV documentation. Defaults to 3.
 
@@ -889,7 +889,7 @@ class ImputeXGBoost(Impute):
 
         crossover_probability (float, optional): For genetic algorithm grid search: Probability of crossover operation between two individuals. See GASearchCV documentation. Defaults to 0.8.
 
-        mutation_probability (float, optional): For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation. Defaults to 0.1.
+        mutation_probability (float, optional): For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation. Defaults to 0.2.
 
         ga_algorithm (str, optional): For genetic algorithm grid search: Evolutionary algorithm to use. See more details in the deap algorithms documentation. Defaults to "eaMuPlusLambda".
 
@@ -978,13 +978,13 @@ class ImputeXGBoost(Impute):
         imputation_order: str = "ascending",
         skip_complete: bool = False,
         random_state: Optional[int] = None,
-        grid_iter: int = 50,
+        grid_iter: int = 80,
         ga: bool = False,
-        population_size: int = 10,
+        population_size: int = 50,
         tournament_size: int = 3,
         elitism: bool = True,
         crossover_probability: float = 0.8,
-        mutation_probability: float = 0.1,
+        mutation_probability: float = 0.2,
         ga_algorithm: str = "eaMuPlusLambda",
         early_stop_gen: int = 5,
         scoring_metric: str = "accuracy",
@@ -1075,11 +1075,11 @@ class ImputeLightGBM(Impute):
 
         random_state (int or None, optional): The seed of the pseudo random number generator to use for the iterative imputer. Randomizes selection of etimator features if n_nearest_features is not None or the imputation_order is 'random'. Use an integer for determinism. If None, then uses a different random seed each time. Defaults to None.
 
-        grid_iter (int, optional): Number of iterations for randomized grid search. Defaults to 50.
+        grid_iter (int, optional): Number of iterations for randomized grid search. Defaults to 80.
 
         ga (bool, optional): Whether to use a genetic algorithm for the grid search. If False, a RandomizedSearchCV is done instead. Defaults to False.
 
-        population_size (int, optional): For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. See GASearchCV documentation. Defaults to 10.
+        population_size (int, optional): For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. See GASearchCV documentation. Defaults to 50.
 
         tournament_size (int, optional): For genetic algorithm grid search: Number of individuals to perform tournament selection. See GASearchCV documentation. Defaults to 3.
 
@@ -1087,7 +1087,7 @@ class ImputeLightGBM(Impute):
 
         crossover_probability (float, optional): For genetic algorithm grid search: Probability of crossover operation between two individuals. See GASearchCV documentation. Defaults to 0.8.
 
-        mutation_probability (float, optional): For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation. Defaults to 0.1.
+        mutation_probability (float, optional): For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation. Defaults to 0.2.
 
         ga_algorithm (str, optional): For genetic algorithm grid search: Evolutionary algorithm to use. See more details in the deap algorithms documentation. Defaults to "eaMuPlusLambda".
 
@@ -1180,13 +1180,13 @@ class ImputeLightGBM(Impute):
         imputation_order: str = "ascending",
         skip_complete: bool = False,
         random_state: Optional[int] = None,
-        grid_iter: int = 50,
+        grid_iter: int = 80,
         ga: bool = False,
-        population_size: int = 10,
+        population_size: int = 50,
         tournament_size: int = 3,
         elitism: bool = True,
         crossover_probability: float = 0.8,
-        mutation_probability: float = 0.1,
+        mutation_probability: float = 0.2,
         ga_algorithm: str = "eaMuPlusLambda",
         early_stop_gen: int = 5,
         scoring_metric: str = "accuracy",
@@ -1381,11 +1381,11 @@ class ImputeUBP(Impute):
 
         cv (int): Number of cross-validation replicates to perform. Defaults to 5.
 
-        grid_iter (int, optional): Number of iterations for grid search. Defaults to 50.
+        grid_iter (int, optional): Number of iterations for grid search. Defaults to 80.
 
         ga (bool, optional): Whether to use a genetic algorithm for the grid search. If False, a RandomizedSearchCV is done instead. Defaults to False.
 
-        population_size (int, optional): For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. See GASearchCV documentation. Defaults to 10.
+        population_size (int, optional): For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. See GASearchCV documentation. Defaults to 50.
 
         tournament_size (int, optional): For genetic algorithm grid search: Number of individuals to perform tournament selection. See GASearchCV documentation. Defaults to 3.
 
@@ -1393,11 +1393,11 @@ class ImputeUBP(Impute):
 
         crossover_probability (float, optional): For genetic algorithm grid search: Probability of crossover operation between two individuals. See GASearchCV documentation. Defaults to 0.8.
 
-        mutation_probability (float, optional): For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation. Defaults to 0.1.
+        mutation_probability (float, optional): For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation. Defaults to 0.2.
 
         ga_algorithm (str, optional): For genetic algorithm grid search: Evolutionary algorithm to use. See more details in the deap algorithms documentation. Defaults to "eaMuPlusLambda".
 
-        scoring_metric (str, optional): Scoring metric to use for randomized or genetic algorithm grid searches. See https://scikit-learn.org/stable/modules/model_evaluation.html for supported options. Defaults to "accuracy".
+        scoring_metric (str, optional): Scoring metric to use for GridSearchCV or genetic algorithm grid searches. Supported options include "auc_macro", "auc_micro", and "accuracy". "auc_macro" and "auc_micro" get the AUC (area under curve) score using the macro and micro averages among the 012-encoded classes. "accuracy" calculates ``number of correct predictions / total predictions``\. Defaults to "auc_macro".
 
         sim_strategy (str, optional): Strategy to use for simulating missing data. Only used to validate the accuracy of the imputation. The final model will be trained with the non-simulated dataset. Supported options include: "random", "nonrandom", and "nonrandom_weighted". "random" randomly simulates missing data. When set to "nonrandom", branches from ``GenotypeData.guidetree`` will be randomly sampled to generate missing data on descendant nodes. For "nonrandom_weighted", missing data will be placed on nodes proportionally to their branch lengths (e.g., to generate data distributed as might be the case with mutation-disruption of RAD sites). Defaults to "random".
 
@@ -1469,13 +1469,13 @@ class ImputeUBP(Impute):
         l2_penalty=0.01,
         dropout_rate=0.2,
         cv=5,
-        grid_iter=50,
+        grid_iter=80,
         ga=False,
-        population_size=10,
+        population_size=50,
         tournament_size=3,
         elitism=True,
         crossover_probability=0.8,
-        mutation_probability=0.1,
+        mutation_probability=0.2,
         ga_algorithm="eaMuPlusLambda",
         scoring_metric="auc_macro",
         sim_strategy="random",
@@ -1574,11 +1574,11 @@ class ImputeNLPCA(ImputeUBP):
 
         cv (int): Number of cross-validation replicates to perform. Defaults to 5.
 
-        grid_iter (int, optional): Number of iterations for grid search. Defaults to 50.
+        grid_iter (int, optional): Number of iterations for grid search. Defaults to 80.
 
         ga (bool, optional): Whether to use a genetic algorithm for the grid search. If False, a RandomizedSearchCV is done instead. Defaults to False.
 
-        population_size (int, optional): For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. See GASearchCV documentation. Defaults to 10.
+        population_size (int, optional): For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. See GASearchCV documentation. Defaults to 50.
 
         tournament_size (int, optional): For genetic algorithm grid search: Number of individuals to perform tournament selection. See GASearchCV documentation. Defaults to 3.
 
@@ -1586,11 +1586,11 @@ class ImputeNLPCA(ImputeUBP):
 
         crossover_probability (float, optional): For genetic algorithm grid search: Probability of crossover operation between two individuals. See GASearchCV documentation. Defaults to 0.8.
 
-        mutation_probability (float, optional): For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation. Defaults to 0.1.
+        mutation_probability (float, optional): For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation. Defaults to 0.2.
 
         ga_algorithm (str, optional): For genetic algorithm grid search: Evolutionary algorithm to use. See more details in the deap algorithms documentation. Defaults to "eaMuPlusLambda".
 
-        scoring_metric (str, optional): Scoring metric to use for randomized or genetic algorithm grid searches. See https://scikit-learn.org/stable/modules/model_evaluation.html for supported options. Defaults to "accuracy".
+        scoring_metric (str, optional): Scoring metric to use for GridSearchCV or genetic algorithm grid searches. Supported options include "auc_macro", "auc_micro", and "accuracy". "auc_macro" and "auc_micro" get the AUC (area under curve) score using the macro and micro averages among the 012-encoded classes. "accuracy" calculates ``number of correct predictions / total predictions``\. Defaults to "auc_macro".
 
         sim_strategy (str, optional): Strategy to use for simulating missing data. Only used to validate the accuracy of the imputation. The final model will be trained with the non-simulated dataset. Supported options include: "random", "nonrandom", and "nonrandom_weighted". "random" randomly simulates missing data. When set to "nonrandom", branches from ``GenotypeData.guidetree`` will be randomly sampled to generate missing data on descendant nodes. For "nonrandom_weighted", missing data will be placed on nodes proportionally to their branch lengths (e.g., to generate data distributed as might be the case with mutation-disruption of RAD sites). Defaults to "random".
 

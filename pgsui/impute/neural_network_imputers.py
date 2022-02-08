@@ -4,21 +4,20 @@ import os
 import pprint
 import sys
 from collections import defaultdict
-from itertools import cycle
 
 # Third-party Imports
 import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
 
-from sklearn.metrics import accuracy_score, roc_auc_score, roc_curve, auc
+from sklearn.metrics import accuracy_score
+
 from sklearn.utils.class_weight import (
     compute_class_weight,
 )
 
 # Grid search imports
 from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.preprocessing import label_binarize
 
 # Randomized grid search imports
 from sklearn.model_selection import GridSearchCV
@@ -1094,9 +1093,9 @@ class UBP(BaseEstimator, TransformerMixin):
         self.tt_ = TargetTransformer()
         y_train = self.tt_.fit_transform(self.y_original_)
 
-        testresults = pd.read_csv("testcvresults.csv")
-        self.nn_.plot_grid_search(testresults)
-        sys.exit()
+        # testresults = pd.read_csv("testcvresults.csv")
+        # self.nn_.plot_grid_search(testresults, self.prefix)
+        # sys.exit()
 
         (
             logfile,
@@ -1122,12 +1121,12 @@ class UBP(BaseEstimator, TransformerMixin):
                 fit_params,
             )
 
-            # if self.gridparams is not None:
-            #     if self.verbose > 0:
-            #         print("\nBest found parameters:")
-            #         pprint.pprint(self.best_params_)
-            #         print(f"\nBest score: {self.best_score_}")
-            #     nn.plot_grid_search(self.search_.cv_results_)
+            if self.gridparams is not None:
+                if self.verbose > 0:
+                    print("\nBest found parameters:")
+                    pprint.pprint(self.best_params_)
+                    print(f"\nBest score: {self.best_score_}")
+                self.nn_.plot_grid_search(self.search_.cv_results_, self.prefix)
 
         else:
             self.models_, self.histories_ = self._run_ubp(
@@ -1135,7 +1134,8 @@ class UBP(BaseEstimator, TransformerMixin):
             )
 
         self._plot_history(self.histories_)
-        self._plot_metrics(self.metrics_)
+        self.nn_.plot_metrics(self.metrics_, self.num_classes, self.prefix)
+        sys.exit()
 
         return self
 
@@ -1274,7 +1274,6 @@ class UBP(BaseEstimator, TransformerMixin):
                     cv=cross_val,
                     refit=True,
                     verbose=self.verbose * 4,
-                    return_train_score=True,
                     error_score="raise",
                 )
 
@@ -1536,69 +1535,28 @@ class UBP(BaseEstimator, TransformerMixin):
         )
         testing = kwargs.get("testing", False)
 
+        y_true_masked = y_true[missing_mask]
+        y_pred_masked = y_pred[missing_mask]
+
         if testing:
             np.set_printoptions(threshold=np.inf)
-            print(y_true[missing_mask])
-            print(y_pred[missing_mask])
-        acc = accuracy_score(y_true[missing_mask], y_pred[missing_mask])
-        roc_auc = UBP.compute_roc_auc_micro_macro(y_true, y_pred, missing_mask)
+            print(y_true_masked)
+            print(y_pred_masked)
+
+        acc = accuracy_score(y_true_masked, y_pred_masked)
+
+        roc_auc = NeuralNetworkMethods.compute_roc_auc_micro_macro(
+            y_true_masked, y_pred_masked
+        )
+
+        pr_ap = NeuralNetworkMethods.compute_pr(y_true_masked, y_pred_masked)
 
         metrics = dict()
         metrics["accuracy"] = acc
         metrics["roc_auc"] = roc_auc
+        metrics["precision_recall"] = pr_ap
 
         return metrics
-
-    @staticmethod
-    def compute_roc_auc_micro_macro(y_true, y_pred, missing_mask):
-        # Binarize the output fo use with ROC-AUC.
-        y_true_bin = label_binarize(y_true[missing_mask], classes=[0, 1, 2])
-        y_pred_bin = label_binarize(y_pred[missing_mask], classes=[0, 1, 2])
-        n_classes = y_true_bin.shape[1]
-
-        # Compute ROC curve and ROC area for each class.
-        fpr = dict()
-        tpr = dict()
-        roc_auc = dict()
-        for i in range(n_classes):
-            fpr[i], tpr[i], _ = roc_curve(y_true_bin[:, i], y_pred_bin[:, i])
-            roc_auc[i] = auc(fpr[i], tpr[i])
-
-        # Compute micro-average ROC curve and ROC area.
-        fpr["micro"], tpr["micro"], _ = roc_curve(
-            y_true_bin.ravel(), y_pred_bin.ravel()
-        )
-
-        roc_auc["micro"] = auc(fpr["micro"], tpr["micro"])
-
-        # Aggregate all false positive rates
-        all_fpr = np.unique(np.concatenate([fpr[i] for i in range(n_classes)]))
-
-        # Then interpolate all ROC curves at these points.
-        mean_tpr = np.zeros_like(all_fpr)
-        for i in range(n_classes):
-            mean_tpr += np.interp(all_fpr, fpr[i], tpr[i])
-
-        # Finally, average it and compute AUC.
-        mean_tpr /= n_classes
-
-        fpr["macro"] = all_fpr
-        tpr["macro"] = mean_tpr
-
-        roc_auc["macro"] = auc(fpr["macro"], tpr["macro"])
-
-        roc_auc["fpr_macro"] = fpr["macro"]
-        roc_auc["tpr_macro"] = tpr["macro"]
-        roc_auc["fpr_micro"] = fpr["micro"]
-        roc_auc["tpr_micro"] = tpr["micro"]
-        roc_auc["fpr_0"] = fpr[0]
-        roc_auc["fpr_1"] = fpr[1]
-        roc_auc["fpr_2"] = fpr[2]
-        roc_auc["tpr_0"] = tpr[0]
-        roc_auc["tpr_1"] = tpr[1]
-        roc_auc["tpr_2"] = tpr[2]
-
-        return roc_auc
 
     def _initialize_parameters(self, y_train, missing_mask):
         """Initialize important parameters.
@@ -1758,65 +1716,6 @@ class UBP(BaseEstimator, TransformerMixin):
         # For debugging.
         model.model().summary()
 
-    def _plot_metrics(self, metrics):
-        fn = "metrics_plot.pdf"
-        fig = plt.figure(figsize=(10, 5))
-        ax = fig.subplots(nrows=1, ncols=1)
-
-        # Line weight
-        lw = 2
-
-        roc_auc = metrics["roc_auc"]
-
-        # Plot ROC curves.
-        ax.plot(
-            roc_auc["fpr_micro"],
-            roc_auc["tpr_micro"],
-            label=f"Micro-averaged ROC Curve (AUC = {roc_auc['micro']:.2f})",
-            color="deeppink",
-            linestyle=":",
-            linewidth=4,
-        )
-
-        ax.plot(
-            roc_auc["fpr_macro"],
-            roc_auc["tpr_macro"],
-            label=f"Macro-averaged ROC Curve (AUC = {roc_auc['macro']:.2f})",
-            color="navy",
-            linestyle=":",
-            linewidth=4,
-        )
-
-        colors = cycle(["aqua", "darkorange", "cornflowerblue"])
-        for i, color in zip(range(self.num_classes), colors):
-            ax.plot(
-                roc_auc[f"fpr_{i}"],
-                roc_auc[f"tpr_{i}"],
-                color=color,
-                lw=lw,
-                label=f"ROC Curve of class {i} (AUC = {roc_auc[i]:.2f})",
-            )
-
-        # Make center line.
-        ax.plot([0, 1], [0, 1], "k--", lw=lw)
-        ax.set_xlim(0.0, 1.0)
-        ax.set_ylim(0.0, 1.05)
-        ax.set_xlabel("False Positive Rate")
-        ax.set_ylabel("True Positive rate")
-
-        acc = round(metrics["accuracy"] * 100, 2)
-
-        ax.set_title(
-            f"Receiver Operating Characteristic (ROC)\nAccuracy = {acc}%",
-        )
-        ax.legend(loc="best")
-
-        fig.savefig(fn, bbox_inches="tight")
-        plt.close()
-        plt.clf()
-        plt.cla()
-        sys.exit()
-
     def _plot_history(self, lod):
         """Plot model history traces. Will be saved to file.
 
@@ -1845,7 +1744,7 @@ class UBP(BaseEstimator, TransformerMixin):
             ax2.set_title("Model Loss")
             ax2.set_ylabel("Loss (MSE)")
             ax2.set_xlabel("Epoch")
-            ax2.legend(["Training"], loc="best")
+            ax2.legend(["Train"], loc="best")
             fig.savefig(fn, bbox_inches="tight")
 
             plt.close()
