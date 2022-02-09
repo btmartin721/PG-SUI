@@ -359,9 +359,7 @@ class MLPTargetTransformer(BaseEstimator, TransformerMixin):
             numpy.ndarray: y predictions in same format as y_true.
         """
         # Return predictions.
-        return y
-        # y_pred_proba = y
-        # return self._decode(y_pred_proba)
+        return tf.nn.softmax(y).numpy()
 
     def _fill(self, data, missing_mask, missing_value=-1, num_classes=3):
         """Mask missing data as ``missing_value``.
@@ -487,8 +485,7 @@ class TargetTransformer(BaseEstimator, TransformerMixin):
         Returns:
             numpy.ndarray: y predictions in same format as y_true.
         """
-        y_pred_proba = y  # For clarity's sake. Keras outputs probabilities.
-        return self._decode(y_pred_proba)
+        return tf.nn.softmax(y).numpy()
 
     def _fill(self, data, missing_mask, missing_value=-1, num_classes=3):
         """Mask missing data as ``missing_value``.
