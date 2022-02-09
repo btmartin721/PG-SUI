@@ -15,6 +15,8 @@ from sklearn.metrics import (
     auc,
     precision_recall_curve,
     average_precision_score,
+    make_scorer,
+    accuracy_score,
 )
 
 from sklearn.preprocessing import label_binarize
@@ -748,10 +750,11 @@ class NeuralNetworkMethods:
         """
         ## Results from grid search
         results = pd.DataFrame(cv_results)
-        means_test = results["mean_test_score"]
+        means_test = [col for col in results if col.startswith("mean_test_")]
         filter_col = [col for col in results if col.startswith("param_")]
         params_df = results[filter_col].astype(str)
-        params_df["score"] = np.array(means_test)
+        for i, col in enumerate(means_test):
+            params_df[col] = results[means_test[i]]
 
         # Get number of needed subplot rows.
         tot = len(filter_col)
@@ -767,20 +770,37 @@ class NeuralNetworkMethods:
         plt.rc("font", **font)
 
         for i, p in enumerate(filter_col, start=1):
-            # Get maximum score for each parameter setting.
-            df_plot = params_df.groupby(p)["score"].agg("max")
-
-            # Convert to float if not supposed to be string.
-            try:
-                df_plot.index = df_plot.index.astype(float)
-            except TypeError:
-                pass
-
-            df_plot = df_plot.sort_index()
 
             ax = fig.add_subplot(rows, cols, i)
-            ax.plot(df_plot.index.astype(str), df_plot.values, "-o")
-            ax.set_xlabel(p.lstrip("param_").lower())
+
+            # Plot each metric.
+            for col in means_test:
+                # Get maximum score for each parameter setting.
+                df_plot = params_df.groupby(p)[col].agg("max")
+
+                # Convert to float if not supposed to be string.
+                try:
+                    df_plot.index = df_plot.index.astype(float)
+                except TypeError:
+                    pass
+
+                # Sort by index (numerically if possible).
+                df_plot = df_plot.sort_index()
+
+                # Remove prefix from score name.
+                col_new_name = col[len("mean_test_") :]
+
+                ax.plot(
+                    df_plot.index.astype(str),
+                    df_plot.values,
+                    "-o",
+                    label=col_new_name,
+                )
+
+                ax.legend(loc="best")
+
+            param_new_name = p[len("param_") :]
+            ax.set_xlabel(param_new_name.lower())
             ax.set_ylabel("Max Score")
             ax.set_ylim([0, 1])
 
@@ -802,8 +822,9 @@ class NeuralNetworkMethods:
         """
         # Binarize the output fo use with ROC-AUC.
         y_true_bin = label_binarize(y_true, classes=[0, 1, 2])
-        y_pred_bin = label_binarize(y_pred, classes=[0, 1, 2])
+        y_pred_bin = y_pred
         n_classes = y_true_bin.shape[1]
+        # y_pred_bin = label_binarize(y_pred, classes=[0, 1, 2])
 
         # Compute ROC curve and ROC area for each class.
         fpr = dict()
@@ -865,7 +886,7 @@ class NeuralNetworkMethods:
         """
         # Binarize the output fo use with ROC-AUC.
         y_true_bin = label_binarize(y_true, classes=[0, 1, 2])
-        y_pred_bin = label_binarize(y_pred, classes=[0, 1, 2])
+        y_pred_bin = y_pred
         n_classes = y_true_bin.shape[1]
 
         precision = dict()
@@ -892,12 +913,12 @@ class NeuralNetworkMethods:
             y_true_bin, y_pred_bin, average="macro"
         )
 
-        # Aggregate all false positive rates
+        # Aggregate all recalls
         all_recall = np.unique(
             np.concatenate([recall[i] for i in range(n_classes)])
         )
 
-        # Then interpolate all ROC curves at these points.
+        # Then interpolate all PR curves at these points.
         mean_precision = np.zeros_like(all_recall)
         for i in range(n_classes):
             mean_precision += np.interp(all_recall, recall[i], precision[i])
@@ -912,8 +933,8 @@ class NeuralNetworkMethods:
 
         results["micro"] = average_precision["micro"]
         results["macro"] = average_precision["macro"]
-        results["recall_macro"] = recall["macro"]
-        results["precision_macro"] = precision["macro"]
+        results["recall_macro"] = all_recall
+        results["precision_macro"] = mean_precision
         results["recall_micro"] = recall["micro"]
         results["precision_micro"] = precision["micro"]
         results["recall_0"] = recall[0]
@@ -1049,16 +1070,15 @@ class NeuralNetworkMethods:
         plt.clf()
         plt.cla()
 
-    @staticmethod
-    def decode(y, missing_mask):
-        """Evaluate VAE predictions by calculating the highest predicted value.
+    def decode_masked(self, y):
+        """Evaluate model predictions by decoding to 012-encoded format.
+
+        Gets the index of the highest predicted value to obtain the 012-encodings.
 
         Calucalates highest predicted value for each row vector and each class, setting the most likely class to 1.0.
 
         Args:
-            y (numpy.ndarray): Input one-hot encoded data with predictions as last dimension.
-
-            missing_mask (numpy.ndarray): Boolean mask of missing values.
+            y (numpy.ndarray): Model predictions of shape (n_samples * n_features,). Array should be flattened and masked.
 
         Returns:
             numpy.ndarray: Imputed one-hot encoded values.
@@ -1066,15 +1086,224 @@ class NeuralNetworkMethods:
             pandas.DataFrame: One-hot encoded pandas DataFrame with no missing values.
         """
         Xprob = y
-        Xt = np.apply_along_axis(mle, axis=2, arr=Xprob)
-        Xpred = np.argmax(Xt, axis=2)
-        Xtrue = np.argmax(y, axis=2)
-        Xdecoded = np.zeros((Xpred.shape[0], Xpred.shape[1]))
-        for idx, row in enumerate(Xdecoded):
-            imputed_vals = np.zeros(len(row))
-            known_vals = np.zeros(len(row))
-            imputed_idx = np.nonzero(missing_mask[idx])
-            known_idx = np.where(missing_mask[idx] == 0)
-            Xdecoded[idx, imputed_idx] = Xpred[idx, imputed_idx]
-            Xdecoded[idx, known_idx] = Xtrue[idx, known_idx]
-        return Xdecoded.astype("int8")
+        Xt = np.apply_along_axis(self.mle, axis=-1, arr=Xprob)
+        Xpred = np.argmax(Xt, axis=-1)
+        return Xpred
+
+    def mle(self, row):
+        """Get the Maximum Likelihood Estimation for the best prediction. Basically, it sets the index of the maxiumum value in a vector (row) to 1.0, since it is one-hot encoded.
+
+        Args:
+            row (numpy.ndarray(float)): Row vector with predicted values as floating points.
+
+        Returns:
+            numpy.ndarray(float): Row vector with the highest prediction set to 1.0 and the others set to 0.0.
+        """
+        res = np.zeros(row.shape[0])
+        res[np.argmax(row)] = 1
+        return res
+
+    @staticmethod
+    def accuracy_scorer(y_true, y_pred, **kwargs):
+        """Get accuracy score for grid search.
+
+        If provided, only calculates score where missing_mask is True (i.e., data were missing). This is so that users can simulate missing data for known values, and then the predictions for only those known values can be evaluated.
+
+        Args:
+            y_true (numpy.ndarray): 012-encoded true target values.
+
+            y_pred (tensorflow.EagerTensor): Predictions from model as probabilities. They must first be decoded to use with accuracy_score.
+
+            kwargs (Any): Keyword arguments to use with scorer. Supported options include ``missing_mask`` and ``testing``\.
+
+        Returns:
+            float: Metric score by comparing y_true and y_pred.
+        """
+        # Get missing mask if provided.
+        # Otherwise default is all missing values (array all True).
+        missing_mask = kwargs.get("missing_mask")
+        testing = kwargs.get("testing", False)
+
+        y_true_masked = y_true[missing_mask]
+        y_pred_masked = y_pred[missing_mask]
+
+        nn = NeuralNetworkMethods()
+        y_pred_mask_decoded = nn.decode_masked(y_pred_masked)
+
+        acc = accuracy_score(y_true_masked, y_pred_mask_decoded)
+
+        if testing:
+            np.set_printoptions(threshold=np.inf)
+            print(y_true_masked)
+            print(y_pred_mask_decoded)
+
+        return acc
+
+    @staticmethod
+    def auc_macro(y_true, y_pred, **kwargs):
+        """Get AUC score with macro averaging for grid search.
+
+        If provided, only calculates score where missing_mask is True (i.e., data were missing). This is so that users can simulate missing data for known values, and then the predictions for only those known values can be evaluated.
+
+        Args:
+            y_true (numpy.ndarray): 012-encoded true target values.
+
+            y_pred (tensorflow.EagerTensor): Predictions from model as probabilities.
+
+            kwargs (Any): Keyword arguments to use with scorer. Supported options include ``missing_mask`` and ``testing``\.
+
+        Returns:
+            float: Metric score by comparing y_true and y_pred.
+        """
+        # Get missing mask if provided.
+        # Otherwise default is all missing values (array all True).
+        missing_mask = kwargs.get("missing_mask")
+        testing = kwargs.get("testing", False)
+
+        y_true_masked = y_true[missing_mask]
+        y_pred_masked = y_pred[missing_mask]
+
+        roc_auc = NeuralNetworkMethods.compute_roc_auc_micro_macro(
+            y_true_masked, y_pred_masked
+        )
+
+        return roc_auc["macro"]
+
+    @staticmethod
+    def auc_micro(y_true, y_pred, **kwargs):
+        """Get AUC score with micro averaging for grid search.
+
+        If provided, only calculates score where missing_mask is True (i.e., data were missing). This is so that users can simulate missing data for known values, and then the predictions for only those known values can be evaluated.
+
+        Args:
+            y_true (numpy.ndarray): 012-encoded true target values.
+
+            y_pred (tensorflow.EagerTensor): Predictions from model as probabilities.
+
+            kwargs (Any): Keyword arguments to use with scorer. Supported options include ``missing_mask`` and ``testing``\.
+
+        Returns:
+            float: Metric score by comparing y_true and y_pred.
+        """
+        # Get missing mask if provided.
+        # Otherwise default is all missing values (array all True).
+        missing_mask = kwargs.get("missing_mask")
+        testing = kwargs.get("testing", False)
+
+        y_true_masked = y_true[missing_mask]
+        y_pred_masked = y_pred[missing_mask]
+
+        roc_auc = NeuralNetworkMethods.compute_roc_auc_micro_macro(
+            y_true_masked, y_pred_masked
+        )
+
+        return roc_auc["micro"]
+
+    @staticmethod
+    def pr_macro(y_true, y_pred, **kwargs):
+        """Get Precision-Recall score with macro averaging for grid search.
+
+        If provided, only calculates score where missing_mask is True (i.e., data were missing). This is so that users can simulate missing data for known values, and then the predictions for only those known values can be evaluated.
+
+        Args:
+            y_true (numpy.ndarray): 012-encoded true target values.
+
+            y_pred (tensorflow.EagerTensor): Predictions from model as probabilities.
+
+            kwargs (Any): Keyword arguments to use with scorer. Supported options include ``missing_mask`` and ``testing``\.
+
+        Returns:
+            float: Metric score by comparing y_true and y_pred.
+        """
+        # Get missing mask if provided.
+        # Otherwise default is all missing values (array all True).
+        missing_mask = kwargs.get("missing_mask")
+        testing = kwargs.get("testing", False)
+
+        y_true_masked = y_true[missing_mask]
+        y_pred_masked = y_pred[missing_mask]
+
+        pr_ap = NeuralNetworkMethods.compute_pr(y_true_masked, y_pred_masked)
+
+        return pr_ap["macro"]
+
+    @staticmethod
+    def pr_micro(y_true, y_pred, **kwargs):
+        """Get Precision-Recall score with micro averaging for grid search.
+
+        If provided, only calculates score where missing_mask is True (i.e., data were missing). This is so that users can simulate missing data for known values, and then the predictions for only those known values can be evaluated.
+
+        Args:
+            y_true (numpy.ndarray): 012-encoded true target values.
+
+            y_pred (tensorflow.EagerTensor): Predictions from model as probabilities.
+
+            kwargs (Any): Keyword arguments to use with scorer. Supported options include ``missing_mask`` and ``testing``\.
+
+        Returns:
+            float: Metric score by comparing y_true and y_pred.
+        """
+        # Get missing mask if provided.
+        # Otherwise default is all missing values (array all True).
+        missing_mask = kwargs.get("missing_mask")
+        testing = kwargs.get("testing", False)
+
+        y_true_masked = y_true[missing_mask]
+        y_pred_masked = y_pred[missing_mask]
+
+        pr_ap = NeuralNetworkMethods.compute_pr(y_true_masked, y_pred_masked)
+
+        return pr_ap["micro"]
+
+    @classmethod
+    def make_multimetric_scorer(cls, metrics, missing_mask, testing=False):
+        """Get all scoring metrics and make an sklearn scorer.
+
+        Args:
+            metrics (str or List[str]): Metrics to use with grid search. If string, it will be converted to a list of one element.
+
+            missing_mask (numpy.ndarray): Missing mask to use to demarcate values to use with scoring.
+
+            testing (bool, optional): True if in test mode, wherein it prints y_true and y_pred_decoded as 1D lists for comparison. Otherwise False. Defaults to False.
+        Returns:
+            Dict[str, Callable]: Dictionary with callable scoring functions to use with grid search as the values.
+
+        Raises:
+            ValueError: Invalid scoring metric provided.
+        """
+        if isinstance(metrics, str):
+            metrics = [metrics]
+
+        scorers = dict()
+        for item in metrics:
+            if item.lower() == "accuracy":
+                scorers["accuracy"] = make_scorer(
+                    cls.accuracy_scorer,
+                    missing_mask=missing_mask,
+                    testing=testing,
+                )
+            elif item.lower() == "auc_macro":
+                scorers["auc_macro"] = make_scorer(
+                    cls.auc_macro, missing_mask=missing_mask, testing=testing
+                )
+            elif item.lower() == "auc_micro":
+                scorers["auc_micro"] = make_scorer(
+                    cls.auc_micro,
+                    missing_mask=missing_mask,
+                    testing=testing,
+                )
+            elif item.lower() == "precision_recall_macro":
+                scorers["precision_recall_macro"] = make_scorer(
+                    cls.pr_macro,
+                    missing_mask=missing_mask,
+                    testing=testing,
+                )
+            elif item.lower() == "precision_recall_micro":
+                scorers["precision_recall_micro"] = make_scorer(
+                    cls.pr_micro,
+                    missing_mask=missing_mask,
+                    testing=testing,
+                )
+            else:
+                raise ValueError(f"Invalid scoring_metric provided: {item}")
+        return scorers
