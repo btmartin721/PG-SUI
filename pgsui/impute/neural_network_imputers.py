@@ -406,31 +406,26 @@ class MLPClassifier(KerasClassifier):
         Args:
             y_true (numpy.ndarray): True target values input to fit().
             y_pred (numpy.ndarray): Predicted target values from estimator. The predictions are modified by self.target_encoder().inverse_transform() before being sent here.
-            kwargs (Any): Other parameters sent to sklearn scoring metric.
+            kwargs (Any): Other parameters sent to sklearn scoring metric. Supported options include missing_mask, scoring_metric, and testing.
 
         Returns:
             float: Calculated score.
         """
         # Get missing mask if provided.
-        # Otherwise default is no missing values (array all False).
+        # Otherwise default is all missing values (array all True).
         missing_mask = kwargs.get(
-            "missing_mask", np.zeros(y_true.shape, dtype=bool)
+            "missing_mask", np.ones(y_true.shape, dtype=bool)
         )
 
         testing = kwargs.get("testing", False)
         scoring_metric = kwargs.get("scoring_metric", "accuracy")
 
-        if testing:
-            np.set_printoptions(threshold=np.inf)
-            print(y_true[missing_mask])
-            print(y_pred[missing_mask])
+        y_true_masked = y_true[missing_mask]
+        y_pred_masked = y_pred[missing_mask]
 
-        if scoring_metric == "accuracy":
-            return accuracy_score(y_true[missing_mask], y_pred[missing_mask])
-
-        elif scoring_metric.startswith("auc"):
-            roc_auc = UBP.compute_roc_auc_micro_macro(
-                y_true, y_pred, missing_mask
+        if scoring_metric.startswith("auc"):
+            roc_auc = NeuralNetworkMethods.compute_roc_auc_micro_macro(
+                y_true_masked, y_pred_masked, missing_mask
             )
 
             if scoring_metric == "auc_macro":
@@ -438,6 +433,48 @@ class MLPClassifier(KerasClassifier):
 
             elif scoring_metric == "auc_micro":
                 return roc_auc["micro"]
+
+            else:
+                raise ValueError(
+                    f"Invalid scoring_metric provided: {scoring_metric}"
+                )
+
+        elif scoring_metric.startswith("precision"):
+            pr_ap = NeuralNetworkMethods.compute_pr(
+                y_true_masked, y_pred_masked
+            )
+
+            if scoring_metric == "precision_recall_macro":
+                return pr_ap["macro"]
+
+            elif scoring_metric == "precision_recall_micro":
+                return pr_ap["micro"]
+
+            else:
+                raise ValueError(
+                    f"Invalid scoring_metric provided: {scoring_metric}"
+                )
+
+        elif scoring_metric == "accuracy":
+            y_pred_masked_decoded = NeuralNetworkMethods.decode_masked(
+                y_pred_masked
+            )
+            return accuracy_score(y_true_masked, y_pred_masked_decoded)
+
+        else:
+            raise ValueError(
+                f"Invalid scoring_metric provided: {scoring_metric}"
+            )
+
+        if testing:
+            np.set_printoptions(threshold=np.inf)
+            print(y_true_masked)
+
+            y_pred_masked_decoded = NeuralNetworkMethods.decode_masked(
+                y_pred_masked
+            )
+
+            print(y_pred_masked_decoded)
 
     @property
     def feature_encoder(self):
@@ -1224,6 +1261,15 @@ class UBP(BaseEstimator, TransformerMixin):
 
             V = model_params.pop("V")
 
+            scoring = self.nn_.make_multimetric_scorer(
+                self.scoring_metric, self.sim_missing_mask_
+            )
+
+            if isinstance(self.scoring_metric, str):
+                scoring_metric = self.scoring_metric
+            else:
+                scoring_metric = self.scoring_metric[0]
+
             clf = MLPClassifier(
                 V,
                 model_params.pop("y_train"),
@@ -1238,8 +1284,6 @@ class UBP(BaseEstimator, TransformerMixin):
                 callbacks=fit_params["callbacks"],
                 validation_split=fit_params["validation_split"],
                 verbose=0,
-                score__missing_mask=self.sim_missing_mask_,
-                score__scoring_metric=self.scoring_metric,
             )
 
             if self.ga:
@@ -1272,7 +1316,8 @@ class UBP(BaseEstimator, TransformerMixin):
                     param_grid=self.gridparams,
                     n_jobs=self.n_jobs,
                     cv=cross_val,
-                    refit=True,
+                    scoring=scoring,
+                    refit=scoring_metric,
                     verbose=self.verbose * 4,
                     error_score="raise",
                 )
@@ -1319,7 +1364,6 @@ class UBP(BaseEstimator, TransformerMixin):
                 verbose=0,
                 score__missing_mask=self.sim_missing_mask_,
                 score__scoring_metric=self.scoring_metric,
-                score__testing=True,
             )
 
             clf.fit(V[self.n_components], y=y_true)
@@ -1529,27 +1573,31 @@ class UBP(BaseEstimator, TransformerMixin):
     @staticmethod
     def scorer(y_true, y_pred, **kwargs):
         # Get missing mask if provided.
-        # Otherwise default is no missing values (array all False).
+        # Otherwise default is all missing values (array all True).
         missing_mask = kwargs.get(
-            "missing_mask", np.zeros(y_true.shape, dtype=bool)
+            "missing_mask", np.ones(y_true.shape, dtype=bool)
         )
+
         testing = kwargs.get("testing", False)
 
         y_true_masked = y_true[missing_mask]
         y_pred_masked = y_pred[missing_mask]
-
-        if testing:
-            np.set_printoptions(threshold=np.inf)
-            print(y_true_masked)
-            print(y_pred_masked)
-
-        acc = accuracy_score(y_true_masked, y_pred_masked)
 
         roc_auc = NeuralNetworkMethods.compute_roc_auc_micro_macro(
             y_true_masked, y_pred_masked
         )
 
         pr_ap = NeuralNetworkMethods.compute_pr(y_true_masked, y_pred_masked)
+
+        nn = NeuralNetworkMethods()
+        y_pred_masked_decoded = nn.decode_masked(y_pred_masked)
+
+        acc = accuracy_score(y_true_masked, y_pred_masked_decoded)
+
+        if testing:
+            np.set_printoptions(threshold=np.inf)
+            print(y_true_masked)
+            print(y_pred_masked_decoded)
 
         metrics = dict()
         metrics["accuracy"] = acc
