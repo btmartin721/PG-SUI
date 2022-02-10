@@ -17,6 +17,7 @@ from sklearn.metrics import (
     average_precision_score,
     make_scorer,
     accuracy_score,
+    multilabel_confusion_matrix,
 )
 
 from sklearn.preprocessing import label_binarize
@@ -822,9 +823,8 @@ class NeuralNetworkMethods:
         """
         # Binarize the output fo use with ROC-AUC.
         y_true_bin = label_binarize(y_true, classes=[0, 1, 2])
-        y_pred_bin = y_pred
+        y_pred_bin = label_binarize(y_pred, classes=[0, 1, 2])
         n_classes = y_true_bin.shape[1]
-        # y_pred_bin = label_binarize(y_pred, classes=[0, 1, 2])
 
         # Compute ROC curve and ROC area for each class.
         fpr = dict()
@@ -886,7 +886,19 @@ class NeuralNetworkMethods:
         """
         # Binarize the output fo use with ROC-AUC.
         y_true_bin = label_binarize(y_true, classes=[0, 1, 2])
-        y_pred_bin = y_pred
+        y_pred_proba_bin = y_pred
+
+        nn = NeuralNetworkMethods()
+        y_pred_012 = nn.decode_masked(y_pred_proba_bin)
+
+        # print(np.unique(y_pred_bin))
+        # sys.exit()
+
+        mcm = multilabel_confusion_matrix(y_true, y_pred_012)
+        tn = np.sum(mcm[:, 0, 0])
+        tp = np.sum(mcm[:, 1, 1])
+        baseline = tp / (tn + tp)
+
         n_classes = y_true_bin.shape[1]
 
         precision = dict()
@@ -894,23 +906,23 @@ class NeuralNetworkMethods:
         average_precision = dict()
         for i in range(n_classes):
             precision[i], recall[i], _ = precision_recall_curve(
-                y_true_bin[:, i], y_pred_bin[:, i]
+                y_true_bin[:, i], y_pred_proba_bin[:, i]
             )
             average_precision[i] = average_precision_score(
-                y_true_bin[:, i], y_pred_bin[:, i]
+                y_true_bin[:, i], y_pred_proba_bin[:, i]
             )
 
         # A "micro-average": quantifying score on all classes jointly.
         precision["micro"], recall["micro"], _ = precision_recall_curve(
-            y_true_bin.ravel(), y_pred_bin.ravel()
+            y_true_bin.ravel(), y_pred_proba_bin.ravel()
         )
 
         average_precision["micro"] = average_precision_score(
-            y_true_bin, y_pred_bin, average="micro"
+            y_true_bin, y_pred_proba_bin, average="micro"
         )
 
         average_precision["macro"] = average_precision_score(
-            y_true_bin, y_pred_bin, average="macro"
+            y_true_bin, y_pred_proba_bin, average="macro"
         )
 
         # Aggregate all recalls
@@ -921,7 +933,7 @@ class NeuralNetworkMethods:
         # Then interpolate all PR curves at these points.
         mean_precision = np.zeros_like(all_recall)
         for i in range(n_classes):
-            mean_precision += np.interp(all_recall, recall[i], precision[i])
+            mean_precision += np.interp(all_recall, precision[i], recall[i])
 
         # Finally, average it and compute AUC.
         mean_precision /= n_classes
@@ -946,6 +958,7 @@ class NeuralNetworkMethods:
         results[0] = average_precision[0]
         results[1] = average_precision[1]
         results[2] = average_precision[2]
+        results["baseline"] = baseline
 
         return results
 
@@ -1003,6 +1016,7 @@ class NeuralNetworkMethods:
                 xlab = "Recall"
                 ylab = "Precision"
                 title = "Precision-Recall"
+                baseline = [metric["baseline"], metric["baseline"]]
 
                 # Plot iso-f1 curves.
                 f_scores = np.linspace(0.2, 0.8, num=4)
@@ -1052,6 +1066,14 @@ class NeuralNetworkMethods:
                 # Make center baseline
                 ax.plot(
                     baseline,
+                    baseline,
+                    "k--",
+                    linewidth=lw,
+                    label="No Classification Skill",
+                )
+            else:
+                ax.plot(
+                    [0, 1],
                     baseline,
                     "k--",
                     linewidth=lw,
@@ -1128,14 +1150,14 @@ class NeuralNetworkMethods:
         y_pred_masked = y_pred[missing_mask]
 
         nn = NeuralNetworkMethods()
-        y_pred_mask_decoded = nn.decode_masked(y_pred_masked)
+        y_pred_masked_decoded = nn.decode_masked(y_pred_masked)
 
-        acc = accuracy_score(y_true_masked, y_pred_mask_decoded)
+        acc = accuracy_score(y_true_masked, y_pred_masked_decoded)
 
         if testing:
             np.set_printoptions(threshold=np.inf)
             print(y_true_masked)
-            print(y_pred_mask_decoded)
+            print(y_pred_masked_decoded)
 
         return acc
 
@@ -1163,8 +1185,11 @@ class NeuralNetworkMethods:
         y_true_masked = y_true[missing_mask]
         y_pred_masked = y_pred[missing_mask]
 
+        nn = NeuralNetworkMethods()
+        y_pred_masked_decoded = nn.decode_masked(y_pred_masked)
+
         roc_auc = NeuralNetworkMethods.compute_roc_auc_micro_macro(
-            y_true_masked, y_pred_masked
+            y_true_masked, y_pred_masked_decoded
         )
 
         return roc_auc["macro"]
@@ -1193,8 +1218,11 @@ class NeuralNetworkMethods:
         y_true_masked = y_true[missing_mask]
         y_pred_masked = y_pred[missing_mask]
 
+        nn = NeuralNetworkMethods()
+        y_pred_masked_decoded = nn.decode_masked(y_pred_masked)
+
         roc_auc = NeuralNetworkMethods.compute_roc_auc_micro_macro(
-            y_true_masked, y_pred_masked
+            y_true_masked, y_pred_masked_decoded
         )
 
         return roc_auc["micro"]
