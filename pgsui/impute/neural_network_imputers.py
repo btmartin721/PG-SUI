@@ -1343,6 +1343,7 @@ class UBP(BaseEstimator, TransformerMixin):
                 y_true,
                 y_pred,
                 missing_mask=self.sim_missing_mask_,
+                testing=True,
             )
 
         else:
@@ -1583,14 +1584,14 @@ class UBP(BaseEstimator, TransformerMixin):
         y_true_masked = y_true[missing_mask]
         y_pred_masked = y_pred[missing_mask]
 
+        nn = NeuralNetworkMethods()
+        y_pred_masked_decoded = nn.decode_masked(y_pred_masked)
+
         roc_auc = NeuralNetworkMethods.compute_roc_auc_micro_macro(
-            y_true_masked, y_pred_masked
+            y_true_masked, y_pred_masked_decoded
         )
 
         pr_ap = NeuralNetworkMethods.compute_pr(y_true_masked, y_pred_masked)
-
-        nn = NeuralNetworkMethods()
-        y_pred_masked_decoded = nn.decode_masked(y_pred_masked)
 
         acc = accuracy_score(y_true_masked, y_pred_masked_decoded)
 
