@@ -11,7 +11,15 @@ import tensorflow as tf
 tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 tf.get_logger().setLevel(logging.ERROR)
 
-from tensorflow.keras.layers import Dropout, Dense, Lambda, Reshape
+from tensorflow.keras.layers import (
+    Dropout,
+    Dense,
+    Lambda,
+    Reshape,
+    LeakyReLU,
+    PReLU,
+)
+
 from tensorflow.keras.regularizers import l1_l2
 
 # Custom Modules
@@ -149,6 +157,19 @@ class NLPCAModel(tf.keras.Model):
         self.kernel_regularizer = kernel_regularizer
         kernel_initializer = weights_initializer
 
+        if hidden_activation.lower() == "leaky_relu":
+            activation = LeakyReLU(alpha=0.01)
+
+        elif hidden_activation.lower() == "prelu":
+            activation = PReLU()
+
+        elif hidden_activation.lower() == "selu":
+            activation = "selu"
+            kernel_initializer = "lecun_normal"
+
+        else:
+            activation = hidden_activation
+
         if num_hidden_layers > 5:
             raise ValueError(
                 f"The maximum number of hidden layers is 5, but got "
@@ -165,7 +186,7 @@ class NLPCAModel(tf.keras.Model):
         self.dense1 = Dense(
             hidden_layer_sizes[0],
             input_shape=(n_components,),
-            activation=hidden_activation,
+            activation=activation,
             kernel_initializer=kernel_initializer,
             kernel_regularizer=kernel_regularizer,
         )
@@ -173,7 +194,7 @@ class NLPCAModel(tf.keras.Model):
         if num_hidden_layers >= 2:
             self.dense2 = Dense(
                 hidden_layer_sizes[1],
-                activation=hidden_activation,
+                activation=activation,
                 kernel_initializer=kernel_initializer,
                 kernel_regularizer=kernel_regularizer,
             )
@@ -181,7 +202,7 @@ class NLPCAModel(tf.keras.Model):
         if num_hidden_layers >= 3:
             self.dense3 = Dense(
                 hidden_layer_sizes[2],
-                activation=hidden_activation,
+                activation=activation,
                 kernel_initializer=kernel_initializer,
                 kernel_regularizer=kernel_regularizer,
             )
@@ -189,7 +210,7 @@ class NLPCAModel(tf.keras.Model):
         if num_hidden_layers >= 4:
             self.dense4 = Dense(
                 hidden_layer_sizes[3],
-                activation=hidden_activation,
+                activation=activation,
                 kernel_initializer=kernel_initializer,
                 kernel_regularizer=kernel_regularizer,
             )
@@ -197,14 +218,13 @@ class NLPCAModel(tf.keras.Model):
         if num_hidden_layers == 5:
             self.dense5 = Dense(
                 hidden_layer_sizes[4],
-                activation=hidden_activation,
+                activation=activation,
                 kernel_initializer=kernel_initializer,
                 kernel_regularizer=kernel_regularizer,
             )
 
         self.output1 = Dense(
             output_shape * num_classes,
-            # activation=hidden_activation,
             kernel_initializer=kernel_initializer,
             kernel_regularizer=kernel_regularizer,
         )
@@ -257,7 +277,6 @@ class NLPCAModel(tf.keras.Model):
     def set_model_outputs(self):
         x = tf.keras.Input(shape=(self.n_components,))
         model = tf.keras.Model(inputs=[x], outputs=self.call(x))
-        # self.inputs = tf.convert_to_tensor(self.V_latent_)
         self.outputs = model.outputs
 
     def train_step(self, data):
@@ -328,7 +347,7 @@ class NLPCAModel(tf.keras.Model):
                 y_pred, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
             )
             ### NOTE: If you get the error, "'tuple' object has no attribute
-            ### 'rank', then convert y_true to a tensor object."
+            ### 'rank'", then convert y_true to a tensor object."
             loss = self.compiled_loss(
                 y_true_masked,
                 y_pred_masked,
