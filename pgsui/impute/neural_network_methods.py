@@ -887,19 +887,20 @@ class NeuralNetworkMethods:
         # Binarize the output fo use with ROC-AUC.
         y_true_bin = label_binarize(y_true, classes=[0, 1, 2])
         y_pred_proba_bin = y_pred
+        n_classes = y_true_bin.shape[1]
 
         nn = NeuralNetworkMethods()
         y_pred_012 = nn.decode_masked(y_pred_proba_bin)
 
-        # print(np.unique(y_pred_bin))
-        # sys.exit()
-
+        # Make confusion matrix to get true negatives and true positives.
         mcm = multilabel_confusion_matrix(y_true, y_pred_012)
         tn = np.sum(mcm[:, 0, 0])
-        tp = np.sum(mcm[:, 1, 1])
-        baseline = tp / (tn + tp)
+        tn /= n_classes
 
-        n_classes = y_true_bin.shape[1]
+        tp = np.sum(mcm[:, 1, 1])
+        tp /= n_classes
+
+        baseline = tp / (tn + tp)
 
         precision = dict()
         recall = dict()
