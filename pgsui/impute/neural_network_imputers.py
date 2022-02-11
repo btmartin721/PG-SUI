@@ -1261,14 +1261,17 @@ class UBP(BaseEstimator, TransformerMixin):
 
             V = model_params.pop("V")
 
-            scoring = self.nn_.make_multimetric_scorer(
-                self.scoring_metric, self.sim_missing_mask_
-            )
+            all_scoring_metrics = [
+                "precision_recall_macro",
+                "precision_recall_micro",
+                "auc_macro",
+                "auc_micro",
+                "accuracy",
+            ]
 
-            if isinstance(self.scoring_metric, str):
-                scoring_metric = self.scoring_metric
-            else:
-                scoring_metric = self.scoring_metric[0]
+            scoring = self.nn_.make_multimetric_scorer(
+                all_scoring_metrics, self.sim_missing_mask_
+            )
 
             clf = MLPClassifier(
                 V,
@@ -1317,7 +1320,7 @@ class UBP(BaseEstimator, TransformerMixin):
                     n_jobs=self.n_jobs,
                     cv=cross_val,
                     scoring=scoring,
-                    refit=scoring_metric,
+                    refit=self.scoring_metric,
                     verbose=self.verbose * 4,
                     error_score="raise",
                 )
