@@ -7,6 +7,7 @@ from collections import defaultdict
 from itertools import cycle
 
 import matplotlib.pyplot as plt
+import seaborn as sns
 import numpy as np
 import pandas as pd
 
@@ -19,6 +20,8 @@ from sklearn.metrics import (
     accuracy_score,
     multilabel_confusion_matrix,
 )
+
+from sklearn_genetic.utils import logbook_to_pandas
 
 from sklearn.preprocessing import label_binarize
 
@@ -1336,3 +1339,61 @@ class NeuralNetworkMethods:
             else:
                 raise ValueError(f"Invalid scoring_metric provided: {item}")
         return scorers
+
+    @staticmethod
+    def plot_search_space(
+        estimator,
+        height=2,
+        s=25,
+        features=None,
+    ):
+        """Make density and contour plots for showing search space during grid search.
+
+        Modified from sklearn-genetic-opt function to implement exception handling.
+
+        Args:
+            estimator (sklearn estimator object): A fitted estimator from :class:`~sklearn_genetic.GASearchCV`.
+
+            height (float, optional): Height of each facet. Defaults to 2.
+
+            s (float, optional): Size of the markers in scatter plot. Defaults to 5.
+
+            features (list, optional): Subset of features to plot, if ``None`` it plots all the features by default. Defaults to None.
+
+        Returns:
+            g (seaborn.PairGrid): Pair plot of the used hyperparameters during the search.
+        """
+        sns.set_style("white")
+
+        df = logbook_to_pandas(estimator.logbook)
+        if features:
+            _stats = df[features]
+        else:
+            variables = [*estimator.space.parameters, "score"]
+            _stats = df[variables]
+
+        g = sns.PairGrid(_stats, diag_sharey=False, height=height)
+
+        g = g.map_upper(sns.scatterplot, s=s, color="r", alpha=0.2)
+
+        try:
+            g = g.map_lower(
+                sns.kdeplot,
+                shade=True,
+                cmap=sns.color_palette("ch:s=.25,rot=-.25", as_cmap=True),
+            )
+        except np.linalg.LinAlgError as err:
+            if "singular matrix" in str(err).lower():
+                g = g.map_lower(sns.scatterplot, s=s, color="b", alpha=1.0)
+            else:
+                raise
+
+        try:
+            g = g.map_diag(
+                sns.kdeplot, shade=True, palette="crest", alpha=0.2, color="red"
+            )
+        except np.linalg.LinAlgError as err:
+            if "singular matrix" in str(err).lower():
+                g = g.map_diag(sns.histplot, color="red", alpha=1.0, kde=False)
+
+        return g
