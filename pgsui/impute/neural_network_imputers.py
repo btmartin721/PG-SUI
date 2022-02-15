@@ -25,7 +25,7 @@ from sklearn.model_selection import ParameterGrid
 
 # Genetic algorithm grid search imports
 from sklearn_genetic import GASearchCV
-from sklearn_genetic.callbacks import ConsecutiveStopping
+from sklearn_genetic.callbacks import ConsecutiveStopping, ProgressBar
 from sklearn_genetic.plots import plot_fitness_evolution
 
 from scikeras.wrappers import KerasClassifier
@@ -59,6 +59,7 @@ try:
     from ..read_input.read_input import GenotypeData
     from ..utils.misc import timer
     from ..utils.misc import isnotebook
+    from ..utils.misc import HiddenPrints
     from ..utils.misc import validate_input_type
     from .neural_network_methods import NeuralNetworkMethods
     from .nlpca_model import NLPCAModel
@@ -73,6 +74,7 @@ except (ModuleNotFoundError, ValueError):
     from read_input.read_input import GenotypeData
     from utils.misc import timer
     from utils.misc import isnotebook
+    from utils.misc import HiddenPrints
     from utils.misc import validate_input_type
     from impute.neural_network_methods import NeuralNetworkMethods
     from impute.nlpca_model import NLPCAModel
@@ -1025,7 +1027,7 @@ class UBP(BaseEstimator, TransformerMixin):
         dropout_rate=0.2,
         sample_weights=False,
         cv=5,
-        grid_iter=50,
+        grid_iter=80,
         ga=False,
         ga_kwargs=None,
         scoring_metric="auc_macro",
@@ -1172,6 +1174,22 @@ class UBP(BaseEstimator, TransformerMixin):
 
         self._plot_history(self.histories_)
         self.nn_.plot_metrics(self.metrics_, self.num_classes, self.prefix)
+
+        if self.ga:
+            plot_fitness_evolution(self.search_)
+            plt.savefig(
+                f"{self.prefix}_fitness_evolution.pdf", bbox_inches="tight"
+            )
+            plt.cla()
+            plt.clf()
+            plt.close()
+
+            g = self.nn_.plot_search_space(self.search_)
+            plt.savefig(f"{self.prefix}_search_space.pdf", bbox_inches="tight")
+            plt.cla()
+            plt.clf()
+            plt.close()
+
         sys.exit()
 
         return self
@@ -1291,26 +1309,33 @@ class UBP(BaseEstimator, TransformerMixin):
 
             if self.ga:
                 # Stop searching if GA sees no improvement.
-                callback = ConsecutiveStopping(
-                    generations=self.early_stop_gen, metric="fitness"
+                callback = [
+                    ConsecutiveStopping(
+                        generations=self.early_stop_gen, metric="fitness"
+                    )
+                ]
+
+                if not self.disable_progressbar:
+                    callback.append(ProgressBar())
+
+                verbose = False if self.verbose == 0 else True
+                
+                # Do genetic algorithm
+                # with HiddenPrints():
+                search = GASearchCV(
+                    estimator=clf,
+                    cv=cross_val,
+                    scoring=scoring,
+                    generations=self.grid_iter,
+                    param_grid=self.gridparams,
+                    n_jobs=self.n_jobs,
+                    refit=self.scoring_metric,
+                    verbose=verbose,
+                    error_score="raise",
+                    **self.ga_kwargs,
                 )
 
-                # Do genetic algorithm
-                with HiddenPrints():
-                    search = GASearchCV(
-                        estimator=clf,
-                        cv=cross_val,
-                        scoring=self.scoring_metric,
-                        generations=self.grid_iter,
-                        param_grid=self.gridparams,
-                        n_jobs=self.n_jobs,
-                        verbose=False,
-                        **self.ga_kwargs,
-                    )
-
-                    search.fit(
-                        V[self.n_components], y_train, callbacks=callback
-                    )
+                search.fit(V[self.n_components], y_true, callbacks=callback)
 
             else:
                 # Do randomized grid search
