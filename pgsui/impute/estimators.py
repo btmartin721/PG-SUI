@@ -110,11 +110,11 @@ class ImputeKNN(Impute):
 
         random_state (int or None, optional): The seed of the pseudo random number generator to use for the iterative imputer. Randomizes selection of etimator features if n_nearest_features is not None or the imputation_order is "random". Use an integer for determinism. If None, then uses a different random seed each time. Defaults to None.
 
-        grid_iter (int, optional): Number of iterations for grid search. Defaults to 80.
+        gridsearch_method (str or None, optional): Grid search method to use. Supported options include: {"gridsearch", "randomized_gridsearch", and "genetic_algorithm", None}. Whether to use a genetic algorithm for the grid search. "gridsearch" uses GridSearchCV to test every possible parameter combination. "randomized_gridsearch" picks ``grid_iter`` random combinations of parameters to test. "genetic_algorithm" uses a genetic algorithm via sklearn-genetic-opt GASearchCV to do the grid search. If set to None, then does not do a grid search. If doing a grid search, "randomized_search" takes the least amount of time because it does not have to test all parameters. "genetic_algorithm" takes the longest. See the scikit-learn GridSearchCV and RandomizedSearchCV documentation for the "gridsearch" and "randomized_gridsearch" options, and the sklearn-genetic-opt GASearchCV documentation for the "genetic_algorithm" option. Defaults to None.
 
-        ga (bool, optional): Whether to use a genetic algorithm for the grid search. If False, a RandomizedSearchCV is done instead. Defaults to False.
+        grid_iter (int, optional): Number of iterations for randomized and genetic algorithm grid searches. Defaults to 80.
 
-        population_size (int, optional): For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. See GASearchCV documentation. Defaults to 50.
+        population_size (int or str, optional): For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. If set to "auto", then ``population_size`` is calculated as ``15 * n_parameters``\. If set to an integer, then uses the integer value as ``population_size``\. If you need to speed up the genetic algorithm grid search, try decreasing this parameter. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io). Defaults to "auto".
 
         tournament_size (int, optional): For genetic algorithm grid search: Number of individuals to perform tournament selection. See GASearchCV documentation. Defaults to 3.
 
@@ -124,7 +124,7 @@ class ImputeKNN(Impute):
 
         mutation_probability (float, optional): For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation. Defaults to 0.2.
 
-        ga_algorithm (str, optional): For genetic algorithm grid search: Evolutionary algorithm to use. See more details in the deap algorithms documentation. Defaults to "eaMuPlusLambda".
+        ga_algorithm (str, optional): For genetic algorithm grid search: Evolutionary algorithm to use. Supported options include: {"eaMuPlusLambda", "eaMuCommaLambda", "eaSimple"}. If you need to speed up the genetic algorithm grid search, try setting ``algorithm`` to "euSimple", at the expense of evolutionary model robustness. See more details in the DEAP algorithms documentation (https://deap.readthedocs.io). Defaults to "eaMuPlusLambda".
 
         early_stop_gen (int, optional): If the genetic algorithm sees ``early_stop_gen`` consecutive generations without improvement in the scoring metric, an early stopping callback is implemented. This saves time by reducing the number of generations the genetic algorithm has to perform. Defaults to 5.
 
@@ -296,11 +296,11 @@ class ImputeRandomForest(Impute):
 
         random_state (int or None, optional): The seed of the pseudo random number generator to use for the iterative imputer. Randomizes selection of etimator features if n_nearest_features is not None or the imputation_order is "random". Use an integer for determinism. If None, then uses a different random seed each time. Defaults to None.
 
-        grid_iter (int, optional): Number of iterations for grid search. Defaults to 80.
+        gridsearch_method (str or None, optional): Grid search method to use. Supported options include: {"gridsearch", "randomized_gridsearch", and "genetic_algorithm", None}. Whether to use a genetic algorithm for the grid search. "gridsearch" uses GridSearchCV to test every possible parameter combination. "randomized_gridsearch" picks ``grid_iter`` random combinations of parameters to test. "genetic_algorithm" uses a genetic algorithm via sklearn-genetic-opt GASearchCV to do the grid search. If set to None, then does not do a grid search. If doing a grid search, "randomized_search" takes the least amount of time because it does not have to test all parameters. "genetic_algorithm" takes the longest. See the scikit-learn GridSearchCV and RandomizedSearchCV documentation for the "gridsearch" and "randomized_gridsearch" options, and the sklearn-genetic-opt GASearchCV documentation for the "genetic_algorithm" option. Defaults to None.
 
-        ga (bool, optional): Whether to use a genetic algorithm for the grid search. If False, a RandomizedSearchCV is done instead. Defaults to False.
+        grid_iter (int, optional): Number of iterations for randomized and genetic algorithm grid searches. Defaults to 80.
 
-        population_size (int, optional): For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. See GASearchCV documentation. Defaults to 50.
+        population_size (int or str, optional): For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. If set to "auto", then ``population_size`` is calculated as ``15 * n_parameters``\. If set to an integer, then uses the integer value as ``population_size``\. If you need to speed up the genetic algorithm grid search, try decreasing this parameter. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io). Defaults to "auto".
 
         tournament_size (int, optional): For genetic algorithm grid search: Number of individuals to perform tournament selection. See GASearchCV documentation. Defaults to 3.
 
@@ -310,7 +310,7 @@ class ImputeRandomForest(Impute):
 
         mutation_probability (float, optional): For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation. Defaults to 0.2.
 
-        ga_algorithm (str, optional): For genetic algorithm grid search: Evolutionary algorithm to use. See more details in the deap algorithms documentation. Defaults to "eaMuPlusLambda".
+        ga_algorithm (str, optional): For genetic algorithm grid search: Evolutionary algorithm to use. Supported options include: {"eaMuPlusLambda", "eaMuCommaLambda", "eaSimple"}. If you need to speed up the genetic algorithm grid search, try setting ``algorithm`` to "euSimple", at the expense of evolutionary model robustness. See more details in the DEAP algorithms documentation (https://deap.readthedocs.io). Defaults to "eaMuPlusLambda".
 
         early_stop_gen (int, optional): If the genetic algorithm sees ``early_stop_gen`` consecutive generations without improvement in the scoring metric, an early stopping callback is implemented. This saves time by reducing the number of generations the genetic algorithm has to perform. Defaults to 5.
 
@@ -506,11 +506,11 @@ class ImputeGradientBoosting(Impute):
 
         random_state (int or None, optional): The seed of the pseudo random number generator to use for the iterative imputer. Randomizes selection of etimator features if ``n_nearest_features`` is not None or the imputation_order is "random". Use an integer for determinism. If None, then uses a different random seed each time. Defaults to None.
 
-        grid_iter (int, optional): Number of iterations for grid search. Defaults to 80.
+        gridsearch_method (str or None, optional): Grid search method to use. Supported options include: {"gridsearch", "randomized_gridsearch", and "genetic_algorithm", None}. Whether to use a genetic algorithm for the grid search. "gridsearch" uses GridSearchCV to test every possible parameter combination. "randomized_gridsearch" picks ``grid_iter`` random combinations of parameters to test. "genetic_algorithm" uses a genetic algorithm via sklearn-genetic-opt GASearchCV to do the grid search. If set to None, then does not do a grid search. If doing a grid search, "randomized_search" takes the least amount of time because it does not have to test all parameters. "genetic_algorithm" takes the longest. See the scikit-learn GridSearchCV and RandomizedSearchCV documentation for the "gridsearch" and "randomized_gridsearch" options, and the sklearn-genetic-opt GASearchCV documentation for the "genetic_algorithm" option. Defaults to None.
 
-        ga (bool, optional): Whether to use a genetic algorithm for the grid search. If False, a RandomizedSearchCV is done instead. Defaults to False.
+        grid_iter (int, optional): Number of iterations for randomized and genetic algorithm grid searches. Defaults to 80.
 
-        population_size (int, optional): For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. See GASearchCV documentation. Defaults to 50.
+        population_size (int or str, optional): For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. If set to "auto", then ``population_size`` is calculated as ``15 * n_parameters``\. If set to an integer, then uses the integer value as ``population_size``\. If you need to speed up the genetic algorithm grid search, try decreasing this parameter. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io). Defaults to "auto".
 
         tournament_size (int, optional): For genetic algorithm grid search: Number of individuals to perform tournament selection. See GASearchCV documentation. Defaults to 3.
 
@@ -520,7 +520,7 @@ class ImputeGradientBoosting(Impute):
 
         mutation_probability (float, optional): For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation. Defaults to 0.2.
 
-        ga_algorithm (str, optional): For genetic algorithm grid search: Evolutionary algorithm to use. See more details in the deap algorithms documentation. Defaults to "eaMuPlusLambda".
+        ga_algorithm (str, optional): For genetic algorithm grid search: Evolutionary algorithm to use. Supported options include: {"eaMuPlusLambda", "eaMuCommaLambda", "eaSimple"}. If you need to speed up the genetic algorithm grid search, try setting ``algorithm`` to "euSimple", at the expense of evolutionary model robustness. See more details in the DEAP algorithms documentation (https://deap.readthedocs.io). Defaults to "eaMuPlusLambda".
 
         early_stop_gen (int, optional): If the genetic algorithm sees ``early_stop_gen`` consecutive generations without improvement in the scoring metric, an early stopping callback is implemented. This saves time by reducing the number of generations the genetic algorithm has to perform. Defaults to 5.
 
@@ -687,11 +687,11 @@ class ImputeBayesianRidge(Impute):
 
         random_state (int or None, optional): The seed of the pseudo random number generator to use for the iterative imputer. Randomizes selection of etimator features if ``n_nearest_features`` is not None or the imputation_order is "random". Use an integer for determinism. If None, then uses a different random seed each time. Defaults to None.
 
-        grid_iter (int, optional): Number of iterations for grid search. Defaults to 80.
+        gridsearch_method (str or None, optional): Grid search method to use. Supported options include: {"gridsearch", "randomized_gridsearch", and "genetic_algorithm", None}. Whether to use a genetic algorithm for the grid search. "gridsearch" uses GridSearchCV to test every possible parameter combination. "randomized_gridsearch" picks ``grid_iter`` random combinations of parameters to test. "genetic_algorithm" uses a genetic algorithm via sklearn-genetic-opt GASearchCV to do the grid search. If set to None, then does not do a grid search. If doing a grid search, "randomized_search" takes the least amount of time because it does not have to test all parameters. "genetic_algorithm" takes the longest. See the scikit-learn GridSearchCV and RandomizedSearchCV documentation for the "gridsearch" and "randomized_gridsearch" options, and the sklearn-genetic-opt GASearchCV documentation for the "genetic_algorithm" option. Defaults to None.
 
-        ga (bool, optional): Whether to use a genetic algorithm for the grid search. If False, a RandomizedSearchCV is done instead. Defaults to False.
+        grid_iter (int, optional): Number of iterations for randomized and genetic algorithm grid searches. Defaults to 80.
 
-        population_size (int, optional): For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. See GASearchCV documentation. Defaults to 50.
+        population_size (int or str, optional): For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. If set to "auto", then ``population_size`` is calculated as ``15 * n_parameters``\. If set to an integer, then uses the integer value as ``population_size``\. If you need to speed up the genetic algorithm grid search, try decreasing this parameter. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io). Defaults to "auto".
 
         tournament_size (int, optional): For genetic algorithm grid search: Number of individuals to perform tournament selection. See GASearchCV documentation. Defaults to 3.
 
@@ -701,7 +701,7 @@ class ImputeBayesianRidge(Impute):
 
         mutation_probability (float, optional): For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation. Defaults to 0.2.
 
-        ga_algorithm (str, optional): For genetic algorithm grid search: Evolutionary algorithm to use. See more details in the deap algorithms documentation. Defaults to "eaMuPlusLambda".
+        ga_algorithm (str, optional): For genetic algorithm grid search: Evolutionary algorithm to use. Supported options include: {"eaMuPlusLambda", "eaMuCommaLambda", "eaSimple"}. If you need to speed up the genetic algorithm grid search, try setting ``algorithm`` to "euSimple", at the expense of evolutionary model robustness. See more details in the DEAP algorithms documentation (https://deap.readthedocs.io). Defaults to "eaMuPlusLambda".
 
         early_stop_gen (int, optional): If the genetic algorithm sees ``early_stop_gen`` consecutive generations without improvement in the scoring metric, an early stopping callback is implemented. This saves time by reducing the number of generations the genetic algorithm has to perform. Defaults to 5.
 
@@ -877,11 +877,11 @@ class ImputeXGBoost(Impute):
 
         random_state (int or None, optional): The seed of the pseudo random number generator to use for the iterative imputer. Randomizes selection of etimator features if ``n_nearest_features`` is not None or the imputation_order is "random". Use an integer for determinism. If None, then uses a different random seed each time. Defaults to None.
 
-        grid_iter (int, optional): Number of iterations for randomized grid search. Defaults to 80.
+        gridsearch_method (str or None, optional): Grid search method to use. Supported options include: {"gridsearch", "randomized_gridsearch", and "genetic_algorithm", None}. Whether to use a genetic algorithm for the grid search. "gridsearch" uses GridSearchCV to test every possible parameter combination. "randomized_gridsearch" picks ``grid_iter`` random combinations of parameters to test. "genetic_algorithm" uses a genetic algorithm via sklearn-genetic-opt GASearchCV to do the grid search. If set to None, then does not do a grid search. If doing a grid search, "randomized_search" takes the least amount of time because it does not have to test all parameters. "genetic_algorithm" takes the longest. See the scikit-learn GridSearchCV and RandomizedSearchCV documentation for the "gridsearch" and "randomized_gridsearch" options, and the sklearn-genetic-opt GASearchCV documentation for the "genetic_algorithm" option. Defaults to None.
 
-        ga (bool, optional): Whether to use a genetic algorithm for the grid search. If False, a RandomizedSearchCV is done instead. Defaults to False.
+        grid_iter (int, optional): Number of iterations for randomized and genetic algorithm grid searches. Defaults to 80.
 
-        population_size (int, optional): For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. See GASearchCV documentation. Defaults to 50.
+        population_size (int or str, optional): For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. If set to "auto", then ``population_size`` is calculated as ``15 * n_parameters``\. If set to an integer, then uses the integer value as ``population_size``\. If you need to speed up the genetic algorithm grid search, try decreasing this parameter. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io). Defaults to "auto".
 
         tournament_size (int, optional): For genetic algorithm grid search: Number of individuals to perform tournament selection. See GASearchCV documentation. Defaults to 3.
 
@@ -891,7 +891,7 @@ class ImputeXGBoost(Impute):
 
         mutation_probability (float, optional): For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation. Defaults to 0.2.
 
-        ga_algorithm (str, optional): For genetic algorithm grid search: Evolutionary algorithm to use. See more details in the deap algorithms documentation. Defaults to "eaMuPlusLambda".
+        ga_algorithm (str, optional): For genetic algorithm grid search: Evolutionary algorithm to use. Supported options include: {"eaMuPlusLambda", "eaMuCommaLambda", "eaSimple"}. If you need to speed up the genetic algorithm grid search, try setting ``algorithm`` to "euSimple", at the expense of evolutionary model robustness. See more details in the DEAP algorithms documentation (https://deap.readthedocs.io). Defaults to "eaMuPlusLambda".
 
         early_stop_gen (int, optional): If the genetic algorithm sees ``early_stop_gen`` consecutive generations without improvement in the scoring metric, an early stopping callback is implemented. This saves time by reducing the number of generations the genetic algorithm has to perform. Defaults to 5.
 
@@ -1075,11 +1075,11 @@ class ImputeLightGBM(Impute):
 
         random_state (int or None, optional): The seed of the pseudo random number generator to use for the iterative imputer. Randomizes selection of etimator features if n_nearest_features is not None or the imputation_order is 'random'. Use an integer for determinism. If None, then uses a different random seed each time. Defaults to None.
 
-        grid_iter (int, optional): Number of iterations for randomized grid search. Defaults to 80.
+        gridsearch_method (str or None, optional): Grid search method to use. Supported options include: {"gridsearch", "randomized_gridsearch", and "genetic_algorithm", None}. Whether to use a genetic algorithm for the grid search. "gridsearch" uses GridSearchCV to test every possible parameter combination. "randomized_gridsearch" picks ``grid_iter`` random combinations of parameters to test. "genetic_algorithm" uses a genetic algorithm via sklearn-genetic-opt GASearchCV to do the grid search. If set to None, then does not do a grid search. If doing a grid search, "randomized_search" takes the least amount of time because it does not have to test all parameters. "genetic_algorithm" takes the longest. See the scikit-learn GridSearchCV and RandomizedSearchCV documentation for the "gridsearch" and "randomized_gridsearch" options, and the sklearn-genetic-opt GASearchCV documentation for the "genetic_algorithm" option. Defaults to None.
 
-        ga (bool, optional): Whether to use a genetic algorithm for the grid search. If False, a RandomizedSearchCV is done instead. Defaults to False.
+        grid_iter (int, optional): Number of iterations for randomized and genetic algorithm grid searches. Defaults to 80.
 
-        population_size (int, optional): For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. See GASearchCV documentation. Defaults to 50.
+        population_size (int or str, optional): For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. If set to "auto", then ``population_size`` is calculated as ``15 * n_parameters``\. If set to an integer, then uses the integer value as ``population_size``\. If you need to speed up the genetic algorithm grid search, try decreasing this parameter. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io). Defaults to "auto".
 
         tournament_size (int, optional): For genetic algorithm grid search: Number of individuals to perform tournament selection. See GASearchCV documentation. Defaults to 3.
 
@@ -1089,7 +1089,7 @@ class ImputeLightGBM(Impute):
 
         mutation_probability (float, optional): For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation. Defaults to 0.2.
 
-        ga_algorithm (str, optional): For genetic algorithm grid search: Evolutionary algorithm to use. See more details in the deap algorithms documentation. Defaults to "eaMuPlusLambda".
+        ga_algorithm (str, optional): For genetic algorithm grid search: Evolutionary algorithm to use. Supported options include: {"eaMuPlusLambda", "eaMuCommaLambda", "eaSimple"}. If you need to speed up the genetic algorithm grid search, try setting ``algorithm`` to "euSimple", at the expense of evolutionary model robustness. See more details in the DEAP algorithms documentation (https://deap.readthedocs.io). Defaults to "eaMuPlusLambda".
 
         early_stop_gen (int, optional): If the genetic algorithm sees ``early_stop_gen`` consecutive generations without improvement in the scoring metric, an early stopping callback is implemented. This saves time by reducing the number of generations the genetic algorithm has to perform. Defaults to 5.
 
@@ -1373,19 +1373,19 @@ class ImputeUBP(Impute):
 
         weights_initializer (str, optional): Initializer to use for the model weights. See tf.keras.initializers for more info. Defaults to "glorot_normal".
 
-        l1_penalty (float, optional): L1 regularization penalty to apply to reduce overfitting. Defaults to 0.01.
+        l1_penalty (float, optional): L1 regularization penalty to apply to reduce overfitting. Defaults to 1e-6.
 
-        l2_penalty (float, optional) L2 regularization penalty to apply to reduce overfitting. Defaults to 0.01.
+        l2_penalty (float, optional) L2 regularization penalty to apply to reduce overfitting. Defaults to 1e-6.
 
         dropout_rate (float, optional): Neuron dropout rate during training to reduce overfitting. Must be a float between 0 and 1. E.g., if dropout_rate is set to 0.2, then 20% of the neurons are randomly dropped out per epoch. Defaults to 0.2.
 
         cv (int): Number of cross-validation replicates to perform. Defaults to 5.
 
-        grid_iter (int, optional): Number of iterations for grid search. Defaults to 80.
+        gridsearch_method (str or None, optional): Grid search method to use. Supported options include: {"gridsearch", "randomized_gridsearch", and "genetic_algorithm", None}. Whether to use a genetic algorithm for the grid search. "gridsearch" uses GridSearchCV to test every possible parameter combination. "randomized_gridsearch" picks ``grid_iter`` random combinations of parameters to test. "genetic_algorithm" uses a genetic algorithm via sklearn-genetic-opt GASearchCV to do the grid search. If set to None, then does not do a grid search. If doing a grid search, "randomized_search" takes the least amount of time because it does not have to test all parameters. "genetic_algorithm" takes the longest. See the scikit-learn GridSearchCV and RandomizedSearchCV documentation for the "gridsearch" and "randomized_gridsearch" options, and the sklearn-genetic-opt GASearchCV documentation for the "genetic_algorithm" option. Defaults to None.
 
-        ga (bool, optional): Whether to use a genetic algorithm for the grid search. If False, a RandomizedSearchCV is done instead. Defaults to False.
+        grid_iter (int, optional): Number of iterations for randomized and genetic algorithm grid searches. Defaults to 80.
 
-        population_size (int, optional): For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. See GASearchCV documentation. Defaults to 50.
+        population_size (int or str, optional): For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. If set to "auto", then ``population_size`` is calculated as ``15 * n_parameters``\. If set to an integer, then uses the integer value as ``population_size``\. If you need to speed up the genetic algorithm grid search, try decreasing this parameter. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io). Defaults to "auto".
 
         tournament_size (int, optional): For genetic algorithm grid search: Number of individuals to perform tournament selection. See GASearchCV documentation. Defaults to 3.
 
@@ -1395,7 +1395,7 @@ class ImputeUBP(Impute):
 
         mutation_probability (float, optional): For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation. Defaults to 0.2.
 
-        ga_algorithm (str, optional): For genetic algorithm grid search: Evolutionary algorithm to use. See more details in the deap algorithms documentation. Defaults to "eaMuPlusLambda".
+        ga_algorithm (str, optional): For genetic algorithm grid search: Evolutionary algorithm to use. Supported options include: {"eaMuPlusLambda", "eaMuCommaLambda", "eaSimple"}. If you need to speed up the genetic algorithm grid search, try setting ``algorithm`` to "euSimple", at the expense of evolutionary model robustness. See more details in the DEAP algorithms documentation (https://deap.readthedocs.io). Defaults to "eaMuPlusLambda".
 
         scoring_metric (str, optional): Scoring metric to use for GridSearchCV or genetic algorithm grid searches. Supported options include "auc_macro", "auc_micro", "precision_recall_macro", "precision_recall_micro", and "accuracy". Note that all metrics are calculated when doing a grid search, the results of which are saved to a CSV file. However, when refitting following the grid search, the value passed to ``scoring_metric`` is used to select the best parameters. If you wish to choose the best parameters from a different metric, that information will also be in the CSV file. "auc_macro" and "auc_micro" get the AUC (area under curve) score for the ROC (Receiver Operating Characteristic) curve. The ROC curves plot the false positive rate (X-axis) versus the true positive rate (Y-axis) for each 012-encoded class and for the macro and micro averages among classes. The false positive rate is defined as: ``False Positive Rate = False Positives / (False Positives + True Negatives)`` and the true positive rate is defined as ``True Positive Rate = True Positives / (True Positives + False Negatives)``\. Macro averaging places equal importance on each class, whereas the micro average is the global average across all classes. AUC scores allow the ROC curve, and thus the model's classification skill, to be summarized as a single number. "precision_recall_macro" and "precision_recall_micro" create Precision-Recall (PR) curves for each class plus the macro and micro averages among classes. Precision is defined as ``True Positives / (True Positives + False Positives)`` and recall is defined as ``Recall = True Positives / (True Positives + False Negatives)``\. Reviewing both precision and recall is useful in cases where there is an imbalance in the observations between the two classes. For example, if there are many examples of major alleles (class 0) and only a few examples of minor alleles (class 2). PR curves take into account the use the Average Precision (AP) instead of AUC. AUC and AP are similar metrics, but AP summarizes a precision-recall curve as the weighted mean of precisions achieved at each probability threshold, with the increase in recall from the previous threshold used as the weight. On the contrary, AUC uses linear interpolation with the trapezoidal rule to calculate the area under the curve, which can sometimes be overly optimistic for Precision-Recall curves. Thus, AP scores are used instead. "accuracy" calculates ``number of correct predictions / total predictions``\, but can often be misleading when used without considering the model's classification skill for each class. Defaults to "auc_macro".
 
@@ -1465,13 +1465,13 @@ class ImputeUBP(Impute):
         epochs=100,
         tol=1e-3,
         weights_initializer="glorot_normal",
-        l1_penalty=0.01,
-        l2_penalty=0.01,
+        l1_penalty=1e-6,
+        l2_penalty=1e-6,
         dropout_rate=0.2,
         cv=5,
         grid_iter=80,
         ga=False,
-        population_size=50,
+        population_size="auto",
         tournament_size=3,
         elitism=True,
         crossover_probability=0.8,
@@ -1574,11 +1574,11 @@ class ImputeNLPCA(ImputeUBP):
 
         cv (int): Number of cross-validation replicates to perform. Defaults to 5.
 
-        grid_iter (int, optional): Number of iterations for grid search. Defaults to 80.
+        gridsearch_method (str or None, optional): Grid search method to use. Supported options include: {"gridsearch", "randomized_gridsearch", and "genetic_algorithm", None}. Whether to use a genetic algorithm for the grid search. "gridsearch" uses GridSearchCV to test every possible parameter combination. "randomized_gridsearch" picks ``grid_iter`` random combinations of parameters to test. "genetic_algorithm" uses a genetic algorithm via sklearn-genetic-opt GASearchCV to do the grid search. If set to None, then does not do a grid search. If doing a grid search, "randomized_search" takes the least amount of time because it does not have to test all parameters. "genetic_algorithm" takes the longest. See the scikit-learn GridSearchCV and RandomizedSearchCV documentation for the "gridsearch" and "randomized_gridsearch" options, and the sklearn-genetic-opt GASearchCV documentation for the "genetic_algorithm" option. Defaults to None.
 
-        ga (bool, optional): Whether to use a genetic algorithm for the grid search. If False, a RandomizedSearchCV is done instead. Defaults to False.
+        grid_iter (int, optional): Number of iterations for randomized and genetic algorithm grid searches. Defaults to 80.
 
-        population_size (int, optional): For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. See GASearchCV documentation. Defaults to 50.
+        population_size (int or str, optional): For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. If set to "auto", then ``population_size`` is calculated as ``15 * n_parameters``\. If set to an integer, then uses the integer value as ``population_size``\. If you need to speed up the genetic algorithm grid search, try decreasing this parameter. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io). Defaults to "auto".
 
         tournament_size (int, optional): For genetic algorithm grid search: Number of individuals to perform tournament selection. See GASearchCV documentation. Defaults to 3.
 
@@ -1588,7 +1588,7 @@ class ImputeNLPCA(ImputeUBP):
 
         mutation_probability (float, optional): For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation. Defaults to 0.2.
 
-        ga_algorithm (str, optional): For genetic algorithm grid search: Evolutionary algorithm to use. See more details in the deap algorithms documentation. Defaults to "eaMuPlusLambda".
+        ga_algorithm (str, optional): For genetic algorithm grid search: Evolutionary algorithm to use. Supported options include: {"eaMuPlusLambda", "eaMuCommaLambda", "eaSimple"}. If you need to speed up the genetic algorithm grid search, try setting ``algorithm`` to "euSimple", at the expense of evolutionary model robustness. See more details in the DEAP algorithms documentation (https://deap.readthedocs.io). Defaults to "eaMuPlusLambda".
 
         scoring_metric (str, optional): Scoring metric to use for GridSearchCV or genetic algorithm grid searches. Supported options include "auc_macro", "auc_micro", "precision_recall_macro", "precision_recall_micro", and "accuracy". Note that all metrics are calculated when doing a grid search, the results of which are saved to a CSV file. However, when refitting following the grid search, the value passed to ``scoring_metric`` is used to select the best parameters. If you wish to choose the best parameters from a different metric, that information will also be in the CSV file. "auc_macro" and "auc_micro" get the AUC (area under curve) score for the ROC (Receiver Operating Characteristic) curve. The ROC curves plot the false positive rate (X-axis) versus the true positive rate (Y-axis) for each 012-encoded class and for the macro and micro averages among classes. The false positive rate is defined as: ``False Positive Rate = False Positives / (False Positives + True Negatives)`` and the true positive rate is defined as ``True Positive Rate = True Positives / (True Positives + False Negatives)``\. Macro averaging places equal importance on each class, whereas the micro average is the global average across all classes. AUC scores allow the ROC curve, and thus the model's classification skill, to be summarized as a single number. "precision_recall_macro" and "precision_recall_micro" create Precision-Recall (PR) curves for each class plus the macro and micro averages among classes. Precision is defined as ``True Positives / (True Positives + False Positives)`` and recall is defined as ``Recall = True Positives / (True Positives + False Negatives)``\. Reviewing both precision and recall is useful in cases where there is an imbalance in the observations between the two classes. For example, if there are many examples of major alleles (class 0) and only a few examples of minor alleles (class 2). PR curves take into account the use the Average Precision (AP) instead of AUC. AUC and AP are similar metrics, but AP summarizes a precision-recall curve as the weighted mean of precisions achieved at each probability threshold, with the increase in recall from the previous threshold used as the weight. On the contrary, AUC uses linear interpolation with the trapezoidal rule to calculate the area under the curve, which can sometimes be overly optimistic for Precision-Recall curves. Thus, AP scores are used instead. "accuracy" calculates ``number of correct predictions / total predictions``\, but can often be misleading when used without considering the model's classification skill for each class. Defaults to "auc_macro".
 
