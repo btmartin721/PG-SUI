@@ -311,37 +311,37 @@ def main():
     # print(vae_data.genotypes012_df)
 
     # For GridSearchCV. Generate parameters to sample from.
-    # learning_rate = [float(10) ** x for x in np.arange(-4, 0)]
-    # l1_penalty = [float(10) ** x for x in np.arange(-6, -1)]
-    # l1_penalty.append(0.0)
-    # l2_penalty = [float(10) ** x for x in np.arange(-6, -1)]
-    # l2_penalty.append(0.0)
-    # hidden_activation = ["elu", "relu"]
-    # num_hidden_layers = [1, 2, 3, 4, 5]
-    # hidden_layer_sizes = ["sqrt", "midpoint"]
-    # n_components = [2, 3]
-    # dropout_rate = [round(x, 1) for x in np.arange(0.0, 1.0, 0.1)]
-    # batch_size = [16, 32, 48, 64]
-    # optimizer = ["adam", "sgd", "adagrad"]
-
-    grid_params = {
-        "learning_rate": Continuous(1e-6, 0.1, distribution="log-uniform"),
-        "l2_penalty": Continuous(1e-6, 0.01, distribution="uniform"),
-        "n_components": Integer(2, 3),
-        "hidden_activation": Categorical(["elu", "relu"]),
-    }
+    learning_rate = [float(10) ** x for x in np.arange(-4, 0)]
+    l1_penalty = [float(10) ** x for x in np.arange(-6, -1)]
+    l1_penalty.append(0.0)
+    l2_penalty = [float(10) ** x for x in np.arange(-6, -1)]
+    l2_penalty.append(0.0)
+    hidden_activation = ["elu", "relu"]
+    num_hidden_layers = [1, 2, 3, 4, 5]
+    hidden_layer_sizes = ["sqrt", "midpoint"]
+    n_components = [2, 3]
+    dropout_rate = [round(x, 1) for x in np.arange(0.0, 1.0, 0.1)]
+    batch_size = [16, 32, 48, 64]
+    optimizer = ["adam", "sgd", "adagrad"]
 
     # grid_params = {
-    #     "learning_rate": learning_rate,
-    #     # "l1_penalty": l1_penalty,
-    #     "l2_penalty": l2_penalty,
-    #     "hidden_activation": hidden_activation,
-    #     # "hidden_layer_sizes": hidden_layer_sizes,
-    #     "n_components": n_components,
-    #     # "dropout_rate": dropout_rate,
-    #     # "batch_size": batch_size,
-    #     # "optimizer": optimizer,
+    #     "learning_rate": Continuous(1e-6, 0.1, distribution="log-uniform"),
+    #     "l2_penalty": Continuous(1e-6, 0.01, distribution="uniform"),
+    #     "n_components": Integer(2, 3),
+    #     # "hidden_activation": Categorical(["elu", "relu"]),
     # }
+
+    grid_params = {
+        # "learning_rate": learning_rate,
+        # "l1_penalty": l1_penalty,
+        "l2_penalty": l2_penalty,
+        # "hidden_activation": hidden_activation,
+        # "hidden_layer_sizes": hidden_layer_sizes,
+        "n_components": n_components,
+        # "dropout_rate": dropout_rate,
+        # "batch_size": batch_size,
+        # "optimizer": optimizer,
+    }
 
     ubp = ImputeNLPCA(
         data,
@@ -363,8 +363,9 @@ def main():
         sim_strategy="nonrandom_weighted",
         sim_prop_missing=0.4,
         scoring_metric="precision_recall_macro",
-        ga=True,
+        gridsearch_method="gridsearch",
         early_stop_gen=5,
+        sample_weights={0: 1.0, 1: 58.0, 2: 33.0},
     )
 
     # ubp = ImputeVAE(
