@@ -1002,7 +1002,6 @@ class UBP(BaseEstimator, TransformerMixin):
         self,
         genotype_data,
         *,
-        missing_mask_val=None,
         prefix="output",
         gridparams=None,
         do_validation=True,
@@ -1026,9 +1025,8 @@ class UBP(BaseEstimator, TransformerMixin):
         l2_penalty=0.0001,
         dropout_rate=0.2,
         sample_weights=False,
-        cv=5,
         grid_iter=80,
-        ga=False,
+        gridsearch_method="gridsearch",
         ga_kwargs=None,
         scoring_metric="auc_macro",
         sim_strategy="random",
@@ -1049,7 +1047,6 @@ class UBP(BaseEstimator, TransformerMixin):
 
         # CLF parameters.
         self.genotype_data = genotype_data
-        self.missing_mask_val = missing_mask_val
         self.prefix = prefix
         self.gridparams = gridparams
         self.do_validation = do_validation
@@ -1073,7 +1070,6 @@ class UBP(BaseEstimator, TransformerMixin):
         self.l2_penalty = l2_penalty
         self.dropout_rate = dropout_rate
         self.sample_weights = sample_weights
-        self.cv = cv
         self.verbose = verbose
         self.validation_mode = validation_mode
 
@@ -1082,7 +1078,7 @@ class UBP(BaseEstimator, TransformerMixin):
         self.num_classes = 3
 
         # Grid search settings.
-        self.ga = ga
+        self.gridsearch_method = gridsearch_method
         self.scoring_metric = scoring_metric
         self.sim_strategy = sim_strategy
         self.sim_prop_missing = sim_prop_missing
@@ -1107,6 +1103,11 @@ class UBP(BaseEstimator, TransformerMixin):
         y = validate_input_type(y, return_type="array")
 
         self.nn_ = NeuralNetworkMethods()
+
+        if self.gridsearch_method == "genetic_algorithm":
+            self.ga_ = True
+        else:
+            self.ga_ = False
 
         # Placeholder for V. Gets replaced in model.
         V = self.nn_.init_weights(y.shape[0], self.n_components)
@@ -1150,6 +1151,7 @@ class UBP(BaseEstimator, TransformerMixin):
                 self.histories_,
                 self.best_params_,
                 self.best_score_,
+                self.best_estimator_,
                 self.search_,
                 self.metrics_,
             ) = self._run_nlpca(
@@ -1175,7 +1177,7 @@ class UBP(BaseEstimator, TransformerMixin):
         self._plot_history(self.histories_)
         self.nn_.plot_metrics(self.metrics_, self.num_classes, self.prefix)
 
-        if self.ga:
+        if self.ga_:
             plot_fitness_evolution(self.search_)
             plt.savefig(
                 f"{self.prefix}_fitness_evolution.pdf", bbox_inches="tight"
@@ -1190,8 +1192,6 @@ class UBP(BaseEstimator, TransformerMixin):
             plt.clf()
             plt.close()
 
-        sys.exit()
-
         return self
 
     def transform(self, X):
@@ -1204,31 +1204,31 @@ class UBP(BaseEstimator, TransformerMixin):
             numpy.ndarray: Imputed data.
         """
         y = X
+        y = validate_input_type(y, return_type="array")
 
         # Get last (i.e., most refined) model.
         if len(self.models_) == 1:
-            imputed_enc = self.models_[0].y.copy()
+            model = self.models_[0]
         else:
-            imputed_enc = self.models_[-1].y.copy()
+            model = self.models_[-1]
 
-        # Has to be y and not y_train because it's not supposed to be one-hot
-        # encoded.
-        imputed_enc, dummy_df = self.nn_.predict(self.y_simulated_, imputed_enc)
+        # Apply softmax acitvation.
+        y_true = y.copy()
+        y_true_1d = y_true.ravel()
 
-        imputed_df = self.nn_.decode_onehot(
-            pd.DataFrame(data=imputed_enc, columns=dummy_df.columns)
-        )
+        y_size = y_true.size
+        y_missing_idx = np.flatnonzero(self.original_missing_mask_)
 
-        return imputed_df.to_numpy()
+        y_pred_proba = model(model.V_latent, training=False)
+        y_pred_proba = tf.nn.softmax(y_pred_proba).numpy()
+        y_pred_decoded = self.nn_.decode_masked(y_pred_proba)
+        y_pred_1d = y_pred_decoded.ravel()
 
-    def dict_mean(self, dict_list):
-        keys = list({k for d in dict_list for k in d.keys()})
-        mean_dict = {}
-        for key in keys:
-            mean_dict[key] = float(
-                sum(d[key] for d in dict_list if key in d)
-            ) / len(dict_list)
-        return mean_dict
+        for i in np.arange(y_size):
+            if i in y_missing_idx:
+                y_true_1d[i] = y_pred_1d[i]
+
+        return np.reshape(y_true_1d, y_true.shape)
 
     def _run_nlpca(
         self,
@@ -1254,10 +1254,16 @@ class UBP(BaseEstimator, TransformerMixin):
         tf.keras.backend.clear_session()
         self.nn_.reset_seeds()
 
-        if self.sample_weights:
+        if self.sample_weights == "auto":
             # Get class weights for each column.
             sample_weights = self._get_class_weights(y_true)
             sample_weights = self._normalize_data(sample_weights)
+
+        elif isinstance(self.sample_weights, dict):
+            sample_weights = self._get_class_weights(
+                y_true, user_weights=self.sample_weights
+            )
+
         else:
             sample_weights = None
 
@@ -1307,7 +1313,7 @@ class UBP(BaseEstimator, TransformerMixin):
                 verbose=0,
             )
 
-            if self.ga:
+            if self.ga_:
                 # Stop searching if GA sees no improvement.
                 callback = [
                     ConsecutiveStopping(
@@ -1319,7 +1325,7 @@ class UBP(BaseEstimator, TransformerMixin):
                     callback.append(ProgressBar())
 
                 verbose = False if self.verbose == 0 else True
-                
+
                 # Do genetic algorithm
                 # with HiddenPrints():
                 search = GASearchCV(
@@ -1338,17 +1344,31 @@ class UBP(BaseEstimator, TransformerMixin):
                 search.fit(V[self.n_components], y_true, callbacks=callback)
 
             else:
-                # Do randomized grid search
-                search = GridSearchCV(
-                    clf,
-                    param_grid=self.gridparams,
-                    n_jobs=self.n_jobs,
-                    cv=cross_val,
-                    scoring=scoring,
-                    refit=self.scoring_metric,
-                    verbose=self.verbose * 4,
-                    error_score="raise",
-                )
+                if self.gridsearch_method == "gridsearch":
+                    # Do GridSearchCV
+                    search = GridSearchCV(
+                        clf,
+                        param_grid=self.gridparams,
+                        n_jobs=self.n_jobs,
+                        cv=cross_val,
+                        scoring=scoring,
+                        refit=self.scoring_metric,
+                        verbose=self.verbose * 4,
+                        error_score="raise",
+                    )
+
+                elif self.gridsearch_method == "randomized_gridsearch":
+                    search = RandomizedSearchCV(
+                        clf,
+                        param_distributions=self.gridparams,
+                        n_iter=self.grid_iter,
+                        n_jobs=self.n_jobs,
+                        cv=cross_val,
+                        scoring=scoring,
+                        refit=self.scoring_metric,
+                        verbose=self.verbose * 4,
+                        error_score="raise",
+                    )
 
                 search.fit(V[self.n_components], y=y_true)
 
@@ -1371,7 +1391,6 @@ class UBP(BaseEstimator, TransformerMixin):
                 y_true,
                 y_pred,
                 missing_mask=self.sim_missing_mask_,
-                testing=True,
             )
 
         else:
@@ -1400,6 +1419,7 @@ class UBP(BaseEstimator, TransformerMixin):
             best_params = None
             best_score = None
             search = None
+            best_clf = clf
 
             histories.append(clf.history_)
             model = clf.model_
@@ -1411,11 +1431,19 @@ class UBP(BaseEstimator, TransformerMixin):
                 y_true,
                 y_pred,
                 missing_mask=self.sim_missing_mask_,
-                testing=True,
             )
 
         models.append(model)
-        return models, histories, best_params, best_score, search, metrics
+
+        return (
+            models,
+            histories,
+            best_params,
+            best_score,
+            best_clf,
+            search,
+            metrics,
+        )
 
     def _run_ubp(
         self, V, y_train, model_params, compile_params, fit_params, nn
@@ -1452,7 +1480,7 @@ class UBP(BaseEstimator, TransformerMixin):
                     self.validation_split,
                     callbacks,
                     self.cv,
-                    self.ga,
+                    self.ga_,
                     self.early_stop_gen,
                     self.scoring_metric,
                     self.grid_iter,
@@ -1502,11 +1530,12 @@ class UBP(BaseEstimator, TransformerMixin):
     def _normalize_data(self, data):
         return (data - np.min(data)) / (np.max(data) - np.min(data))
 
-    def _get_class_weights(self, y_true):
+    def _get_class_weights(self, y_true, user_weights=None):
         """Get class weights for each column in a 2D matrix.
 
         Args:
             y_true (numpy.ndarray): True target values.
+            user_weights (Dict[int, float]): Class weights if user-provided.
 
         Returns:
             numpy.ndarray: Class weights per column of shape (n_samples, n_features).
@@ -1517,11 +1546,20 @@ class UBP(BaseEstimator, TransformerMixin):
             mm = ~self.original_missing_mask_[:, i]
             classes = np.unique(y_true[mm, i])
 
-            cw = compute_class_weight(
-                "balanced",
-                classes=classes,
-                y=y_true[mm, i],
-            )
+            if user_weights is None:
+                cw = compute_class_weight(
+                    "balanced",
+                    classes=classes,
+                    y=y_true[mm, i],
+                )
+            else:
+                uw = user_weights.copy()
+                cw = {
+                    uw.pop(k)
+                    for k in user_weights.copy().keys()
+                    if k not in classes
+                }
+
             class_weights.append({k: v for k, v in zip(classes, cw)})
 
         # Make sample_weight_matrix from per-column class_weights.
@@ -1531,73 +1569,10 @@ class UBP(BaseEstimator, TransformerMixin):
                 if j in w:
                     sample_weight[self.y_original_[:, i] == j, i] = w[j]
 
+        print(pd.DataFrame(sample_weight))
+        sys.exit()
+
         return sample_weight
-
-    def _prep_model_arguments(
-        self, model_params, compile_params, fit_params, perms
-    ):
-        """Prepare model, compile, and fit parameters for use with model.
-
-        Sets arguments for current permutation and removes duplicate arguments when using perms dictionary.
-        """
-        # Avoid duplicated arguments.
-        perm_searched = {
-            model_params.pop(k) for k in model_params.copy() if k in perms
-        }
-
-        if "optimizer__learning_rate" in perms:
-            lr = perms["optimizer__learning_rate"]
-        else:
-            lr = self.learning_rate
-
-        compile_params["optimizer"] = compile_params["optimizer"](
-            learning_rate=lr
-        )
-
-        perms.pop("optimizer__learning_rate")
-
-        if "epochs" in perms:
-            fit_params["epochs"] = perms.pop("epochs")
-
-        # if "batch_size" in perms:
-        #     fit_params["batch_size"] = perms.pop("batch_size")
-
-        if "learning_rate" in compile_params:
-            compile_params.pop("learning_rate")
-
-        return model_params, compile_params, fit_params, perms
-
-    def _set_best_arguments(
-        self, model_params, compile_params, fit_params, best_params, y_train
-    ):
-        """Set model parameters to best found under grid search."""
-
-        if "optimizer__learning_rate" in best_params:
-            lr = best_params["optimizer__learning_rate"]
-        else:
-            lr = self.learning_rate
-
-        compile_params["optimizer"] = compile_params["optimizer"](
-            learning_rate=lr
-        )
-
-        if "epochs" in best_params:
-            fit_params["epochs"] = best_params["epochs"]
-
-        model_searched = {
-            k: best_params[k] for k in best_params if k in model_params
-        }
-
-        model_params.update(model_searched)
-
-        # Get new random initial V.
-        vinput = self.nn_.init_weights(
-            y_train.shape[0], model_params["n_components"]
-        )
-
-        model_params["V"] = vinput
-
-        return model_params, compile_params, fit_params
 
     @staticmethod
     def scorer(y_true, y_pred, **kwargs):
