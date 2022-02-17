@@ -3,6 +3,7 @@ import errno
 import gc
 import math
 import os
+import pprint
 import sys
 from collections import Counter
 from collections import defaultdict
@@ -158,34 +159,29 @@ class Impute:
 
         # Separate local variables into settings objects
         (
-            self.gridparams,
             self.imp_kwargs,
             self.clf_kwargs,
             self.ga_kwargs,
-            self.grid_iter,
             self.cv,
+            self.verbose,
             self.n_jobs,
             self.prefix,
             self.column_subset,
-            self.ga,
             self.disable_progressbar,
-            self.progress_update_percent,
-            self.scoring_metric,
-            self.early_stop_gen,
             self.chunk_size,
             self.do_validation,
-            self.sim_strategy,
-            self.sim_prop_missing,
+            self.do_gridsearch,
         ) = self._gather_impute_settings(kwargs)
 
-        if self.gridparams is not None:
-            for v in self.gridparams.values():
+        if self.do_gridsearch:
+            for v in kwargs["gridparams"].values():
                 if (
                     isinstance(v, (Categorical, Integer, Continuous))
-                    and not self.ga
+                    and kwargs["gridsearch_method"].lower()
+                    != "genetic_algorithm"
                 ):
                     raise TypeError(
-                        "ga argument must be True if gridparams are of type sklearn_genetic.space"
+                        "gridsearch_method argument must equal 'genetic_algorithm' if gridparams values are of type sklearn_genetic.space"
                     )
 
         self.logfilepath = f"{self.prefix}_imputer_progress_log.txt"
@@ -232,7 +228,7 @@ class Impute:
         # sys.exit()
 
         # Don't do a grid search
-        if self.gridparams is None:
+        if not self.do_gridsearch:
             imputed_df, df_scores, best_params = self._impute_single(X)
 
             if df_scores is not None:
@@ -243,21 +239,8 @@ class Impute:
             imputed_df, df_scores, best_params = self._impute_gridsearch(X)
 
             if self.verbose > 0:
-                print("Grid Search Results:")
-                if self.clf_type == "regressor":
-                    for col in df_scores:
-                        print(
-                            f"{self.scoring_metric} {col} (best parameters): "
-                            f"{df_scores[col].iloc[0]}"
-                        )
-                else:
-                    for col in df_scores:
-                        print(
-                            f"{self.scoring_metric} {col} (best parameters): "
-                            f"{df_scores[col].iloc[0]}"
-                        )
-
-                print(f"Best Parameters: {best_params}\n")
+                print("\nBest Parameters:")
+                pprint.pprint(best_params)
 
         imp_data = self._imputed2genotypedata(imputed_df, self.genotype_data)
 
@@ -543,7 +526,10 @@ class Impute:
             pandas.DataFrame: DataFrame with validation scores.
             NoneType: Only used with _impute_gridsearch. Set to None here for compatibility.
         """
-        print(f"Doing {self.clf.__name__} imputation without grid search...")
+        if self.verbose > 0:
+            print(
+                f"\nDoing {self.clf.__name__} imputation without grid search..."
+            )
 
         if self.algorithm == "nn":
             clf = None
@@ -595,9 +581,6 @@ class Impute:
                 clf,
                 self.logfilepath,
                 clf_kwargs=self.clf_kwargs,
-                prefix=self.prefix,
-                disable_progressbar=self.disable_progressbar,
-                progress_update_percent=self.progress_update_percent,
                 pops=self.pops,
             )
 
@@ -672,23 +655,13 @@ class Impute:
 
         if self.algorithm == "nn":
             imputer = self.clf(
-                self.genotype_data,
-                gridparams=self.gridparams,
-                scoring_metric=self.scoring_metric,
                 **self.clf_kwargs,
-                ga=self.ga,
-                grid_iter=self.grid_iter,
+                **self.imp_kwargs,
                 ga_kwargs=self.ga_kwargs,
-                early_stop_gen=self.early_stop_gen,
-                sim_strategy=self.sim_strategy,
-                sim_prop_missing=self.sim_prop_missing,
-                str_encodings=self.imp_kwargs["str_encodings"],
-                verbose=self.verbose,
             )
 
             df_imp = pd.DataFrame(
-                imputer.fit_transform(df_subset),
-                columns=cols_to_keep,
+                imputer.fit_transform(df_subset), columns=cols_to_keep
             )
 
             df_imp = df_imp.astype("float")
@@ -704,17 +677,8 @@ class Impute:
                 self.logfilepath,
                 clf_kwargs=self.clf_kwargs,
                 ga_kwargs=self.ga_kwargs,
-                prefix=self.prefix,
                 n_jobs=self.n_jobs,
-                n_iter=self.grid_iter,
-                cv=self.cv,
                 clf_type=self.clf_type,
-                ga=self.ga,
-                search_space=self.gridparams,
-                disable_progressbar=self.disable_progressbar,
-                progress_update_percent=self.progress_update_percent,
-                scoring_metric=self.scoring_metric,
-                early_stop_gen=self.early_stop_gen,
                 pops=self.pops,
             )
 
@@ -728,12 +692,14 @@ class Impute:
         if self.verbose > 0:
             print(f"\nDone with {self.clf.__name__} grid search!")
 
-        if self.disable_progressbar:
-            if self.verbose > 0:
-                with open(self.logfilepath, "a") as fout:
-                    # Redirect to progress logfile
-                    with redirect_stdout(fout):
-                        print(f"\nDone with {self.clf.__name__} grid search!")
+            if self.disable_progressbar:
+                if self.verbose > 0:
+                    with open(self.logfilepath, "a") as fout:
+                        # Redirect to progress logfile
+                        with redirect_stdout(fout):
+                            print(
+                                f"\nDone with {self.clf.__name__} grid search!"
+                            )
 
         if self.algorithm == "ii":
             del imputer
@@ -778,41 +744,39 @@ class Impute:
         # Change values to the ones in best_params
         self.clf_kwargs.update(best_params)
 
-        test = self.clf()
-
         if self.algorithm == "nn":
-            best_imputer = self.clf(**clf_kwargs, **imp_kwargs)
+            best_imputer = None
         else:
+            test = self.clf()
             if hasattr(test, "n_jobs"):
                 best_clf = self.clf(n_jobs=self.n_jobs, **self.clf_kwargs)
             else:
                 best_clf = self.clf(**self.clf_kwargs)
 
-        del test
+            del test
+
         gc.collect()
 
-        print(
-            f"\nDoing {self.clf.__name__} imputation "
-            f"with best found parameters...\n"
-        )
+        if self.verbose > 0:
+            print(
+                f"\nDoing {self.clf.__name__} imputation "
+                f"with best found parameters...\n"
+            )
 
-        if self.disable_progressbar:
-            with open(self.logfilepath, "a") as fout:
-                # Redirect to progress logfile
-                with redirect_stdout(fout):
-                    print(
-                        f"\nDoing {self.clf.__name__} imputation "
-                        f"with best found parameters...\n"
-                    )
+            if self.disable_progressbar:
+                with open(self.logfilepath, "a") as fout:
+                    # Redirect to progress logfile
+                    with redirect_stdout(fout):
+                        print(
+                            f"\nDoing {self.clf.__name__} imputation "
+                            f"with best found parameters...\n"
+                        )
 
         if self.algorithm == "ii":
             best_imputer = self._define_iterative_imputer(
                 best_clf,
                 self.logfilepath,
                 clf_kwargs=self.clf_kwargs,
-                prefix=self.prefix,
-                disable_progressbar=self.disable_progressbar,
-                progress_update_percent=self.progress_update_percent,
                 pops=self.pops,
             )
 
@@ -834,8 +798,7 @@ class Impute:
         if self.verbose > 0:
             print(f"Done with {self.clf.__name__} imputation!\n")
 
-        if self.disable_progressbar:
-            if self.verbose > 0:
+            if self.disable_progressbar:
                 with open(self.logfilepath, "a") as fout:
                     # Redirect to progress logfile
                     with redirect_stdout(fout):
@@ -973,7 +936,7 @@ class Impute:
         df_chunks: List[pd.DataFrame],
         imputer: Optional[
             Union[IterativeImputerFixedParams, IterativeImputerGridSearch]
-        ],
+        ] = None,
         cols_to_keep: Optional[np.ndarray] = None,
     ) -> pd.DataFrame:
         """Impute list of pandas.DataFrame objects using custom IterativeImputer class.
@@ -983,9 +946,9 @@ class Impute:
         Args:
             df_chunks (List[pandas.DataFrame]): List of Dataframes of shape(n_samples, n_features_in_chunk).
 
-            imputer (IterativeImputerFixedParams instance or None): Defined IterativeImputerFixedParams instance to perform the imputation.
+            imputer (imputer or classifier instance or None): Imputer or classifier instance to perform the imputation.
 
-            cols_to_keep (numpy.ndarray): Final bi-allelic columns to keep. If some columns were non-biallelic, it will be a subset of columns.
+            cols_to_keep (numpy.ndarray or None): Final bi-allelic columns to keep. If some columns were non-biallelic, it will be a subset of columns.
 
         Returns:
             pandas.DataFrame: Single DataFrame object, with all the imputed chunks concatenated together.
@@ -1001,7 +964,6 @@ class Impute:
                     df_imp = pd.DataFrame(
                         imputer.fit_transform(Xchunk),
                     )
-                    df_imp = pd.DataFrame(imputer.fit_transform(Xchunk))
                     df_imp = df_imp.astype("float")
                     df_imp = df_imp.astype("Int8")
 
@@ -1182,22 +1144,15 @@ class Impute:
         Optional[Dict[str, Any]],
         Optional[Dict[str, Any]],
         Optional[Dict[str, Any]],
-        Optional[Dict[str, Any]],
         Optional[int],
         Optional[int],
         Optional[int],
         Optional[str],
         Optional[Union[int, float]],
         Optional[bool],
-        Optional[bool],
-        Optional[Optional[int]],
-        Optional[str],
-        Optional[int],
         Optional[Union[int, float]],
-        Optional[float],
         Optional[bool],
-        Optional[str],
-        Optional[float],
+        Optional[bool],
     ]:
         """Gather impute settings from kwargs object.
 
@@ -1207,40 +1162,28 @@ class Impute:
             kwargs (Dict[str, Any]): Dictionary with keys as the keyword arguments and their corresponding values.
 
         Returns:
-            Dict[str, Any]: Parameters with distributions to run with grid search.
             Dict[str, Any]: IterativeImputer keyword arguments.
             Dict[str, Any]: Classifier keyword arguments.
             Dict[str, Any]: Genetic algorithm keyword arguments.
-            int: Number of iterations to run with grid search.
-            int: Number of cross-validation folds to use with grid search.
+            int: Number of cross-validation folds to use with non-grid search validation.
+            int: Verbosity setting. 0 is silent, 2 is most verbose.
             int: Number of processors to use with grid search.
             str or None: Prefix for output files.
             int or float: Proportion of dataset (if float) or number of columns (if int) to use for grid search.
-            bool: True if using GASearchCV, False if using RandomSearchCV.
             bool: If True, disables the tqdm progress bar and just prints status updates to a file. If False, uses tqdm progress bar.
-            int or None: Percent in which to print progress updates for features. If None, then does not print progress through features.
-            str: Scoring metric to use with grid search. Can be any of the sklearn classifier metrics in string format.
-            int: Number of generations without improvement before Early Stopping criterion is called.
             int or float: Chunk sizes for doing full imputation following grid search. If int, then splits into chunks of ``chunk_size``\. If float, then splits into chunks of ``n_features * chunk_size``\.
             bool: Whether to do validation if ``gridparams is None``.
-            str: Simulation strategy to use.
-            float: Proportion of missing data to use with missing data simulation.
+            bool: True if doing grid search, False otherwise.
         """
-        gridparams = kwargs.pop("gridparams", None)
+        n_jobs = kwargs.pop("n_jobs", 1)
         cv = kwargs.pop("cv", None)
-        n_jobs = kwargs.pop("n_jobs", None)
-        prefix = kwargs.pop("prefix", None)
-        grid_iter = kwargs.pop("grid_iter", None)
         column_subset = kwargs.pop("column_subset", None)
-        ga = kwargs.pop("ga", None)
-        disable_progressbar = kwargs.pop("disable_progressbar", None)
-        scoring_metric = kwargs.pop("scoring_metric", None)
-        early_stop_gen = kwargs.pop("early_stop_gen", None)
         chunk_size = kwargs.pop("chunk_size", None)
-        progress_update_percent = kwargs.pop("progress_update_percent", None)
-        do_validation = kwargs.pop("do_validation", None)
-        sim_strategy = kwargs.pop("sim_strategy", "random")
-        sim_prop_missing = kwargs.pop("sim_prop_missing", 0.1)
+        do_validation = kwargs.pop("do_validation", False)
+        verbose = kwargs.get("verbose", 0)
+        disable_progressbar = kwargs.get("disable_progressbar", False)
+        prefix = kwargs.get("prefix", "output")
+        do_gridsearch = False if kwargs["gridparams"] is None else True
 
         if prefix is None:
             prefix = "output"
@@ -1250,18 +1193,33 @@ class Impute:
         ga_kwargs = kwargs.copy()
 
         imp_keys = [
-            "n_nearest_features",
-            "max_iter",
+            "grid_iter",
             "tol",
-            "initial_strategy",
-            "imputation_order",
-            "skip_complete",
-            "random_state",
             "verbose",
-            "sample_posterior",
             "genotype_data",
             "str_encodings",
+            "progress_update_percent",
+            "sim_strategy",
+            "sim_prop_missing",
+            "gridparams",
+            "gridsearch_method",
+            "scoring_metric",
+            "disable_progressbar",
+            "prefix",
         ]
+
+        if self.algorithm == "ii":
+            imp_keys.append(
+                [
+                    "n_nearest_features",
+                    "max_iter",
+                    "initial_strategy",
+                    "imputation_order",
+                    "skip_complete",
+                    "random_state",
+                    "sample_posterior",
+                ]
+            )
 
         ga_keys = [
             "population_size",
@@ -1303,30 +1261,21 @@ class Impute:
             ga_kwargs["criteria"] = "min"
 
         elif self.clf_type == "classifier":
-            if self.algorithm == "ii":
-                ga_kwargs["criteria"] = "max"
-            else:
-                ga_kwargs["criteria"] = "min"
+            ga_kwargs["criteria"] = "max"
 
         return (
-            gridparams,
             imp_kwargs,
             clf_kwargs,
             ga_kwargs,
-            grid_iter,
             cv,
+            verbose,
             n_jobs,
             prefix,
             column_subset,
-            ga,
             disable_progressbar,
-            progress_update_percent,
-            scoring_metric,
-            early_stop_gen,
             chunk_size,
             do_validation,
-            sim_strategy,
-            sim_prop_missing,
+            do_gridsearch,
         )
 
     def _format_features(
@@ -1529,13 +1478,17 @@ class Impute:
 
         df_known = df.copy()
 
-        df_unknown = pd.DataFrame(
-            SimGenotypeDataTransformer(
-                self.genotype_data,
-                prop_missing=self.sim_prop_missing,
-                strategy=self.sim_strategy,
-            ).fit_transform(df_known)
-        )
+        if self.algorithm == "nn":
+            df_unknown = df_known.copy()
+
+        else:
+            df_unknown = pd.DataFrame(
+                SimGenotypeDataTransformer(
+                    self.genotype_data,
+                    prop_missing=self.imp_kwargs["sim_prop_missing"],
+                    strategy=self.imp_kwargs["sim_strategy"],
+                ).fit_transform(df_known)
+            )
 
         # Code adapted from:
         # https://medium.com/analytics-vidhya/using-scikit-learns-iterative-imputer-694c3cca34de
@@ -1554,12 +1507,7 @@ class Impute:
                 df_stg[col] = df_stg[col].replace({pd.NA: np.nan})
             # df_stg.fillna(-9, inplace=True)
 
-            imputer = self.clf(
-                self.genotype_data,
-                sim_strategy=self.sim_strategy,
-                sim_prop_missing=self.sim_prop_missing,
-                **self.clf_kwargs,
-            )
+            imputer = self.clf(**self.clf_kwargs, **self.imp_kwargs)
 
             df_imp = pd.DataFrame(
                 imputer.fit_transform(df_stg.to_numpy()),
@@ -1590,9 +1538,6 @@ class Impute:
                 clf,
                 self.logfilepath,
                 clf_kwargs=self.clf_kwargs,
-                prefix=self.prefix,
-                disable_progressbar=self.disable_progressbar,
-                progress_update_percent=self.progress_update_percent,
                 pops=self.pops,
             )
 
@@ -1746,17 +1691,8 @@ class Impute:
         logfilepath: str,
         clf_kwargs: Optional[Dict[str, Any]] = None,
         ga_kwargs: Optional[Dict[str, Any]] = None,
-        prefix: str = "out",
         n_jobs: Optional[int] = None,
-        n_iter: Optional[int] = None,
-        cv: Optional[int] = None,
         clf_type: Optional[str] = None,
-        ga: bool = False,
-        search_space: Optional[Dict[str, Any]] = None,
-        disable_progressbar: bool = False,
-        progress_update_percent: Optional[int] = None,
-        scoring_metric: Optional[str] = None,
-        early_stop_gen: Optional[int] = None,
         pops: Optional[List[Union[int, str]]] = None,
     ) -> Union[IterativeImputerGridSearch, IterativeImputerFixedParams]:
         """Define an IterativeImputer instance.
@@ -1772,41 +1708,20 @@ class Impute:
 
             ga_kwargs (dict, optional): Keyword arguments for genetic algorithm grid search. Defaults to None.
 
-            prefix (str, optional): Prefix for saving GA plots to PDF file. Defaults to None.
-
             n_jobs (int, optional): Number of parallel jobs to use with the IterativeImputer grid search. Ignored if ``search_space=None``\. Defaults to None.
 
-            n_iter (int, optional): [Number of iterations for grid search. Ignored if ``search_space=None``]. Defaults to None.
-
-            cv (int, optional): Number of cross-validation folds to use with grid search. Ignored if ``search_space=None``\. Defaults to None
-
             clf_type (str, optional): Type of estimator. Valid options are "classifier" or "regressor". Ignored if ``search_space=None``\. Defaults to None.
-
-            ga (bool, optional): Whether to use genetic algorithm for the grid search. If False, uses RandomizedSearchCV instead. Defaults to False.
-
-            search_space (dict, optional): gridparams dictionary with search space to explore in random grid search. Defaults to None.
-
-            disable_progressbar (bool, optional): Whether or not to disable the tqdm progress bar. Defaults to False.
-
-            progress_update_percent (int, optional): Print progress updates every ``progress_update_percent`` percent. Defaults to None.
-
-            scoring_metric (str, optional): Scoring metric to use with grid search. Defaults to None.
-
-            early_stop_gen (int, optional): Number of consecutive generations without improvement to raise early stopping callback. Defaults to None.
 
             pops (List[Union[int, str]], optional): Population IDs as 1d-list in order of sampleID.
 
         Returns:
             sklearn.impute.IterativeImputer: IterativeImputer instance.
         """
-        if search_space is None:
+        if not self.do_gridsearch:
             imp = IterativeImputerFixedParams(
                 logfilepath,
                 clf_kwargs,
-                prefix,
                 estimator=clf,
-                disable_progressbar=disable_progressbar,
-                progress_update_percent=progress_update_percent,
                 pops=pops,
                 **self.imp_kwargs,
             )
@@ -1815,20 +1730,11 @@ class Impute:
             # Create iterative imputer
             imp = IterativeImputerGridSearch(
                 logfilepath,
-                search_space,
                 clf_kwargs,
                 ga_kwargs,
-                prefix,
                 estimator=clf,
                 grid_n_jobs=n_jobs,
-                grid_n_iter=n_iter,
-                grid_cv=cv,
                 clf_type=clf_type,
-                ga=ga,
-                disable_progressbar=disable_progressbar,
-                progress_update_percent=progress_update_percent,
-                scoring_metric=scoring_metric,
-                early_stop_gen=early_stop_gen,
                 pops=pops,
                 **self.imp_kwargs,
             )
