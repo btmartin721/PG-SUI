@@ -74,9 +74,9 @@ class ImputeKNN(Impute):
 
         prefix (str): Prefix for imputed data's output filename.
 
-        gridparams (Dict[str, Any] or None, optional): Dictionary with keys=keyword arguments for the specified estimator and values=lists of parameter values or distributions. If using RandomizedSearchCV, distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). ``gridparams`` will be used for a randomized grid search with cross-validation. If using the genetic algorithm grid search (GASearchCV) by setting ``ga=True``\, the parameters can be specified as ``sklearn_genetic.space`` objects. The grid search will determine the optimal parameters as those that maximize accuracy (or minimize root mean squared error for BayesianRidge regressor). NOTE: Takes a long time, so run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. If ``gridparams=None``\, a grid search is not performed. Defaults to None.
+        gridparams (Dict[str, Any] or None or None, optional): Dictionary with keys=keyword arguments for the specified estimator and values=lists of parameter values or distributions. If ``gridparams=None``\, a grid search is not performed, otherwise ``gridparams`` will be used to specify parameter ranges or distributions for the grid search. If using ``gridsearch_method="gridsearch"``, then the ``gridparams`` values can be lists of or numpy arrays. If using ``gridsearch_method="randomized_gridsearch"``\, distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). If using the genetic algorithm grid search by setting ``gridsearch_method="genetic_algorithm"``\, the parameters can be specified as ``sklearn_genetic.space`` objects. The grid search will determine the optimal parameters as those that maximize accuracy (or minimize root mean squared error for BayesianRidge regressor). NOTE: Takes a long time, so run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. Defaults to None.
 
-        do_validation (bool, optional): Whether to validate the imputation if not doing a grid search. This validation method randomly replaces between 15% and 50% of the known, non-missing genotypes in ``n_features * column_subset`` of the features. It then imputes the newly missing genotypes for which we know the true values and calculates validation scores. This procedure is replicated ``cv`` times and a mean, median, minimum, maximum, lower 95% confidence interval (CI) of the mean, and the upper 95% CI are calculated and saved to a CSV file. ``gridparams`` must be set to None for ``do_validation`` to work. Calculating a validation score can be turned off altogether by setting ``do_validation`` to False. Defaults to True.
+        do_validation (bool, optional): Whether to validate the imputation if not doing a grid search. This validation method randomly replaces between 15% and 50% of the known, non-missing genotypes in ``n_features * column_subset`` of the features. It then imputes the newly missing genotypes for which we know the true values and calculates validation scores. This procedure is replicated ``cv`` times and a mean, median, minimum, maximum, lower 95% confidence interval (CI) of the mean, and the upper 95% CI are calculated and saved to a CSV file. ``gridparams`` must be set to None for ``do_validation`` to work. Calculating a validation score can be turned off altogether by setting ``do_validation`` to False. Defaults to False.
 
         column_subset (int or float, optional): If float, proportion of the dataset to randomly subset for the grid search or validation. Should be between 0 and 1, and should also be small, because the grid search or validation takes a long time. If int, subset ``column_subset`` columns. If float, subset ``int(n_features * column_subset)`` columns. Defaults to 0.1.
 
@@ -110,7 +110,7 @@ class ImputeKNN(Impute):
 
         random_state (int or None, optional): The seed of the pseudo random number generator to use for the iterative imputer. Randomizes selection of etimator features if n_nearest_features is not None or the imputation_order is "random". Use an integer for determinism. If None, then uses a different random seed each time. Defaults to None.
 
-        gridsearch_method (str or None, optional): Grid search method to use. Supported options include: {"gridsearch", "randomized_gridsearch", and "genetic_algorithm", None}. Whether to use a genetic algorithm for the grid search. "gridsearch" uses GridSearchCV to test every possible parameter combination. "randomized_gridsearch" picks ``grid_iter`` random combinations of parameters to test. "genetic_algorithm" uses a genetic algorithm via sklearn-genetic-opt GASearchCV to do the grid search. If set to None, then does not do a grid search. If doing a grid search, "randomized_search" takes the least amount of time because it does not have to test all parameters. "genetic_algorithm" takes the longest. See the scikit-learn GridSearchCV and RandomizedSearchCV documentation for the "gridsearch" and "randomized_gridsearch" options, and the sklearn-genetic-opt GASearchCV documentation for the "genetic_algorithm" option. Defaults to None.
+        gridsearch_method (str, optional): Grid search method to use. Supported options include: {"gridsearch", "randomized_gridsearch", and "genetic_algorithm"}. Whether to use a genetic algorithm for the grid search. "gridsearch" uses GridSearchCV to test every possible parameter combination. "randomized_gridsearch" picks ``grid_iter`` random combinations of parameters to test. "genetic_algorithm" uses a genetic algorithm via sklearn-genetic-opt GASearchCV to do the grid search. If set to None, then does not do a grid search. If doing a grid search, "randomized_search" takes the least amount of time because it does not have to test all parameters. "genetic_algorithm" takes the longest. See the scikit-learn GridSearchCV and RandomizedSearchCV documentation for the "gridsearch" and "randomized_gridsearch" options, and the sklearn-genetic-opt GASearchCV documentation for the "genetic_algorithm" option. Defaults to "gridsearch".
 
         grid_iter (int, optional): Number of iterations for randomized and genetic algorithm grid searches. Defaults to 80.
 
@@ -167,7 +167,7 @@ class ImputeKNN(Impute):
         >>>     genotype_data=data,
         >>>     gridparams=grid_params,
         >>>     cv=5,
-        >>>     ga=True,
+        >>>     gridsearch_method="genetic_algorithm",
         >>>     n_nearest_features=10,
         >>>     n_estimators=100,
         >>>     initial_strategy="phylogeny",
@@ -182,7 +182,7 @@ class ImputeKNN(Impute):
         *,
         prefix: str = "output",
         gridparams: Optional[Dict[str, Any]] = None,
-        do_validation: bool = True,
+        do_validation: bool = False,
         column_subset: Union[int, float] = 0.1,
         cv: int = 5,
         n_neighbors: int = 5,
@@ -205,9 +205,9 @@ class ImputeKNN(Impute):
         imputation_order: str = "ascending",
         skip_complete: bool = False,
         random_state: Optional[int] = None,
+        gridsearch_method: str = "gridsearch",
         grid_iter: int = 80,
-        ga: bool = False,
-        population_size: int = 50,
+        population_size: Union[int, str] = "auto",
         tournament_size: int = 3,
         elitism: bool = True,
         crossover_probability: float = 0.8,
@@ -244,9 +244,9 @@ class ImputeRandomForest(Impute):
 
         write_output (bool, optional): If True, writes imputed data to file on disk. Otherwise just stores it as a class attribute.
 
-        gridparams (Dict[str, Any] or None or None, optional): Dictionary with keys=keyword arguments for the specified estimator and values=lists of parameter values or distributions. If using RandomizedSearchCV, distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). ``gridparams`` will be used for a randomized grid search with cross-validation. If using the genetic algorithm grid search (GASearchCV), the parameters can be specified as ``sklearn_genetic.space`` objects. The grid search will determine the optimal parameters as those that maximize accuracy (or minimize root mean squared error for BayesianRidge regressor). NOTE: Takes a long time, so run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. If ``gridparams=None``\, a grid search is not performed. Defaults to None.
+        gridparams (Dict[str, Any] or None or None, optional): Dictionary with keys=keyword arguments for the specified estimator and values=lists of parameter values or distributions. If ``gridparams=None``\, a grid search is not performed, otherwise ``gridparams`` will be used to specify parameter ranges or distributions for the grid search. If using ``gridsearch_method="gridsearch"``, then the ``gridparams`` values can be lists of or numpy arrays. If using ``gridsearch_method="randomized_gridsearch"``\, distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). If using the genetic algorithm grid search by setting ``gridsearch_method="genetic_algorithm"``\, the parameters can be specified as ``sklearn_genetic.space`` objects. The grid search will determine the optimal parameters as those that maximize accuracy (or minimize root mean squared error for BayesianRidge regressor). NOTE: Takes a long time, so run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. Defaults to None.
 
-        do_validation (bool, optional): Whether to validate the imputation if not doing a grid search. This validation method randomly replaces between 15% and 50% of the known, non-missing genotypes in ``n_features * column_subset`` of the features. It then imputes the newly missing genotypes for which we know the true values and calculates validation scores. This procedure is replicated ``cv`` times and a mean, median, minimum, maximum, lower 95% confidence interval (CI) of the mean, and the upper 95% CI are calculated and saved to a CSV file. ``gridparams`` must be set to None for ``do_validation`` to work. Calculating a validation score can be turned off altogether by setting ``do_validation`` to False. Defaults to True.
+        do_validation (bool, optional): Whether to validate the imputation if not doing a grid search. This validation method randomly replaces between 15% and 50% of the known, non-missing genotypes in ``n_features * column_subset`` of the features. It then imputes the newly missing genotypes for which we know the true values and calculates validation scores. This procedure is replicated ``cv`` times and a mean, median, minimum, maximum, lower 95% confidence interval (CI) of the mean, and the upper 95% CI are calculated and saved to a CSV file. ``gridparams`` must be set to None for ``do_validation`` to work. Calculating a validation score can be turned off altogether by setting ``do_validation`` to False. Defaults to False.
 
         column_subset (int or float, optional): If float, proportion of the dataset to randomly subset for the grid search or validation. Should be between 0 and 1, and should also be small, because the grid search or validation takes a long time. If int, subset ``column_subset`` columns. If float, subset ``int(n_features * column_subset)`` columns. Defaults to 0.1.
 
@@ -296,7 +296,7 @@ class ImputeRandomForest(Impute):
 
         random_state (int or None, optional): The seed of the pseudo random number generator to use for the iterative imputer. Randomizes selection of etimator features if n_nearest_features is not None or the imputation_order is "random". Use an integer for determinism. If None, then uses a different random seed each time. Defaults to None.
 
-        gridsearch_method (str or None, optional): Grid search method to use. Supported options include: {"gridsearch", "randomized_gridsearch", and "genetic_algorithm", None}. Whether to use a genetic algorithm for the grid search. "gridsearch" uses GridSearchCV to test every possible parameter combination. "randomized_gridsearch" picks ``grid_iter`` random combinations of parameters to test. "genetic_algorithm" uses a genetic algorithm via sklearn-genetic-opt GASearchCV to do the grid search. If set to None, then does not do a grid search. If doing a grid search, "randomized_search" takes the least amount of time because it does not have to test all parameters. "genetic_algorithm" takes the longest. See the scikit-learn GridSearchCV and RandomizedSearchCV documentation for the "gridsearch" and "randomized_gridsearch" options, and the sklearn-genetic-opt GASearchCV documentation for the "genetic_algorithm" option. Defaults to None.
+        gridsearch_method (str, optional): Grid search method to use. Supported options include: {"gridsearch", "randomized_gridsearch", and "genetic_algorithm"}. Whether to use a genetic algorithm for the grid search. "gridsearch" uses GridSearchCV to test every possible parameter combination. "randomized_gridsearch" picks ``grid_iter`` random combinations of parameters to test. "genetic_algorithm" uses a genetic algorithm via sklearn-genetic-opt GASearchCV to do the grid search. If set to None, then does not do a grid search. If doing a grid search, "randomized_search" takes the least amount of time because it does not have to test all parameters. "genetic_algorithm" takes the longest. See the scikit-learn GridSearchCV and RandomizedSearchCV documentation for the "gridsearch" and "randomized_gridsearch" options, and the sklearn-genetic-opt GASearchCV documentation for the "genetic_algorithm" option. Defaults to "gridsearch".
 
         grid_iter (int, optional): Number of iterations for randomized and genetic algorithm grid searches. Defaults to 80.
 
@@ -355,7 +355,7 @@ class ImputeRandomForest(Impute):
         >>>     genotype_data=data,
         >>>     gridparams=grid_params,
         >>>     cv=5,
-        >>>     ga=True,
+        >>>     gridsearch_method="genetic_algorithm",
         >>>     n_nearest_features=10,
         >>>     n_estimators=100,
         >>>     initial_strategy="phylogeny",
@@ -370,7 +370,7 @@ class ImputeRandomForest(Impute):
         *,
         prefix: str = "output",
         gridparams: Optional[Dict[str, Any]] = None,
-        do_validation: bool = True,
+        do_validation: bool = False,
         column_subset: Union[int, float] = 0.1,
         cv: int = 5,
         extratrees: bool = True,
@@ -401,9 +401,9 @@ class ImputeRandomForest(Impute):
         imputation_order: str = "ascending",
         skip_complete: bool = False,
         random_state: Optional[int] = None,
+        gridsearch_method: str = "gridsearch",
         grid_iter: int = 80,
-        ga: bool = False,
-        population_size: int = 50,
+        population_size: Union[int, str] = "auto",
         tournament_size: int = 3,
         elitism: bool = True,
         crossover_probability: float = 0.8,
@@ -456,9 +456,9 @@ class ImputeGradientBoosting(Impute):
 
         prefix (str, optional): Prefix for imputed data's output filename.
 
-        gridparams (Dict[str, Any] or None, optional): Dictionary with keys=keyword arguments for the specified estimator and values=lists of parameter values or distributions. If using RandomizedSearchCV, distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). ``gridparams`` will be used for a randomized grid search with cross-validation. If using the genetic algorithm grid search (GASearchCV), the parameters can be specified as ``sklearn_genetic.space`` objects. The grid search will determine the optimal parameters as those that maximize accuracy (or minimize root mean squared error for BayesianRidge regressor). NOTE: Takes a long time, so run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. If ``gridparams=None``\, a grid search is not performed. Defaults to None.
+        gridparams (Dict[str, Any] or None or None, optional): Dictionary with keys=keyword arguments for the specified estimator and values=lists of parameter values or distributions. If ``gridparams=None``\, a grid search is not performed, otherwise ``gridparams`` will be used to specify parameter ranges or distributions for the grid search. If using ``gridsearch_method="gridsearch"``, then the ``gridparams`` values can be lists of or numpy arrays. If using ``gridsearch_method="randomized_gridsearch"``\, distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). If using the genetic algorithm grid search by setting ``gridsearch_method="genetic_algorithm"``\, the parameters can be specified as ``sklearn_genetic.space`` objects. The grid search will determine the optimal parameters as those that maximize accuracy (or minimize root mean squared error for BayesianRidge regressor). NOTE: Takes a long time, so run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. Defaults to None.
 
-        do_validation (bool, optional): Whether to validate the imputation if not doing a grid search. This validation method randomly replaces between 15% and 50% of the known, non-missing genotypes in ``n_features * column_subset`` of the features. It then imputes the newly missing genotypes for which we know the true values and calculates validation scores. This procedure is replicated ``cv`` times and a mean, median, minimum, maximum, lower 95% confidence interval (CI) of the mean, and the upper 95% CI are calculated and saved to a CSV file. ``gridparams`` must be set to None for ``do_validation`` to work. Calculating a validation score can be turned off altogether by setting ``do_validation`` to False. Defaults to True.
+        do_validation (bool, optional): Whether to validate the imputation if not doing a grid search. This validation method randomly replaces between 15% and 50% of the known, non-missing genotypes in ``n_features * column_subset`` of the features. It then imputes the newly missing genotypes for which we know the true values and calculates validation scores. This procedure is replicated ``cv`` times and a mean, median, minimum, maximum, lower 95% confidence interval (CI) of the mean, and the upper 95% CI are calculated and saved to a CSV file. ``gridparams`` must be set to None for ``do_validation`` to work. Calculating a validation score can be turned off altogether by setting ``do_validation`` to False. Defaults to False.
 
         column_subset (int or float, optional): If float, proportion of the dataset to randomly subset for the grid search or validation. Should be between 0 and 1, and should also be small, because the grid search or validation takes a long time. If int, subset ``column_subset`` columns. If float, subset ``int(n_features * column_subset)`` columns. Defaults to 0.1.
 
@@ -506,7 +506,7 @@ class ImputeGradientBoosting(Impute):
 
         random_state (int or None, optional): The seed of the pseudo random number generator to use for the iterative imputer. Randomizes selection of etimator features if ``n_nearest_features`` is not None or the imputation_order is "random". Use an integer for determinism. If None, then uses a different random seed each time. Defaults to None.
 
-        gridsearch_method (str or None, optional): Grid search method to use. Supported options include: {"gridsearch", "randomized_gridsearch", and "genetic_algorithm", None}. Whether to use a genetic algorithm for the grid search. "gridsearch" uses GridSearchCV to test every possible parameter combination. "randomized_gridsearch" picks ``grid_iter`` random combinations of parameters to test. "genetic_algorithm" uses a genetic algorithm via sklearn-genetic-opt GASearchCV to do the grid search. If set to None, then does not do a grid search. If doing a grid search, "randomized_search" takes the least amount of time because it does not have to test all parameters. "genetic_algorithm" takes the longest. See the scikit-learn GridSearchCV and RandomizedSearchCV documentation for the "gridsearch" and "randomized_gridsearch" options, and the sklearn-genetic-opt GASearchCV documentation for the "genetic_algorithm" option. Defaults to None.
+        gridsearch_method (str, optional): Grid search method to use. Supported options include: {"gridsearch", "randomized_gridsearch", and "genetic_algorithm"}. Whether to use a genetic algorithm for the grid search. "gridsearch" uses GridSearchCV to test every possible parameter combination. "randomized_gridsearch" picks ``grid_iter`` random combinations of parameters to test. "genetic_algorithm" uses a genetic algorithm via sklearn-genetic-opt GASearchCV to do the grid search. If set to None, then does not do a grid search. If doing a grid search, "randomized_search" takes the least amount of time because it does not have to test all parameters. "genetic_algorithm" takes the longest. See the scikit-learn GridSearchCV and RandomizedSearchCV documentation for the "gridsearch" and "randomized_gridsearch" options, and the sklearn-genetic-opt GASearchCV documentation for the "genetic_algorithm" option. Defaults to "gridsearch".
 
         grid_iter (int, optional): Number of iterations for randomized and genetic algorithm grid searches. Defaults to 80.
 
@@ -514,7 +514,7 @@ class ImputeGradientBoosting(Impute):
 
         tournament_size (int, optional): For genetic algorithm grid search: Number of individuals to perform tournament selection. See GASearchCV documentation. Defaults to 3.
 
-        elitism (bool, optional): For genetic algorithm grid search:     If True takes the tournament_size best solution to the next generation. See GASearchCV documentation. Defaults to True.
+        elitism (bool, optional): For genetic algorithm grid search: If True takes the tournament_size best solution to the next generation. See GASearchCV documentation. Defaults to True.
 
         crossover_probability (float, optional): For genetic algorithm grid search: Probability of crossover operation between two individuals. See GASearchCV documentation. Defaults to 0.8.
 
@@ -565,7 +565,7 @@ class ImputeGradientBoosting(Impute):
         >>>     genotype_data=data,
         >>>     gridparams=grid_params,
         >>>     cv=5,
-        >>>     ga=True,
+        >>>     gridsearch_method="genetic_algorithm",
         >>>     n_nearest_features=10,
         >>>     n_estimators=100,
         >>>     initial_strategy="phylogeny",
@@ -580,7 +580,7 @@ class ImputeGradientBoosting(Impute):
         *,
         prefix: str = "output",
         gridparams: Optional[Dict[str, Any]] = None,
-        do_validation: bool = True,
+        do_validation: bool = False,
         column_subset: Union[int, float] = 0.1,
         cv: int = 5,
         n_estimators: int = 100,
@@ -610,9 +610,9 @@ class ImputeGradientBoosting(Impute):
         imputation_order: str = "ascending",
         skip_complete: bool = False,
         random_state: Optional[int] = None,
+        gridsearch_method: str = "gridsearch",
         grid_iter: int = 80,
-        ga: bool = False,
-        population_size: int = 50,
+        population_size: Union[int, str] = "auto",
         tournament_size: int = 3,
         elitism: bool = True,
         crossover_probability: float = 0.8,
@@ -647,9 +647,9 @@ class ImputeBayesianRidge(Impute):
 
         prefix (str, optional): Prefix for imputed data's output filename.
 
-        gridparams (Dict[str, Any] or None, optional): Dictionary with keys=keyword arguments for the specified estimator and values=lists of parameter values or distributions. If using RandomizedSearchCV, distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). ``gridparams`` will be used for a randomized grid search with cross-validation. If using the genetic algorithm grid search (GASearchCV) by setting ``ga=True``\, the parameters can be specified as ``sklearn_genetic.space`` objects. The grid search will determine the optimal parameters as those that maximize accuracy (or minimize root mean squared error for BayesianRidge regressor). NOTE: Takes a long time, so run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. If ``gridparams=None``\, a grid search is not performed. Defaults to None.
+        gridparams (Dict[str, Any] or None or None, optional): Dictionary with keys=keyword arguments for the specified estimator and values=lists of parameter values or distributions. If ``gridparams=None``\, a grid search is not performed, otherwise ``gridparams`` will be used to specify parameter ranges or distributions for the grid search. If using ``gridsearch_method="gridsearch"``, then the ``gridparams`` values can be lists of or numpy arrays. If using ``gridsearch_method="randomized_gridsearch"``\, distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). If using the genetic algorithm grid search by setting ``gridsearch_method="genetic_algorithm"``\, the parameters can be specified as ``sklearn_genetic.space`` objects. The grid search will determine the optimal parameters as those that maximize accuracy (or minimize root mean squared error for BayesianRidge regressor). NOTE: Takes a long time, so run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. Defaults to None.
 
-        do_validation (bool, optional): Whether to validate the imputation if not doing a grid search. This validation method randomly replaces between 15% and 50% of the known, non-missing genotypes in ``n_features * column_subset`` of the features. It then imputes the newly missing genotypes for which we know the true values and calculates validation scores. This procedure is replicated ``cv`` times and a mean, median, minimum, maximum, lower 95% confidence interval (CI) of the mean, and the upper 95% CI are calculated and saved to a CSV file. ``gridparams`` must be set to None for ``do_validation`` to work. Calculating a validation score can be turned off altogether by setting ``do_validation`` to False. Defaults to True.
+        do_validation (bool, optional): Whether to validate the imputation if not doing a grid search. This validation method randomly replaces between 15% and 50% of the known, non-missing genotypes in ``n_features * column_subset`` of the features. It then imputes the newly missing genotypes for which we know the true values and calculates validation scores. This procedure is replicated ``cv`` times and a mean, median, minimum, maximum, lower 95% confidence interval (CI) of the mean, and the upper 95% CI are calculated and saved to a CSV file. ``gridparams`` must be set to None for ``do_validation`` to work. Calculating a validation score can be turned off altogether by setting ``do_validation`` to False. Defaults to False.
 
         column_subset (int or float, optional): If float, proportion of the dataset to randomly subset for the grid search or validation. Should be between 0 and 1, and should also be small, because the grid search or validation takes a long time. If int, subset ``column_subset`` columns. If float, subset ``int(n_features * column_subset)`` columns. Defaults to 0.1.
 
@@ -687,7 +687,7 @@ class ImputeBayesianRidge(Impute):
 
         random_state (int or None, optional): The seed of the pseudo random number generator to use for the iterative imputer. Randomizes selection of etimator features if ``n_nearest_features`` is not None or the imputation_order is "random". Use an integer for determinism. If None, then uses a different random seed each time. Defaults to None.
 
-        gridsearch_method (str or None, optional): Grid search method to use. Supported options include: {"gridsearch", "randomized_gridsearch", and "genetic_algorithm", None}. Whether to use a genetic algorithm for the grid search. "gridsearch" uses GridSearchCV to test every possible parameter combination. "randomized_gridsearch" picks ``grid_iter`` random combinations of parameters to test. "genetic_algorithm" uses a genetic algorithm via sklearn-genetic-opt GASearchCV to do the grid search. If set to None, then does not do a grid search. If doing a grid search, "randomized_search" takes the least amount of time because it does not have to test all parameters. "genetic_algorithm" takes the longest. See the scikit-learn GridSearchCV and RandomizedSearchCV documentation for the "gridsearch" and "randomized_gridsearch" options, and the sklearn-genetic-opt GASearchCV documentation for the "genetic_algorithm" option. Defaults to None.
+        gridsearch_method (str, optional): Grid search method to use. Supported options include: {"gridsearch", "randomized_gridsearch", and "genetic_algorithm"}. Whether to use a genetic algorithm for the grid search. "gridsearch" uses GridSearchCV to test every possible parameter combination. "randomized_gridsearch" picks ``grid_iter`` random combinations of parameters to test. "genetic_algorithm" uses a genetic algorithm via sklearn-genetic-opt GASearchCV to do the grid search. If set to None, then does not do a grid search. If doing a grid search, "randomized_search" takes the least amount of time because it does not have to test all parameters. "genetic_algorithm" takes the longest. See the scikit-learn GridSearchCV and RandomizedSearchCV documentation for the "gridsearch" and "randomized_gridsearch" options, and the sklearn-genetic-opt GASearchCV documentation for the "genetic_algorithm" option. Defaults to "gridsearch".
 
         grid_iter (int, optional): Number of iterations for randomized and genetic algorithm grid searches. Defaults to 80.
 
@@ -750,7 +750,7 @@ class ImputeBayesianRidge(Impute):
         >>>     genotype_data=data,
         >>>     gridparams=grid_params,
         >>>     cv=5,
-        >>>     ga=True,
+        >>>     gridsearch_method="genetic_algorithm",
         >>>     n_nearest_features=10,
         >>>     n_estimators=100,
         >>>     initial_strategy="phylogeny",
@@ -765,7 +765,7 @@ class ImputeBayesianRidge(Impute):
         *,
         prefix: str = "output",
         gridparams: Optional[Dict[str, Any]] = None,
-        do_validation: bool = True,
+        do_validation: bool = False,
         column_subset: Union[int, float] = 0.1,
         cv: int = 5,
         n_iter: int = 300,
@@ -790,9 +790,9 @@ class ImputeBayesianRidge(Impute):
         imputation_order: str = "ascending",
         skip_complete: bool = False,
         random_state: Optional[int] = None,
+        gridsearch_method: str = "gridsearch",
         grid_iter: int = 80,
-        ga: bool = False,
-        population_size: int = 50,
+        population_size: Union[int, str] = "auto",
         tournament_size: int = 3,
         elitism: bool = True,
         crossover_probability: float = 0.8,
@@ -829,9 +829,9 @@ class ImputeXGBoost(Impute):
 
         prefix (str, optional): Prefix for imputed data's output filename.
 
-        gridparams (Dict[str, Any] or None, optional): Dictionary with keys=keyword arguments for the specified estimator and values=lists of parameter values or distributions. If using RandomizedSearchCV, distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). ``gridparams`` will be used for a randomized grid search with cross-validation. If using the genetic algorithm grid search (GASearchCV) by setting ``ga=True``\, the parameters can be specified as ``sklearn_genetic.space`` objects. The grid search will determine the optimal parameters as those that maximize accuracy (or minimize root mean squared error for BayesianRidge regressor). NOTE: Takes a long time, so run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. If ``gridparams=None``\, a grid search is not performed. Defaults to None.
+        gridparams (Dict[str, Any] or None or None, optional): Dictionary with keys=keyword arguments for the specified estimator and values=lists of parameter values or distributions. If ``gridparams=None``\, a grid search is not performed, otherwise ``gridparams`` will be used to specify parameter ranges or distributions for the grid search. If using ``gridsearch_method="gridsearch"``, then the ``gridparams`` values can be lists of or numpy arrays. If using ``gridsearch_method="randomized_gridsearch"``\, distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). If using the genetic algorithm grid search by setting ``gridsearch_method="genetic_algorithm"``\, the parameters can be specified as ``sklearn_genetic.space`` objects. The grid search will determine the optimal parameters as those that maximize accuracy (or minimize root mean squared error for BayesianRidge regressor). NOTE: Takes a long time, so run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. Defaults to None.
 
-        do_validation (bool, optional): Whether to validate the imputation if not doing a grid search. This validation method randomly replaces between 15% and 50% of the known, non-missing genotypes in ``n_features * column_subset`` of the features. It then imputes the newly missing genotypes for which we know the true values and calculates validation scores. This procedure is replicated ``cv`` times and a mean, median, minimum, maximum, lower 95% confidence interval (CI) of the mean, and the upper 95% CI are calculated and saved to a CSV file. ``gridparams`` must be set to None for ``do_validation`` to work. Calculating a validation score can be turned off altogether by setting ``do_validation`` to False. Defaults to True.
+        do_validation (bool, optional): Whether to validate the imputation if not doing a grid search. This validation method randomly replaces between 15% and 50% of the known, non-missing genotypes in ``n_features * column_subset`` of the features. It then imputes the newly missing genotypes for which we know the true values and calculates validation scores. This procedure is replicated ``cv`` times and a mean, median, minimum, maximum, lower 95% confidence interval (CI) of the mean, and the upper 95% CI are calculated and saved to a CSV file. ``gridparams`` must be set to None for ``do_validation`` to work. Calculating a validation score can be turned off altogether by setting ``do_validation`` to False. Defaults to False.
 
         column_subset (int or float, optional): If float, proportion of the dataset to randomly subset for the grid search or validation. Should be between 0 and 1, and should also be small, because the grid search or validation takes a long time. If int, subset ``column_subset`` columns. If float, subset ``int(n_features * column_subset)`` columns. Defaults to 0.1.
 
@@ -877,7 +877,7 @@ class ImputeXGBoost(Impute):
 
         random_state (int or None, optional): The seed of the pseudo random number generator to use for the iterative imputer. Randomizes selection of etimator features if ``n_nearest_features`` is not None or the imputation_order is "random". Use an integer for determinism. If None, then uses a different random seed each time. Defaults to None.
 
-        gridsearch_method (str or None, optional): Grid search method to use. Supported options include: {"gridsearch", "randomized_gridsearch", and "genetic_algorithm", None}. Whether to use a genetic algorithm for the grid search. "gridsearch" uses GridSearchCV to test every possible parameter combination. "randomized_gridsearch" picks ``grid_iter`` random combinations of parameters to test. "genetic_algorithm" uses a genetic algorithm via sklearn-genetic-opt GASearchCV to do the grid search. If set to None, then does not do a grid search. If doing a grid search, "randomized_search" takes the least amount of time because it does not have to test all parameters. "genetic_algorithm" takes the longest. See the scikit-learn GridSearchCV and RandomizedSearchCV documentation for the "gridsearch" and "randomized_gridsearch" options, and the sklearn-genetic-opt GASearchCV documentation for the "genetic_algorithm" option. Defaults to None.
+        gridsearch_method (str, optional): Grid search method to use. Supported options include: {"gridsearch", "randomized_gridsearch", and "genetic_algorithm"}. Whether to use a genetic algorithm for the grid search. "gridsearch" uses GridSearchCV to test every possible parameter combination. "randomized_gridsearch" picks ``grid_iter`` random combinations of parameters to test. "genetic_algorithm" uses a genetic algorithm via sklearn-genetic-opt GASearchCV to do the grid search. If set to None, then does not do a grid search. If doing a grid search, "randomized_search" takes the least amount of time because it does not have to test all parameters. "genetic_algorithm" takes the longest. See the scikit-learn GridSearchCV and RandomizedSearchCV documentation for the "gridsearch" and "randomized_gridsearch" options, and the sklearn-genetic-opt GASearchCV documentation for the "genetic_algorithm" option. Defaults to "gridsearch".
 
         grid_iter (int, optional): Number of iterations for randomized and genetic algorithm grid searches. Defaults to 80.
 
@@ -934,7 +934,7 @@ class ImputeXGBoost(Impute):
         >>>     genotype_data=data,
         >>>     gridparams=grid_params,
         >>>     cv=5,
-        >>>     ga=True,
+        >>>     gridsearch_method="genetic_algorithm",
         >>>     n_nearest_features=10,
         >>>     n_estimators=100,
         >>>     initial_strategy="phylogeny",
@@ -949,7 +949,7 @@ class ImputeXGBoost(Impute):
         *,
         prefix: str = "output",
         gridparams: Optional[Dict[str, Any]] = None,
-        do_validation: bool = True,
+        do_validation: bool = False,
         column_subset: Union[int, float] = 0.1,
         cv: int = 5,
         n_estimators: int = 100,
@@ -978,9 +978,9 @@ class ImputeXGBoost(Impute):
         imputation_order: str = "ascending",
         skip_complete: bool = False,
         random_state: Optional[int] = None,
+        gridsearch_method: str = "gridsearch",
         grid_iter: int = 80,
-        ga: bool = False,
-        population_size: int = 50,
+        population_size: Union[int, str] = "auto",
         tournament_size: int = 3,
         elitism: bool = True,
         crossover_probability: float = 0.8,
@@ -1019,9 +1019,9 @@ class ImputeLightGBM(Impute):
 
         prefix (str, optional): Prefix for imputed data's output filename.
 
-        gridparams (Dict[str, Any] or None, optional): Dictionary with keys=keyword arguments for the specified estimator and values=lists of parameter values or distributions. If using RandomizedSearchCV, distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). ``gridparams`` will be used for a randomized grid search with cross-validation. If using the genetic algorithm grid search (GASearchCV) by setting ``ga=True``\, the parameters can be specified as ``sklearn_genetic.space`` objects. The grid search will determine the optimal parameters as those that maximize accuracy (or minimize root mean squared error for BayesianRidge regressor). NOTE: Takes a long time, so run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. If ``gridparams=None``\, a grid search is not performed. Defaults to None.
+        gridparams (Dict[str, Any] or None or None, optional): Dictionary with keys=keyword arguments for the specified estimator and values=lists of parameter values or distributions. If ``gridparams=None``\, a grid search is not performed, otherwise ``gridparams`` will be used to specify parameter ranges or distributions for the grid search. If using ``gridsearch_method="gridsearch"``, then the ``gridparams`` values can be lists of or numpy arrays. If using ``gridsearch_method="randomized_gridsearch"``\, distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). If using the genetic algorithm grid search by setting ``gridsearch_method="genetic_algorithm"``\, the parameters can be specified as ``sklearn_genetic.space`` objects. The grid search will determine the optimal parameters as those that maximize accuracy (or minimize root mean squared error for BayesianRidge regressor). NOTE: Takes a long time, so run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. Defaults to None.
 
-        do_validation (bool, optional): Whether to validate the imputation if not doing a grid search. This validation method randomly replaces between 15% and 50% of the known, non-missing genotypes in ``n_features * column_subset`` of the features. It then imputes the newly missing genotypes for which we know the true values and calculates validation scores. This procedure is replicated ``cv`` times and a mean, median, minimum, maximum, lower 95% confidence interval (CI) of the mean, and the upper 95% CI are calculated and saved to a CSV file. ``gridparams`` must be set to None for ``do_validation`` to work. Calculating a validation score can be turned off altogether by setting ``do_validation`` to False. Defaults to True.
+        do_validation (bool, optional): Whether to validate the imputation if not doing a grid search. This validation method randomly replaces between 15% and 50% of the known, non-missing genotypes in ``n_features * column_subset`` of the features. It then imputes the newly missing genotypes for which we know the true values and calculates validation scores. This procedure is replicated ``cv`` times and a mean, median, minimum, maximum, lower 95% confidence interval (CI) of the mean, and the upper 95% CI are calculated and saved to a CSV file. ``gridparams`` must be set to None for ``do_validation`` to work. Calculating a validation score can be turned off altogether by setting ``do_validation`` to False. Defaults to False.
 
         column_subset (int or float, optional): If float, proportion of the dataset to randomly subset for the grid search or validation. Should be between 0 and 1, and should also be small, because the grid search or validation takes a long time. If int, subset ``column_subset`` columns. If float, subset ``int(n_features * column_subset)`` columns. Defaults to 0.1.
 
@@ -1075,7 +1075,7 @@ class ImputeLightGBM(Impute):
 
         random_state (int or None, optional): The seed of the pseudo random number generator to use for the iterative imputer. Randomizes selection of etimator features if n_nearest_features is not None or the imputation_order is 'random'. Use an integer for determinism. If None, then uses a different random seed each time. Defaults to None.
 
-        gridsearch_method (str or None, optional): Grid search method to use. Supported options include: {"gridsearch", "randomized_gridsearch", and "genetic_algorithm", None}. Whether to use a genetic algorithm for the grid search. "gridsearch" uses GridSearchCV to test every possible parameter combination. "randomized_gridsearch" picks ``grid_iter`` random combinations of parameters to test. "genetic_algorithm" uses a genetic algorithm via sklearn-genetic-opt GASearchCV to do the grid search. If set to None, then does not do a grid search. If doing a grid search, "randomized_search" takes the least amount of time because it does not have to test all parameters. "genetic_algorithm" takes the longest. See the scikit-learn GridSearchCV and RandomizedSearchCV documentation for the "gridsearch" and "randomized_gridsearch" options, and the sklearn-genetic-opt GASearchCV documentation for the "genetic_algorithm" option. Defaults to None.
+        gridsearch_method (str, optional): Grid search method to use. Supported options include: {"gridsearch", "randomized_gridsearch", and "genetic_algorithm"}. Whether to use a genetic algorithm for the grid search. "gridsearch" uses GridSearchCV to test every possible parameter combination. "randomized_gridsearch" picks ``grid_iter`` random combinations of parameters to test. "genetic_algorithm" uses a genetic algorithm via sklearn-genetic-opt GASearchCV to do the grid search. If set to None, then does not do a grid search. If doing a grid search, "randomized_search" takes the least amount of time because it does not have to test all parameters. "genetic_algorithm" takes the longest. See the scikit-learn GridSearchCV and RandomizedSearchCV documentation for the "gridsearch" and "randomized_gridsearch" options, and the sklearn-genetic-opt GASearchCV documentation for the "genetic_algorithm" option. Defaults to "gridsearch".
 
         grid_iter (int, optional): Number of iterations for randomized and genetic algorithm grid searches. Defaults to 80.
 
@@ -1132,7 +1132,7 @@ class ImputeLightGBM(Impute):
         >>>     genotype_data=data,
         >>>     gridparams=grid_params,
         >>>     cv=5,
-        >>>     ga=True,
+        >>>     gridsearch_method="genetic_algorithm",
         >>>     n_nearest_features=10,
         >>>     n_estimators=100,
         >>>     initial_strategy="phylogeny",
@@ -1147,7 +1147,7 @@ class ImputeLightGBM(Impute):
         *,
         prefix: str = "output",
         gridparams: Optional[Dict[str, Any]] = None,
-        do_validation: bool = True,
+        do_validation: bool = False,
         column_subset: Union[int, float] = 0.1,
         cv: int = 5,
         n_estimators: int = 100,
@@ -1180,9 +1180,9 @@ class ImputeLightGBM(Impute):
         imputation_order: str = "ascending",
         skip_complete: bool = False,
         random_state: Optional[int] = None,
+        gridsearch_method: str = "gridsearch",
         grid_iter: int = 80,
-        ga: bool = False,
-        population_size: int = 50,
+        population_size: Union[int, str] = "auto",
         tournament_size: int = 3,
         elitism: bool = True,
         crossover_probability: float = 0.8,
@@ -1341,9 +1341,9 @@ class ImputeUBP(Impute):
 
         prefix (str, optional): Prefix for output files. Defaults to "output".
 
-        gridparams (Dict[str, Any] or None, optional): Dictionary with keys=keyword arguments for the specified estimator and values=lists of parameter values or distributions. If using RandomizedSearchCV, distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). ``gridparams`` will be used for a randomized grid search with cross-validation. If using the genetic algorithm grid search (GASearchCV) by setting ``ga=True``\, the parameters can be specified as ``sklearn_genetic.space`` objects. The grid search will determine the optimal parameters as those that maximize accuracy (or minimize root mean squared error for BayesianRidge regressor). NOTE: Takes a long time, so run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. If ``gridparams=None``\, a grid search is not performed. Defaults to None.
+        gridparams (Dict[str, Any] or None or None, optional): Dictionary with keys=keyword arguments for the specified estimator and values=lists of parameter values or distributions. If ``gridparams=None``\, a grid search is not performed, otherwise ``gridparams`` will be used to specify parameter ranges or distributions for the grid search. If using ``gridsearch_method="gridsearch"``, then the ``gridparams`` values can be lists of or numpy arrays. If using ``gridsearch_method="randomized_gridsearch"``\, distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). If using the genetic algorithm grid search by setting ``gridsearch_method="genetic_algorithm"``\, the parameters can be specified as ``sklearn_genetic.space`` objects. The grid search will determine the optimal parameters as those that maximize accuracy (or minimize root mean squared error for BayesianRidge regressor). NOTE: Takes a long time, so run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. Defaults to None.
 
-        do_validation (bool, optional): Whether to validate the imputation if not doing a grid search. This validation method randomly replaces between 15% and 50% of the known, non-missing genotypes in ``n_features * column_subset`` of the features. It then imputes the newly missing genotypes for which we know the true values and calculates validation scores. This procedure is replicated ``cv`` times and a mean, median, minimum, maximum, lower 95% confidence interval (CI) of the mean, and the upper 95% CI are calculated and saved to a CSV file. ``gridparams`` must be set to None for ``do_validation`` to work. Calculating a validation score can be turned off altogether by setting ``do_validation`` to False. Defaults to True.
+        do_validation (bool, optional): Whether to validate the imputation if not doing a grid search. This validation method randomly replaces between 15% and 50% of the known, non-missing genotypes in ``n_features * column_subset`` of the features. It then imputes the newly missing genotypes for which we know the true values and calculates validation scores. This procedure is replicated ``cv`` times and a mean, median, minimum, maximum, lower 95% confidence interval (CI) of the mean, and the upper 95% CI are calculated and saved to a CSV file. ``gridparams`` must be set to None for ``do_validation`` to work. Calculating a validation score can be turned off altogether by setting ``do_validation`` to False. Defaults to False.
 
         column_subset (int or float, optional): If float, proportion of the dataset to randomly subset for the grid search or validation. Should be between 0 and 1, and should also be small, because the grid search or validation takes a long time. If int, subset ``column_subset`` columns. If float, subset ``int(n_features * column_subset)`` columns. Defaults to 0.1.
 
@@ -1379,9 +1379,11 @@ class ImputeUBP(Impute):
 
         dropout_rate (float, optional): Neuron dropout rate during training to reduce overfitting. Must be a float between 0 and 1. E.g., if dropout_rate is set to 0.2, then 20% of the neurons are randomly dropped out per epoch. Defaults to 0.2.
 
+        sample_weights (str, Dict[int, float], or None, optional): Weights for the 012-encoded classes during training. If None, then does not weight classes. If set to "auto", then class weights are automatically calculated for each column. If a dictionary is passed, it must contain 0, 1, and 2 as the keys and the class weights as the values. E.g., {0: 1.0, 1: 1.0, 2: 1.0}. The dictionary is then used as they overall class weights. If you wanted to prevent the model from learning to predict heterozygotes, for example, you could set the class weights to {0: 1.0, 1: 0.0, 2: 1.0}. Defaults to None (no weighting).
+
         cv (int): Number of cross-validation replicates to perform. Defaults to 5.
 
-        gridsearch_method (str or None, optional): Grid search method to use. Supported options include: {"gridsearch", "randomized_gridsearch", and "genetic_algorithm", None}. Whether to use a genetic algorithm for the grid search. "gridsearch" uses GridSearchCV to test every possible parameter combination. "randomized_gridsearch" picks ``grid_iter`` random combinations of parameters to test. "genetic_algorithm" uses a genetic algorithm via sklearn-genetic-opt GASearchCV to do the grid search. If set to None, then does not do a grid search. If doing a grid search, "randomized_search" takes the least amount of time because it does not have to test all parameters. "genetic_algorithm" takes the longest. See the scikit-learn GridSearchCV and RandomizedSearchCV documentation for the "gridsearch" and "randomized_gridsearch" options, and the sklearn-genetic-opt GASearchCV documentation for the "genetic_algorithm" option. Defaults to None.
+        gridsearch_method (str, optional): Grid search method to use. Supported options include: {"gridsearch", "randomized_gridsearch", and "genetic_algorithm"}. Whether to use a genetic algorithm for the grid search. "gridsearch" uses GridSearchCV to test every possible parameter combination. "randomized_gridsearch" picks ``grid_iter`` random combinations of parameters to test. "genetic_algorithm" uses a genetic algorithm via sklearn-genetic-opt GASearchCV to do the grid search. If set to None, then does not do a grid search. If doing a grid search, "randomized_search" takes the least amount of time because it does not have to test all parameters. "genetic_algorithm" takes the longest. See the scikit-learn GridSearchCV and RandomizedSearchCV documentation for the "gridsearch" and "randomized_gridsearch" options, and the sklearn-genetic-opt GASearchCV documentation for the "genetic_algorithm" option. Defaults to "gridsearch".
 
         grid_iter (int, optional): Number of iterations for randomized and genetic algorithm grid searches. Defaults to 80.
 
@@ -1451,7 +1453,7 @@ class ImputeUBP(Impute):
         *,
         prefix="output",
         gridparams=None,
-        do_validation=True,
+        do_validation=False,
         column_subset=0.1,
         batch_size=32,
         validation_split=0.3,
@@ -1468,9 +1470,10 @@ class ImputeUBP(Impute):
         l1_penalty=1e-6,
         l2_penalty=1e-6,
         dropout_rate=0.2,
+        sample_weights=None,
         cv=5,
+        gridsearch_method="gridsearch",
         grid_iter=80,
-        ga=False,
         population_size="auto",
         tournament_size=3,
         elitism=True,
@@ -1534,9 +1537,9 @@ class ImputeNLPCA(ImputeUBP):
 
         prefix (str, optional): Prefix for output files. Defaults to "output".
 
-        gridparams (Dict[str, Any] or None, optional): Dictionary with keys=keyword arguments for the specified estimator and values=lists of parameter values or distributions. If using RandomizedSearchCV, distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). ``gridparams`` will be used for a randomized grid search with cross-validation. If using the genetic algorithm grid search (GASearchCV) by setting ``ga=True``\, the parameters can be specified as ``sklearn_genetic.space`` objects. The grid search will determine the optimal parameters as those that maximize accuracy (or minimize root mean squared error for BayesianRidge regressor). NOTE: Takes a long time, so run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. If ``gridparams=None``\, a grid search is not performed. Defaults to None.
+        gridparams (Dict[str, Any] or None or None, optional): Dictionary with keys=keyword arguments for the specified estimator and values=lists of parameter values or distributions. If ``gridparams=None``\, a grid search is not performed, otherwise ``gridparams`` will be used to specify parameter ranges or distributions for the grid search. If using ``gridsearch_method="gridsearch"``, then the ``gridparams`` values can be lists of or numpy arrays. If using ``gridsearch_method="randomized_gridsearch"``\, distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). If using the genetic algorithm grid search by setting ``gridsearch_method="genetic_algorithm"``\, the parameters can be specified as ``sklearn_genetic.space`` objects. The grid search will determine the optimal parameters as those that maximize accuracy (or minimize root mean squared error for BayesianRidge regressor). NOTE: Takes a long time, so run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. Defaults to None.
 
-        do_validation (bool, optional): Whether to validate the imputation if not doing a grid search. This validation method randomly replaces between 15% and 50% of the known, non-missing genotypes in ``n_features * column_subset`` of the features. It then imputes the newly missing genotypes for which we know the true values and calculates validation scores. This procedure is replicated ``cv`` times and a mean, median, minimum, maximum, lower 95% confidence interval (CI) of the mean, and the upper 95% CI are calculated and saved to a CSV file. ``gridparams`` must be set to None for ``do_validation`` to work. Calculating a validation score can be turned off altogether by setting ``do_validation`` to False. Defaults to True.
+        do_validation (bool, optional): Whether to validate the imputation if not doing a grid search. This validation method randomly replaces between 15% and 50% of the known, non-missing genotypes in ``n_features * column_subset`` of the features. It then imputes the newly missing genotypes for which we know the true values and calculates validation scores. This procedure is replicated ``cv`` times and a mean, median, minimum, maximum, lower 95% confidence interval (CI) of the mean, and the upper 95% CI are calculated and saved to a CSV file. ``gridparams`` must be set to None for ``do_validation`` to work. Calculating a validation score can be turned off altogether by setting ``do_validation`` to False. Defaults to False.
 
         column_subset (int or float, optional): If float, proportion of the dataset to randomly subset for the grid search or validation. Should be between 0 and 1, and should also be small, because the grid search or validation takes a long time. If int, subset ``column_subset`` columns. If float, subset ``int(n_features * column_subset)`` columns. Defaults to 0.1.
 
@@ -1572,9 +1575,11 @@ class ImputeNLPCA(ImputeUBP):
 
         dropout_rate (float, optional): Neuron dropout rate during training to reduce overfitting. Must be a float between 0 and 1. E.g., if dropout_rate is set to 0.2, then 20% of the neurons are randomly dropped out per epoch. Defaults to 0.2.
 
+        sample_weights (str, Dict[int, float], or None, optional): Weights for the 012-encoded classes during training. If None, then does not weight classes. If set to "auto", then class weights are automatically calculated for each column. If a dictionary is passed, it must contain 0, 1, and 2 as the keys and the class weights as the values. E.g., {0: 1.0, 1: 1.0, 2: 1.0}. The dictionary is then used as they overall class weights. If you wanted to prevent the model from learning to predict heterozygotes, for example, you could set the class weights to {0: 1.0, 1: 0.0, 2: 1.0}. Defaults to None (no weighting).
+
         cv (int): Number of cross-validation replicates to perform. Defaults to 5.
 
-        gridsearch_method (str or None, optional): Grid search method to use. Supported options include: {"gridsearch", "randomized_gridsearch", and "genetic_algorithm", None}. Whether to use a genetic algorithm for the grid search. "gridsearch" uses GridSearchCV to test every possible parameter combination. "randomized_gridsearch" picks ``grid_iter`` random combinations of parameters to test. "genetic_algorithm" uses a genetic algorithm via sklearn-genetic-opt GASearchCV to do the grid search. If set to None, then does not do a grid search. If doing a grid search, "randomized_search" takes the least amount of time because it does not have to test all parameters. "genetic_algorithm" takes the longest. See the scikit-learn GridSearchCV and RandomizedSearchCV documentation for the "gridsearch" and "randomized_gridsearch" options, and the sklearn-genetic-opt GASearchCV documentation for the "genetic_algorithm" option. Defaults to None.
+        gridsearch_method (str, optional): Grid search method to use. Supported options include: {"gridsearch", "randomized_gridsearch", and "genetic_algorithm"}. Whether to use a genetic algorithm for the grid search. "gridsearch" uses GridSearchCV to test every possible parameter combination. "randomized_gridsearch" picks ``grid_iter`` random combinations of parameters to test. "genetic_algorithm" uses a genetic algorithm via sklearn-genetic-opt GASearchCV to do the grid search. If set to None, then does not do a grid search. If doing a grid search, "randomized_search" takes the least amount of time because it does not have to test all parameters. "genetic_algorithm" takes the longest. See the scikit-learn GridSearchCV and RandomizedSearchCV documentation for the "gridsearch" and "randomized_gridsearch" options, and the sklearn-genetic-opt GASearchCV documentation for the "genetic_algorithm" option. Defaults to "gridsearch".
 
         grid_iter (int, optional): Number of iterations for randomized and genetic algorithm grid searches. Defaults to 80.
 
