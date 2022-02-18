@@ -357,7 +357,7 @@ def main():
         batch_size=64,
         l1_penalty=1e-6,
         l2_penalty=1e-6,
-        gridparams=grid_params,
+        # gridparams=grid_params,
         n_jobs=4,
         grid_iter=5,
         sim_strategy="nonrandom_weighted",
@@ -365,7 +365,7 @@ def main():
         scoring_metric="precision_recall_macro",
         gridsearch_method="gridsearch",
         early_stop_gen=5,
-        sample_weights={0: 1.0, 1: 58.0, 2: 33.0},
+        # sample_weights={0: 1.0, 1: 58.0, 2: 33.0},
     )
 
     # ubp = ImputeVAE(

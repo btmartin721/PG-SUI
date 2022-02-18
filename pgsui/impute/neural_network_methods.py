@@ -3,6 +3,7 @@ import math
 import os
 import sys
 import random
+import warnings
 from collections import defaultdict
 from itertools import cycle
 
@@ -25,12 +26,31 @@ from sklearn_genetic.utils import logbook_to_pandas
 
 from sklearn.preprocessing import label_binarize
 
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # or any {'0', '1', '2', '3'}
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+logging.getLogger("tensorflow").disabled = True
+warnings.filterwarnings("ignore", category=UserWarning)
 
+# noinspection PyPackageRequirements
 import tensorflow as tf
+tf.config.set_visible_devices([], 'GPU')
+
+from tensorflow.python.util import deprecation
 
 tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 tf.get_logger().setLevel(logging.ERROR)
+
+# Monkey patching deprecation utils to shut it up!
+# noinspection PyUnusedLocal
+def deprecated(
+    date, instructions, warn_once=True
+):  # pylint: disable=unused-argument
+    def deprecated_wrapper(func):
+        return func
+
+    return deprecated_wrapper
+
+
+deprecation.deprecated = deprecated
 
 # Custom module imports
 try:

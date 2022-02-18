@@ -3,12 +3,50 @@ import logging
 import os
 import pprint
 import sys
+import warnings
 from collections import defaultdict
 
 # Third-party Imports
 import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
+
+# Import tensorflow with reduced warnings.
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+logging.getLogger("tensorflow").disabled = True
+warnings.filterwarnings("ignore", category=UserWarning)
+
+# noinspection PyPackageRequirements
+import tensorflow as tf
+tf.config.set_visible_devices([], 'GPU')
+
+from tensorflow.python.util import deprecation
+
+tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
+tf.get_logger().setLevel(logging.ERROR)
+
+# Monkey patching deprecation utils to shut it up!
+# noinspection PyUnusedLocal
+def deprecated(
+    date, instructions, warn_once=True
+):  # pylint: disable=unused-argument
+    def deprecated_wrapper(func):
+        return func
+
+    return deprecated_wrapper
+
+deprecation.deprecated = deprecated
+
+from tensorflow.keras.callbacks import (
+    EarlyStopping,
+    ProgbarLogger,
+    ReduceLROnPlateau,
+    CSVLogger,
+)
+from tensorflow.keras.layers import Dropout, Dense
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.regularizers import l1_l2
+
 
 from sklearn.metrics import accuracy_score
 
@@ -33,28 +71,7 @@ from scikeras.wrappers import KerasClassifier
 # For development purposes
 # from memory_profiler import memory_usage
 
-# Ignore warnings, but still print errors.
-# Set to 0 for debugging, 2 to ignore warnings, 3 to ignore all but fatal.errors
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # or any {'0', '1', '2', '3'}
-
-# Neural network imports
-import tensorflow as tf
-
-tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
-tf.get_logger().setLevel(logging.ERROR)
-
-from tensorflow.python.util import deprecation
-from tensorflow.keras.callbacks import (
-    EarlyStopping,
-    ProgbarLogger,
-    ReduceLROnPlateau,
-    CSVLogger,
-)
-from tensorflow.keras.layers import Dropout, Dense
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.regularizers import l1_l2
-
-# Custom Modules
+# Custom module imports
 try:
     from ..read_input.read_input import GenotypeData
     from ..utils.misc import timer
@@ -85,11 +102,6 @@ except (ModuleNotFoundError, ValueError):
         SimGenotypeDataTransformer,
         TargetTransformer,
     )
-
-
-# Ignore warnings, but still print errors.
-deprecation._PRINT_DEPRECATION_WARNINGS = False
-tf.get_logger().setLevel("ERROR")
 
 is_notebook = isnotebook()
 

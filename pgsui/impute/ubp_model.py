@@ -1,24 +1,49 @@
 import logging
 import os
 import sys
+import warnings
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # or any {'0', '1', '2', '3'}
+logging.getLogger("tensorflow").disabled = True
 
 import numpy as np
 import pandas as pd
+
+# Import tensorflow with reduced warnings.
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+logging.getLogger("tensorflow").disabled = True
+warnings.filterwarnings("ignore", category=UserWarning)
+
+# noinspection PyPackageRequirements
 import tensorflow as tf
+tf.config.set_visible_devices([], 'GPU')
+
+from tensorflow.python.util import deprecation
 
 tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 tf.get_logger().setLevel(logging.ERROR)
 
-from tensorflow.keras.layers import Dropout, Dense, Lambda
-from tensorflow.keras.regularizers import l1_l2
+# Monkey patching deprecation utils to shut it up!
+# noinspection PyUnusedLocal
+def deprecated(
+    date, instructions, warn_once=True
+):  # pylint: disable=unused-argument
+    def deprecated_wrapper(func):
+        return func
+
+    return deprecated_wrapper
+
+
+deprecation.deprecated = deprecated
 
 # Custom Modules
 try:
     from .neural_network_methods import NeuralNetworkMethods
 except (ModuleNotFoundError, ValueError):
     from impute.neural_network_methods import NeuralNetworkMethods
+
+from tensorflow.keras.layers import Dropout, Dense, Lambda
+from tensorflow.keras.regularizers import l1_l2
 
 
 class UBPPhase1(tf.keras.Model):
