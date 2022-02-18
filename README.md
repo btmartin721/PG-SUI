@@ -88,7 +88,7 @@ pip install sklearn-genetic-opt[all]
 
 pip install scikeras
 
-pip install tensorflow==2.7
+pip install tensorflow-cpu==2.7
 ```
 
 #### Installation troubleshooting
