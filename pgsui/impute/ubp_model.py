@@ -39,14 +39,21 @@ def deprecated(
 
 deprecation.deprecated = deprecated
 
+from tensorflow.keras.layers import (
+    Dropout,
+    Dense,
+    Reshape,
+    LeakyReLU,
+    PReLU,
+)
+
+from tensorflow.keras.regularizers import l1_l2
+
 # Custom Modules
 try:
     from .neural_network_methods import NeuralNetworkMethods
 except (ModuleNotFoundError, ValueError):
     from impute.neural_network_methods import NeuralNetworkMethods
-
-from tensorflow.keras.layers import Dropout, Dense, Lambda
-from tensorflow.keras.regularizers import l1_l2
 
 
 class UBPPhase1(tf.keras.Model):
@@ -69,11 +76,13 @@ class UBPPhase1(tf.keras.Model):
 
         output_shape (int): Output units for n_features dimension. Output will be of shape (batch_size, n_features). Defaults to None.
 
+        n_components (int, optional): Number of features in input V to use. Defaults to 3.
+
         weights_initializer (str, optional): Kernel initializer to use for initializing model weights. Defaults to "glorot_normal".
 
-        hidden_layer_sizes (NoneType, optional): Output units for each hidden layer. List should be of same length as the number of hidden layers. Not used for UBP Phase 1, but is here for compatibility. Defaults to None.
+        hidden_layer_sizes (NoneType, optional): Output units for each hidden layer. List should be of same length as the number of hidden layers. Not used for UBP Phase 1, but is here for compatibility. Defaults to "midpoint".
 
-        num_hidden_layers (int, optional): Number of hidden layers to use. Not used in UBP Phase 1, but is here for compatibility. Defaults to 0.
+        num_hidden_layers (int, optional): Number of hidden layers to use. Not used in UBP Phase 1, but is here for compatibility. Defaults to 1.
 
         hidden_activation (str, optional): Activation function to use for hidden layers. Defaults to "elu".
 
@@ -83,9 +92,11 @@ class UBPPhase1(tf.keras.Model):
 
         dropout_rate (float, optional): Dropout rate during training to reduce overfitting. Must be a float between 0 and 1. Defaults to 0.2.
 
-        num_classes (int, optional): Number of classes in output. Corresponds to the 3rd dimension of the output shape (batch_size, n_features, num_classes). Defaults to 1.
+        num_classes (int, optional): Number of classes in output. Corresponds to the 3rd dimension of the output shape (batch_size, n_features, num_classes). Defaults to 3.
 
         phase (int, optional): Current phase if doing UBP model. Defaults to 1.
+
+        sample_weight (numpy.ndarray, optional): 2D sample weights of shape (n_samples, n_features). Should have values for each class weighted. Defaults to None.
 
     Methods:
         call: Does forward pass for model.
@@ -93,9 +104,7 @@ class UBPPhase1(tf.keras.Model):
         test_step: Does evaluation for one batch in a single epoch.
 
     Attributes:
-        V_latent_ (numpy.ndarray(float)): Randomly initialized input that gets refined during training.
-
-        phase (int): Current phase if doing UBP model. Ignored if doing NLPCA model.
+        V_latent_ (numpy.ndarray(float)): Randomly initialized input that gets refined during training to better predict the targets.
 
         hidden_layer_sizes (List[Union[int, str]]): Output units for each hidden layer. Length should be the same as the number of hidden layers.
 
@@ -105,19 +114,14 @@ class UBPPhase1(tf.keras.Model):
 
         _batch_idx (int): Index of current batch.
 
-        _n_batches (int): Total number of batches per epoch.
-
-        input_with_mask_ (numpy.ndarray): Target y with the missing data mask horizontally concatenated and shape (n_samples, n_features * 2). Gets refined in the UBPCallbacks() callback.
-
     Example:
-        >>>model = UBPPhase1(V=V, y=y, batch_size=32, missing_mask=missing_mask, output_shape, n_components, weights_initializer, hidden_layer_sizes, num_hidden_layers, hidden_activation, l1_penalty, l2_penalty, num_classes=3, phase=3)
+        >>>model = UBPPhase1(V=V, y=y, batch_size=32, missing_mask=missing_mask, output_shape=y_train.shape[1], n_components=3, weights_initializer="glorot_normal", hidden_layer_sizes="midpoint", num_hidden_layers=1, hidden_activation="elu", l1_penalty=1e-6, l2_penalty=1e-6, num_classes=3, phase=3)
         >>>model.compile(optimizer=optimizer, loss=loss_func, metrics=[my_metrics], run_eagerly=True)
         >>>history = model.fit(X, y, batch_size=batch_size, epochs=epochs, callbacks=[MyCallback()], validation_split=validation_split, shuffle=False)
 
     Raises:
         TypeError: V, y, missing_mask, output_shape must not be NoneType.
         ValueError: Maximum of 5 hidden layers.
-
     """
 
     def __init__(
@@ -129,14 +133,15 @@ class UBPPhase1(tf.keras.Model):
         output_shape=None,
         n_components=3,
         weights_initializer="glorot_normal",
-        hidden_layer_sizes=None,
-        num_hidden_layers=0,
+        hidden_layer_sizes="midpoint",
+        num_hidden_layers=1,
         hidden_activation="elu",
         l1_penalty=0.01,
         l2_penalty=0.01,
         dropout_rate=0.2,
-        num_classes=1,
+        num_classes=3,
         phase=1,
+        sample_weight=None,
     ):
         super(UBPPhase1, self).__init__()
 
@@ -145,18 +150,28 @@ class UBPPhase1(tf.keras.Model):
 
         if V is None:
             self._V = nn.init_weights(y.shape[0], n_components)
+        elif isinstance(V, dict):
+            self._V = V[n_components]
         else:
             self._V = V
 
         self._y = y
 
+        hidden_layer_sizes = nn.validate_hidden_layers(
+            hidden_layer_sizes, num_hidden_layers
+        )
+
+        hidden_layer_sizes = nn.get_hidden_layer_sizes(
+            y.shape[1], self._V.shape[1], hidden_layer_sizes
+        )
+
         nn.validate_model_inputs(y, missing_mask, output_shape)
 
         self._missing_mask = missing_mask
-        self.phase = phase
-        self.hidden_layer_sizes = hidden_layer_sizes
-        self.n_components = n_components
         self.weights_initializer = weights_initializer
+        self.phase = phase
+        self.dropout_rate = dropout_rate
+        self._sample_weight = sample_weight
 
         ### NOTE: I tried using just _V as the input to be refined, but it
         # wasn't getting updated. So I copy it here and it works.
@@ -166,26 +181,40 @@ class UBPPhase1(tf.keras.Model):
         # Initialize parameters used during train_step() and test_step().
         # input_with_mask_ is set during the UBPCallbacks() execution.
         self._batch_idx = 0
-        self._n_batches = 0
         self._batch_size = batch_size
-        self.input_with_mask_ = None
         self.n_components = n_components
 
         if l1_penalty == 0.0 and l2_penalty == 0.0:
             kernel_regularizer = None
         else:
             kernel_regularizer = l1_l2(l1_penalty, l2_penalty)
+
         self.kernel_regularizer = kernel_regularizer
         kernel_initializer = weights_initializer
 
+        if hidden_activation.lower() == "leaky_relu":
+            activation = LeakyReLU(alpha=0.01)
+
+        elif hidden_activation.lower() == "prelu":
+            activation = PReLU()
+
+        elif hidden_activation.lower() == "selu":
+            activation = "selu"
+            kernel_initializer = "lecun_normal"
+
+        else:
+            activation = hidden_activation
+
         # Construct single-layer perceptron.
+
         self.dense1 = Dense(
-            output_shape,
+            output_shape * num_classes,
             input_shape=(n_components,),
             kernel_initializer=kernel_initializer,
             kernel_regularizer=kernel_regularizer,
-            activation="sigmoid",
         )
+
+        self.rshp = Reshape((output_shape, num_classes))
 
     def call(self, inputs):
         """Forward propagates inputs through the model defined in __init__().
@@ -196,7 +225,8 @@ class UBPPhase1(tf.keras.Model):
         Returns:
             tf.keras.Model: Output tensor from forward propagation.
         """
-        return self.dense1(inputs)
+        x = self.dense1(inputs)
+        return self.rshp(x)
 
     def model(self):
         """Here so that mymodel.model().summary() can be called for debugging"""
@@ -220,18 +250,40 @@ class UBPPhase1(tf.keras.Model):
             Obtain batch_size without using run_eagerly option in compile(). This will allow the step to be run in graph mode, thereby speeding up computation.
         """
         # Set in the UBPCallbacks() callback.
-        y = self.input_with_mask_
+        # Set in the UBPCallbacks() callback.
+        y = self._y
 
-        v, y_true, batch_start, batch_end = self.nn.prepare_training_batches(
+        (
+            v,
+            y_true,
+            sample_weight,
+            missing_mask,
+            batch_start,
+            batch_end,
+        ) = self.nn.prepare_training_batches(
             self.V_latent_,
             y,
             self._batch_size,
             self._batch_idx,
             True,
             self.n_components,
+            self._sample_weight,
+            self._missing_mask,
         )
 
         src = [v]
+
+        if sample_weight is not None:
+            sample_weight_masked = tf.convert_to_tensor(
+                sample_weight[~missing_mask], dtype=tf.float32
+            )
+        else:
+            sample_weight_masked = None
+
+        y_true_masked = tf.boolean_mask(
+            tf.convert_to_tensor(y_true, dtype=tf.float32),
+            tf.reduce_any(tf.not_equal(y_true, -1), axis=2),
+        )
 
         # NOTE: Earlier model architectures incorrectly
         # applied one gradient to all the variables, including
@@ -241,9 +293,15 @@ class UBPPhase1(tf.keras.Model):
             # Forward pass. Watch input tensor v.
             tape.watch(v)
             y_pred = self(v, training=True)
+            y_pred_masked = tf.boolean_mask(
+                y_pred, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
+            )
+            ### NOTE: If you get the error, "'tuple' object has no attribute
+            ### 'rank'", then convert y_true to a tensor object."
             loss = self.compiled_loss(
-                tf.convert_to_tensor(y_true, dtype=tf.float32),
-                y_pred,
+                y_true_masked,
+                y_pred_masked,
+                sample_weight=sample_weight_masked,
                 regularization_losses=self.losses,
             )
 
@@ -258,8 +316,12 @@ class UBPPhase1(tf.keras.Model):
 
         del tape
 
+        ### NOTE: If you get the error, "'tuple' object has no attribute
+        ### 'rank', then convert y_true to a tensor object."
         self.compiled_metrics.update_state(
-            tf.convert_to_tensor(y_true, dtype=tf.float32), y_pred
+            y_true_masked,
+            y_pred_masked,
+            sample_weight=sample_weight_masked,
         )
 
         # NOTE: run_eagerly must be set to True in the compile() method for this
@@ -272,52 +334,9 @@ class UBPPhase1(tf.keras.Model):
         # history object that gets returned from model.fit().
         return {m.name: m.result() for m in self.metrics}
 
-    def test_step(self, data):
-        """Validation step for one batch in a single epoch.
-
-        Custom logic for the test step that gets sent back to on_train_batch_end() callback.
-
-        Args:
-            data (Tuple[tf.EagerTensor, tf.EagerTensor]): Batches of input data V and y_true.
-
-        Returns:
-            A dict containing values that will be passed to ``tf.keras.callbacks.CallbackList.on_train_batch_end``. Typically, the values of the Model's metrics are returned.
-        """
-        # Unpack the data. Don't need V here. Just X (y_true).
-        # y_true = data[1]
-        y = self.input_with_mask_
-
-        v, y_true, batch_start, batch_end = self.nn.prepare_training_batches(
-            self.V_latent_,
-            y,
-            self._batch_size,
-            self._batch_idx,
-            False,
-            self.n_components,
-        )
-
-        # Compute predictions
-        y_pred = self(v, training=False)
-
-        # Updates the metrics tracking the loss
-        self.compiled_loss(
-            tf.convert_to_tensor(y_true, dtype=tf.float32),
-            y_pred,
-            regularization_losses=self.losses,
-        )
-
-        # Update the metrics.
-        self.compiled_metrics.update_state(
-            tf.convert_to_tensor(y_true, dtype=tf.float32), y_pred
-        )
-
-        # Return a dict mapping metric names to current value.
-        # Note that it will include the loss (tracked in self.metrics).
-        return {m.name: m.result() for m in self.metrics}
-
     @property
     def V_latent(self):
-        """Randomly initialized input variable that gets refined during training."""
+        """Randomly initialized input that gets refined during training."""
         return self.V_latent_
 
     @property
@@ -331,11 +350,6 @@ class UBPPhase1(tf.keras.Model):
         return self._batch_idx
 
     @property
-    def n_batches(self):
-        """Total number of batches per epoch."""
-        return self._n_batches
-
-    @property
     def y(self):
         return self._y
 
@@ -344,12 +358,12 @@ class UBPPhase1(tf.keras.Model):
         return self._missing_mask
 
     @property
-    def input_with_mask(self):
-        return self.input_with_mask_
+    def sample_weight(self):
+        return self._sample_weight
 
     @V_latent.setter
     def V_latent(self, value):
-        """Set randomly initialized input variable. Gets refined during training."""
+        """Set randomly initialized input. Gets refined during training."""
         self.V_latent_ = value
 
     @batch_size.setter
@@ -362,11 +376,6 @@ class UBPPhase1(tf.keras.Model):
         """Set current batch (=step) index."""
         self._batch_idx = int(value)
 
-    @n_batches.setter
-    def n_batches(self, value):
-        """Set total number of batches (=steps) per epoch."""
-        self._n_batches = int(value)
-
     @y.setter
     def y(self, value):
         """Set y after each epoch."""
@@ -377,9 +386,9 @@ class UBPPhase1(tf.keras.Model):
         """Set y after each epoch."""
         self._missing_mask = value
 
-    @input_with_mask.setter
-    def input_with_mask(self, value):
-        self.input_with_mask_ = value
+    @sample_weight.setter
+    def sample_weight(self, value):
+        self._sample_weight = value
 
 
 class UBPPhase2(tf.keras.Model):
@@ -400,11 +409,13 @@ class UBPPhase2(tf.keras.Model):
 
         output_shape (int): Output units for n_features dimension. Output will be of shape (batch_size, n_features). Defaults to None.
 
+        n_components (int, optional): Number of features in input V to use. Defaults to 3.
+
         weights_initializer (str, optional): Kernel initializer to use for initializing model weights. Defaults to "glorot_normal".
 
-        hidden_layer_sizes (List[int], optional): Output units for each hidden layer. List should be of same length as the number of hidden layers. Defaults to "midpoint".
+        hidden_layer_sizes (NoneType, optional): Output units for each hidden layer. List should be of same length as the number of hidden layers. Not used for UBP Phase 1, but is here for compatibility. Defaults to "midpoint".
 
-        num_hidden_layers (int, optional): Number of hidden layers to use. Defaults to 1.
+        num_hidden_layers (int, optional): Number of hidden layers to use. Not used in UBP Phase 1, but is here for compatibility. Defaults to 1.
 
         hidden_activation (str, optional): Activation function to use for hidden layers. Defaults to "elu".
 
@@ -414,18 +425,19 @@ class UBPPhase2(tf.keras.Model):
 
         dropout_rate (float, optional): Dropout rate during training to reduce overfitting. Must be a float between 0 and 1. Defaults to 0.2.
 
-        num_classes (int, optional): Number of classes in output. Corresponds to the 3rd dimension of the output shape (batch_size, n_features, num_classes). Defaults to 1.
+        num_classes (int, optional): Number of classes in output. Corresponds to the 3rd dimension of the output shape (batch_size, n_features, num_classes). Defaults to 3.
 
-        phase (int, optional): Current phase if doing UBP model. Defaults to 2.
+        phase (int, optional): Current phase if doing UBP model. Defaults to 1.
 
+        sample_weight (numpy.ndarray, optional): 2D sample weights of shape (n_samples, n_features). Should have values for each class weighted. Defaults to None.
 
     Methods:
         call: Does forward pass for model.
         train_step: Does training for one batch in a single epoch.
-        test_step: Does evalutation for one batch in a single epoch.
+        test_step: Does evaluation for one batch in a single epoch.
 
     Attributes:
-        phase (int): Current phase if doing UBP model. Ignored if doing NLPCA model.
+        V_latent_ (numpy.ndarray(float)): Randomly initialized input that gets refined during training to better predict the targets.
 
         hidden_layer_sizes (List[Union[int, str]]): Output units for each hidden layer. Length should be the same as the number of hidden layers.
 
@@ -435,17 +447,14 @@ class UBPPhase2(tf.keras.Model):
 
         _batch_idx (int): Index of current batch.
 
-        _n_batches (int): Total number of batches per epoch.
-
     Example:
-        >>>model = UBPPhase2(V=V, y=y, batch_size=32, missing_mask=missing_mask, output_shape, n_components, weights_initializer, hidden_layer_sizes, num_hidden_layers, hidden_activation, l1_penalty, l2_penalty, dropout_rate, num_classes=3, phase=3)
+        >>>model = UBPPhase2(V=V, y=y, batch_size=32, missing_mask=missing_mask, output_shape=y_train.shape[1], n_components=3, weights_initializer="glorot_normal", hidden_layer_sizes="midpoint", num_hidden_layers=1, hidden_activation="elu", l1_penalty=1e-6, l2_penalty=1e-6, num_classes=3, phase=3)
         >>>model.compile(optimizer=optimizer, loss=loss_func, metrics=[my_metrics], run_eagerly=True)
         >>>history = model.fit(X, y, batch_size=batch_size, epochs=epochs, callbacks=[MyCallback()], validation_split=validation_split, shuffle=False)
 
     Raises:
         TypeError: V, y, missing_mask, output_shape must not be NoneType.
         ValueError: Maximum of 5 hidden layers.
-
     """
 
     def __init__(
@@ -463,18 +472,21 @@ class UBPPhase2(tf.keras.Model):
         l1_penalty=0.01,
         l2_penalty=0.01,
         dropout_rate=0.2,
-        num_classes=1,
+        num_classes=3,
         phase=2,
+        sample_weight=None,
     ):
         super(UBPPhase2, self).__init__()
 
         nn = NeuralNetworkMethods()
         self.nn = nn
 
-        self._V = V
-
-        if self._V is None:
-            raise TypeError("V cannot be NoneType in UBP Phases 2 and 3.")
+        if V is None:
+            self._V = nn.init_weights(y.shape[0], n_components)
+        elif isinstance(V, dict):
+            self._V = V[n_components]
+        else:
+            self._V = V
 
         self._y = y
 
@@ -483,29 +495,25 @@ class UBPPhase2(tf.keras.Model):
         )
 
         hidden_layer_sizes = nn.get_hidden_layer_sizes(
-            y.shape[1], V.shape[1], hidden_layer_sizes
+            y.shape[1], self._V.shape[1], hidden_layer_sizes
         )
 
         nn.validate_model_inputs(y, missing_mask, output_shape)
 
         self._missing_mask = missing_mask
-        self.phase = phase
-        self.hidden_layer_sizes = hidden_layer_sizes
-        self.n_components = n_components
         self.weights_initializer = weights_initializer
+        self.phase = phase
         self.dropout_rate = dropout_rate
+        self._sample_weight = sample_weight
 
         ### NOTE: I tried using just _V as the input to be refined, but it
         # wasn't getting updated. So I copy it here and it works.
         # V_latent is refined during train_step().
         self.V_latent_ = self._V.copy()
 
-        # Initialize parameters used during train_step() and test_step().
-        # input_with_mask_ is set during the UBPCallbacks() execution.
+        # Initialize parameters used during train_step().
         self._batch_idx = 0
-        self._n_batches = 0
         self._batch_size = batch_size
-        self.input_with_mask_ = None
         self.n_components = n_components
 
         if l1_penalty == 0.0 and l2_penalty == 0.0:
@@ -516,8 +524,24 @@ class UBPPhase2(tf.keras.Model):
         self.kernel_regularizer = kernel_regularizer
         kernel_initializer = weights_initializer
 
-        if len(hidden_layer_sizes) > 5:
-            raise ValueError("The maximum number of hidden layers is 5.")
+        if hidden_activation.lower() == "leaky_relu":
+            activation = LeakyReLU(alpha=0.01)
+
+        elif hidden_activation.lower() == "prelu":
+            activation = PReLU()
+
+        elif hidden_activation.lower() == "selu":
+            activation = "selu"
+            kernel_initializer = "lecun_normal"
+
+        else:
+            activation = hidden_activation
+
+        if num_hidden_layers > 5:
+            raise ValueError(
+                f"The maximum number of hidden layers is 5, but got "
+                f"{num_hidden_layers}"
+            )
 
         self.dense2 = None
         self.dense3 = None
@@ -567,11 +591,12 @@ class UBPPhase2(tf.keras.Model):
             )
 
         self.output1 = Dense(
-            output_shape,
+            output_shape * num_classes,
             kernel_initializer=kernel_initializer,
             kernel_regularizer=kernel_regularizer,
-            activation="sigmoid",
         )
+
+        self.rshp = Reshape((output_shape, num_classes))
 
         self.dropout_layer = Dropout(rate=dropout_rate)
 
@@ -607,7 +632,9 @@ class UBPPhase2(tf.keras.Model):
             x = self.dense5(x)
             if training:
                 x = self.dropout_layer(x, training=training)
-        return self.output1(x)
+
+        x = self.output1(x)
+        return self.rshp(x)
 
     def model(self):
         """Here so that mymodel.model().summary() can be called for debugging"""
@@ -636,81 +663,70 @@ class UBPPhase2(tf.keras.Model):
         """
 
         # Set in the UBPCallbacks() callback.
-        y = self.input_with_mask_
+        y = self._y
 
-        # v should not be trainable here in Phase 2.
-        # Doesn't get refined in Phase 2.
-        v, y_true, batch_start, batch_end = self.nn.prepare_training_batches(
+        (
+            v,
+            y_true,
+            sample_weight,
+            missing_mask,
+            batch_start,
+            batch_end,
+        ) = self.nn.prepare_training_batches(
             self.V_latent_,
             y,
             self._batch_size,
             self._batch_idx,
-            False,
+            True,
             self.n_components,
+            self._sample_weight,
+            self._missing_mask,
         )
 
+        if sample_weight is not None:
+            sample_weight_masked = tf.convert_to_tensor(
+                sample_weight[~missing_mask], dtype=tf.float32
+            )
+        else:
+            sample_weight_masked = None
+
+        y_true_masked = tf.boolean_mask(
+            tf.convert_to_tensor(y_true, dtype=tf.float32),
+            tf.reduce_any(tf.not_equal(y_true, -1), axis=2),
+        )
+
+        # NOTE: Earlier model architectures incorrectly
+        # applied one gradient to all the variables, including
+        # the weights and v. Here we apply them separately, per
+        # the UBP manuscript.
         with tf.GradientTape() as tape:
             # Forward pass
             y_pred = self(v, training=True)
+            y_pred_masked = tf.boolean_mask(
+                y_pred, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
+            )
+            ### NOTE: If you get the error, "'tuple' object has no attribute
+            ### 'rank'", then convert y_true to a tensor object."
             loss = self.compiled_loss(
-                tf.convert_to_tensor(y_true, dtype=tf.float32),
-                y_pred,
+                y_true_masked,
+                y_pred_masked,
+                sample_weight=sample_weight_masked,
                 regularization_losses=self.losses,
             )
 
-        src = self.trainable_variables
-
         # Refine the watched variables with backpropagation
-        gradients = tape.gradient(loss, src)
-        self.optimizer.apply_gradients(zip(gradients, src))
+        gradients = tape.gradient(loss, self.trainable_variables)
+        self.optimizer.apply_gradients(zip(gradients, self.trainable_variables))
 
+        ### NOTE: If you get the error, "'tuple' object has no attribute
+        ### 'rank', then convert y_true to a tensor object."
         self.compiled_metrics.update_state(
-            tf.convert_to_tensor(y_true, dtype=tf.float32), y_pred
+            y_true_masked,
+            y_pred_masked,
+            sample_weight=sample_weight_masked,
         )
 
         # history object that gets returned from fit().
-        return {m.name: m.result() for m in self.metrics}
-
-    def test_step(self, data):
-        """Validation step for one batch in a single epoch.
-
-        Custom logic for the test step that gets sent back to on_train_batch_end() callback.
-
-        Args:
-            data (Tuple[tf.EagerTensor, tf.EagerTensor]): Batches of input data V and y.
-
-        Returns:
-            A dict containing values that will be passed to ``tf.keras.callbacks.CallbackList.on_train_batch_end``. Typically, the values of the Model's metrics are returned.
-        """
-        # Set in the UBPCallbacks() callback.
-        y = self.input_with_mask_
-
-        v, y_true, batch_start, batch_end = self.nn.prepare_training_batches(
-            self.V_latent_,
-            y,
-            self._batch_size,
-            self._batch_idx,
-            False,
-            self.n_components,
-        )
-
-        # Compute predictions
-        y_pred = self(v, training=False)
-
-        # Updates the metrics tracking the loss
-        self.compiled_loss(
-            tf.convert_to_tensor(y_true, dtype=tf.float32),
-            y_pred,
-            regularization_losses=self.losses,
-        )
-
-        # Update the metrics.
-        self.compiled_metrics.update_state(
-            tf.convert_to_tensor(y_true, dtype=tf.float32), y_pred
-        )
-
-        # Return a dict mapping metric names to current value.
-        # Note that it will include the loss (tracked in self.metrics).
         return {m.name: m.result() for m in self.metrics}
 
     @property
@@ -729,11 +745,6 @@ class UBPPhase2(tf.keras.Model):
         return self._batch_idx
 
     @property
-    def n_batches(self):
-        """Total number of batches per epoch."""
-        return self._n_batches
-
-    @property
     def y(self):
         return self._y
 
@@ -742,8 +753,8 @@ class UBPPhase2(tf.keras.Model):
         return self._missing_mask
 
     @property
-    def input_with_mask(self):
-        return self.input_with_mask_
+    def sample_weight(self):
+        return self._sample_weight
 
     @V_latent.setter
     def V_latent(self, value):
@@ -760,11 +771,6 @@ class UBPPhase2(tf.keras.Model):
         """Set current batch (=step) index."""
         self._batch_idx = int(value)
 
-    @n_batches.setter
-    def n_batches(self, value):
-        """Set total number of batches (=steps) per epoch."""
-        self._n_batches = int(value)
-
     @y.setter
     def y(self, value):
         """Set y after each epoch."""
@@ -775,9 +781,9 @@ class UBPPhase2(tf.keras.Model):
         """Set y after each epoch."""
         self._missing_mask = value
 
-    @input_with_mask.setter
-    def input_with_mask(self, value):
-        self.input_with_mask_ = value
+    @sample_weight.setter
+    def sample_weight(self, value):
+        self._sample_weight = value
 
 
 class UBPPhase3(tf.keras.Model):
@@ -798,11 +804,13 @@ class UBPPhase3(tf.keras.Model):
 
         output_shape (int): Output units for n_features dimension. Output will be of shape (batch_size, n_features). Defaults to None.
 
+        n_components (int, optional): Number of features in input V to use. Defaults to 3.
+
         weights_initializer (str, optional): Kernel initializer to use for initializing model weights. Defaults to "glorot_normal".
 
-        hidden_layer_sizes (List[int], optional): Output units for each hidden layer. List should be of same length as the number of hidden layers. Defaults to "midpoint".
+        hidden_layer_sizes (NoneType, optional): Output units for each hidden layer. List should be of same length as the number of hidden layers. Not used for UBP Phase 1, but is here for compatibility. Defaults to "midpoint".
 
-        num_hidden_layers (int, optional): Number of hidden layers to use. Defaults to 1.
+        num_hidden_layers (int, optional): Number of hidden layers to use. Not used in UBP Phase 1, but is here for compatibility. Defaults to 1.
 
         hidden_activation (str, optional): Activation function to use for hidden layers. Defaults to "elu".
 
@@ -812,9 +820,11 @@ class UBPPhase3(tf.keras.Model):
 
         dropout_rate (float, optional): Dropout rate during training to reduce overfitting. Must be a float between 0 and 1. Defaults to 0.2.
 
-        num_classes (int, optional): Number of classes in output. Corresponds to the 3rd dimension of the output shape (batch_size, n_features, num_classes). Defaults to 1.
+        num_classes (int, optional): Number of classes in output. Corresponds to the 3rd dimension of the output shape (batch_size, n_features, num_classes). Defaults to 3.
 
-        phase (int, optional): Current phase if doing UBP model. Defaults to 3.
+        phase (int, optional): Current phase if doing UBP model. Defaults to 1.
+
+        sample_weight (numpy.ndarray, optional): 2D sample weights of shape (n_samples, n_features). Should have values for each class weighted. Defaults to None.
 
     Methods:
         call: Does forward pass for model.
@@ -822,9 +832,7 @@ class UBPPhase3(tf.keras.Model):
         test_step: Does evaluation for one batch in a single epoch.
 
     Attributes:
-        V_latent_ (numpy.ndarray(float)): Randomly initialized input that gets refined during training.
-
-        phase (int): Current phase if doing UBP model. Ignored if doing NLPCA model.
+        V_latent_ (numpy.ndarray(float)): Randomly initialized input that gets refined during training to better predict the targets.
 
         hidden_layer_sizes (List[Union[int, str]]): Output units for each hidden layer. Length should be the same as the number of hidden layers.
 
@@ -834,16 +842,10 @@ class UBPPhase3(tf.keras.Model):
 
         _batch_idx (int): Index of current batch.
 
-        _n_batches (int): Total number of batches per epoch.
-
-        input_with_mask_ (numpy.ndarray): Target y with the missing data mask horizontally concatenated and shape (n_samples, n_features * 2). Gets refined in the UBPCallbacks() callback.
-
     Example:
-        >>>model3 = UBPPhase3(V=V, y=y, batch_size=32, missing_mask=missing_mask, output_shape, n_components, weights_initializer, hidden_layer_sizes, num_hidden_layers, hidden_activation, l1_penalty, l2_penalty, num_classes=3, phase=3)
-        >>>model3.build((None, n_features))
-        >>>model3.set_weights(model2.get_weights())
-        >>>model3.compile(optimizer=optimizer, loss=loss_func, metrics=[my_metrics], run_eagerly=True)
-        >>>history = model3.fit(X, y, batch_size=batch_size, epochs=epochs, callbacks=[MyCallback()], validation_split=validation_split, shuffle=False)
+        >>>model = UBPPhase3(V=V, y=y, batch_size=32, missing_mask=missing_mask, output_shape=y_train.shape[1], n_components=3, weights_initializer="glorot_normal", hidden_layer_sizes="midpoint", num_hidden_layers=1, hidden_activation="elu", l1_penalty=1e-6, l2_penalty=1e-6, num_classes=3, phase=3)
+        >>>model.compile(optimizer=optimizer, loss=loss_func, metrics=[my_metrics], run_eagerly=True)
+        >>>history = model.fit(X, y, batch_size=batch_size, epochs=epochs, callbacks=[MyCallback()], validation_split=validation_split, shuffle=False)
 
     Raises:
         TypeError: V, y, missing_mask, output_shape must not be NoneType.
@@ -865,18 +867,21 @@ class UBPPhase3(tf.keras.Model):
         l1_penalty=0.01,
         l2_penalty=0.01,
         dropout_rate=0.2,
-        num_classes=1,
+        num_classes=3,
         phase=3,
+        sample_weight=None,
     ):
         super(UBPPhase3, self).__init__()
 
         nn = NeuralNetworkMethods()
         self.nn = nn
 
-        self._V = V
-
-        if self._V is None:
-            raise TypeError("V cannot be NoneType in UBP Phases 2 and 3.")
+        if V is None:
+            self._V = nn.init_weights(y.shape[0], n_components)
+        elif isinstance(V, dict):
+            self._V = V[n_components]
+        else:
+            self._V = V
 
         self._y = y
 
@@ -885,37 +890,53 @@ class UBPPhase3(tf.keras.Model):
         )
 
         hidden_layer_sizes = nn.get_hidden_layer_sizes(
-            y.shape[1], V.shape[1], hidden_layer_sizes
+            y.shape[1], self._V.shape[1], hidden_layer_sizes
         )
 
         nn.validate_model_inputs(y, missing_mask, output_shape)
 
         self._missing_mask = missing_mask
+        self.weights_initializer = weights_initializer
         self.phase = phase
-        self.hidden_layer_sizes = hidden_layer_sizes
-        self.n_components = n_components
         self.dropout_rate = dropout_rate
+        self._sample_weight = sample_weight
 
         ### NOTE: I tried using just _V as the input to be refined, but it
         # wasn't getting updated. So I copy it here and it works.
         # V_latent is refined during train_step().
         self.V_latent_ = self._V.copy()
 
-        # Initialize parameters used during train_step() and test_step().
-        # input_with_mask_ is set during the UBPCallbacks() execution.
+        # Initialize parameters used during train_step().
         self._batch_idx = 0
-        self._n_batches = 0
         self._batch_size = batch_size
-        self.input_with_mask_ = None
         self.n_components = n_components
 
-        # No regularization in phase 3.
-        kernel_regularizer = None
-        self.kernel_regularizer = kernel_regularizer
-        kernel_initializer = None
+        if l1_penalty == 0.0 and l2_penalty == 0.0:
+            kernel_regularizer = None
+        else:
+            kernel_regularizer = l1_l2(l1_penalty, l2_penalty)
 
-        if len(hidden_layer_sizes) > 5:
-            raise ValueError("The maximum number of hidden layers is 5.")
+        self.kernel_regularizer = kernel_regularizer
+        kernel_initializer = weights_initializer
+
+        if hidden_activation.lower() == "leaky_relu":
+            activation = LeakyReLU(alpha=0.01)
+
+        elif hidden_activation.lower() == "prelu":
+            activation = PReLU()
+
+        elif hidden_activation.lower() == "selu":
+            activation = "selu"
+            kernel_initializer = "lecun_normal"
+
+        else:
+            activation = hidden_activation
+
+        if num_hidden_layers > 5:
+            raise ValueError(
+                f"The maximum number of hidden layers is 5, but got "
+                f"{num_hidden_layers}"
+            )
 
         self.dense2 = None
         self.dense3 = None
@@ -929,6 +950,7 @@ class UBPPhase3(tf.keras.Model):
             input_shape=(n_components,),
             activation=hidden_activation,
             kernel_initializer=kernel_initializer,
+            kernel_regularizer=kernel_regularizer,
         )
 
         if num_hidden_layers >= 2:
@@ -936,6 +958,7 @@ class UBPPhase3(tf.keras.Model):
                 hidden_layer_sizes[1],
                 activation=hidden_activation,
                 kernel_initializer=kernel_initializer,
+                kernel_regularizer=kernel_regularizer,
             )
 
         if num_hidden_layers >= 3:
@@ -943,6 +966,7 @@ class UBPPhase3(tf.keras.Model):
                 hidden_layer_sizes[2],
                 activation=hidden_activation,
                 kernel_initializer=kernel_initializer,
+                kernel_regularizer=kernel_regularizer,
             )
 
         if num_hidden_layers >= 4:
@@ -950,6 +974,7 @@ class UBPPhase3(tf.keras.Model):
                 hidden_layer_sizes[3],
                 activation=hidden_activation,
                 kernel_initializer=kernel_initializer,
+                kernel_regularizer=kernel_regularizer,
             )
 
         if num_hidden_layers == 5:
@@ -957,13 +982,18 @@ class UBPPhase3(tf.keras.Model):
                 hidden_layer_sizes[4],
                 activation=hidden_activation,
                 kernel_initializer=kernel_initializer,
+                kernel_regularizer=kernel_regularizer,
             )
 
         self.output1 = Dense(
-            output_shape,
+            output_shape * num_classes,
             kernel_initializer=kernel_initializer,
-            activation="sigmoid",
+            kernel_regularizer=kernel_regularizer,
         )
+
+        self.rshp = Reshape((output_shape, num_classes))
+
+        self.dropout_layer = Dropout(rate=dropout_rate)
 
     def call(self, inputs, training=None):
         """Forward propagates inputs through the model defined in __init__().
@@ -978,16 +1008,30 @@ class UBPPhase3(tf.keras.Model):
         Returns:
             tf.keras.Model: Output tensor from forward propagation.
         """
+        if self.dropout_rate == 0.0:
+            training = False
         x = self.dense1(inputs)
+        if training:
+            x = self.dropout_layer(x, training=training)
         if self.dense2 is not None:
             x = self.dense2(x)
+            if training:
+                x = self.dropout_layer(x, training=training)
         if self.dense3 is not None:
             x = self.dense3(x)
+            if training:
+                x = self.dropout_layer(x, training=training)
         if self.dense4 is not None:
             x = self.dense4(x)
+            if training:
+                x = self.dropout_layer(x, training=training)
         if self.dense5 is not None:
             x = self.dense5(x)
-        return self.output1(x)
+            if training:
+                x = self.dropout_layer(x, training=training)
+
+        x = self.output1(x)
+        return self.rshp(x)
 
     def model(self):
         """Here so that mymodel.model().summary() can be called for debugging"""
@@ -1015,18 +1059,40 @@ class UBPPhase3(tf.keras.Model):
             Obtain batch_size without using run_eagerly option in compile(). This will allow the step to be run in graph mode, thereby speeding up computation.
         """
         # Set in the UBPCallbacks() callback.
-        y = self.input_with_mask_
+        # Set in the UBPCallbacks() callback.
+        y = self._y
 
-        v, y_true, batch_start, batch_end = self.nn.prepare_training_batches(
+        (
+            v,
+            y_true,
+            sample_weight,
+            missing_mask,
+            batch_start,
+            batch_end,
+        ) = self.nn.prepare_training_batches(
             self.V_latent_,
             y,
             self._batch_size,
             self._batch_idx,
             True,
             self.n_components,
+            self._sample_weight,
+            self._missing_mask,
         )
 
         src = [v]
+
+        if sample_weight is not None:
+            sample_weight_masked = tf.convert_to_tensor(
+                sample_weight[~missing_mask], dtype=tf.float32
+            )
+        else:
+            sample_weight_masked = None
+
+        y_true_masked = tf.boolean_mask(
+            tf.convert_to_tensor(y_true, dtype=tf.float32),
+            tf.reduce_any(tf.not_equal(y_true, -1), axis=2),
+        )
 
         # NOTE: Earlier model architectures incorrectly
         # applied one gradient to all the variables, including
@@ -1036,9 +1102,16 @@ class UBPPhase3(tf.keras.Model):
             # Forward pass. Watch input tensor v.
             tape.watch(v)
             y_pred = self(v, training=True)
+            y_pred_masked = tf.boolean_mask(
+                y_pred, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
+            )
+            ### NOTE: If you get the error, "'tuple' object has no attribute
+            ### 'rank'", then convert y_true to a tensor object."
             loss = self.compiled_loss(
-                tf.convert_to_tensor(y_true, dtype=tf.float32),
-                y_pred,
+                y_true_masked,
+                y_pred_masked,
+                sample_weight=sample_weight_masked,
+                regularization_losses=self.losses,
             )
 
         # Refine the watched variables with
@@ -1052,56 +1125,22 @@ class UBPPhase3(tf.keras.Model):
 
         del tape
 
+        ### NOTE: If you get the error, "'tuple' object has no attribute
+        ### 'rank', then convert y_true to a tensor object."
         self.compiled_metrics.update_state(
-            tf.convert_to_tensor(y_true, dtype=tf.float32), y_pred
+            y_true_masked,
+            y_pred_masked,
+            sample_weight=sample_weight_masked,
         )
 
+        # NOTE: run_eagerly must be set to True in the compile() method for this
+        # to work. Otherwise it can't convert a Tensor object to a numpy array.
+        # There is really no other way to set v back to V_latent_ in graph
+        # mode as far as I know. eager execution is slower, so it would be nice
+        # to find a way to do this without converting to numpy.
         self.V_latent_[batch_start:batch_end, :] = v.numpy()
 
         # history object that gets returned from fit().
-        return {m.name: m.result() for m in self.metrics}
-
-    def test_step(self, data):
-        """Validation step for one batch in a single epoch.
-
-        Custom logic for the test step that gets sent back to on_train_batch_end() callback.
-
-        Args:
-            data (Tuple[tf.EagerTensor, tf.EagerTensor]): Batches of input data V and y_true.
-
-        Returns:
-            A dict containing values that will be passed to ``tf.keras.callbacks.CallbackList.on_train_batch_end``. Typically, the values of the Model's metrics are returned.
-        """
-        # Unpack the data. Don't need V here. Just X (y_true).
-        # y_true = data[1]
-        y = self.input_with_mask_
-
-        v, y_true, batch_start, batch_end = self.nn.prepare_training_batches(
-            self.V_latent_,
-            y,
-            self._batch_size,
-            self._batch_idx,
-            False,
-            self.n_components,
-        )
-
-        # Compute predictions
-        y_pred = self(v, training=False)
-
-        # Updates the metrics tracking the loss
-        self.compiled_loss(
-            tf.convert_to_tensor(y_true, dtype=tf.float32),
-            y_pred,
-            regularization_losses=self.losses,
-        )
-
-        # Update the metrics.
-        self.compiled_metrics.update_state(
-            tf.convert_to_tensor(y_true, dtype=tf.float32), y_pred
-        )
-
-        # Return a dict mapping metric names to current value.
-        # Note that it will include the loss (tracked in self.metrics).
         return {m.name: m.result() for m in self.metrics}
 
     @property
@@ -1120,11 +1159,6 @@ class UBPPhase3(tf.keras.Model):
         return self._batch_idx
 
     @property
-    def n_batches(self):
-        """Total number of batches per epoch."""
-        return self._n_batches
-
-    @property
     def y(self):
         return self._y
 
@@ -1133,8 +1167,8 @@ class UBPPhase3(tf.keras.Model):
         return self._missing_mask
 
     @property
-    def input_with_mask(self):
-        return self.input_with_mask_
+    def sample_weight(self):
+        return self._sample_weight
 
     @V_latent.setter
     def V_latent(self, value):
@@ -1151,11 +1185,6 @@ class UBPPhase3(tf.keras.Model):
         """Set current batch (=step) index."""
         self._batch_idx = int(value)
 
-    @n_batches.setter
-    def n_batches(self, value):
-        """Set total number of batches (=steps) per epoch."""
-        self._n_batches = int(value)
-
     @y.setter
     def y(self, value):
         """Set y after each epoch."""
@@ -1166,6 +1195,6 @@ class UBPPhase3(tf.keras.Model):
         """Set y after each epoch."""
         self._missing_mask = value
 
-    @input_with_mask.setter
-    def input_with_mask(self, value):
-        self.input_with_mask_ = value
+    @sample_weight.setter
+    def sample_weight(self, value):
+        self._sample_weight = value
