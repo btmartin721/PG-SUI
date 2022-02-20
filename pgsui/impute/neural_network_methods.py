@@ -847,18 +847,27 @@ class NeuralNetworkMethods:
         Returns:
             Dict[str, Any]: Dictionary with true and false positive rates along probability threshold curve per class, micro and macro tpr and fpr curves averaged across classes, and AUC scores per-class and for micro and macro averages.
         """
+        # Get only classes that appear in y_true.
+        classes = [i for i in range(3) if i in y_true]
+
         # Binarize the output fo use with ROC-AUC.
         y_true_bin = label_binarize(y_true, classes=[0, 1, 2])
         y_pred_bin = label_binarize(y_pred, classes=[0, 1, 2])
-        n_classes = y_true_bin.shape[1]
+
+        for i in range(y_true_bin.shape[1]):
+            if i not in classes:
+                y_true_bin = np.delete(y_true_bin, i, axis=-1)
+                y_pred_bin = np.delete(y_pred_bin, i, axis=-1)
+
+        n_classes = len(classes)
 
         # Compute ROC curve and ROC area for each class.
         fpr = dict()
         tpr = dict()
         roc_auc = dict()
-        for i in range(n_classes):
-            fpr[i], tpr[i], _ = roc_curve(y_true_bin[:, i], y_pred_bin[:, i])
-            roc_auc[i] = auc(fpr[i], tpr[i])
+        for i, c in enumerate(classes):
+            fpr[c], tpr[c], _ = roc_curve(y_true_bin[:, i], y_pred_bin[:, i])
+            roc_auc[c] = auc(fpr[c], tpr[c])
 
         # Compute micro-average ROC curve and ROC area.
         fpr["micro"], tpr["micro"], _ = roc_curve(
@@ -868,11 +877,11 @@ class NeuralNetworkMethods:
         roc_auc["micro"] = auc(fpr["micro"], tpr["micro"])
 
         # Aggregate all false positive rates
-        all_fpr = np.unique(np.concatenate([fpr[i] for i in range(n_classes)]))
+        all_fpr = np.unique(np.concatenate([fpr[i] for i in classes]))
 
         # Then interpolate all ROC curves at these points.
         mean_tpr = np.zeros_like(all_fpr)
-        for i in range(n_classes):
+        for i in classes:
             mean_tpr += np.interp(all_fpr, fpr[i], tpr[i])
 
         # Finally, average it and compute AUC.
@@ -887,12 +896,10 @@ class NeuralNetworkMethods:
         roc_auc["tpr_macro"] = tpr["macro"]
         roc_auc["fpr_micro"] = fpr["micro"]
         roc_auc["tpr_micro"] = tpr["micro"]
-        roc_auc["fpr_0"] = fpr[0]
-        roc_auc["fpr_1"] = fpr[1]
-        roc_auc["fpr_2"] = fpr[2]
-        roc_auc["tpr_0"] = tpr[0]
-        roc_auc["tpr_1"] = tpr[1]
-        roc_auc["tpr_2"] = tpr[2]
+
+        for i in classes:
+            roc_auc[f"fpr_{i}"] = fpr[i]
+            roc_auc[f"tpr_{i}"] = tpr[i]
 
         return roc_auc
 
@@ -910,10 +917,19 @@ class NeuralNetworkMethods:
         Returns:
             Dict[str, Any]: Dictionary with precision and recall curves per class and micro and macro averaged across classes, plus AP scores per-class and for micro and macro averages.
         """
+        # Get only classes that appear in y_true.
+        classes = [i for i in range(3) if i in y_true]
+
         # Binarize the output fo use with ROC-AUC.
         y_true_bin = label_binarize(y_true, classes=[0, 1, 2])
         y_pred_proba_bin = y_pred
-        n_classes = y_true_bin.shape[1]
+
+        for i in range(y_true_bin.shape[1]):
+            if i not in classes:
+                y_true_bin = np.delete(y_true_bin, i, axis=-1)
+                y_pred_proba_bin = np.delete(y_pred_proba_bin, i, axis=-1)
+
+        n_classes = len(classes)
 
         nn = NeuralNetworkMethods()
         y_pred_012 = nn.decode_masked(y_pred_proba_bin)
@@ -931,11 +947,11 @@ class NeuralNetworkMethods:
         precision = dict()
         recall = dict()
         average_precision = dict()
-        for i in range(n_classes):
-            precision[i], recall[i], _ = precision_recall_curve(
+        for i, c in enumerate(classes):
+            precision[c], recall[c], _ = precision_recall_curve(
                 y_true_bin[:, i], y_pred_proba_bin[:, i]
             )
-            average_precision[i] = average_precision_score(
+            average_precision[c] = average_precision_score(
                 y_true_bin[:, i], y_pred_proba_bin[:, i]
             )
 
@@ -953,13 +969,11 @@ class NeuralNetworkMethods:
         )
 
         # Aggregate all recalls
-        all_recall = np.unique(
-            np.concatenate([recall[i] for i in range(n_classes)])
-        )
+        all_recall = np.unique(np.concatenate([recall[i] for i in classes]))
 
         # Then interpolate all PR curves at these points.
         mean_precision = np.zeros_like(all_recall)
-        for i in range(n_classes):
+        for i in classes:
             mean_precision += np.interp(all_recall, precision[i], recall[i])
 
         # Finally, average it and compute AUC.
@@ -976,15 +990,11 @@ class NeuralNetworkMethods:
         results["precision_macro"] = mean_precision
         results["recall_micro"] = recall["micro"]
         results["precision_micro"] = precision["micro"]
-        results["recall_0"] = recall[0]
-        results["recall_1"] = recall[1]
-        results["recall_2"] = recall[2]
-        results["precision_0"] = precision[0]
-        results["precision_1"] = precision[1]
-        results["precision_2"] = precision[2]
-        results[0] = average_precision[0]
-        results[1] = average_precision[1]
-        results[2] = average_precision[2]
+
+        for i in classes:
+            results[f"recall_{i}"] = recall[i]
+            results[f"precision_{i}"] = precision[i]
+            results[i] = average_precision[i]
         results["baseline"] = baseline
 
         return results
@@ -1081,13 +1091,14 @@ class NeuralNetworkMethods:
 
             colors = cycle(["aqua", "darkorange", "cornflowerblue"])
             for i, color in zip(range(num_classes), colors):
-                ax.plot(
-                    metric[f"{prefix1}_{i}"],
-                    metric[f"{prefix2}_{i}"],
-                    color=color,
-                    lw=lw,
-                    label=f"{lab1} Curve of class {i} ({lab2} = {metric[i]:.2f})",
-                )
+                if f"{prefix1}_{i}" in metric:
+                    ax.plot(
+                        metric[f"{prefix1}_{i}"],
+                        metric[f"{prefix2}_{i}"],
+                        color=color,
+                        lw=lw,
+                        label=f"{lab1} Curve of class {i} ({lab2} = {metric[i]:.2f})",
+                    )
 
             if "fpr_micro" in metric:
                 # Make center baseline

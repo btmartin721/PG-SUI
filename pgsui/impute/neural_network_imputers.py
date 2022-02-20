@@ -1149,7 +1149,7 @@ class UBP(BaseEstimator, TransformerMixin):
         self.tt_ = TargetTransformer()
         y_train = self.tt_.fit_transform(self.y_original_)
 
-        # testresults = pd.read_csv("testcvresults.csv")
+        # testresults = pd.read_csv(f"{self.prefix}_cvresults.csv")
         # self.nn_.plot_grid_search(testresults, self.prefix)
         # sys.exit()
 
@@ -1276,6 +1276,10 @@ class UBP(BaseEstimator, TransformerMixin):
             sample_weights = self._normalize_data(sample_weights)
 
         elif isinstance(self.sample_weights, dict):
+            for i in range(self.num_classes):
+                if self.sample_weights[i] == 0.0:
+                    self.sim_missing_mask_[self.y_original_ == i] = False
+
             sample_weights = self._get_class_weights(
                 y_true, user_weights=self.sample_weights
             )
@@ -1360,7 +1364,7 @@ class UBP(BaseEstimator, TransformerMixin):
                 search.fit(V[self.n_components], y_true, callbacks=callback)
 
             else:
-                if self.gridsearch_method == "gridsearch":
+                if self.gridsearch_method.lower() == "gridsearch":
                     # Do GridSearchCV
                     search = GridSearchCV(
                         clf,
@@ -1373,7 +1377,7 @@ class UBP(BaseEstimator, TransformerMixin):
                         error_score="raise",
                     )
 
-                elif self.gridsearch_method == "randomized_gridsearch":
+                elif self.gridsearch_method.lower() == "randomized_gridsearch":
                     search = RandomizedSearchCV(
                         clf,
                         param_distributions=self.gridparams,
@@ -1386,6 +1390,12 @@ class UBP(BaseEstimator, TransformerMixin):
                         error_score="raise",
                     )
 
+                else:
+                    raise ValueError(
+                        f"Invalid gridsearch_method specified: "
+                        f"{self.gridsearch_method}"
+                    )
+
                 search.fit(V[self.n_components], y=y_true)
 
             best_params = search.best_params_
@@ -1393,7 +1403,7 @@ class UBP(BaseEstimator, TransformerMixin):
             best_index = search.best_index_
 
             cv_results = pd.DataFrame(search.cv_results_)
-            cv_results.to_csv("testcvresults.csv", index=False)
+            cv_results.to_csv(f"{self.prefix}_cvresults.csv", index=False)
 
             best_clf = search.best_estimator_
             histories.append(best_clf.history_)
@@ -1551,42 +1561,36 @@ class UBP(BaseEstimator, TransformerMixin):
 
         Args:
             y_true (numpy.ndarray): True target values.
-            user_weights (Dict[int, float]): Class weights if user-provided.
+            user_weights (Dict[int, float], optional): Class weights if user-provided.
 
         Returns:
             numpy.ndarray: Class weights per column of shape (n_samples, n_features).
         """
         # Get list of class_weights (per-column).
         class_weights = list()
-        for i in np.arange(y_true.shape[1]):
-            mm = ~self.original_missing_mask_[:, i]
-            classes = np.unique(y_true[mm, i])
-
-            if user_weights is None:
+        sample_weight = np.zeros(y_true.shape)
+        if user_weights is not None:
+            # Set user-defined sample_weights
+            for k in user_weights.keys():
+                sample_weight[y_true == k] = user_weights[k]
+        else:
+            # Automatically get class weights to set sample_weight.
+            for i in np.arange(y_true.shape[1]):
+                mm = ~self.original_missing_mask_[:, i]
+                classes = np.unique(y_true[mm, i])
                 cw = compute_class_weight(
                     "balanced",
                     classes=classes,
                     y=y_true[mm, i],
                 )
-            else:
-                uw = user_weights.copy()
-                cw = {
-                    uw.pop(k)
-                    for k in user_weights.copy().keys()
-                    if k not in classes
-                }
 
-            class_weights.append({k: v for k, v in zip(classes, cw)})
+                class_weights.append({k: v for k, v in zip(classes, cw)})
 
-        # Make sample_weight_matrix from per-column class_weights.
-        sample_weight = np.zeros(y_true.shape)
-        for i, w in enumerate(class_weights):
-            for j in range(3):
-                if j in w:
-                    sample_weight[self.y_original_[:, i] == j, i] = w[j]
-
-        print(pd.DataFrame(sample_weight))
-        sys.exit()
+            # Make sample_weight_matrix from automatic per-column class_weights.
+            for i, w in enumerate(class_weights):
+                for j in range(3):
+                    if j in w:
+                        sample_weight[self.y_original_[:, i] == j, i] = w[j]
 
         return sample_weight
 
