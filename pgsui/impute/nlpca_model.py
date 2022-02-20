@@ -3,8 +3,6 @@ import os
 import sys
 import warnings
 
-# os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # or any {'0', '1', '2', '3'}
-
 import numpy as np
 import pandas as pd
 
@@ -41,7 +39,6 @@ deprecation.deprecated = deprecated
 from tensorflow.keras.layers import (
     Dropout,
     Dense,
-    Lambda,
     Reshape,
     LeakyReLU,
     PReLU,
@@ -72,6 +69,8 @@ class NLPCAModel(tf.keras.Model):
 
         output_shape (int): Output units for n_features dimension. Output will be of shape (batch_size, n_features). Defaults to None.
 
+        n_components (int, optional): Number of features in input V to use. Defaults to 3.
+
         weights_initializer (str, optional): Kernel initializer to use for initializing model weights. Defaults to "glorot_normal".
 
         hidden_layer_sizes (List[int], optional): Output units for each hidden layer. List should be of same length as the number of hidden layers. Defaults to "midpoint".
@@ -89,6 +88,8 @@ class NLPCAModel(tf.keras.Model):
         num_classes (int, optional): Number of classes in output. Corresponds to the 3rd dimension of the output shape (batch_size, n_features, num_classes). Defaults to 1.
 
         phase (NoneType): Here for compatibility with UBP.
+
+        sample_weight (numpy.ndarray, optional): 2D sample weights of shape (n_samples, n_features). Should have values for each class weighted. Defaults to None.
 
     Methods:
         call: Does forward pass for model.
@@ -413,7 +414,7 @@ class NLPCAModel(tf.keras.Model):
 
     @property
     def V_latent(self):
-        """Randomly initialized input variable that gets refined during training."""
+        """Randomly initialized input that gets refined during training."""
         return self.V_latent_
 
     @property
@@ -440,7 +441,7 @@ class NLPCAModel(tf.keras.Model):
 
     @V_latent.setter
     def V_latent(self, value):
-        """Set randomly initialized input variable. Gets refined during training."""
+        """Set randomly initialized input. Gets refined during training."""
         self.V_latent_ = value
 
     @batch_size.setter
