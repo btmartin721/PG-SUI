@@ -29,14 +29,17 @@ warnings.filterwarnings("ignore", category=UserWarning)
 
 # noinspection PyPackageRequirements
 import tensorflow as tf
-tf.config.set_visible_devices([], 'GPU')
+
+# Disable can't find cuda .dll errors. Also turns of GPU support.
+tf.config.set_visible_devices([], "GPU")
 
 from tensorflow.python.util import deprecation
 
+# Disable warnings and info logs.
 tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 tf.get_logger().setLevel(logging.ERROR)
 
-# Monkey patching deprecation utils to shut it up!
+# Monkey patching deprecation utils to supress warnings.
 # noinspection PyUnusedLocal
 def deprecated(
     date, instructions, warn_once=True
