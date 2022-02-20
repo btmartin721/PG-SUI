@@ -62,7 +62,7 @@ from sklearn.utils.class_weight import (
 from sklearn.base import BaseEstimator, TransformerMixin
 
 # Randomized grid search imports
-from sklearn.model_selection import GridSearchCV
+from sklearn.model_selection import GridSearchCV, RandomizedSearchCV
 from sklearn.model_selection import ParameterGrid
 
 # Genetic algorithm grid search imports
@@ -113,6 +113,8 @@ if is_notebook:
     from tqdm.notebook import tqdm as progressbar
 else:
     from tqdm import tqdm as progressbar
+
+from tqdm.keras import TqdmCallback
 
 
 class DisabledCV:
@@ -1674,6 +1676,12 @@ class UBP(BaseEstimator, TransformerMixin):
         ]
 
         search_mode = False if self.gridparams is None else True
+
+        if not self.disable_progressbar and not search_mode:
+            callbacks.append(
+                TqdmCallback(epochs=self.epochs, verbose=0, desc="Epoch: ")
+            )
+
         vinput = self._initV(y_train, search_mode)
         compile_params = self.nn_.set_compile_params(self.optimizer)
         compile_params["learning_rate"] = self.learning_rate
