@@ -365,7 +365,8 @@ def main():
         scoring_metric="precision_recall_macro",
         gridsearch_method="gridsearch",
         early_stop_gen=5,
-        # sample_weights={0: 1.0, 1: 58.0, 2: 33.0},
+        # sample_weights={0: 1.0, 1: 0.0, 2: 1.0},
+        # sample_weights="auto",
     )
 
     # ubp = ImputeVAE(
