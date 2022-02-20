@@ -173,6 +173,9 @@ class Impute:
             self.do_gridsearch,
         ) = self._gather_impute_settings(kwargs)
 
+        if self.algorithm == "ii":
+            self.imp_kwargs["pops"] = self.pops
+
         if self.do_gridsearch:
             for v in kwargs["gridparams"].values():
                 if (
@@ -581,7 +584,7 @@ class Impute:
                 clf,
                 self.logfilepath,
                 clf_kwargs=self.clf_kwargs,
-                pops=self.pops,
+                imp_kwargs=self.imp_kwargs,
             )
 
         if self.original_num_cols is None:
@@ -679,7 +682,7 @@ class Impute:
                 ga_kwargs=self.ga_kwargs,
                 n_jobs=self.n_jobs,
                 clf_type=self.clf_type,
-                pops=self.pops,
+                imp_kwargs=self.imp_kwargs,
             )
 
             if len(cols_to_keep) == original_num_cols:
@@ -735,6 +738,7 @@ class Impute:
             best_params = imputer.best_params_
             df_scores = imputer.best_score_
             df_scores = round(df_scores, 2) * 100
+            best_imputer = None
 
         if self.clf_type == "classifier" and self.algorithm != "nn":
             df_scores = df_scores.apply(lambda x: x * 100)
@@ -744,16 +748,11 @@ class Impute:
         # Change values to the ones in best_params
         self.clf_kwargs.update(best_params)
 
-        if self.algorithm == "nn":
-            best_imputer = None
-        else:
-            test = self.clf()
-            if hasattr(test, "n_jobs"):
-                best_clf = self.clf(n_jobs=self.n_jobs, **self.clf_kwargs)
-            else:
-                best_clf = self.clf(**self.clf_kwargs)
+        if self.algorithm == "ii":
+            if hasattr(self.clf(), "n_jobs"):
+                self.clf_kwargs["n_jobs"] = self.n_jobs
 
-            del test
+            best_clf = self.clf(**self.clf_kwargs)
 
         gc.collect()
 
@@ -777,7 +776,7 @@ class Impute:
                 best_clf,
                 self.logfilepath,
                 clf_kwargs=self.clf_kwargs,
-                pops=self.pops,
+                imp_kwargs=self.imp_kwargs,
             )
 
         final_cols = None
@@ -1538,7 +1537,7 @@ class Impute:
                 clf,
                 self.logfilepath,
                 clf_kwargs=self.clf_kwargs,
-                pops=self.pops,
+                imp_kwargs=self.imp_kwargs,
             )
 
             imp_arr = imputer.fit_transform(df_stg)
@@ -1690,10 +1689,10 @@ class Impute:
         clf: Callable,
         logfilepath: str,
         clf_kwargs: Optional[Dict[str, Any]] = None,
+        imp_kwargs: Optional[str] = None,
         ga_kwargs: Optional[Dict[str, Any]] = None,
         n_jobs: Optional[int] = None,
         clf_type: Optional[str] = None,
-        pops: Optional[List[Union[int, str]]] = None,
     ) -> Union[IterativeImputerGridSearch, IterativeImputerFixedParams]:
         """Define an IterativeImputer instance.
 
@@ -1706,13 +1705,13 @@ class Impute:
 
             clf_kwargs (dict, optional): Keyword arguments for classifier. Defaults to None.
 
+            imp_kwargs (Dict[str, Any], optional): Keyword arguments for imputation settings. Defaults to None.
+
             ga_kwargs (dict, optional): Keyword arguments for genetic algorithm grid search. Defaults to None.
 
             n_jobs (int, optional): Number of parallel jobs to use with the IterativeImputer grid search. Ignored if ``search_space=None``\. Defaults to None.
 
             clf_type (str, optional): Type of estimator. Valid options are "classifier" or "regressor". Ignored if ``search_space=None``\. Defaults to None.
-
-            pops (List[Union[int, str]], optional): Population IDs as 1d-list in order of sampleID.
 
         Returns:
             sklearn.impute.IterativeImputer: IterativeImputer instance.
@@ -1722,8 +1721,7 @@ class Impute:
                 logfilepath,
                 clf_kwargs,
                 estimator=clf,
-                pops=pops,
-                **self.imp_kwargs,
+                **imp_kwargs,
             )
 
         else:
@@ -1735,8 +1733,7 @@ class Impute:
                 estimator=clf,
                 grid_n_jobs=n_jobs,
                 clf_type=clf_type,
-                pops=pops,
-                **self.imp_kwargs,
+                **imp_kwargs,
             )
 
         return imp
