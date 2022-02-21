@@ -1272,25 +1272,6 @@ class UBP(BaseEstimator, TransformerMixin):
         tf.keras.backend.clear_session()
         self.nn_.reset_seeds()
 
-        if self.sample_weights == "auto":
-            # Get class weights for each column.
-            sample_weights = self._get_class_weights(y_true)
-            sample_weights = self._normalize_data(sample_weights)
-
-        elif isinstance(self.sample_weights, dict):
-            for i in range(self.num_classes):
-                if self.sample_weights[i] == 0.0:
-                    self.sim_missing_mask_[self.y_original_ == i] = False
-
-            sample_weights = self._get_class_weights(
-                y_true, user_weights=self.sample_weights
-            )
-
-        else:
-            sample_weights = None
-
-        model_params["sample_weight"] = sample_weights
-
         if do_gridsearch:
             # Cannot do CV because there is no way to use test splits
             # given that the input gets refined. If using a test split,
@@ -1298,12 +1279,6 @@ class UBP(BaseEstimator, TransformerMixin):
             # would not accurately represent the model.
             # Thus, we disable cross-validation for the grid searches.
             cross_val = DisabledCV()
-
-            if "learning_rate" in self.gridparams:
-                self.gridparams["optimizer__learning_rate"] = self.gridparams[
-                    "learning_rate"
-                ]
-                self.gridparams.pop("learning_rate")
 
             V = model_params.pop("V")
 
@@ -1476,49 +1451,129 @@ class UBP(BaseEstimator, TransformerMixin):
     def _run_ubp(
         self, V, y_train, model_params, compile_params, fit_params, nn
     ):
-
-        # Whether to do grid search.
         do_gridsearch = False if self.gridparams is None else True
 
         histories = list()
-        phases = [UBPPhase1, UBPPhase2, UBPPhase3]
         models = list()
+        phases = [UBPPhase1, UBPPhase2, UBPPhase3]
         w = None
-        for i, phase in enumerate(phases, start=1):
 
+        if do_gridsearch:
+            cross_val = DisabledCV()
+
+            V = model_params.pop("V")
+
+            all_scoring_metrics = [
+                "precision_recall_macro",
+                "precision_recall_micro",
+                "auc_macro",
+                "auc_micro",
+                "accuracy",
+            ]
+
+            scoring = self.nn_.make_multimetric_scorer(
+                all_scoring_metrics, self.sim_missing_mask_
+            )
+
+        for i, phase in enumerate(phases, start=1):
             # This reduces memory usage.
             # tensorflow builds graphs that
             # will stack if not cleared before
             # building a new model.
             tf.keras.backend.set_learning_phase(1)
             tf.keras.backend.clear_session()
-            nn.reset_seeds()
+            self.nn_.reset_seeds()
 
             if do_gridsearch:
-                compile_params["learning_rate"] = self.learning_rate
+                # Cannot do CV because there is no way to use test splits
+                # given that the input gets refined. If using a test split,
+                # then it would just be the randomly initialized values and
+                # would not accurately represent the model.
+                # Thus, we disable cross-validation for the grid searches.
 
-                search = self.grid_search(
-                    model_params["V"],
-                    y_train,
-                    i,
-                    self._create_model,
-                    model_params,
-                    compile_params,
-                    self.epochs,
-                    self.validation_split,
-                    callbacks,
-                    self.cv,
-                    self.ga_,
-                    self.early_stop_gen,
-                    self.scoring_metric,
-                    self.grid_iter,
-                    self.gridparams,
-                    self.n_jobs,
-                    self.ga_kwargs,
+                clf = MLPClassifier(
+                    V,
+                    model_params.pop("y_train"),
+                    y_true,
+                    **model_params,
+                    optimizer=compile_params["optimizer"],
+                    optimizer__learning_rate=compile_params["learning_rate"],
+                    loss=compile_params["loss"],
+                    metrics=compile_params["metrics"],
+                    epochs=fit_params["epochs"],
+                    phase=phase,
+                    callbacks=fit_params["callbacks"],
+                    validation_split=fit_params["validation_split"],
+                    verbose=0,
                 )
-                pprint.ppprint(search.best_params_)
-                print(search.best_score_)
-                sys.exit()
+
+                if self.ga_:
+                    # Stop searching if GA sees no improvement.
+                    callback = [
+                        ConsecutiveStopping(
+                            generations=self.early_stop_gen, metric="fitness"
+                        )
+                    ]
+
+                    if not self.disable_progressbar:
+                        callback.append(ProgressBar())
+
+                    verbose = False if self.verbose == 0 else True
+
+                    # Do genetic algorithm
+                    # with HiddenPrints():
+                    search = GASearchCV(
+                        estimator=clf,
+                        cv=cross_val,
+                        scoring=scoring,
+                        generations=self.grid_iter,
+                        param_grid=self.gridparams,
+                        n_jobs=self.n_jobs,
+                        refit=self.scoring_metric,
+                        verbose=verbose,
+                        error_score="raise",
+                        **self.ga_kwargs,
+                    )
+
+                    search.fit(V[self.n_components], y_true, callbacks=callback)
+
+                else:
+                    if self.gridsearch_method.lower() == "gridsearch":
+                        # Do GridSearchCV
+                        search = GridSearchCV(
+                            clf,
+                            param_grid=self.gridparams,
+                            n_jobs=self.n_jobs,
+                            cv=cross_val,
+                            scoring=scoring,
+                            refit=self.scoring_metric,
+                            verbose=self.verbose * 4,
+                            error_score="raise",
+                        )
+
+                    elif (
+                        self.gridsearch_method.lower()
+                        == "randomized_gridsearch"
+                    ):
+                        search = RandomizedSearchCV(
+                            clf,
+                            param_distributions=self.gridparams,
+                            n_iter=self.grid_iter,
+                            n_jobs=self.n_jobs,
+                            cv=cross_val,
+                            scoring=scoring,
+                            refit=self.scoring_metric,
+                            verbose=self.verbose * 4,
+                            error_score="raise",
+                        )
+
+                    else:
+                        raise ValueError(
+                            f"Invalid gridsearch_method specified: "
+                            f"{self.gridsearch_method}"
+                        )
+
+                    search.fit(V[self.n_components], y=y_true)
 
             else:
                 model = None
@@ -1713,6 +1768,32 @@ class UBP(BaseEstimator, TransformerMixin):
             "shuffle": False,
             "verbose": fit_verbose,
         }
+
+        if self.sample_weights == "auto":
+            # Get class weights for each column.
+            sample_weights = self._get_class_weights(y_true)
+            sample_weights = self._normalize_data(sample_weights)
+
+        elif isinstance(self.sample_weights, dict):
+            for i in range(self.num_classes):
+                if self.sample_weights[i] == 0.0:
+                    self.sim_missing_mask_[self.y_original_ == i] = False
+
+            sample_weights = self._get_class_weights(
+                y_true, user_weights=self.sample_weights
+            )
+
+        else:
+            sample_weights = None
+
+        model_params["sample_weight"] = sample_weights
+
+        if "learning_rate" in self.gridparams:
+            self.gridparams["optimizer__learning_rate"] = self.gridparams[
+                "learning_rate"
+            ]
+
+            self.gridparams.pop("learning_rate")
 
         return (
             logfile,
