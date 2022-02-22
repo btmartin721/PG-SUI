@@ -268,6 +268,8 @@ class MLPClassifier(KerasClassifier):
 
         verbose (int): Verbosity mode ranging from 0 - 2. 0 = silent, 2 = most verbose.
 
+        ubp_weights (tensorflow.Tensor): Weights from UBP model. Fetched by doing model.get_weights() on phase 2 model. Only used if phase 3. Defaults to None.
+
         kwargs (Any): Other keyword arguments to route to fit, compile, callbacks, etc. Should have the routing prefix (e.g., optimizer__learning_rate=0.01).
     """
 
@@ -276,6 +278,7 @@ class MLPClassifier(KerasClassifier):
         V,
         y_train,
         y_original,
+        ubp_weights,
         batch_size=32,
         missing_mask=None,
         output_shape=None,
@@ -318,6 +321,7 @@ class MLPClassifier(KerasClassifier):
         self.loss = loss
         self.epochs = epochs
         self.verbose = verbose
+        self.ubp_weights = ubp_weights
 
     def _keras_build_fn(self, compile_kwargs):
         """Build model with custom parameters.
@@ -415,6 +419,10 @@ class MLPClassifier(KerasClassifier):
         )
 
         model.set_model_outputs()
+
+        if self.phase == 3:
+            model.set_weights(self.ubp_weights)
+
         return model
 
     @staticmethod
@@ -1151,7 +1159,7 @@ class UBP(BaseEstimator, TransformerMixin):
         self.tt_ = TargetTransformer()
         y_train = self.tt_.fit_transform(self.y_original_)
 
-        # testresults = pd.read_csv(f"{self.prefix}_cvresults.csv")
+        # testresults = pd.read_csv(f"{self.prefix}_nlpca_cvresults.csv")
         # self.nn_.plot_grid_search(testresults, self.prefix)
         # sys.exit()
 
@@ -1163,34 +1171,29 @@ class UBP(BaseEstimator, TransformerMixin):
             fit_params,
         ) = self._initialize_parameters(y_train, self.original_missing_mask_)
 
-        if self.nlpca:
-            (
-                self.models_,
-                self.histories_,
-                self.best_params_,
-                self.best_score_,
-                self.best_estimator_,
-                self.search_,
-                self.metrics_,
-            ) = self._run_nlpca(
-                self.y_original_,
-                y_train,
-                model_params,
-                compile_params,
-                fit_params,
-            )
+        run_func = self._run_nlpca if self.nlpca else self._run_ubp
 
-            if self.gridparams is not None:
-                if self.verbose > 0:
-                    print("\nBest found parameters:")
-                    pprint.pprint(self.best_params_)
-                    print(f"\nBest score: {self.best_score_}")
-                self.nn_.plot_grid_search(self.search_.cv_results_, self.prefix)
+        (
+            self.models_,
+            self.histories_,
+            self.best_params_,
+            self.best_score_,
+            self.best_estimator_,
+            self.search_,
+            self.metrics_,
+        ) = run_func(
+            self.y_original_,
+            model_params,
+            compile_params,
+            fit_params,
+        )
 
-        else:
-            self.models_, self.histories_ = self._run_ubp(
-                V, y_train, model_params, compile_params, fit_params, self.nn_
-            )
+        if self.gridparams is not None:
+            if self.verbose > 0:
+                print("\nBest found parameters:")
+                pprint.pprint(self.best_params_)
+                print(f"\nBest score: {self.best_score_}")
+            self.nn_.plot_grid_search(self.search_.cv_results_, self.prefix)
 
         self._plot_history(self.histories_)
         self.nn_.plot_metrics(self.metrics_, self.num_classes, self.prefix)
@@ -1251,7 +1254,6 @@ class UBP(BaseEstimator, TransformerMixin):
     def _run_nlpca(
         self,
         y_true,
-        y_train,
         model_params,
         compile_params,
         fit_params,
@@ -1271,6 +1273,8 @@ class UBP(BaseEstimator, TransformerMixin):
         tf.keras.backend.set_learning_phase(1)
         tf.keras.backend.clear_session()
         self.nn_.reset_seeds()
+
+        y_train = model_params.pop("y_train")
 
         if do_gridsearch:
             # Cannot do CV because there is no way to use test splits
@@ -1296,7 +1300,7 @@ class UBP(BaseEstimator, TransformerMixin):
 
             clf = MLPClassifier(
                 V,
-                model_params.pop("y_train"),
+                y_train,
                 y_true,
                 **model_params,
                 optimizer=compile_params["optimizer"],
@@ -1380,7 +1384,7 @@ class UBP(BaseEstimator, TransformerMixin):
             best_index = search.best_index_
 
             cv_results = pd.DataFrame(search.cv_results_)
-            cv_results.to_csv(f"{self.prefix}_cvresults.csv", index=False)
+            cv_results.to_csv(f"{self.prefix}_nlpca_cvresults.csv", index=False)
 
             best_clf = search.best_estimator_
             histories.append(best_clf.history_)
@@ -1401,7 +1405,7 @@ class UBP(BaseEstimator, TransformerMixin):
 
             clf = MLPClassifier(
                 V,
-                model_params.pop("y_train"),
+                y_train,
                 y_true,
                 **model_params,
                 optimizer=compile_params["optimizer"],
@@ -1449,19 +1453,21 @@ class UBP(BaseEstimator, TransformerMixin):
         )
 
     def _run_ubp(
-        self, V, y_train, model_params, compile_params, fit_params, nn
+        self,
+        y_true,
+        model_params,
+        compile_params,
+        fit_params,
     ):
         do_gridsearch = False if self.gridparams is None else True
 
-        histories = list()
-        models = list()
-        phases = [UBPPhase1, UBPPhase2, UBPPhase3]
-        w = None
-
         if do_gridsearch:
+            # Cannot do CV because there is no way to use test splits
+            # given that the input gets refined. If using a test split,
+            # then it would just be the randomly initialized values and
+            # would not accurately represent the model.
+            # Thus, we disable cross-validation for the grid searches.
             cross_val = DisabledCV()
-
-            V = model_params.pop("V")
 
             all_scoring_metrics = [
                 "precision_recall_macro",
@@ -1475,6 +1481,11 @@ class UBP(BaseEstimator, TransformerMixin):
                 all_scoring_metrics, self.sim_missing_mask_
             )
 
+        y_train = model_params.pop("y_train")
+
+        histories = list()
+        models = list()
+        phases = [UBPPhase1, UBPPhase2, UBPPhase3]
         for i, phase in enumerate(phases, start=1):
             # This reduces memory usage.
             # tensorflow builds graphs that
@@ -1484,24 +1495,30 @@ class UBP(BaseEstimator, TransformerMixin):
             tf.keras.backend.clear_session()
             self.nn_.reset_seeds()
 
+            model = None
+
+            if not self.disable_progressbar and not do_gridsearch:
+                fit_params["callbacks"][-1] = TqdmCallback(
+                    epochs=self.epochs, verbose=0, desc=f"Epoch (Phase {i}): "
+                )
+
             if do_gridsearch:
-                # Cannot do CV because there is no way to use test splits
-                # given that the input gets refined. If using a test split,
-                # then it would just be the randomly initialized values and
-                # would not accurately represent the model.
-                # Thus, we disable cross-validation for the grid searches.
+                V = model_params.pop("V")
+
+                ubp_weights = models[1].get_weights() if i == 3 else None
 
                 clf = MLPClassifier(
                     V,
-                    model_params.pop("y_train"),
+                    y_train,
                     y_true,
+                    ubp_weights,
                     **model_params,
                     optimizer=compile_params["optimizer"],
                     optimizer__learning_rate=compile_params["learning_rate"],
                     loss=compile_params["loss"],
                     metrics=compile_params["metrics"],
                     epochs=fit_params["epochs"],
-                    phase=phase,
+                    phase=i,
                     callbacks=fit_params["callbacks"],
                     validation_split=fit_params["validation_split"],
                     verbose=0,
@@ -1575,40 +1592,102 @@ class UBP(BaseEstimator, TransformerMixin):
 
                     search.fit(V[self.n_components], y=y_true)
 
+                best_params = search.best_params_
+                best_score = search.best_score_
+                best_clf = search.best_estimator_
+
+                cv_results = pd.DataFrame(search.cv_results_)
+                cv_results.to_csv(
+                    f"{self.prefix}_ubp_cvresults_phase{i}.csv", index=False
+                )
+
+                histories.append(best_clf.history_)
+                model = best_clf.model_
+
+                y_pred_proba = model(model.V_latent, training=False)
+                y_pred = self.tt_.inverse_transform(y_pred_proba)
+
+                # Get metric scores.
+                metrics = self.scorer(
+                    y_true,
+                    y_pred,
+                    missing_mask=self.sim_missing_mask_,
+                    testing=True,
+                )
+
             else:
-                model = None
+                V = model_params.pop("V")
 
-                model = self._create_model(
-                    phase,
-                    model_params,
-                    compile_params,
+                ubp_weights = models[1].get_weights() if i == 3 else None
+
+                clf = MLPClassifier(
+                    V,
+                    y_train,
+                    y_true,
+                    ubp_weights,
+                    **model_params,
+                    optimizer=compile_params["optimizer"],
+                    optimizer__learning_rate=compile_params["learning_rate"],
+                    loss=compile_params["loss"],
+                    metrics=compile_params["metrics"],
+                    epochs=fit_params["epochs"],
+                    phase=i,
+                    callbacks=fit_params["callbacks"],
+                    validation_split=fit_params["validation_split"],
+                    verbose=0,
+                    score__missing_mask=self.sim_missing_mask_,
+                    score__scoring_metric=self.scoring_metric,
                 )
 
-                if i == 3:
-                    # Set the refined weights if doing phase 3.
-                    # Phase 3 gets the refined weights from Phase 2.
-                    model.set_weights(models[1].get_weights())
+                clf.fit(V[self.n_components], y=y_true)
 
-                history = model.fit(
-                    x=model_params["V"],
-                    y=y_train,
-                    batch_size=self.batch_size,
-                    epochs=self.epochs,
-                    callbacks=callbacks,
-                    validation_split=self.validation_split,
-                    shuffle=False,
-                    verbose=self.verbose,
+                best_params = None
+                best_score = None
+                search = None
+                best_clf = clf
+
+                histories.append(clf.history_)
+                model = clf.model_
+
+                y_pred_proba = model(model.V_latent, training=False)
+                y_pred = self.tt_.inverse_transform(y_pred_proba)
+
+                # Get metric scores.
+                metrics = self.scorer(
+                    y_true,
+                    y_pred,
+                    missing_mask=self.sim_missing_mask_,
+                    testing=True,
                 )
-
-                histories.append(history.history)
-                models.append(model)
 
             if i == 1:
-                model_params["V"] = model.V_latent.copy()
+                if (
+                    best_params is not None
+                    and "n_components" in self.gridparams
+                ):
+                    model_params["V"] = {
+                        best_params["n_components"]: model.V_latent.copy()
+                    }
+                    self.gridparams.pop("n_components")
+
+                else:
+                    model_params["V"] = V
+            elif i == 2:
+                model_params["V"] = V
+
+            models.append(model)
 
             del model
 
-        return models, histories
+        return (
+            models,
+            histories,
+            best_params,
+            best_score,
+            best_clf,
+            search,
+            metrics,
+        )
 
     def _normalize_data(self, data):
         return (data - np.min(data)) / (np.max(data) - np.min(data))
@@ -1788,7 +1867,7 @@ class UBP(BaseEstimator, TransformerMixin):
 
         model_params["sample_weight"] = sample_weights
 
-        if "learning_rate" in self.gridparams:
+        if self.gridparams is not None and "learning_rate" in self.gridparams:
             self.gridparams["optimizer__learning_rate"] = self.gridparams[
                 "learning_rate"
             ]
@@ -1924,7 +2003,7 @@ class UBP(BaseEstimator, TransformerMixin):
 
                 # Plot model accuracy
                 ax = plt.gca()
-                ax.plot(history["accuracy"])
+                ax.plot(history["categorical_accuracy"])
                 ax.set_title(f"{title} Accuracy")
                 ax.set_ylabel("Accuracy")
                 ax.set_xlabel("Epoch")
