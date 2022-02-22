@@ -233,6 +233,11 @@ class UBPPhase1(tf.keras.Model):
         x = tf.keras.Input(shape=(self.n_components,))
         return tf.keras.Model(inputs=[x], outputs=self.call(x))
 
+    def set_model_outputs(self):
+        x = tf.keras.Input(shape=(self.n_components,))
+        model = tf.keras.Model(inputs=[x], outputs=self.call(x))
+        self.outputs = model.outputs
+
     def train_step(self, data):
         """Custom training loop for one step (=batch) in a single epoch.
 
@@ -641,6 +646,11 @@ class UBPPhase2(tf.keras.Model):
         x = tf.keras.Input(shape=(self.n_components,))
         return tf.keras.Model(inputs=[x], outputs=self.call(x))
 
+    def set_model_outputs(self):
+        x = tf.keras.Input(shape=(self.n_components,))
+        model = tf.keras.Model(inputs=[x], outputs=self.call(x))
+        self.outputs = model.outputs
+
     def train_step(self, data):
         """Custom training loop for one step (=batch) in a single epoch.
 
@@ -911,13 +921,10 @@ class UBPPhase3(tf.keras.Model):
         self._batch_size = batch_size
         self.n_components = n_components
 
-        if l1_penalty == 0.0 and l2_penalty == 0.0:
-            kernel_regularizer = None
-        else:
-            kernel_regularizer = l1_l2(l1_penalty, l2_penalty)
-
+        # No regularization in phase 3.
+        kernel_regularizer = None
         self.kernel_regularizer = kernel_regularizer
-        kernel_initializer = weights_initializer
+        kernel_initializer = None
 
         if hidden_activation.lower() == "leaky_relu":
             activation = LeakyReLU(alpha=0.01)
@@ -950,7 +957,6 @@ class UBPPhase3(tf.keras.Model):
             input_shape=(n_components,),
             activation=hidden_activation,
             kernel_initializer=kernel_initializer,
-            kernel_regularizer=kernel_regularizer,
         )
 
         if num_hidden_layers >= 2:
@@ -958,7 +964,6 @@ class UBPPhase3(tf.keras.Model):
                 hidden_layer_sizes[1],
                 activation=hidden_activation,
                 kernel_initializer=kernel_initializer,
-                kernel_regularizer=kernel_regularizer,
             )
 
         if num_hidden_layers >= 3:
@@ -966,7 +971,6 @@ class UBPPhase3(tf.keras.Model):
                 hidden_layer_sizes[2],
                 activation=hidden_activation,
                 kernel_initializer=kernel_initializer,
-                kernel_regularizer=kernel_regularizer,
             )
 
         if num_hidden_layers >= 4:
@@ -974,7 +978,6 @@ class UBPPhase3(tf.keras.Model):
                 hidden_layer_sizes[3],
                 activation=hidden_activation,
                 kernel_initializer=kernel_initializer,
-                kernel_regularizer=kernel_regularizer,
             )
 
         if num_hidden_layers == 5:
@@ -982,13 +985,11 @@ class UBPPhase3(tf.keras.Model):
                 hidden_layer_sizes[4],
                 activation=hidden_activation,
                 kernel_initializer=kernel_initializer,
-                kernel_regularizer=kernel_regularizer,
             )
 
         self.output1 = Dense(
             output_shape * num_classes,
             kernel_initializer=kernel_initializer,
-            kernel_regularizer=kernel_regularizer,
         )
 
         self.rshp = Reshape((output_shape, num_classes))
@@ -1008,27 +1009,15 @@ class UBPPhase3(tf.keras.Model):
         Returns:
             tf.keras.Model: Output tensor from forward propagation.
         """
-        if self.dropout_rate == 0.0:
-            training = False
         x = self.dense1(inputs)
-        if training:
-            x = self.dropout_layer(x, training=training)
         if self.dense2 is not None:
             x = self.dense2(x)
-            if training:
-                x = self.dropout_layer(x, training=training)
         if self.dense3 is not None:
             x = self.dense3(x)
-            if training:
-                x = self.dropout_layer(x, training=training)
         if self.dense4 is not None:
             x = self.dense4(x)
-            if training:
-                x = self.dropout_layer(x, training=training)
         if self.dense5 is not None:
             x = self.dense5(x)
-            if training:
-                x = self.dropout_layer(x, training=training)
 
         x = self.output1(x)
         return self.rshp(x)
@@ -1037,6 +1026,11 @@ class UBPPhase3(tf.keras.Model):
         """Here so that mymodel.model().summary() can be called for debugging"""
         x = tf.keras.Input(shape=(self.n_components,))
         return tf.keras.Model(inputs=[x], outputs=self.call(x))
+
+    def set_model_outputs(self):
+        x = tf.keras.Input(shape=(self.n_components,))
+        model = tf.keras.Model(inputs=[x], outputs=self.call(x))
+        self.outputs = model.outputs
 
     def train_step(self, data):
         """Custom training loop for one step (=batch) in a single epoch.
