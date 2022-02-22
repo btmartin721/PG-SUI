@@ -343,7 +343,7 @@ def main():
         # "optimizer": optimizer,
     }
 
-    ubp = ImputeNLPCA(
+    ubp = ImputeUBP(
         data,
         disable_progressbar=False,
         cv=3,
