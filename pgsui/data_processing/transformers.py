@@ -260,14 +260,9 @@ class UBPInputTransformer(BaseEstimator, TransformerMixin):
             TypeError: V must be a dictionary if phase is None or phase == 1.
             TypeError: V must be a numpy array if phase is 2 or 3.
         """
-        if self.phase == None or self.phase == 1:
-            if not isinstance(self.V, dict):
-                raise TypeError(f"V must be a dictionary, but got {type(V)}")
-            return self.V[self.n_components]
-        else:
-            if isinstance(self.V, dict):
-                raise TypeError(f"V must be a numpy array, but got {type(V)}")
-            return self.V
+        if not isinstance(self.V, dict):
+            raise TypeError(f"V must be a dictionary, but got {type(V)}")
+        return self.V[self.n_components]
 
 
 class NNInputTransformer(BaseEstimator, TransformerMixin):
