@@ -1,8 +1,14 @@
+
+<img src="https://github.com/btmartin721/PG-SUI/blob/master/img/pgsui-logo-faded.png" alt="PG-SUI Logo" width="50%" height="50%">
+
+
 # PG-SUI
 
 Population Genomic Supervised and Unsupervised Imputation
 
 ## About PG-SUI
+
+NOTE: PG-SUI is not fully functional yet and is changing daily. We will issue a full release when it is fully functional.
 
 PG-SUI is a Python 3 API that uses machine learning to impute missing values from population genomic SNP data. There are several supervised and unsupervised machine learning algorithms available to impute missing data, as well as some non-machine learning imputers that are useful. 
 
@@ -55,21 +61,22 @@ These four "simple" imputation methods can be used as standalone imputers, as th
 + jupyterlab
 + tqdm
 + toytree
-+ scikit-learn >= 0.24
-+ tensorflow >= 2.0
++ scikit-learn >= 1.0
++ tensorflow >= 2.7
 + keras
 + xgboost
 + lightgbm
++ scikeras >= 0.6.0
 
 ### Installation
 
-The requirements can mostly be installed with conda. The only module that isn't available on conda is sklearn-genetic-opt, which can be installed via pip.
+The requirements can be installed with conda and pip. sklearn-genetic-opt and scikeras are only avaiable via pip, and scikeras requires tensorflow >= 2.7 and scikit-learn >= 1.0. Since tensorflow 2.7 is not yet available on conda channels, you must install it with pip here.
 
 ```
-conda create -n pg-sui python=3.7
+conda create -n pg-sui python=3.8
 conda activate pg-sui
 
-conda install matplotlib seaborn jupyterlab scikit-learn tqdm pandas=1.2.5 numpy=1.20.2 scipy=1.6.2 xgboost lightgbm tensorflow keras
+conda install matplotlib seaborn jupyterlab scikit-learn=1.0 tqdm pandas=1.2.5 numpy=1.20.2 scipy=1.6.2 xgboost lightgbm
 
 # Only works if using Intel CPUs; speeds up processing
 conda install scikit-learn-intelex
@@ -78,6 +85,10 @@ conda install -c conda-forge toytree
 
 # For genetic algorithm plotting functions
 pip install sklearn-genetic-opt[all]
+
+pip install scikeras
+
+pip install tensorflow-cpu==2.7
 ```
 
 #### Installation troubleshooting

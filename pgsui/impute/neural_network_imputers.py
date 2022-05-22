@@ -1,40 +1,111 @@
 # Standard Library Imports
-import math
+import logging
 import os
-import random
-import shutil
+import pprint
 import sys
+import warnings
 from collections import defaultdict
 
 # Third-party Imports
 import numpy as np
 import pandas as pd
+from matplotlib import pyplot as plt
+
+# Import tensorflow with reduced warnings.
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+logging.getLogger("tensorflow").disabled = True
+warnings.filterwarnings("ignore", category=UserWarning)
+
+# noinspection PyPackageRequirements
+import tensorflow as tf
+
+# Disable can't find cuda .dll errors. Also turns of GPU support.
+tf.config.set_visible_devices([], "GPU")
+
+from tensorflow.python.util import deprecation
+
+# Disable warnings and info logs.
+tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
+tf.get_logger().setLevel(logging.ERROR)
+
+# Monkey patching deprecation utils to supress warnings.
+# noinspection PyUnusedLocal
+def deprecated(
+    date, instructions, warn_once=True
+):  # pylint: disable=unused-argument
+    def deprecated_wrapper(func):
+        return func
+
+    return deprecated_wrapper
+
+
+deprecation.deprecated = deprecated
+
+from tensorflow.keras.callbacks import (
+    EarlyStopping,
+    ProgbarLogger,
+    ReduceLROnPlateau,
+    CSVLogger,
+)
+from tensorflow.keras.layers import Dropout, Dense
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.regularizers import l1_l2
+
+
+from sklearn.metrics import accuracy_score
+
+from sklearn.utils.class_weight import (
+    compute_class_weight,
+)
+
+# Grid search imports
+from sklearn.base import BaseEstimator, TransformerMixin
+
+# Randomized grid search imports
+from sklearn.model_selection import GridSearchCV, RandomizedSearchCV
+from sklearn.model_selection import ParameterGrid
+
+# Genetic algorithm grid search imports
+from sklearn_genetic import GASearchCV
+from sklearn_genetic.callbacks import ConsecutiveStopping, ProgressBar
+from sklearn_genetic.plots import plot_fitness_evolution
+
+from scikeras.wrappers import KerasClassifier
 
 # For development purposes
 # from memory_profiler import memory_usage
 
-# Ignore warnings, but still print errors.
-# Set to 0 for debugging, 2 to ignore warnings.
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"  # or any {'0', '1', '2', '3'}
-
-# Neural network imports
-import tensorflow as tf
-from tensorflow.python.util import deprecation
-
-import keras.backend as K
-from keras.objectives import mse
-from keras.models import Sequential
-from keras.layers.core import Dropout, Dense, Lambda
-from keras.regularizers import l1_l2
-
-# Custom Modules
-from read_input.read_input import GenotypeData
-from utils.misc import timer
-from utils.misc import isnotebook
-
-# Ignore warnings, but still print errors.
-deprecation._PRINT_DEPRECATION_WARNINGS = False
-tf.get_logger().setLevel("WARNING")
+# Custom module imports
+try:
+    from ..read_input.read_input import GenotypeData
+    from ..utils.misc import timer
+    from ..utils.misc import isnotebook
+    from ..utils.misc import HiddenPrints
+    from ..utils.misc import validate_input_type
+    from .neural_network_methods import NeuralNetworkMethods
+    from .nlpca_model import NLPCAModel
+    from .ubp_model import UBPPhase1, UBPPhase2, UBPPhase3
+    from ..data_processing.transformers import (
+        UBPInputTransformer,
+        MLPTargetTransformer,
+        SimGenotypeDataTransformer,
+        TargetTransformer,
+    )
+except (ModuleNotFoundError, ValueError):
+    from read_input.read_input import GenotypeData
+    from utils.misc import timer
+    from utils.misc import isnotebook
+    from utils.misc import HiddenPrints
+    from utils.misc import validate_input_type
+    from impute.neural_network_methods import NeuralNetworkMethods
+    from impute.nlpca_model import NLPCAModel
+    from impute.ubp_model import UBPPhase1, UBPPhase2, UBPPhase3
+    from data_processing.transformers import (
+        UBPInputTransformer,
+        MLPTargetTransformer,
+        SimGenotypeDataTransformer,
+        TargetTransformer,
+    )
 
 is_notebook = isnotebook()
 
@@ -43,221 +114,435 @@ if is_notebook:
 else:
     from tqdm import tqdm as progressbar
 
+from tqdm.keras import TqdmCallback
 
-class NeuralNetwork:
-    """Methods common to all neural network imputer classes and loss functions"""
 
-    def __init__(self, **kwargs):
-        self.data = None
+class DisabledCV:
+    def __init__(self):
+        self.n_splits = 1
 
-    def make_reconstruction_loss(self, n_features):
-        """Make loss function for use with a keras model.
+    def split(self, X, y, groups=None):
+        yield (np.arange(len(X)), np.arange(len(y)))
 
-        Args:
-            n_features (int): Number of features in input dataset.
+    def get_n_splits(self, X, y, groups=None):
+        return self.n_splits
 
-        Returns:
-            callable: Function that calculates loss.
-        """
 
-        def reconstruction_loss(input_and_mask, y_pred):
-            """Custom loss function for variational autoencoder model with missing mask.
+class UBPCallbacks(tf.keras.callbacks.Callback):
+    """Custom callbacks to use with subclassed NLPCA/ UBP Keras models.
 
-            Ignores missing data in the calculation of the loss function.
+    See tf.keras.callbacks.Callback documentation.
+    """
 
-            Args:
-                n_features (int): Number of features (columns) in the dataset.
+    def __init__(self):
+        self.indices = None
 
-                input_and_mask (numpy.ndarray): Input one-hot encoded array with missing values also one-hot encoded and h-stacked.
+    def on_epoch_begin(self, epoch, logs=None):
+        """Shuffle input and target at start of epoch."""
+        y = self.model.y.copy()
+        missing_mask = self.model.missing_mask
+        sample_weight = self.model.sample_weight
 
-                y_pred (numpy.ndarray): Predicted values.
+        n_samples = len(y)
+        self.indices = np.arange(n_samples)
+        np.random.shuffle(self.indices)
 
-            Returns:
-                float: Mean squared error loss value with missing data masked.
-            """
-            X_values = input_and_mask[:, :n_features]
-            missing_mask = input_and_mask[:, n_features:]
-            observed_mask = 1 - missing_mask
-            X_values_observed = X_values * observed_mask
-            pred_observed = y_pred * observed_mask
+        self.model.y = y[self.indices]
+        self.model.V_latent = self.model.V_latent[self.indices]
+        self.model.missing_mask = missing_mask[self.indices]
 
-            return mse(y_true=X_values_observed, y_pred=pred_observed)
+        if sample_weight is not None:
+            self.model.sample_weight = sample_weight[self.indices]
 
-        return reconstruction_loss
+    def on_train_batch_begin(self, batch, logs=None):
+        """Get batch index."""
+        self.model.batch_idx = batch
 
-    def masked_mse(self, X_true, X_pred, mask):
-        """Calculates mean squared error with missing values ignored.
+    def on_epoch_end(self, epoch, logs=None):
+        """Unsort the row indices."""
+        unshuffled = np.argsort(self.indices)
 
-        Args:
-            X_true (numpy.ndarray): One-hot encoded input data.
-            X_pred (numpy.ndarray): Predicted values.
-            mask (numpy.ndarray): One-hot encoded missing data mask.
+        self.model.y = self.model.y[unshuffled]
+        self.model.V_latent = self.model.V_latent[unshuffled]
+        self.model.missing_mask = self.model.missing_mask[unshuffled]
 
-        Returns:
-            float: Mean squared error calculation.
-        """
-        return np.square(np.subtract(X_true[mask], X_pred[mask])).mean()
+        if self.model.sample_weight is not None:
+            self.model.sample_weight = self.model.sample_weight[unshuffled]
 
-    def categorical_crossentropy_masked(self, y_true, y_pred):
-        """Calculates categorical crossentropy while ignoring missing values.
 
-        Used for UBP and NLPCA. Missing values should be an array of length(n_categories). If data is missing, it should be encoded as [-1] * n_categories.
+class UBPEarlyStopping(tf.keras.callbacks.Callback):
+    """Stop training when the loss is at its min, i.e. the loss stops decreasing.
 
-        Args:
-            y_true (tf.Tensor): Known values from input data.
-            y_pred (tf.Tensor): Values predicted from model.
+    Arguments:
+        patience: Number of epochs to wait after min has been hit. After this
+        number of no improvement, training stops.
+    """
 
-        Returns:
-            float: Loss value.
-        """
-        y_true_masked = tf.boolean_mask(
-            y_true, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
-        )
+    def __init__(self, patience=0, phase=3):
+        super(UBPEarlyStopping, self).__init__()
+        self.patience = patience
+        self.phase = phase
 
-        y_pred_masked = tf.boolean_mask(
-            y_pred, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
-        )
+        # best_weights to store the weights at which the minimum loss occurs.
+        self.best_weights = None
 
-        loss_fn = tf.keras.losses.CategoricalCrossentropy()
-        return loss_fn(y_true_masked, y_pred_masked)
+        # In UBP, the input gets refined during training.
+        # So we have to revert it too.
+        self.best_input = None
 
-    def categorical_accuracy_masked(self, y_true, y_pred):
-        y_true_masked = tf.boolean_mask(
-            y_true, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
-        )
+    def on_train_begin(self, logs=None):
+        # The number of epoch it has waited when loss is no longer minimum.
+        self.wait = 0
+        # The epoch the training stops at.
+        self.stopped_epoch = 0
+        # Initialize the best as infinity.
+        self.best = np.Inf
 
-        y_pred_masked = tf.boolean_mask(
-            y_pred, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
-        )
+    def on_epoch_end(self, epoch, logs=None):
+        current = logs.get("loss")
+        if np.less(current, self.best):
+            self.best = current
+            self.wait = 0
+            # Record the best weights if current results is better (less).
+            self.best_weights = self.model.get_weights()
 
-        return tf.keras.metrics.categorical_accuracy(
-            y_true_masked, y_pred_masked
-        )
-
-    def categorical_mse_masked(self, y_true, y_pred):
-        y_true_masked = tf.boolean_mask(
-            y_true, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
-        )
-
-        y_pred_masked = tf.boolean_mask(
-            y_pred, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
-        )
-
-        return mse(y_true_masked, y_pred_masked)
-
-    def validate_batch_size(self, X, batch_size):
-        """Validate the batch size, and adjust as necessary.
-
-        If the specified batch_size is greater than the number of samples in the input data, it will divide batch_size by 2 until it is less than n_samples.
-
-        Args:
-            X (numpy.ndarray): Input data of shape (n_samples, n_features).
-            batch_size (int): Batch size to use.
-
-        Returns:
-            int: Batch size (adjusted if necessary).
-        """
-        if batch_size > X.shape[0]:
-            while batch_size > X.shape[0]:
-                print(
-                    "Batch size is larger than the number of samples. "
-                    "Dividing batch_size by 2."
-                )
-                batch_size //= 2
-        return batch_size
-
-    def mle(self, row):
-        """Get the Maximum Likelihood Estimation for the best prediction. Basically, it sets the index of the maxiumum value in a vector (row) to 1.0, since it is one-hot encoded.
-
-        Args:
-            row (numpy.ndarray(float)): Row vector with predicted values as floating points.
-
-        Returns:
-            numpy.ndarray(float): Row vector with the highest prediction set to 1.0 and the others set to 0.0.
-        """
-        res = np.zeros(row.shape[0])
-        res[np.argmax(row)] = 1
-        return res
-
-    def fill(self, missing_mask, missing_value, num_classes):
-        """Mask missing data as ``missing_value``.
-
-        Args:
-            missing_mask (np.ndarray(bool)): Missing data mask with True corresponding to a missing value.
-
-            missing_value (int): Value to set missing data to. If a list is provided, then its length should equal the number of one-hot classes.
-        """
-        if num_classes > 1:
-            missing_value = [missing_value] * num_classes
-        self.data[missing_mask] = missing_value
-
-    def validate_extrakwargs(self, d):
-        """Validate extra keyword arguments.
-
-        Args:
-            d (Dict[str, Any]): Dictionary with keys=keywords and values=passed setting.
-
-        Returns:
-            numpy.ndarray: Test categorical dataset.
-
-        Raises:
-            ValueError: If not a supported keyword argument.
-        """
-        supported_kwargs = ["test_categorical"]
-        if kwargs is not None:
-            for k in kwargs.keys():
-                if k not in supported_kwargs:
-                    raise ValueError(f"{k} is not a valid argument.")
-
-        test_cat = kwargs.get("test_categorical", None)
-        return test_cat
-
-    def validate_input(self, input_data, out_type="numpy"):
-        """Validate input data and ensure that it is of correct type.
-
-        Args:
-            input_data (List[List[int]], numpy.ndarray, or pandas.DataFrame): Input data to validate.
-
-            out_type (str, optional): Type of object to convert input data to. Possible options include "numpy" and "pandas". Defaults to "numpy".
-
-        Returns:
-            numpy.ndarray: Input data as numpy array.
-
-        Raises:
-            TypeError: Must be of type pandas.DataFrame, numpy.ndarray, or List[List[int]].
-
-            ValueError: astype must be either "numpy" or "pandas".
-        """
-        if out_type == "numpy":
-            if isinstance(input_data, pd.DataFrame):
-                X = input_data.to_numpy()
-            elif isinstance(input_data, list):
-                X = np.array(input_data)
-            elif isinstance(input_data, np.ndarray):
-                X = input_data.copy()
-            else:
-                raise TypeError(
-                    f"input_data must be of type pd.DataFrame, np.ndarray, or "
-                    f"list(list(int)), but got {type(input_data)}"
-                )
-
-        elif out_type == "pandas":
-            if isinstance(input_data, pd.DataFrame):
-                X = input_data.copy()
-            elif isinstance(input_data, (list, np.ndarray)):
-                X = pd.DataFrame(input_data)
-            else:
-                raise TypeError(
-                    f"input_data must be of type pd.DataFrame, np.ndarray, or "
-                    f"list(list(int)), but got {type(input_data)}"
-                )
+            if self.phase != 2:
+                # Only refine input in phase 2.
+                self.best_input = self.model.V_latent
         else:
-            raise ValueError("astype must be either 'numpy' or 'pandas'.")
+            self.wait += 1
+            if self.wait >= self.patience:
+                self.stopped_epoch = epoch
+                self.model.stop_training = True
+                self.model.set_weights(self.best_weights)
 
-        return X
+                if self.phase != 2:
+                    self.model.V_latent = self.best_input
 
 
-class VAE(NeuralNetwork):
+class MLPClassifier(KerasClassifier):
+    """Estimator to be used with the scikit-learn API.
+
+    Args:
+        V (numpy.ndarray or Dict[str, Any]): Input X values of shape (n_samples, n_components). If a dictionary is passed, each key: value pair should have randomly initialized values for n_components: V. self.feature_encoder() will parse it and select the key: value pair with the current n_components. This allows n_components to be grid searched using GridSearchCV. Otherwise, it throws an error that the dimensions are off. Defaults to None.
+
+        y_decoded (numpy.ndarray): Original target data, y, that is not one-hot encoded. Should have shape (n_samples, n_features). Should be 012-encoded. Defaults to None.
+
+        y (numpy.ndarray): One-hot encoded target data. Defaults to None.
+
+        batch_size (int): Batch size to train with. Defaults to 32.
+
+        missing_mask (np.ndarray): Missing mask with missing values set to False (0) and observed values as True (1). Defaults to None. Defaults to None.
+
+        output_shape (int): Number of units in model output layer. Defaults to None.
+
+        weights_initializer (str): Kernel initializer to use for model weights. Defaults to "glorot_normal".
+
+        hidden_layer_sizes (List[int]): Output unit size for each hidden layer. Should be list of length num_hidden_layers. Defaults to None.
+
+        num_hidden_layers (int): Number of hidden layers to use. Defaults to 1.
+
+        hidden_activation (str): Hidden activation function to use. Defaults to "elu".
+
+        l1_penalty (float): L1 regularization penalty to use to reduce overfitting. Defautls to 0.01.
+
+        l2_penalty (float): L2 regularization penalty to use to reduce overfitting. Defaults to 0.01.
+
+        dropout_rate (float): Dropout rate for each hidden layer to reduce overfitting. Defaults to 0.2.
+
+        num_classes (int): Number of classes in output predictions. Defaults to 1.
+
+        phase (int or None): Current phase (if doing UBP), or None if doing NLPCA. Defults to None.
+
+        n_components (int): Number of components to use for input V. Defaults to 3.
+
+        search_mode (bool): Whether in grid search mode (True) or single estimator mode (False). Defaults to True.
+
+        optimizer (str or callable): Optimizer to use during training. Should be either a str or tf.keras.optimizers callable. Defaults to "adam".
+
+        loss (str or callable): Loss function to use. Should be a string or a callable if using a custom loss function. Defaults to "binary_crossentropy".
+
+        metrics (List[Union[str, callable]]): Metrics to use. Should be a sstring or a callable if using a custom metrics function. Defaults to "accuracy".
+
+        epochs (int): Number of epochs to train over. Defaults to 100.
+
+        verbose (int): Verbosity mode ranging from 0 - 2. 0 = silent, 2 = most verbose.
+
+        ubp_weights (tensorflow.Tensor): Weights from UBP model. Fetched by doing model.get_weights() on phase 2 model. Only used if phase 3. Defaults to None.
+
+        kwargs (Any): Other keyword arguments to route to fit, compile, callbacks, etc. Should have the routing prefix (e.g., optimizer__learning_rate=0.01).
+    """
+
+    def __init__(
+        self,
+        V,
+        y_train,
+        y_original,
+        ubp_weights,
+        batch_size=32,
+        missing_mask=None,
+        output_shape=None,
+        weights_initializer="glorot_normal",
+        hidden_layer_sizes=None,
+        num_hidden_layers=1,
+        hidden_activation="elu",
+        l1_penalty=0.01,
+        l2_penalty=0.01,
+        dropout_rate=0.2,
+        num_classes=3,
+        phase=None,
+        sample_weight=None,
+        n_components=3,
+        optimizer="adam",
+        loss="binary_crossentropy",
+        epochs=100,
+        verbose=0,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self.V = V
+        self.y_train = y_train
+        self.y_original = y_original
+        self.batch_size = batch_size
+        self.missing_mask = missing_mask
+        self.output_shape = output_shape
+        self.weights_initializer = weights_initializer
+        self.hidden_layer_sizes = hidden_layer_sizes
+        self.num_hidden_layers = num_hidden_layers
+        self.hidden_activation = hidden_activation
+        self.l1_penalty = l1_penalty
+        self.l2_penalty = l2_penalty
+        self.dropout_rate = dropout_rate
+        self.num_classes = num_classes
+        self.phase = phase
+        self.sample_weight = sample_weight
+        self.n_components = n_components
+        self.optimizer = optimizer
+        self.loss = loss
+        self.epochs = epochs
+        self.verbose = verbose
+        self.ubp_weights = ubp_weights
+
+    def _keras_build_fn(self, compile_kwargs):
+        """Build model with custom parameters.
+
+        Args:
+            compile_kwargs (Dict[str, Any]): Dictionary with parameters: values. The parameters should be passed to the class constructor, but should be captured as kwargs. They should also have the routing prefix (e.g., optimizer__learning_rate=0.01). compile_kwargs will automatically be parsed from **kwargs by KerasClassifier and sent here.
+
+        Returns:
+            tf.keras.Model: Model instance. The chosen model depends on which phase is passed to the class constructor.
+        """
+        if self.phase is None:
+            model = NLPCAModel(
+                V=self.V,
+                y=self.y_train,
+                batch_size=self.batch_size,
+                missing_mask=self.missing_mask,
+                output_shape=self.output_shape,
+                n_components=self.n_components,
+                weights_initializer=self.weights_initializer,
+                hidden_layer_sizes=self.hidden_layer_sizes,
+                num_hidden_layers=self.num_hidden_layers,
+                hidden_activation=self.hidden_activation,
+                l1_penalty=self.l1_penalty,
+                l2_penalty=self.l2_penalty,
+                dropout_rate=self.dropout_rate,
+                num_classes=self.num_classes,
+                phase=self.phase,
+                sample_weight=self.sample_weight,
+            )
+
+        elif self.phase == 1:
+            model = UBPPhase1(
+                V=self.V,
+                y=self.y_train,
+                batch_size=self.batch_size,
+                missing_mask=self.missing_mask,
+                output_shape=self.output_shape,
+                n_components=self.n_components,
+                weights_initializer=self.weights_initializer,
+                hidden_layer_sizes=self.hidden_layer_sizes,
+                num_hidden_layers=self.num_hidden_layers,
+                hidden_activation=self.hidden_activation,
+                l1_penalty=self.l1_penalty,
+                l2_penalty=self.l2_penalty,
+                dropout_rate=self.dropout_rate,
+                num_classes=self.num_classes,
+                phase=self.phase,
+            )
+
+        elif self.phase == 2:
+            model = UBPPhase2(
+                V=self.V,
+                y=self.y_train,
+                batch_size=self.batch_size,
+                missing_mask=self.missing_mask,
+                output_shape=self.output_shape,
+                n_components=self.n_components,
+                weights_initializer=self.weights_initializer,
+                hidden_layer_sizes=self.hidden_layer_sizes,
+                num_hidden_layers=self.num_hidden_layers,
+                hidden_activation=self.hidden_activation,
+                l1_penalty=self.l1_penalty,
+                l2_penalty=self.l2_penalty,
+                dropout_rate=self.dropout_rate,
+                num_classes=self.num_classes,
+                phase=self.phase,
+            )
+
+        elif self.phase == 3:
+            model = UBPPhase3(
+                V=self.V,
+                y=self.y_train,
+                batch_size=self.batch_size,
+                missing_mask=self.missing_mask,
+                output_shape=self.output_shape,
+                n_components=self.n_components,
+                weights_initializer=self.weights_initializer,
+                hidden_layer_sizes=self.hidden_layer_sizes,
+                num_hidden_layers=self.num_hidden_layers,
+                hidden_activation=self.hidden_activation,
+                l1_penalty=self.l1_penalty,
+                l2_penalty=self.l2_penalty,
+                dropout_rate=self.dropout_rate,
+                num_classes=self.num_classes,
+                phase=self.phase,
+            )
+
+            model.build((None, self.n_components))
+
+        model.compile(
+            optimizer=compile_kwargs["optimizer"],
+            loss=compile_kwargs["loss"],
+            metrics=compile_kwargs["metrics"],
+            run_eagerly=True,
+        )
+
+        model.set_model_outputs()
+
+        if self.phase == 3:
+            model.set_weights(self.ubp_weights)
+
+        return model
+
+    @staticmethod
+    def scorer(y_true, y_pred, **kwargs):
+        """Scorer for grid search that masks missing data.
+
+        To use this, do not specify a scoring metric when initializing the grid search object. By default if the scoring_metric option is left as None, then it uses the estimator's scoring metric (this one).
+
+        Args:
+            y_true (numpy.ndarray): True target values input to fit().
+            y_pred (numpy.ndarray): Predicted target values from estimator. The predictions are modified by self.target_encoder().inverse_transform() before being sent here.
+            kwargs (Any): Other parameters sent to sklearn scoring metric. Supported options include missing_mask, scoring_metric, and testing.
+
+        Returns:
+            float: Calculated score.
+        """
+        # Get missing mask if provided.
+        # Otherwise default is all missing values (array all True).
+        missing_mask = kwargs.get(
+            "missing_mask", np.ones(y_true.shape, dtype=bool)
+        )
+
+        testing = kwargs.get("testing", False)
+        scoring_metric = kwargs.get("scoring_metric", "accuracy")
+
+        y_true_masked = y_true[missing_mask]
+        y_pred_masked = y_pred[missing_mask]
+
+        if scoring_metric.startswith("auc"):
+            roc_auc = NeuralNetworkMethods.compute_roc_auc_micro_macro(
+                y_true_masked, y_pred_masked, missing_mask
+            )
+
+            if scoring_metric == "auc_macro":
+                return roc_auc["macro"]
+
+            elif scoring_metric == "auc_micro":
+                return roc_auc["micro"]
+
+            else:
+                raise ValueError(
+                    f"Invalid scoring_metric provided: {scoring_metric}"
+                )
+
+        elif scoring_metric.startswith("precision"):
+            pr_ap = NeuralNetworkMethods.compute_pr(
+                y_true_masked, y_pred_masked
+            )
+
+            if scoring_metric == "precision_recall_macro":
+                return pr_ap["macro"]
+
+            elif scoring_metric == "precision_recall_micro":
+                return pr_ap["micro"]
+
+            else:
+                raise ValueError(
+                    f"Invalid scoring_metric provided: {scoring_metric}"
+                )
+
+        elif scoring_metric == "accuracy":
+            y_pred_masked_decoded = NeuralNetworkMethods.decode_masked(
+                y_pred_masked
+            )
+            return accuracy_score(y_true_masked, y_pred_masked_decoded)
+
+        else:
+            raise ValueError(
+                f"Invalid scoring_metric provided: {scoring_metric}"
+            )
+
+        if testing:
+            np.set_printoptions(threshold=np.inf)
+            print(y_true_masked)
+
+            y_pred_masked_decoded = NeuralNetworkMethods.decode_masked(
+                y_pred_masked
+            )
+
+            print(y_pred_masked_decoded)
+
+    @property
+    def feature_encoder(self):
+        """Handles feature input, X, before training.
+
+        Returns:
+            UBPInputTransformer: InputTransformer object that includes fit() and transform() methods to transform input before estimator fitting.
+        """
+        return UBPInputTransformer(self.phase, self.n_components, self.V)
+
+    @property
+    def target_encoder(self):
+        """Handles target input and output, y_true and y_pred, both before and after training.
+
+        Returns:
+            NNOutputTransformer: NNOutputTransformer object that includes fit(), transform(), and inverse_transform() methods.
+        """
+        return MLPTargetTransformer()
+
+    def predict(self, X, **kwargs):
+        """Returns predictions for the given test data.
+
+        Args:
+            X (Union[array-like, sparse matrix, dataframe] of shape (n_samples, n_features)): Training samples where n_samples is the number of samples and n_features is the number of features.
+        **kwargs (Dict[str, Any]): Extra arguments to route to ``Model.predict``\.
+
+        Warnings:
+            Passing estimator parameters as keyword arguments (aka as ``**kwargs``) to ``predict`` is not supported by the Scikit-Learn API, and will be removed in a future version of SciKeras. These parameters can also be specified by prefixing ``predict__`` to a parameter at initialization (``BaseWrapper(..., fit__batch_size=32, predict__batch_size=1000)``) or by using ``set_params`` (``est.set_params(fit__batch_size=32, predict__batch_size=1000)``\).
+
+        Returns:
+            array-like: Predictions, of shape shape (n_samples,) or (n_samples, n_outputs).
+
+        Notes:
+            Had to override predict() here in order to do the __call__ with the refined input, V_latent.
+        """
+        y_pred_proba = self.model_(self.model_.V_latent, training=False)
+        return self.target_encoder_.inverse_transform(y_pred_proba)
+
+
+class VAE(NeuralNetworkMethods):
     """Class to impute missing data using a Variational Autoencoder neural network.
 
     Args:
@@ -267,15 +552,15 @@ class VAE(NeuralNetwork):
 
         prefix (str): Prefix for output files. Defaults to "output".
 
-        cv (int): Number of cross-validation replicates to perform. Only used if ``validation_only`` is not None. Defaults to 5.
+        cv (int): Number of cross-validation replicates to perform. Only used if ``validation_split`` is not None. Defaults to 5.
 
         initial_strategy (str): Initial strategy to impute missing data with for validation. Possible options include: "populations", "most_frequent", and "phylogeny", where "populations" imputes by the mode of each population at each site, "most_frequent" imputes by the overall mode of each site, and "phylogeny" uses an input phylogeny to inform the imputation. "populations" requires a population map file as input in the GenotypeData object, and "phylogeny" requires an input phylogeny and Rate Matrix Q (also instantiated in the GenotypeData object). Defaults to "populations".
 
-        validation_only (float or None): Proportion of sites to use for the validation. If ``validation_only`` is None, then does not perform validation. Defaults to 0.2.
+        validation_split (float or None): Proportion of sites to use for the validation. If ``validation_split`` is None, then does not perform validation. Defaults to 0.2.
 
         disable_progressbar (bool): Whether to disable the tqdm progress bar. Useful if you are doing the imputation on e.g. a high-performance computing cluster, where sometimes tqdm does not work correctly. If False, uses tqdm progress bar. If True, does not use tqdm. Defaults to False.
 
-        train_epochs (int): Number of epochs to train the VAE model with. Defaults to 100.
+        epochs (int): Number of epochs to train the VAE model with. Defaults to 100.
 
         batch_size (int): Batch size to train the model with.
 
@@ -283,7 +568,7 @@ class VAE(NeuralNetwork):
 
         optimizer (str): Gradient descent optimizer to use. See tf.keras.optimizers for more info. Defaults to "adam".
 
-        dropout_probability (float): Dropout rate for neurons in the network. Can adjust to reduce overfitting. Defaults to 0.2.
+        dropout_rate (float): Dropout rate for neurons in the network. Can adjust to reduce overfitting. Defaults to 0.2.
 
         hidden_activation (str): Activation function to use for hidden layers. See tf.keras.activations for more info. Defaults to "relu".
 
@@ -304,13 +589,13 @@ class VAE(NeuralNetwork):
         prefix="output",
         cv=5,
         initial_strategy="populations",
-        validation_only=0.2,
+        validation_split=0.2,
         disable_progressbar=False,
-        train_epochs=100,
+        epochs=100,
         batch_size=32,
         recurrent_weight=0.5,
         optimizer="adam",
-        dropout_probability=0.2,
+        dropout_rate=0.2,
         hidden_activation="relu",
         output_activation="sigmoid",
         kernel_initializer="glorot_normal",
@@ -321,11 +606,11 @@ class VAE(NeuralNetwork):
 
         self.prefix = prefix
 
-        self.train_epochs = train_epochs
+        self.epochs = epochs
         self.initial_batch_size = batch_size
         self.recurrent_weight = recurrent_weight
         self.optimizer = optimizer
-        self.dropout_probability = dropout_probability
+        self.dropout_rate = dropout_rate
         self.hidden_activation = hidden_activation
         self.output_activation = output_activation
         self.kernel_initializer = kernel_initializer
@@ -333,7 +618,7 @@ class VAE(NeuralNetwork):
         self.l2_penalty = l2_penalty
 
         self.cv = cv
-        self.validation_only = validation_only
+        self.validation_split = validation_split
         self.disable_progressbar = disable_progressbar
         self.num_classes = 1
 
@@ -361,9 +646,7 @@ class VAE(NeuralNetwork):
         # VAE needs a numpy array, not a dataframe
         self.data = self.df.copy().values
 
-        imputed_enc = self.fit(
-            train_epochs=self.train_epochs, batch_size=self.batch_size
-        )
+        imputed_enc = self.fit(epochs=self.epochs, batch_size=self.batch_size)
 
         imputed_enc, dummy_df = self.predict(X, imputed_enc)
 
@@ -373,25 +656,25 @@ class VAE(NeuralNetwork):
 
         return imputed_df.to_numpy()
 
-    def fit(self, batch_size=256, train_epochs=100):
+    def fit(self, batch_size=256, epochs=100):
         """Train a variational autoencoder model to impute missing data.
 
         Args:
             batch_size (int, optional): Number of data splits to train on per epoch. Defaults to 256.
 
-            train_epochs (int, optional): Number of epochs (cycles through the data) to use. Defaults to 100.
+            epochs (int, optional): Number of epochs (cycles through the data) to use. Defaults to 100.
 
         Returns:
             numpy.ndarray(float): Predicted values as numpy array.
         """
 
         missing_mask = self._create_missing_mask()
-        self.fill(missing_mask, -1, self.num_classes)
+        self.fill(self.data, missing_mask, -1, self.num_classes)
         self.model = self._create_model()
 
         observed_mask = ~missing_mask
 
-        for epoch in range(1, train_epochs + 1):
+        for epoch in range(1, epochs + 1):
             X_pred = self._train_epoch(self.model, missing_mask, batch_size)
             observed_mse = self.masked_mse(
                 X_true=self.data, X_pred=X_pred, mask=observed_mask
@@ -402,7 +685,7 @@ class VAE(NeuralNetwork):
 
             elif epoch % 50 == 0:
                 print(
-                    f"Observed MSE ({epoch}/{train_epochs} epochs): "
+                    f"Observed MSE ({epoch}/{epochs} epochs): "
                     f"{observed_mse}"
                 )
 
@@ -632,7 +915,7 @@ class VAE(NeuralNetwork):
             )
         )
 
-        model.add(Dropout(self.dropout_probability))
+        model.add(Dropout(self.dropout_rate))
 
         for layer_size in hidden_layer_sizes[1:]:
             model.add(
@@ -644,7 +927,7 @@ class VAE(NeuralNetwork):
                 )
             )
 
-            model.add(Dropout(self.dropout_probability))
+            model.add(Dropout(self.dropout_rate))
 
         model.add(
             Dense(
@@ -670,787 +953,1075 @@ class VAE(NeuralNetwork):
         return np.isnan(self.data)
 
 
-class UBP(NeuralNetwork):
+class UBP(BaseEstimator, TransformerMixin):
     """Class to impute missing data using unsupervised backpropagation (UBP) or inverse non-linear principal component analysis (NLPCA).
 
     Args:
-        genotype_data (GenotypeData object or None): Input GenotypeData object. If this value is None, ``gt`` must be supplied instead. Defaults to None.
+        genotype_data (GenotypeData): Input GenotypeData instance.
 
-        gt (numpy.ndarray or None): Input genotypes directly as a numpy array. If this value is None, ``genotype_data`` must be supplied instead. Defaults to None.
+        prefix (str, optional): Prefix for output files. Defaults to "output".
 
-        prefix (str): Prefix for output files. Defaults to "output".
+        gridparams (Dict[str, Any] or None, optional): Dictionary with keys=keyword arguments for the specified estimator and values=lists of parameter values or distributions. If using GridSearchCV, distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). ``gridparams`` will be used for a randomized grid search with cross-validation. If using the genetic algorithm grid search (GASearchCV) by setting ``ga=True``\, the parameters can be specified as ``sklearn_genetic.space`` objects. The grid search will determine the optimal parameters as those that maximize accuracy (or minimize root mean squared error for BayesianRidge regressor). NOTE: Takes a long time, so run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. If ``gridparams=None``\, a grid search is not performed. Defaults to None.
 
-        cv (int): Number of cross-validation replicates to perform. Only used if ``validation_only`` is not None. Defaults to 5.
+        do_validation (bool): Whether to validate the imputation if not doing a grid search. This validation method randomly replaces between 15% and 50% of the known, non-missing genotypes in ``n_features * column_subset`` of the features. It then imputes the newly missing genotypes for which we know the true values and calculates validation scores. This procedure is replicated ``cv`` times and a mean, median, minimum, maximum, lower 95% confidence interval (CI) of the mean, and the upper 95% CI are calculated and saved to a CSV file. ``gridparams`` must be set to None for ``do_validation`` to work. Calculating a validation score can be turned off altogether by setting ``do_validation`` to False. Defaults to True.
 
-        initial_strategy (str): Initial strategy to impute missing data with for validation. Possible options include: "populations", "most_frequent", and "phylogeny", where "populations" imputes by the mode of each population at each site, "most_frequent" imputes by the overall mode of each site, and "phylogeny" uses an input phylogeny to inform the imputation. "populations" requires a population map file as input in the GenotypeData object, and "phylogeny" requires an input phylogeny and Rate Matrix Q (also instantiated in the GenotypeData object). Defaults to "populations".
+        write_output (bool, optional): If True, writes imputed data to file on disk. Otherwise just stores it as a class attribute.
 
-        validation_only (float or None): Proportion of sites to use for the validation. If ``validation_only`` is None, then does not perform validation. Defaults to 0.2.
+        disable_progressbar (bool, optional): Whether to disable the tqdm progress bar. Useful if you are doing the imputation on e.g. a high-performance computing cluster, where sometimes tqdm does not work correctly. If False, uses tqdm progress bar. If True, does not use tqdm. Defaults to False.
 
-        disable_progressbar (bool): Whether to disable the tqdm progress bar. Useful if you are doing the imputation on e.g. a high-performance computing cluster, where sometimes tqdm does not work correctly. If False, uses tqdm progress bar. If True, does not use tqdm. Defaults to False.
+        nlpca (bool, optional): If True, then uses NLPCA model instead of UBP. Otherwise uses UBP. Defaults to False.
 
-        nlpca (bool): If True, then uses NLPCA model instead of UBP. Otherwise uses UBP. Defaults to False.
+        batch_size (int, optional): Batch size per epoch to train the model with.
 
-        batch_size (int): Batch size per epoch to train the model with.
+        validation_split (float or None, optional): Proportion of samples (=rows) between 0 and 1 to use for the neural network training validation. Defaults to 0.3.
 
-        n_components (int): Number of components to use as the input data. Defaults to 3.
+        n_components (int, optional): Number of components to use as the input data. Defaults to 3.
 
-        early_stop_gen (int): Early stopping criterion for epochs. Training will stop if the loss (error) does not decrease past the tolerance level ``tol`` for ``early_stop_gen`` epochs. Will save the optimal model and reload it once ``early_stop_gen`` has been reached. Defaults to 50.
+        early_stop_gen (int, optional): Early stopping criterion for epochs. Training will stop if the loss (error) does not decrease past the tolerance level ``tol`` for ``early_stop_gen`` epochs. Will save the optimal model and reload it once ``early_stop_gen`` has been reached. Defaults to 25.
 
-        num_hidden_layers (int): Number of hidden layers to use in the model. Adjust if overfitting occurs. Defaults to 3.
+        num_hidden_layers (int, optional): Number of hidden layers to use in the model. Adjust if overfitting occurs. Defaults to 3.
 
-        hidden_layer_sizes (str, List[int], List[str], or int): Number of neurons to use in hidden layers. If string or a list of strings is supplied, the strings must be either "midpoint", "sqrt", or "log2". "midpoint" will calculate the midpoint as ``(n_features + n_components) / 2``. If "sqrt" is supplied, the square root of the number of features will be used to calculate the output units. If "log2" is supplied, the units will be calculated as ``log2(n_features)``. hidden_layer_sizes will calculate and set the number of output units for each hidden layer. If one string or integer is supplied, the model will use the same number of output units for each hidden layer. If a list of integers or strings is supplied, the model will use the values supplied in the list, which can differ. The list length must be equal to the ``num_hidden_layers``. Defaults to "midpoint".
+        hidden_layer_sizes (str, List[int], List[str], or int, optional): Number of neurons to use in hidden layers. If string or a list of strings is supplied, the strings must be either "midpoint", "sqrt", or "log2". "midpoint" will calculate the midpoint as ``(n_features + n_components) / 2``. If "sqrt" is supplied, the square root of the number of features will be used to calculate the output units. If "log2" is supplied, the units will be calculated as ``log2(n_features)``. hidden_layer_sizes will calculate and set the number of output units for each hidden layer. If one string or integer is supplied, the model will use the same number of output units for each hidden layer. If a list of integers or strings is supplied, the model will use the values supplied in the list, which can differ. The list length must be equal to the ``num_hidden_layers``. Defaults to "midpoint".
 
-        optimizer (str): The optimizer to use with gradient descent. Possible value include: "adam", "sgd", and "adagrad" are supported. See tf.keras.optimizers for more info. Defaults to "adam".
+        optimizer (str, optional): The optimizer to use with gradient descent. Possible value include: "adam", "sgd", and "adagrad" are supported. See tf.keras.optimizers for more info. Defaults to "adam".
 
-        hidden_activation (str): The activation function to use for the hidden layers. See tf.keras.activations for more info. Commonly used activation functions include "elu", "relu", and "sigmoid". Defaults to "elu".
+        hidden_activation (str, optional): The activation function to use for the hidden layers. See tf.keras.activations for more info. Commonly used activation functions include "elu", "relu", and "sigmoid". Defaults to "elu".
 
-        learning_rate (float): The learning rate for the optimizers. Adjust if the loss is learning too slowly. Defaults to 0.1.
+        learning_rate (float, optional): The learning rate for the optimizers. Adjust if the loss is learning too slowly. Defaults to 0.1.
 
-        max_epochs (int): Maximum number of epochs to run if the ``early_stop_gen`` criterion is not met.
+        lr_patience (int, optional): Number of epochs with no loss improvement to wait before reducing the learning rate.
 
-        tol (float): Tolerance level to use for the early stopping criterion. If the loss does not improve past the tolerance level after ``early_stop_gen`` epochs, then training will halt. Defaults to 1e-3.
+        epochs (int, optional): Maximum number of epochs to run if the ``early_stop_gen`` criterion is not met.
 
-        weights_initializer (str): Initializer to use for the model weights. See tf.keras.initializers for more info. Defaults to "glorot_normal".
+        tol (float, optional): Tolerance level to use for the early stopping criterion. If the loss does not improve past the tolerance level after ``early_stop_gen`` epochs, then training will halt. Defaults to 1e-3.
 
-        l1_penalty (float): L1 regularization penalty to apply to reduce overfitting. Defaults to 0.01.
+        weights_initializer (str, optional): Initializer to use for the model weights. See tf.keras.initializers for more info. Defaults to "glorot_normal".
 
-        l2_penalty (float) L2 regularization penalty to apply to reduce overfitting. Defaults to 0.01.
+        l1_penalty (float, optional): L1 regularization penalty to apply to reduce overfitting. Defaults to 0.01.
+
+        l2_penalty (float, optional): L2 regularization penalty to apply to reduce overfitting. Defaults to 0.01.
+
+        dropout_rate (float, optional): Dropout rate during training to reduce overfitting. Must be a float between 0 and 1. Defaults to 0.2.
+
+        verbose (int, optional): Verbosity setting ranging from 0 to 3 (least to most verbose). Defaults to 0.
+
+        cv (int, optional): Number of cross-validation replicates to perform. Defaults to 5.
+
+        grid_iter (int, optional): Number of iterations for grid search. Defaults to 50.
+
+        ga (bool, optional): Whether to use a genetic algorithm for the grid search. If False, a GridSearchCV is done instead. Defaults to False.
+
+        ga_kwargs (Dict[str, Any] or None): Keyword arguments to be passed to a Genetic Algorithm grid search. Only used if ``ga==True``\.
+
+        scoring_metric (str, optional): Scoring metric to use for randomized or genetic algorithm grid searches. See https://scikit-learn.org/stable/modules/model_evaluation.html for supported options. Defaults to "accuracy".
+
+        sim_strategy (str, optional): Strategy to use for simulating missing data. Only used to validate the accuracy of the imputation. The final model will be trained with the non-simulated dataset. Supported options include: "random", "nonrandom", and "nonrandom_weighted". "random" randomly simulates missing data. When set to "nonrandom", branches from ``GenotypeData.guidetree`` will be randomly sampled to generate missing data on descendant nodes. For "nonrandom_weighted", missing data will be placed on nodes proportionally to their branch lengths (e.g., to generate data distributed as might be the case with mutation-disruption of RAD sites). Defaults to "random".
+
+        str_encodings (Dict[str, int], optional): Integer encodings for nucleotides if input file was in STRUCTURE format. Only used if ``initial_strategy="phylogeny"``\. Defaults to {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}.
+
+        n_jobs (int, optional): Number of parallel jobs to use in the grid search if ``gridparams`` is not None. -1 means use all available processors. Defaults to 1.
+
+        verbose (int, optional): Verbosity setting. Can be 0, 1, or 2. 0 is the least and 2 is the most verbose. Defaults to 0.
     """
 
     def __init__(
         self,
+        genotype_data,
         *,
-        genotype_data=None,
-        gt=None,
         prefix="output",
-        cv=5,
-        initial_strategy="populations",
-        validation_only=0.3,
+        gridparams=None,
+        do_validation=True,
         write_output=True,
         disable_progressbar=False,
         nlpca=False,
         batch_size=32,
+        validation_split=0.3,
         n_components=3,
-        early_stop_gen=50,
+        early_stop_gen=25,
         num_hidden_layers=3,
         hidden_layer_sizes="midpoint",
         optimizer="adam",
         hidden_activation="elu",
-        learning_rate=0.1,
-        max_epochs=1000,
+        learning_rate=0.01,
+        lr_patience=1,
+        epochs=100,
         tol=1e-3,
         weights_initializer="glorot_normal",
-        l1_penalty=0.01,
-        l2_penalty=0.01,
+        l1_penalty=0.0001,
+        l2_penalty=0.0001,
+        dropout_rate=0.2,
+        sample_weights=False,
+        grid_iter=80,
+        gridsearch_method="gridsearch",
+        ga_kwargs=None,
+        scoring_metric="auc_macro",
+        sim_strategy="random",
+        sim_prop_missing=0.1,
+        str_encodings={
+            "A": 1,
+            "C": 2,
+            "G": 3,
+            "T": 4,
+            "N": -9,
+        },
+        n_jobs=1,
+        verbose=0,
+        validation_mode=True,
     ):
 
         super().__init__()
 
+        # CLF parameters.
+        self.genotype_data = genotype_data
         self.prefix = prefix
-
-        self.cv = cv
-        self.validation_only = validation_only
+        self.gridparams = gridparams
+        self.do_validation = do_validation
         self.write_output = write_output
         self.disable_progressbar = disable_progressbar
         self.nlpca = nlpca
-        self.initial_batch_size = batch_size
+        self.batch_size = batch_size
+        self.validation_split = validation_split
         self.n_components = n_components
         self.early_stop_gen = early_stop_gen
+        self.num_hidden_layers = num_hidden_layers
         self.hidden_layer_sizes = hidden_layer_sizes
         self.optimizer = optimizer
         self.hidden_activation = hidden_activation
-        self.initial_eta = learning_rate
-        self.max_epochs = max_epochs
+        self.learning_rate = learning_rate
+        self.lr_patience = lr_patience
+        self.epochs = epochs
         self.tol = tol
         self.weights_initializer = weights_initializer
         self.l1_penalty = l1_penalty
         self.l2_penalty = l2_penalty
+        self.dropout_rate = dropout_rate
+        self.sample_weights = sample_weights
+        self.verbose = verbose
+        self.validation_mode = validation_mode
 
-        # Initialize instance variables
-        self.data = None
-        self.V_latent = None
-        self.batch_size = None
-        self.observed_mask = None
+        # TODO: Make estimators compatible with variable number of classes.
+        # E.g., with morphological data.
         self.num_classes = 3
-        self.opt = self._set_optimizer()
-        self.phase2_model = list()
 
-        (
-            self.hidden_layer_sizes,
-            num_hidden_layers,
-        ) = self._validate_hidden_layers(hidden_layer_sizes, num_hidden_layers)
+        # Grid search settings.
+        self.gridsearch_method = gridsearch_method
+        self.scoring_metric = scoring_metric
+        self.sim_strategy = sim_strategy
+        self.sim_prop_missing = sim_prop_missing
+        self.str_encodings = str_encodings
+        self.grid_iter = grid_iter
+        self.n_jobs = n_jobs
+        self.ga_kwargs = ga_kwargs
 
     @timer
-    def fit_transform(self, input_data):
+    def fit(self, X):
         """Train a UBP or NLPCA model and predict the output.
 
+        Uses input data from GenotypeData object.
+
         Args:
-            input_data (numpy.ndarray, pandas.DataFrame, or List[List[int]]): Input data of shape (n_samples, n_features).
+            X (pandas.DataFrame, numpy.ndarray, or List[List[int]]): 012-encoded input data.
 
         Returns:
-            pandas.DataFrame: Imputation predictions.
+            pandas.DataFrame: Imputated data.
         """
-        X = self.validate_input(input_data)
+        y = X
+        y = validate_input_type(y, return_type="array")
 
-        # Define random reduced-dimensionality input to refine.
-        self.V_latent = self._init_weights(X.shape[0], self.n_components)
-        self.batch_size = self.validate_batch_size(X, self.initial_batch_size)
+        self.nn_ = NeuralNetworkMethods()
 
-        self.hidden_layer_sizes = self._get_hidden_layer_sizes(
-            X.shape[1], self.n_components, self.hidden_layer_sizes
+        if self.gridsearch_method == "genetic_algorithm":
+            self.ga_ = True
+        else:
+            self.ga_ = False
+
+        # Placeholder for V. Gets replaced in model.
+        V = self.nn_.init_weights(y.shape[0], self.n_components)
+
+        # Simulate missing data and get missing masks.
+        sim = SimGenotypeDataTransformer(
+            self.genotype_data,
+            prop_missing=self.sim_prop_missing,
+            strategy=self.sim_strategy,
+            mask_missing=True,
         )
 
-        self.data = self._encode_onehot(X)
+        self.y_original_ = y.copy()
+        self.y_simulated_ = sim.fit_transform(self.y_original_)
+        self.sim_missing_mask_ = sim.sim_missing_mask_
+        self.original_missing_mask_ = sim.original_missing_mask_
+        self.all_missing_ = sim.all_missing_mask_
 
-        model = self.fit()
-        Xpred = self.predict(self.V_latent, X, model)
+        # In NLPCA and UBP, X and y are flipped.
+        # X is the randomly initialized model input (V)
+        # V is initialized with small, random values.
+        # y is the actual input data, one-hot encoded.
+        self.tt_ = TargetTransformer()
+        y_train = self.tt_.fit_transform(self.y_original_)
 
-        del model
-        K.clear_session()
-        tf.compat.v1.reset_default_graph()
+        # testresults = pd.read_csv(f"{self.prefix}_nlpca_cvresults.csv")
+        # self.nn_.plot_grid_search(testresults, self.prefix)
+        # sys.exit()
 
-        return Xpred
+        (
+            logfile,
+            callbacks,
+            compile_params,
+            model_params,
+            fit_params,
+        ) = self._initialize_parameters(y_train, self.original_missing_mask_)
 
-    def predict(self, V, X, model):
-        """Predict imputations based on a trained UBP or NLPCA model.
+        run_func = self._run_nlpca if self.nlpca else self._run_ubp
+
+        (
+            self.models_,
+            self.histories_,
+            self.best_params_,
+            self.best_score_,
+            self.best_estimator_,
+            self.search_,
+            self.metrics_,
+        ) = run_func(
+            self.y_original_,
+            model_params,
+            compile_params,
+            fit_params,
+        )
+
+        if self.gridparams is not None:
+            if self.verbose > 0:
+                print("\nBest found parameters:")
+                pprint.pprint(self.best_params_)
+                print(f"\nBest score: {self.best_score_}")
+            self.nn_.plot_grid_search(self.search_.cv_results_, self.prefix)
+
+        self._plot_history(self.histories_)
+        self.nn_.plot_metrics(self.metrics_, self.num_classes, self.prefix)
+
+        if self.ga_:
+            plot_fitness_evolution(self.search_)
+            plt.savefig(
+                f"{self.prefix}_fitness_evolution.pdf", bbox_inches="tight"
+            )
+            plt.cla()
+            plt.clf()
+            plt.close()
+
+            g = self.nn_.plot_search_space(self.search_)
+            plt.savefig(f"{self.prefix}_search_space.pdf", bbox_inches="tight")
+            plt.cla()
+            plt.clf()
+            plt.close()
+
+        return self
+
+    def transform(self, X):
+        """Predict and decode imputations and return transformed array.
 
         Args:
-            V (numpy.ndarray(float)): Refined reduced-dimensional input for predicting imputations.
-
-            X (numpy.ndarray(float)): Original data to impute.
-
-            model_mlp_phase3 (tf.keras.Sequential): Trained model (phase 3 if doing UBP).
+            X (pandas.DataFrame, numpy.ndarray, or List[List[int]]): Input data to transform.
 
         Returns:
-            numpy.ndarray: Imputation predictions.
+            numpy.ndarray: Imputed data.
         """
-        predictions = model(V, training=False)
-        Xprob = predictions.numpy()
-        Xt = np.apply_along_axis(self.mle, axis=2, arr=Xprob)
-        Xpred = np.argmax(Xt, axis=2)
-        Xdecoded = np.zeros((Xpred.shape[0], Xpred.shape[1]))
-        for idx, row in enumerate(Xdecoded):
-            imputed_vals = np.zeros(len(row))
-            known_vals = np.zeros(len(row))
-            imputed_idx = np.where(self.observed_mask[idx] == 0)
-            known_idx = np.nonzero(self.observed_mask[idx])
-            Xdecoded[idx, imputed_idx] = Xpred[idx, imputed_idx]
-            Xdecoded[idx, known_idx] = X[idx, known_idx]
-        del model
-        return Xdecoded
+        y = X
+        y = validate_input_type(y, return_type="array")
 
-    def fit(self):
-        """Train an unsupervised backpropagation (UBP) or NLPCA model.
-
-        UBP runs over three phases.
-
-        1. Train a single-layer perceptron to refine the input, V_latent.
-        2. Train a multi-layer perceptron (MLP) to refine only the weights
-        3. Train an MLP to refine both the weights and input, V_latent.
-
-        NLPCA just does phase 3.
-
-        Returns:
-            numpy.ndarray(float): Predicted values as numpy array.
-        """
-        missing_mask = self._create_missing_mask()
-        self.observed_mask = ~missing_mask
-        self.fill(missing_mask, -1, self.num_classes)
-
-        # Reset model states
-        K.clear_session()
-        tf.compat.v1.reset_default_graph()
-        self._reset_seeds()
-
-        # Define neural network models.
-        if self.nlpca:
-            # If using NLPCA model: Don't need phases 1 and 2.
-            model_single_layer = None
-            model_mlp_phase2 = None
-            start_phase = 3
-
+        # Get last (i.e., most refined) model.
+        if len(self.models_) == 1:
+            model = self.models_[0]
         else:
-            # Using UBP model over three phases
-            phase1model = self._build_ubp(phase=1)
-            phase2model = self._build_ubp(phase=2)
+            model = self.models_[-1]
 
-            # Initialize new model with new random weights.
-            model_single_layer = tf.keras.models.clone_model(phase1model)
-            model_mlp_phase2 = tf.keras.models.clone_model(phase2model)
+        # Apply softmax acitvation.
+        y_true = y.copy()
+        y_true_1d = y_true.ravel()
 
-            del phase1model
-            del phase2model
+        y_size = y_true.size
+        y_missing_idx = np.flatnonzero(self.original_missing_mask_)
 
-            start_phase = 1
+        y_pred_proba = model(model.V_latent, training=False)
+        y_pred_proba = tf.nn.softmax(y_pred_proba).numpy()
+        y_pred_decoded = self.nn_.decode_masked(y_pred_proba)
+        y_pred_1d = y_pred_decoded.ravel()
 
-        phase3model = self._build_ubp(phase=3)
-        model_mlp_phase3 = tf.keras.models.clone_model(phase3model)
-        del phase3model
+        for i in np.arange(y_size):
+            if i in y_missing_idx:
+                y_true_1d[i] = y_pred_1d[i]
 
-        # Number of batches based on rows in X and V_latent.
-        n_batches = int(np.ceil(self.data.shape[0] / self.batch_size))
+        return np.reshape(y_true_1d, y_true.shape)
 
-        if self.nlpca:
-            model_dir3 = "optimal_nlpca"
-            self._remove_dir(model_dir3)
-        else:
-            model_dir1 = f"{self.prefix}_optimal_ubp_phase1"
-            model_dir2 = f"{self.prefix}_optimal_ubp_phase2"
-            model_dir3 = f"{self.prefix}_optimal_ubp_phase3"
-            self._remove_dir(model_dir1)
-            self._remove_dir(model_dir2)
-            self._remove_dir(model_dir3)
-
-        # self._initialise_parameters()
-
-        for phase in range(start_phase, 4):
-
-            s_delta = None
-            s_prime = np.inf
-            final_s = 0
-            num_epochs = 0
-            counter = 0
-            checkpoint = 1
-            criterion_met = False
-
-            # While stopping criterion not met: keep doing more epochs.
-            while (
-                counter < self.early_stop_gen and num_epochs <= self.max_epochs
-            ):
-                # Train per epoch
-                # s is error (loss)
-                s = self._train_epoch(
-                    model_single_layer,
-                    model_mlp_phase2,
-                    model_mlp_phase3,
-                    n_batches,
-                    phase=phase,
-                )
-
-                num_epochs += 1
-
-                if num_epochs % 50 == 0:
-                    print(f"Epoch {num_epochs}...")
-                    print(f"Observed MSE: {s}")
-
-                if num_epochs == 1:
-                    s_prime = s
-
-                    if self.nlpca:
-                        print("\nBeginning NLPCA training...\n")
-                    else:
-                        print(f"\nBeginning UBP Phase {phase} training...\n")
-                    print(f"Initial MSE: {s}")
-
-                if not criterion_met and num_epochs > 1:
-                    if s < s_prime:
-                        s_delta = abs(s_prime - s)
-                        if s_delta <= self.tol:
-                            criterion_met = True
-                            if phase == 1:
-                                tf.keras.models.save_model(
-                                    model_single_layer,
-                                    model_dir1,
-                                    include_optimizer=False,
-                                    overwrite=True,
-                                )
-                            elif phase == 2:
-                                tf.keras.models.save_model(
-                                    model_mlp_phase2,
-                                    model_dir2,
-                                    include_optimizer=False,
-                                    overwrite=True,
-                                )
-                            elif phase == 3:
-                                tf.keras.models.save_model(
-                                    model_mlp_phase3,
-                                    model_dir3,
-                                    include_optimizer=False,
-                                    overwrite=True,
-                                )
-                            checkpoint = num_epochs
-                        else:
-                            counter = 0
-                            s_prime = s
-
-                    else:
-                        if phase == 1 and not os.path.isdir(model_dir1):
-                            tf.keras.models.save_model(
-                                model_single_layer,
-                                model_dir1,
-                                include_optimizer=False,
-                                overwrite=True,
-                            )
-                        elif phase == 2 and not os.path.isdir(model_dir2):
-                            tf.keras.models.save_model(
-                                model_mlp_phase2,
-                                model_dir2,
-                                include_optimizer=False,
-                                overwrite=True,
-                            )
-                        elif phase == 3 and not os.path.isdir(model_dir3):
-                            tf.keras.models.save_model(
-                                model_mlp_phase3,
-                                model_dir3,
-                                include_optimizer=False,
-                                overwrite=True,
-                            )
-                        criterion_met = True
-                        checkpoint = num_epochs
-
-                elif criterion_met and num_epochs > 1:
-                    if s < s_prime:
-                        s_delta = abs(s_prime - s)
-                        if s_delta > self.tol:
-                            criterion_met = False
-                            s_prime = s
-                            counter = 0
-                        else:
-                            counter += 1
-                            if counter == self.early_stop_gen:
-                                counter = 0
-                                if phase == 1:
-                                    model_single_layer = (
-                                        tf.keras.models.load_model(
-                                            model_dir1, compile=False
-                                        )
-                                    )
-                                elif phase == 2:
-                                    model_mlp_phase2 = (
-                                        tf.keras.models.load_model(
-                                            model_dir2, compile=False
-                                        )
-                                    )
-                                elif phase == 3:
-                                    model_mlp_phase3 = (
-                                        tf.keras.models.load_model(
-                                            model_dir3, compile=False
-                                        )
-                                    )
-                                final_s = s_prime
-                                break
-                    else:
-                        counter += 1
-                        if counter == self.early_stop_gen:
-                            counter = 0
-                            if phase == 1:
-                                model_single_layer = tf.keras.models.load_model(
-                                    model_dir1, compile=False
-                                )
-                            elif phase == 2:
-                                model_mlp_phase2 = tf.keras.models.load_model(
-                                    model_dir2, compile=False
-                                )
-                            elif phase == 3:
-                                model_mlp_phase3 = tf.keras.models.load_model(
-                                    model_dir3, compile=False
-                                )
-                            final_s = s_prime
-                            break
-
-            print(f"Number of epochs used to train: {checkpoint}")
-            print(f"Final MSE: {final_s}")
-
-        if not self.nlpca:
-            self._remove_dir(model_dir1)
-            self._remove_dir(model_dir2)
-        self._remove_dir(model_dir3)
-
-        del model_single_layer
-        del model_mlp_phase2
-
-        return model_mlp_phase3
-
-    def _train_epoch(
+    def _run_nlpca(
         self,
-        model_single_layer,
-        model_mlp_phase2,
-        model_mlp_phase3,
-        n_batches,
-        phase=3,
-        num_classes=3,
+        y_true,
+        model_params,
+        compile_params,
+        fit_params,
     ):
-        """Train UBP or NLPCA over one epoch.
+        """Run NLPCA Model using custom subclassed model."""
 
-        Args:
-            model (tf.keras.models.Sequential): Keras model to train.
+        # Whether to do grid search.
+        do_gridsearch = False if self.gridparams is None else True
 
-            n_batches (int): Number of batches to train.
+        histories = list()
+        models = list()
 
-            phase (int): Current phase. UBP has three phases. If doing NLPCA, it only does phase 3.
+        # This reduces memory usage.
+        # tensorflow builds graphs that
+        # will stack if not cleared before
+        # building a new model.
+        tf.keras.backend.set_learning_phase(1)
+        tf.keras.backend.clear_session()
+        self.nn_.reset_seeds()
 
-            num_classes (int): Number of categorical classes to predict (three for 012 encoding). Defaults to 3.
-        """
-        if phase > 3:
-            raise ValueError(
-                f"There can only be maximum 3 phases, but phase={phase}"
+        y_train = model_params.pop("y_train")
+
+        if do_gridsearch:
+            # Cannot do CV because there is no way to use test splits
+            # given that the input gets refined. If using a test split,
+            # then it would just be the randomly initialized values and
+            # would not accurately represent the model.
+            # Thus, we disable cross-validation for the grid searches.
+            cross_val = DisabledCV()
+
+            V = model_params.pop("V")
+
+            all_scoring_metrics = [
+                "precision_recall_macro",
+                "precision_recall_micro",
+                "auc_macro",
+                "auc_micro",
+                "accuracy",
+            ]
+
+            scoring = self.nn_.make_multimetric_scorer(
+                all_scoring_metrics, self.sim_missing_mask_
             )
 
-        # Randomize the order the of the samples in the batches.
-        indices = np.arange(self.data.shape[0])
-        np.random.shuffle(indices)
-
-        losses = list()
-        val_loss = list()
-        val_acc = list()
-        for batch_idx in range(n_batches):
-            if phase == 3 and not self.nlpca:
-                # Set the refined weights from model 2.
-                model_mlp_phase3.set_weights(self.phase2_model[batch_idx])
-
-            batch_start = batch_idx * self.batch_size
-            batch_end = (batch_idx + 1) * self.batch_size
-            x_batch = self.data[batch_start:batch_end, :]
-            v_batch = self.V_latent[batch_start:batch_end, :]
-
-            # Initialize variable v as tensorflow variable.
-            if phase != 2:
-                v = tf.Variable(
-                    tf.zeros([x_batch.shape[0], self.n_components]),
-                    trainable=True,
-                    dtype=tf.float32,
-                )
-
-            elif phase == 2:
-                v = tf.Variable(
-                    tf.zeros([x_batch.shape[0], self.n_components]),
-                    trainable=False,
-                    dtype=tf.float32,
-                )
-
-            # Assign current batch to v.
-            v.assign(v_batch)
-
-            if phase == 1:
-                loss, refined = self._train_on_batch(
-                    v, x_batch, model_single_layer, phase
-                )
-            elif phase == 2:
-                loss, refined = self._train_on_batch(
-                    v, x_batch, model_mlp_phase2, phase
-                )
-            elif phase == 3:
-                loss, refined = self._train_on_batch(
-                    v, x_batch, model_mlp_phase3, phase
-                )
-
-            losses.append(loss.numpy())
-
-            if phase != 2:
-                self.V_latent[batch_start:batch_end, :] = refined.numpy()
-            else:
-                self.phase2_model.append(refined)
-
-        return np.mean(losses)
-
-    def _train_on_batch(self, x, y, model, phase):
-        """Custom training loop for neural network.
-
-        GradientTape records the weights and watched
-        variables (usually tf.Variable objects), which
-        in this case are the weights and the input (x)
-        (if not phase 2), during the forward pass.
-        This allows us to run gradient descent during
-        backpropagation to refine the watched variables.
-
-        This function will train on a batch of samples (rows).
-
-        Args:
-            x (tf.Variable): Input tensorflow variable of shape (batch_size, n_features).
-
-            y (tf.Variable): Target variable to calculate loss.
-
-            model (tf.keras.models.Sequential): Keras model to use.
-
-            phase (int): UBP phase to run.
-
-        Returns:
-            tf.Tensor: Calculated loss of current batch.
-
-            tf.Variable, conditional: Input refined by gradient descent. Only returned if phase != 2.
-
-            List[np.ndarray], conditional: Refined weights from keras model, as returned with the tf.keras.models.Sequential.get_weights() function. Only returned if phase == 2.
-
-        """
-        if phase != 2:
-            src = [x]
-
-        with tf.GradientTape() as tape:
-            # Forward pass
-            if phase != 2:
-                tape.watch(x)
-            pred = model(x, training=True)
-            loss = self.categorical_crossentropy_masked(
-                tf.convert_to_tensor(y, dtype=tf.float32), pred
+            clf = MLPClassifier(
+                V,
+                y_train,
+                y_true,
+                **model_params,
+                optimizer=compile_params["optimizer"],
+                optimizer__learning_rate=compile_params["learning_rate"],
+                loss=compile_params["loss"],
+                metrics=compile_params["metrics"],
+                epochs=fit_params["epochs"],
+                phase=None,
+                callbacks=fit_params["callbacks"],
+                validation_split=fit_params["validation_split"],
+                verbose=0,
             )
 
-        if phase != 2:
-            # Phase == 1 or 3.
-            src.extend(model.trainable_variables)
-        elif phase == 2:
-            # Phase == 2.
-            src = model.trainable_variables
-
-        # Refine the watched variables with
-        # gradient descent backpropagation
-        gradients = tape.gradient(loss, src)
-        self.opt.apply_gradients(zip(gradients, src))
-
-        if phase != 2:
-            return loss, x
-        elif phase == 2:
-            return loss, model.get_weights()
-
-    def _remove_dir(self, dir_path):
-        """Remove directory from disk.
-
-        Will pass if directory doesn't exist.
-
-        Args:
-            dir_path (str): The directory to remove.
-        """
-        try:
-            shutil.rmtree(dir_path)
-        except OSError as e:
-            pass
-
-    def _build_ubp(self, phase=3, num_classes=3):
-        """Create and train a UBP neural network model.
-
-        If we are implementing a single layer perceptron, we want exactly one dense layer. So in that case, X_hat = v * w, where w is the weights of that one dense layer. If we are implementing NLPCA or UBP, then we should add more layers and x = f(v, w) in a multi-layer perceptron (MLP).
-
-        Creates a network with the following structure:
-
-        If phase > 1:
-            InputLayer (V) -> DenseLayer1 -> ActivationFunction1 ... HiddenLayerN -> ActivationFunctionN ... DenseLayerN+1 -> Lambda (to expand shape) -> DenseOutputLayer -> Softmax
-
-        If Phase == 1:
-            InputLayer (V) -> DenseLayer1 -> Lambda (to expand shape) -> DenseOutputLayer -> Softmax
-
-        Args:
-            num_classes (int, optional): The number of classes in the vector. Defaults to 3.
-
-        Returns:
-            tf.keras.Sequential object: Keras model.
-        """
-
-        if phase == 1 or phase == 2:
-            kernel_regularizer = l1_l2(self.l1_penalty, self.l2_penalty)
-        elif phase == 3:
-            kernel_regularizer = None
-        else:
-            raise ValueError(f"Phase must equal 1, 2, or 3, but got {phase}")
-
-        if phase == 3:
-            # Phase 3 uses weights from phase 2.
-            kernel_initializer = None
-        else:
-            kernel_initializer = self.weights_initializer
-
-        model = Sequential()
-
-        model.add(tf.keras.Input(shape=(self.n_components,)))
-
-        if phase > 1:
-            # Construct multi-layer perceptron.
-            # Add hidden layers dynamically.
-            for layer_size in self.hidden_layer_sizes:
-                model.add(
-                    Dense(
-                        layer_size,
-                        activation=self.hidden_activation,
-                        kernel_initializer=kernel_initializer,
-                        kernel_regularizer=kernel_regularizer,
+            if self.ga_:
+                # Stop searching if GA sees no improvement.
+                callback = [
+                    ConsecutiveStopping(
+                        generations=self.early_stop_gen, metric="fitness"
                     )
+                ]
+
+                if not self.disable_progressbar:
+                    callback.append(ProgressBar())
+
+                verbose = False if self.verbose == 0 else True
+
+                # Do genetic algorithm
+                # with HiddenPrints():
+                search = GASearchCV(
+                    estimator=clf,
+                    cv=cross_val,
+                    scoring=scoring,
+                    generations=self.grid_iter,
+                    param_grid=self.gridparams,
+                    n_jobs=self.n_jobs,
+                    refit=self.scoring_metric,
+                    verbose=verbose,
+                    error_score="raise",
+                    **self.ga_kwargs,
                 )
 
-            model.add(
-                Dense(
-                    self.data.shape[1],
-                    kernel_initializer=kernel_initializer,
-                    kernel_regularizer=kernel_regularizer,
-                )
-            )
+                search.fit(V[self.n_components], y_true, callbacks=callback)
 
-            model.add(Lambda(lambda x: tf.expand_dims(x, -1)))
-            model.add(Dense(num_classes, activation="softmax"))
-
-        else:
-            # phase == 1.
-            # Construct single-layer perceptron.
-            model.add(
-                Dense(
-                    self.data.shape[1],
-                    input_shape=(self.n_components,),
-                    kernel_initializer=kernel_initializer,
-                    kernel_regularizer=kernel_regularizer,
-                )
-            )
-            model.add(Lambda(lambda x: tf.expand_dims(x, -1)))
-            model.add(Dense(num_classes, activation="softmax"))
-
-        return model
-
-    def _validate_hidden_layers(self, hidden_layer_sizes, num_hidden_layers):
-        """Validate hidden_layer_sizes and verify that it is in the correct format.
-
-        Args:
-            hidden_layer_sizes (str, int, List[str], or List[int]): Output units for all the hidden layers.
-
-            num_hidden_layers (int): Number of hidden layers to use.
-
-        Returns:
-            List[int] or List[str]: List of hidden layer sizes.
-            int: Number of hidden layers to use.
-        """
-        if isinstance(hidden_layer_sizes, (str, int)):
-            hidden_layer_sizes = [hidden_layer_sizes] * num_hidden_layers
-
-        # If not all integers
-        elif isinstance(hidden_layer_sizes, list):
-            if not all([isinstance(x, (str, int)) for x in hidden_layer_sizes]):
-                ls = list(set([type(item) for item in hidden_layer_sizes]))
-                raise TypeError(
-                    f"Variable hidden_layer_sizes must either be None, "
-                    f"an integer or string, or a list of integers or "
-                    f"strings, but got the following type(s): {ls}"
-                )
-
-        else:
-            raise TypeError(
-                f"Variable hidden_layer_sizes must either be, "
-                f"an integer, a string, or a list of integers or strings, "
-                f"but got the following type: {type(hidden_layer_sizes)}"
-            )
-
-        assert (
-            num_hidden_layers == len(hidden_layer_sizes)
-            and num_hidden_layers > 0
-        ), "num_hidden_layers must be the length of hidden_layer_sizes."
-
-        return hidden_layer_sizes, num_hidden_layers
-
-    def _init_weights(self, dim1, dim2, w_mean=0, w_stddev=0.01):
-        """Initialize random weights to use with the model.
-
-        Args:
-            dim1 (int): Size of first dimension.
-
-            dim2 (int): Size of second dimension.
-
-            w_mean (float, optional): Mean of normal distribution. Defaults to 0.
-
-            w_stddev (float, optional): Standard deviation of normal distribution. Defaults to 0.01.
-        """
-        # Get reduced-dimension dataset.
-        return np.random.normal(loc=w_mean, scale=w_stddev, size=(dim1, dim2))
-
-    def _encode_onehot(self, X):
-        """Convert 012-encoded data to one-hot encodings.
-
-        Args:
-            X (numpy.ndarray): Input array with 012-encoded data and -9 as the missing data value.
-
-        Returns:
-            pandas.DataFrame: One-hot encoded data, ignoring missing values (np.nan).
-        """
-        Xt = np.zeros(shape=(X.shape[0], X.shape[1], 3))
-        mappings = {
-            0: np.array([1, 0, 0]),
-            1: np.array([0, 1, 0]),
-            2: np.array([0, 0, 1]),
-            -9: np.array([np.nan, np.nan, np.nan]),
-        }
-        for row in np.arange(X.shape[0]):
-            Xt[row] = [mappings[enc] for enc in X[row]]
-        return Xt
-
-    def _get_hidden_layer_sizes(self, n_dims, n_components, hl_func):
-        """Get dimensions of hidden layers.
-
-        Args:
-            n_dims (int): The number of feature dimensions (columns) (d).
-
-            n_components (int): The number of reduced dimensions (t).
-
-            hl_func (str): The function to use to calculate the hidden layer sizes. Possible options: "midpoint", "sqrt", "log2".
-
-        Returns:
-            [int, int, int]: [Number of dimensions in hidden layers]
-        """
-        layers = list()
-        if not isinstance(hl_func, list):
-            raise TypeError("hl_func must be of type list.")
-
-        for func in hl_func:
-            if func == "midpoint":
-                units = round((n_dims + n_components) / 2)
-            elif func == "sqrt":
-                units = round(math.sqrt(n_dims))
-            elif func == "log2":
-                units = round(math.log(n_dims, 2))
-            elif isinstance(func, int):
-                units = func
             else:
-                raise ValueError(
-                    f"hidden_layer_sizes must be either integers or any of "
-                    f"the following strings: 'midpoint', "
-                    f"'sqrt', or 'log2', but got {func} of type {type(func)}"
-                )
+                if self.gridsearch_method.lower() == "gridsearch":
+                    # Do GridSearchCV
+                    search = GridSearchCV(
+                        clf,
+                        param_grid=self.gridparams,
+                        n_jobs=self.n_jobs,
+                        cv=cross_val,
+                        scoring=scoring,
+                        refit=self.scoring_metric,
+                        verbose=self.verbose * 4,
+                        error_score="raise",
+                    )
 
-            assert units > 0 and units < n_dims, (
-                f"The hidden layer sizes must be > 0 and < the number of "
-                f"features (i.e., columns) in the dataset, but size was {units}"
+                elif self.gridsearch_method.lower() == "randomized_gridsearch":
+                    search = RandomizedSearchCV(
+                        clf,
+                        param_distributions=self.gridparams,
+                        n_iter=self.grid_iter,
+                        n_jobs=self.n_jobs,
+                        cv=cross_val,
+                        scoring=scoring,
+                        refit=self.scoring_metric,
+                        verbose=self.verbose * 4,
+                        error_score="raise",
+                    )
+
+                else:
+                    raise ValueError(
+                        f"Invalid gridsearch_method specified: "
+                        f"{self.gridsearch_method}"
+                    )
+
+                search.fit(V[self.n_components], y=y_true)
+
+            best_params = search.best_params_
+            best_score = search.best_score_
+            best_index = search.best_index_
+
+            cv_results = pd.DataFrame(search.cv_results_)
+            cv_results.to_csv(f"{self.prefix}_nlpca_cvresults.csv", index=False)
+
+            best_clf = search.best_estimator_
+            histories.append(best_clf.history_)
+            model = best_clf.model_
+
+            y_pred_proba = model(model.V_latent, training=False)
+            y_pred = self.tt_.inverse_transform(y_pred_proba)
+
+            # Get metric scores.
+            metrics = self.scorer(
+                y_true,
+                y_pred,
+                missing_mask=self.sim_missing_mask_,
             )
 
-            layers.append(units)
-        return layers
-
-    def _create_missing_mask(self):
-        """Creates a missing data mask with boolean values.
-
-        Returns:
-            numpy.ndarray(bool): Boolean mask of missing values, with True corresponding to a missing data point.
-        """
-        return np.isnan(self.data).all(axis=2)
-
-    def _initialise_parameters(self):
-        """Initialize important parameters."""
-        self.current_eta = self.initial_eta
-        self.final_s = 0
-        self.s_prime = np.inf
-        self.num_epochs = 0
-        self.checkpoint = 1
-
-    def _reset_seeds(self):
-        """Reset random seeds for initializing weights."""
-        seed1 = np.random.randint(1, 1e6)
-        seed2 = np.random.randint(1, 1e6)
-        seed3 = np.random.randint(1, 1e6)
-        np.random.seed(seed1)
-        random.seed(seed2)
-        if tf.__version__[0] == "2":
-            tf.random.set_seed(seed3)
         else:
-            tf.set_random_seed(seed3)
+            V = model_params.pop("V")
 
-    def _set_optimizer(self):
-        """Set optimizer to use.
+            clf = MLPClassifier(
+                V,
+                y_train,
+                y_true,
+                **model_params,
+                optimizer=compile_params["optimizer"],
+                optimizer__learning_rate=compile_params["learning_rate"],
+                loss=compile_params["loss"],
+                metrics=compile_params["metrics"],
+                epochs=fit_params["epochs"],
+                phase=None,
+                callbacks=fit_params["callbacks"],
+                validation_split=fit_params["validation_split"],
+                verbose=0,
+                score__missing_mask=self.sim_missing_mask_,
+                score__scoring_metric=self.scoring_metric,
+            )
+
+            clf.fit(V[self.n_components], y=y_true)
+
+            best_params = None
+            best_score = None
+            search = None
+            best_clf = clf
+
+            histories.append(clf.history_)
+            model = clf.model_
+            y_pred_proba = model(model.V_latent, training=False)
+            y_pred = self.tt_.inverse_transform(y_pred_proba)
+
+            # Get metric scores.
+            metrics = self.scorer(
+                y_true,
+                y_pred,
+                missing_mask=self.sim_missing_mask_,
+            )
+
+        models.append(model)
+
+        return (
+            models,
+            histories,
+            best_params,
+            best_score,
+            best_clf,
+            search,
+            metrics,
+        )
+
+    def _run_ubp(
+        self,
+        y_true,
+        model_params,
+        compile_params,
+        fit_params,
+    ):
+        do_gridsearch = False if self.gridparams is None else True
+
+        if do_gridsearch:
+            # Cannot do CV because there is no way to use test splits
+            # given that the input gets refined. If using a test split,
+            # then it would just be the randomly initialized values and
+            # would not accurately represent the model.
+            # Thus, we disable cross-validation for the grid searches.
+            cross_val = DisabledCV()
+
+            all_scoring_metrics = [
+                "precision_recall_macro",
+                "precision_recall_micro",
+                "auc_macro",
+                "auc_micro",
+                "accuracy",
+            ]
+
+            scoring = self.nn_.make_multimetric_scorer(
+                all_scoring_metrics, self.sim_missing_mask_
+            )
+
+        y_train = model_params.pop("y_train")
+
+        histories = list()
+        models = list()
+        phases = [UBPPhase1, UBPPhase2, UBPPhase3]
+        for i, phase in enumerate(phases, start=1):
+            # This reduces memory usage.
+            # tensorflow builds graphs that
+            # will stack if not cleared before
+            # building a new model.
+            tf.keras.backend.set_learning_phase(1)
+            tf.keras.backend.clear_session()
+            self.nn_.reset_seeds()
+
+            model = None
+
+            if not self.disable_progressbar and not do_gridsearch:
+                fit_params["callbacks"][-1] = TqdmCallback(
+                    epochs=self.epochs, verbose=0, desc=f"Epoch (Phase {i}): "
+                )
+
+            if do_gridsearch:
+                V = model_params.pop("V")
+
+                ubp_weights = models[1].get_weights() if i == 3 else None
+
+                clf = MLPClassifier(
+                    V,
+                    y_train,
+                    y_true,
+                    ubp_weights,
+                    **model_params,
+                    optimizer=compile_params["optimizer"],
+                    optimizer__learning_rate=compile_params["learning_rate"],
+                    loss=compile_params["loss"],
+                    metrics=compile_params["metrics"],
+                    epochs=fit_params["epochs"],
+                    phase=i,
+                    callbacks=fit_params["callbacks"],
+                    validation_split=fit_params["validation_split"],
+                    verbose=0,
+                )
+
+                if self.ga_:
+                    # Stop searching if GA sees no improvement.
+                    callback = [
+                        ConsecutiveStopping(
+                            generations=self.early_stop_gen, metric="fitness"
+                        )
+                    ]
+
+                    if not self.disable_progressbar:
+                        callback.append(ProgressBar())
+
+                    verbose = False if self.verbose == 0 else True
+
+                    # Do genetic algorithm
+                    # with HiddenPrints():
+                    search = GASearchCV(
+                        estimator=clf,
+                        cv=cross_val,
+                        scoring=scoring,
+                        generations=self.grid_iter,
+                        param_grid=self.gridparams,
+                        n_jobs=self.n_jobs,
+                        refit=self.scoring_metric,
+                        verbose=verbose,
+                        error_score="raise",
+                        **self.ga_kwargs,
+                    )
+
+                    search.fit(V[self.n_components], y_true, callbacks=callback)
+
+                else:
+                    if self.gridsearch_method.lower() == "gridsearch":
+                        # Do GridSearchCV
+                        search = GridSearchCV(
+                            clf,
+                            param_grid=self.gridparams,
+                            n_jobs=self.n_jobs,
+                            cv=cross_val,
+                            scoring=scoring,
+                            refit=self.scoring_metric,
+                            verbose=self.verbose * 4,
+                            error_score="raise",
+                        )
+
+                    elif (
+                        self.gridsearch_method.lower()
+                        == "randomized_gridsearch"
+                    ):
+                        search = RandomizedSearchCV(
+                            clf,
+                            param_distributions=self.gridparams,
+                            n_iter=self.grid_iter,
+                            n_jobs=self.n_jobs,
+                            cv=cross_val,
+                            scoring=scoring,
+                            refit=self.scoring_metric,
+                            verbose=self.verbose * 4,
+                            error_score="raise",
+                        )
+
+                    else:
+                        raise ValueError(
+                            f"Invalid gridsearch_method specified: "
+                            f"{self.gridsearch_method}"
+                        )
+
+                    search.fit(V[self.n_components], y=y_true)
+
+                best_params = search.best_params_
+                best_score = search.best_score_
+                best_clf = search.best_estimator_
+
+                cv_results = pd.DataFrame(search.cv_results_)
+                cv_results.to_csv(
+                    f"{self.prefix}_ubp_cvresults_phase{i}.csv", index=False
+                )
+
+                histories.append(best_clf.history_)
+                model = best_clf.model_
+
+                y_pred_proba = model(model.V_latent, training=False)
+                y_pred = self.tt_.inverse_transform(y_pred_proba)
+
+                # Get metric scores.
+                metrics = self.scorer(
+                    y_true,
+                    y_pred,
+                    missing_mask=self.sim_missing_mask_,
+                    testing=True,
+                )
+
+            else:
+                V = model_params.pop("V")
+
+                ubp_weights = models[1].get_weights() if i == 3 else None
+
+                clf = MLPClassifier(
+                    V,
+                    y_train,
+                    y_true,
+                    ubp_weights,
+                    **model_params,
+                    optimizer=compile_params["optimizer"],
+                    optimizer__learning_rate=compile_params["learning_rate"],
+                    loss=compile_params["loss"],
+                    metrics=compile_params["metrics"],
+                    epochs=fit_params["epochs"],
+                    phase=i,
+                    callbacks=fit_params["callbacks"],
+                    validation_split=fit_params["validation_split"],
+                    verbose=0,
+                    score__missing_mask=self.sim_missing_mask_,
+                    score__scoring_metric=self.scoring_metric,
+                )
+
+                clf.fit(V[self.n_components], y=y_true)
+
+                best_params = None
+                best_score = None
+                search = None
+                best_clf = clf
+
+                histories.append(clf.history_)
+                model = clf.model_
+
+                y_pred_proba = model(model.V_latent, training=False)
+                y_pred = self.tt_.inverse_transform(y_pred_proba)
+
+                # Get metric scores.
+                metrics = self.scorer(
+                    y_true,
+                    y_pred,
+                    missing_mask=self.sim_missing_mask_,
+                    testing=True,
+                )
+
+            if i == 1:
+                if (
+                    best_params is not None
+                    and "n_components" in self.gridparams
+                ):
+                    model_params["V"] = {
+                        best_params["n_components"]: model.V_latent.copy()
+                    }
+                    self.gridparams.pop("n_components")
+
+                else:
+                    model_params["V"] = V
+            elif i == 2:
+                model_params["V"] = V
+
+            models.append(model)
+
+            del model
+
+        return (
+            models,
+            histories,
+            best_params,
+            best_score,
+            best_clf,
+            search,
+            metrics,
+        )
+
+    def _normalize_data(self, data):
+        return (data - np.min(data)) / (np.max(data) - np.min(data))
+
+    def _get_class_weights(self, y_true, user_weights=None):
+        """Get class weights for each column in a 2D matrix.
+
+        Args:
+            y_true (numpy.ndarray): True target values.
+            user_weights (Dict[int, float], optional): Class weights if user-provided.
 
         Returns:
-            tf.keras.optimizers: Initialized optimizer.
+            numpy.ndarray: Class weights per column of shape (n_samples, n_features).
+        """
+        # Get list of class_weights (per-column).
+        class_weights = list()
+        sample_weight = np.zeros(y_true.shape)
+        if user_weights is not None:
+            # Set user-defined sample_weights
+            for k in user_weights.keys():
+                sample_weight[y_true == k] = user_weights[k]
+        else:
+            # Automatically get class weights to set sample_weight.
+            for i in np.arange(y_true.shape[1]):
+                mm = ~self.original_missing_mask_[:, i]
+                classes = np.unique(y_true[mm, i])
+                cw = compute_class_weight(
+                    "balanced",
+                    classes=classes,
+                    y=y_true[mm, i],
+                )
+
+                class_weights.append({k: v for k, v in zip(classes, cw)})
+
+            # Make sample_weight_matrix from automatic per-column class_weights.
+            for i, w in enumerate(class_weights):
+                for j in range(3):
+                    if j in w:
+                        sample_weight[self.y_original_[:, i] == j, i] = w[j]
+
+        return sample_weight
+
+    @staticmethod
+    def scorer(y_true, y_pred, **kwargs):
+        # Get missing mask if provided.
+        # Otherwise default is all missing values (array all True).
+        missing_mask = kwargs.get(
+            "missing_mask", np.ones(y_true.shape, dtype=bool)
+        )
+
+        testing = kwargs.get("testing", False)
+
+        y_true_masked = y_true[missing_mask]
+        y_pred_masked = y_pred[missing_mask]
+
+        nn = NeuralNetworkMethods()
+        y_pred_masked_decoded = nn.decode_masked(y_pred_masked)
+
+        roc_auc = NeuralNetworkMethods.compute_roc_auc_micro_macro(
+            y_true_masked, y_pred_masked_decoded
+        )
+
+        pr_ap = NeuralNetworkMethods.compute_pr(y_true_masked, y_pred_masked)
+
+        acc = accuracy_score(y_true_masked, y_pred_masked_decoded)
+
+        if testing:
+            np.set_printoptions(threshold=np.inf)
+            print(y_true_masked)
+            print(y_pred_masked_decoded)
+
+        metrics = dict()
+        metrics["accuracy"] = acc
+        metrics["roc_auc"] = roc_auc
+        metrics["precision_recall"] = pr_ap
+
+        return metrics
+
+    def _initialize_parameters(self, y_train, missing_mask):
+        """Initialize important parameters.
+
+        Args:
+            y_train (numpy.ndarray): Training subset of original input data to be used as target.
+
+            missing_mask (numpy.ndarray): Training missing data mask.
+
+        Returns:
+            List[int]: Hidden layer sizes of length num_hidden_layers.
+            int: Number of hidden layers.
+            tf.keras.optimizers: Gradient descent optimizer to use.
+            str: Logfile for CSVLogger callback.
+            List[tf.keras.callbacks]: List of callbacks for Keras model.
+            Dict[str, Any]: Parameters to use for model.compile().
+            Dict[str, Any]: UBP Phase 1 model parameters.
+            Dict[str, Any]: UBP Phase 2 model parameters.
+            Dict[str, Any]: UBP Phase 3 or NLPCA model parameters.
+            Dict[str, Any]: Other parameters to pass to KerasClassifier().
+            Dict[str, Any]: Parameters to pass to fit_params() in grid search.
+        """
+        if self.nlpca:
+            # For CSVLogger() callback.
+            append = False
+            logfile = f"{self.prefix}_nlpca_log.csv"
+        else:
+            append = True
+            logfile = f"{self.prefix}_ubp_log.csv"
+
+            # Remove logfile if exists, because UBP writes in append mode.
+            try:
+                os.remove(logfile)
+            except:
+                pass
+
+        callbacks = [
+            UBPCallbacks(),
+            CSVLogger(filename=logfile, append=append),
+            ReduceLROnPlateau(
+                patience=self.lr_patience, min_lr=1e-6, min_delta=1e-6
+            ),
+        ]
+
+        search_mode = False if self.gridparams is None else True
+
+        if not self.disable_progressbar and not search_mode:
+            callbacks.append(
+                TqdmCallback(epochs=self.epochs, verbose=0, desc="Epoch: ")
+            )
+
+        vinput = self._initV(y_train, search_mode)
+        compile_params = self.nn_.set_compile_params(self.optimizer)
+        compile_params["learning_rate"] = self.learning_rate
+
+        model_params = {
+            "V": vinput,
+            "y_train": y_train,
+            "batch_size": self.batch_size,
+            "missing_mask": missing_mask,
+            "output_shape": y_train.shape[1],
+            "weights_initializer": self.weights_initializer,
+            "n_components": self.n_components,
+            "hidden_layer_sizes": self.hidden_layer_sizes,
+            "num_hidden_layers": self.num_hidden_layers,
+            "hidden_activation": self.hidden_activation,
+            "l1_penalty": self.l1_penalty,
+            "l2_penalty": self.l2_penalty,
+            "dropout_rate": self.dropout_rate,
+            "num_classes": self.num_classes,
+        }
+
+        fit_verbose = 1 if self.verbose == 2 else 0
+
+        fit_params = {
+            "batch_size": self.batch_size,
+            "epochs": self.epochs,
+            "callbacks": callbacks,
+            "validation_split": 0.0,
+            "shuffle": False,
+            "verbose": fit_verbose,
+        }
+
+        if self.sample_weights == "auto":
+            # Get class weights for each column.
+            sample_weights = self._get_class_weights(y_true)
+            sample_weights = self._normalize_data(sample_weights)
+
+        elif isinstance(self.sample_weights, dict):
+            for i in range(self.num_classes):
+                if self.sample_weights[i] == 0.0:
+                    self.sim_missing_mask_[self.y_original_ == i] = False
+
+            sample_weights = self._get_class_weights(
+                y_true, user_weights=self.sample_weights
+            )
+
+        else:
+            sample_weights = None
+
+        model_params["sample_weight"] = sample_weights
+
+        if self.gridparams is not None and "learning_rate" in self.gridparams:
+            self.gridparams["optimizer__learning_rate"] = self.gridparams[
+                "learning_rate"
+            ]
+
+            self.gridparams.pop("learning_rate")
+
+        return (
+            logfile,
+            callbacks,
+            compile_params,
+            model_params,
+            fit_params,
+        )
+
+    def _initV(self, y_train, search_mode):
+        """Initialize random input V as dictionary of numpy arrays.
+
+        Args:
+            y_train (numpy.ndarray): One-hot encoded training dataset (actual data).
+
+            search_mode (bool): Whether doing grid search.
+
+        Returns:
+            Dict[int, numpy.ndarray]: Dictionary with n_components: V as key-value pairs.
 
         Raises:
-            ValueError: Unsupported optimizer specified.
+            ValueError: Number of components must be >= 2.
         """
-        if self.optimizer == "adam":
-            return tf.keras.optimizers.Adam(learning_rate=self.initial_eta)
-        elif self.optimizer == "sgd":
-            return tf.keras.optimizers.SGD(learning_rate=self.initial_eta)
-        elif self.optimizer == "adagrad":
-            return tf.keras.optimizers.Adagrad(learning_rate=self.initial_eta)
+        vinput = dict()
+        if search_mode:
+            if self.n_components < 2:
+                raise ValueError("n_components must be >= 2.")
+
+            elif self.n_components == 2:
+                vinput[2] = self.nn_.init_weights(
+                    y_train.shape[0], self.n_components
+                )
+
+            else:
+                for i in range(2, self.n_components + 1):
+                    vinput[i] = self.nn_.init_weights(y_train.shape[0], i)
+
         else:
-            raise ValueError(
-                f"Only 'adam', 'sgd', and 'adagrad' optimizers are supported, "
-                f"but got {self.optimizer}."
+            vinput[self.n_components] = self.nn_.init_weights(
+                y_train.shape[0], self.n_components
             )
+
+        return vinput
+
+    def _create_model(
+        self,
+        estimator,
+        model_kwargs,
+        compile_kwargs,
+        permutation_kwargs=None,
+        build=False,
+    ):
+        """Create a neural network model using the estimator to initialize.
+        Model will be initialized, compiled, and built if ``build=True``\.
+        Args:
+            estimator (tf.keras.Model): Model to create. Can be a subclassed model.
+            compile_params (Dict[str, Any]): Parameters passed to model.compile(). Key-value pairs should be the parameter names and their corresponding values.
+            n_components (int): The number of principal components to use with NLPCA or UBP models. Not used if doing VAE. Defaults to 3.
+            build (bool): Whether to build the model. Defaults to False.
+            kwargs (Dict[str, Any]): Keyword arguments to pass to KerasClassifier.
+        Returns:
+            tf.keras.Model: Instantiated, compiled, and optionally built model.
+        """
+        if permutation_kwargs is not None:
+            model = estimator(**model_kwargs, **permutation_kwargs)
+        else:
+            model = estimator(**model_kwargs)
+
+        if build:
+            model.build((None, model_kwargs["n_components"]))
+
+        model.compile(**compile_kwargs)
+        return model
+
+    def _summarize_model(self, model):
+        """Print model summary for debugging purposes.
+
+        Args:
+            model (tf.keras.Model): Model to summarize.
+        """
+        # For debugging.
+        model.model().summary()
+
+    def _plot_history(self, lod):
+        """Plot model history traces. Will be saved to file.
+
+        Args:
+            lod (List[tf.keras.callbacks.History]): List of history objects.
+        """
+        if self.nlpca:
+            title = "NLPCA"
+            fn = "histplot_nlpca.pdf"
+            fig, (ax1, ax2) = plt.subplots(1, 2)
+            fig.suptitle("NLPCA")
+            fig.tight_layout(h_pad=2.0, w_pad=2.0)
+            history = lod[0]
+
+            # Plot accuracy
+            ax1.plot(history["categorical_accuracy"])
+            ax1.set_title("Model Accuracy")
+            ax1.set_ylabel("Accuracy")
+            ax1.set_xlabel("Epoch")
+            ax1.set_ylim(bottom=0.0, top=1.0)
+            ax1.set_yticks([0.0, 0.25, 0.5, 0.75, 1.0])
+            ax1.legend(["Train"], loc="best")
+
+            # Plot model loss
+            ax2.plot(history["loss"])
+            ax2.set_title("Model Loss")
+            ax2.set_ylabel("Loss (MSE)")
+            ax2.set_xlabel("Epoch")
+            ax2.legend(["Train"], loc="best")
+            fig.savefig(fn, bbox_inches="tight")
+
+            plt.close()
+            plt.clf()
+
+        else:
+            fig = plt.figure(figsize=(12, 16))
+            fig.suptitle("UBP")
+            fig.tight_layout(h_pad=2.0, w_pad=2.0)
+            fn = "histplot_ubp.pdf"
+
+            idx = 1
+            for i, history in enumerate(lod, start=1):
+                plt.subplot(3, 2, idx)
+                title = f"Phase {i}"
+
+                # Plot model accuracy
+                ax = plt.gca()
+                ax.plot(history["categorical_accuracy"])
+                ax.set_title(f"{title} Accuracy")
+                ax.set_ylabel("Accuracy")
+                ax.set_xlabel("Epoch")
+                ax.set_yticks([0.0, 0.25, 0.5, 0.75, 1.0])
+                ax.legend(["Training"], loc="best")
+
+                # Plot model loss
+                plt.subplot(3, 2, idx + 1)
+                ax = plt.gca()
+                ax.plot(history["loss"])
+                ax.set_title(f"{title} Loss")
+                ax.set_ylabel("Loss (MSE)")
+                ax.set_xlabel("Epoch")
+                ax.legend(["Train"], loc="best")
+
+                idx += 2
+
+            plt.savefig(fn, bbox_inches="tight")
+
+            plt.close()
+            plt.clf()

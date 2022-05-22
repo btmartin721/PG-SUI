@@ -39,7 +39,7 @@ from sklearn.utils._mask import _get_mask
 from sklearn.utils.validation import FLOAT_DTYPES
 
 # Grid search imports
-from sklearn.model_selection import RandomizedSearchCV
+from sklearn.model_selection import RandomizedSearchCV, GridSearchCV
 from sklearn.model_selection import StratifiedKFold
 
 # Genetic algorithm grid search imports
@@ -51,10 +51,16 @@ from sklearn_genetic.plots import plot_fitness_evolution
 from sklearn_genetic.utils import logbook_to_pandas
 
 # Custom function imports
-from impute import simple_imputers
-from utils.misc import get_processor_name
-from utils.misc import HiddenPrints
-from utils.misc import isnotebook
+try:
+    from . import simple_imputers
+    from ..utils.misc import get_processor_name
+    from ..utils.misc import HiddenPrints
+    from ..utils.misc import isnotebook
+except (ModuleNotFoundError, ValueError):
+    from impute import simple_imputers
+    from utils.misc import get_processor_name
+    from utils.misc import HiddenPrints
+    from utils.misc import isnotebook
 
 # Uses scikit-learn-intellex package if CPU is Intel
 if get_processor_name().strip().startswith("Intel"):
@@ -104,7 +110,7 @@ class IterativeImputerGridSearch(IterativeImputer):
     Args:
         logfilepath (str): Path to the progress log file.
 
-        search_space (sklearn_genetic.space object or Dict[str, Any]): The parameter distributions or values to use for the grid search.
+        gridparams (sklearn_genetic.space object or Dict[str, Any]): The parameter distributions or values to use for the grid search.
 
         clf_kwargs (Dict[str, Any]): A dictionary with the classifier keyword arguments.
 
@@ -118,7 +124,7 @@ class IterativeImputerGridSearch(IterativeImputer):
 
         grid_n_jobs (int, optional): [The number of processors to use with the grid search. Set ``grid_n_jobs`` to -1 to use all available processors]. Defaults to 1.
 
-        grid_n_iter (int, optional): The number of iterations (for RandomizedSearchCV) or generations (for the genetic algorithm) to run with the grid search. For the genetic algorithm, an early stopping callback method is implemented that will stop if the accuracy does not improve for more than 5 consecutive generations. Defaults to 10.
+        grid_iter (int, optional): The number of iterations (for RandomizedSearchCV) or generations (for the genetic algorithm) to run with the grid search. For the genetic algorithm, an early stopping callback method is implemented that will stop if the accuracy does not improve for more than 5 consecutive generations. Defaults to 10.
 
         clf_type (str, optional): Whether to run ``"classifier"`` or ``"regression"`` based imputation. Defaults to "classifier".
 
@@ -208,17 +214,17 @@ class IterativeImputerGridSearch(IterativeImputer):
     def __init__(
         self,
         logfilepath: str,
-        search_space: Dict[str, Any],
         clf_kwargs: Dict[str, Any],
         ga_kwargs: Dict[str, Any],
-        prefix: str,
-        estimator: Callable = None,
         *,
+        estimator: Callable = None,
+        gridparams: Dict[str, Any] = None,
+        prefix: str = "output",
         grid_cv: int = 5,
         grid_n_jobs: int = 1,
-        grid_n_iter: int = 10,
+        grid_iter: int = 10,
         clf_type: str = "classifier",
-        ga: bool = False,
+        gridsearch_method: str = "gridsearch",
         disable_progressbar: bool = False,
         progress_update_percent: Optional[int] = None,
         pops: Optional[List[Union[str, int]]] = None,
@@ -259,7 +265,7 @@ class IterativeImputerGridSearch(IterativeImputer):
         )
 
         self.logfilepath = logfilepath
-        self.search_space = search_space
+        self.gridparams = gridparams
         self.clf_kwargs = clf_kwargs
         self.ga_kwargs = ga_kwargs
         self.prefix = prefix
@@ -279,7 +285,7 @@ class IterativeImputerGridSearch(IterativeImputer):
         self.str_encodings = str_encodings
         self.grid_cv = grid_cv
         self.grid_n_jobs = grid_n_jobs
-        self.grid_n_iter = grid_n_iter
+        self.grid_iter = grid_iter
         self.clf_type = clf_type
         self.ga = ga
         self.disable_progressbar = disable_progressbar
@@ -287,6 +293,7 @@ class IterativeImputerGridSearch(IterativeImputer):
         self.pops = pops
         self.scoring_metric = scoring_metric
         self.early_stop_gen = early_stop_gen
+        self.missing_values = missing_values
 
     def _initial_imputation(
         self, X: np.ndarray, cols_to_keep: np.ndarray, in_fit: bool = False
@@ -345,7 +352,6 @@ class IterativeImputerGridSearch(IterativeImputer):
 
             X_filled = self.initial_imputer_.imputed
             Xt = X.copy()
-            print(X_filled)
 
         elif self.initial_strategy == "phylogeny":
             if (
@@ -390,7 +396,6 @@ class IterativeImputerGridSearch(IterativeImputer):
 
             X_filled = self.initial_imputer_.imputed
             Xt = X.copy()
-            # print(X_filled)
 
         else:
             if self.initial_imputer_ is None:
@@ -458,21 +463,31 @@ class IterativeImputerGridSearch(IterativeImputer):
         # Modified code
         # If regressor
         if self.clf_type == "regressor":
-            if self.ga:
+            if self.gridsearch_method == "genetic_algorithm":
                 callback = DeltaThreshold(threshold=1e-3, metric="fitness")
 
         else:
-            if self.ga:
+            if self.gridsearch_method == "genetic_algorithm":
                 callback = ConsecutiveStopping(
                     generations=self.early_stop_gen, metric="fitness"
                 )
 
         # Do randomized grid search
-        if not self.ga:
+        if self.gridsearch_method == "randomized_gridsearch":
             search = RandomizedSearchCV(
                 estimator,
-                param_distributions=self.search_space,
-                n_iter=self.grid_n_iter,
+                param_distributions=self.gridparams,
+                n_iter=self.grid_iter,
+                scoring=self.scoring_metric,
+                n_jobs=self.grid_n_jobs,
+                cv=cross_val,
+            )
+
+        elif self.gridsearch_method == "gridsearch":
+            search = GridSearchCV(
+                estimator,
+                param_grid=self.gridparams,
+                n_iter=self.grid_iter,
                 scoring=self.scoring_metric,
                 n_jobs=self.grid_n_jobs,
                 cv=cross_val,
@@ -485,8 +500,8 @@ class IterativeImputerGridSearch(IterativeImputer):
                     estimator=estimator,
                     cv=cross_val,
                     scoring=self.scoring_metric,
-                    generations=self.grid_n_iter,
-                    param_grid=self.search_space,
+                    generations=self.grid_iter,
+                    param_grid=self.gridparams,
                     n_jobs=self.grid_n_jobs,
                     verbose=False,
                     **self.ga_kwargs,
@@ -500,7 +515,7 @@ class IterativeImputerGridSearch(IterativeImputer):
 
             y_train = _safe_indexing(X_filled[:, feat_idx], ~missing_row_mask)
 
-            if self.ga:
+            if self.gridsearch_method == "genetic_algorithm":
                 with HiddenPrints():
                     search.fit(X_train, y_train, callbacks=callback)
 
@@ -679,7 +694,7 @@ class IterativeImputerGridSearch(IterativeImputer):
         score_list = list()
         iter_list = list()
 
-        if self.ga:
+        if self.gridsearch_method == "genetic_algorithm":
             sns.set_style("white")
 
         total_iter = self.max_iter
@@ -693,7 +708,7 @@ class IterativeImputerGridSearch(IterativeImputer):
             disable=self.disable_progressbar,
         ):
 
-            if self.ga:
+            if self.gridsearch_method == "genetic_algorithm":
                 iter_list.append(self.n_iter_)
 
                 pp_oneline = PdfPages(
@@ -770,7 +785,7 @@ class IterativeImputerGridSearch(IterativeImputer):
                     params_list.append(search.best_params_)
                     score_list.append(search.best_score_)
 
-                    if self.ga:
+                    if self.gridsearch_method == "genetic_algorithm":
                         plt.cla()
                         plt.clf()
                         plt.close()
@@ -791,7 +806,7 @@ class IterativeImputerGridSearch(IterativeImputer):
                     # Search is None
                     # Thus, there was no missing data in the given feature
                     tmp_dict = dict()
-                    for k in self.search_space.keys():
+                    for k in self.gridparams.keys():
                         tmp_dict[k] = -9
                     params_list.append(tmp_dict)
 
@@ -856,7 +871,7 @@ class IterativeImputerGridSearch(IterativeImputer):
                             "reached."
                         )
 
-                    if self.ga:
+                    if self.gridsearch_method == "genetic_algorithm":
                         pp_oneline.close()
                         pp_space.close()
 
@@ -877,7 +892,7 @@ class IterativeImputerGridSearch(IterativeImputer):
                     break
                 Xt_previous = Xt.copy()
 
-            if self.ga:
+            if self.gridsearch_method == "genetic_algorithm":
                 pp_oneline.close()
                 pp_space.close()
 
@@ -905,7 +920,7 @@ class IterativeImputerGridSearch(IterativeImputer):
 
         Xt[~mask_missing_values] = X[~mask_missing_values]
 
-        if self.ga:
+        if self.gridsearch_method == "genetic_algorithm":
             # Remove all files except last iteration
             final_iter = iter_list.pop()
 

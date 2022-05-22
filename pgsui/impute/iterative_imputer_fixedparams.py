@@ -33,10 +33,16 @@ from sklearn.utils._mask import _get_mask
 from sklearn.utils.validation import FLOAT_DTYPES
 
 # Custom function imports
-from impute import simple_imputers
-from utils.misc import get_processor_name
-from utils.misc import HiddenPrints
-from utils.misc import isnotebook
+try:
+    from . import simple_imputers
+    from ..utils.misc import get_processor_name
+    from ..utils.misc import HiddenPrints
+    from ..utils.misc import isnotebook
+except (ModuleNotFoundError, ValueError):
+    from impute import simple_imputers
+    from utils.misc import get_processor_name
+    from utils.misc import HiddenPrints
+    from utils.misc import isnotebook
 
 # Uses scikit-learn-intellex package if CPU is Intel
 if get_processor_name().strip().startswith("Intel"):
@@ -211,9 +217,8 @@ class IterativeImputerFixedParams(IterativeImputer):
         self,
         logfilepath: str,
         clf_kwargs: Dict[str, Any],
-        prefix: str,
-        estimator: Callable = None,
         *,
+        estimator: Callable = None,
         clf_type: str = "classifier",
         disable_progressbar: bool = False,
         progress_update_percent: Optional[int] = None,
@@ -272,6 +277,7 @@ class IterativeImputerFixedParams(IterativeImputer):
         self.random_state = random_state
         self.genotype_data = genotype_data
         self.str_encodings = str_encodings
+        self.missing_values = missing_values
 
     def _initial_imputation(
         self, X: np.ndarray, cols_to_keep: np.ndarray, in_fit: bool = False

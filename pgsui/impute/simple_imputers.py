@@ -1,5 +1,6 @@
 import sys
 from pathlib import Path
+import warnings
 from typing import Optional, Union, List, Dict, Tuple, Any, Callable
 
 # Third-party imports
@@ -10,12 +11,21 @@ import toyplot.pdf
 import toyplot as tp
 import toytree as tt
 
+from sklearn.base import BaseEstimator, TransformerMixin
+
 # Custom imports
-from read_input.read_input import GenotypeData
-from utils import misc
-from utils.misc import get_processor_name
-from utils.misc import isnotebook
-from utils.misc import timer
+try:
+    from ..read_input.read_input import GenotypeData
+    from ..utils import misc
+    from ..utils.misc import get_processor_name
+    from ..utils.misc import isnotebook
+    from ..utils.misc import timer
+except (ModuleNotFoundError, ValueError):
+    from read_input.read_input import GenotypeData
+    from utils import misc
+    from utils.misc import get_processor_name
+    from utils.misc import isnotebook
+    from utils.misc import timer
 
 is_notebook = isnotebook()
 
@@ -38,6 +48,11 @@ if get_processor_name().strip().startswith("Intel"):
         intelex = False
 else:
     intelex = False
+
+# Pandas on pip gives a performance warning when doing the below code.
+# Apparently it's a bug that exists in the pandas version I used here.
+# It can be safely ignored.
+warnings.simplefilter(action="ignore", category=pd.errors.PerformanceWarning)
 
 
 class ImputePhylo(GenotypeData):
@@ -138,7 +153,7 @@ class ImputePhylo(GenotypeData):
         self._validate_arguments(genotype_data)
         data, tree, q, site_rates = self._parse_arguments(genotype_data)
 
-        if self.validation_mode == True:
+        if self.validation_mode == False:
             imputed012 = self.impute_phylo(tree, data, q, site_rates)
 
             imputed_filename = genotype_data.decode_imputed(
@@ -155,11 +170,12 @@ class ImputePhylo(GenotypeData):
             self.imputed = GenotypeData(
                 filename=imputed_filename,
                 filetype=ft,
+                popmapfile=genotype_data.popmapfile,
                 guidetree=genotype_data.guidetree,
                 qmatrix_iqtree=genotype_data.qmatrix_iqtree,
                 qmatrix=genotype_data.qmatrix,
                 siterates=genotype_data.siterates,
-                siterates_iqtree=genotype_data.siterates_iqtre,
+                siterates_iqtree=genotype_data.siterates_iqtree,
                 verbose=False,
             )
 
@@ -208,7 +224,7 @@ class ImputePhylo(GenotypeData):
         """
         try:
             if list(genotypes.values())[0][0][1] == "/":
-                genotypes = self.str2iupac(genotypes, self.str_encodings)
+                genotypes = self._str2iupac(genotypes, self.str_encodings)
         except IndexError:
             if self._is_int(list(genotypes.values())[0][0][0]):
                 raise
@@ -643,7 +659,7 @@ class ImputePhylo(GenotypeData):
 
         toyplot.pdf.render(canvas, out)
 
-    def all_missing(
+    def _all_missing(
         self,
         tree: tt.tree,
         node_index: int,
@@ -783,7 +799,6 @@ class ImputePhylo(GenotypeData):
         ret = iupac[char]
         return ret
 
-
 class ImputeAlleleFreq(GenotypeData):
     """Impute missing data by global allele frequency. Population IDs can be sepcified with the pops argument. if pops is None, then imputation is by global allele frequency. If pops is not None, then imputation is by population-wise allele frequency. A list of population IDs in the appropriate format can be obtained from the GenotypeData object as GenotypeData.populations.
 
@@ -897,7 +912,7 @@ class ImputeAlleleFreq(GenotypeData):
         self.iterative_mode = kwargs.get("iterative_mode", False)
         self.validation_mode = kwargs.get("validation_mode", False)
 
-        if self.validation_mode == True:
+        if self.validation_mode == False:
             imputed012, self.valid_cols = self.fit_predict(gt_list)
 
             imputed_filename = genotype_data.decode_imputed(
@@ -914,6 +929,7 @@ class ImputeAlleleFreq(GenotypeData):
             self.imputed = GenotypeData(
                 filename=imputed_filename,
                 filetype=ft,
+                popmapfile=genotype_data.popmapfile,
                 guidetree=genotype_data.guidetree,
                 qmatrix_iqtree=genotype_data.qmatrix_iqtree,
                 qmatrix=genotype_data.qmatrix,
@@ -972,9 +988,11 @@ class ImputeAlleleFreq(GenotypeData):
             # Impute per-population mode.
             # Loop method is faster (by 2X) than no-loop transform.
             df["pops"] = self.pops
+            groups = df.groupby(["pops"], sort=False)
+
             for col in df.columns:
                 try:
-                    data[col] = df.groupby(["pops"], sort=False)[col].transform(
+                    data[col] = groups[col].transform(
                         lambda x: x.fillna(x.mode().iloc[0])
                     )
 
@@ -1141,7 +1159,7 @@ class ImputeNMF(GenotypeData):
         elif gt is not None:
             X = gt
 
-        if self.validation_mode == True:
+        if self.validation_mode == False:
             imputed012 = pd.DataFrame(self.fit_predict(X))
 
             imputed_filename = genotype_data.decode_imputed(
@@ -1158,6 +1176,7 @@ class ImputeNMF(GenotypeData):
             self.imputed = GenotypeData(
                 filename=imputed_filename,
                 filetype=ft,
+                popmapfile=genotype_data.popmapfile,
                 guidetree=genotype_data.guidetree,
                 qmatrix_iqtree=genotype_data.qmatrix_iqtree,
                 qmatrix=genotype_data.qmatrix,

@@ -9,11 +9,64 @@ import re
 import logging
 
 import numpy as np
+import pandas as pd
 from tqdm import tqdm
 from tqdm.utils import disp_len, _unicode  # for overriding status_print
 
 
 # from skopt import BayesSearchCV
+
+
+def validate_input_type(X, return_type="array"):
+    """Validate input type and return as numpy array.
+
+    Args:
+        X (pandas.DataFrame, numpy.ndarray, or List[List[int]]): Input data.
+
+        return_type (str): Type of returned object. Supported options include: "df", "array", and "list". Defaults to "array".
+
+    Returns:
+        pandas.DataFrame, numpy.ndarray, or List[List[int]]: Input data desired return_type.
+
+    Raises:
+        TypeError: X must be of type pandas.DataFrame, numpy.ndarray, or List[List[int]].
+
+        ValueError: Unsupported return_type provided. Supported types are "df", "array", and "list".
+
+    """
+    if not isinstance(X, (pd.DataFrame, np.ndarray, list)):
+        raise TypeError(
+            f"X must be of type pandas.DataFrame, numpy.ndarray, "
+            f"or List[List[int]], but got {type(X)}"
+        )
+
+    if return_type == "array":
+        if isinstance(X, pd.DataFrame):
+            return X.to_numpy()
+        elif isinstance(X, list):
+            return np.array(X)
+        elif isinstance(X, np.ndarray):
+            return X.copy()
+
+    elif return_type == "df":
+        if isinstance(X, pd.DataFrame):
+            return X.copy()
+        elif isinstance(X, (np.ndarray, list)):
+            return pd.DataFrame(X)
+
+    elif return_type == "list":
+        if isinstance(X, list):
+            return X
+        elif isinstance(X, np.ndarray):
+            return X.tolist()
+        elif isinstance(X, pd.DataFrame):
+            return X.values.tolist()
+
+    else:
+        raise ValueError(
+            f"Unsupported return type provided: {return_type}. Supported types "
+            f"are 'df', 'array', and 'list'"
+        )
 
 
 def generate_random_dataset(

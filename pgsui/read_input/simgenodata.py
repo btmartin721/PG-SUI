@@ -11,7 +11,14 @@ from functools import partial
 import pandas as pd
 import numpy as np
 import scipy as sp
-from read_input.read_input import GenotypeData
+
+from sklearn.base import BaseEstimator, TransformerMixin
+
+try:
+    from .read_input import GenotypeData
+except (ModuleNotFoundError, ValueError):
+    from read_input.read_input import GenotypeData
+
 
 class SimGenotypeData(GenotypeData):
     """Simulate missing data on genotypes read/ encoded in a GenotypeData object.
@@ -24,6 +31,8 @@ class SimGenotypeData(GenotypeData):
             prop_missing (float, optional): Proportion of missing data desired in output. Defaults to 0.10
 
             strategy (str, optional): Strategy for simulating missing data. May be one of: \"nonrandom\", \"nonrandom_weighted\", or \"random\". When set to \"nonrandom\", branches from GenotypeData.guidetree will be randomly sampled to generate missing data on descendant nodes. For \"nonrandom_weighted\", missing data will be placed on nodes proportionally to their branch lengths (e.g., to generate data distributed as might be the case with mutation-disruption of RAD sites). Defaults to \"random\"
+
+            subset (float): Proportion of sites to randomly subset from the input data. Defaults to 1.0 (i.e., all data retained)
 
             verbose (bool, optional): Verbosity level. Defaults to True.
 
@@ -59,137 +68,208 @@ class SimGenotypeData(GenotypeData):
 
             genotypes_onehot (numpy.ndarray of shape (n_samples, n_SNPs, 4)): One-hot encoded numpy array, after inserting missing data. The inner-most array consists of one-hot encoded values for the four nucleotides in the order of "A", "T", "G", "C". Values of 0.5 indicate heterozygotes, and missing values contain 0.0 for all four nucleotides.
 
-            mask (numpy.ndarray): 2-dimensional array tracking the indices of sampled missing data sites (n_samples, n_sites)
+            missing_count (int): Number of genotypes masked by chosen missing data strategy
 
-"""
+            prop_missing_real (float): True proportion of missing data generated using chosen strategy
+
+            mask (numpy.ndarray): 2-dimensional array tracking the indices of sampled missing data sites (n_samples, n_sites)
+    """
+
     def __init__(
         self,
-        genotype_data = None,
-        prop_missing = None,
-        strategy = "random"
+        genotype_data=None,
+        prop_missing=None,
+        strategy="random",
+        subset=1.0,
     ) -> None:
-        self.genotype_data = genotype_data
         self.prop_missing = prop_missing
         self.strategy = strategy
+        self.subset = subset
 
-        super().__init__()
-
-        #Copy genotype_data attributes into local attributes
-        #keep original genotype_data as a reference for calculating
-        #accuracy after imputing masked sites
-        if self.genotype_data is None:
+        # Copy genotype_data attributes into local attributes
+        # keep original genotype_data as a reference for calculating
+        # accuracy after imputing masked sites
+        if genotype_data is None:
             raise TypeError("genotype_data cannot be NoneType")
         else:
-            self.filename = genotype_data.filename
-            self.filetype = genotype_data.filetype
-            self.popmapfile = genotype_data.popmapfile
-            self.guidetree = copy.deepcopy(genotype_data.guidetree)
-            self.qmatrix_iqtree = genotype_data.qmatrix_iqtree
-            self.qmatrix = genotype_data.qmatrix
-            self.siterates = genotype_data.siterates
-            self.siterates_iqtree = genotype_data.siterates_iqtree
-
-            self.snpsdict = copy.deepcopy(genotype_data.snpsdict)
-            self.samples= copy.deepcopy(genotype_data.samples)
-            self.snps= copy.deepcopy(genotype_data.snps)
-            self.pops= copy.deepcopy(genotype_data.pops)
-            self.onehot= copy.deepcopy(genotype_data.onehot)
-            self.num_snps = copy.deepcopy(genotype_data.num_snps)
-            self.num_inds = copy.deepcopy(genotype_data.num_inds)
-            self.q = copy.deepcopy(genotype_data.q)
-            self.site_rates = copy.deepcopy(genotype_data.site_rates)
-
-            if self.guidetree is not None:
-                self.tree = self.read_tree(self.guidetree)
-            elif self.guidetree is None:
-                self.tree = None
-
-            if self.qmatrix_iqtree is not None and self.qmatrix is not None:
-                raise TypeError("qmatrix_iqtree and qmatrix cannot both be defined")
-
-            if self.qmatrix_iqtree is not None:
-                self.q = self.q_from_iqtree(self.qmatrix_iqtree)
-            elif self.qmatrix_iqtree is None and self.qmatrix is not None:
-                self.q = self.q_from_file(self.qmatrix)
-            elif self.qmatrix is None and self.qmatrix_iqtree is None:
-                self.q = None
+            self.genotype_data = copy.deepcopy(genotype_data)
+            super().__init__(
+                filename=self.genotype_data.filename,
+                filetype=self.genotype_data.filetype,
+                popmapfile=self.genotype_data.popmapfile,
+                guidetree=self.genotype_data.guidetree,
+                qmatrix_iqtree=self.genotype_data.qmatrix_iqtree,
+                qmatrix=self.genotype_data.qmatrix,
+                siterates=self.genotype_data.siterates,
+                siterates_iqtree=self.genotype_data.siterates_iqtree,
+                verbose=False,
+            )
 
             if self.prop_missing is None:
                 raise TypeError("prop_missing cannot be NoneType")
 
-            #add in missing data
+            # add in missing data
             self.add_missing()
 
-    def add_missing(self):
-        print("\nAdding",self.prop_missing,"missing data using strategy:",self.strategy)
+    def add_missing(self, tol=None, max_tries=None):
+        """Function to generate masked sites in a SimGenotypeData object
+
+        Args:
+            tol (float): Tolerance to reach proportion specified in self.prop_missing. Defaults to 1/num_snps*num_inds
+
+            max_tries (int): Maximum number of tries to reach targeted missing data proportion within specified tol. Defaults to num_inds.
+        """
+        print(
+            "\nAdding",
+            self.prop_missing,
+            "missing data using strategy:",
+            self.strategy,
+        )
 
         if self.strategy == "random":
-            self.mask = np.random.choice([0, 1],
+            self.mask = np.random.choice(
+                [0, 1],
                 size=self.genotypes012_array.shape,
-                p=((1 - self.prop_missing), self.prop_missing)).astype(np.bool)
+                p=((1 - self.prop_missing), self.prop_missing),
+            ).astype(np.bool)
 
-            #mask 012-encoded (self.snps) and one-hot encoded genotypes (self.onehot)
+            self.validate_mask()
+
+            # mask 012-encoded (self.snps) and one-hot encoded genotypes (self.onehot)
             self.mask_snps()
 
-        elif self.strategy == "nonrandom" or self.strategy== "nonrandom_weighted":
+        elif (
+            self.strategy == "nonrandom"
+            or self.strategy == "nonrandom_weighted"
+        ):
             if self.tree is None:
-                raise TypeError("SimGenotypeData.tree cannot be NoneType when strategy=\"systematic\"")
+                raise TypeError(
+                    'SimGenotypeData.tree cannot be NoneType when strategy="systematic"'
+                )
             mask = np.full_like(self.genotypes012_array, 0.0, dtype=bool)
 
             if self.strategy == "nonrandom_weighted":
-                weighted=True
+                weighted = True
             else:
-                weighted=False
+                weighted = False
 
             sample_map = dict()
             for i, sample in enumerate(self.samples):
                 sample_map[sample] = i
 
-            filled=False
-            while not filled:
-                #Get list of samples from tree
-                samples = self.sample_tree(internal_only=False, skip_root=True, weighted=weighted)
+            # if no tolerance provided, set to 1 snp position
+            if tol is None:
+                tol = 1.0 / mask.size
 
-                #convert to row indices
+            # if no max_tries provided, set to # inds
+            if max_tries is None:
+                max_tries = mask.shape[0]
+
+            filled = False
+            while not filled:
+                # Get list of samples from tree
+                samples = self.sample_tree(
+                    internal_only=False, skip_root=True, weighted=weighted
+                )
+
+                # convert to row indices
                 rows = [sample_map[i] for i in samples]
 
-                #randomly sample a column
-                np.random.choice([0, self.num_snps]
+                # randomly sample a column
+                col_idx = np.random.randint(0, mask.shape[1])
+                sampled_col = copy.copy(mask[:, col_idx])
 
-                #mask column
+                # mask column
+                sampled_col[rows] = True
 
+                # check that column is not 100% missing now
+                # if yes, sample again
+                if np.sum(sampled_col) == sampled_col.size:
+                    continue
 
-                #check that column is not 100% missing now
-                #if yes, revert and sample again
-
-                #if not, set values in mask matrix
-
-                #if this addition pushes missing % > self.prop_missing,
-                #check previous prop_missing, remove masked samples from this
-                #column until closest to target prop_missing
-
-                sys.exit()
+                # if not, set values in mask matrix
+                else:
+                    mask[:, col_idx] = sampled_col
+                    # if this addition pushes missing % > self.prop_missing,
+                    # check previous prop_missing, remove masked samples from this
+                    # column until closest to target prop_missing
+                    current_prop = np.sum(mask) / mask.size
+                    if abs(current_prop - self.prop_missing) <= tol:
+                        filled = True
+                        break
+                    elif current_prop > self.prop_missing:
+                        tries = 0
+                        while (
+                            abs(current_prop - self.prop_missing) > tol
+                            and tries < max_tries
+                        ):
+                            r = np.random.randint(0, mask.shape[0])
+                            c = np.random.randint(0, mask.shape[1])
+                            mask[r, c] = False
+                            tries = tries + 1
+                            current_prop = np.sum(mask) / mask.size
+                            # print("After removal:",(np.sum(mask)/mask.size))
+                        filled = True
+                    else:
+                        continue
+            # finish
+            self.mask = mask
+            self.validate_mask()
+            self.mask_snps()
         else:
-            raise ValueError("Invalid SimGenotypeData.strategy value:",self.strategy)
+            raise ValueError(
+                "Invalid SimGenotypeData.strategy value:", self.strategy
+            )
+
+    def validate_mask(self):
+        """
+        Internal function to make sure no entirely missing columns are simulated.
+        """
+        i = 0
+        for column in self.mask.T:
+            if np.sum(column) == column.size:
+                self.mask[np.random.randint(0, mask.shape[0]), i] = False
+            i = i + 1
 
     def accuracy(self, imputed):
-        pass
+        masked_sites = np.sum(self.mask)
+        num_correct = np.sum(
+            self.genotype_data.genotypes012_array[self.mask]
+            == imputed.imputed.genotypes012_array[self.mask]
+        )
+        return num_correct / masked_sites
 
-    def sample_tree(self,
+    def sample_tree(
+        self,
         internal_only=False,
         tips_only=False,
         skip_root=True,
-        weighted=False):
+        weighted=False,
+    ):
+        """Function for randomly sampling clades from SimGenotypeData.tree
+
+        Args:
+            internal_only (bool): Only sample from NON-TIPS. Defaults to False.
+
+            tips_only (bool): Only sample from tips. Defaults to False.
+
+            skip_root (bool): Exclude sampling of root node. Defaults to True.
+
+            weighted (bool): Weight sampling by branch length. Defaults to False.
+
+        Returns:
+            List[str]: List of descendant tips from the sampled node.
+        """
 
         if tips_only and internal_only:
             raise ValueError("internal_only and tips_only cannot both be true")
 
-        #to only sample internal nodes add  if not i.is_leaf()
+        # to only sample internal nodes add  if not i.is_leaf()
         node_dict = dict()
 
         for i in self.tree.treenode.traverse("preorder"):
             if skip_root:
-                if i.idx == self.tree.nnodes-1:
+                if i.idx == self.tree.nnodes - 1:
                     continue
             if tips_only:
                 if not i.is_leaf():
@@ -200,17 +280,35 @@ class SimGenotypeData(GenotypeData):
             node_dict[i.idx] = i.dist
         if weighted:
             s = sum(list(node_dict.values()))
-            p = [i/s for i in list(node_dict.values())]
+            p = [i / s for i in list(node_dict.values())]
             node_idx = np.random.choice(list(node_dict.keys()), size=1, p=p)[0]
         else:
             node_idx = np.random.choice(list(node_dict.keys()), size=1)[0]
-        return(tree.get_tip_labels(idx=node_idx))
-
+        return self.tree.get_tip_labels(idx=node_idx)
 
     def mask_snps(self):
-        i=0
+        """Mask positions in SimGenotypeData.snps and SimGenotypeData.onehot"""
+        i = 0
         for row in self.mask:
             for j in row.nonzero()[0]:
                 self.snps[i][j] = -9
-                self.onehot[i][j] = [0.0,0.0,0.0,0.0]
-            i=i+1
+                self.onehot[i][j] = [0.0, 0.0, 0.0, 0.0]
+            i = i + 1
+
+    @property
+    def missing_count(self) -> int:
+        """Count of masked genotypes in SimGenotypeData.mask
+
+        Returns:
+            int: Integer count of masked alleles.
+        """
+        return np.sum(np.mask)
+
+    @property
+    def prop_missing_real(self) -> float:
+        """Proportion of genotypes masked in SimGenotypeData.mask
+
+        Returns:
+            float: Total number of masked alleles divided by SNP matrix size.
+        """
+        return np.sum(np.mask) / mask.size

@@ -9,12 +9,14 @@ import pandas as pd
 import scipy.stats as stats
 from sklearn_genetic.space import Continuous, Categorical, Integer
 
+from utils.misc import get_processor_name
+from utils.misc import generate_012_genotypes
+
 # Custom module imports
-from pgsui import *
-# from pgsui import GenotypeData
-# from pgsui import SimGenotypeData
-# from pgsui import ImputeNLPCA, ImputeRandomForest
-# from pgsui import ImputePhylo, ImputeAlleleFreq
+from read_input.read_input import GenotypeData
+from read_input.simgenodata import SimGenotypeData
+from impute.estimators import *
+from impute.simple_imputers import *
 
 def main():
     """[Class instantiations and main package body]"""
@@ -84,101 +86,30 @@ def main():
                 prop_missing=0.1,
                 strategy="random")
 
-        # nmf = ImputeNMF(genotype_data=sim)
-        #
-        # accuracy = sim.accuracy(nmf)
-        # print("Accuracy:",accuracy)
-        #
-        # phylo = ImputePhylo(genotype_data=sim, save_plots=False)
+        nmf = ImputeNMF(genotype_data=sim)
 
-        # accuracy = sim.accuracy(phylo)
-        # print("Accuracy:",accuracy)
+        accuracy = sim.accuracy(nmf)
+        print("Accuracy:",accuracy)
 
-        vae = ImputeVAE(
+        phylo = ImputePhylo(genotype_data=sim, save_plots=False)
+
+        accuracy = sim.accuracy(phylo)
+        print("Accuracy:",accuracy)
+
+        nlpca = ImputeNLPCA(
+            genotype_data=sim,
+            initial_strategy="populations",
+            cv=5
+        )
+        accuracy = sim.accuracy(nlpca)
+        print("Accuracy:",accuracy)
+
+        ubp = ImputeUBP(
             genotype_data=sim,
             initial_strategy="populations"
         )
-        accuracy = sim.accuracy(vae)
-        print("VAE Accuracy:",accuracy)
-
-
-
-        sys.exit()
-
-
-        nlpca = ImputeNLPCA(
-            genotype_data=sim,
-            initial_strategy="populations",
-            cv=5,
-            num_hidden_layers=3
-        )
-        accuracy = sim.accuracy(nlpca)
-        print("NLPCA Accuracy (num_hidden_layers=3):",accuracy)
-
-        nlpca = ImputeNLPCA(
-            genotype_data=sim,
-            initial_strategy="populations",
-            cv=5,
-            num_hidden_layers=5
-        )
-        accuracy = sim.accuracy(nlpca)
-        print("NLPCA Accuracy (num_hidden_layers=5):",accuracy)
-
-        nlpca = ImputeNLPCA(
-            genotype_data=sim,
-            initial_strategy="populations",
-            cv=5,
-            num_hidden_layers=8
-        )
-        accuracy = sim.accuracy(nlpca)
-        print("NLPCA Accuracy (num_hidden_layers=8):",accuracy)
-
-        nlpca = ImputeNLPCA(
-            genotype_data=sim,
-            initial_strategy="populations",
-            cv=5,
-            num_hidden_layers=10
-        )
-        accuracy = sim.accuracy(nlpca)
-        print("NLPCA Accuracy (num_hidden_layers=10):",accuracy)
-
-
-
-
-        nlpca = ImputeNLPCA(
-            genotype_data=sim,
-            initial_strategy="populations",
-            cv=5,
-            n_components=2
-        )
-        accuracy = sim.accuracy(nlpca)
-        print("NLPCA Accuracy (n_components=2):",accuracy)
-
-        nlpca = ImputeNLPCA(
-            genotype_data=sim,
-            initial_strategy="populations",
-            cv=5,
-            n_components=3
-        )
-        accuracy = sim.accuracy(nlpca)
-        print("NLPCA Accuracy (n_components=3):",accuracy)
-
-        nlpca = ImputeNLPCA(
-            genotype_data=sim,
-            initial_strategy="populations",
-            cv=5,
-            n_components=4
-        )
-        accuracy = sim.accuracy(nlpca)
-        print("NLPCA Accuracy (n_components=4):",accuracy)
-
-
-        # ubp = ImputeUBP(
-        #     genotype_data=sim,
-        #     initial_strategy="populations"
-        # )
-        # accuracy = sim.accuracy(ubp)
-        # print("Accuracy:",accuracy)
+        accuracy = sim.accuracy(ubp)
+        print("Accuracy:",accuracy)
 
         # vae = ImputeVAE(
         #     genotype_data=sim,

@@ -10,12 +10,12 @@ PG-SUI is a Python 3 API that uses machine learning to impute missing values fro
 
 Supervised methods utilze the scikit-learn's IterativeImputer, which is based on the MICE (Multivariate Imputation by Chained Equations) algorithm [[1]](#1), and iterates over each SNP site (i.e., feature) while uses the N nearest neighbor features to inform the imputation. The number of nearest features can be adjusted by users. IterativeImputer currently works with any of the following scikit-learn classifiers: 
 
-    + K-Nearest Neighbors
-    + Random Forest
-    + Extra Trees
-    + Gradient Boosting
-    + XGBoost
-    + LightGBM
++ K-Nearest Neighbors
++ Random Forest
++ Extra Trees
++ Gradient Boosting
++ XGBoost
++ LightGBM
 
 See the scikit-learn documentation (https://scikit-learn.org) for more information on IterativeImputer and each of the classifiers.
 
@@ -23,9 +23,9 @@ See the scikit-learn documentation (https://scikit-learn.org) for more informati
 
 Unsupervised imputers include three custom neural network models:
 
-    + Variational Autoencoder (VAE) [[2]](#2)
-    + Non-linear Principal Component Analysis (NLPCA) [[3]](#3)
-    + Unsupervised Backpropagation (UBP) [[4]](#4)
++ Variational Autoencoder (VAE) [[2]](#2)
++ Non-linear Principal Component Analysis (NLPCA) [[3]](#3)
++ Unsupervised Backpropagation (UBP) [[4]](#4)
 
 VAE models train themselves to reconstruct their input (i.e., the genotypes. To use VAE for imputation, the missing values are masked and the VAE model gets trained to reconstruct only on known values. Once the model is trained, it is then used to predict the missing values.
 
@@ -37,10 +37,10 @@ UBP is an extension of NLPCA that runs over three phases. Phase 1 refines the ra
 
 We also include several non-machine learning options for imputing missing data, including:
 
-    + Per-population mode per SNP site
-    + Global mode per SNP site
-    + Using a phylogeny as input to inform the imputation
-    + Matrix Factorization
++ Per-population mode per SNP site
++ Global mode per SNP site
++ Using a phylogeny as input to inform the imputation
++ Matrix Factorization
 
 These four "simple" imputation methods can be used as standalone imputers, as the initial imputation strategy for IterativeImputer (at least one method is required to be chosen), and to validate the accuracy of both IterativeImputer and the neural network models.
 

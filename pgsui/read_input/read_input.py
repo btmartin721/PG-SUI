@@ -4,16 +4,20 @@ import warnings
 
 from typing import Optional, Union, List, Dict, Tuple, Any, Callable
 
-# Make sure python version is >= 3.6
-if sys.version_info < (3, 6):
-    raise ImportError("Python < 3.6 is not supported!")
+# Make sure python version is >= 3.7
+if sys.version_info < (3, 7):
+    raise ImportError("Python < 3.7 is not supported!")
 
 import numpy as np
 import pandas as pd
 import toytree as tt
 
-from read_input.popmap_file import ReadPopmap
-from utils import sequence_tools
+try:
+    from .popmap_file import ReadPopmap
+    from ..utils import sequence_tools
+except (ModuleNotFoundError, ValueError):
+    from read_input.popmap_file import ReadPopmap
+    from utils import sequence_tools
 
 
 class GenotypeData:
@@ -595,7 +599,6 @@ class GenotypeData:
 
         if self.verbose:
             print("Done!")
-
             print("\nConverting genotypes to 012 encoding...")
 
         # Convert snp_data to 012 format
@@ -699,7 +702,6 @@ class GenotypeData:
 
         # TODO: valid_sites is now deprecated.
         valid_sites = np.ones(len(snps[0]))
-
         for j in range(0, len(snps[0])):
             loc = list()
             for i in range(0, len(snps)):
@@ -716,6 +718,10 @@ class GenotypeData:
                     warnings.warn(
                         f"Monomorphic site detected at SNP column {j+1}.\n"
                     )
+                    """
+                    ***TO-DO***: Check here if column is all-missing. What to
+                    do in this case? Error out?
+                    """
                     ref = sequence_tools.get_major_allele(loc, vcf=vcf)
                     ref = str(ref[0])
                     alt = None
@@ -798,9 +804,7 @@ class GenotypeData:
 
                             else:
                                 new_snps[i].append(1)
-                    # skip += 1
-                    # valid_sites[j] = np.nan
-                    # continue
+
             else:
                 ref, alt = sequence_tools.get_major_allele(loc, vcf=vcf)
                 ref = str(ref)
@@ -1058,7 +1062,6 @@ class GenotypeData:
                 ref2 = nuc[ref2]
                 alt2 = nuc[alt2]
                 het2 = nuc[het2]
-
             d = {"0": ref2, 0: ref2, "1": het2, 1: het2, "2": alt2, 2: alt2}
             dreplace[col] = d
 
@@ -1108,10 +1111,7 @@ class GenotypeData:
 
             if write_output:
                 df_decoded.to_csv(
-                    of,
-                    sep="\t",
-                    header=False,
-                    index=False,
+                    of, sep="\t", header=False, index=False,
                 )
 
         elif ft.startswith("phylip"):

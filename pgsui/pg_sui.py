@@ -10,9 +10,19 @@ import scipy.stats as stats
 
 from sklearn_genetic.space import Continuous, Categorical, Integer
 
+# from pgsui import GenotypeData
 from read_input.read_input import GenotypeData
-from impute.estimators import *
-from impute.simple_imputers import ImputeAlleleFreq, ImputePhylo
+from impute.estimators import (
+    ImputeNLPCA,
+    ImputeUBP,
+    ImputeRandomForest,
+    ImputeVAE,
+)
+from impute.simple_imputers import ImputePhylo
+
+# from read_input.read_input import GenotypeData
+# from impute.estimators import *
+# from impute.simple_imputers import ImputeAlleleFreq, ImputePhylo
 
 # from read_input import GenotypeData
 # from estimators import *
@@ -78,257 +88,61 @@ def main():
             popmapfile=args.popmap,
             guidetree=args.treefile,
             qmatrix_iqtree=args.iqtree,
+            siterates_iqtree="pgsui/example_data/trees/test_n10.rate",
         )
 
-    if args.resume_imputed:
-        pass
-        # data.read_imputed(args.resume_imputed, impute_methods="rf")
-        # data.write_imputed(data.imputed_rf_df, args.prefix)
+    # For GridSearchCV. Generate parameters to sample from.
+    learning_rate = [float(10) ** x for x in np.arange(-4, 0)]
+    l1_penalty = [float(10) ** x for x in np.arange(-6, -1)]
+    l1_penalty.append(0.0)
+    l2_penalty = [float(10) ** x for x in np.arange(-6, -1)]
+    l2_penalty.append(0.0)
+    hidden_activation = ["elu", "relu"]
+    num_hidden_layers = [1, 2, 3, 4, 5]
+    hidden_layer_sizes = ["sqrt", "midpoint"]
+    n_components = [2, 3]
+    dropout_rate = [round(x, 1) for x in np.arange(0.0, 1.0, 0.1)]
+    batch_size = [16, 32, 48, 64]
+    optimizer = ["adam", "sgd", "adagrad"]
 
-    else:
-        # For randomizedsearchcv
-        # Number of trees in random forest
-        n_estimators = [
-            int(x) for x in np.linspace(start=100, stop=1000, num=10)
-        ]
+    # Some are commented out for testing purposes.
+    grid_params = {
+        # "learning_rate": learning_rate,
+        # "l1_penalty": l1_penalty,
+        "l2_penalty": l2_penalty,
+        # "hidden_activation": hidden_activation,
+        # "hidden_layer_sizes": hidden_layer_sizes,
+        "n_components": n_components,
+        # "dropout_rate": dropout_rate,
+        # "batch_size": batch_size,
+        # "optimizer": optimizer,
+    }
 
-        # Number of features to consider at every split
-        max_features = ["sqrt", "log2"]
-
-        # Maximum number of levels in the tree
-        max_depth = [int(x) for x in np.linspace(10, 110, num=11)]
-        max_depth.append(None)
-
-        # Minimmum number of samples required to split a node
-        min_samples_split = [int(x) for x in np.linspace(2, 10, num=5)]
-
-        # Minimum number of samples required at each leaf node
-        min_samples_leaf = [int(x) for x in np.linspace(1, 5, num=5)]
-
-        # Proportion of dataset to use with bootstrapping
-        # max_samples = [x for x in np.linspace(0.5, 1.0, num=6)]
-
-        # Random Forest gridparams - RandomizedSearchCV
-        grid_params = {
-            "max_features": max_features,
-            "max_depth": max_depth,
-            "min_samples_split": min_samples_split,
-            "min_samples_leaf": min_samples_leaf,
-        }
-
-        # Random Forest gridparams - Genetic Algorithms
-        # grid_params = {
-        # 	"n_estimators": Integer(100, 500),
-        # 	"max_features": max_features,
-        # 	"max_depth": max_depth,
-        # 	"min_samples_split": min_samples_split,
-        # 	"min_samples_leaf": min_samples_leaf,
-        # 	"max_samples": max_samples
-        # }
-
-        # Genetic Algorithm grid_params
-        # grid_params = {
-        #     "max_features": Categorical(["sqrt", "log2"]),
-        #     "min_samples_split": Integer(2, 10),
-        #     "min_samples_leaf": Integer(1, 10),
-        #     "max_depth": Integer(2, 110),
-        # }
-
-        # Bayesian Ridge gridparams - RandomizedSearchCV
-        # grid_params = {
-        # 	"alpha_1": stats.loguniform(1e-6, 0.01),
-        # 	"alpha_2": stats.loguniform(1e-6, 0.01),
-        # 	"lambda_1": stats.loguniform(1e-6, 0.01),
-        # 	"lambda_2": stats.loguniform(1e-6, 0.01),
-        # }
-
-        # # Bayesian Ridge gridparams - Genetic algorithm
-        # grid_params = {
-        # 	"alpha_1": Continuous(1e-6, 1e-3, distribution="log-uniform"),
-        # 	"alpha_2": Continuous(1e-6, 1e-3, distribution="log-uniform"),
-        # 	"lambda_1": Continuous(1e-6, 1e-3, distribution="log-uniform"),
-        # 	"lambda_2": Continuous(1e-6, 1e-3, distribution="log-uniform")
-        # }
-
-        # Random forest imputation with genetic algorithm grid search
-        rf_imp = ImputeRandomForest(
-            data,
-            prefix=args.prefix,
-            n_estimators=50,
-            n_nearest_features=1,
-            gridparams=grid_params,
-            cv=3,
-            grid_iter=40,
-            n_jobs=4,
-            max_iter=2,
-            column_subset=1.0,
-            ga=False,
-            disable_progressbar=True,
-            extratrees=False,
-            mutation_probability=0.1,
-            progress_update_percent=20,
-            chunk_size=1.0,
-            initial_strategy="phylogeny",
-        )
-
-        rfdata = rf_imp.imputed
-        print(rfdata.genotypes012_df)
-
-        # rf_data = rf_imp.imputed
-        # print(data.genotypes012_df)
-        # print(rf_data.genotypes012_df)
-
-        # imp_decoded = data.decode_imputed(rf_imp.imputed)
-        # print(imp_decoded)
-
-        # # RandomizedSearchCV Test
-        # rf_imp = ImputeRandomForest(
-        #     data,
-        #     prefix=args.prefix,
-        #     n_estimators=50,
-        #     n_nearest_features=3,
-        #     gridparams=grid_params,
-        #     cv=3,
-        #     grid_iter=40,
-        #     n_jobs=4,
-        #     max_iter=2,
-        #     column_subset=5,
-        #     ga=False,
-        #     disable_progressbar=False,
-        #     extratrees=False,
-        #     progress_update_percent=20,
-        #     chunk_size=0.2,
-        #     initial_strategy="populations",
-        # )
-
-        # lgbm = ImputeLightGBM(
-        #     data,
-        #     prefix=args.prefix,
-        #     cv=3,
-        #     n_jobs=4,
-        #     n_estimators=50,
-        #     disable_progressbar=True,
-        #     chunk_size=0.2,
-        #     validation_only=0.1,
-        #     n_nearest_features=3,
-        #     max_iter=2,
-        #     initial_strategy="populations",
-        # )
-
-        # vae = ImputeVAE(
-        #     genotype_data=data,
-        #     prefix=args.prefix,
-        #     disable_progressbar=True,
-        #     validation_only=None,
-        #     initial_strategy="populations",
-        # )
-
-        # vae_gtdata = vae.imputed
-        # print(vae_gtdata.genotypes012_df)
-
-        # complete_encoded = imputer.train(train_epochs=300, batch_size=256)
-        # print(complete_encoded)
-
-        # rf_imp = ImputeRandomForest(
-        #     data,
-        #     prefix=args.prefix,
-        #     n_estimators=50,
-        #     n_nearest_features=3,
-        #     n_jobs=4,
-        #     max_iter=2,
-        #     disable_progressbar=True,
-        #     extratrees=False,
-        #     max_features="sqrt",
-        #     min_samples_split=5,
-        #     min_samples_leaf=2,
-        #     max_depth=30,
-        #     cv=3,
-        #     validation_only=0.3,
-        #     chunk_size=1.0,
-        #     initial_strategy="populations",
-        # )
-
-        # afpops = ImputeAlleleFreq(
-        #     genotype_data=data,
-        #     by_populations=True,
-        #     prefix=args.prefix,
-        # )
-
-        # print(data.genotypes012_df)
-        # print(afpops.genotypes012_df)
-
-        # br_imp = ImputeBayesianRidge(data, prefix=args.prefix, n_iter=100, gridparams=grid_params, grid_iter=3, cv=3, n_jobs=4, max_iter=5, n_nearest_features=3, column_subset=4, ga=False, disable_progressbar=True, progress_update_percent=20, chunk_size=1.0)
-
-        # aftestpops = ImputeAlleleFreq(
-        #     genotype_data=data, by_populations=True, prefix=args.prefix
-        # )
-
-        # aftestpops_data = aftestpops.imputed
-
-        # print(data.genotypes012_df)
-        # print(aftestpops_data.genotypes012_df)
-
-    # vae = ImputeVAE(
-    #     gt=np.array([[0, 1], [-9, 1], [2, -9]]),
-    #     initial_strategy="most_frequent",
-    #     cv=3,
-    #     validation_only=None,
-    # )
-
-    # vae_data = vae.imputed
-
-    # print(data.genotypes012_df)
-    # print(vae_data.genotypes012_df)
-
-    # nlpca = ImputeNLPCA(
-    #     data,
-    #     n_components=3,
-    #     initial_strategy="populations",
-    #     disable_progressbar=True,
-    #     cv=3,
-    #     hidden_activation="elu",
-    #     hidden_layer_sizes="midpoint",
-    #     validation_only=None,
-    #     num_hidden_layers=1,
-    #     learning_rate=0.1,
-    # )
-
-    # nlpca_data = nlpca.imputed
-    # print(nlpca_data.genotypes012_df)
-
-    # print(data.genotypes012_df)
-    # print(nlpca_data.genotypes012_df)
-
-    # ubp = ImputeUBP(
-    #     genotype_data=data,
-    #     test_categorical=np.array([[0, 1], [-9, 1], [2, -9]]),
-    # )
-
-    # ubp = ImputeVAE(
-    #     gt=np.array([[0, 1], [-9, 1], [2, -9]]),
-    #     initial_strategy="most_frequent",
-    # )
-
-    # br_imp = ImputeBayesianRidge(
-    #     data,
-    #     prefix=args.prefix,
-    #     alpha_1=0.0002689638465560243,
-    #     alpha_2=0.0001473822173361299,
-    #     lambda_1=0.0003281735206234651,
-    #     lambda_2=0.00020767920087590963,
-    #     n_iter=100,
-    #     n_nearest_features=3,
-    #     progress_update_percent=20,
-    #     disable_progressbar=True,
-    #     max_iter=2,
-    #     cv=3,
-    #     initial_strategy="group_mode",
-    # )
-
-    # phylo = ImputePhylo(genotype_data=data, save_plots=False)
-
-    # phylodata = phylo.imputed
-    # print(phylodata.genotypes012_df)
+    ubp = ImputeUBP(
+        data,
+        disable_progressbar=False,
+        cv=3,
+        column_subset=1.0,
+        validation_split=0.0,
+        learning_rate=0.1,
+        num_hidden_layers=1,
+        verbose=1,
+        dropout_rate=0.2,
+        hidden_activation="elu",
+        batch_size=64,
+        l1_penalty=1e-6,
+        l2_penalty=1e-6,
+        gridparams=grid_params,
+        n_jobs=4,
+        grid_iter=5,
+        sim_strategy="nonrandom_weighted",
+        sim_prop_missing=0.4,
+        scoring_metric="precision_recall_macro",
+        gridsearch_method="randomized_gridsearch",
+        early_stop_gen=5,
+        # sample_weights={0: 1.0, 1: 0.0, 2: 1.0},
+        # sample_weights="auto",
+    )
 
 
 def get_arguments():
