@@ -48,3 +48,11 @@ output*
 build/
 venv/
 venv/*
+Rplot*.png
+input.fa
+.Rhistory
+*_reports/
+reports/
+bias_INDV20_popmap.txt
+bias_INDV20_popmap2.txt
+biasINDV20_popmap.txt
