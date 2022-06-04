@@ -5,26 +5,9 @@ import sys
 import random
 import warnings
 from collections import defaultdict
-from itertools import cycle
 
-import matplotlib.pyplot as plt
-import seaborn as sns
 import numpy as np
 import pandas as pd
-
-from sklearn.metrics import (
-    roc_curve,
-    auc,
-    precision_recall_curve,
-    average_precision_score,
-    make_scorer,
-    accuracy_score,
-    multilabel_confusion_matrix,
-)
-
-from sklearn_genetic.utils import logbook_to_pandas
-
-from sklearn.preprocessing import label_binarize
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 logging.getLogger("tensorflow").disabled = True
@@ -54,12 +37,6 @@ def deprecated(
 
 
 deprecation.deprecated = deprecated
-
-# Custom module imports
-try:
-    from ..data_processing.transformers import SimGenotypeDataTransformer
-except (ModuleNotFoundError, ValueError):
-    from data_processing.transformers import SimGenotypeDataTransformer
 
 
 class NeuralNetworkMethods:
@@ -103,6 +80,26 @@ class NeuralNetworkMethods:
         df[df_dummies.columns[pos["_"]]] = df_dummies.iloc[:, pos["_"]]
 
         return df
+
+    def decode_masked(self, y):
+        """Evaluate model predictions by decoding to 012-encoded format.
+
+        Gets the index of the highest predicted value to obtain the 012-encodings.
+
+        Calucalates highest predicted value for each row vector and each class, setting the most likely class to 1.0.
+
+        Args:
+            y (numpy.ndarray): Model predictions of shape (n_samples * n_features,). Array should be flattened and masked.
+
+        Returns:
+            numpy.ndarray: Imputed one-hot encoded values.
+
+            pandas.DataFrame: One-hot encoded pandas DataFrame with no missing values.
+        """
+        Xprob = y
+        Xt = np.apply_along_axis(self.mle, axis=-1, arr=Xprob)
+        Xpred = np.argmax(Xt, axis=-1)
+        return Xpred
 
     @staticmethod
     def encode_categorical(X):
@@ -179,50 +176,6 @@ class NeuralNetworkMethods:
             else:
                 mle_complete = np.hstack([mle_complete, mle_completed])
         return mle_complete, df_dummies
-
-    def simulate_missing(
-        self, X, genotype_data, prop_missing, strategy, missing=-9
-    ):
-        """Simulate missing data and generate missing masks.
-
-        Generates missing masks for original dataset, all missing values (simulated + original), and simulated missing values.
-
-        Args:
-            X (numpy.ndarray): Original dataset with original missing values.
-            genotype_data (GenotypeData): Initialized GenotypeData object.
-            prop_missing (float): Proportion of missing values to simulate.
-            strategy (str): Strategy to use for simulation. Supported options include "random", "nonrandom", and "nonrandom_weighted".
-            missing (int): Missing data value.
-
-        Returns:
-            numpy.ndarray: Dataset with simulated and original missing values.
-            numpy.ndarray: Boolean mask of original missing values.
-            numpy.ndarray: Boolean mask of simulated missing values.
-            numpy.ndarray: Boolean mask of original + simulated missing values.
-        """
-        # Get original missing values.
-        original_mask = (
-            pd.DataFrame(X).replace(missing, np.nan).isna().to_numpy()
-        )
-
-        Xt = SimGenotypeDataTransformer(
-            genotype_data,
-            prop_missing=prop_missing,
-            strategy=strategy,
-        ).fit_transform(X)
-
-        all_mask = pd.DataFrame(Xt).replace(missing, np.nan).isna().to_numpy()
-
-        # Get values where original value was not missing and simulated missing
-        # data is missing.
-        sim_mask = np.logical_and(all_mask, original_mask == False)
-
-        return (
-            Xt,
-            original_mask,
-            sim_mask,
-            all_mask,
-        )
 
     def validate_hidden_layers(self, hidden_layer_sizes, num_hidden_layers):
         """Validate hidden_layer_sizes and verify that it is in the correct format.
@@ -302,21 +255,6 @@ class NeuralNetworkMethods:
 
             layers.append(units)
         return layers
-
-    def init_weights(self, dim1, dim2, w_mean=0, w_stddev=0.01):
-        """Initialize random weights to use with the model.
-
-        Args:
-            dim1 (int): Size of first dimension.
-
-            dim2 (int): Size of second dimension.
-
-            w_mean (float, optional): Mean of normal distribution. Defaults to 0.
-
-            w_stddev (float, optional): Standard deviation of normal distribution. Defaults to 0.01.
-        """
-        # Get reduced-dimension dataset.
-        return np.random.normal(loc=w_mean, scale=w_stddev, size=(dim1, dim2))
 
     def validate_model_inputs(self, y, missing_mask, output_shape):
         """Validate inputs to Keras subclass model.
@@ -423,289 +361,6 @@ class NeuralNetworkMethods:
             batch_end,
         )
 
-    def reset_seeds(self):
-        """Reset random seeds for initializing weights."""
-        seed1 = np.random.randint(1, 1e6)
-        seed2 = np.random.randint(1, 1e6)
-        seed3 = np.random.randint(1, 1e6)
-        np.random.seed(seed1)
-        random.seed(seed2)
-        if tf.__version__[0] == "2":
-            tf.random.set_seed(seed3)
-        else:
-            tf.set_random_seed(seed3)
-
-    def make_reconstruction_loss(self):
-        """Make loss function for use with a keras model.
-
-        Returns:
-            callable: Function that calculates loss.
-        """
-
-        def reconstruction_loss(input_and_mask, y_pred):
-            """Custom loss function for neural network model with missing mask.
-
-            Ignores missing data in the calculation of the loss function.
-
-            Args:
-                input_and_mask (numpy.ndarray): Input one-hot encoded array with missing values also one-hot encoded and h-stacked.
-
-                y_pred (numpy.ndarray): Predicted values.
-
-            Returns:
-                float: Mean squared error loss value with missing data masked.
-            """
-            n_features = y_pred.numpy().shape[1]
-
-            true_indices = range(n_features)
-            missing_indices = range(n_features, n_features * 2)
-
-            # Split features and missing mask.
-            y_true = tf.gather(input_and_mask, true_indices, axis=1)
-            missing_mask = tf.gather(input_and_mask, missing_indices, axis=1)
-
-            observed_mask = tf.subtract(1.0, missing_mask)
-            y_true_observed = tf.multiply(y_true, observed_mask)
-            pred_observed = tf.multiply(y_pred, observed_mask)
-
-            # loss_fn = tf.keras.losses.CategoricalCrossentropy()
-            # return loss_fn(y_true_observed, pred_observed)
-
-            return tf.keras.metrics.mean_squared_error(
-                y_true=y_true_observed, y_pred=pred_observed
-            )
-
-        return reconstruction_loss
-
-    def make_masked_loss(self):
-        """Make loss function for use with a keras model.
-
-        Args:
-            missing_mask (numpy.ndarray): Boolean missing mask of shape (n_samples, n_features).
-
-        Returns:
-            callable: Function that calculates loss.
-        """
-
-        def masked_loss(y_true, y_pred):
-            """Custom loss function for neural network model with missing mask.
-
-            Ignores missing data in the calculation of the loss function.
-
-            Args:
-                y_true (tensorflow.tensor): Input one-hot encoded 3D tensor.
-                y_pred (tensorflow.tensor): Predicted values.
-
-            Returns:
-                float: Mean squared error loss value with missing data masked.
-            """
-
-            sample_weight = args[0]
-
-            if sample_weight is not None:
-                print("yes")
-            else:
-                print("no")
-            sys.exit()
-
-            # y_true_masked = tf.boolean_mask(
-            #     y_true, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
-            # )
-
-            # y_pred_masked = tf.boolean_mask(
-            #     y_pred, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
-            # )
-
-            # sample_weight_masked = tf.boolean_mask(
-            #     tf.convert_to_tensor(sample_weight),
-            #     tf.reduce_any(tf.not_equal(y_true, -1), axis=2),
-            # )
-
-            loss_fn = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
-
-            return loss_fn(
-                y_true_masked, y_pred_masked, sample_weight=sample_weight_masked
-            )
-
-        return masked_loss
-
-    def make_masked_acc(self):
-        """Make accuracy function for use with a keras model.
-
-        Args:
-            missing_mask (numpy.ndarray): Boolean missing mask of shape (n_samples, n_features).
-            sample_weight (tensorflow.tensor or None, optional): Sample weights to multiply loss by.
-
-        Returns:
-            callable: Function that calculates loss.
-        """
-
-        def masked_acc(y_true, y_pred):
-            """Custom loss function for neural network model with missing mask.
-
-            Ignores missing data in the calculation of the loss function.
-
-            Args:
-                y_true (tensorflow.tensor): Input one-hot encoded 3D tensor.
-                y_pred (tensorflow.tensor): Predicted values.
-
-            Returns:
-                float: Mean squared error loss value with missing data masked.
-            """
-
-            sample_weight = args[0]
-
-            # y_true_masked = tf.boolean_mask(
-            #     y_true, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
-            # )
-
-            # y_pred_masked = tf.boolean_mask(
-            #     y_pred, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
-            # )
-
-            # sample_weight_masked = tf.boolean_mask(
-            #     tf.convert_to_tensor(sample_weight),
-            #     tf.reduce_any(tf.not_equal(y_true, -1), axis=2),
-            # )
-
-            metric = tf.keras.metrics.CategoricalAccuracy(
-                name="masked_accuracy"
-            )
-            metric.update_state(
-                y_true_masked,
-                y_pred_masked,
-                sample_weight=sample_weight_masked,
-            )
-            return metric.result()
-
-        return masked_acc
-
-    # def custom_loss(self, input_and_mask, y_pred):
-    #     """Custom loss function for neural network model with missing mask.
-
-    #     Ignores missing data in the calculation of the loss function.
-
-    #     Args:
-    #         input_and_mask (numpy.ndarray): Input one-hot encoded array with missing values also one-hot encoded and h-stacked.
-
-    #         y_pred (numpy.ndarray): Predicted values.
-
-    #     Returns:
-    #         float: Mean squared error loss value with missing data masked.
-    #     """
-    #     n_features = y_pred.numpy().shape[1]
-
-    #     true_indices = range(n_features)
-    #     missing_indices = range(n_features, n_features * 2)
-
-    #     # Split features and missing mask.
-    #     y_true = tf.gather(input_and_mask, true_indices, axis=1)
-    #     missing_mask = tf.gather(input_and_mask, missing_indices, axis=1)
-
-    #     observed_mask = tf.subtract(1.0, missing_mask)
-    #     y_true_observed = tf.multiply(y_true, observed_mask)
-    #     pred_observed = tf.multiply(y_pred, observed_mask)
-
-    #     return tf.keras.metrics.mean_squared_error(
-    #         y_true=y_true_observed, y_pred=pred_observed
-    #     )
-
-    def val_loss(self, input_and_mask, y_pred):
-        """Custom loss function for neural network model test dataset with missing mask.
-
-        Ignores missing data in the calculation of the loss function.
-
-        Args:
-            input_and_mask (numpy.ndarray): Input one-hot encoded array with missing values also one-hot encoded and h-stacked.
-
-            y_pred (numpy.ndarray): Predicted values.
-
-        Returns:
-            float: Mean squared error loss value with missing data masked.
-        """
-
-    def make_acc(self):
-        """Make loss function for use with a keras model.
-
-        Returns:
-            callable: Function that calculates loss.
-        """
-
-        def accuracy_masked(input_and_mask, y_pred):
-            """Custom loss function for neural network model with missing mask.
-
-            Ignores missing data in the calculation of the loss function.
-
-            Args:
-                input_and_mask (numpy.ndarray): Input one-hot encoded array with missing values also one-hot encoded and h-stacked.
-
-                y_pred (numpy.ndarray): Predicted values.
-
-            Returns:
-                float: Mean squared error loss value with missing data masked.
-            """
-            n_features = y_pred.numpy().shape[1]
-
-            true_indices = range(n_features)
-            missing_indices = range(n_features, n_features * 2)
-
-            # Split features and missing mask.
-            y_true = tf.gather(input_and_mask, true_indices, axis=1)
-            missing_mask = tf.gather(input_and_mask, missing_indices, axis=1)
-
-            observed_mask = tf.subtract(1.0, missing_mask)
-            y_true_observed = tf.multiply(y_true, observed_mask)
-            pred_observed = tf.multiply(y_pred, observed_mask)
-
-            metric = tf.keras.metrics.BinaryAccuracy(name="accuracy_masked")
-            metric.update_state(y_true_observed, pred_observed)
-            return metric.result()
-
-        return accuracy_masked
-
-    def accuracy(self, input_and_mask, y_pred):
-        """Custom loss function for neural network model with missing mask.
-
-        Ignores missing data in the calculation of the loss function.
-
-        Args:
-            input_and_mask (numpy.ndarray): Input one-hot encoded array with missing values also one-hot encoded and h-stacked.
-
-            y_pred (numpy.ndarray): Predicted values.
-
-        Returns:
-            float: Mean squared error loss value with missing data masked.
-        """
-        n_features = y_pred.numpy().shape[1]
-
-        true_indices = range(n_features)
-        missing_indices = range(n_features, n_features * 2)
-
-        # Split features and missing mask.
-        y_true = tf.gather(input_and_mask, true_indices, axis=1)
-        missing_mask = tf.gather(input_and_mask, missing_indices, axis=1)
-
-        observed_mask = tf.subtract(1.0, missing_mask)
-        y_true_observed = tf.multiply(y_true, observed_mask)
-        pred_observed = tf.multiply(y_pred, observed_mask)
-
-        metric = tf.keras.metrics.BinaryAccuracy(name="accuracy_masked")
-        metric.update_state(y_true_observed, pred_observed)
-        return metric.result()
-
-    def masked_mse(self, X_true, X_pred, mask):
-        """Calculates mean squared error with missing values ignored.
-
-        Args:
-            X_true (numpy.ndarray): One-hot encoded input data.
-            X_pred (numpy.ndarray): Predicted values.
-            mask (numpy.ndarray): One-hot encoded missing data mask.
-
-        Returns:
-            float: Mean squared error calculation.
-        """
-        return np.square(np.subtract(X_true[mask], X_pred[mask])).mean()
-
     def validate_batch_size(self, X, batch_size):
         """Validate the batch size, and adjust as necessary.
 
@@ -764,670 +419,85 @@ class NeuralNetworkMethods:
             "run_eagerly": True,
         }
 
-    @staticmethod
-    def plot_grid_search(cv_results, prefix):
-        """Plot cv_results_ from a grid search for each parameter.
-
-        Saves a figure to disk.
+    def init_weights(self, dim1, dim2, w_mean=0, w_stddev=0.01):
+        """Initialize random weights to use with the model.
 
         Args:
-            cv_results (numpy.ndarray): the cv_results_ attribute from a trained grid search object.
+            dim1 (int): Size of first dimension.
 
-            prefix (str): Prefix to use for saving the plot to file.
+            dim2 (int): Size of second dimension.
+
+            w_mean (float, optional): Mean of normal distribution. Defaults to 0.
+
+            w_stddev (float, optional): Standard deviation of normal distribution. Defaults to 0.01.
         """
-        ## Results from grid search
-        results = pd.DataFrame(cv_results)
-        means_test = [col for col in results if col.startswith("mean_test_")]
-        filter_col = [col for col in results if col.startswith("param_")]
-        params_df = results[filter_col].astype(str)
-        for i, col in enumerate(means_test):
-            params_df[col] = results[means_test[i]]
-
-        # Get number of needed subplot rows.
-        tot = len(filter_col)
-        cols = 4
-        rows = int(np.ceil(tot / cols))
-        remainder = tot % cols
-
-        fig = plt.figure(1, figsize=(20, 10))
-        fig.tight_layout(pad=3.0)
-
-        # Set font properties.
-        font = {"size": 12}
-        plt.rc("font", **font)
-
-        for i, p in enumerate(filter_col, start=1):
-
-            ax = fig.add_subplot(rows, cols, i)
-
-            # Plot each metric.
-            for col in means_test:
-                # Get maximum score for each parameter setting.
-                df_plot = params_df.groupby(p)[col].agg("max")
-
-                # Convert to float if not supposed to be string.
-                try:
-                    df_plot.index = df_plot.index.astype(float)
-                except TypeError:
-                    pass
-
-                # Sort by index (numerically if possible).
-                df_plot = df_plot.sort_index()
-
-                # Remove prefix from score name.
-                col_new_name = col[len("mean_test_") :]
-
-                ax.plot(
-                    df_plot.index.astype(str),
-                    df_plot.values,
-                    "-o",
-                    label=col_new_name,
-                )
-
-                ax.legend(loc="best")
-
-            param_new_name = p[len("param_") :]
-            ax.set_xlabel(param_new_name.lower())
-            ax.set_ylabel("Max Score")
-            ax.set_ylim([0, 1])
-
-        fig.savefig(f"{prefix}_gridsearch.pdf", bbox_inches="tight")
-
-    @staticmethod
-    def compute_roc_auc_micro_macro(y_true, y_pred):
-        """Compute ROC curve with AUC scores.
-
-        ROC (Receiver Operating Characteristic) curves and AUC (area under curve) scores are computed per-class and for micro and macro averages.
-
-        Args:
-            y_true (numpy.ndarray): Ravelled numpy array of shape (n_samples * n_features,).
-
-            y_pred (numpy.ndarray): Ravelled numpy array of shape (n_samples * n_features,).
-
-        Returns:
-            Dict[str, Any]: Dictionary with true and false positive rates along probability threshold curve per class, micro and macro tpr and fpr curves averaged across classes, and AUC scores per-class and for micro and macro averages.
-        """
-        # Get only classes that appear in y_true.
-        classes = [i for i in range(3) if i in y_true]
-
-        # Binarize the output fo use with ROC-AUC.
-        y_true_bin = label_binarize(y_true, classes=[0, 1, 2])
-        y_pred_bin = label_binarize(y_pred, classes=[0, 1, 2])
-
-        for i in range(y_true_bin.shape[1]):
-            if i not in classes:
-                y_true_bin = np.delete(y_true_bin, i, axis=-1)
-                y_pred_bin = np.delete(y_pred_bin, i, axis=-1)
-
-        n_classes = len(classes)
-
-        # Compute ROC curve and ROC area for each class.
-        fpr = dict()
-        tpr = dict()
-        roc_auc = dict()
-        for i, c in enumerate(classes):
-            fpr[c], tpr[c], _ = roc_curve(y_true_bin[:, i], y_pred_bin[:, i])
-            roc_auc[c] = auc(fpr[c], tpr[c])
-
-        # Compute micro-average ROC curve and ROC area.
-        fpr["micro"], tpr["micro"], _ = roc_curve(
-            y_true_bin.ravel(), y_pred_bin.ravel()
-        )
-
-        roc_auc["micro"] = auc(fpr["micro"], tpr["micro"])
-
-        # Aggregate all false positive rates
-        all_fpr = np.unique(np.concatenate([fpr[i] for i in classes]))
-
-        # Then interpolate all ROC curves at these points.
-        mean_tpr = np.zeros_like(all_fpr)
-        for i in classes:
-            mean_tpr += np.interp(all_fpr, fpr[i], tpr[i])
-
-        # Finally, average it and compute AUC.
-        mean_tpr /= n_classes
-
-        fpr["macro"] = all_fpr
-        tpr["macro"] = mean_tpr
-
-        roc_auc["macro"] = auc(fpr["macro"], tpr["macro"])
-
-        roc_auc["fpr_macro"] = fpr["macro"]
-        roc_auc["tpr_macro"] = tpr["macro"]
-        roc_auc["fpr_micro"] = fpr["micro"]
-        roc_auc["tpr_micro"] = tpr["micro"]
-
-        for i in classes:
-            roc_auc[f"fpr_{i}"] = fpr[i]
-            roc_auc[f"tpr_{i}"] = tpr[i]
-
-        return roc_auc
-
-    @staticmethod
-    def compute_pr(y_true, y_pred):
-        """Compute precision-recall curve with Average Precision scores.
-
-        PR and AP scores are computed per-class and for micro and macro averages.
-
-        Args:
-            y_true (numpy.ndarray): Ravelled numpy array of shape (n_samples * n_features,).
-
-            y_pred (numpy.ndarray): Ravelled numpy array of shape (n_samples * n_features,).
-
-        Returns:
-            Dict[str, Any]: Dictionary with precision and recall curves per class and micro and macro averaged across classes, plus AP scores per-class and for micro and macro averages.
-        """
-        # Get only classes that appear in y_true.
-        classes = [i for i in range(3) if i in y_true]
-
-        # Binarize the output fo use with ROC-AUC.
-        y_true_bin = label_binarize(y_true, classes=[0, 1, 2])
-        y_pred_proba_bin = y_pred
-
-        for i in range(y_true_bin.shape[1]):
-            if i not in classes:
-                y_true_bin = np.delete(y_true_bin, i, axis=-1)
-                y_pred_proba_bin = np.delete(y_pred_proba_bin, i, axis=-1)
-
-        n_classes = len(classes)
-
-        nn = NeuralNetworkMethods()
-        y_pred_012 = nn.decode_masked(y_pred_proba_bin)
-
-        # Make confusion matrix to get true negatives and true positives.
-        mcm = multilabel_confusion_matrix(y_true, y_pred_012)
-        tn = np.sum(mcm[:, 0, 0])
-        tn /= n_classes
-
-        tp = np.sum(mcm[:, 1, 1])
-        tp /= n_classes
-
-        baseline = tp / (tn + tp)
-
-        precision = dict()
-        recall = dict()
-        average_precision = dict()
-        for i, c in enumerate(classes):
-            precision[c], recall[c], _ = precision_recall_curve(
-                y_true_bin[:, i], y_pred_proba_bin[:, i]
-            )
-            average_precision[c] = average_precision_score(
-                y_true_bin[:, i], y_pred_proba_bin[:, i]
-            )
-
-        # A "micro-average": quantifying score on all classes jointly.
-        precision["micro"], recall["micro"], _ = precision_recall_curve(
-            y_true_bin.ravel(), y_pred_proba_bin.ravel()
-        )
-
-        average_precision["micro"] = average_precision_score(
-            y_true_bin, y_pred_proba_bin, average="micro"
-        )
-
-        average_precision["macro"] = average_precision_score(
-            y_true_bin, y_pred_proba_bin, average="macro"
-        )
-
-        # Aggregate all recalls
-        all_recall = np.unique(np.concatenate([recall[i] for i in classes]))
-
-        # Then interpolate all PR curves at these points.
-        mean_precision = np.zeros_like(all_recall)
-        for i in classes:
-            mean_precision += np.interp(all_recall, precision[i], recall[i])
-
-        # Finally, average it and compute AUC.
-        mean_precision /= n_classes
-
-        recall["macro"] = all_recall
-        precision["macro"] = mean_precision
-
-        results = dict()
-
-        results["micro"] = average_precision["micro"]
-        results["macro"] = average_precision["macro"]
-        results["recall_macro"] = all_recall
-        results["precision_macro"] = mean_precision
-        results["recall_micro"] = recall["micro"]
-        results["precision_micro"] = precision["micro"]
-
-        for i in classes:
-            results[f"recall_{i}"] = recall[i]
-            results[f"precision_{i}"] = precision[i]
-            results[i] = average_precision[i]
-        results["baseline"] = baseline
-
-        return results
-
-    @staticmethod
-    def plot_metrics(metrics, num_classes, prefix):
-        """Plot performance metrics for classifier.
-
-        Saves plot to PDF file on disk.
-
-        Args:
-            metrics (Dict[str, Any]): Per-class, micro, and macro-averaged metrics including accuracy, ROC-AUC, and Precision-Recall with Average Precision scores.
-
-            num_classes (int): Number of classes evaluated.
-
-            prefix (str): Prefix to use for output plot.
-        """
-        # Set font properties.
-        font = {"size": 12}
-        plt.rc("font", **font)
-
-        fn = f"{prefix}_metrics_plot.pdf"
-        fig = plt.figure(figsize=(20, 10))
-
-        acc = round(metrics["accuracy"] * 100, 2)
-
-        fig.suptitle(f"Performance Metrics\nAccuracy: {acc}")
-        axs = fig.subplots(nrows=1, ncols=2)
-        plt.subplots_adjust(hspace=0.5)
-
-        # Line weight
-        lw = 2
-
-        roc_auc = metrics["roc_auc"]
-        pr_ap = metrics["precision_recall"]
-
-        metric_list = [roc_auc, pr_ap]
-
-        for metric, ax in zip(metric_list, axs):
-
-            if "fpr_micro" in metric:
-                prefix1 = "fpr"
-                prefix2 = "tpr"
-                lab1 = "ROC"
-                lab2 = "AUC"
-                xlab = "False Positive Rate"
-                ylab = "True Positive Rate"
-                title = "Receiver Operating Characteristic (ROC)"
-                baseline = [0, 1]
-
-            elif "recall_micro" in metric:
-                prefix1 = "recall"
-                prefix2 = "precision"
-                lab1 = "Precision-Recall"
-                lab2 = "AP"
-                xlab = "Recall"
-                ylab = "Precision"
-                title = "Precision-Recall"
-                baseline = [metric["baseline"], metric["baseline"]]
-
-                # Plot iso-f1 curves.
-                f_scores = np.linspace(0.2, 0.8, num=4)
-                for i, f_score in enumerate(f_scores):
-                    x = np.linspace(0.01, 1)
-                    y = f_score * x / (2 * x - f_score)
-                    ax.plot(
-                        x[y >= 0],
-                        y[y >= 0],
-                        color="gray",
-                        alpha=0.2,
-                        linewidth=lw,
-                        label="Iso-F1 Curves" if i == 0 else "",
-                    )
-                    ax.annotate(f"F1={f_score:0.1f}", xy=(0.9, y[45] + 0.02))
-
-            # Plot ROC curves.
-            ax.plot(
-                metric[f"{prefix1}_micro"],
-                metric[f"{prefix2}_micro"],
-                label=f"Micro-averaged {lab1} Curve ({lab2} = {metric['micro']:.2f})",
-                color="deeppink",
-                linestyle=":",
-                linewidth=4,
-            )
-
-            ax.plot(
-                metric[f"{prefix1}_macro"],
-                metric[f"{prefix2}_macro"],
-                label=f"Macro-averaged {lab1} Curve ({lab2} = {metric['macro']:.2f})",
-                color="navy",
-                linestyle=":",
-                linewidth=4,
-            )
-
-            colors = cycle(["aqua", "darkorange", "cornflowerblue"])
-            for i, color in zip(range(num_classes), colors):
-                if f"{prefix1}_{i}" in metric:
-                    ax.plot(
-                        metric[f"{prefix1}_{i}"],
-                        metric[f"{prefix2}_{i}"],
-                        color=color,
-                        lw=lw,
-                        label=f"{lab1} Curve of class {i} ({lab2} = {metric[i]:.2f})",
-                    )
-
-            if "fpr_micro" in metric:
-                # Make center baseline
-                ax.plot(
-                    baseline,
-                    baseline,
-                    "k--",
-                    linewidth=lw,
-                    label="No Classification Skill",
-                )
-            else:
-                ax.plot(
-                    [0, 1],
-                    baseline,
-                    "k--",
-                    linewidth=lw,
-                    label="No Classification Skill",
-                )
-
-            ax.set_xlim(0.0, 1.0)
-            ax.set_ylim(0.0, 1.05)
-            ax.set_xlabel(f"{xlab}")
-            ax.set_ylabel(f"{ylab}")
-            ax.set_title(f"{title}")
-            ax.legend(loc="best")
-
-        fig.savefig(fn, bbox_inches="tight")
-        plt.close()
-        plt.clf()
-        plt.cla()
-
-    def decode_masked(self, y):
-        """Evaluate model predictions by decoding to 012-encoded format.
-
-        Gets the index of the highest predicted value to obtain the 012-encodings.
-
-        Calucalates highest predicted value for each row vector and each class, setting the most likely class to 1.0.
-
-        Args:
-            y (numpy.ndarray): Model predictions of shape (n_samples * n_features,). Array should be flattened and masked.
-
-        Returns:
-            numpy.ndarray: Imputed one-hot encoded values.
-
-            pandas.DataFrame: One-hot encoded pandas DataFrame with no missing values.
-        """
-        Xprob = y
-        Xt = np.apply_along_axis(self.mle, axis=-1, arr=Xprob)
-        Xpred = np.argmax(Xt, axis=-1)
-        return Xpred
-
-    def mle(self, row):
-        """Get the Maximum Likelihood Estimation for the best prediction. Basically, it sets the index of the maxiumum value in a vector (row) to 1.0, since it is one-hot encoded.
-
-        Args:
-            row (numpy.ndarray(float)): Row vector with predicted values as floating points.
-
-        Returns:
-            numpy.ndarray(float): Row vector with the highest prediction set to 1.0 and the others set to 0.0.
-        """
-        res = np.zeros(row.shape[0])
-        res[np.argmax(row)] = 1
-        return res
-
-    @staticmethod
-    def accuracy_scorer(y_true, y_pred, **kwargs):
-        """Get accuracy score for grid search.
-
-        If provided, only calculates score where missing_mask is True (i.e., data were missing). This is so that users can simulate missing data for known values, and then the predictions for only those known values can be evaluated.
-
-        Args:
-            y_true (numpy.ndarray): 012-encoded true target values.
-
-            y_pred (tensorflow.EagerTensor): Predictions from model as probabilities. They must first be decoded to use with accuracy_score.
-
-            kwargs (Any): Keyword arguments to use with scorer. Supported options include ``missing_mask`` and ``testing``\.
-
-        Returns:
-            float: Metric score by comparing y_true and y_pred.
-        """
-        # Get missing mask if provided.
-        # Otherwise default is all missing values (array all True).
-        missing_mask = kwargs.get("missing_mask")
-        testing = kwargs.get("testing", False)
-
-        y_true_masked = y_true[missing_mask]
-        y_pred_masked = y_pred[missing_mask]
-
-        nn = NeuralNetworkMethods()
-        y_pred_masked_decoded = nn.decode_masked(y_pred_masked)
-
-        acc = accuracy_score(y_true_masked, y_pred_masked_decoded)
-
-        if testing:
-            np.set_printoptions(threshold=np.inf)
-            print(y_true_masked)
-            print(y_pred_masked_decoded)
-
-        return acc
-
-    @staticmethod
-    def auc_macro(y_true, y_pred, **kwargs):
-        """Get AUC score with macro averaging for grid search.
-
-        If provided, only calculates score where missing_mask is True (i.e., data were missing). This is so that users can simulate missing data for known values, and then the predictions for only those known values can be evaluated.
-
-        Args:
-            y_true (numpy.ndarray): 012-encoded true target values.
-
-            y_pred (tensorflow.EagerTensor): Predictions from model as probabilities.
-
-            kwargs (Any): Keyword arguments to use with scorer. Supported options include ``missing_mask`` and ``testing``\.
-
-        Returns:
-            float: Metric score by comparing y_true and y_pred.
-        """
-        # Get missing mask if provided.
-        # Otherwise default is all missing values (array all True).
-        missing_mask = kwargs.get("missing_mask")
-        testing = kwargs.get("testing", False)
-
-        y_true_masked = y_true[missing_mask]
-        y_pred_masked = y_pred[missing_mask]
-
-        nn = NeuralNetworkMethods()
-        y_pred_masked_decoded = nn.decode_masked(y_pred_masked)
-
-        roc_auc = NeuralNetworkMethods.compute_roc_auc_micro_macro(
-            y_true_masked, y_pred_masked_decoded
-        )
-
-        return roc_auc["macro"]
-
-    @staticmethod
-    def auc_micro(y_true, y_pred, **kwargs):
-        """Get AUC score with micro averaging for grid search.
-
-        If provided, only calculates score where missing_mask is True (i.e., data were missing). This is so that users can simulate missing data for known values, and then the predictions for only those known values can be evaluated.
-
-        Args:
-            y_true (numpy.ndarray): 012-encoded true target values.
-
-            y_pred (tensorflow.EagerTensor): Predictions from model as probabilities.
-
-            kwargs (Any): Keyword arguments to use with scorer. Supported options include ``missing_mask`` and ``testing``\.
-
-        Returns:
-            float: Metric score by comparing y_true and y_pred.
-        """
-        # Get missing mask if provided.
-        # Otherwise default is all missing values (array all True).
-        missing_mask = kwargs.get("missing_mask")
-        testing = kwargs.get("testing", False)
-
-        y_true_masked = y_true[missing_mask]
-        y_pred_masked = y_pred[missing_mask]
-
-        nn = NeuralNetworkMethods()
-        y_pred_masked_decoded = nn.decode_masked(y_pred_masked)
-
-        roc_auc = NeuralNetworkMethods.compute_roc_auc_micro_macro(
-            y_true_masked, y_pred_masked_decoded
-        )
-
-        return roc_auc["micro"]
-
-    @staticmethod
-    def pr_macro(y_true, y_pred, **kwargs):
-        """Get Precision-Recall score with macro averaging for grid search.
-
-        If provided, only calculates score where missing_mask is True (i.e., data were missing). This is so that users can simulate missing data for known values, and then the predictions for only those known values can be evaluated.
-
-        Args:
-            y_true (numpy.ndarray): 012-encoded true target values.
-
-            y_pred (tensorflow.EagerTensor): Predictions from model as probabilities.
-
-            kwargs (Any): Keyword arguments to use with scorer. Supported options include ``missing_mask`` and ``testing``\.
-
-        Returns:
-            float: Metric score by comparing y_true and y_pred.
-        """
-        # Get missing mask if provided.
-        # Otherwise default is all missing values (array all True).
-        missing_mask = kwargs.get("missing_mask")
-        testing = kwargs.get("testing", False)
-
-        y_true_masked = y_true[missing_mask]
-        y_pred_masked = y_pred[missing_mask]
-
-        pr_ap = NeuralNetworkMethods.compute_pr(y_true_masked, y_pred_masked)
-
-        return pr_ap["macro"]
-
-    @staticmethod
-    def pr_micro(y_true, y_pred, **kwargs):
-        """Get Precision-Recall score with micro averaging for grid search.
-
-        If provided, only calculates score where missing_mask is True (i.e., data were missing). This is so that users can simulate missing data for known values, and then the predictions for only those known values can be evaluated.
-
-        Args:
-            y_true (numpy.ndarray): 012-encoded true target values.
-
-            y_pred (tensorflow.EagerTensor): Predictions from model as probabilities.
-
-            kwargs (Any): Keyword arguments to use with scorer. Supported options include ``missing_mask`` and ``testing``\.
-
-        Returns:
-            float: Metric score by comparing y_true and y_pred.
-        """
-        # Get missing mask if provided.
-        # Otherwise default is all missing values (array all True).
-        missing_mask = kwargs.get("missing_mask")
-        testing = kwargs.get("testing", False)
-
-        y_true_masked = y_true[missing_mask]
-        y_pred_masked = y_pred[missing_mask]
-
-        pr_ap = NeuralNetworkMethods.compute_pr(y_true_masked, y_pred_masked)
-
-        return pr_ap["micro"]
-
-    @classmethod
-    def make_multimetric_scorer(cls, metrics, missing_mask, testing=False):
-        """Get all scoring metrics and make an sklearn scorer.
-
-        Args:
-            metrics (str or List[str]): Metrics to use with grid search. If string, it will be converted to a list of one element.
-
-            missing_mask (numpy.ndarray): Missing mask to use to demarcate values to use with scoring.
-
-            testing (bool, optional): True if in test mode, wherein it prints y_true and y_pred_decoded as 1D lists for comparison. Otherwise False. Defaults to False.
-        Returns:
-            Dict[str, Callable]: Dictionary with callable scoring functions to use with grid search as the values.
-
-        Raises:
-            ValueError: Invalid scoring metric provided.
-        """
-        if isinstance(metrics, str):
-            metrics = [metrics]
-
-        scorers = dict()
-        for item in metrics:
-            if item.lower() == "accuracy":
-                scorers["accuracy"] = make_scorer(
-                    cls.accuracy_scorer,
-                    missing_mask=missing_mask,
-                    testing=testing,
-                )
-            elif item.lower() == "auc_macro":
-                scorers["auc_macro"] = make_scorer(
-                    cls.auc_macro, missing_mask=missing_mask, testing=testing
-                )
-            elif item.lower() == "auc_micro":
-                scorers["auc_micro"] = make_scorer(
-                    cls.auc_micro,
-                    missing_mask=missing_mask,
-                    testing=testing,
-                )
-            elif item.lower() == "precision_recall_macro":
-                scorers["precision_recall_macro"] = make_scorer(
-                    cls.pr_macro,
-                    missing_mask=missing_mask,
-                    testing=testing,
-                )
-            elif item.lower() == "precision_recall_micro":
-                scorers["precision_recall_micro"] = make_scorer(
-                    cls.pr_micro,
-                    missing_mask=missing_mask,
-                    testing=testing,
-                )
-            else:
-                raise ValueError(f"Invalid scoring_metric provided: {item}")
-        return scorers
-
-    @staticmethod
-    def plot_search_space(
-        estimator,
-        height=2,
-        s=25,
-        features=None,
-    ):
-        """Make density and contour plots for showing search space during grid search.
-
-        Modified from sklearn-genetic-opt function to implement exception handling.
-
-        Args:
-            estimator (sklearn estimator object): A fitted estimator from :class:`~sklearn_genetic.GASearchCV`.
-
-            height (float, optional): Height of each facet. Defaults to 2.
-
-            s (float, optional): Size of the markers in scatter plot. Defaults to 5.
-
-            features (list, optional): Subset of features to plot, if ``None`` it plots all the features by default. Defaults to None.
-
-        Returns:
-            g (seaborn.PairGrid): Pair plot of the used hyperparameters during the search.
-        """
-        sns.set_style("white")
-
-        df = logbook_to_pandas(estimator.logbook)
-        if features:
-            _stats = df[features]
+        # Get reduced-dimension dataset.
+        return np.random.normal(loc=w_mean, scale=w_stddev, size=(dim1, dim2))
+
+    def reset_seeds(self):
+        """Reset random seeds for initializing weights."""
+        seed1 = np.random.randint(1, 1e6)
+        seed2 = np.random.randint(1, 1e6)
+        seed3 = np.random.randint(1, 1e6)
+        np.random.seed(seed1)
+        random.seed(seed2)
+        if tf.__version__[0] == "2":
+            tf.random.set_seed(seed3)
         else:
-            variables = [*estimator.space.parameters, "score"]
-            _stats = df[variables]
+            tf.set_random_seed(seed3)
 
-        g = sns.PairGrid(_stats, diag_sharey=False, height=height)
+    @staticmethod
+    def masked_mse(self, X_true, X_pred, mask):
+        """Calculates mean squared error with missing values ignored.
 
-        g = g.map_upper(sns.scatterplot, s=s, color="r", alpha=0.2)
+        Args:
+            X_true (numpy.ndarray): One-hot encoded input data.
+            X_pred (numpy.ndarray): Predicted values.
+            mask (numpy.ndarray): One-hot encoded missing data mask.
 
-        try:
-            g = g.map_lower(
-                sns.kdeplot,
-                shade=True,
-                cmap=sns.color_palette("ch:s=.25,rot=-.25", as_cmap=True),
+        Returns:
+            float: Mean squared error calculation.
+        """
+        return np.square(np.subtract(X_true[mask], X_pred[mask])).mean()
+
+    def make_reconstruction_loss(self):
+        """Make loss function for use with a keras model.
+
+        Returns:
+            callable: Function that calculates loss.
+        """
+
+        def reconstruction_loss(input_and_mask, y_pred):
+            """Custom loss function for neural network model with missing mask.
+
+            Ignores missing data in the calculation of the loss function.
+
+            Args:
+                input_and_mask (numpy.ndarray): Input one-hot encoded array with missing values also one-hot encoded and h-stacked.
+
+                y_pred (numpy.ndarray): Predicted values.
+
+            Returns:
+                float: Mean squared error loss value with missing data masked.
+            """
+            n_features = y_pred.numpy().shape[1]
+
+            true_indices = range(n_features)
+            missing_indices = range(n_features, n_features * 2)
+
+            # Split features and missing mask.
+            y_true = tf.gather(input_and_mask, true_indices, axis=1)
+            missing_mask = tf.gather(input_and_mask, missing_indices, axis=1)
+
+            observed_mask = tf.subtract(1.0, missing_mask)
+            y_true_observed = tf.multiply(y_true, observed_mask)
+            pred_observed = tf.multiply(y_pred, observed_mask)
+
+            # loss_fn = tf.keras.losses.CategoricalCrossentropy()
+            # return loss_fn(y_true_observed, pred_observed)
+
+            return tf.keras.metrics.mean_squared_error(
+                y_true=y_true_observed, y_pred=pred_observed
             )
-        except np.linalg.LinAlgError as err:
-            if "singular matrix" in str(err).lower():
-                g = g.map_lower(sns.scatterplot, s=s, color="b", alpha=1.0)
-            else:
-                raise
 
-        try:
-            g = g.map_diag(
-                sns.kdeplot, shade=True, palette="crest", alpha=0.2, color="red"
-            )
-        except np.linalg.LinAlgError as err:
-            if "singular matrix" in str(err).lower():
-                g = g.map_diag(sns.histplot, color="red", alpha=1.0, kde=False)
-
-        return g
+        return reconstruction_loss
