@@ -18,7 +18,8 @@ from impute.estimators import (
     ImputeRandomForest,
     ImputeVAE,
 )
-from impute.simple_imputers import ImputePhylo
+from impute.simple_imputers import ImputePhylo, ImputeAlleleFreq
+from impute.plotting import Plotting
 
 # from read_input.read_input import GenotypeData
 # from impute.estimators import *
@@ -88,8 +89,10 @@ def main():
             popmapfile=args.popmap,
             guidetree=args.treefile,
             qmatrix_iqtree=args.iqtree,
-            siterates_iqtree="pgsui/example_data/trees/test_n10.rate",
+            siterates_iqtree="pgsui/example_data/trees/test_n100.rate",
         )
+
+    data.missingness_reports(prefix=args.prefix, plot_format="png")
 
     # For GridSearchCV. Generate parameters to sample from.
     learning_rate = [float(10) ** x for x in np.arange(-4, 0)]
@@ -142,6 +145,22 @@ def main():
         early_stop_gen=5,
         # sample_weights={0: 1.0, 1: 0.0, 2: 1.0},
         # sample_weights="auto",
+    )
+
+    # af_glb = ImputeAlleleFreq(genotype_data=data)
+
+    # phylo = ImputePhylo(genotype_data=data)
+    # af_glb = ImputeAlleleFreq(genotype_data=data)
+
+    plotting = Plotting()
+
+    components, model = plotting.run_and_plot_pca(
+        data,
+        ubp,
+        plot_format="png",
+        center=True,
+        scale=False,
+        # n_axes=3,
     )
 
 
