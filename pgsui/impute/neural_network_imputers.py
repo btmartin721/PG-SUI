@@ -83,6 +83,8 @@ try:
     from ..utils.misc import HiddenPrints
     from ..utils.misc import validate_input_type
     from .neural_network_methods import NeuralNetworkMethods
+    from .scorers import Scorers
+    from .plotting import Plotting
     from .nlpca_model import NLPCAModel
     from .ubp_model import UBPPhase1, UBPPhase2, UBPPhase3
     from ..data_processing.transformers import (
@@ -98,6 +100,8 @@ except (ModuleNotFoundError, ValueError):
     from utils.misc import HiddenPrints
     from utils.misc import validate_input_type
     from impute.neural_network_methods import NeuralNetworkMethods
+    from impute.scorers import Scorers
+    from impute.plotting import Plotting
     from impute.nlpca_model import NLPCAModel
     from impute.ubp_model import UBPPhase1, UBPPhase2, UBPPhase3
     from data_processing.transformers import (
@@ -278,7 +282,7 @@ class MLPClassifier(KerasClassifier):
         V,
         y_train,
         y_original,
-        ubp_weights,
+        ubp_weights=None,
         batch_size=32,
         missing_mask=None,
         output_shape=None,
@@ -303,6 +307,7 @@ class MLPClassifier(KerasClassifier):
         self.V = V
         self.y_train = y_train
         self.y_original = y_original
+        self.ubp_weights = ubp_weights
         self.batch_size = batch_size
         self.missing_mask = missing_mask
         self.output_shape = output_shape
@@ -321,7 +326,6 @@ class MLPClassifier(KerasClassifier):
         self.loss = loss
         self.epochs = epochs
         self.verbose = verbose
-        self.ubp_weights = ubp_weights
 
     def _keras_build_fn(self, compile_kwargs):
         """Build model with custom parameters.
@@ -452,7 +456,7 @@ class MLPClassifier(KerasClassifier):
         y_pred_masked = y_pred[missing_mask]
 
         if scoring_metric.startswith("auc"):
-            roc_auc = NeuralNetworkMethods.compute_roc_auc_micro_macro(
+            roc_auc = Scorers.compute_roc_auc_micro_macro(
                 y_true_masked, y_pred_masked, missing_mask
             )
 
@@ -468,9 +472,7 @@ class MLPClassifier(KerasClassifier):
                 )
 
         elif scoring_metric.startswith("precision"):
-            pr_ap = NeuralNetworkMethods.compute_pr(
-                y_true_masked, y_pred_masked
-            )
+            pr_ap = Scorers.compute_pr(y_true_masked, y_pred_masked)
 
             if scoring_metric == "precision_recall_macro":
                 return pr_ap["macro"]
@@ -1125,10 +1127,13 @@ class UBP(BaseEstimator, TransformerMixin):
         Returns:
             pandas.DataFrame: Imputated data.
         """
+        self.run_gridsearch_ = False if self.gridparams is None else True
+
         y = X
         y = validate_input_type(y, return_type="array")
 
         self.nn_ = NeuralNetworkMethods()
+        plotting = Plotting()
 
         if self.gridsearch_method == "genetic_algorithm":
             self.ga_ = True
@@ -1159,8 +1164,17 @@ class UBP(BaseEstimator, TransformerMixin):
         self.tt_ = TargetTransformer()
         y_train = self.tt_.fit_transform(self.y_original_)
 
+        if self.gridparams is not None:
+            self.scoring_metrics_ = [
+                "precision_recall_macro",
+                "precision_recall_micro",
+                "auc_macro",
+                "auc_micro",
+                "accuracy",
+            ]
+
         # testresults = pd.read_csv(f"{self.prefix}_nlpca_cvresults.csv")
-        # self.nn_.plot_grid_search(testresults, self.prefix)
+        # plotting.plot_grid_search(testresults, self.prefix)
         # sys.exit()
 
         (
@@ -1193,10 +1207,10 @@ class UBP(BaseEstimator, TransformerMixin):
                 print("\nBest found parameters:")
                 pprint.pprint(self.best_params_)
                 print(f"\nBest score: {self.best_score_}")
-            self.nn_.plot_grid_search(self.search_.cv_results_, self.prefix)
+            plotting.plot_grid_search(self.search_.cv_results_, self.prefix)
 
         self._plot_history(self.histories_)
-        self.nn_.plot_metrics(self.metrics_, self.num_classes, self.prefix)
+        plotting.plot_metrics(self.metrics_, self.num_classes, self.prefix)
 
         if self.ga_:
             plot_fitness_evolution(self.search_)
@@ -1207,7 +1221,7 @@ class UBP(BaseEstimator, TransformerMixin):
             plt.clf()
             plt.close()
 
-            g = self.nn_.plot_search_space(self.search_)
+            g = plotting.plot_search_space(self.search_)
             plt.savefig(f"{self.prefix}_search_space.pdf", bbox_inches="tight")
             plt.cla()
             plt.clf()
@@ -1258,14 +1272,161 @@ class UBP(BaseEstimator, TransformerMixin):
         compile_params,
         fit_params,
     ):
-        """Run NLPCA Model using custom subclassed model."""
+        """Run NLPCA using custom subclassed model."""
 
-        # Whether to do grid search.
-        do_gridsearch = False if self.gridparams is None else True
+        scorers = Scorers()
 
         histories = list()
         models = list()
+        y_train = model_params.pop("y_train")
+        ubp_weights = None
+        phase = None
+        scoring = None
 
+        if self.run_gridsearch_:
+            scoring = scorers.make_multimetric_scorer(
+                self.scoring_metrics_, self.sim_missing_mask_
+            )
+
+        (
+            V,
+            model,
+            best_history,
+            best_params,
+            best_score,
+            best_clf,
+            search,
+            metrics,
+        ) = self._run_clf(
+            y_train,
+            y_true,
+            model_params,
+            compile_params,
+            fit_params,
+            ubp_weights=ubp_weights,
+            phase=phase,
+            scoring=scoring,
+            testing=True,
+        )
+
+        histories.append(best_history)
+        models.append(model)
+        del model
+
+        return (
+            models,
+            histories,
+            best_params,
+            best_score,
+            best_clf,
+            search,
+            metrics,
+        )
+
+    def _run_ubp(
+        self,
+        y_true,
+        model_params,
+        compile_params,
+        fit_params,
+    ):
+        """Run UBP using custom subclassed model."""
+
+        scorers = Scorers()
+
+        histories = list()
+        models = list()
+        search_n_components = False
+
+        y_train = model_params.pop("y_train")
+
+        if self.run_gridsearch_:
+            # Cannot do CV because there is no way to use test splits
+            # given that the input gets refined. If using a test split,
+            # then it would just be the randomly initialized values and
+            # would not accurately represent the model.
+            # Thus, we disable cross-validation for the grid searches.
+            scoring = scorers.make_multimetric_scorer(
+                self.scoring_metrics_, self.sim_missing_mask_
+            )
+
+            if "n_components" in self.gridparams:
+                search_n_components = True
+                n_components_searched = self.n_components
+        else:
+            scoring = None
+
+        for phase in range(1, 4):
+
+            ubp_weights = models[1].get_weights() if phase == 3 else None
+
+            (
+                V,
+                model,
+                best_history,
+                best_params,
+                best_score,
+                best_clf,
+                search,
+                metrics,
+            ) = self._run_clf(
+                y_train,
+                y_true,
+                model_params,
+                compile_params,
+                fit_params,
+                ubp_weights=ubp_weights,
+                phase=phase,
+                scoring=scoring,
+                testing=True,
+            )
+
+            if phase == 1:
+                # Cannot have V input with different n_components
+                # in other phases than are in phase 1.
+                # So the n_components search has to happen in phase 1.
+                if best_params is not None and search_n_components:
+                    n_components_searched = best_params["n_components"]
+                    model_params["V"] = {
+                        n_components_searched: model.V_latent.copy()
+                    }
+                    self.gridparams.pop("n_components")
+
+                else:
+                    model_params["V"] = V
+            elif phase == 2:
+                model_params["V"] = V
+
+            elif phase == 3:
+                if best_params is not None and search_n_components:
+                    best_params["n_components"] = n_components_searched
+
+            histories.append(best_history)
+            models.append(model)
+            del model
+
+        return (
+            models,
+            histories,
+            best_params,
+            best_score,
+            best_clf,
+            search,
+            metrics,
+        )
+
+    def _run_clf(
+        self,
+        y_train,
+        y_true,
+        model_params,
+        compile_params,
+        fit_params,
+        ubp_weights=None,
+        phase=None,
+        scoring=None,
+        testing=False,
+    ):
         # This reduces memory usage.
         # tensorflow builds graphs that
         # will stack if not cleared before
@@ -1274,45 +1435,45 @@ class UBP(BaseEstimator, TransformerMixin):
         tf.keras.backend.clear_session()
         self.nn_.reset_seeds()
 
-        y_train = model_params.pop("y_train")
+        model = None
+        V = model_params.pop("V")
 
-        if do_gridsearch:
+        if phase is not None:
+            desc = f"Epoch (Phase {phase}): "
+        else:
+            desc = "Epoch: "
+
+        if not self.disable_progressbar and not self.run_gridsearch_:
+            fit_params["callbacks"][-1] = TqdmCallback(
+                epochs=self.epochs, verbose=0, desc=desc
+            )
+
+        clf = MLPClassifier(
+            V,
+            y_train,
+            y_true,
+            **model_params,
+            ubp_weights=ubp_weights,
+            optimizer=compile_params["optimizer"],
+            optimizer__learning_rate=compile_params["learning_rate"],
+            loss=compile_params["loss"],
+            metrics=compile_params["metrics"],
+            epochs=fit_params["epochs"],
+            phase=phase,
+            callbacks=fit_params["callbacks"],
+            validation_split=fit_params["validation_split"],
+            verbose=0,
+            score__missing_mask=self.sim_missing_mask_,
+            score__scoring_metric=self.scoring_metric,
+        )
+
+        if self.run_gridsearch_:
             # Cannot do CV because there is no way to use test splits
             # given that the input gets refined. If using a test split,
             # then it would just be the randomly initialized values and
             # would not accurately represent the model.
             # Thus, we disable cross-validation for the grid searches.
             cross_val = DisabledCV()
-
-            V = model_params.pop("V")
-
-            all_scoring_metrics = [
-                "precision_recall_macro",
-                "precision_recall_micro",
-                "auc_macro",
-                "auc_micro",
-                "accuracy",
-            ]
-
-            scoring = self.nn_.make_multimetric_scorer(
-                all_scoring_metrics, self.sim_missing_mask_
-            )
-
-            clf = MLPClassifier(
-                V,
-                y_train,
-                y_true,
-                **model_params,
-                optimizer=compile_params["optimizer"],
-                optimizer__learning_rate=compile_params["learning_rate"],
-                loss=compile_params["loss"],
-                metrics=compile_params["metrics"],
-                epochs=fit_params["epochs"],
-                phase=None,
-                callbacks=fit_params["callbacks"],
-                validation_split=fit_params["validation_split"],
-                verbose=0,
-            )
 
             if self.ga_:
                 # Stop searching if GA sees no improvement.
@@ -1381,307 +1542,40 @@ class UBP(BaseEstimator, TransformerMixin):
 
             best_params = search.best_params_
             best_score = search.best_score_
-            best_index = search.best_index_
+            best_clf = search.best_estimator_
+
+            if phase is not None:
+                fp = f"{self.prefix}_ubp_cvresults_phase{phase}.csv"
+            else:
+                fp = f"{self.prefix}_nlpca_cvresults.csv"
 
             cv_results = pd.DataFrame(search.cv_results_)
-            cv_results.to_csv(f"{self.prefix}_nlpca_cvresults.csv", index=False)
-
-            best_clf = search.best_estimator_
-            histories.append(best_clf.history_)
-            model = best_clf.model_
-
-            y_pred_proba = model(model.V_latent, training=False)
-            y_pred = self.tt_.inverse_transform(y_pred_proba)
-
-            # Get metric scores.
-            metrics = self.scorer(
-                y_true,
-                y_pred,
-                missing_mask=self.sim_missing_mask_,
-            )
+            cv_results.to_csv(fp, index=False)
 
         else:
-            V = model_params.pop("V")
-
-            clf = MLPClassifier(
-                V,
-                y_train,
-                y_true,
-                **model_params,
-                optimizer=compile_params["optimizer"],
-                optimizer__learning_rate=compile_params["learning_rate"],
-                loss=compile_params["loss"],
-                metrics=compile_params["metrics"],
-                epochs=fit_params["epochs"],
-                phase=None,
-                callbacks=fit_params["callbacks"],
-                validation_split=fit_params["validation_split"],
-                verbose=0,
-                score__missing_mask=self.sim_missing_mask_,
-                score__scoring_metric=self.scoring_metric,
-            )
-
             clf.fit(V[self.n_components], y=y_true)
-
             best_params = None
             best_score = None
             search = None
             best_clf = clf
 
-            histories.append(clf.history_)
-            model = clf.model_
-            y_pred_proba = model(model.V_latent, training=False)
-            y_pred = self.tt_.inverse_transform(y_pred_proba)
+        model = best_clf.model_
+        best_history = best_clf.history_
+        y_pred_proba = model(model.V_latent, training=False)
+        y_pred = self.tt_.inverse_transform(y_pred_proba)
 
-            # Get metric scores.
-            metrics = self.scorer(
-                y_true,
-                y_pred,
-                missing_mask=self.sim_missing_mask_,
-            )
-
-        models.append(model)
-
-        return (
-            models,
-            histories,
-            best_params,
-            best_score,
-            best_clf,
-            search,
-            metrics,
+        # Get metric scores.
+        metrics = self.scorer(
+            y_true,
+            y_pred,
+            missing_mask=self.sim_missing_mask_,
+            testing=True,
         )
 
-    def _run_ubp(
-        self,
-        y_true,
-        model_params,
-        compile_params,
-        fit_params,
-    ):
-        do_gridsearch = False if self.gridparams is None else True
-
-        if do_gridsearch:
-            # Cannot do CV because there is no way to use test splits
-            # given that the input gets refined. If using a test split,
-            # then it would just be the randomly initialized values and
-            # would not accurately represent the model.
-            # Thus, we disable cross-validation for the grid searches.
-            cross_val = DisabledCV()
-
-            all_scoring_metrics = [
-                "precision_recall_macro",
-                "precision_recall_micro",
-                "auc_macro",
-                "auc_micro",
-                "accuracy",
-            ]
-
-            scoring = self.nn_.make_multimetric_scorer(
-                all_scoring_metrics, self.sim_missing_mask_
-            )
-
-        y_train = model_params.pop("y_train")
-
-        histories = list()
-        models = list()
-        phases = [UBPPhase1, UBPPhase2, UBPPhase3]
-        for i, phase in enumerate(phases, start=1):
-            # This reduces memory usage.
-            # tensorflow builds graphs that
-            # will stack if not cleared before
-            # building a new model.
-            tf.keras.backend.set_learning_phase(1)
-            tf.keras.backend.clear_session()
-            self.nn_.reset_seeds()
-
-            model = None
-
-            if not self.disable_progressbar and not do_gridsearch:
-                fit_params["callbacks"][-1] = TqdmCallback(
-                    epochs=self.epochs, verbose=0, desc=f"Epoch (Phase {i}): "
-                )
-
-            if do_gridsearch:
-                V = model_params.pop("V")
-
-                ubp_weights = models[1].get_weights() if i == 3 else None
-
-                clf = MLPClassifier(
-                    V,
-                    y_train,
-                    y_true,
-                    ubp_weights,
-                    **model_params,
-                    optimizer=compile_params["optimizer"],
-                    optimizer__learning_rate=compile_params["learning_rate"],
-                    loss=compile_params["loss"],
-                    metrics=compile_params["metrics"],
-                    epochs=fit_params["epochs"],
-                    phase=i,
-                    callbacks=fit_params["callbacks"],
-                    validation_split=fit_params["validation_split"],
-                    verbose=0,
-                )
-
-                if self.ga_:
-                    # Stop searching if GA sees no improvement.
-                    callback = [
-                        ConsecutiveStopping(
-                            generations=self.early_stop_gen, metric="fitness"
-                        )
-                    ]
-
-                    if not self.disable_progressbar:
-                        callback.append(ProgressBar())
-
-                    verbose = False if self.verbose == 0 else True
-
-                    # Do genetic algorithm
-                    # with HiddenPrints():
-                    search = GASearchCV(
-                        estimator=clf,
-                        cv=cross_val,
-                        scoring=scoring,
-                        generations=self.grid_iter,
-                        param_grid=self.gridparams,
-                        n_jobs=self.n_jobs,
-                        refit=self.scoring_metric,
-                        verbose=verbose,
-                        error_score="raise",
-                        **self.ga_kwargs,
-                    )
-
-                    search.fit(V[self.n_components], y_true, callbacks=callback)
-
-                else:
-                    if self.gridsearch_method.lower() == "gridsearch":
-                        # Do GridSearchCV
-                        search = GridSearchCV(
-                            clf,
-                            param_grid=self.gridparams,
-                            n_jobs=self.n_jobs,
-                            cv=cross_val,
-                            scoring=scoring,
-                            refit=self.scoring_metric,
-                            verbose=self.verbose * 4,
-                            error_score="raise",
-                        )
-
-                    elif (
-                        self.gridsearch_method.lower()
-                        == "randomized_gridsearch"
-                    ):
-                        search = RandomizedSearchCV(
-                            clf,
-                            param_distributions=self.gridparams,
-                            n_iter=self.grid_iter,
-                            n_jobs=self.n_jobs,
-                            cv=cross_val,
-                            scoring=scoring,
-                            refit=self.scoring_metric,
-                            verbose=self.verbose * 4,
-                            error_score="raise",
-                        )
-
-                    else:
-                        raise ValueError(
-                            f"Invalid gridsearch_method specified: "
-                            f"{self.gridsearch_method}"
-                        )
-
-                    search.fit(V[self.n_components], y=y_true)
-
-                best_params = search.best_params_
-                best_score = search.best_score_
-                best_clf = search.best_estimator_
-
-                cv_results = pd.DataFrame(search.cv_results_)
-                cv_results.to_csv(
-                    f"{self.prefix}_ubp_cvresults_phase{i}.csv", index=False
-                )
-
-                histories.append(best_clf.history_)
-                model = best_clf.model_
-
-                y_pred_proba = model(model.V_latent, training=False)
-                y_pred = self.tt_.inverse_transform(y_pred_proba)
-
-                # Get metric scores.
-                metrics = self.scorer(
-                    y_true,
-                    y_pred,
-                    missing_mask=self.sim_missing_mask_,
-                    testing=True,
-                )
-
-            else:
-                V = model_params.pop("V")
-
-                ubp_weights = models[1].get_weights() if i == 3 else None
-
-                clf = MLPClassifier(
-                    V,
-                    y_train,
-                    y_true,
-                    ubp_weights,
-                    **model_params,
-                    optimizer=compile_params["optimizer"],
-                    optimizer__learning_rate=compile_params["learning_rate"],
-                    loss=compile_params["loss"],
-                    metrics=compile_params["metrics"],
-                    epochs=fit_params["epochs"],
-                    phase=i,
-                    callbacks=fit_params["callbacks"],
-                    validation_split=fit_params["validation_split"],
-                    verbose=0,
-                    score__missing_mask=self.sim_missing_mask_,
-                    score__scoring_metric=self.scoring_metric,
-                )
-
-                clf.fit(V[self.n_components], y=y_true)
-
-                best_params = None
-                best_score = None
-                search = None
-                best_clf = clf
-
-                histories.append(clf.history_)
-                model = clf.model_
-
-                y_pred_proba = model(model.V_latent, training=False)
-                y_pred = self.tt_.inverse_transform(y_pred_proba)
-
-                # Get metric scores.
-                metrics = self.scorer(
-                    y_true,
-                    y_pred,
-                    missing_mask=self.sim_missing_mask_,
-                    testing=True,
-                )
-
-            if i == 1:
-                if (
-                    best_params is not None
-                    and "n_components" in self.gridparams
-                ):
-                    model_params["V"] = {
-                        best_params["n_components"]: model.V_latent.copy()
-                    }
-                    self.gridparams.pop("n_components")
-
-                else:
-                    model_params["V"] = V
-            elif i == 2:
-                model_params["V"] = V
-
-            models.append(model)
-
-            del model
-
         return (
-            models,
-            histories,
+            V,
+            model,
+            best_history,
             best_params,
             best_score,
             best_clf,
@@ -1746,11 +1640,11 @@ class UBP(BaseEstimator, TransformerMixin):
         nn = NeuralNetworkMethods()
         y_pred_masked_decoded = nn.decode_masked(y_pred_masked)
 
-        roc_auc = NeuralNetworkMethods.compute_roc_auc_micro_macro(
+        roc_auc = Scorers.compute_roc_auc_micro_macro(
             y_true_masked, y_pred_masked_decoded
         )
 
-        pr_ap = NeuralNetworkMethods.compute_pr(y_true_masked, y_pred_masked)
+        pr_ap = Scorers.compute_pr(y_true_masked, y_pred_masked)
 
         acc = accuracy_score(y_true_masked, y_pred_masked_decoded)
 
