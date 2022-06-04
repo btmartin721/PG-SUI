@@ -14,10 +14,12 @@ import toytree as tt
 
 try:
     from .popmap_file import ReadPopmap
-    from ..utils import sequence_tools
+    from ..impute.plotting import Plotting
+    from ..utils import sequence_tools, misc
 except (ModuleNotFoundError, ValueError):
     from read_input.popmap_file import ReadPopmap
-    from utils import sequence_tools
+    from impute.plotting import Plotting
+    from utils import sequence_tools, misc
 
 
 class GenotypeData:
@@ -41,6 +43,8 @@ class GenotypeData:
             siterates (str or None, optional): Path to file containing per-site rates, with 1 rate per line corresponding to 1 site. Not required if ``genotype_data`` is defined with the siterates or siterates_iqtree option. Defaults to None.
 
             siterates_iqtree (str or None, optional): Path to *.rates file output from IQ-TREE, containing a per-site rate table. If specified, ``ImputePhylo`` will read the site-rates from the IQ-TREE output file. Cannot be used in conjunction with ``siterates`` argument. Not required if the ``siterates`` or ``siterates_iqtree`` options were used with the ``GenotypeData`` object. Defaults to None.
+
+            plot_format (str, optional): Format to save report plots. Valid options include: 'pdf', 'svg', 'png', and 'jpeg'. Defaults to "pdf".
 
             verbose (bool, optional): Verbosity level. Defaults to True.
 
@@ -91,6 +95,7 @@ class GenotypeData:
         qmatrix: Optional[str] = None,
         siterates: Optional[str] = None,
         siterates_iqtree: Optional[str] = None,
+        plot_format: Optional[str] = "pdf",
         verbose: bool = True,
     ) -> None:
         self.filename = filename
@@ -101,6 +106,7 @@ class GenotypeData:
         self.qmatrix = qmatrix
         self.siterates = siterates
         self.siterates_iqtree = siterates_iqtree
+        self.plot_format = plot_format
         self.verbose = verbose
 
         self.snpsdict: Dict[str, List[Union[str, int]]] = dict()
@@ -216,7 +222,7 @@ class GenotypeData:
                     "popid"
                 ):
                     print(
-                        "WARNING: popmapfile was not None but provided "
+                        "WARNING: popmapfile was not None, but provided "
                         "filetype was structure2rowPopID. Using populations "
                         "from 2nd column in STRUCTURE file."
                     )
@@ -232,6 +238,10 @@ class GenotypeData:
 
                 else:
                     raise OSError(f"Unsupported filetype provided: {filetype}")
+
+            elif filetype == "012":
+                self.filetype = filetype
+                self.read_012()
 
             else:
                 raise OSError(f"Unsupported filetype provided: {filetype}\n")
@@ -509,6 +519,8 @@ class GenotypeData:
                     self.snpsdict[ind] = genotypes
                     firstline = None
 
+        self.original_snps = snp_data
+
         if self.verbose:
             print("Done!")
             print("\nConverting genotypes to one-hot encoding...")
@@ -545,6 +557,58 @@ class GenotypeData:
                     "There are sequences of different lengths in the "
                     "structure file\n"
                 )
+
+    def read_012(self) -> None:
+        """Read 012-encoded comma-delimited file.
+
+        Raises:
+            ValueError: Sequences differ in length.
+        """
+        if self.verbose:
+            print(f"\nReading 012-encoded file {self.filename}...")
+
+        self._check_filetype("012")
+        snp_data = list()
+        num_snps = list()
+        with open(self.filename, "r") as fin:
+            num_inds = 0
+            for line in fin:
+                line = line.strip()
+                if not line:
+                    continue
+                cols = line.split(",")
+                inds = cols[0]
+                snps = cols[1:]
+                num_snps.append(len(snps))
+                num_inds += 1
+
+                self.snpsdict[inds] = snps
+                snp_data.append(snps)
+
+                self.samples.append(inds)
+
+        if len(list(set(num_snps))) > 1:
+            raise ValueError(
+                "All sequences must be the same length; "
+                "at least one sequence differs in length from the others\n"
+            )
+
+        self.num_snps = num_snps[0]
+        self.num_inds = num_inds
+
+        df = pd.DataFrame(snp_data)
+        df.replace("NA", "-9", inplace=True)
+        df = df.astype("int")
+
+        self.original_snps = df.values.tolist()
+
+        if self.verbose:
+            print("Done!")
+
+        self.snps = df.values.tolist()
+
+        self.ref = None
+        self.alt = None
 
     def read_phylip(self) -> None:
         """Populates GenotypeData object by parsing Phylip.
@@ -589,6 +653,8 @@ class GenotypeData:
                 snp_data.append(snps)
 
                 self.samples.append(inds)
+
+        self.original_snps = snp_data
 
         if self.verbose:
             print("Done!")
@@ -1111,7 +1177,10 @@ class GenotypeData:
 
             if write_output:
                 df_decoded.to_csv(
-                    of, sep="\t", header=False, index=False,
+                    of,
+                    sep="\t",
+                    header=False,
+                    index=False,
                 )
 
         elif ft.startswith("phylip"):
@@ -1132,6 +1201,122 @@ class GenotypeData:
                 df_decoded.insert(0, "sampleID", self.samples)
 
         return of
+
+    def missingness_reports(
+        self,
+        zoom=True,
+        prefix=None,
+        horizontal_space=0.6,
+        vertical_space=0.6,
+        bar_color="gray",
+        heatmap_palette="magma",
+        plot_format="pdf",
+        dpi=300,
+    ):
+        """Generate missingness reports and plots.
+
+        Function will write several comma-delimited report files:
+            1) individual_missingness.csv: Missing proportions per-individual.
+            2) locus_missingness.csv: Missing proportions per-locus.
+            3) population_missingness.csv: Missing proportions per population (only generated if popmapfile was passed to GenotypeData).
+            4) population_locus_missingness.csv: Table of per-population and per-locus missing data proportions.
+
+        A file missingness.<plot_format> will also be saved.
+        It contains the following subplots:
+            1) Barplot with per-individual missing data proportions.
+            2) Barplot with per-locus missing data proportions.
+            3) Barplot with per-population missing data proportions (only if popmapfile was passed to GenotypeData.
+            4) Heatmap showing per-population + per-locus missing data proportions (only if popmapfile was passed to GenotypeData).
+            5) Stacked barplot showing missing data proportions per-individual.
+            6) Stacked barplot showing missing data proportions per-population (only if popmapfile was passed to GenotypeData).
+
+        If popmapfile was not passed to GenotypeData, then the subplots and report files that require populations are not included.
+
+        The non-stacked bar plot colors can be adjusted, as can the heatmap palette, plot file format, and the spacing between subplots.
+
+        Args:
+            zoom (bool, optional): If True, zooms in to the missing proportion range on some of the plots. If False, the plot range is fixed at [0, 1]. Defaults to True.
+
+            prefix (str, optional): Prefix for output directory and files. Plots and files will be written to a directory called <prefix>_reports. The report directory will be created if it does not already exist. If prefix is None, then the reports directory will not have a prefix. Defaults to None.
+
+            horizontal_space (float, optional): Set width spacing between subplots. If your plot are overlapping horizontally, increase horizontal_space. If your plots are too far apart, decrease it. Defaults to 0.6.
+
+            vertical_space (float, optioanl): Set height spacing between subplots. If your plots are overlapping vertically, increase vertical_space. If your plots are too far apart, decrease it. Defaults to 0.6.
+
+            bar_color (str, optional): Color of the bars on the non-stacked barplots. Can be any color supported by matplotlib. See matplotlib.pyplot.colors documentation. Defaults to 'gray'.
+
+            heatmap_palette (str, optional): Palette to use for heatmap plot. Can be any palette supported by seaborn. See seaborn documentation. Defaults to 'magma'.
+
+            plot_format (str, optional): Format to save plots. Can be any of the following: "pdf", "png", "svg", "ps", "eps". Defaults to "pdf".
+
+            dpi (int): The resolution in dots per inch. Defaults to 300.
+        """
+        params = dict(
+            zoom=zoom,
+            prefix=prefix,
+            horizontal_space=horizontal_space,
+            vertical_space=vertical_space,
+            bar_color=bar_color,
+            heatmap_palette=heatmap_palette,
+            plot_format=plot_format,
+            dpi=dpi,
+        )
+
+        df = pd.DataFrame(self.snps)
+        df.replace(-9, np.nan, inplace=True)
+
+        report_path = "reports"
+        if prefix is not None:
+            report_path = f"{prefix}_{report_path}"
+        os.makedirs(report_path, exist_ok=True)
+
+        loc, ind, poploc, poptotal, indpop = Plotting.visualize_missingness(
+            self, df, report_path, **params
+        )
+
+        self._report2file(ind, report_path, "individual_missingness.csv")
+        self._report2file(loc, report_path, "locus_missingness.csv")
+
+        if self.pops is not None:
+            self._report2file(
+                poploc, report_path, "per_pop_and_locus_missingness.csv"
+            )
+            self._report2file(
+                poptotal, report_path, "population_missingness.csv"
+            )
+            self._report2file(
+                indpop,
+                report_path,
+                "population_locus_missingness.csv",
+                header=True,
+            )
+
+    def _report2file(self, df, report_path, mypath, header=False):
+        df.to_csv(os.path.join(report_path, mypath), header=header, index=False)
+
+    def calc_missing(self, df, use_pops=True):
+        # Get missing value counts per-locus.
+        loc = df.isna().sum(axis=0) / self.num_inds
+        loc = loc.round(2)
+
+        # Get missing value counts per-individual.
+        ind = df.isna().sum(axis=1) / self.num_snps
+        ind = ind.round(2)
+
+        poploc = None
+        poptot = None
+        indpop = None
+        if use_pops:
+            popdf = df.copy()
+            popdf.index = self.pops
+            misscnt = popdf.isna().groupby(level=0).sum()
+            n = popdf.groupby(level=0).size()
+            poploc = misscnt.div(n, axis=0).round(2).T
+            poptot = misscnt.sum(axis=1) / self.num_snps
+            poptot = poptot.div(n, axis=0).round(2)
+            indpop = df.copy()
+
+        return loc, ind, poploc, poptot, indpop
 
     @property
     def snpcount(self) -> int:
