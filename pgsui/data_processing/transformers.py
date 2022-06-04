@@ -1706,7 +1706,10 @@ class ImputeAlleleFreqTransformer(
         gt_list = X.genotypes012_list
         self.pops_ = X.populations
         self.iterative_mode_ = self.kwargs.get("iterative_mode", False)
-        self.imputed_, valid_cols = self._impute(gt_list)
+        if self.pops_ is None:
+            self.imputed_ = self._global_impute(gt_list)
+        else:
+            self.imputed_ = self._impute(gt_list)
         return self
 
     def transform(self, X):
@@ -1720,12 +1723,43 @@ class ImputeAlleleFreqTransformer(
         """
         return self.imputed_
 
+    def _global_impute(
+        self, X: List[List[int]]
+    ) -> Union[pd.DataFrame, np.ndarray, List[List[Union[int, float]]]]:
+
+        if self.verbose:
+            print("\nImputing by global allele frequency...")
+
+        df = misc.validate_input_type(X, return_type="df")
+        df.replace(self.missing, np.nan, inplace=True)
+        imp = SimpleImputer(strategy="most_frequent")
+        imp_arr = imp.fit_transform(df)
+
+        if self.iterative_mode_:
+            data = data.astype(dtype="float32")
+        else:
+            data = data.astype(dtype="Int8")
+
+        if self.verbose:
+            print("Done!")
+
+        if self.output_format == "df":
+            return data
+
+        elif self.output_format == "array":
+            return data.to_numpy()
+
+        elif self.output_format == "list":
+            return data.values.tolist()
+        else:
+            raise ValueError(
+                f"Unsupported output_format provided. Valid options include "
+                f"'df', 'array', or 'list', but got {self.output_format}"
+            )
+
     def _impute(
         self, X: List[List[int]]
-    ) -> Tuple[
-        Union[pd.DataFrame, np.ndarray, List[List[Union[int, float]]]],
-        List[int],
-    ]:
+    ) -> Union[pd.DataFrame, np.ndarray, List[List[Union[int, float]]]]:
         """Impute missing genotypes using allele frequencies.
 
         Impute using global or by_population allele frequencies. Missing alleles are primarily coded as negative; usually -9.
@@ -1807,13 +1841,13 @@ class ImputeAlleleFreqTransformer(
             print("Done!")
 
         if self.output_format == "df":
-            return data, valid_cols
+            return data
 
         elif self.output_format == "array":
-            return data.to_numpy(), valid_cols
+            return data.to_numpy()
 
         elif self.output_format == "list":
-            return data.values.tolist(), valid_cols
+            return data.values.tolist()
         else:
             raise ValueError(
                 f"Unsupported output_format provided. Valid options include "
