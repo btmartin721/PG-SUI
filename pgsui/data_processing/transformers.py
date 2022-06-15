@@ -86,26 +86,6 @@ else:
 warnings.simplefilter(action="ignore", category=pd.errors.PerformanceWarning)
 
 
-# def encode_onehot(X):
-#     """Convert 012-encoded data to one-hot encodings.
-
-#     Args:
-#         X (numpy.ndarray): Input array with 012-encoded data and -9 as the missing data value.
-
-#     Returns:
-#         pandas.DataFrame: One-hot encoded data, ignoring missing values (np.nan).
-#     """
-
-#     df = encode_categorical(X)
-#     df_incomplete = df.copy()
-#     missing_encoded = pd.get_dummies(df_incomplete)
-
-#     for col in df.columns:
-#         missing_cols = missing_encoded.columns.str.startswith(str(col) + "_")
-#         missing_encoded.loc[df_incomplete[col].isnull(), missing_cols] = np.nan
-#     return missing_encoded
-
-
 def encode_onehot(X):
     """Convert 012-encoded data to one-hot encodings.
     Args:
@@ -220,18 +200,47 @@ def mle(row):
     return res
 
 
+class VAEInputTransformer(BaseEstimator, TransformerMixin):
+    """Transform input X prior to estimator fitting.
+
+    For use with KerasClassifier.
+    """
+
+    def fit(self, X):
+        """Fit transformer to input data X.
+
+        Args:
+            X (numpy.ndarray): Input data to fit. If numpy.ndarray, then should be of shape (n_samples, n_components). If dictionary, then should be component: numpy.ndarray.
+
+        Returns:
+            self: Class instance.
+        """
+        self.n_features_in_ = X.shape[1]
+        self.y_train = x
+        return self
+
+    def transform(self, X):
+        """Transform input data X to the needed format.
+
+        Args:
+            X (numpy.ndarray): Input data to fit. If numpy.ndarray, then should be of shape (n_samples, n_components). If dictionary, then should be component: numpy.ndarray.
+
+        Returns:
+            numpy.ndarray: Formatted input data with correct component.
+        """
+        return self.y_train
+
+
 class UBPInputTransformer(BaseEstimator, TransformerMixin):
     """Transform input X prior to estimator fitting.
 
     Args:
-        phase (int or None): current phase if doing UBP or None if doing NLPCA.
         n_components (int): Number of principal components currently being used in V.
 
         V (numpy.ndarray or Dict[str, Any]): If doing grid search, should be a dictionary with current_component: numpy.ndarray. If not doing grid search, then it should be a numpy.ndarray.
     """
 
-    def __init__(self, phase, n_components, V):
-        self.phase = phase
+    def __init__(self, n_components, V):
         self.n_components = n_components
         self.V = V
 
