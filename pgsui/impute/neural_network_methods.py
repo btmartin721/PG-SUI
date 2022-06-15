@@ -9,12 +9,21 @@ from collections import defaultdict
 import numpy as np
 import pandas as pd
 
+# Grid search imports
+from sklearn.model_selection import GridSearchCV, RandomizedSearchCV
+from scikeras.wrappers import KerasClassifier
+
+# Genetic algorithm grid search imports
+from sklearn_genetic import GASearchCV
+from sklearn_genetic.callbacks import ConsecutiveStopping, ProgressBar
+
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 logging.getLogger("tensorflow").disabled = True
 warnings.filterwarnings("ignore", category=UserWarning)
 
 # noinspection PyPackageRequirements
 import tensorflow as tf
+from tqdm.keras import TqdmCallback
 
 # Disable can't find cuda .dll errors. Also turns of GPU support.
 tf.config.set_visible_devices([], "GPU")
@@ -37,6 +46,604 @@ def deprecated(
 
 
 deprecation.deprecated = deprecated
+
+try:
+    from .scorers import Scorers
+    from .vae_model import VAEModel
+    from .nlpca_model import NLPCAModel
+    from .ubp_model import UBPPhase1, UBPPhase2, UBPPhase3
+    from ..data_processing.transformers import (
+        UBPInputTransformer,
+        VAEInputTransformer,
+        MLPTargetTransformer,
+    )
+except (ModuleNotFoundError, ValueError):
+    from impute.scorers import Scorers
+    from impute.vae_model import VAEModel
+    from impute.nlpca_model import NLPCAModel
+    from impute.ubp_model import UBPPhase1, UBPPhase2, UBPPhase3
+    from data_processing.transformers import (
+        UBPInputTransformer,
+        VAEInputTransformer,
+        MLPTargetTransformer,
+    )
+
+
+class DisabledCV:
+    def __init__(self):
+        self.n_splits = 1
+
+    def split(self, X, y, groups=None):
+        yield (np.arange(len(X)), np.arange(len(y)))
+
+    def get_n_splits(self, X, y, groups=None):
+        return self.n_splits
+
+
+class VAEClassifier(KerasClassifier):
+    """Estimator to be used with the scikit-learn API.
+
+    Args:
+        y_decoded (numpy.ndarray): Original target data, y, that is not one-hot encoded. Should have shape (n_samples, n_features). Should be 012-encoded. Defaults to None.
+
+        y (numpy.ndarray): One-hot encoded target data. Defaults to None.
+
+        batch_size (int): Batch size to train with. Defaults to 32.
+
+        missing_mask (np.ndarray): Missing mask with missing values set to False (0) and observed values as True (1). Defaults to None. Defaults to None.
+
+        output_shape (int): Number of units in model output layer. Defaults to None.
+
+        weights_initializer (str): Kernel initializer to use for model weights. Defaults to "glorot_normal".
+
+        hidden_layer_sizes (List[int]): Output unit size for each hidden layer. Should be list of length num_hidden_layers. Defaults to None.
+
+        num_hidden_layers (int): Number of hidden layers to use. Defaults to 1.
+
+        hidden_activation (str): Hidden activation function to use. Defaults to "elu".
+
+        l1_penalty (float): L1 regularization penalty to use to reduce overfitting. Defautls to 0.01.
+
+        l2_penalty (float): L2 regularization penalty to use to reduce overfitting. Defaults to 0.01.
+
+        dropout_rate (float): Dropout rate for each hidden layer to reduce overfitting. Defaults to 0.2.
+
+        num_classes (int): Number of classes in output predictions. Defaults to 1.
+
+        n_components (int): Number of components to use for input V. Defaults to 3.
+
+        search_mode (bool): Whether in grid search mode (True) or single estimator mode (False). Defaults to True.
+
+        optimizer (str or callable): Optimizer to use during training. Should be either a str or tf.keras.optimizers callable. Defaults to "adam".
+
+        loss (str or callable): Loss function to use. Should be a string or a callable if using a custom loss function. Defaults to "binary_crossentropy".
+
+        metrics (List[Union[str, callable]]): Metrics to use. Should be a sstring or a callable if using a custom metrics function. Defaults to "accuracy".
+
+        epochs (int): Number of epochs to train over. Defaults to 100.
+
+        verbose (int): Verbosity mode ranging from 0 - 2. 0 = silent, 2 = most verbose.
+
+        kwargs (Any): Other keyword arguments to route to fit, compile, callbacks, etc. Should have the routing prefix (e.g., optimizer__learning_rate=0.01).
+    """
+
+    def __init__(
+        self,
+        y_train,
+        y_original,
+        model_params,
+        batch_size=32,
+        missing_mask=None,
+        output_shape=None,
+        weights_initializer="glorot_normal",
+        hidden_layer_sizes=None,
+        num_hidden_layers=1,
+        hidden_activation="elu",
+        l1_penalty=0.01,
+        l2_penalty=0.01,
+        dropout_rate=0.2,
+        num_classes=3,
+        sample_weight=None,
+        n_components=3,
+        optimizer="adam",
+        loss="categorical_crossentropy",
+        epochs=100,
+        verbose=0,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+
+        self.y_train = y_train
+        self.y_original = y_original
+        self.batch_size = batch_size
+        self.missing_mask = missing_mask
+        self.output_shape = output_shape
+        self.weights_initializer = weights_initializer
+        self.hidden_layer_sizes = hidden_layer_sizes
+        self.num_hidden_layers = num_hidden_layers
+        self.hidden_activation = hidden_activation
+        self.l1_penalty = l1_penalty
+        self.l2_penalty = l2_penalty
+        self.dropout_rate = dropout_rate
+        self.num_classes = num_classes
+        self.sample_weight = sample_weight
+        self.n_components = n_components
+        self.optimizer = optimizer
+        self.loss = loss
+        self.epochs = epochs
+        self.verbose = verbose
+
+    def _keras_build_fn(self, compile_kwargs):
+        """Build model with custom parameters.
+
+        Args:
+            compile_kwargs (Dict[str, Any]): Dictionary with parameters: values. The parameters should be passed to the class constructor, but should be captured as kwargs. They should also have the routing prefix (e.g., optimizer__learning_rate=0.01). compile_kwargs will automatically be parsed from **kwargs by KerasClassifier and sent here.
+
+        Returns:
+            tf.keras.Model: Model instance. The chosen model depends on which phase is passed to the class constructor.
+        """
+        model = VAEModel(
+            y=self.y_train,
+            batch_size=self.batch_size,
+            missing_mask=self.missing_mask,
+            output_shape=self.output_shape,
+            n_components=self.n_components,
+            weights_initializer=self.weights_initializer,
+            hidden_layer_sizes=self.hidden_layer_sizes,
+            num_hidden_layers=self.num_hidden_layers,
+            hidden_activation=self.hidden_activation,
+            l1_penalty=self.l1_penalty,
+            l2_penalty=self.l2_penalty,
+            dropout_rate=self.dropout_rate,
+            num_classes=self.num_classes,
+            sample_weight=self.sample_weight,
+        )
+
+        model.build((None, self.y_train.shape[1]))
+
+        model.compile(
+            optimizer=compile_kwargs["optimizer"],
+            loss=compile_kwargs["loss"],
+            metrics=compile_kwargs["metrics"],
+            run_eagerly=True,
+        )
+
+        model.set_model_outputs()
+        return model
+
+    @staticmethod
+    def scorer(y_true, y_pred, **kwargs):
+        """Scorer for grid search that masks missing data.
+
+        To use this, do not specify a scoring metric when initializing the grid search object. By default if the scoring_metric option is left as None, then it uses the estimator's scoring metric (this one).
+
+        Args:
+            y_true (numpy.ndarray): True target values input to fit().
+            y_pred (numpy.ndarray): Predicted target values from estimator. The predictions are modified by self.target_encoder().inverse_transform() before being sent here.
+            kwargs (Any): Other parameters sent to sklearn scoring metric. Supported options include missing_mask, scoring_metric, and testing.
+
+        Returns:
+            float: Calculated score.
+        """
+        # Get missing mask if provided.
+        # Otherwise default is all missing values (array all True).
+        missing_mask = kwargs.get(
+            "missing_mask", np.ones(y_true.shape, dtype=bool)
+        )
+
+        testing = kwargs.get("testing", False)
+        scoring_metric = kwargs.get("scoring_metric", "accuracy")
+
+        y_true_masked = y_true[missing_mask]
+        y_pred_masked = y_pred[missing_mask]
+
+        if scoring_metric.startswith("auc"):
+            roc_auc = Scorers.compute_roc_auc_micro_macro(
+                y_true_masked, y_pred_masked, missing_mask
+            )
+
+            if scoring_metric == "auc_macro":
+                return roc_auc["macro"]
+
+            elif scoring_metric == "auc_micro":
+                return roc_auc["micro"]
+
+            else:
+                raise ValueError(
+                    f"Invalid scoring_metric provided: {scoring_metric}"
+                )
+
+        elif scoring_metric.startswith("precision"):
+            pr_ap = Scorers.compute_pr(y_true_masked, y_pred_masked)
+
+            if scoring_metric == "precision_recall_macro":
+                return pr_ap["macro"]
+
+            elif scoring_metric == "precision_recall_micro":
+                return pr_ap["micro"]
+
+            else:
+                raise ValueError(
+                    f"Invalid scoring_metric provided: {scoring_metric}"
+                )
+
+        elif scoring_metric == "accuracy":
+            y_pred_masked_decoded = NeuralNetworkMethods.decode_masked(
+                y_pred_masked
+            )
+            return accuracy_score(y_true_masked, y_pred_masked_decoded)
+
+        else:
+            raise ValueError(
+                f"Invalid scoring_metric provided: {scoring_metric}"
+            )
+
+        if testing:
+            np.set_printoptions(threshold=np.inf)
+            print(y_true_masked)
+
+            y_pred_masked_decoded = NeuralNetworkMethods.decode_masked(
+                y_pred_masked
+            )
+
+            print(y_pred_masked_decoded)
+
+    @property
+    def feature_encoder(self):
+        """Handles feature input, X, before training.
+
+        Returns:
+            VAEInputTransformer: InputTransformer object that includes fit() and transform() methods to transform input before estimator fitting.
+        """
+        return VAEInputTransformer()
+
+    @property
+    def target_encoder(self):
+        """Handles target input and output, y_true and y_pred, both before and after training.
+
+        Returns:
+            NNOutputTransformer: NNOutputTransformer object that includes fit(), transform(), and inverse_transform() methods.
+        """
+        return MLPTargetTransformer()
+
+    def predict(self, X, **kwargs):
+        """Returns predictions for the given test data.
+
+        Args:
+            X (Union[array-like, sparse matrix, dataframe] of shape (n_samples, n_features)): Training samples where n_samples is the number of samples and n_features is the number of features.
+        **kwargs (Dict[str, Any]): Extra arguments to route to ``Model.predict``\.
+
+        Warnings:
+            Passing estimator parameters as keyword arguments (aka as ``**kwargs``) to ``predict`` is not supported by the Scikit-Learn API, and will be removed in a future version of SciKeras. These parameters can also be specified by prefixing ``predict__`` to a parameter at initialization (``BaseWrapper(..., fit__batch_size=32, predict__batch_size=1000)``) or by using ``set_params`` (``est.set_params(fit__batch_size=32, predict__batch_size=1000)``\).
+
+        Returns:
+            array-like: Predictions, of shape shape (n_samples,) or (n_samples, n_outputs).
+
+        Notes:
+            Had to override predict() here in order to do the __call__ with the refined input, V_latent.
+        """
+        y_pred_proba = self.model_(self.y_train, training=False)
+        return self.target_encoder_.inverse_transform(y_pred_proba)
+
+
+class MLPClassifier(KerasClassifier):
+    """Estimator to be used with the scikit-learn API.
+
+    Args:
+        V (numpy.ndarray or Dict[str, Any]): Input X values of shape (n_samples, n_components). If a dictionary is passed, each key: value pair should have randomly initialized values for n_components: V. self.feature_encoder() will parse it and select the key: value pair with the current n_components. This allows n_components to be grid searched using GridSearchCV. Otherwise, it throws an error that the dimensions are off. Defaults to None.
+
+        y_decoded (numpy.ndarray): Original target data, y, that is not one-hot encoded. Should have shape (n_samples, n_features). Should be 012-encoded. Defaults to None.
+
+        y (numpy.ndarray): One-hot encoded target data. Defaults to None.
+
+        batch_size (int): Batch size to train with. Defaults to 32.
+
+        missing_mask (np.ndarray): Missing mask with missing values set to False (0) and observed values as True (1). Defaults to None. Defaults to None.
+
+        output_shape (int): Number of units in model output layer. Defaults to None.
+
+        weights_initializer (str): Kernel initializer to use for model weights. Defaults to "glorot_normal".
+
+        hidden_layer_sizes (List[int]): Output unit size for each hidden layer. Should be list of length num_hidden_layers. Defaults to None.
+
+        num_hidden_layers (int): Number of hidden layers to use. Defaults to 1.
+
+        hidden_activation (str): Hidden activation function to use. Defaults to "elu".
+
+        l1_penalty (float): L1 regularization penalty to use to reduce overfitting. Defautls to 0.01.
+
+        l2_penalty (float): L2 regularization penalty to use to reduce overfitting. Defaults to 0.01.
+
+        dropout_rate (float): Dropout rate for each hidden layer to reduce overfitting. Defaults to 0.2.
+
+        num_classes (int): Number of classes in output predictions. Defaults to 1.
+
+        phase (int or None): Current phase (if doing UBP), or None if doing NLPCA. Defults to None.
+
+        n_components (int): Number of components to use for input V. Defaults to 3.
+
+        search_mode (bool): Whether in grid search mode (True) or single estimator mode (False). Defaults to True.
+
+        optimizer (str or callable): Optimizer to use during training. Should be either a str or tf.keras.optimizers callable. Defaults to "adam".
+
+        loss (str or callable): Loss function to use. Should be a string or a callable if using a custom loss function. Defaults to "binary_crossentropy".
+
+        metrics (List[Union[str, callable]]): Metrics to use. Should be a sstring or a callable if using a custom metrics function. Defaults to "accuracy".
+
+        epochs (int): Number of epochs to train over. Defaults to 100.
+
+        verbose (int): Verbosity mode ranging from 0 - 2. 0 = silent, 2 = most verbose.
+
+        ubp_weights (tensorflow.Tensor): Weights from UBP model. Fetched by doing model.get_weights() on phase 2 model. Only used if phase 3. Defaults to None.
+
+        kwargs (Any): Other keyword arguments to route to fit, compile, callbacks, etc. Should have the routing prefix (e.g., optimizer__learning_rate=0.01).
+    """
+
+    def __init__(
+        self,
+        V,
+        y_train,
+        y_original,
+        ubp_weights=None,
+        batch_size=32,
+        missing_mask=None,
+        output_shape=None,
+        weights_initializer="glorot_normal",
+        hidden_layer_sizes=None,
+        num_hidden_layers=1,
+        hidden_activation="elu",
+        l1_penalty=0.01,
+        l2_penalty=0.01,
+        dropout_rate=0.2,
+        num_classes=3,
+        phase=None,
+        sample_weight=None,
+        n_components=3,
+        optimizer="adam",
+        loss="binary_crossentropy",
+        epochs=100,
+        verbose=0,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self.V = V
+        self.y_train = y_train
+        self.y_original = y_original
+        self.ubp_weights = ubp_weights
+        self.batch_size = batch_size
+        self.missing_mask = missing_mask
+        self.output_shape = output_shape
+        self.weights_initializer = weights_initializer
+        self.hidden_layer_sizes = hidden_layer_sizes
+        self.num_hidden_layers = num_hidden_layers
+        self.hidden_activation = hidden_activation
+        self.l1_penalty = l1_penalty
+        self.l2_penalty = l2_penalty
+        self.dropout_rate = dropout_rate
+        self.num_classes = num_classes
+        self.phase = phase
+        self.sample_weight = sample_weight
+        self.n_components = n_components
+        self.optimizer = optimizer
+        self.loss = loss
+        self.epochs = epochs
+        self.verbose = verbose
+
+    def _keras_build_fn(self, compile_kwargs):
+        """Build model with custom parameters.
+
+        Args:
+            compile_kwargs (Dict[str, Any]): Dictionary with parameters: values. The parameters should be passed to the class constructor, but should be captured as kwargs. They should also have the routing prefix (e.g., optimizer__learning_rate=0.01). compile_kwargs will automatically be parsed from **kwargs by KerasClassifier and sent here.
+
+        Returns:
+            tf.keras.Model: Model instance. The chosen model depends on which phase is passed to the class constructor.
+        """
+        if self.phase is None:
+            model = NLPCAModel(
+                V=self.V,
+                y=self.y_train,
+                batch_size=self.batch_size,
+                missing_mask=self.missing_mask,
+                output_shape=self.output_shape,
+                n_components=self.n_components,
+                weights_initializer=self.weights_initializer,
+                hidden_layer_sizes=self.hidden_layer_sizes,
+                num_hidden_layers=self.num_hidden_layers,
+                hidden_activation=self.hidden_activation,
+                l1_penalty=self.l1_penalty,
+                l2_penalty=self.l2_penalty,
+                dropout_rate=self.dropout_rate,
+                num_classes=self.num_classes,
+                phase=self.phase,
+                sample_weight=self.sample_weight,
+            )
+
+        elif self.phase == 1:
+            model = UBPPhase1(
+                V=self.V,
+                y=self.y_train,
+                batch_size=self.batch_size,
+                missing_mask=self.missing_mask,
+                output_shape=self.output_shape,
+                n_components=self.n_components,
+                weights_initializer=self.weights_initializer,
+                hidden_layer_sizes=self.hidden_layer_sizes,
+                num_hidden_layers=self.num_hidden_layers,
+                hidden_activation=self.hidden_activation,
+                l1_penalty=self.l1_penalty,
+                l2_penalty=self.l2_penalty,
+                dropout_rate=self.dropout_rate,
+                num_classes=self.num_classes,
+                phase=self.phase,
+            )
+
+        elif self.phase == 2:
+            model = UBPPhase2(
+                V=self.V,
+                y=self.y_train,
+                batch_size=self.batch_size,
+                missing_mask=self.missing_mask,
+                output_shape=self.output_shape,
+                n_components=self.n_components,
+                weights_initializer=self.weights_initializer,
+                hidden_layer_sizes=self.hidden_layer_sizes,
+                num_hidden_layers=self.num_hidden_layers,
+                hidden_activation=self.hidden_activation,
+                l1_penalty=self.l1_penalty,
+                l2_penalty=self.l2_penalty,
+                dropout_rate=self.dropout_rate,
+                num_classes=self.num_classes,
+                phase=self.phase,
+            )
+
+        elif self.phase == 3:
+            model = UBPPhase3(
+                V=self.V,
+                y=self.y_train,
+                batch_size=self.batch_size,
+                missing_mask=self.missing_mask,
+                output_shape=self.output_shape,
+                n_components=self.n_components,
+                weights_initializer=self.weights_initializer,
+                hidden_layer_sizes=self.hidden_layer_sizes,
+                num_hidden_layers=self.num_hidden_layers,
+                hidden_activation=self.hidden_activation,
+                l1_penalty=self.l1_penalty,
+                l2_penalty=self.l2_penalty,
+                dropout_rate=self.dropout_rate,
+                num_classes=self.num_classes,
+                phase=self.phase,
+            )
+
+            model.build((None, self.n_components))
+
+        model.compile(
+            optimizer=compile_kwargs["optimizer"],
+            loss=compile_kwargs["loss"],
+            metrics=compile_kwargs["metrics"],
+            run_eagerly=True,
+        )
+
+        model.set_model_outputs()
+
+        if self.phase == 3:
+            model.set_weights(self.ubp_weights)
+
+        return model
+
+    @staticmethod
+    def scorer(y_true, y_pred, **kwargs):
+        """Scorer for grid search that masks missing data.
+
+        To use this, do not specify a scoring metric when initializing the grid search object. By default if the scoring_metric option is left as None, then it uses the estimator's scoring metric (this one).
+
+        Args:
+            y_true (numpy.ndarray): True target values input to fit().
+            y_pred (numpy.ndarray): Predicted target values from estimator. The predictions are modified by self.target_encoder().inverse_transform() before being sent here.
+            kwargs (Any): Other parameters sent to sklearn scoring metric. Supported options include missing_mask, scoring_metric, and testing.
+
+        Returns:
+            float: Calculated score.
+        """
+        # Get missing mask if provided.
+        # Otherwise default is all missing values (array all True).
+        missing_mask = kwargs.get(
+            "missing_mask", np.ones(y_true.shape, dtype=bool)
+        )
+
+        testing = kwargs.get("testing", False)
+        scoring_metric = kwargs.get("scoring_metric", "accuracy")
+
+        y_true_masked = y_true[missing_mask]
+        y_pred_masked = y_pred[missing_mask]
+
+        if scoring_metric.startswith("auc"):
+            roc_auc = Scorers.compute_roc_auc_micro_macro(
+                y_true_masked, y_pred_masked, missing_mask
+            )
+
+            if scoring_metric == "auc_macro":
+                return roc_auc["macro"]
+
+            elif scoring_metric == "auc_micro":
+                return roc_auc["micro"]
+
+            else:
+                raise ValueError(
+                    f"Invalid scoring_metric provided: {scoring_metric}"
+                )
+
+        elif scoring_metric.startswith("precision"):
+            pr_ap = Scorers.compute_pr(y_true_masked, y_pred_masked)
+
+            if scoring_metric == "precision_recall_macro":
+                return pr_ap["macro"]
+
+            elif scoring_metric == "precision_recall_micro":
+                return pr_ap["micro"]
+
+            else:
+                raise ValueError(
+                    f"Invalid scoring_metric provided: {scoring_metric}"
+                )
+
+        elif scoring_metric == "accuracy":
+            y_pred_masked_decoded = NeuralNetworkMethods.decode_masked(
+                y_pred_masked
+            )
+            return accuracy_score(y_true_masked, y_pred_masked_decoded)
+
+        else:
+            raise ValueError(
+                f"Invalid scoring_metric provided: {scoring_metric}"
+            )
+
+        if testing:
+            np.set_printoptions(threshold=np.inf)
+            print(y_true_masked)
+
+            y_pred_masked_decoded = NeuralNetworkMethods.decode_masked(
+                y_pred_masked
+            )
+
+            print(y_pred_masked_decoded)
+
+    @property
+    def feature_encoder(self):
+        """Handles feature input, X, before training.
+
+        Returns:
+            UBPInputTransformer: InputTransformer object that includes fit() and transform() methods to transform input before estimator fitting.
+        """
+        return UBPInputTransformer(self.n_components, self.V)
+
+    @property
+    def target_encoder(self):
+        """Handles target input and output, y_true and y_pred, both before and after training.
+
+        Returns:
+            NNOutputTransformer: NNOutputTransformer object that includes fit(), transform(), and inverse_transform() methods.
+        """
+        return MLPTargetTransformer()
+
+    def predict(self, X, **kwargs):
+        """Returns predictions for the given test data.
+
+        Args:
+            X (Union[array-like, sparse matrix, dataframe] of shape (n_samples, n_features)): Training samples where n_samples is the number of samples and n_features is the number of features.
+        **kwargs (Dict[str, Any]): Extra arguments to route to ``Model.predict``\.
+
+        Warnings:
+            Passing estimator parameters as keyword arguments (aka as ``**kwargs``) to ``predict`` is not supported by the Scikit-Learn API, and will be removed in a future version of SciKeras. These parameters can also be specified by prefixing ``predict__`` to a parameter at initialization (``BaseWrapper(..., fit__batch_size=32, predict__batch_size=1000)``) or by using ``set_params`` (``est.set_params(fit__batch_size=32, predict__batch_size=1000)``\).
+
+        Returns:
+            array-like: Predictions, of shape shape (n_samples,) or (n_samples, n_outputs).
+
+        Notes:
+            Had to override predict() here in order to do the __call__ with the refined input, V_latent.
+        """
+        y_pred_proba = self.model_(self.model_.V_latent, training=False)
+        return self.target_encoder_.inverse_transform(y_pred_proba)
 
 
 class NeuralNetworkMethods:
@@ -293,11 +900,12 @@ class NeuralNetworkMethods:
         n_components,
         sample_weight,
         missing_mask,
+        ubp=True,
     ):
         """Prepare training batches in the custom training loop.
 
         Args:
-            V (numpy.ndarray): Input to batch subset and refine, of shape (n_samples, n_components).
+            V (numpy.ndarray): Input to batch subset and refine, of shape (n_samples, n_components) (if doing UBP/NLPCA) or (n_samples, n_features) (if doing VAE).
 
             y (numpy.ndarray): Target to use to refine input V. shape (n_samples, n_features).
 
@@ -312,6 +920,8 @@ class NeuralNetworkMethods:
             sample_weight (List[float] or None): List of floats of shape (n_samples,) with sample weights. sample_weight argument must be passed to fit().
 
             missing_mask (numpy.ndarray): Boolean array with True for missing values and False for observed values.
+
+            ubp (bool, optional): Whether model is UBP/NLPCA (if True) or VAE (if False). Defaults to True.
 
         Returns:
             tf.Variable: Input tensor v with current batch assigned.
@@ -343,14 +953,17 @@ class NeuralNetworkMethods:
         else:
             sample_weight_batch = None
 
-        v = tf.Variable(
-            tf.zeros([batch_size, n_components]),
-            trainable=trainable,
-            dtype=tf.float32,
-        )
+        if ubp:
+            v = tf.Variable(
+                tf.zeros([batch_size, n_components]),
+                trainable=trainable,
+                dtype=tf.float32,
+            )
 
-        # Assign current batch to tf.Variable v.
-        v.assign(v_batch)
+            # Assign current batch to tf.Variable v.
+            v.assign(v_batch)
+        else:
+            v = v_batch
 
         return (
             v,
@@ -501,3 +1114,410 @@ class NeuralNetworkMethods:
             )
 
         return reconstruction_loss
+
+    @staticmethod
+    def normalize_data(data):
+        """Normalize data between 0 and 1."""
+        return (data - np.min(data)) / (np.max(data) - np.min(data))
+
+    @staticmethod
+    def get_class_weights(y_true, original_missing_mask, user_weights=None):
+        """Get class weights for each column in a 2D matrix.
+
+        Args:
+            y_true (numpy.ndarray): True target values.
+
+            original_missing_mask (numpy.ndarray): Boolean mask with missing values set to True and non-missing to False.
+
+            user_weights (Dict[int, float], optional): Class weights if user-provided.
+
+        Returns:
+            numpy.ndarray: Class weights per column of shape (n_samples, n_features).
+        """
+        # Get list of class_weights (per-column).
+        class_weights = list()
+        sample_weight = np.zeros(y_true.shape)
+        if user_weights is not None:
+            # Set user-defined sample_weights
+            for k in user_weights.keys():
+                sample_weight[y_true == k] = user_weights[k]
+        else:
+            # Automatically get class weights to set sample_weight.
+            for i in np.arange(y_true.shape[1]):
+                mm = ~original_missing_mask_[:, i]
+                classes = np.unique(y_true[mm, i])
+                cw = compute_class_weight(
+                    "balanced",
+                    classes=classes,
+                    y=y_true[mm, i],
+                )
+
+                class_weights.append({k: v for k, v in zip(classes, cw)})
+
+            # Make sample_weight_matrix from automatic per-column class_weights.
+            for i, w in enumerate(class_weights):
+                for j in range(3):
+                    if j in w:
+                        sample_weight[y_true[:, i] == j, i] = w[j]
+
+        return sample_weight
+
+    @staticmethod
+    def run_vae_clf(
+        y_train,
+        y_test,
+        y_true,
+        model_params,
+        compile_params,
+        fit_params,
+        disable_progressbar,
+        run_gridsearch,
+        epochs,
+        sim_missing_mask,
+        scoring_metric,
+        ga,
+        early_stop_gen,
+        verbosity,
+        grid_iter,
+        gridparams,
+        n_jobs,
+        ga_kwargs,
+        n_components,
+        gridsearch_method,
+        prefix,
+        tt,
+        ubp_weights=None,
+        phase=None,
+        scoring=None,
+        testing=False,
+    ):
+        # This reduces memory usage.
+        # tensorflow builds graphs that
+        # will stack if not cleared before
+        # building a new model.
+        tf.keras.backend.set_learning_phase(1)
+        tf.keras.backend.clear_session()
+        self.reset_seeds()
+
+        model = None
+
+        if not disable_progressbar and not run_gridsearch:
+            fit_params["callbacks"][-1] = TqdmCallback(
+                epochs=epochs, verbose=0, desc=desc
+            )
+
+        clf = VAEClassifier(
+            y_train,
+            y_true,
+            **model_params,
+            optimizer=compile_params["optimizer"],
+            optimizer__learning_rate=compile_params["learning_rate"],
+            loss=compile_params["loss"],
+            metrics=compile_params["metrics"],
+            epochs=fit_params["epochs"],
+            callbacks=fit_params["callbacks"],
+            validation_split=fit_params["validation_split"],
+            verbose=0,
+            score__missing_mask=sim_missing_mask_,
+            score__scoring_metric=scoring_metric,
+        )
+
+        if run_gridsearch:
+            # Cannot do CV because there is no way to use test splits
+            # given that the input gets refined. If using a test split,
+            # then it would just be the randomly initialized values and
+            # would not accurately represent the model.
+            # Thus, we disable cross-validation for the grid searches.
+            cross_val = DisabledCV()
+
+            if ga:
+                # Stop searching if GA sees no improvement.
+                callback = [
+                    ConsecutiveStopping(
+                        generations=early_stop_gen, metric="fitness"
+                    )
+                ]
+
+                if not disable_progressbar:
+                    callback.append(ProgressBar())
+
+                verbose = False if verbosity == 0 else True
+
+                # Do genetic algorithm
+                # with HiddenPrints():
+                search = GASearchCV(
+                    estimator=clf,
+                    cv=cross_val,
+                    scoring=scoring,
+                    generations=grid_iter,
+                    param_grid=gridparams,
+                    n_jobs=n_jobs,
+                    refit=scoring_metric,
+                    verbose=verbose,
+                    error_score="raise",
+                    **ga_kwargs,
+                )
+
+                search.fit(V[n_components], y_true, callbacks=callback)
+
+            else:
+                if gridsearch_method.lower() == "gridsearch":
+                    # Do GridSearchCV
+                    search = GridSearchCV(
+                        clf,
+                        param_grid=gridparams,
+                        n_jobs=n_jobs,
+                        cv=cross_val,
+                        scoring=scoring,
+                        refit=scoring_metric,
+                        verbose=verbose * 4,
+                        error_score="raise",
+                    )
+
+                elif gridsearch_method.lower() == "randomized_gridsearch":
+                    search = RandomizedSearchCV(
+                        clf,
+                        param_distributions=gridparams,
+                        n_iter=grid_iter,
+                        n_jobs=n_jobs,
+                        cv=cross_val,
+                        scoring=scoring,
+                        refit=scoring_metric,
+                        verbose=verbose * 4,
+                        error_score="raise",
+                    )
+
+                else:
+                    raise ValueError(
+                        f"Invalid gridsearch_method specified: "
+                        f"{gridsearch_method}"
+                    )
+
+                search.fit(V[n_components], y=y_true)
+
+            best_params = search.best_params_
+            best_score = search.best_score_
+            best_clf = search.best_estimator_
+
+            if phase is not None:
+                fp = f"{prefix}_ubp_cvresults_phase{phase}.csv"
+            else:
+                fp = f"{prefix}_nlpca_cvresults.csv"
+
+            cv_results = pd.DataFrame(search.cv_results_)
+            cv_results.to_csv(fp, index=False)
+
+        else:
+            clf.fit(V[n_components], y=y_true)
+            best_params = None
+            best_score = None
+            search = None
+            best_clf = clf
+
+        model = best_clf.model_
+        best_history = best_clf.history_
+        y_pred_proba = model(model.V_latent, training=False)
+        y_pred = tt.inverse_transform(y_pred_proba)
+
+        # Get metric scores.
+        metrics = Scorers.scorer(
+            y_true,
+            y_pred,
+            missing_mask=sim_missing_mask_,
+            testing=True,
+        )
+
+        return (
+            V,
+            model,
+            best_history,
+            best_params,
+            best_score,
+            best_clf,
+            search,
+            metrics,
+        )
+
+    @staticmethod
+    def run_mlp_clf(
+        y_train,
+        y_true,
+        model_params,
+        compile_params,
+        fit_params,
+        disable_progressbar,
+        run_gridsearch,
+        epochs,
+        sim_missing_mask,
+        scoring_metric,
+        ga,
+        early_stop_gen,
+        verbosity,
+        grid_iter,
+        gridparams,
+        n_jobs,
+        ga_kwargs,
+        n_components,
+        gridsearch_method,
+        prefix,
+        tt,
+        ubp_weights=None,
+        phase=None,
+        scoring=None,
+        testing=False,
+    ):
+        # This reduces memory usage.
+        # tensorflow builds graphs that
+        # will stack if not cleared before
+        # building a new model.
+        tf.keras.backend.set_learning_phase(1)
+        tf.keras.backend.clear_session()
+        self.reset_seeds()
+
+        model = None
+        V = model_params.pop("V")
+
+        if phase is not None:
+            desc = f"Epoch (Phase {phase}): "
+        else:
+            desc = "Epoch: "
+
+        if not disable_progressbar and not run_gridsearch:
+            fit_params["callbacks"][-1] = TqdmCallback(
+                epochs=epochs, verbose=0, desc=desc
+            )
+
+        clf = MLPClassifier(
+            V,
+            y_train,
+            y_true,
+            **model_params,
+            ubp_weights=ubp_weights,
+            optimizer=compile_params["optimizer"],
+            optimizer__learning_rate=compile_params["learning_rate"],
+            loss=compile_params["loss"],
+            metrics=compile_params["metrics"],
+            epochs=fit_params["epochs"],
+            phase=phase,
+            callbacks=fit_params["callbacks"],
+            validation_split=fit_params["validation_split"],
+            verbose=0,
+            score__missing_mask=sim_missing_mask_,
+            score__scoring_metric=scoring_metric,
+        )
+
+        if run_gridsearch:
+            # Cannot do CV because there is no way to use test splits
+            # given that the input gets refined. If using a test split,
+            # then it would just be the randomly initialized values and
+            # would not accurately represent the model.
+            # Thus, we disable cross-validation for the grid searches.
+            cross_val = DisabledCV()
+
+            if ga:
+                # Stop searching if GA sees no improvement.
+                callback = [
+                    ConsecutiveStopping(
+                        generations=early_stop_gen, metric="fitness"
+                    )
+                ]
+
+                if not disable_progressbar:
+                    callback.append(ProgressBar())
+
+                verbose = False if verbosity == 0 else True
+
+                # Do genetic algorithm
+                # with HiddenPrints():
+                search = GASearchCV(
+                    estimator=clf,
+                    cv=cross_val,
+                    scoring=scoring,
+                    generations=grid_iter,
+                    param_grid=gridparams,
+                    n_jobs=n_jobs,
+                    refit=scoring_metric,
+                    verbose=verbose,
+                    error_score="raise",
+                    **ga_kwargs,
+                )
+
+                search.fit(V[n_components], y_true, callbacks=callback)
+
+            else:
+                if gridsearch_method.lower() == "gridsearch":
+                    # Do GridSearchCV
+                    search = GridSearchCV(
+                        clf,
+                        param_grid=gridparams,
+                        n_jobs=n_jobs,
+                        cv=cross_val,
+                        scoring=scoring,
+                        refit=scoring_metric,
+                        verbose=verbose * 4,
+                        error_score="raise",
+                    )
+
+                elif gridsearch_method.lower() == "randomized_gridsearch":
+                    search = RandomizedSearchCV(
+                        clf,
+                        param_distributions=gridparams,
+                        n_iter=grid_iter,
+                        n_jobs=n_jobs,
+                        cv=cross_val,
+                        scoring=scoring,
+                        refit=scoring_metric,
+                        verbose=verbose * 4,
+                        error_score="raise",
+                    )
+
+                else:
+                    raise ValueError(
+                        f"Invalid gridsearch_method specified: "
+                        f"{gridsearch_method}"
+                    )
+
+                search.fit(V[n_components], y=y_true)
+
+            best_params = search.best_params_
+            best_score = search.best_score_
+            best_clf = search.best_estimator_
+
+            if phase is not None:
+                fp = f"{prefix}_ubp_cvresults_phase{phase}.csv"
+            else:
+                fp = f"{prefix}_nlpca_cvresults.csv"
+
+            cv_results = pd.DataFrame(search.cv_results_)
+            cv_results.to_csv(fp, index=False)
+
+        else:
+            clf.fit(V[n_components], y=y_true)
+            best_params = None
+            best_score = None
+            search = None
+            best_clf = clf
+
+        model = best_clf.model_
+        best_history = best_clf.history_
+        y_pred_proba = model(model.V_latent, training=False)
+        y_pred = tt.inverse_transform(y_pred_proba)
+
+        # Get metric scores.
+        metrics = Scorers.scorer(
+            y_true,
+            y_pred,
+            missing_mask=sim_missing_mask_,
+            testing=True,
+        )
+
+        return (
+            V,
+            model,
+            best_history,
+            best_params,
+            best_score,
+            best_clf,
+            search,
+            metrics,
+        )
