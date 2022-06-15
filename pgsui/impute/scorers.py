@@ -262,7 +262,7 @@ class Scorers:
         else:
             y_pred_masked_decoded = y_pred_masked
 
-        roc_auc = Scorers.compute_roc_auc_micro_macro(
+        roc_auc = self.compute_roc_auc_micro_macro(
             y_true_masked, y_pred_masked_decoded
         )
 
@@ -299,7 +299,7 @@ class Scorers:
         else:
             y_pred_masked_decoded = y_pred_masked
 
-        roc_auc = Scorers.compute_roc_auc_micro_macro(
+        roc_auc = self.compute_roc_auc_micro_macro(
             y_true_masked, y_pred_masked_decoded
         )
 
@@ -329,7 +329,7 @@ class Scorers:
         y_true_masked = y_true[missing_mask]
         y_pred_masked = y_pred[missing_mask]
 
-        pr_ap = Scorers.compute_pr(y_true_masked, y_pred_masked)
+        pr_ap = self.compute_pr(y_true_masked, y_pred_masked)
 
         return pr_ap["macro"]
 
@@ -357,7 +357,7 @@ class Scorers:
         y_true_masked = y_true[missing_mask]
         y_pred_masked = y_pred[missing_mask]
 
-        pr_ap = Scorers.compute_pr(y_true_masked, y_pred_masked)
+        pr_ap = self.compute_pr(y_true_masked, y_pred_masked)
 
         return pr_ap["micro"]
 
@@ -413,3 +413,39 @@ class Scorers:
             else:
                 raise ValueError(f"Invalid scoring_metric provided: {item}")
         return scorers
+
+    @staticmethod
+    def scorer(y_true, y_pred, **kwargs):
+        # Get missing mask if provided.
+        # Otherwise default is all missing values (array all True).
+        missing_mask = kwargs.get(
+            "missing_mask", np.ones(y_true.shape, dtype=bool)
+        )
+
+        testing = kwargs.get("testing", False)
+
+        y_true_masked = y_true[missing_mask]
+        y_pred_masked = y_pred[missing_mask]
+
+        nn = NeuralNetworkMethods()
+        y_pred_masked_decoded = nn.decode_masked(y_pred_masked)
+
+        roc_auc = self.compute_roc_auc_micro_macro(
+            y_true_masked, y_pred_masked_decoded
+        )
+
+        pr_ap = self.compute_pr(y_true_masked, y_pred_masked)
+
+        acc = accuracy_score(y_true_masked, y_pred_masked_decoded)
+
+        if testing:
+            np.set_printoptions(threshold=np.inf)
+            print(y_true_masked)
+            print(y_pred_masked_decoded)
+
+        metrics = dict()
+        metrics["accuracy"] = acc
+        metrics["roc_auc"] = roc_auc
+        metrics["precision_recall"] = pr_ap
+
+        return metrics
