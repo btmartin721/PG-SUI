@@ -1,5 +1,4 @@
 import copy
-import gc
 import os
 import logging
 import sys
@@ -16,7 +15,6 @@ import numpy as np
 import pandas as pd
 import scipy.linalg
 import toyplot.pdf
-import toyplot as tp
 import toytree as tt
 
 from sklearn.base import BaseEstimator, TransformerMixin
@@ -41,9 +39,7 @@ tf.get_logger().setLevel(logging.ERROR)
 
 # Monkey patching deprecation utils to supress warnings.
 # noinspection PyUnusedLocal
-def deprecated(
-    date, instructions, warn_once=True
-):  # pylint: disable=unused-argument
+def deprecated(date, instructions, warn_once=True):  # pylint: disable=unused-argument
     def deprecated_wrapper(func):
         return func
 
@@ -201,34 +197,149 @@ def mle(row):
 
 
 class VAEInputTransformer(BaseEstimator, TransformerMixin):
-    """Transform input X prior to estimator fitting.
+    """Transformer to format target data both before and after model fitting.
 
-    For use with KerasClassifier.
+    Args:
+        y_decoded (numpy.ndarray): Original input data that is 012-encoded.
+        model (tf.keras.model.Model): model to use for predicting y.
     """
 
-    def fit(self, X):
-        """Fit transformer to input data X.
+    def fit(self, y):
+        """Fit 012-encoded target data.
 
         Args:
-            X (numpy.ndarray): Input data to fit. If numpy.ndarray, then should be of shape (n_samples, n_components). If dictionary, then should be component: numpy.ndarray.
+            y (numpy.ndarray): Target data that is 012-encoded.
 
         Returns:
             self: Class instance.
         """
-        self.n_features_in_ = X.shape[1]
-        self.y_train = x
+        y = misc.validate_input_type(y, return_type="array")
+
+        # Original 012-encoded y
+        self.y_decoded_ = y
+
+        y_train = encode_onehot(y)
+
+        # One-hot encode y
+        # df = encode_onehot(y)
+        # y_train = df.copy().values
+
+        # Get missing and observed data boolean masks.
+        self.missing_mask_, self.observed_mask_ = self._get_masks(y_train)
+
+        # To accomodate multiclass-multioutput.
+        self.n_outputs_expected_ = 1
+
         return self
 
-    def transform(self, X):
-        """Transform input data X to the needed format.
+    def transform(self, y):
+        """Transform y_true to one-hot encoded.
+
+        Accomodates multiclass-multioutput targets.
 
         Args:
-            X (numpy.ndarray): Input data to fit. If numpy.ndarray, then should be of shape (n_samples, n_components). If dictionary, then should be component: numpy.ndarray.
+            y (numpy.ndarray): One-hot encoded target data.
 
         Returns:
-            numpy.ndarray: Formatted input data with correct component.
+            numpy.ndarray: y_true target data.
         """
-        return self.y_train
+        y = misc.validate_input_type(y, return_type="array")
+        y_train = encode_onehot(y)
+        return self._fill(y_train, self.missing_mask_)
+
+    def _fill(self, data, missing_mask, missing_value=-1, num_classes=3):
+        """Mask missing data as ``missing_value``.
+
+        Args:
+            data (numpy.ndarray): Input with missing values of shape (n_samples, n_features, num_classes).
+
+            missing_mask (np.ndarray(bool)): Missing data mask with True corresponding to a missing value.
+
+            missing_value (int): Value to set missing data to. If a list is provided, then its length should equal the number of one-hot classes.
+        """
+        if num_classes > 1:
+            missing_value = [missing_value] * num_classes
+        data[missing_mask] = missing_value
+        return data
+
+    def _get_masks(self, X):
+        """Format the provided target data for use with UBP/NLPCA.
+
+        Args:
+            y (numpy.ndarray(float)): Input data that will be used as the target.
+
+        Returns:
+            numpy.ndarray(float): Missing data mask, with missing values encoded as 1's and non-missing as 0's.
+
+            numpy.ndarray(float): Observed data mask, with non-missing values encoded as 1's and missing values as 0's.
+        """
+        missing_mask = self._create_missing_mask(X)
+        observed_mask = ~missing_mask
+        return missing_mask, observed_mask
+
+    def _create_missing_mask(self, data):
+        """Creates a missing data mask with boolean values.
+        Args:
+            data (numpy.ndarray): Data to generate missing mask from, of shape (n_samples, n_features, n_classes).
+        Returns:
+            numpy.ndarray(bool): Boolean mask of missing values of shape (n_samples, n_features), with True corresponding to a missing data point.
+        """
+        return np.isnan(data).all(axis=2)
+
+    def _decode(self, y):
+        """Evaluate VAE predictions by calculating the highest predicted value.
+
+        Calucalates highest predicted value for each row vector and each class, setting the most likely class to 1.0.
+
+        Args:
+            y (numpy.ndarray): Input one-hot encoded data.
+
+        Returns:
+            numpy.ndarray: Imputed one-hot encoded values.
+
+            pandas.DataFrame: One-hot encoded pandas DataFrame with no missing values.
+        """
+        Xprob = y
+        Xt = np.apply_along_axis(mle, axis=2, arr=Xprob)
+        Xpred = np.argmax(Xt, axis=2)
+        Xtrue = np.argmax(y, axis=2)
+        Xdecoded = np.zeros((Xpred.shape[0], Xpred.shape[1]))
+        for idx, row in enumerate(Xdecoded):
+            imputed_vals = np.zeros(len(row))
+            known_vals = np.zeros(len(row))
+            imputed_idx = np.where(self.observed_mask_[idx] == 0)
+            known_idx = np.nonzero(self.observed_mask_[idx])
+            Xdecoded[idx, imputed_idx] = Xpred[idx, imputed_idx]
+            Xdecoded[idx, known_idx] = Xtrue[idx, known_idx]
+        return Xdecoded.astype("int8")
+
+    # """Transform input X prior to estimator fitting.
+
+    # For use with KerasClassifier.
+    # """
+
+    # def fit(self, X):
+    #     """Fit transformer to input data X.
+
+    #     Args:
+    #         X (numpy.ndarray): Input data to fit. If numpy.ndarray, then should be of shape (n_samples, n_components). If dictionary, then should be component: numpy.ndarray.
+
+    #     Returns:
+    #         self: Class instance.
+    #     """
+    #     self.n_features_in_ = X.shape[1]
+    #     return self
+
+    # def transform(self, X):
+    #     """Transform input data X to the needed format.
+
+    #     Args:
+    #         X (numpy.ndarray): Input data to fit. If numpy.ndarray, then should be of shape (n_samples, n_components). If dictionary, then should be component: numpy.ndarray.
+
+    #     Returns:
+    #         numpy.ndarray: Formatted input data.
+    #     """
+    #     return X
 
 
 class UBPInputTransformer(BaseEstimator, TransformerMixin):
@@ -270,7 +381,7 @@ class UBPInputTransformer(BaseEstimator, TransformerMixin):
             TypeError: V must be a numpy array if phase is 2 or 3.
         """
         if not isinstance(self.V, dict):
-            raise TypeError(f"V must be a dictionary, but got {type(V)}")
+            raise TypeError(f"V must be a dictionary, but got {type(self.V)}")
         return self.V[self.n_components]
 
 
@@ -354,10 +465,6 @@ class MLPTargetTransformer(BaseEstimator, TransformerMixin):
 
         y_train = encode_onehot(y)
 
-        # One-hot encode y
-        # df = encode_onehot(y)
-        # y_train = df.copy().values
-
         # Get missing and observed data boolean masks.
         self.missing_mask_, self.observed_mask_ = self._get_masks(y_train)
 
@@ -392,6 +499,10 @@ class MLPTargetTransformer(BaseEstimator, TransformerMixin):
         Returns:
             numpy.ndarray: y predictions in same format as y_true.
         """
+        # VAE has tuple output
+        if isinstance(y, tuple):
+            y = y[0]
+
         # Return predictions.
         return tf.nn.softmax(y).numpy()
 
@@ -1081,8 +1192,7 @@ class ImputePhyloTransformer(GenotypeData, BaseEstimator, TransformerMixin):
                 self.column_subset_ = self.column_subset_.tolist()
 
             genotypes = {
-                k: [v[i] for i in self.column_subset_]
-                for k, v in genotypes.items()
+                k: [v[i] for i in self.column_subset_] for k, v in genotypes.items()
             }
 
         # For each SNP:
@@ -1136,9 +1246,7 @@ class ImputePhyloTransformer(GenotypeData, BaseEstimator, TransformerMixin):
                                 else:
                                     sum = [
                                         sum[i] + val
-                                        for i, val in enumerate(
-                                            list(pt[allele])
-                                        )
+                                        for i, val in enumerate(list(pt[allele]))
                                     ]
 
                             if node_lik[node.idx] is None:
@@ -1152,8 +1260,7 @@ class ImputePhyloTransformer(GenotypeData, BaseEstimator, TransformerMixin):
                         else:
                             # raise error
                             sys.exit(
-                                f"Error: Taxon {child.name} not found in "
-                                f"genotypes"
+                                f"Error: Taxon {child.name} not found in " f"genotypes"
                             )
 
                     else:
@@ -1163,8 +1270,7 @@ class ImputePhyloTransformer(GenotypeData, BaseEstimator, TransformerMixin):
 
                         else:
                             node_lik[node.idx] = [
-                                l[i] * val
-                                for i, val in enumerate(node_lik[node.idx])
+                                l[i] * val for i, val in enumerate(node_lik[node.idx])
                             ]
 
             # infer most likely states for tips with missing data
@@ -1177,17 +1283,13 @@ class ImputePhyloTransformer(GenotypeData, BaseEstimator, TransformerMixin):
                     # actual data
                     # is found
                     # node = tree.search_nodes(name=samp)[0]
-                    node = tree.idx_dict[
-                        tree.get_mrca_idx_from_tip_labels(names=samp)
-                    ]
+                    node = tree.idx_dict[tree.get_mrca_idx_from_tip_labels(names=samp)]
                     dist = node.dist
                     node = node.up
                     imputed = None
 
                     while node and imputed is None:
-                        if self._all_missing(
-                            tree, node.idx, snp_index, genotypes
-                        ):
+                        if self._all_missing(tree, node.idx, snp_index, genotypes):
                             dist += node.dist
                             node = node.up
 
@@ -1345,9 +1447,7 @@ class ImputePhyloTransformer(GenotypeData, BaseEstimator, TransformerMixin):
             raise TypeError("Either genotype_data or phylipfle must be defined")
 
         if genotype_data.tree is None and self.treefile is None:
-            raise TypeError(
-                "Either genotype_data.tree or treefile must be defined"
-            )
+            raise TypeError("Either genotype_data.tree or treefile must be defined")
 
         if genotype_data is None and self.filetype_ is None:
             raise TypeError("filetype must be defined if genotype_data is None")
@@ -1524,9 +1624,7 @@ class ImputePhyloTransformer(GenotypeData, BaseEstimator, TransformerMixin):
                 return False
         return True
 
-    def _get_internal_lik(
-        self, pt: pd.DataFrame, lik_arr: List[float]
-    ) -> List[float]:
+    def _get_internal_lik(self, pt: pd.DataFrame, lik_arr: List[float]) -> List[float]:
         """Get ancestral state likelihoods for internal nodes of the tree.
 
         Postorder traversal to calculate internal ancestral state likelihoods (tips -> root).
@@ -1639,9 +1737,7 @@ class ImputePhyloTransformer(GenotypeData, BaseEstimator, TransformerMixin):
         return ret
 
 
-class ImputeAlleleFreqTransformer(
-    GenotypeData, BaseEstimator, TransformerMixin
-):
+class ImputeAlleleFreqTransformer(GenotypeData, BaseEstimator, TransformerMixin):
     """Impute missing data by global or by-population allele frequency. Population IDs can be sepcified with the pops argument. if pops is None, then imputation is by global allele frequency. If pops is not None, then imputation is by population-wise allele frequency. A list of population IDs in the appropriate format can be obtained from the GenotypeData object as GenotypeData.populations.
 
     Args:
@@ -2174,10 +2270,7 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
             # Make sure no entirely missing columns were simulated.
             self._validate_mask()
 
-        elif (
-            self.strategy == "nonrandom"
-            or self.strategy == "nonrandom_weighted"
-        ):
+        elif self.strategy == "nonrandom" or self.strategy == "nonrandom_weighted":
             if self.genotype_data.tree is None:
                 raise TypeError(
                     "SimGenotypeData.tree cannot be NoneType when "
@@ -2265,14 +2358,10 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
             self._validate_mask()
 
         else:
-            raise ValueError(
-                "Invalid SimGenotypeData.strategy value:", self.strategy
-            )
+            raise ValueError("Invalid SimGenotypeData.strategy value:", self.strategy)
 
         # Get all missing values.
-        self.all_missing_mask_ = np.logical_or(
-            self.mask_, self.original_missing_mask_
-        )
+        self.all_missing_mask_ = np.logical_or(self.mask_, self.original_missing_mask_)
         # Get values where original value was not missing and simulated.
         # data is missing.
         self.sim_missing_mask_ = np.logical_and(
@@ -2339,9 +2428,7 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
                     continue
 
             if tips_only and internal_only:
-                raise ValueError(
-                    "tips_only and internal_only cannot both be True"
-                )
+                raise ValueError("tips_only and internal_only cannot both be True")
 
             if tips_only:
                 if not node.is_leaf():
