@@ -1,3 +1,5 @@
+import sys
+
 import numpy as np
 import pandas as pd
 
@@ -139,6 +141,7 @@ class Scorers:
         precision = dict()
         recall = dict()
         average_precision = dict()
+
         for i, c in enumerate(classes):
             precision[c], recall[c], _ = precision_recall_curve(
                 y_true_bin[:, i], y_pred_proba_bin[:, i]
@@ -192,6 +195,13 @@ class Scorers:
         return results
 
     @staticmethod
+    def check_if_tuple(y_pred):
+        """Checks if y_pred is a tuple and if so, returns the first element of the tuple."""
+        if isinstance(y_pred, tuple):
+            y_pred = y_pred[0]
+        return y_pred
+
+    @staticmethod
     def accuracy_scorer(y_true, y_pred, **kwargs):
         """Get accuracy score for grid search.
 
@@ -209,10 +219,12 @@ class Scorers:
         """
         # Get missing mask if provided.
         # Otherwise default is all missing values (array all True).
+
         missing_mask = kwargs.get("missing_mask")
         testing = kwargs.get("testing", False)
         nn_model = kwargs.get("nn_model", True)
 
+        y_pred = Scorers.check_if_tuple(y_pred)
         y_true_masked = y_true[missing_mask]
         y_pred_masked = y_pred[missing_mask]
 
@@ -253,6 +265,7 @@ class Scorers:
         testing = kwargs.get("testing", False)
         nn_model = kwargs.get("nn_model", True)
 
+        y_pred = Scorers.check_if_tuple(y_pred)
         y_true_masked = y_true[missing_mask]
         y_pred_masked = y_pred[missing_mask]
 
@@ -262,7 +275,7 @@ class Scorers:
         else:
             y_pred_masked_decoded = y_pred_masked
 
-        roc_auc = self.compute_roc_auc_micro_macro(
+        roc_auc = Scorers.compute_roc_auc_micro_macro(
             y_true_masked, y_pred_masked_decoded
         )
 
@@ -290,6 +303,7 @@ class Scorers:
         testing = kwargs.get("testing", False)
         nn_model = kwargs.get("nn_model", True)
 
+        y_pred = Scorers.check_if_tuple(y_pred)
         y_true_masked = y_true[missing_mask]
         y_pred_masked = y_pred[missing_mask]
 
@@ -299,7 +313,7 @@ class Scorers:
         else:
             y_pred_masked_decoded = y_pred_masked
 
-        roc_auc = self.compute_roc_auc_micro_macro(
+        roc_auc = Scorers.compute_roc_auc_micro_macro(
             y_true_masked, y_pred_masked_decoded
         )
 
@@ -321,15 +335,17 @@ class Scorers:
         Returns:
             float: Metric score by comparing y_true and y_pred.
         """
+
         # Get missing mask if provided.
         # Otherwise default is all missing values (array all True).
         missing_mask = kwargs.get("missing_mask")
         testing = kwargs.get("testing", False)
 
+        y_pred = Scorers.check_if_tuple(y_pred)
         y_true_masked = y_true[missing_mask]
         y_pred_masked = y_pred[missing_mask]
 
-        pr_ap = self.compute_pr(y_true_masked, y_pred_masked)
+        pr_ap = Scorers.compute_pr(y_true_masked, y_pred_masked)
 
         return pr_ap["macro"]
 
@@ -354,10 +370,11 @@ class Scorers:
         missing_mask = kwargs.get("missing_mask")
         testing = kwargs.get("testing", False)
 
+        y_pred = Scorers.check_if_tuple(y_pred)
         y_true_masked = y_true[missing_mask]
         y_pred_masked = y_pred[missing_mask]
 
-        pr_ap = self.compute_pr(y_true_masked, y_pred_masked)
+        pr_ap = Scorers.compute_pr(y_true_masked, y_pred_masked)
 
         return pr_ap["micro"]
 
@@ -418,11 +435,13 @@ class Scorers:
     def scorer(y_true, y_pred, **kwargs):
         # Get missing mask if provided.
         # Otherwise default is all missing values (array all True).
-        missing_mask = kwargs.get(
-            "missing_mask", np.ones(y_true.shape, dtype=bool)
-        )
+        missing_mask = kwargs.get("missing_mask", np.ones(y_true.shape, dtype=bool))
 
         testing = kwargs.get("testing", False)
+
+        # VAE has tuple output.
+        if isinstance(y_pred, tuple):
+            y_pred = y_pred[0]
 
         y_true_masked = y_true[missing_mask]
         y_pred_masked = y_pred[missing_mask]
@@ -430,12 +449,10 @@ class Scorers:
         nn = NeuralNetworkMethods()
         y_pred_masked_decoded = nn.decode_masked(y_pred_masked)
 
-        roc_auc = self.compute_roc_auc_micro_macro(
+        roc_auc = Scorers.compute_roc_auc_micro_macro(
             y_true_masked, y_pred_masked_decoded
         )
-
-        pr_ap = self.compute_pr(y_true_masked, y_pred_masked)
-
+        pr_ap = Scorers.compute_pr(y_true_masked, y_pred_masked)
         acc = accuracy_score(y_true_masked, y_pred_masked_decoded)
 
         if testing:
