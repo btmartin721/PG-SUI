@@ -552,13 +552,9 @@ class Plotting:
         os.makedirs(report_path, exist_ok=True)
 
         if n_axes > 3:
-            raise ValueError(
-                ">3 axes is not supported; n_axes must be either 2 or 3."
-            )
+            raise ValueError(">3 axes is not supported; n_axes must be either 2 or 3.")
         if n_axes < 2:
-            raise ValueError(
-                "<2 axes is not supported; n_axes must be either 2 or 3."
-            )
+            raise ValueError("<2 axes is not supported; n_axes must be either 2 or 3.")
 
         imputer = imputer_object.imputed
 
@@ -666,3 +662,101 @@ class Plotting:
         )
 
         return components, model
+
+    @staticmethod
+    def plot_history(lod, nn_method):
+        """Plot model history traces. Will be saved to file.
+
+        Args:
+            lod (List[tf.keras.callbacks.History]): List of history objects.
+            nn_method (str): Neural network method to plot. Possible options include: 'NLPCA', 'UBP', or 'VAE'. NLPCA and VAE get plotted the same, but UBP does it differently due to its three phases.
+
+        Raises:
+            ValueError: nn_method must be either 'NLPCA', 'UBP', or 'VAE'.
+        """
+        if nn_method == "NLPCA" or nn_method == "VAE":
+            title = nn_method
+            fn = f"histplot_{nn_method}.pdf"
+
+            fig, (ax1, ax2) = plt.subplots(1, 2)
+            fig.suptitle(title)
+            fig.tight_layout(h_pad=2.0, w_pad=2.0)
+            history = lod[0]
+
+            acctrain = "categorical_accuracy" if nn_method == "NLPCA" else "accuracy"
+            accval = None if nn_method == "NLPCA" else "val_accuracy"
+            lossval = None if nn_method == "NLPCA" else "val_loss"
+
+            # Plot accuracy
+            ax1.plot(history[acctrain])
+            ax1.set_title("Model Accuracy")
+            ax1.set_ylabel("Accuracy")
+            ax1.set_xlabel("Epoch")
+            ax1.set_ylim(bottom=0.0, top=1.0)
+            ax1.set_yticks([0.0, 0.25, 0.5, 0.75, 1.0])
+
+            labels = ["Train"]
+            if nn_method == "VAE":
+                ax1.plot(history[accval])
+                labels.append("Validation")
+
+            ax1.legend(labels, loc="best")
+
+            # Plot model loss
+            ax2.plot(history["loss"])
+            ax2.set_title("Model Loss")
+            ax2.set_ylabel("Loss (MSE)")
+            ax2.set_xlabel("Epoch")
+
+            if nn_method == "VAE":
+                ax2.plot(history[lossval])
+
+            ax2.legend(labels, loc="best")
+
+            fig.savefig(fn, bbox_inches="tight")
+
+            plt.close()
+            plt.clf()
+
+            print(history["loss"])
+
+        elif nn_method == "UBP":
+            fig = plt.figure(figsize=(12, 16))
+            fig.suptitle(nn_method)
+            fig.tight_layout(h_pad=2.0, w_pad=2.0)
+            fn = "histplot_ubp.pdf"
+
+            idx = 1
+            for i, history in enumerate(lod, start=1):
+                plt.subplot(3, 2, idx)
+                title = f"Phase {i}"
+
+                # Plot model accuracy
+                ax = plt.gca()
+                ax.plot(history["categorical_accuracy"])
+                ax.set_title(f"{title} Accuracy")
+                ax.set_ylabel("Accuracy")
+                ax.set_xlabel("Epoch")
+                ax.set_yticks([0.0, 0.25, 0.5, 0.75, 1.0])
+                ax.legend(["Training"], loc="best")
+
+                # Plot model loss
+                plt.subplot(3, 2, idx + 1)
+                ax = plt.gca()
+                ax.plot(history["loss"])
+                ax.set_title(f"{title} Loss")
+                ax.set_ylabel("Loss (MSE)")
+                ax.set_xlabel("Epoch")
+                ax.legend(["Train"], loc="best")
+
+                idx += 2
+
+            plt.savefig(fn, bbox_inches="tight")
+
+            plt.close()
+            plt.clf()
+
+        else:
+            raise ValueError(
+                f"nn_method must be either 'NLPCA', 'UBP', or 'VAE', but got {nn_method}"
+            )
