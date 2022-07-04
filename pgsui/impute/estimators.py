@@ -229,9 +229,7 @@ class ImputeKNN(Impute):
 
         super().__init__(self.clf, self.clf_type, kwargs)
 
-        self.imputed, self.best_params = self.fit_predict(
-            genotype_data.genotypes012_df
-        )
+        self.imputed, self.best_params = self.fit_predict(genotype_data.genotypes012_df)
 
 
 class ImputeRandomForest(Impute):
@@ -443,9 +441,7 @@ class ImputeRandomForest(Impute):
 
         super().__init__(self.clf, self.clf_type, kwargs)
 
-        self.imputed, self.best_params = self.fit_predict(
-            genotype_data.genotypes012_df
-        )
+        self.imputed, self.best_params = self.fit_predict(genotype_data.genotypes012_df)
 
 
 class ImputeGradientBoosting(Impute):
@@ -634,9 +630,7 @@ class ImputeGradientBoosting(Impute):
 
         super().__init__(self.clf, self.clf_type, kwargs)
 
-        self.imputed, self.best_params = self.fit_predict(
-            genotype_data.genotypes012_df
-        )
+        self.imputed, self.best_params = self.fit_predict(genotype_data.genotypes012_df)
 
 
 class ImputeBayesianRidge(Impute):
@@ -816,9 +810,7 @@ class ImputeBayesianRidge(Impute):
 
         super().__init__(self.clf, self.clf_type, kwargs)
 
-        self.imputed, self.best_params = self.fit_predict(
-            genotype_data.genotypes012_df
-        )
+        self.imputed, self.best_params = self.fit_predict(genotype_data.genotypes012_df)
 
 
 class ImputeXGBoost(Impute):
@@ -1006,9 +998,7 @@ class ImputeXGBoost(Impute):
 
         super().__init__(self.clf, self.clf_type, kwargs)
 
-        self.imputed, self.best_params = self.fit_predict(
-            genotype_data.genotypes012_df
-        )
+        self.imputed, self.best_params = self.fit_predict(genotype_data.genotypes012_df)
 
 
 class ImputeLightGBM(Impute):
@@ -1208,9 +1198,7 @@ class ImputeLightGBM(Impute):
 
         super().__init__(self.clf, self.clf_type, kwargs)
 
-        self.imputed, self.best_params = self.fit_predict(
-            genotype_data.genotypes012_df
-        )
+        self.imputed, self.best_params = self.fit_predict(genotype_data.genotypes012_df)
 
 
 class ImputeVAE(Impute):
@@ -1221,13 +1209,9 @@ class ImputeVAE(Impute):
 
         prefix (str): Prefix for output files. Defaults to "output".
 
-        cv (int): Number of cross-validation replicates to perform. Only used if ``validation_split`` is not None. Defaults to 5.
-
         sim_strategy (str, optional): Strategy to use for simulating missing data. Only used to validate the accuracy of the imputation. The final model will be trained with the non-simulated dataset. Supported options include: "random", "nonrandom", and "nonrandom_weighted". "random" randomly simulates missing data. When set to "nonrandom", branches from ``GenotypeData.guidetree`` will be randomly sampled to generate missing data on descendant nodes. For "nonrandom_weighted", missing data will be placed on nodes proportionally to their branch lengths (e.g., to generate data distributed as might be the case with mutation-disruption of RAD sites). Defaults to "random".
 
         sim_prop_missing (float, optional): Proportion of missing data to use with missing data simulation. Defaults to 0.1.
-
-        validation_split (float or None): Proportion of sites to use for the validation. If ``validation_split`` is None, then does not perform validation. Defaults to 0.2.
 
         disable_progressbar (bool): Whether to disable the tqdm progress bar. Useful if you are doing the imputation on e.g. a high-performance computing cluster, where sometimes tqdm does not work correctly. If False, uses tqdm progress bar. If True, does not use tqdm. Defaults to False.
 
@@ -1274,7 +1258,6 @@ class ImputeVAE(Impute):
         >>>     genotype_data=data,
         >>>     cv=5,
         >>>     learning_rate=0.05,
-        >>>     validation_split=0.3
         >>>)
         >>>
         >>>vae_gtdata = vae.imputed
@@ -1285,22 +1268,38 @@ class ImputeVAE(Impute):
         genotype_data,
         *,
         prefix="output",
+        gridparams=None,
+        do_validation=False,
+        column_subset=0.1,
+        batch_size=32,
+        n_components=3,
+        early_stop_gen=25,
+        num_hidden_layers=3,
+        hidden_layer_sizes="midpoint",
+        optimizer="adam",
+        hidden_activation="elu",
+        learning_rate=0.1,
+        epochs=100,
+        weights_initializer="glorot_normal",
+        l1_penalty=1e-6,
+        l2_penalty=1e-6,
+        dropout_rate=0.2,
+        sample_weights=None,
         cv=5,
+        gridsearch_method="gridsearch",
+        grid_iter=80,
+        population_size="auto",
+        tournament_size=3,
+        elitism=True,
+        crossover_probability=0.8,
+        mutation_probability=0.2,
+        ga_algorithm="eaMuPlusLambda",
+        scoring_metric="auc_macro",
         sim_strategy="random",
         sim_prop_missing=0.1,
-        validation_split=0.2,
         disable_progressbar=False,
         chunk_size=1.0,
-        epochs=100,
-        batch_size=32,
-        recurrent_weight=0.5,
-        optimizer="adam",
-        dropout_rate=0.2,
-        hidden_activation="relu",
-        output_activation="sigmoid",
-        kernel_initializer="glorot_normal",
-        l1_penalty=0,
-        l2_penalty=0,
+        n_jobs=1,
         verbose=0,
     ):
 
@@ -1349,8 +1348,6 @@ class ImputeUBP(Impute):
 
         batch_size (int, optional): Batch size per epoch to train the model with.
 
-        validation_split (float, optional): Proportion of samples (=rows) between 0 and 1 to use for the neural network training validation. Defaults to 0.3.
-
         n_components (int, optional): Number of components to use as the input data. Defaults to 3.
 
         early_stop_gen (int, optional): If neural network and genetic algorithm see ``early_stop_gen`` consecutive generations without improvement in the scoring metric, an early stopping callback is implemented. This saves time by reducing the number of epochs and generations the they have to perform. Defaults to 25.
@@ -1368,8 +1365,6 @@ class ImputeUBP(Impute):
         lr_patience (int, optional): Number of epochs with no loss improvement to wait before reducing the learning rate.
 
         epochs (int, optional): Number of epochs to run if the ``early_stop_gen`` criterion is not met.
-
-        tol (float, optional): Tolerance level to use for the early stopping criterion. If the loss does not improve past the tolerance level after ``early_stop_gen`` epochs, then training will halt. Defaults to 1e-3.
 
         weights_initializer (str, optional): Initializer to use for the model weights. See tf.keras.initializers for more info. Defaults to "glorot_normal".
 
@@ -1405,8 +1400,6 @@ class ImputeUBP(Impute):
 
         sim_prop_missing (float, optional): Proportion of missing data to use with missing data simulation. Defaults to 0.1.
 
-        str_encodings (Dict[str, int], optional): Integer encodings for nucleotides if input file was in STRUCTURE format. Only used if ``initial_strategy="phylogeny"``\. Defaults to {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}.
-
         disable_progressbar (bool, optional): Whether to disable the tqdm progress bar. Useful if you are doing the imputation on e.g. a high-performance computing cluster, where sometimes tqdm does not work correctly. If False, uses tqdm progress bar. If True, does not use tqdm. Defaults to False.
 
         chunk_size (int or float, optional): Number of loci for which to perform IterativeImputer at one time. Useful for reducing the memory usage if you are running out of RAM. If integer is specified, selects ``chunk_size`` loci at a time. If a float is specified, selects ``math.ceil(total_loci * chunk_size)`` loci at a time. Defaults to 1.0 (all features).
@@ -1434,7 +1427,6 @@ class ImputeUBP(Impute):
         >>>     genotype_data=data,
         >>>     cv=5,
         >>>     learning_rate=0.05,
-        >>>     validation_split=0.3
         >>> )
         >>>
         >>> ubp_gtdata = ubp.imputed
@@ -1456,7 +1448,6 @@ class ImputeUBP(Impute):
         do_validation=False,
         column_subset=0.1,
         batch_size=32,
-        validation_split=0.3,
         n_components=3,
         early_stop_gen=25,
         num_hidden_layers=3,
@@ -1465,7 +1456,6 @@ class ImputeUBP(Impute):
         hidden_activation="elu",
         learning_rate=0.1,
         epochs=100,
-        tol=1e-3,
         weights_initializer="glorot_normal",
         l1_penalty=1e-6,
         l2_penalty=1e-6,
@@ -1483,14 +1473,6 @@ class ImputeUBP(Impute):
         scoring_metric="auc_macro",
         sim_strategy="random",
         sim_prop_missing=0.1,
-        str_encodings={
-            "A": 1,
-            "C": 2,
-            "G": 3,
-            "T": 4,
-            "N": -9,
-        },
-        write_output=True,
         disable_progressbar=False,
         chunk_size=1.0,
         n_jobs=1,
@@ -1545,8 +1527,6 @@ class ImputeNLPCA(ImputeUBP):
 
         batch_size (int, optional): Batch size per epoch to train the model with.
 
-        validation_split (float, optional): Proportion of samples (=rows) between 0 and 1 to use for the neural network training validation. Defaults to 0.3.
-
         n_components (int, optional): Number of components to use as the input data. Defaults to 3.
 
         early_stop_gen (int, optional): If neural network and genetic algorithm see ``early_stop_gen`` consecutive generations without improvement in the scoring metric, an early stopping callback is implemented. This saves time by reducing the number of epochs and generations the they have to perform. Defaults to 25.
@@ -1564,8 +1544,6 @@ class ImputeNLPCA(ImputeUBP):
         lr_patience (int, optional): Number of epochs with no loss improvement to wait before reducing the learning rate.
 
         epochs (int, optional): Number of epochs to run if the ``early_stop_gen`` criterion is not met.
-
-        tol (float, optional): Tolerance level to use for the early stopping criterion. If the loss does not improve past the tolerance level after ``early_stop_gen`` epochs, then training will halt. Defaults to 1e-3.
 
         weights_initializer (str, optional): Initializer to use for the model weights. See tf.keras.initializers for more info. Defaults to "glorot_normal".
 
@@ -1623,7 +1601,6 @@ class ImputeNLPCA(ImputeUBP):
         >>>     genotype_data=data,
         >>>     cv=5,
         >>>     learning_rate=0.05,
-        >>>     validation_split=0.3
         >>> )
         >>>
         >>> nlpca_gtdata = nlpca.imputed
