@@ -176,7 +176,7 @@ class VAEClassifier(KerasClassifier):
         n_components=3,
         optimizer="adam",
         loss="categorical_crossentropy",
-        kl_weight=0.1,
+        kl_beta=4,
         epochs=100,
         verbose=0,
         **kwargs,
@@ -199,7 +199,7 @@ class VAEClassifier(KerasClassifier):
         self.optimizer = optimizer
         self.loss = loss
         self.epochs = epochs
-        self.kl_weight = kl_weight
+        self.kl_beta = kl_beta
         self.verbose = verbose
 
     def _keras_build_fn(self, compile_kwargs):
@@ -223,7 +223,7 @@ class VAEClassifier(KerasClassifier):
             dropout_rate=self.dropout_rate,
             num_classes=self.num_classes,
             sample_weight=self.sample_weight,
-            kl_weight=self.kl_weight,
+            kl_beta=self.kl_beta,
         )
 
         # model = VAEModel(vae.encoder, vae.decoder)
@@ -235,7 +235,7 @@ class VAEClassifier(KerasClassifier):
             run_eagerly=False,
         )
 
-        # print(model.model().summary())
+        print(model.model().summary())
 
         return model
 
@@ -342,7 +342,9 @@ class VAEClassifier(KerasClassifier):
             Had to override predict() here in order to do the __call__ with the refined input, V_latent.
         """
         X_train = self.feature_encoder_.transform(X)
-        y_pred_proba, z_mean, z_log_var, z = self.model_(X_train, training=False)
+        # y_pred_proba, z_mean, z_log_var, z = self.model_(X_train, training=False)
+        y_pred_proba = self.model_(X_train, training=False)
+
         return tf.nn.softmax(y_pred_proba).numpy(), z_mean, z_log_var, z
 
 
@@ -956,8 +958,15 @@ class VAE(BaseEstimator, TransformerMixin):
 
         self.y_original_ = y.copy()
         self.y_simulated_ = sim.fit_transform(self.y_original_)
+
+        # Get values where original value was not missing and simulated.
+        # data is missing.
         self.sim_missing_mask_ = sim.sim_missing_mask_
+
+        # Original missing data.
         self.original_missing_mask_ = sim.original_missing_mask_
+
+        # Both simulated and original missing data.
         self.all_missing_ = sim.all_missing_mask_
 
         # One-hot encode y to get y_train.
@@ -1068,7 +1077,9 @@ class VAE(BaseEstimator, TransformerMixin):
         y_size = y_true.size
         y_missing_idx = np.flatnonzero(self.original_missing_mask_)
 
-        y_pred_proba, z_mean, z_log_var, z = model(y_train, training=False)
+        # y_pred_proba, z_mean, z_log_var, z = model(y_train, training=False)
+        y_pred_proba = model(y_train, training=False)
+
         # y_pred = y_pred.numpy()
         y_pred_proba = tf.nn.softmax(y_pred_proba).numpy()
         y_pred_decoded = self.nn_.decode_masked(y_pred_proba)
@@ -1332,7 +1343,9 @@ class VAE(BaseEstimator, TransformerMixin):
         best_history = best_clf.history_
 
         y_train = self.tt_.transform(y_true)
-        y_pred_proba, z_mean, z_log_var, z = model(y_train, training=False)
+        # y_pred_proba, z_mean, z_log_var, z = model(y_train, training=False)
+        y_pred_proba = model(y_train, training=False)
+
         # y_pred = y_pred.numpy()
         y_pred = self.tt_.inverse_transform(y_pred_proba)
 
