@@ -83,6 +83,250 @@ class Sampling(tf.keras.layers.Layer):
         return z_mean + z_sigma * epsilon
 
 
+class Encoder(tf.keras.layers.Layer):
+    """VAE encoder to Encode genotypes to (z_mean, z_log_var, z)."""
+
+    def __init__(
+        self,
+        input_shape,
+        latent_dim,
+        hidden_layer_sizes,
+        dropout_rate,
+        activation,
+        kernel_initializer,
+        kernel_regularizer,
+        name="Encoder",
+        **kwargs,
+    ):
+        super(Encoder, self).__init__(name=name, **kwargs)
+
+        self.dense2 = None
+        self.dense3 = None
+        self.dense4 = None
+        self.dense5 = None
+
+        # Flatten to 2D shape.
+        self.flatten = Flatten()
+
+        # for layer_size in hidden_layer_sizes:
+        self.dense1 = Dense(
+            hidden_layer_sizes[0],
+            input_shape=(input_shape,),
+            activation=activation,
+            kernel_initializer=kernel_initializer,
+            kernel_regularizer=kernel_regularizer,
+            name="Encoder1",
+        )
+
+        if len(hidden_layer_sizes) >= 2:
+            self.dense2 = Dense(
+                hidden_layer_sizes[1],
+                activation=activation,
+                kernel_initializer=kernel_initializer,
+                kernel_regularizer=kernel_regularizer,
+                name="Encoder2",
+            )
+
+        if len(hidden_layer_sizes) >= 3:
+            self.dense3 = Dense(
+                hidden_layer_sizes[2],
+                activation=activation,
+                kernel_initializer=kernel_initializer,
+                kernel_regularizer=kernel_regularizer,
+                name="Encoder3",
+            )
+
+        if len(hidden_layer_sizes) >= 4:
+            self.dense4 = Dense(
+                hidden_layer_sizes[3],
+                activation=activation,
+                kernel_initializer=kernel_initializer,
+                kernel_regularizer=kernel_regularizer,
+                name="Encoder4",
+            )
+
+        if len(hidden_layer_sizes) == 5:
+            self.dense5 = Dense(
+                hidden_layer_sizes[4],
+                activation=activation,
+                kernel_initializer=kernel_initializer,
+                kernel_regularizer=kernel_regularizer,
+                name="Encoder5",
+            )
+
+        # x = BatchNormalization(center=False, scale=False)(x)
+
+        self.dense_z_mean = Dense(
+            latent_dim,
+            name="z_mean",
+        )
+        self.dense_z_log_var = Dense(
+            latent_dim,
+            name="z_log_var",
+        )
+
+        # z_mean and z_log_var are inputs.
+        self.sampling = Sampling(name="z")
+
+        self.dropout_layer = Dropout(dropout_rate)
+        self.batch_norm_layer1 = BatchNormalization(center=False, scale=False)
+        self.batch_norm_layer2 = BatchNormalization(center=False, scale=False)
+        self.batch_norm_layer3 = BatchNormalization(center=False, scale=False)
+        self.batch_norm_layer4 = BatchNormalization(center=False, scale=False)
+        self.batch_norm_layer5 = BatchNormalization(center=False, scale=False)
+        self.batch_norm_layer6 = BatchNormalization(center=False, scale=False)
+
+    def call(self, inputs, training=None):
+        x = self.flatten(inputs)
+        x = self.batch_norm_layer1(x, training=training)
+        x = self.dense1(x)
+        if training:
+            x = self.dropout_layer(x)
+        x = self.batch_norm_layer2(x, training=training)
+        if self.dense2 is not None:
+            x = self.dense2(x)
+            if training:
+                x = self.dropout_layer(x)
+            x = self.batch_norm_layer3(x, training=training)
+        if self.dense3 is not None:
+            x = self.dense3(x)
+            if training:
+                x = self.dropout_layer(x)
+            x = self.batch_norm_layer3(x, training=training)
+        if self.dense4 is not None:
+            x = self.dense4(x)
+            if training:
+                x = self.dropout_layer(x)
+            x = self.batch_norm_layer4(x, training=training)
+        if self.dense5 is not None:
+            x = self.dense5(x)
+            if training:
+                x = self.dropout_layer(x)
+            x = self.batch_norm_layer5(x, training=training)
+
+        z_mean = self.dense_z_mean(x)
+        z_log_var = self.dense_z_log_var(x)
+        z = self.sampling([z_mean, z_log_var])
+        return z_mean, z_log_var, z
+
+
+class Decoder(tf.keras.layers.Layer):
+    """Converts z, the encoded vector, back into the reconstructed output"""
+
+    def __init__(
+        self,
+        output_shape,
+        latent_dim,
+        hidden_layer_sizes,
+        dropout_rate,
+        activation,
+        kernel_initializer,
+        kernel_regularizer,
+        name="Decoder",
+        **kwargs,
+    ):
+        super(Decoder, self).__init__(name=name, **kwargs)
+
+        self.dense2 = None
+        self.dense3 = None
+        self.dense4 = None
+        self.dense5 = None
+
+        self.dense1 = Dense(
+            hidden_layer_sizes[0],
+            input_shape=(latent_dim,),
+            activation=activation,
+            kernel_initializer=kernel_initializer,
+            kernel_regularizer=kernel_regularizer,
+            name="Decoder1",
+        )
+
+        # x = Dropout(rate=self.dropout_rate)(x)
+        # x = BatchNormalization(center=False, scale=False)(x)
+
+        if len(hidden_layer_sizes) >= 2:
+            self.dense2 = Dense(
+                hidden_layer_sizes[1],
+                activation=activation,
+                kernel_initializer=kernel_initializer,
+                kernel_regularizer=kernel_regularizer,
+                name="Decoder2",
+            )
+
+        if len(hidden_layer_sizes) >= 3:
+            self.dense3 = Dense(
+                hidden_layer_sizes[2],
+                activation=activation,
+                kernel_initializer=kernel_initializer,
+                kernel_regularizer=kernel_regularizer,
+                name="Decoder3",
+            )
+
+        if len(hidden_layer_sizes) >= 4:
+            self.dense4 = Dense(
+                hidden_layer_sizes[3],
+                activation=activation,
+                kernel_initializer=kernel_initializer,
+                kernel_regularizer=kernel_regularizer,
+                name="Decoder4",
+            )
+
+        if len(hidden_layer_sizes) == 5:
+            self.dense5 = Dense(
+                hidden_layer_sizes[4],
+                activation=activation,
+                kernel_initializer=kernel_initializer,
+                kernel_regularizer=kernel_regularizer,
+                name="Decoder5",
+            )
+
+        self.dense_output = Dense(
+            output_shape,
+            kernel_initializer=kernel_initializer,
+            kernel_regularizer=kernel_regularizer,
+            activation=None,
+            name="DecoderOutput",
+        )
+
+        self.dropout_layer = Dropout(dropout_rate)
+        self.batch_norm_layer1 = BatchNormalization(center=False, scale=False)
+        self.batch_norm_layer2 = BatchNormalization(center=False, scale=False)
+        self.batch_norm_layer3 = BatchNormalization(center=False, scale=False)
+        self.batch_norm_layer4 = BatchNormalization(center=False, scale=False)
+        self.batch_norm_layer5 = BatchNormalization(center=False, scale=False)
+        self.batch_norm_layer6 = BatchNormalization(center=False, scale=False)
+
+    def call(self, inputs, training=None):
+        x = self.dense1(inputs)
+        if training:
+            x = self.dropout_layer(x)
+        x = self.batch_norm_layer1(x, training=training)
+        if self.dense2 is not None:
+            x = self.dense2(x)
+            if training:
+                x = self.dropout_layer(x)
+            x = self.batch_norm_layer2(x, training=training)
+        if self.dense3 is not None:
+            x = self.dense3(x)
+            if training:
+                x = self.dropout_layer(x)
+            x = self.batch_norm_layer3(x, training=training)
+
+        if self.dense4 is not None:
+            x = self.dense4(x)
+            if training:
+                x = self.dropout_layer(x)
+            x = self.batch_norm_layer4(x, training=training)
+
+        if self.dense5 is not None:
+            x = self.dense5(x)
+            if training:
+                x = self.dropout_layer(x)
+            x = self.batch_norm_layer5(x, training=training)
+
+        return self.dense_output(x)
+
+
 class VAEModel(tf.keras.Model):
     def __init__(
         self,
@@ -98,11 +342,11 @@ class VAEModel(tf.keras.Model):
         dropout_rate=0.2,
         num_classes=3,
         sample_weight=None,
-        kl_weight=0.5,
+        kl_beta=4,
     ):
         super(VAEModel, self).__init__()
 
-        self.kl_weight = kl_weight
+        self.kl_beta = kl_beta
 
         self.nn_ = NeuralNetworkMethods()
         self.categorical_accuracy = self.nn_.make_masked_categorical_accuracy()
@@ -128,13 +372,13 @@ class VAEModel(tf.keras.Model):
         self.num_classes = num_classes
         self.sample_weight = sample_weight
 
+        n_features = self.n_features
+
         # Bnorm = Beta * M / N, where M is the size of the latent space and N is the input size (e.g., 64 * 64 * 1 = 4096)
-        self.beta_norm = (self.kl_weight * self.n_components) / (
-            self.n_features * self.num_classes
-        )
+        # self.beta_norm = (self.kl_beta * self.n_components) / n_features
+        self.beta = (n_features * self.n_components) / self.batch_size
 
         nn = NeuralNetworkMethods()
-        n_features = self.n_features
 
         hidden_layer_sizes = nn.validate_hidden_layers(
             self.hidden_layer_sizes, self.num_hidden_layers
@@ -172,14 +416,28 @@ class VAEModel(tf.keras.Model):
                 f"{num_hidden_layers}"
             )
 
-        self.dense3 = None
-        self.dense4 = None
-        self.dense5 = None
-        self.dense6 = None
-        self.dense8 = None
-        self.dense9 = None
-        self.dense10 = None
-        self.dense11 = None
+        flattened_shape = n_features * self.num_classes
+
+        self.encoder = Encoder(
+            flattened_shape,
+            self.n_components,
+            hidden_layer_sizes,
+            self.dropout_rate,
+            activation,
+            kernel_initializer,
+            kernel_regularizer,
+        )
+        hidden_layer_sizes.reverse()
+        self.decoder = Decoder(
+            flattened_shape,
+            self.n_components,
+            hidden_layer_sizes,
+            self.dropout_rate,
+            activation,
+            kernel_initializer,
+            kernel_regularizer,
+        )
+        self.rshp = Reshape((n_features, self.num_classes))
 
         # # # # inp = tf.keras.Input(shape=(n_features, self.num_classes), name="input")
         # self.dense1 = Dense(
@@ -190,122 +448,9 @@ class VAEModel(tf.keras.Model):
         #     kernel_regularizer=kernel_regularizer,
         # )
 
-        # Flatten to 2D shape.
-        self.flatten = Flatten()
-
-        # for layer_size in hidden_layer_sizes:
-        self.dense2 = Dense(
-            hidden_layer_sizes[0],
-            input_shape=(self.n_features * self.num_classes,),
-            activation=activation,
-            kernel_initializer=kernel_initializer,
-            kernel_regularizer=kernel_regularizer,
-        )
-
-        if len(hidden_layer_sizes) >= 2:
-            self.dense3 = Dense(
-                hidden_layer_sizes[1],
-                activation=activation,
-                kernel_initializer=kernel_initializer,
-                kernel_regularizer=kernel_regularizer,
-            )
-
-        if len(hidden_layer_sizes) >= 3:
-            self.dense4 = Dense(
-                hidden_layer_sizes[2],
-                activation=activation,
-                kernel_initializer=kernel_initializer,
-                kernel_regularizer=kernel_regularizer,
-            )
-
-        if len(hidden_layer_sizes) >= 4:
-            self.dense5 = Dense(
-                hidden_layer_sizes[3],
-                activation=activation,
-                kernel_initializer=kernel_initializer,
-                kernel_regularizer=kernel_regularizer,
-            )
-
-        if len(hidden_layer_sizes) == 5:
-            self.dense6 = Dense(
-                hidden_layer_sizes[4],
-                activation=activation,
-                kernel_initializer=kernel_initializer,
-                kernel_regularizer=kernel_regularizer,
-            )
-
-        # x = BatchNormalization(center=False, scale=False)(x)
-
-        self.z_mean = Dense(
-            self.n_components,
-            name="z_mean",
-        )
-        self.z_log_var = Dense(
-            self.n_components,
-            name="z_log_var",
-        )
-
-        # z_mean and z_log_var are inputs.
-        self.z = Sampling()
-
-        hidden_layer_sizes.reverse()
-
         # latent_inputs = tf.keras.Input(shape=(self.n_components,))
 
-        self.dense7 = Dense(
-            hidden_layer_sizes[0],
-            activation=activation,
-            kernel_initializer=kernel_initializer,
-            kernel_regularizer=kernel_regularizer,
-        )
-
-        # x = Dropout(rate=self.dropout_rate)(x)
-        # x = BatchNormalization(center=False, scale=False)(x)
-
-        if len(hidden_layer_sizes) >= 2:
-            self.dense8 = Dense(
-                hidden_layer_sizes[1],
-                activation=activation,
-                kernel_initializer=kernel_initializer,
-                kernel_regularizer=kernel_regularizer,
-            )
-
-        if len(hidden_layer_sizes) >= 3:
-            self.dense9 = Dense(
-                hidden_layer_sizes[2],
-                activation=activation,
-                kernel_initializer=kernel_initializer,
-                kernel_regularizer=kernel_regularizer,
-            )
-
-        if len(hidden_layer_sizes) >= 4:
-            self.dense10 = Dense(
-                hidden_layer_sizes[3],
-                activation=activation,
-                kernel_initializer=kernel_initializer,
-                kernel_regularizer=kernel_regularizer,
-            )
-
-        if len(hidden_layer_sizes) == 5:
-            self.dense11 = Dense(
-                hidden_layer_sizes[4],
-                activation=activation,
-                kernel_initializer=kernel_initializer,
-                kernel_regularizer=kernel_regularizer,
-            )
-
-        self.output1 = Dense(
-            n_features * self.num_classes,
-            kernel_initializer=kernel_initializer,
-            kernel_regularizer=kernel_regularizer,
-            activation=None,
-        )
-
-        self.rshp = Reshape((n_features, self.num_classes))
-
-        self.dropout_layer = Dropout(rate=self.dropout_rate)
-        self.batchnorm = BatchNormalization(center=False, scale=False)
-        self.activate_output = tf.keras.layers.Softmax()
+        # self.activate_output = tf.keras.layers.Softmax()
 
         # output = Activation("softmax")(x_rshp)
 
@@ -321,59 +466,27 @@ class VAEModel(tf.keras.Model):
         # if self.dropout_rate == 0.0:
         #     training = False
         # x = self.dense1(inputs)
-        x = self.flatten(inputs)
-        x = self.dense2(x)
-        if training:
-            # x = self.batchnorm(x, training=training)
-            x = self.dropout_layer(x, training=training)
-        if self.dense3 is not None:
-            x = self.dense3(x)
-            if training:
-                # x = self.batchnorm(x, training=training)
-                x = self.dropout_layer(x, training=training)
-        if self.dense4 is not None:
-            x = self.dense4(x)
-            if training:
-                # x = self.batchnorm(x, training=training)
-                x = self.dropout_layer(x, training=training)
-        if self.dense5 is not None:
-            x = self.dense5(x)
-            if training:
-                # x = self.batchnorm(x, training=training)
-                x = self.dropout_layer(x, training=training)
-        if self.dense6 is not None:
-            x = self.dense6(x)
-            if training:
-                # x = self.batchnorm(x, training=training)
-                x = self.dropout_layer(x, training=training)
-        z_mean = self.z_mean(x)
-        z_log_var = self.z_log_var(x)
-        z = self.z([z_mean, z_log_var])
-        xde = self.dense7(z)
-        if self.dense8 is not None:
-            xde = self.dense8(xde)
-            if training:
-                # xde = self.batchnorm(xde, training=training)
-                xde = self.dropout_layer(xde, training=training)
-        if self.dense9 is not None:
-            xde = self.dense9(xde)
-            if training:
-                # xde = self.batchnorm(xde, training=training)
-                xde = self.dropout_layer(xde, training=training)
-        if self.dense10 is not None:
-            xde = self.dense10(xde)
-            if training:
-                # xde = self.batchnorm(xde, training=training)
-                xde = self.dropout_layer(xde, training=training)
-        if self.dense11 is not None:
-            xde = self.dense11(xde)
-            if training:
-                # xde = self.batchnorm(xde, training=training)
-                xde = self.dropout_layer(xde, training=training)
+        z_mean, z_log_var, z = self.encoder(inputs)
+        reconstructed = self.decoder(z)
+        xde = self.rshp(reconstructed)
 
-        xde = self.output1(xde)
-        xde = self.rshp(xde)
-        return self.activate_output(xde), z_mean, z_log_var, z
+        # kl_loss = self.beta_norm * tf.reduce_mean(
+        #     -0.5
+        #     * (1 / self.n_components)
+        #     * tf.reduce_sum(
+        #         z_log_var - tf.math.square(z_mean) - tf.math.exp(z_log_var) + 1, axis=-1
+        #     )
+        # )
+
+        kl_loss = tf.reduce_mean(
+            -0.5
+            * tf.reduce_sum(
+                z_log_var - tf.math.square(z_mean) - tf.math.exp(z_log_var) + 1, axis=-1
+            )
+        )
+
+        self.add_loss(kl_loss)
+        return xde
 
     def model(self):
         """Here so that mymodel.model().summary() can be called for debugging."""
@@ -394,50 +507,50 @@ class VAEModel(tf.keras.Model):
             self.accuracy_tracker,
         ]
 
-    @tf.function
-    def vae_loss(self, y_true, y_pred, z_mean, z_log_var, sample_weight=None):
-        """Custom loss function for neural network model with missing mask.
-        Ignores missing data in the calculation of the loss function.
+    # @tf.function
+    # def vae_loss(self, y_true, y_pred, z_mean, z_log_var, sample_weight=None):
+    #     """Custom loss function for neural network model with missing mask.
+    #     Ignores missing data in the calculation of the loss function.
 
-        Args:
-            y_true (tensorflow.tensor): Input one-hot encoded 3D tensor.
-            y_pred (tensorflow.tensor): Predicted values.
-            sample_weight (numpy.ndarray): 2D matrix of sample weights.
+    #     Args:
+    #         y_true (tensorflow.tensor): Input one-hot encoded 3D tensor.
+    #         y_pred (tensorflow.tensor): Predicted values.
+    #         sample_weight (numpy.ndarray): 2D matrix of sample weights.
 
-        Returns:
-            float: Mean squared error loss value with missing data masked.
-        """
-        # Mask out missing values.
-        y_true_masked = tf.boolean_mask(
-            y_true, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
-        )
+    #     Returns:
+    #         float: Mean squared error loss value with missing data masked.
+    #     """
+    #     # Mask out missing values.
+    #     y_true_masked = tf.boolean_mask(
+    #         y_true, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
+    #     )
 
-        y_pred_masked = tf.boolean_mask(
-            y_pred, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
-        )
+    #     y_pred_masked = tf.boolean_mask(
+    #         y_pred, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
+    #     )
 
-        if sample_weight is not None:
-            sample_weight_masked = tf.boolean_mask(
-                tf.convert_to_tensor(sample_weight),
-                tf.reduce_any(tf.not_equal(y_true, -1), axis=2),
-            )
-        else:
-            sample_weight_masked = None
+    #     if sample_weight is not None:
+    #         sample_weight_masked = tf.boolean_mask(
+    #             tf.convert_to_tensor(sample_weight),
+    #             tf.reduce_any(tf.not_equal(y_true, -1), axis=2),
+    #         )
+    #     else:
+    #         sample_weight_masked = None
 
-        cce_loss = self.cce(
-            y_true_masked, y_pred_masked, sample_weight=sample_weight_masked
-        )
+    #     cce_loss = self.cce(
+    #         y_true_masked, y_pred_masked, sample_weight=sample_weight_masked
+    #     )
 
-        # cce_loss *= self.n_features * self.num_classes
+    #     # cce_loss *= self.n_features * self.num_classes
 
-        kl_loss = -0.5 * tf.reduce_sum(
-            1 + z_log_var - tf.math.square(z_mean) - tf.math.exp(z_log_var)
-        )
-        kl_loss = tf.reduce_mean(kl_loss)
+    #     kl_loss = -0.5 * tf.reduce_sum(
+    #         1 + z_log_var - tf.math.square(z_mean) - tf.math.exp(z_log_var)
+    #     )
+    #     kl_loss = tf.reduce_mean(kl_loss)
 
-        decay = self.n_components / (self.n_features * self.num_classes)
-        total_loss = cce_loss + kl_loss * decay
-        return total_loss, cce_loss, kl_loss
+    #     decay = self.n_components / (self.n_features * self.num_classes)
+    #     total_loss = cce_loss + kl_loss * decay
+    #     return total_loss, cce_loss, kl_loss
 
     @tf.function
     def train_step(self, data):
@@ -451,25 +564,17 @@ class VAEModel(tf.keras.Model):
             raise TypeError("Target y must be supplied to fit for this model.")
 
         with tf.GradientTape() as tape:
-            reconstruction, z_mean, z_log_var, z = self(x, training=True)
+            reconstruction = self(x, training=True)
             # reconstruction = self.decoder(z)
 
-            total_loss, reconstruction_loss, kl_loss = self.vae_loss(
+            reconstruction_loss = self.compiled_loss(
                 y,
                 reconstruction,
-                z_mean,
-                z_log_var,
                 sample_weight=sample_weight,
-                # regularization_losses=self.losses,
             )
 
-            # kl_loss = self.nn_.kl_divergence(
-            #     z_mean, z_log_var, kl_weight=self.kl_weight
-            # )
-            # kl_loss = 1 + z_log_var - K.square(z_mean) - K.exp(z_log_var)
-            # kl_loss *= -0.5
-            # kl_loss = K.sum(kl_loss, axis=-1)
-            # total_loss = reconstruction_loss + kl_loss
+            kl_loss = tf.reduce_sum(self.losses)
+            total_loss = reconstruction_loss + tf.reduce_sum(kl_loss)
 
         grads = tape.gradient(total_loss, self.trainable_weights)
         self.optimizer.apply_gradients(zip(grads, self.trainable_weights))
@@ -479,11 +584,11 @@ class VAEModel(tf.keras.Model):
 
         ### NOTE: If you get the error, "'tuple' object has no attribute
         ### 'rank', then convert y_true to a tensor object."
+        # self.compiled_metrics.update_state(
         self.accuracy_tracker.update_state(
             self.categorical_accuracy(
                 y,
                 reconstruction,
-                sample_weight=sample_weight,
             )
         )
 
@@ -505,32 +610,23 @@ class VAEModel(tf.keras.Model):
         else:
             raise TypeError("Target y must be supplied to fit in this model.")
 
-        reconstruction, z_mean, z_log_var, z = self(x, training=False)
-        # reconstruction = self.decoder(z)
-
-        # reconstruction_loss = tf.reduce_sum(
-        #     self.compiled_loss(y, reconstruction, sample_weight=sample_weight)
-        # )
-
-        total_loss, reconstruction_loss, kl_loss = self.vae_loss(
-            y, reconstruction, z_mean, z_log_var, sample_weight=sample_weight
+        reconstruction = self(x, training=False)
+        reconstruction_loss = self.compiled_loss(
+            y, reconstruction, sample_weight=sample_weight
         )
-        # kl_loss = self.nn_.kl_divergence(z_mean, z_log_var, kl_weight=self.kl_weight)
-        # kl_loss *= self.kl_weight
-        # total_loss = reconstruction_loss + kl_loss
+        kl_loss = tf.reduce_sum(self.losses)
+        total_loss = reconstruction_loss + kl_loss
 
-        self.total_loss_tracker.update_state(total_loss)
-        self.reconstruction_loss_tracker.update_state(reconstruction_loss)
-        self.kl_loss_tracker.update_state(kl_loss)
-
-        ### NOTE: If you get the error, "'tuple' object has no attribute
-        ### 'rank', then convert y_true to a tensor object."
         self.accuracy_tracker.update_state(
             self.categorical_accuracy(
                 y,
                 reconstruction,
             )
         )
+
+        self.total_loss_tracker.update_state(total_loss)
+        self.reconstruction_loss_tracker.update_state(reconstruction_loss)
+        self.kl_loss_tracker.update_state(kl_loss)
 
         return {
             "loss": self.total_loss_tracker.result(),
