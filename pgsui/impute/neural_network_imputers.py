@@ -1,9 +1,11 @@
 # Standard Library Imports
 from faulthandler import disable
 import logging
+import math
 import os
 import pprint
 import sys
+from tracemalloc import stop
 import warnings
 from collections import defaultdict
 
@@ -82,6 +84,7 @@ try:
         TargetTransformer,
         MLPTargetTransformer,
         UBPInputTransformer,
+        VAEFeatureTransformer,
     )
 except (ModuleNotFoundError, ValueError):
     from read_input.read_input import GenotypeData
@@ -100,6 +103,7 @@ except (ModuleNotFoundError, ValueError):
         TargetTransformer,
         MLPTargetTransformer,
         UBPInputTransformer,
+        VAEFeatureTransformer,
     )
 
 is_notebook = isnotebook()
@@ -171,12 +175,10 @@ class VAEClassifier(KerasClassifier):
         l2_penalty=0.01,
         dropout_rate=0.2,
         validation_split=0.2,
-        num_classes=3,
         sample_weight=None,
-        n_components=3,
+        n_components=1,
         optimizer="adam",
         loss="categorical_crossentropy",
-        kl_beta=4,
         epochs=100,
         verbose=0,
         **kwargs,
@@ -193,13 +195,11 @@ class VAEClassifier(KerasClassifier):
         self.l2_penalty = l2_penalty
         self.dropout_rate = dropout_rate
         self.validation_split = validation_split
-        self.num_classes = num_classes
         self.sample_weight = sample_weight
         self.n_components = n_components
         self.optimizer = optimizer
         self.loss = loss
         self.epochs = epochs
-        self.kl_beta = kl_beta
         self.verbose = verbose
 
     def _keras_build_fn(self, compile_kwargs):
@@ -221,9 +221,7 @@ class VAEClassifier(KerasClassifier):
             l1_penalty=self.l1_penalty,
             l2_penalty=self.l2_penalty,
             dropout_rate=self.dropout_rate,
-            num_classes=self.num_classes,
             sample_weight=self.sample_weight,
-            kl_beta=self.kl_beta,
         )
 
         # model = VAEModel(vae.encoder, vae.decoder)
@@ -256,12 +254,20 @@ class VAEClassifier(KerasClassifier):
         # Get missing mask if provided.
         # Otherwise default is all missing values (array all True).
         missing_mask = kwargs.get("missing_mask", np.ones(y_true.shape, dtype=bool))
+        is_vae = kwargs.get("is_vae", False)
 
         testing = kwargs.get("testing", False)
         scoring_metric = kwargs.get("scoring_metric", "accuracy")
 
+        nn = NeuralNetworkMethods()
+
         if isinstance(y_pred, tuple):
             y_pred = y_pred[0]
+
+        if is_vae:
+            if len(y_pred.shape) < 3:
+                y_pred = y_pred.reshape((y_true.shape[0], y_true.shape[1], 2))
+            y_pred = nn.decode_binary_multilab(y_pred)
 
         y_true_masked = y_true[missing_mask]
         y_pred_masked = y_pred[missing_mask]
@@ -293,7 +299,7 @@ class VAEClassifier(KerasClassifier):
                 raise ValueError(f"Invalid scoring_metric provided: {scoring_metric}")
 
         elif scoring_metric == "accuracy":
-            y_pred_masked_decoded = NeuralNetworkMethods.decode_masked(y_pred_masked)
+            y_pred_masked_decoded = nn.decode_onehot(y_pred_masked)
             return accuracy_score(y_true_masked, y_pred_masked_decoded)
 
         else:
@@ -303,7 +309,7 @@ class VAEClassifier(KerasClassifier):
             np.set_printoptions(threshold=np.inf)
             print(y_true_masked)
 
-            y_pred_masked_decoded = NeuralNetworkMethods.decode_masked(y_pred_masked)
+            y_pred_masked_decoded = nn.decode_onehot(y_pred_masked)
 
             print(y_pred_masked_decoded)
 
@@ -314,7 +320,7 @@ class VAEClassifier(KerasClassifier):
         Returns:
             MLPTargetTransformer: InputTransformer object that includes fit() and transform() methods to transform input before estimator fitting.
         """
-        return MLPTargetTransformer()
+        return VAEFeatureTransformer()
 
     @property
     def target_encoder(self):
@@ -323,7 +329,7 @@ class VAEClassifier(KerasClassifier):
         Returns:
             NNOutputTransformer: NNOutputTransformer object that includes fit(), transform(), and inverse_transform() methods.
         """
-        return MLPTargetTransformer()
+        return VAEFeatureTransformer()
 
     def predict(self, X, **kwargs):
         """Returns predictions for the given test data.
@@ -656,50 +662,104 @@ class MLPClassifier(KerasClassifier):
         return self.target_encoder_.inverse_transform(y_pred_proba)
 
 
-class VAECallbacks(tf.keras.callbacks.Callback):
-    """Custom callbacks to use with subclassed VAE Keras model.
+class CyclicalAnnealingCallback(tf.keras.callbacks.Callback):
+    def __init__(
+        self,
+        n_iter,
+        beta=tf.keras.backend.variable(0.0),
+        start=0.0,
+        stop=1.0,
+        n_cycle=4,
+        ratio=0.5,
+        schedule_type="linear",
+    ):
+        self.n_iter = n_iter
+        self.beta = beta
+        self.start = start
+        self.stop = stop
+        self.n_cycle = n_cycle
+        self.ratio = ratio
+        self.schedule_type = schedule_type
 
-    See tf.keras.callbacks.Callback documentation.
-    """
+        self.arr = None
 
-    def __init__(self):
-        self.indices = None
+    def on_train_begin(self, logs=None):
+        if self.schedule_type == "linear":
+            cycle_func = self._linear_cycle_range
+        elif self.schedule_type == "sigmoid":
+            cycle_func = self._sigmoid_cycle_range
+        elif self.schedule_type == "cosine":
+            cycle_func = self._cosine_cycle_range
+
+        self.arr = cycle_func()
 
     def on_epoch_begin(self, epoch, logs=None):
-        """Shuffle input and target at start of epoch."""
-        x = self.model.x.copy()
-        y = self.model.y.copy()
-        y_train = self.model.y_train.copy()
-        missing_mask = self.model.missing_mask
-        sample_weight = self.model.sample_weight
+        idx = epoch - 1
+        new_weight = self.arr[idx]
 
-        n_samples = len(y)
-        self.indices = np.arange(n_samples)
-        np.random.shuffle(self.indices)
+        # new_weight = tf.minimum(
+        #     tf.keras.backend.get_value(self.model.kl_beta) + (1.0 / self.time), 1.0
+        # )
+        tf.keras.backend.set_value(self.model.kl_beta, new_weight)
 
-        self.model.x = x[self.indices]
-        self.model.y = y[self.indices]
-        self.model.y_train = y_train[self.indices]
-        self.model.missing_mask = missing_mask[self.indices]
+    def _linear_cycle_range(self):
+        """Get linear cycle range from 0 to 1 for n_iter epochs.
 
-        if sample_weight is not None:
-            self.model.sample_weight = sample_weight[self.indices]
+        Returns:
+            numpy.ndarray: Linear cycle range.
+        """
+        L = np.ones(self.n_iter) * self.stop
+        period = self.n_iter / self.n_cycle
 
-    def on_train_batch_begin(self, batch, logs=None):
-        """Get batch index."""
-        self.model.batch_idx = batch
+        # Linear schedule
+        step = (self.stop - self.start) / (period * self.ratio)  # linear schedle
 
-    def on_epoch_end(self, epoch, logs=None):
-        """Unsort the row indices."""
-        unshuffled = np.argsort(self.indices)
+        for c in range(self.n_cycle):
+            v, i = self.start, 0
+            while v <= self.stop and (int(i + c * period) < self.n_iter):
+                L[int(i + c * period)] = v
+                v += step
+                i += 1
 
-        self.model.x = self.model.x[unshuffled]
-        self.model.y = self.model.y[unshuffled]
-        self.model.y_train = self.model.y_train[unshuffled]
-        self.model.missing_mask = self.model.missing_mask[unshuffled]
+        return L
 
-        if self.model.sample_weight is not None:
-            self.model.sample_weight = self.model.sample_weight[unshuffled]
+    def _sigmoid_cycle_range(self):
+        """Get sigmoidal cycle range from 0 to 1 for n_iter epochs.
+
+        Returns:
+            numpy.ndarray: Sigmoidal cycle range.
+        """
+        L = np.ones(self.n_iter)
+        period = self.n_iter / self.n_cycle
+        step = (self.stop - self.start) / (period * self.ratio)  # step is in [0,1]
+
+        for c in range(self.n_cycle):
+            v, i = self.start, 0
+
+            while v <= self.stop:
+                L[int(i + c * period)] = 1.0 / (1.0 + np.exp(-(v * 12.0 - 6.0)))
+                v += step
+                i += 1
+        return L
+
+    def _cosine_cycle_range(self):
+        """Get cosine cycle range from 0 to 1 for n_iter epochs.
+
+        Returns:
+            numpy.ndarray: Cosine cycle range.
+        """
+        L = np.ones(self.n_iter)
+        period = self.n_iter / self.n_cycle
+        step = (self.stop - self.start) / (period * self.ratio)  # step is in [0,1]
+
+        for c in range(self.n_cycle):
+            v, i = self.start, 0
+
+            while v <= self.stop:
+                L[int(i + c * period)] = 0.5 - 0.5 * math.cos(v * math.pi)
+                v += step
+                i += 1
+        return L
 
 
 class UBPCallbacks(tf.keras.callbacks.Callback):
@@ -875,6 +935,7 @@ class VAE(BaseEstimator, TransformerMixin):
         l1_penalty=0.0001,
         l2_penalty=0.0001,
         dropout_rate=0.2,
+        kl_beta=1.0,
         validation_split=0.2,
         sample_weights=False,
         grid_iter=80,
@@ -907,6 +968,7 @@ class VAE(BaseEstimator, TransformerMixin):
         self.l1_penalty = l1_penalty
         self.l2_penalty = l2_penalty
         self.dropout_rate = dropout_rate
+        self.kl_beta = kl_beta
         self.validation_split = validation_split
         self.sample_weights = sample_weights
         self.grid_iter = grid_iter
@@ -918,7 +980,7 @@ class VAE(BaseEstimator, TransformerMixin):
         self.n_jobs = n_jobs
         self.verbose = verbose
 
-        self.num_classes = 3
+        self.num_classes = 2
 
     @timer
     def fit(self, X):
@@ -969,8 +1031,8 @@ class VAE(BaseEstimator, TransformerMixin):
         # Both simulated and original missing data.
         self.all_missing_ = sim.all_missing_mask_
 
-        # One-hot encode y to get y_train.
-        self.tt_ = TargetTransformer()
+        # Binary encode y to get y_train.
+        self.tt_ = VAEFeatureTransformer()
         y_train = self.tt_.fit_transform(self.y_original_)
 
         if self.gridparams is not None:
@@ -1078,11 +1140,17 @@ class VAE(BaseEstimator, TransformerMixin):
         y_missing_idx = np.flatnonzero(self.original_missing_mask_)
 
         # y_pred_proba, z_mean, z_log_var, z = model(y_train, training=False)
-        y_pred_proba = model(y_train, training=False)
+        # y_pred_proba = model(y_train, training=False)
+        y_pred, z_mean, z_log_var = model(y_train, training=False)
 
         # y_pred = y_pred.numpy()
-        y_pred_proba = tf.nn.softmax(y_pred_proba).numpy()
-        y_pred_decoded = self.nn_.decode_masked(y_pred_proba)
+        # y_pred_proba = tf.nn.softmax(y_pred_proba).numpy()
+        # y_pred_decoded = self.nn_.decode_binary_multilab(y_pred_proba)
+        y_pred = self.tt_.inverse_transform(y_pred)
+        y_pred = y_pred.numpy()
+        y_pred_onehot = self.nn_.decode_binary_multilab(y_pred)
+        y_pred_decoded = self.nn_.decode_masked(y_pred_onehot)
+
         # y_pred_decoded = self.nn_.decode_masked(y_pred)
         y_pred_1d = y_pred_decoded.ravel()
 
@@ -1210,6 +1278,7 @@ class VAE(BaseEstimator, TransformerMixin):
             fit__validation_split=fit_params["validation_split"],
             score__missing_mask=self.sim_missing_mask_,
             score__scoring_metric=self.scoring_metric,
+            score__is_vae=True,
         )
 
         if self.run_gridsearch_:
@@ -1344,16 +1413,17 @@ class VAE(BaseEstimator, TransformerMixin):
 
         y_train = self.tt_.transform(y_true)
         # y_pred_proba, z_mean, z_log_var, z = model(y_train, training=False)
-        y_pred_proba = model(y_train, training=False)
+        y_pred_sigmoid, z_mean, z_log_var = model(y_train, training=False)
 
         # y_pred = y_pred.numpy()
-        y_pred = self.tt_.inverse_transform(y_pred_proba)
+        y_pred = self.tt_.inverse_transform(y_pred_sigmoid)
 
         # Get metric scores.
         metrics = Scorers.scorer(
             y_true,
             y_pred,
             missing_mask=self.sim_missing_mask_,
+            is_vae=True,
             testing=True,
         )
 
@@ -1393,6 +1463,7 @@ class VAE(BaseEstimator, TransformerMixin):
 
         callbacks = [
             # VAECallbacks(),
+            CyclicalAnnealingCallback(self.epochs, schedule_type="cosine"),
             CSVLogger(filename=logfile, append=append),
             ReduceLROnPlateau(patience=self.lr_patience, min_lr=1e-6, min_delta=1e-6),
         ]
@@ -1419,7 +1490,6 @@ class VAE(BaseEstimator, TransformerMixin):
             "l1_penalty": self.l1_penalty,
             "l2_penalty": self.l2_penalty,
             "dropout_rate": self.dropout_rate,
-            "num_classes": self.num_classes,
         }
 
         fit_verbose = 1 if self.verbose == 2 else 0
