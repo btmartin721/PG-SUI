@@ -940,7 +940,9 @@ class Impute:
             if self.clf_type == "classifier":
                 if self.algorithm == "nn":
                     imputer = self.clf(
-                        self.imp_kwargs["genotype_data"], disable_progressbar=self.disable_progressbar, **self.clf_kwargs
+                        self.imp_kwargs["genotype_data"],
+                        disable_progressbar=self.disable_progressbar,
+                        **self.clf_kwargs,
                     )
                     df_imp = pd.DataFrame(
                         imputer.fit_transform(Xchunk),
