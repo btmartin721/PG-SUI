@@ -56,6 +56,8 @@ class DisabledCV:
 # For VAE. Necessary to initialize outside of class for use with tf.function decorator.
 cce = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
 cca = tf.keras.metrics.CategoricalAccuracy()
+ba = tf.keras.metrics.BinaryAccuracy()
+bce = tf.keras.losses.BinaryCrossentropy()
 
 
 class NeuralNetworkMethods:
@@ -100,8 +102,28 @@ class NeuralNetworkMethods:
 
         return df
 
-    def decode_masked(self, y):
-        """Evaluate model predictions by decoding to 012-encoded format.
+    @staticmethod
+    def encode_onehot(X, missing_val=np.nan):
+        """Convert 012-encoded data to one-hot encodings.
+        Args:
+            X (numpy.ndarray): Input array with 012-encoded data and -9 as the missing data value.
+        Returns:
+            pandas.DataFrame: One-hot encoded data, ignoring missing values (np.nan).
+        """
+        Xt = np.zeros(shape=(X.shape[0], X.shape[1], 3))
+        mappings = {
+            0: np.array([1, 0, 0]),
+            1: np.array([0, 1, 0]),
+            2: np.array([0, 0, 1]),
+            -9: np.array([missing_val, missing_val, missing_val]),
+        }
+        for row in np.arange(X.shape[0]):
+            Xt[row] = [mappings[enc] for enc in X[row]]
+        return Xt
+
+    @classmethod
+    def decode_masked(cls, y):
+        """Evaluate model predictions by decoding from one-hot encoding to 012-encoded format.
 
         Gets the index of the highest predicted value to obtain the 012-encodings.
 
@@ -116,9 +138,51 @@ class NeuralNetworkMethods:
             pandas.DataFrame: One-hot encoded pandas DataFrame with no missing values.
         """
         Xprob = y
-        Xt = np.apply_along_axis(self.mle, axis=-1, arr=Xprob)
+        Xt = np.apply_along_axis(cls.mle, axis=-1, arr=Xprob)
         Xpred = np.argmax(Xt, axis=-1)
         return Xpred
+
+    @classmethod
+    def decode_binary_multilab(cls, y, missing_val=-1):
+        """Evaluate model predictions by decoding from binary multi-label to 012-encoded format.
+
+        If sigmoid activation output is >0.5, gets encoded as 1.0; else 0.0. If both categories are > 0.5, then it is heterozygote.
+
+        Args:
+            y (numpy.ndarray): Model predictions of shape (n_samples * n_features,). Array should be flattened and masked.
+
+        Returns:
+            numpy.ndarray: Imputed one-hot encoded values.
+
+            pandas.DataFrame: One-hot encoded pandas DataFrame with no missing values.
+        """
+        y_pred_sigmoid = y
+
+        y_012 = np.zeros((y_pred_sigmoid.shape[0], y_pred_sigmoid.shape[1]))
+        yt = np.where(y_pred_sigmoid >= 0.5, 1.0, 0.0)
+        bin_mappings = {
+            0: np.array([1, 0]),
+            1: np.array([1, 1]),
+            2: np.array([0, 1]),
+            -9: np.array([0, 0]),
+        }
+
+        for row in np.arange(y_pred_sigmoid.shape[0]):
+            for col in np.arange(y_pred_sigmoid.shape[1]):
+                y_012[row, col] = [
+                    k
+                    for k, v in bin_mappings.items()
+                    if np.array_equal(v, yt[row, col])
+                ][0]
+
+        return cls.encode_onehot(y_012, missing_val=missing_val)
+
+        # y_012[row] = [
+        #     bin_mappings[k] for k, v in bin_mappings.items() if v == yt[row]
+        # ][0]
+        return y_012
+
+        # ypred = np.where(np.all(yt == 1), 1, a)
 
     @staticmethod
     def encode_categorical(X):
@@ -469,8 +533,8 @@ class NeuralNetworkMethods:
             opt = tf.keras.optimizers.RMSProp
 
         if vae:
-            loss = NeuralNetworkMethods.make_masked_categorical_crossentropy()
-            metrics = [NeuralNetworkMethods.make_masked_categorical_accuracy()]
+            loss = NeuralNetworkMethods.make_masked_binary_crossentropy()
+            metrics = [NeuralNetworkMethods.make_masked_binary_accuracy()]
 
         else:
             # Doing grid search. Params are callables.
@@ -527,7 +591,7 @@ class NeuralNetworkMethods:
         return np.square(np.subtract(X_true[mask], X_pred[mask])).mean()
 
     @staticmethod
-    def make_masked_categorical_accuracy():
+    def make_masked_binary_accuracy(num_classes=2):
         """Make categorical crossentropy loss function with missing mask.
 
         Returns:
@@ -535,6 +599,97 @@ class NeuralNetworkMethods:
         """
 
         @tf.function
+        def masked_binary_accuracy(y_true, y_pred, sample_weight=None):
+            """Custom loss function for neural network model with missing mask.
+            Ignores missing data in the calculation of the loss function.
+            Args:
+                y_true (tensorflow.tensor): Input one-hot encoded 3D tensor.
+                y_pred (tensorflow.tensor): Predicted values.
+                sample_weight (numpy.ndarray): 2D matrix of sample weights.
+
+            Returns:
+                float: Mean squared error loss value with missing data masked.
+            """
+            s = tf.shape(y_true)
+            y_true = tf.reshape(y_true, shape=[s[0], s[1] // num_classes, num_classes])
+
+            y_true_masked = tf.boolean_mask(
+                y_true, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
+            )
+
+            y_pred_masked = tf.boolean_mask(
+                y_pred, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
+            )
+
+            if sample_weight is not None:
+                sample_weight_masked = tf.boolean_mask(
+                    tf.convert_to_tensor(sample_weight),
+                    tf.reduce_any(tf.not_equal(y_true, -1), axis=2),
+                )
+            else:
+                sample_weight_masked = None
+
+            return ba(y_true_masked, y_pred_masked, sample_weight=sample_weight_masked)
+
+        return masked_binary_accuracy
+
+    @staticmethod
+    def make_masked_binary_crossentropy(num_classes=2):
+        """Make binary crossentropy loss function with missing mask.
+
+        Args:
+            num_classes (int, optional): Number of classes used. Defaults to 2.
+
+        Returns:
+            callable: Function that calculates categorical crossentropy loss.
+        """
+
+        @tf.function
+        def masked_binary_crossentropy(y_true, y_pred, sample_weight=None):
+            """Custom loss function for neural network model with missing mask.
+            Ignores missing data in the calculation of the loss function.
+
+            Args:
+                y_true (tensorflow.tensor): Input one-hot encoded 3D tensor.
+                y_pred (tensorflow.tensor): Predicted values.
+                sample_weight (numpy.ndarray): 2D matrix of sample weights.
+
+            Returns:
+                float: Mean squared error loss value with missing data masked.
+            """
+            s = tf.shape(y_true)
+            y_true = tf.reshape(y_true, shape=[s[0], s[1] // num_classes, num_classes])
+
+            # Mask out missing values.
+            y_true_masked = tf.boolean_mask(
+                y_true, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
+            )
+
+            y_pred_masked = tf.boolean_mask(
+                y_pred, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
+            )
+
+            if sample_weight is not None:
+                sample_weight_masked = tf.boolean_mask(
+                    tf.convert_to_tensor(sample_weight),
+                    tf.reduce_any(tf.not_equal(y_true, -1), axis=2),
+                )
+            else:
+                sample_weight_masked = None
+
+            return bce(y_true_masked, y_pred_masked, sample_weight=sample_weight_masked)
+
+        return masked_binary_crossentropy
+
+    @staticmethod
+    def make_masked_categorical_accuracy():
+        """Make categorical crossentropy loss function with missing mask.
+
+        Returns:
+            callable: Function that calculates categorical crossentropy loss.
+        """
+
+        # @tf.function
         def masked_categorical_accuracy(y_true, y_pred, sample_weight=None):
             """Custom loss function for neural network model with missing mask.
             Ignores missing data in the calculation of the loss function.
@@ -569,7 +724,7 @@ class NeuralNetworkMethods:
             callable: Function that calculates categorical crossentropy loss.
         """
 
-        @tf.function
+        # @tf.function
         def masked_categorical_crossentropy(y_true, y_pred, sample_weight=None):
             """Custom loss function for neural network model with missing mask.
             Ignores missing data in the calculation of the loss function.
@@ -584,17 +739,17 @@ class NeuralNetworkMethods:
             """
             # Mask out missing values.
             y_true_masked = tf.boolean_mask(
-                y_true, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
+                y_true, tf.reduce_any(tf.not_equal(y_true, -1), axis=-1)
             )
 
             y_pred_masked = tf.boolean_mask(
-                y_pred, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
+                y_pred, tf.reduce_any(tf.not_equal(y_true, -1), axis=-1)
             )
 
             if sample_weight is not None:
                 sample_weight_masked = tf.boolean_mask(
                     tf.convert_to_tensor(sample_weight),
-                    tf.reduce_any(tf.not_equal(y_true, -1), axis=2),
+                    tf.reduce_any(tf.not_equal(y_true, -1), axis=-1),
                 )
             else:
                 sample_weight_masked = None
