@@ -678,16 +678,29 @@ class Plotting:
             title = nn_method
             fn = f"histplot_{nn_method}.pdf"
 
-            fig, (ax1, ax2) = plt.subplots(1, 2)
+            if nn_method == "VAE":
+                fig, axes = plt.subplots(2, 2)
+                ax1 = axes[0, 0]
+                ax2 = axes[0, 1]
+                ax3 = axes[1, 0]
+                ax4 = axes[1, 1]
+            else:
+                fig, (ax1, ax2) = plt.subplots(1, 2)
             fig.suptitle(title)
-            fig.tight_layout(h_pad=2.0, w_pad=2.0)
+            fig.tight_layout(h_pad=3.0, w_pad=3.0)
             history = lod[0]
 
             acctrain = "categorical_accuracy" if nn_method == "NLPCA" else "accuracy"
-            accval = None if nn_method == "NLPCA" else "val_accuracy"
-            lossval = None if nn_method == "NLPCA" else "val_loss"
 
-            # Plot accuracy
+            if nn_method == "VAE":
+                accval = "val_accuracy"
+                recon_loss = "reconstruction_loss"
+                kl_loss = "kl_loss"
+                val_recon_loss = "val_reconstruction_loss"
+                val_kl_loss = "val_kl_loss"
+                lossval = "val_loss"
+
+            # Plot train accuracy
             ax1.plot(history[acctrain])
             ax1.set_title("Model Accuracy")
             ax1.set_ylabel("Accuracy")
@@ -697,28 +710,48 @@ class Plotting:
 
             labels = ["Train"]
             if nn_method == "VAE":
+                # Plot validation accuracy
                 ax1.plot(history[accval])
                 labels.append("Validation")
 
             ax1.legend(labels, loc="best")
 
+            loss_type = "Binary" if nn_method == "VAE" else "Categorical"
+
             # Plot model loss
-            ax2.plot(history["loss"])
-            ax2.set_title("Model Loss")
-            ax2.set_ylabel("Loss (MSE)")
+            if nn_method == "VAE":
+                # Reconstruction loss only.
+                ax2.plot(history[recon_loss])
+                ax2.plot(history[val_recon_loss])
+
+                # KL Loss
+                ax3.plot(history[kl_loss])
+                ax3.plot(history[val_kl_loss])
+                ax3.set_title("KL Divergence Loss")
+                ax3.set_ylabel("Loss")
+                ax3.set_xlabel("Epoch")
+
+                # Total Loss (Reconstruction Loss + KL Loss)
+                ax4.plot(history["loss"])
+                ax4.plot(history[lossval])
+                ax4.set_title("Total Loss (Recon. + KL)")
+                ax4.set_ylabel("Loss")
+                ax4.set_xlabel("Epoch")
+            else:
+                ax2.plot(history["loss"])
+
+            ax2.set_title(f"Reconstruction Loss")
+            ax2.set_ylabel(f"Loss")
             ax2.set_xlabel("Epoch")
 
-            if nn_method == "VAE":
-                ax2.plot(history[lossval])
-
             ax2.legend(labels, loc="best")
+            ax3.legend(labels, loc="best")
+            ax4.legend(labels, loc="best")
 
             fig.savefig(fn, bbox_inches="tight")
 
             plt.close()
             plt.clf()
-
-            print(history["loss"])
 
         elif nn_method == "UBP":
             fig = plt.figure(figsize=(12, 16))
