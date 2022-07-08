@@ -101,6 +101,25 @@ def encode_onehot(X):
     return Xt
 
 
+def encode_binary(X):
+    """Convert 012-encoded data to binary encodings.
+    Args:
+        X (numpy.ndarray): Input array with 012-encoded data and -9 as the missing data value.
+    Returns:
+        pandas.DataFrame: One-hot encoded data, ignoring missing values (np.nan).
+    """
+    Xt = np.zeros(shape=(X.shape[0], X.shape[1], 2))
+    mappings = {
+        0: np.array([1, 0]),
+        1: np.array([1, 1]),
+        2: np.array([0, 1]),
+        -9: np.array([np.nan, np.nan]),
+    }
+    for row in np.arange(X.shape[0]):
+        Xt[row] = [mappings[enc] for enc in X[row]]
+    return Xt
+
+
 def encode_categorical(X):
     """Encode -9 encoded missing values as np.nan.
 
@@ -441,6 +460,86 @@ class NNInputTransformer(BaseEstimator, TransformerMixin):
         return np.isnan(data)
 
 
+class VAEFeatureTransformer(BaseEstimator, TransformerMixin):
+    """Transformer to format features before model fitting."""
+
+    def fit(self, X):
+        X = misc.validate_input_type(X, return_type="array")
+
+        # Original 012-encoded y
+        self.X_decoded = X
+
+        X_train = encode_binary(X)
+        self.X_train = X_train
+
+        # Get missing and observed data boolean masks.
+        self.missing_mask_, self.observed_mask_ = self._get_masks(X_train)
+
+        # To accomodate multiclass-multioutput.
+        self.n_outputs_expected_ = 1
+
+        return self
+
+    def transform(self, X):
+        """Transform y_true to one-hot encoded.
+
+        Accomodates multiclass-multioutput targets.
+
+        Args:
+            y (numpy.ndarray): One-hot encoded target data.
+
+        Returns:
+            numpy.ndarray: y_true target data.
+        """
+        X = misc.validate_input_type(X, return_type="array")
+        X_train = encode_binary(X)
+        filled = self._fill(X_train, self.missing_mask_, num_classes=2)
+        return filled.reshape(X_train.shape[0], X_train.shape[1] * X_train.shape[2])
+
+    def inverse_transform(self, y):
+        # y_pred = y.numpy()
+        return tf.reshape(y, self.X_train.shape)
+
+    def _fill(self, data, missing_mask, missing_value=-1, num_classes=3):
+        """Mask missing data as ``missing_value``.
+
+        Args:
+            data (numpy.ndarray): Input with missing values of shape (n_samples, n_features, num_classes).
+
+            missing_mask (np.ndarray(bool)): Missing data mask with True corresponding to a missing value.
+
+            missing_value (int): Value to set missing data to. If a list is provided, then its length should equal the number of one-hot classes.
+        """
+        if num_classes > 1:
+            missing_value = [missing_value] * num_classes
+        data[missing_mask] = missing_value
+        return data
+
+    def _get_masks(self, X):
+        """Format the provided target data for use with UBP/NLPCA.
+
+        Args:
+            y (numpy.ndarray(float)): Input data that will be used as the target.
+
+        Returns:
+            numpy.ndarray(float): Missing data mask, with missing values encoded as 1's and non-missing as 0's.
+
+            numpy.ndarray(float): Observed data mask, with non-missing values encoded as 1's and missing values as 0's.
+        """
+        missing_mask = self._create_missing_mask(X)
+        observed_mask = ~missing_mask
+        return missing_mask, observed_mask
+
+    def _create_missing_mask(self, data):
+        """Creates a missing data mask with boolean values.
+        Args:
+            data (numpy.ndarray): Data to generate missing mask from, of shape (n_samples, n_features, n_classes).
+        Returns:
+            numpy.ndarray(bool): Boolean mask of missing values of shape (n_samples, n_features), with True corresponding to a missing data point.
+        """
+        return np.isnan(data).all(axis=2)
+
+
 class MLPTargetTransformer(BaseEstimator, TransformerMixin):
     """Transformer to format target data both before and after model fitting.
 
@@ -576,6 +675,9 @@ class MLPTargetTransformer(BaseEstimator, TransformerMixin):
 class TargetTransformer(BaseEstimator, TransformerMixin):
     """Transformer to format target data both before and after model fitting."""
 
+    def __init__(self, is_vae=False):
+        self.is_vae = is_vae
+
     def fit(self, y):
         """Fit 012-encoded target data.
 
@@ -630,7 +732,10 @@ class TargetTransformer(BaseEstimator, TransformerMixin):
         Returns:
             numpy.ndarray: y predictions in same format as y_true.
         """
-        return tf.nn.softmax(y).numpy()
+        if self.is_vae:
+            return y.numpy()
+        else:
+            return tf.nn.softmax(y).numpy()
 
     def _fill(self, data, missing_mask, missing_value=-1, num_classes=3):
         """Mask missing data as ``missing_value``.
