@@ -1284,6 +1284,7 @@ class ImputeVAE(Impute):
         l1_penalty=1e-6,
         l2_penalty=1e-6,
         dropout_rate=0.2,
+        kl_beta=1.0,
         sample_weights=None,
         cv=5,
         gridsearch_method="gridsearch",
