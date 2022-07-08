@@ -93,7 +93,7 @@ class Scorers:
         return roc_auc
 
     @staticmethod
-    def compute_pr(y_true, y_pred, nn_model=True):
+    def compute_pr(y_true, y_pred, nn_model=True, vae=False):
         """Compute precision-recall curve with Average Precision scores.
 
         PR and AP scores are computed per-class and for micro and macro averages.
@@ -223,13 +223,22 @@ class Scorers:
         missing_mask = kwargs.get("missing_mask")
         testing = kwargs.get("testing", False)
         nn_model = kwargs.get("nn_model", True)
+        is_vae = kwargs.get("is_vae", False)
 
         y_pred = Scorers.check_if_tuple(y_pred)
+
+        if nn_model:
+            nn = NeuralNetworkMethods()
+
+        if is_vae:
+            if len(y_pred.shape) < 3:
+                y_pred = y_pred.reshape((y_true.shape[0], y_true.shape[1], 2))
+            y_pred = nn.decode_binary_multilab(y_pred)
+
         y_true_masked = y_true[missing_mask]
         y_pred_masked = y_pred[missing_mask]
 
         if nn_model:
-            nn = NeuralNetworkMethods()
             y_pred_masked_decoded = nn.decode_masked(y_pred_masked)
         else:
             y_pred_masked_decoded = y_pred_masked
@@ -264,13 +273,22 @@ class Scorers:
         missing_mask = kwargs.get("missing_mask")
         testing = kwargs.get("testing", False)
         nn_model = kwargs.get("nn_model", True)
+        is_vae = kwargs.get("is_vae", False)
 
         y_pred = Scorers.check_if_tuple(y_pred)
+
+        if nn_model:
+            nn = NeuralNetworkMethods()
+
+        if is_vae:
+            if len(y_pred.shape) < 3:
+                y_pred = y_pred.reshape((y_true.shape[0], y_true.shape[1], 2))
+            y_pred = nn.decode_binary_multilab(y_pred)
+
         y_true_masked = y_true[missing_mask]
         y_pred_masked = y_pred[missing_mask]
 
         if nn_model:
-            nn = NeuralNetworkMethods()
             y_pred_masked_decoded = nn.decode_masked(y_pred_masked)
         else:
             y_pred_masked_decoded = y_pred_masked
@@ -302,13 +320,22 @@ class Scorers:
         missing_mask = kwargs.get("missing_mask")
         testing = kwargs.get("testing", False)
         nn_model = kwargs.get("nn_model", True)
+        is_vae = kwargs.get("is_vae", False)
 
         y_pred = Scorers.check_if_tuple(y_pred)
+
+        if nn_model:
+            nn = NeuralNetworkMethods()
+
+        if is_vae:
+            if len(y_pred.shape) < 3:
+                y_pred = y_pred.reshape((y_true.shape[0], y_true.shape[1], 2))
+            y_pred = nn.decode_binary_multilab(y_pred)
+
         y_true_masked = y_true[missing_mask]
         y_pred_masked = y_pred[missing_mask]
 
         if nn_model:
-            nn = NeuralNetworkMethods()
             y_pred_masked_decoded = nn.decode_masked(y_pred_masked)
         else:
             y_pred_masked_decoded = y_pred_masked
@@ -340,8 +367,17 @@ class Scorers:
         # Otherwise default is all missing values (array all True).
         missing_mask = kwargs.get("missing_mask")
         testing = kwargs.get("testing", False)
+        is_vae = kwargs.get("is_vae", False)
 
         y_pred = Scorers.check_if_tuple(y_pred)
+
+        nn = NeuralNetworkMethods()
+
+        if is_vae:
+            if len(y_pred.shape) < 3:
+                y_pred = y_pred.reshape((y_true.shape[0], y_true.shape[1], 2))
+            y_pred = nn.decode_binary_multilab(y_pred)
+
         y_true_masked = y_true[missing_mask]
         y_pred_masked = y_pred[missing_mask]
 
@@ -369,8 +405,17 @@ class Scorers:
         # Otherwise default is all missing values (array all True).
         missing_mask = kwargs.get("missing_mask")
         testing = kwargs.get("testing", False)
+        is_vae = kwargs.get("is_vae", False)
 
         y_pred = Scorers.check_if_tuple(y_pred)
+
+        nn = NeuralNetworkMethods()
+
+        if is_vae:
+            if len(y_pred.shape) < 3:
+                y_pred = y_pred.reshape((y_true.shape[0], y_true.shape[1], 2))
+            y_pred = nn.decode_binary_multilab(y_pred)
+
         y_true_masked = y_true[missing_mask]
         y_pred_masked = y_pred[missing_mask]
 
@@ -403,28 +448,35 @@ class Scorers:
                 scorers["accuracy"] = make_scorer(
                     cls.accuracy_scorer,
                     missing_mask=missing_mask,
+                    is_vae=is_vae,
                     testing=testing,
                 )
             elif item.lower() == "auc_macro":
                 scorers["auc_macro"] = make_scorer(
-                    cls.auc_macro, missing_mask=missing_mask, testing=testing
+                    cls.auc_macro,
+                    missing_mask=missing_mask,
+                    is_vae=is_vae,
+                    testing=testing,
                 )
             elif item.lower() == "auc_micro":
                 scorers["auc_micro"] = make_scorer(
                     cls.auc_micro,
                     missing_mask=missing_mask,
+                    is_vae=is_vae,
                     testing=testing,
                 )
             elif item.lower() == "precision_recall_macro":
                 scorers["precision_recall_macro"] = make_scorer(
                     cls.pr_macro,
                     missing_mask=missing_mask,
+                    is_vae=is_vae,
                     testing=testing,
                 )
             elif item.lower() == "precision_recall_micro":
                 scorers["precision_recall_micro"] = make_scorer(
                     cls.pr_micro,
                     missing_mask=missing_mask,
+                    is_vae=is_vae,
                     testing=testing,
                 )
             else:
@@ -436,17 +488,27 @@ class Scorers:
         # Get missing mask if provided.
         # Otherwise default is all missing values (array all True).
         missing_mask = kwargs.get("missing_mask", np.ones(y_true.shape, dtype=bool))
-
+        is_vae = kwargs.get("is_vae", False)
+        nn_model = kwargs.get("nn_model", True)
         testing = kwargs.get("testing", False)
+
+        if nn_model:
+            nn = NeuralNetworkMethods()
+
 
         # VAE has tuple output.
         if isinstance(y_pred, tuple):
             y_pred = y_pred[0]
 
+        if is_vae:
+            if len(y_pred.shape) < 3:
+                y_pred = y_pred.reshape((y_true.shape[0], y_true.shape[1], 2))
+
+            y_pred = nn.decode_binary_multilab(y_pred)
+
         y_true_masked = y_true[missing_mask]
         y_pred_masked = y_pred[missing_mask]
 
-        nn = NeuralNetworkMethods()
         y_pred_masked_decoded = nn.decode_masked(y_pred_masked)
 
         roc_auc = Scorers.compute_roc_auc_micro_macro(
