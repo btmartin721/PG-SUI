@@ -273,7 +273,11 @@ class Plotting:
 
         try:
             g = g.map_diag(
-                sns.kdeplot, shade=True, palette="crest", alpha=0.2, color="red"
+                sns.kdeplot,
+                shade=True,
+                palette="crest",
+                alpha=0.2,
+                color="red",
             )
         except np.linalg.LinAlgError as err:
             if "singular matrix" in str(err).lower():
@@ -356,7 +360,9 @@ class Plotting:
         ax = axes[0, 1]
 
         ax.set_title("Per-Locus")
-        ax.barh(range(genotype_data.num_snps), loc, color=bar_color, height=1.0)
+        ax.barh(
+            range(genotype_data.num_snps), loc, color=bar_color, height=1.0
+        )
         if not zoom:
             ax.set_xlim([0, 1])
         ax.set_ylabel("Locus")
@@ -552,13 +558,19 @@ class Plotting:
         os.makedirs(report_path, exist_ok=True)
 
         if n_axes > 3:
-            raise ValueError(">3 axes is not supported; n_axes must be either 2 or 3.")
+            raise ValueError(
+                ">3 axes is not supported; n_axes must be either 2 or 3."
+            )
         if n_axes < 2:
-            raise ValueError("<2 axes is not supported; n_axes must be either 2 or 3.")
+            raise ValueError(
+                "<2 axes is not supported; n_axes must be either 2 or 3."
+            )
 
         imputer = imputer_object.imputed
 
-        df = misc.validate_input_type(imputer.genotypes012_df, return_type="df")
+        df = misc.validate_input_type(
+            imputer.genotypes012_df, return_type="df"
+        )
 
         original_df = misc.validate_input_type(
             original_genotype_data.genotypes012_df, return_type="df"
@@ -674,7 +686,7 @@ class Plotting:
         Raises:
             ValueError: nn_method must be either 'NLPCA', 'UBP', or 'VAE'.
         """
-        if nn_method == "NLPCA" or nn_method == "VAE":
+        if nn_method == "NLPCA" or nn_method == "VAE" or nn_method == "SAE":
             title = nn_method
             fn = f"histplot_{nn_method}.pdf"
 
@@ -690,7 +702,9 @@ class Plotting:
             fig.tight_layout(h_pad=3.0, w_pad=3.0)
             history = lod[0]
 
-            acctrain = "categorical_accuracy" if nn_method == "NLPCA" else "accuracy"
+            acctrain = (
+                "categorical_accuracy" if nn_method == "NLPCA" else "accuracy"
+            )
 
             if nn_method == "VAE":
                 accval = "val_accuracy"
@@ -698,6 +712,10 @@ class Plotting:
                 kl_loss = "kl_loss"
                 val_recon_loss = "val_reconstruction_loss"
                 val_kl_loss = "val_kl_loss"
+                lossval = "val_loss"
+
+            elif nn_method == "SAE":
+                accval = "val_accuracy"
                 lossval = "val_loss"
 
             # Plot train accuracy
@@ -709,14 +727,12 @@ class Plotting:
             ax1.set_yticks([0.0, 0.25, 0.5, 0.75, 1.0])
 
             labels = ["Train"]
-            if nn_method == "VAE":
+            if nn_method == "VAE" or nn_method == "SAE":
                 # Plot validation accuracy
                 ax1.plot(history[accval])
                 labels.append("Validation")
 
             ax1.legend(labels, loc="best")
-
-            loss_type = "Binary" if nn_method == "VAE" else "Categorical"
 
             # Plot model loss
             if nn_method == "VAE":
@@ -730,6 +746,7 @@ class Plotting:
                 ax3.set_title("KL Divergence Loss")
                 ax3.set_ylabel("Loss")
                 ax3.set_xlabel("Epoch")
+                ax3.legend(labels, loc="best")
 
                 # Total Loss (Reconstruction Loss + KL Loss)
                 ax4.plot(history["loss"])
@@ -737,16 +754,18 @@ class Plotting:
                 ax4.set_title("Total Loss (Recon. + KL)")
                 ax4.set_ylabel("Loss")
                 ax4.set_xlabel("Epoch")
+                ax4.legend(labels, loc="best")
+
             else:
                 ax2.plot(history["loss"])
+
+                if nn_method == "SAE":
+                    ax2.plot(history[lossval])
 
             ax2.set_title(f"Reconstruction Loss")
             ax2.set_ylabel(f"Loss")
             ax2.set_xlabel("Epoch")
-
             ax2.legend(labels, loc="best")
-            ax3.legend(labels, loc="best")
-            ax4.legend(labels, loc="best")
 
             fig.savefig(fn, bbox_inches="tight")
 
