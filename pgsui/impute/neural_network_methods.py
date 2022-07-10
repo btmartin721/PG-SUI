@@ -32,7 +32,9 @@ tf.get_logger().setLevel(logging.ERROR)
 
 # Monkey patching deprecation utils to supress warnings.
 # noinspection PyUnusedLocal
-def deprecated(date, instructions, warn_once=True):  # pylint: disable=unused-argument
+def deprecated(
+    date, instructions, warn_once=True
+):  # pylint: disable=unused-argument
     def deprecated_wrapper(func):
         return func
 
@@ -55,6 +57,7 @@ class DisabledCV:
 
 # For VAE. Necessary to initialize outside of class for use with tf.function decorator.
 cce = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
+cce_proba = tf.keras.losses.CategoricalCrossentropy()
 cca = tf.keras.metrics.CategoricalAccuracy()
 ba = tf.keras.metrics.BinaryAccuracy()
 bce = tf.keras.losses.BinaryCrossentropy()
@@ -121,11 +124,37 @@ class NeuralNetworkMethods:
             Xt[row] = [mappings[enc] for enc in X[row]]
         return Xt
 
+    @staticmethod
+    def encode_vae(X):
+        """Convert 012-encoded data to one-hot encodings.
+        Args:
+            X (numpy.ndarray): Input array with 012-encoded data and -9 as the missing data value.
+        Returns:
+            pandas.DataFrame: One-hot encoded data, ignoring missing values (np.nan).
+        """
+        Xt = np.zeros(shape=(X.shape[0], X.shape[1], 3))
+        mappings = {
+            0: [1.0, 0.0, 0.0, 0.0],
+            1: [0.0, 1.0, 0.0, 0.0],
+            2: [0.0, 0.0, 1.0, 0.0],
+            3: [0.0, 0.0, 0.0, 1.0],
+            4: [0.5, 0.5, 0.0, 0.0],
+            5: [0.5, 0.0, 0.5, 0.0],
+            6: [0.5, 0.0, 0.0, 0.5],
+            7: [0.0, 0.5, 0.5, 0.0],
+            8: [0.0, 0.5, 0.0, 0.5],
+            9: [0.0, 0.0, 0.5, 0.5],
+            -9: [np.nan, np.nan, np.nan, np.nan],
+        }
+        for row in np.arange(X.shape[0]):
+            Xt[row] = [mappings[enc] for enc in X[row]]
+        return Xt
+
     @classmethod
     def decode_masked(cls, y):
         """Evaluate model predictions by decoding from one-hot encoding to 012-encoded format.
 
-        Gets the index of the highest predicted value to obtain the 012-encodings.
+        Gets the index of the highest predicted value to obtain the 012-encodings or integer encodings.
 
         Calucalates highest predicted value for each row vector and each class, setting the most likely class to 1.0.
 
@@ -141,6 +170,10 @@ class NeuralNetworkMethods:
         Xt = np.apply_along_axis(cls.mle, axis=-1, arr=Xprob)
         Xpred = np.argmax(Xt, axis=-1)
         return Xpred
+
+    @classmethod
+    def decode_integer(cls, y):
+        Xprob = y
 
     @classmethod
     def decode_binary_multilab(cls, y, missing_val=-1):
@@ -249,7 +282,9 @@ class NeuralNetworkMethods:
         for i, cnt in enumerate(col_classes):
             start_idx = int(sum(col_classes[0:i]))
             col_completed = complete_encoded[:, start_idx : start_idx + cnt]
-            mle_completed = np.apply_along_axis(cls.mle, axis=1, arr=col_completed)
+            mle_completed = np.apply_along_axis(
+                cls.mle, axis=1, arr=col_completed
+            )
 
             if mle_complete is None:
                 mle_complete = mle_completed
@@ -274,7 +309,9 @@ class NeuralNetworkMethods:
 
         # If not all integers
         elif isinstance(hidden_layer_sizes, list):
-            if not all([isinstance(x, (str, int)) for x in hidden_layer_sizes]):
+            if not all(
+                [isinstance(x, (str, int)) for x in hidden_layer_sizes]
+            ):
                 ls = list(set([type(item) for item in hidden_layer_sizes]))
                 raise TypeError(
                     f"Variable hidden_layer_sizes must either be None, "
@@ -290,7 +327,8 @@ class NeuralNetworkMethods:
             )
 
         assert (
-            num_hidden_layers == len(hidden_layer_sizes) and num_hidden_layers > 0
+            num_hidden_layers == len(hidden_layer_sizes)
+            and num_hidden_layers > 0
         ), "num_hidden_layers must be the length of hidden_layer_sizes."
 
         return hidden_layer_sizes
@@ -315,7 +353,9 @@ class NeuralNetworkMethods:
         """
         layers = list()
         if not isinstance(hl_func, list):
-            raise TypeError(f"hl_func must be of type list, but got {type(hl_func)}.")
+            raise TypeError(
+                f"hl_func must be of type list, but got {type(hl_func)}."
+            )
 
         units = n_dims
         for func in hl_func:
@@ -323,6 +363,8 @@ class NeuralNetworkMethods:
                 units = round((units + n_components) / 2)
             elif func == "sqrt":
                 units = round(math.sqrt(units))
+                print(units)
+                sys.exit()
             elif func == "log2":
                 units = round(math.log(units, 2))
             elif isinstance(func, int):
@@ -335,6 +377,9 @@ class NeuralNetworkMethods:
                 )
 
             if units <= n_components:
+                print(
+                    f"WARNING: hidden_layer_size reduction became less than n_components. Using only {len(layers)} hidden layers."
+                )
                 break
 
             assert units > 0 and units < n_dims, (
@@ -343,6 +388,10 @@ class NeuralNetworkMethods:
             )
 
             layers.append(units)
+
+        assert (
+            layers
+        ), "There was an error setting hidden layer sizes. Size list is empty. It is possible that the first 'sqrt' reduction caused units to be <= n_components."
 
         if not vae:
             layers.reverse()
@@ -445,11 +494,11 @@ class NeuralNetworkMethods:
             else:
                 sample_weight_batch = None
 
-                v = tf.Variable(
-                    tf.zeros([batch_size, n_components]),
-                    trainable=trainable,
-                    dtype=tf.float32,
-                )
+            v = tf.Variable(
+                tf.zeros([batch_size, n_components]),
+                trainable=trainable,
+                dtype=tf.float32,
+            )
 
             # Assign current batch to tf.Variable v.
             v.assign(v_batch)
@@ -533,8 +582,8 @@ class NeuralNetworkMethods:
             opt = tf.keras.optimizers.RMSProp
 
         if vae:
-            loss = NeuralNetworkMethods.make_masked_binary_crossentropy()
-            metrics = [NeuralNetworkMethods.make_masked_binary_accuracy()]
+            loss = NeuralNetworkMethods.make_masked_categorical_crossentropy()
+            metrics = [NeuralNetworkMethods.make_masked_categorical_accuracy()]
 
         else:
             # Doing grid search. Params are callables.
@@ -549,7 +598,7 @@ class NeuralNetworkMethods:
         }
 
     @staticmethod
-    def init_weights(self, dim1, dim2, w_mean=0, w_stddev=0.01):
+    def init_weights(dim1, dim2, w_mean=0, w_stddev=0.01):
         """Initialize random weights to use with the model.
 
         Args:
@@ -611,7 +660,9 @@ class NeuralNetworkMethods:
                 float: Mean squared error loss value with missing data masked.
             """
             s = tf.shape(y_true)
-            y_true = tf.reshape(y_true, shape=[s[0], s[1] // num_classes, num_classes])
+            y_true = tf.reshape(
+                y_true, shape=[s[0], s[1] // num_classes, num_classes]
+            )
 
             y_true_masked = tf.boolean_mask(
                 y_true, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
@@ -629,7 +680,11 @@ class NeuralNetworkMethods:
             else:
                 sample_weight_masked = None
 
-            return ba(y_true_masked, y_pred_masked, sample_weight=sample_weight_masked)
+            return ba(
+                y_true_masked,
+                y_pred_masked,
+                sample_weight=sample_weight_masked,
+            )
 
         return masked_binary_accuracy
 
@@ -658,7 +713,9 @@ class NeuralNetworkMethods:
                 float: Mean squared error loss value with missing data masked.
             """
             s = tf.shape(y_true)
-            y_true = tf.reshape(y_true, shape=[s[0], s[1] // num_classes, num_classes])
+            y_true = tf.reshape(
+                y_true, shape=[s[0], s[1] // num_classes, num_classes]
+            )
 
             # Mask out missing values.
             y_true_masked = tf.boolean_mask(
@@ -677,7 +734,11 @@ class NeuralNetworkMethods:
             else:
                 sample_weight_masked = None
 
-            return bce(y_true_masked, y_pred_masked, sample_weight=sample_weight_masked)
+            return bce(
+                y_true_masked,
+                y_pred_masked,
+                sample_weight=sample_weight_masked,
+            )
 
         return masked_binary_crossentropy
 
@@ -725,7 +786,9 @@ class NeuralNetworkMethods:
         """
 
         # @tf.function
-        def masked_categorical_crossentropy(y_true, y_pred, sample_weight=None):
+        def masked_categorical_crossentropy(
+            y_true, y_pred, sample_weight=None
+        ):
             """Custom loss function for neural network model with missing mask.
             Ignores missing data in the calculation of the loss function.
 
@@ -754,13 +817,19 @@ class NeuralNetworkMethods:
             else:
                 sample_weight_masked = None
 
-            return cce(y_true_masked, y_pred_masked, sample_weight=sample_weight_masked)
+            return cce_proba(
+                y_true_masked,
+                y_pred_masked,
+                sample_weight=sample_weight_masked,
+            )
 
         return masked_categorical_crossentropy
 
     @staticmethod
     def kl_divergence(z_mean, z_log_var, kl_weight=0.5):
-        kl_loss = -0.5 * (1 + z_log_var - tf.square(z_mean) - tf.exp(z_log_var))
+        kl_loss = -0.5 * (
+            1 + z_log_var - tf.square(z_mean) - tf.exp(z_log_var)
+        )
         return tf.reduce_mean(tf.reduce_sum(kl_loss, axis=-1))
 
         # Another way of doing it.
