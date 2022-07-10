@@ -12,6 +12,7 @@ import toyplot as tp
 import toytree as tt
 
 from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.impute import SimpleImputer
 
 # Custom imports
 try:
@@ -181,6 +182,18 @@ class ImputePhylo(GenotypeData):
 
         else:
             self.imputed = self.impute_phylo(tree, data, q, site_rates)
+
+    @property
+    def genotypes012_df(self):
+        return self.imputed.genotypes012_df
+
+    @property
+    def genotypes012_array(self):
+        return self.imputed.genotypes012_array
+
+    @property
+    def genotypes012_list(self):
+        return self.imputed.genotypes012_list
 
     def impute_phylo(
         self,
@@ -799,6 +812,7 @@ class ImputePhylo(GenotypeData):
         ret = iupac[char]
         return ret
 
+
 class ImputeAlleleFreq(GenotypeData):
     """Impute missing data by global allele frequency. Population IDs can be sepcified with the pops argument. if pops is None, then imputation is by global allele frequency. If pops is not None, then imputation is by population-wise allele frequency. A list of population IDs in the appropriate format can be obtained from the GenotypeData object as GenotypeData.populations.
 
@@ -915,11 +929,17 @@ class ImputeAlleleFreq(GenotypeData):
         if self.validation_mode == False:
             imputed012, self.valid_cols = self.fit_predict(gt_list)
 
-            imputed_filename = genotype_data.decode_imputed(
-                imputed012, write_output=True, prefix=prefix
-            )
-
             ft = genotype_data.filetype
+
+            if ft != "012":
+                imputed_filename = genotype_data.decode_imputed(
+                    imputed012, write_output=True, prefix=prefix
+                )
+            else:
+                imputed_filename = f"{prefix}_012.csv"
+                imp_df = pd.DataFrame(imputed012)
+                imp_df.insert(0, "sampleID", genotype_data.samples)
+                imp_df.to_csv(imputed_filename, index=False, header=False)
 
             if ft.lower().startswith("structure") and ft.lower().endswith(
                 "row"
@@ -940,6 +960,18 @@ class ImputeAlleleFreq(GenotypeData):
 
         else:
             self.imputed, self.valid_cols = self.fit_predict(gt_list)
+
+    @property
+    def genotypes012_df(self):
+        return self.imputed.genotypes012_df
+
+    @property
+    def genotypes012_array(self):
+        return self.imputed.genotypes012_array
+
+    @property
+    def genotypes012_list(self):
+        return self.imputed.genotypes012_list
 
     def fit_predict(
         self, X: List[List[int]]
@@ -1019,7 +1051,9 @@ class ImputeAlleleFreq(GenotypeData):
         else:
             # Impute global mode.
             # No-loop method was faster for global.
-            data = df.apply(lambda x: x.fillna(x.mode().iloc[0]), axis=1)
+            imp = SimpleImputer(strategy="most_frequent")
+            data = pd.DataFrame(imp.fit_transform(df))
+            # data = df.apply(lambda x: x.fillna(x.mode().iloc[0]), axis=1)
 
         if self.iterative_mode:
             data = data.astype(dtype="float32")
@@ -1184,6 +1218,7 @@ class ImputeNMF(GenotypeData):
                 siterates_iqtree=genotype_data.siterates_iqtree,
                 verbose=False,
             )
+
         else:
             self.imputed = pd.DataFrame(self.fit_predict(X))
             if self.output_format is not None:
@@ -1196,6 +1231,18 @@ class ImputeNMF(GenotypeData):
 
             if write_output:
                 self.write2file(self.imputed)
+
+    @property
+    def genotypes012_df(self):
+        return self.imputed.genotypes012_df
+
+    @property
+    def genotypes012_array(self):
+        return self.imputed.genotypes012_array
+
+    @property
+    def genotypes012_list(self):
+        return self.imputed.genotypes012_list
 
     def fit_predict(self, X):
         # imputation

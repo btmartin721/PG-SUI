@@ -57,6 +57,8 @@ These four "simple" imputation methods can be used as standalone imputers, as th
 + numpy == 1.20
 + scipy >= 1.6.2 and < 1.7.0
 + matplotlib
++ plotly
++ kaleido
 + seaborn
 + jupyterlab
 + tqdm
@@ -81,7 +83,10 @@ conda install matplotlib seaborn jupyterlab scikit-learn=1.0 tqdm pandas=1.2.5 n
 # Only works if using Intel CPUs; speeds up processing
 conda install scikit-learn-intelex
 
-conda install -c conda-forge toytree
+conda install -c conda-forge toytree kaleido
+
+# For PCA plots.
+conda install -c plotly plotly
 
 # For genetic algorithm plotting functions
 pip install sklearn-genetic-opt[all]

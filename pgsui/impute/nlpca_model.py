@@ -25,9 +25,7 @@ tf.get_logger().setLevel(logging.ERROR)
 
 # Monkey patching deprecation utils to supress warnings.
 # noinspection PyUnusedLocal
-def deprecated(
-    date, instructions, warn_once=True
-):  # pylint: disable=unused-argument
+def deprecated(date, instructions, warn_once=True):  # pylint: disable=unused-argument
     def deprecated_wrapper(func):
         return func
 

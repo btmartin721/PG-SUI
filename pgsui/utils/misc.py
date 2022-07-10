@@ -117,9 +117,9 @@ def generate_random_dataset(
             "must be cast-able to type float"
         )
 
-    X = np.random.randint(min_value, max_value + 1, size=(nrows, ncols)).astype(
-        float
-    )
+    X = np.random.randint(
+        min_value, max_value + 1, size=(nrows, ncols)
+    ).astype(float)
     for i in range(X.shape[1]):
         drop_rate = int(
             np.random.choice(
@@ -253,6 +253,65 @@ def generate_012_genotypes(
     )
 
     return X
+
+
+def _remove_nonbiallelic(df, cv=5):
+    """Remove non-biallelic sites from pandas.DataFrame.
+
+    Remove sites that do not have both 0 and 2 encoded values in a column and if any of the allele counts is less than the number of cross-validation folds.
+
+    Args:
+        df (pandas.DataFrame): DataFrame with 012-encoded genotypes.
+
+    Returns:
+        pandas.DataFrame: DataFrame with non-biallelic sites dropped.
+    """
+    df_cp = df.copy()
+    bad_cols = list()
+    if pd.__version__[0] == 0:
+        for col in df_cp.columns:
+            if (
+                not df_cp[col].isin([0.0]).any()
+                or not df_cp[col].isin([2.0]).any()
+            ):
+                bad_cols.append(col)
+
+            elif len(df_cp[df_cp[col] == 0.0]) < cv:
+                bad_cols.append(col)
+
+            elif df_cp[col].isin([1.0]).any():
+                if len(df_cp[df_cp[col] == 1]) < cv:
+                    bad_cols.append(col)
+
+            elif len(df_cp[df_cp[col] == 2.0]) < cv:
+                bad_cols.append(col)
+
+    # pandas 1.X.X
+    else:
+        for col in df_cp.columns:
+            if 0.0 not in df[col].unique() and 2.0 not in df[col].unique():
+                bad_cols.append(col)
+
+            elif len(df_cp[df_cp[col] == 0.0]) < cv:
+                bad_cols.append(col)
+
+            elif 1.0 in df_cp[col].unique():
+                if len(df_cp[df_cp[col] == 1.0]) < cv:
+                    bad_cols.append(col)
+
+            elif len(df_cp[df_cp[col] == 2.0]) < cv:
+                bad_cols.append(col)
+
+    if bad_cols:
+        df_cp.drop(bad_cols, axis=1, inplace=True)
+
+        print(
+            f"{len(bad_cols)} columns removed for being non-biallelic or "
+            f"having genotype counts < number of cross-validation "
+            f"folds\nSubsetting from {len(df_cp.columns)} remaining columns\n"
+        )
+
+    return df_cp
 
 
 def get_indices(l):

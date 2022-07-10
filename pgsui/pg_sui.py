@@ -10,6 +10,8 @@ import scipy.stats as stats
 
 from sklearn_genetic.space import Continuous, Categorical, Integer
 
+# from pgsui.impute.estimators import ImputeStandardAutoEncoder
+
 # from pgsui import GenotypeData
 from read_input.read_input import GenotypeData
 from impute.estimators import (
@@ -17,8 +19,10 @@ from impute.estimators import (
     ImputeUBP,
     ImputeRandomForest,
     ImputeVAE,
+    ImputeStandardAutoEncoder,
 )
-from impute.simple_imputers import ImputePhylo
+from impute.simple_imputers import ImputePhylo, ImputeAlleleFreq
+from impute.plotting import Plotting
 
 # from read_input.read_input import GenotypeData
 # from impute.estimators import *
@@ -88,11 +92,13 @@ def main():
             popmapfile=args.popmap,
             guidetree=args.treefile,
             qmatrix_iqtree=args.iqtree,
-            siterates_iqtree="pgsui/example_data/trees/test_n10.rate",
+            siterates_iqtree="pgsui/example_data/trees/test_n100.rate",
         )
 
+    data.missingness_reports(prefix=args.prefix, plot_format="png")
+
     # For GridSearchCV. Generate parameters to sample from.
-    learning_rate = [float(10) ** x for x in np.arange(-4, 0)]
+    learning_rate = [float(10) ** x for x in np.arange(-5, -1)]
     l1_penalty = [float(10) ** x for x in np.arange(-6, -1)]
     l1_penalty.append(0.0)
     l2_penalty = [float(10) ** x for x in np.arange(-6, -1)]
@@ -100,48 +106,93 @@ def main():
     hidden_activation = ["elu", "relu"]
     num_hidden_layers = [1, 2, 3, 4, 5]
     hidden_layer_sizes = ["sqrt", "midpoint"]
-    n_components = [2, 3]
-    dropout_rate = [round(x, 1) for x in np.arange(0.0, 1.0, 0.1)]
-    batch_size = [16, 32, 48, 64]
+    n_components = [2, 4, 6, 8, 10, 20, 30]
+    dropout_rate = [0.0, 0.2, 0.4]
+    # batch_size = [16, 32, 48, 64]
     optimizer = ["adam", "sgd", "adagrad"]
 
     # Some are commented out for testing purposes.
     grid_params = {
         # "learning_rate": learning_rate,
         # "l1_penalty": l1_penalty,
-        "l2_penalty": l2_penalty,
-        # "hidden_activation": hidden_activation,
+        # "l2_penalty": l2_penalty,
         # "hidden_layer_sizes": hidden_layer_sizes,
-        "n_components": n_components,
-        # "dropout_rate": dropout_rate,
-        # "batch_size": batch_size,
+        # "n_components": n_components,
+        "dropout_rate": dropout_rate,
         # "optimizer": optimizer,
+        # "num_hidden_layers": num_hidden_layers,
+        "hidden_activation": hidden_activation,
     }
 
-    ubp = ImputeUBP(
+    vae = ImputeVAE(
         data,
         disable_progressbar=False,
-        cv=3,
+        epochs=100,
         column_subset=1.0,
-        validation_split=0.0,
-        learning_rate=0.1,
-        num_hidden_layers=1,
+        learning_rate=0.01,
+        num_hidden_layers=2,
+        hidden_layer_sizes="midpoint",
         verbose=1,
         dropout_rate=0.2,
-        hidden_activation="elu",
-        batch_size=64,
-        l1_penalty=1e-6,
+        hidden_activation="relu",
+        batch_size=32,
+        l1_penalty=0.0,
         l2_penalty=1e-6,
-        gridparams=grid_params,
+        # gridparams=grid_params,
         n_jobs=4,
         grid_iter=5,
         sim_strategy="nonrandom_weighted",
-        sim_prop_missing=0.4,
+        sim_prop_missing=0.5,
         scoring_metric="precision_recall_macro",
-        gridsearch_method="randomized_gridsearch",
+        gridsearch_method="gridsearch",
         early_stop_gen=5,
+        n_components=3,
+        validation_split=0.2,
         # sample_weights={0: 1.0, 1: 0.0, 2: 1.0},
-        # sample_weights="auto",
+    )
+
+    # vae = ImputeNLPCA(
+    #     data,
+    #     disable_progressbar=False,
+    #     epochs=100,
+    #     cv=3,
+    #     column_subset=1.0,
+    #     learning_rate=0.01,
+    #     num_hidden_layers=1,
+    #     hidden_layer_sizes="midpoint",
+    #     verbose=1,
+    #     dropout_rate=0.2,
+    #     hidden_activation="relu",
+    #     batch_size=32,
+    #     l1_penalty=1e-6,
+    #     l2_penalty=1e-6,
+    #     # gridparams=grid_params,
+    #     n_jobs=4,
+    #     grid_iter=5,
+    #     sim_strategy="nonrandom_weighted",
+    #     sim_prop_missing=0.5,
+    #     scoring_metric="precision_recall_macro",
+    #     gridsearch_method="gridsearch",
+    #     early_stop_gen=5,
+    #     n_components=3,
+    #     # sample_weights={0: 1.0, 1: 0.0, 2: 1.0},
+    #     # sample_weights="auto",
+    # )
+
+    # af_glb = ImputeAlleleFreq(genotype_data=data)
+
+    # phylo = ImputePhylo(genotype_data=data)
+    # af_glb = ImputeAlleleFreq(genotype_data=data)
+
+    plotting = Plotting()
+
+    components, model = plotting.run_and_plot_pca(
+        data,
+        vae,
+        plot_format="png",
+        center=True,
+        scale=False,
+        # n_axes=3,
     )
 
 

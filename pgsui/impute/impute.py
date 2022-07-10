@@ -41,18 +41,13 @@ from sklearn_genetic.space import Continuous, Categorical, Integer
 try:
     from .iterative_imputer_gridsearch import IterativeImputerGridSearch
     from .iterative_imputer_fixedparams import IterativeImputerFixedParams
-    from .neural_network_imputers import VAE, UBP
-
+    from .neural_network_imputers import VAE, UBP, SAE
     from ..read_input.read_input import GenotypeData
     from . import simple_imputers
     from ..utils.misc import get_processor_name
     from ..utils.misc import isnotebook
     from ..utils.misc import timer
     from ..data_processing.transformers import (
-        UBPInputTransformer,
-        NNInputTransformer,
-        MLPTargetTransformer,
-        RandomizeMissingTransformer,
         ImputePhyloTransformer,
         ImputeAlleleFreqTransformer,
         ImputeNMFTransformer,
@@ -60,9 +55,10 @@ try:
     )
 except (ModuleNotFoundError, ValueError):
     from impute.iterative_imputer_gridsearch import IterativeImputerGridSearch
-    from impute.iterative_imputer_fixedparams import IterativeImputerFixedParams
-    from impute.neural_network_imputers import VAE, UBP
-
+    from impute.iterative_imputer_fixedparams import (
+        IterativeImputerFixedParams,
+    )
+    from impute.neural_network_imputers import VAE, UBP, SAE
     from read_input.read_input import GenotypeData
     from impute import simple_imputers
     from utils.misc import get_processor_name
@@ -70,10 +66,6 @@ except (ModuleNotFoundError, ValueError):
     from utils.misc import isnotebook
     from utils.misc import timer
     from data_processing.transformers import (
-        UBPInputTransformer,
-        NNInputTransformer,
-        MLPTargetTransformer,
-        RandomizeMissingTransformer,
         ImputePhyloTransformer,
         ImputeAlleleFreqTransformer,
         ImputeNMFTransformer,
@@ -144,9 +136,14 @@ class Impute:
         self.clf_type = clf_type
         self.original_num_cols = None
 
-        if self.clf == VAE or self.clf == UBP:
+        if self.clf == VAE or self.clf == SAE or self.clf == UBP:
             self.algorithm = "nn"
+            if self.clf == VAE:
+                self.using_vae = True
+            else:
+                self.using_vae = False
         else:
+            self.nn_method = None
             self.algorithm = "ii"
 
         try:
@@ -398,7 +395,10 @@ class Impute:
             GenotypeData: GenotypeData object with imputed data.
         """
         imputed_filename = genotype_data.decode_imputed(
-            imp012, write_output=True, prefix=self.prefix
+            imp012,
+            write_output=True,
+            prefix=self.prefix,
+            is_vae=self.using_vae,
         )
 
         ft = genotype_data.filetype
@@ -657,6 +657,7 @@ class Impute:
                     print(f"Doing {self.clf.__name__} grid search...\n")
 
         if self.algorithm == "nn":
+            self.imp_kwargs.pop("str_encodings")
             imputer = self.clf(
                 **self.clf_kwargs,
                 **self.imp_kwargs,
@@ -705,6 +706,7 @@ class Impute:
                             )
 
         if self.algorithm == "ii":
+            # Iterative Imputer.
             del imputer
             del Xt
 
@@ -735,6 +737,7 @@ class Impute:
             del min_score
             gc.collect()
         else:
+            # Using neural network.
             best_params = imputer.best_params_
             df_scores = imputer.best_score_
             df_scores = round(df_scores, 2) * 100
@@ -783,10 +786,14 @@ class Impute:
         if len(df.columns) < original_num_cols:
             final_cols = np.array(df.columns)
 
-        df_chunks = self._df2chunks(df, self.chunk_size)
-        imputed_df = self._impute_df(
-            df_chunks, best_imputer, cols_to_keep=final_cols
-        )
+        if self.algorithm == "nn" and self.column_subset == 1.0:
+            imputed_df = df_imp.copy()
+            df_chunks = None
+        else:
+            df_chunks = self._df2chunks(df, self.chunk_size)
+            imputed_df = self._impute_df(
+                df_chunks, best_imputer, cols_to_keep=final_cols
+            )
 
         lst2del = [df_chunks, df]
         del lst2del
@@ -958,7 +965,9 @@ class Impute:
             if self.clf_type == "classifier":
                 if self.algorithm == "nn":
                     imputer = self.clf(
-                        self.imp_kwargs["genotype_data"], **self.clf_kwargs
+                        self.imp_kwargs["genotype_data"],
+                        disable_progressbar=self.disable_progressbar,
+                        **self.clf_kwargs,
                     )
                     df_imp = pd.DataFrame(
                         imputer.fit_transform(Xchunk),
@@ -1024,14 +1033,18 @@ class Impute:
         params_list = list(filter(lambda i: i[first_key] != -9, params_list))
 
         for k in keys:
-            if all(isinstance(x[k], (int, float)) for x in params_list if x[k]):
+            if all(
+                isinstance(x[k], (int, float)) for x in params_list if x[k]
+            ):
                 if all(isinstance(y[k], int) for y in params_list):
                     best_params[k] = self._average_list_of_dicts(
                         params_list, k, is_int=True
                     )
 
                 elif all(isinstance(z[k], float) for z in params_list):
-                    best_params[k] = self._average_list_of_dicts(params_list, k)
+                    best_params[k] = self._average_list_of_dicts(
+                        params_list, k
+                    )
 
             elif all(isinstance(x[k], (str, bool)) for x in params_list):
                 best_params[k] = self._mode_list_of_dicts(params_list, k)
@@ -1079,64 +1092,6 @@ class Impute:
         else:
             return sum(d[k] for d in l) / len(l)
 
-    def _remove_nonbiallelic(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Remove non-biallelic sites from pandas.DataFrame.
-
-        Remove sites that do not have both 0 and 2 encoded values in a column and if any of the allele counts is less than the number of cross-validation folds.
-
-        Args:
-            df (pandas.DataFrame): DataFrame with 012-encoded genotypes.
-
-        Returns:
-            pandas.DataFrame: DataFrame with non-biallelic sites dropped.
-        """
-        df_cp = df.copy()
-        bad_cols = list()
-        if pd.__version__[0] == 0:
-            for col in df_cp.columns:
-                if (
-                    not df_cp[col].isin([0.0]).any()
-                    or not df_cp[col].isin([2.0]).any()
-                ):
-                    bad_cols.append(col)
-
-                elif len(df_cp[df_cp[col] == 0.0]) < self.cv:
-                    bad_cols.append(col)
-
-                elif df_cp[col].isin([1.0]).any():
-                    if len(df_cp[df_cp[col] == 1]) < self.cv:
-                        bad_cols.append(col)
-
-                elif len(df_cp[df_cp[col] == 2.0]) < self.cv:
-                    bad_cols.append(col)
-
-        # pandas 1.X.X
-        else:
-            for col in df_cp.columns:
-                if 0.0 not in df[col].unique() and 2.0 not in df[col].unique():
-                    bad_cols.append(col)
-
-                elif len(df_cp[df_cp[col] == 0.0]) < self.cv:
-                    bad_cols.append(col)
-
-                elif 1.0 in df_cp[col].unique():
-                    if len(df_cp[df_cp[col] == 1.0]) < self.cv:
-                        bad_cols.append(col)
-
-                elif len(df_cp[df_cp[col] == 2.0]) < self.cv:
-                    bad_cols.append(col)
-
-        if bad_cols:
-            df_cp.drop(bad_cols, axis=1, inplace=True)
-
-            print(
-                f"{len(bad_cols)} columns removed for being non-biallelic or "
-                f"having genotype counts < number of cross-validation "
-                f"folds\nSubsetting from {len(df_cp.columns)} remaining columns\n"
-            )
-
-        return df_cp
-
     def _gather_impute_settings(
         self, kwargs: Dict[str, Any]
     ) -> Tuple[
@@ -1177,7 +1132,7 @@ class Impute:
         n_jobs = kwargs.pop("n_jobs", 1)
         cv = kwargs.pop("cv", None)
         column_subset = kwargs.pop("column_subset", None)
-        chunk_size = kwargs.pop("chunk_size", None)
+        chunk_size = kwargs.pop("chunk_size", 1.0)
         do_validation = kwargs.pop("do_validation", False)
         verbose = kwargs.get("verbose", 0)
         disable_progressbar = kwargs.get("disable_progressbar", False)
