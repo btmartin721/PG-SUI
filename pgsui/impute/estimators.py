@@ -1,14 +1,10 @@
 # Standard library imports
 import sys
-from pathlib import Path
 from typing import Optional, Union, List, Dict, Tuple, Any, Callable
 
 # Third-party imports
 import numpy as np
 import pandas as pd
-import toyplot.pdf
-import toyplot as tp
-import toytree as tt
 
 # Scikit-learn imports
 import lightgbm as lgbm
@@ -17,7 +13,6 @@ from sklearn.ensemble import ExtraTreesClassifier
 from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.experimental import enable_iterative_imputer
-from sklearn.impute import SimpleImputer
 from sklearn.linear_model import BayesianRidge
 from sklearn.neighbors import KNeighborsClassifier
 
@@ -26,29 +21,18 @@ try:
     from ..read_input.read_input import GenotypeData
 
     from .impute import Impute
-    from .neural_network_imputers import VAE, UBP
+    from .neural_network_imputers import VAE, UBP, SAE
 
-    from ..utils import misc
     from ..utils.misc import get_processor_name
     from ..utils.misc import isnotebook
-    from ..utils.misc import timer
 except (ModuleNotFoundError, ValueError):
     from read_input.read_input import GenotypeData
 
     from impute.impute import Impute
-    from impute.neural_network_imputers import VAE, UBP
+    from impute.neural_network_imputers import VAE, UBP, SAE
 
-    from utils import misc
     from utils.misc import get_processor_name
     from utils.misc import isnotebook
-    from utils.misc import timer
-
-is_notebook = isnotebook()
-
-if is_notebook:
-    from tqdm.notebook import tqdm as progressbar
-else:
-    from tqdm import tqdm as progressbar
 
 # Requires scikit-learn-intellex package
 if get_processor_name().strip().startswith("Intel"):
@@ -229,7 +213,9 @@ class ImputeKNN(Impute):
 
         super().__init__(self.clf, self.clf_type, kwargs)
 
-        self.imputed, self.best_params = self.fit_predict(genotype_data.genotypes012_df)
+        self.imputed, self.best_params = self.fit_predict(
+            genotype_data.genotypes012_df
+        )
 
 
 class ImputeRandomForest(Impute):
@@ -441,7 +427,9 @@ class ImputeRandomForest(Impute):
 
         super().__init__(self.clf, self.clf_type, kwargs)
 
-        self.imputed, self.best_params = self.fit_predict(genotype_data.genotypes012_df)
+        self.imputed, self.best_params = self.fit_predict(
+            genotype_data.genotypes012_df
+        )
 
 
 class ImputeGradientBoosting(Impute):
@@ -630,7 +618,9 @@ class ImputeGradientBoosting(Impute):
 
         super().__init__(self.clf, self.clf_type, kwargs)
 
-        self.imputed, self.best_params = self.fit_predict(genotype_data.genotypes012_df)
+        self.imputed, self.best_params = self.fit_predict(
+            genotype_data.genotypes012_df
+        )
 
 
 class ImputeBayesianRidge(Impute):
@@ -810,7 +800,9 @@ class ImputeBayesianRidge(Impute):
 
         super().__init__(self.clf, self.clf_type, kwargs)
 
-        self.imputed, self.best_params = self.fit_predict(genotype_data.genotypes012_df)
+        self.imputed, self.best_params = self.fit_predict(
+            genotype_data.genotypes012_df
+        )
 
 
 class ImputeXGBoost(Impute):
@@ -998,7 +990,9 @@ class ImputeXGBoost(Impute):
 
         super().__init__(self.clf, self.clf_type, kwargs)
 
-        self.imputed, self.best_params = self.fit_predict(genotype_data.genotypes012_df)
+        self.imputed, self.best_params = self.fit_predict(
+            genotype_data.genotypes012_df
+        )
 
 
 class ImputeLightGBM(Impute):
@@ -1198,7 +1192,9 @@ class ImputeLightGBM(Impute):
 
         super().__init__(self.clf, self.clf_type, kwargs)
 
-        self.imputed, self.best_params = self.fit_predict(genotype_data.genotypes012_df)
+        self.imputed, self.best_params = self.fit_predict(
+            genotype_data.genotypes012_df
+        )
 
 
 class ImputeVAE(Impute):
@@ -1209,58 +1205,91 @@ class ImputeVAE(Impute):
 
         prefix (str): Prefix for output files. Defaults to "output".
 
-        sim_strategy (str, optional): Strategy to use for simulating missing data. Only used to validate the accuracy of the imputation. The final model will be trained with the non-simulated dataset. Supported options include: "random", "nonrandom", and "nonrandom_weighted". "random" randomly simulates missing data. When set to "nonrandom", branches from ``GenotypeData.guidetree`` will be randomly sampled to generate missing data on descendant nodes. For "nonrandom_weighted", missing data will be placed on nodes proportionally to their branch lengths (e.g., to generate data distributed as might be the case with mutation-disruption of RAD sites). Defaults to "random".
+        gridparams (Dict[str, Any] or None, optional): Dictionary with keys=keyword arguments for the specified estimator and values=lists of parameter values or distributions. If ``gridparams=None``\, a grid search is not performed, otherwise ``gridparams`` will be used to specify parameter ranges or distributions for the grid search. If using ``gridsearch_method="gridsearch"``, then the ``gridparams`` values can be lists of or numpy arrays. If using ``gridsearch_method="randomized_gridsearch"``\, distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). If using the genetic algorithm grid search by setting ``gridsearch_method="genetic_algorithm"``\, the parameters can be specified as ``sklearn_genetic.space`` objects. The grid search will determine the optimal parameters as those that maximize accuracy (or minimize root mean squared error for BayesianRidge regressor). If it takes a long time, run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. Defaults to None (no gridsearch performed).
+
+        validation_split (float, optional): Proportion of training dataset to set aside for loss validation during model training. Defaults to 0.2.
+
+        column_subset (int or float, optional): If float is provided, gets the proportion of the dataset to randomly subset for the grid search or validation. Subsets ``int(n_features * column_subset)`` columns and Should be in the range [0, 1]. It can be small if the grid search or validation takes a long time. If int is provided, subset ``column_subset`` columns. Defaults to 1.0.
+
+        epochs (int, optional): Number of epochs (cycles through the data) to run during training.Defaults to 100.
+
+        batch_size (int, optional): Batch size to train the model with. Model training per epoch is performed over multiple subsets of samples (rows) of size ``batch_size``\. Defaults to 32.
+
+        n_components (int, optional): Number of components (latent dimensions) to compress the input features to. Defaults to 3.
+
+        early_stop_gen (int, optional): Only used with the genetic algorithm grid search option. Stop training early if the model sees ``early_stop_gen`` consecutive generations without improvement to the scoring metric. This can save training time by reducing the number of epochs and generations that are performed. Defaults to 25.
+
+        num_hidden_layers (int, optional): Number of hidden layers to use in the model. Adjust if overfitting or underfitting occurs. Defaults to 1.
+
+        hidden_layer_sizes (str, List[int], List[str], or int, optional): Number of neurons to use in the hidden layers. If string or a list of strings is passed, the strings must be either "midpoint", "sqrt", or "log2". "midpoint" will calculate the midpoint as ``(n_features + n_components) / 2``\. If "sqrt" is supplied, the square root of the number of features will be used to calculate the output units. If "log2" is supplied, the units will be calculated as ``log2(n_features)``\. hidden_layer_sizes will calculate and set the number of output units for each hidden layer. If multiple hidden layers are supplied, each subsequent layer's dimensions are further reduced by the "midpoint", "sqrt", or "log2". E.g., if using ``num_hidden_layers=3`` and ``n_components=2``\, and there are 100 features (columns), the hidden layer sizes for ``midpoint`` will be: [51, 27, 14]. If a single string or integer is supplied, the model will use the same number of output units for each hidden layer. If a list of integers or strings is supplied, the model will use the values supplied in the list. The list length must be equal to the ``num_hidden_layers`` and all hidden layer sizes must be > n_components. Defaults to "midpoint".
+
+        hidden_activation (str, optional): The activation function to use for the hidden layers. See tf.keras.activations for more info. Supported activation functions include: ["elu", "selu", "leaky_relu", "prelu", "relu"]. Each activation function has some advantages and disadvantages and determines the curve and non-linearity of gradient descent. Some are also faster than others. See https://towardsdatascience.com/7-popular-activation-functions-you-should-know-in-deep-learning-and-how-to-use-them-with-keras-and-27b4d838dfe6 for more information. Note that using ``hidden_activation="selu"`` will force ``weights_initializer`` to be "lecun_normal". Defaults to "elu".
+
+        optimizer (str, optional): The optimizer to use with gradient descent. Supported options are: "adam", "sgd", and "adagrad". See tf.keras.optimizers for more info. Defaults to "adam".
+
+        learning_rate (float, optional): The learning rate for the optimizer. Adjust if the loss is learning too slowly or quickly. If you are getting overfitting, it is likely too high, and likewise underfitting can occur when the learning rate is too low. Defaults to 0.01.
+
+        lr_patience (int, optional): Number of epochs without loss improvement to wait before reducing the learning rate. Defaults to 1.0.
+
+        weights_initializer (str, optional): Initializer to use for the model weights. See tf.keras.initializers for more info. Defaults to "glorot_normal".
+
+        l1_penalty (float, optional): L1 regularization penalty to apply. Adjust if the model is over or underfitting. If this value is too high, underfitting can occur, and vice versa. Defaults to 1e-6.
+
+        l2_penalty (float, optional) L2 regularization penalty to apply. If this value is too high, underfitting can occur, and vice versa. Defaults to 1e-6.
+
+        dropout_rate (float, optional): Neuron dropout rate during training. Dropout randomly disables ``dropout_rate`` proportion of neurons during training, which can reduce overfitting. E.g., if dropout_rate is set to 0.2, then 20% of the neurons are randomly dropped out per epoch. Adjust if the model is over or underfitting. Must be a float in the range [0, 1]. . Defaults to 0.2.
+
+        kl_beta (float, optional): Weight to apply to Kullback-Liebler divergence loss. If the latent distribution is not learned well, this weight can be adjusted to adjust how much KL divergence affects the total loss. Should be in the range [0, 1]. If set to 1.0, the KL loss is unweighted. If set to 0.0, the KL loss is negated entirely and does not affect the total loss. Defaults to 1.0.
+
+        sample_weights (str, Dict[int, float], or None, optional): Weights for the 012-encoded classes during training. If None, then does not weight classes. If set to "auto", then class weights are automatically calculated for each column. If a dictionary is passed, it must contain 0, 1, and 2 as the keys and the class weights as the values. E.g., {0: 1.0, 1: 1.0, 2: 1.0}. The dictionary is then used as the overall class weights. If you wanted to prevent the model from learning to predict heterozygotes, for example, you could set the class weights to {0: 1.0, 1: 0.0, 2: 1.0}. Defaults to None (equal weighting).
+
+        gridsearch_method (str, optional): Grid search method to use. Supported options include: {"gridsearch", "randomized_gridsearch", "genetic_algorithm"}. "gridsearch" uses GridSearchCV to test every possible parameter combination. "randomized_gridsearch" picks ``grid_iter`` random combinations of parameters to test. "genetic_algorithm" uses a genetic algorithm via the sklearn-genetic-opt GASearchCV module to do the grid search. If set to None, then does not do a grid search. If doing a grid search, "randomized_search" takes the least amount of time because it does not have to test all parameters. "genetic_algorithm" takes the longest. See the scikit-learn GridSearchCV and RandomizedSearchCV documentation for the "gridsearch" and "randomized_gridsearch" options, and the sklearn-genetic-opt GASearchCV documentation for the "genetic_algorithm" option. Defaults to "gridsearch".
+
+        grid_iter (int, optional): Number of iterations to use for randomized and genetic algorithm grid searches. For randomized grid search, ``grid_iter`` parameter combinations will be randomly sampled. For the genetic algorithm, this determines how many generations the genetic algorithm will run. Defaults to 80.
+
+        scoring_metric (str, optional): Scoring metric to use for the grid search. Supported options include: {"auc_macro", "auc_micro", "precision_recall_macro", "precision_recall_micro", "accuracy"}. Note that all metrics are automatically calculated when doing a grid search, the results of which are logged to a CSV file. However, when refitting following the grid search, the value passed to ``scoring_metric`` is used to select the best parameters. If you wish to choose the best parameters from a different metric, that information will also be in the CSV file. "auc_macro" and "auc_micro" get the AUC (area under curve) score for the ROC (Receiver Operating Characteristic) curve. The ROC curves plot the false positive rate (X-axis) versus the true positive rate (Y-axis) for each 012-encoded class and for the macro and micro averages among classes. The false positive rate is defined as: ``False Positive Rate = False Positives / (False Positives + True Negatives)`` and the true positive rate is defined as ``True Positive Rate = True Positives / (True Positives + False Negatives)``\. Macro averaging places equal importance on each class, whereas the micro average is the global average across all classes. AUC scores allow the ROC curve, and thus the model's classification skill, to be summarized as a single number. "precision_recall_macro" and "precision_recall_micro" create Precision-Recall (PR) curves for each class plus the macro and micro averages among classes. Precision is defined as ``True Positives / (True Positives + False Positives)`` and recall is defined as ``Recall = True Positives / (True Positives + False Negatives)``\. Reviewing both precision and recall is useful in cases where there is an imbalance in the observations between the two classes. For example, if there are many examples of major alleles (class 0) and only a few examples of minor alleles (class 2). PR curves take into account the use the Average Precision (AP) instead of AUC. AUC and AP are similar metrics, but AP summarizes a precision-recall curve as the weighted mean of precisions achieved at each probability threshold, with the increase in recall from the previous threshold used as the weight. On the contrary, AUC uses linear interpolation with the trapezoidal rule to calculate the area under the curve. "accuracy" calculates ``number of correct predictions / total predictions``\, but can often be misleading when used without considering the model's classification skill for each class. Defaults to "auc_macro".
+
+        population_size (int or str, optional): Only used for the genetic algorithm grid search. Size of the initial population to sample randomly generated individuals. If set to "auto", then ``population_size`` is calculated as ``15 * n_parameters``\. If set to an integer, then uses the integer value as ``population_size``\. If you need to speed up the genetic algorithm grid search, try decreasing this parameter. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to "auto".
+
+        tournament_size (int, optional): For genetic algorithm grid search only. Number of individuals to perform tournament selection. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to 3.
+
+        elitism (bool, optional): For genetic algorithm grid search only. If set to True, takes the ``tournament_size`` best solution to the next generation. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to True.
+
+        crossover_probability (float, optional): For genetic algorithm grid search only. Probability of crossover operation between two individuals. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to 0.8.
+
+        mutation_probability (float, optional): For genetic algorithm grid search only. Probability of child mutation. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to 0.2.
+
+        ga_algorithm (str, optional): For genetic algorithm grid search only. Evolutionary algorithm to use. Supported options include: {"eaMuPlusLambda", "eaMuCommaLambda", "eaSimple"}. If you need to speed up the genetic algorithm grid search, try setting ``algorithm`` to "euSimple", at the expense of evolutionary model robustness. See more details in the DEAP algorithms documentation (https://deap.readthedocs.io). Defaults to "eaMuPlusLambda".
+
+        sim_strategy (str, optional): Strategy to use for simulating missing data. Only used to validate the accuracy of the imputation. The final model will be trained with the non-simulated dataset. Supported options include: {"random", "nonrandom", "nonrandom_weighted"}. "random" randomly simulates missing data. When set to "nonrandom", branches from ``GenotypeData.guidetree`` will be randomly sampled to generate missing data on descendant nodes. For "nonrandom_weighted", missing data will be placed on nodes proportionally to their branch lengths (e.g., to generate data distributed as might be the case with mutation-disruption of RAD sites). If using the "nonrandom" or "nonrandom_weighted" options, a guide tree is required to have been initialized in the passed ``genotype_data`` object. Defaults to "random".
 
         sim_prop_missing (float, optional): Proportion of missing data to use with missing data simulation. Defaults to 0.1.
 
-        disable_progressbar (bool): Whether to disable the tqdm progress bar. Useful if you are doing the imputation on e.g. a high-performance computing cluster, where sometimes tqdm does not work correctly. If False, uses tqdm progress bar. If True, does not use tqdm. Defaults to False.
+        disable_progressbar (bool, optional): Whether to disable the tqdm progress bar. Useful if you are doing the imputation on e.g. a high-performance computing cluster, where sometimes tqdm does not work correctly when being written to a file. If False, uses tqdm progress bar. If True, does not use tqdm. Defaults to False.
 
-        chunk_size (int or float, optional): Number of loci for which to perform IterativeImputer at one time. Useful for reducing the memory usage if you are running out of RAM. If integer is specified, selects ``chunk_size`` loci at a time. If a float is specified, selects ``math.ceil(total_loci * chunk_size)`` loci at a time. Defaults to 1.0 (all features).
+        n_jobs (int, optional): Number of parallel jobs to use in the grid search if ``gridparams`` is not None. -1 means use all available processors. Defaults to 1.
 
-        epochs (int): Number of epochs to train the VAE model with. Defaults to 100.
-
-        batch_size (int): Batch size to train the model with.
-
-        recurrent_weight (float): Weight to apply to recurrent network. Defaults to 0.5.
-
-        optimizer (str): Gradient descent optimizer to use. See tf.keras.optimizers for more info. Defaults to "adam".
-
-        dropout_rate (float, optional): Dropout rate during training to reduce overfitting. Must be a float between 0 and 1. Defaults to 0.2.
-
-        hidden_activation (str): Activation function to use for hidden layers. See tf.keras.activations for more info. Defaults to "relu".
-
-        output_activation (str): Activation function to use for output layer. See tf.keras.activations for more info. Defaults to "sigmoid".
-
-        kernel_initializer (str): Initializer to use for initializing model weights. See tf.keras.initializers for more info. Defaults to "glorot_normal".
-
-        l1_penalty (float): L1 regularization penalty to apply. Adjust if overfitting is occurring. Defaults to 0.
-
-        l2_penalty (float): L2 regularization penalty to apply. Adjust if overfitting is occurring. Defaults to 0.
-
-        verbose (int): Verbosity mode, ranging from 0 (=silent) to 2 (=most verbose).
+        verbose (int, optional): Verbosity flag. The higher, the more verbose. Possible values are 0, 1, or 2. 0 = silent, 1 = progress bar, 2 = one line per epoch. Note that the progress bar is not particularly useful when logged to a file, so verbose=0 or verbose=2 is recommended when not running interactively. Setting verbose higher than 0 is useful for initial runs and debugging, but can slow down training. Defaults to 0.
 
     Attributes:
-        clf (sklearn or neural network classifier): Estimator to use.
-
         imputed (GenotypeData): New GenotypeData instance with imputed data.
-
-        best_params (Dict[str, Any]): Best found parameters from grid search. In neural networks this value is None because grid searches are not supported.
+        best_params (Dict[str, Any]): Best found parameters from grid search.
 
     Example:
-        >>>data = GenotypeData(
+        >>> data = GenotypeData(
         >>>    filename="test.str",
         >>>    filetype="structure2rowPopID",
         >>>    guidetree="test.tre",
         >>>    qmatrix_iqtree="test.iqtree"
-        >>>)
+        >>> )
         >>>
-        >>>vae = ImputeVAE(
+        >>> vae = ImputeVAE(
         >>>     genotype_data=data,
-        >>>     cv=5,
-        >>>     learning_rate=0.05,
-        >>>)
+        >>>     learning_rate=0.001,
+        >>>     epochs=200,
+        >>> )
         >>>
-        >>>vae_gtdata = vae.imputed
+        >>> vae_gtdata = vae.imputed
     """
 
     def __init__(
@@ -1269,37 +1298,35 @@ class ImputeVAE(Impute):
         *,
         prefix="output",
         gridparams=None,
-        do_validation=False,
-        column_subset=0.1,
+        validation_split=0.2,
+        column_subset=1.0,
+        epochs=100,
         batch_size=32,
         n_components=3,
         early_stop_gen=25,
-        num_hidden_layers=3,
+        num_hidden_layers=1,
         hidden_layer_sizes="midpoint",
         optimizer="adam",
         hidden_activation="elu",
-        learning_rate=0.1,
-        epochs=100,
+        learning_rate=0.01,
         weights_initializer="glorot_normal",
         l1_penalty=1e-6,
         l2_penalty=1e-6,
         dropout_rate=0.2,
         kl_beta=1.0,
         sample_weights=None,
-        cv=5,
         gridsearch_method="gridsearch",
         grid_iter=80,
+        scoring_metric="auc_macro",
         population_size="auto",
         tournament_size=3,
         elitism=True,
         crossover_probability=0.8,
         mutation_probability=0.2,
         ga_algorithm="eaMuPlusLambda",
-        scoring_metric="auc_macro",
         sim_strategy="random",
         sim_prop_missing=0.1,
         disable_progressbar=False,
-        chunk_size=1.0,
         n_jobs=1,
         verbose=0,
     ):
@@ -1308,6 +1335,167 @@ class ImputeVAE(Impute):
         all_kwargs = locals()
 
         self.clf = VAE
+        self.clf_type = "classifier"
+
+        imp_kwargs = {
+            "str_encodings": {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9},
+        }
+
+        all_kwargs.update(imp_kwargs)
+
+        super().__init__(self.clf, self.clf_type, all_kwargs)
+
+        if genotype_data is None:
+            raise TypeError("genotype_data cannot be NoneType")
+
+        X = genotype_data.int_iupac
+
+        if not isinstance(X, pd.DataFrame):
+            df = pd.DataFrame(X)
+        else:
+            df = X.copy()
+
+        self.imputed, self.best_params = self.fit_predict(df)
+
+
+class ImputeStandardAutoEncoder(Impute):
+    """Class to impute missing data using a standard Autoencoder (SAE) neural network model.
+
+    Args:
+        genotype_data (GenotypeData object): Input data initialized as GenotypeData object. Required positional argument.
+
+        prefix (str): Prefix for output files. Defaults to "output".
+
+        gridparams (Dict[str, Any] or None, optional): Dictionary with keys=keyword arguments for the specified estimator and values=lists of parameter values or distributions. If ``gridparams=None``\, a grid search is not performed, otherwise ``gridparams`` will be used to specify parameter ranges or distributions for the grid search. If using ``gridsearch_method="gridsearch"``, then the ``gridparams`` values can be lists of or numpy arrays. If using ``gridsearch_method="randomized_gridsearch"``\, distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). If using the genetic algorithm grid search by setting ``gridsearch_method="genetic_algorithm"``\, the parameters can be specified as ``sklearn_genetic.space`` objects. The grid search will determine the optimal parameters as those that maximize accuracy (or minimize root mean squared error for BayesianRidge regressor). If it takes a long time, run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. Defaults to None (no gridsearch performed).
+
+        validation_split (float, optional): Proportion of training dataset to set aside for loss validation during model training. Defaults to 0.2.
+
+        column_subset (int or float, optional): If float is provided, gets the proportion of the dataset to randomly subset for the grid search or validation. Subsets ``int(n_features * column_subset)`` columns and Should be in the range [0, 1]. It can be small if the grid search or validation takes a long time. If int is provided, subset ``column_subset`` columns. Defaults to 1.0.
+
+        epochs (int, optional): Number of epochs (cycles through the data) to run during training.Defaults to 100.
+
+        batch_size (int, optional): Batch size to train the model with. Model training per epoch is performed over multiple subsets of samples (rows) of size ``batch_size``\. Defaults to 32.
+
+        n_components (int, optional): Number of components (latent dimensions) to compress the input features to. Defaults to 3.
+
+        early_stop_gen (int, optional): Only used with the genetic algorithm grid search option. Stop training early if the model sees ``early_stop_gen`` consecutive generations without improvement to the scoring metric. This can save training time by reducing the number of epochs and generations that are performed. Defaults to 25.
+
+        num_hidden_layers (int, optional): Number of hidden layers to use in the model. Adjust if overfitting or underfitting occurs. Defaults to 1.
+
+        hidden_layer_sizes (str, List[int], List[str], or int, optional): Number of neurons to use in the hidden layers. If string or a list of strings is passed, the strings must be either "midpoint", "sqrt", or "log2". "midpoint" will calculate the midpoint as ``(n_features + n_components) / 2``\. If "sqrt" is supplied, the square root of the number of features will be used to calculate the output units. If "log2" is supplied, the units will be calculated as ``log2(n_features)``\. hidden_layer_sizes will calculate and set the number of output units for each hidden layer. If multiple hidden layers are supplied, each subsequent layer's dimensions are further reduced by the "midpoint", "sqrt", or "log2". E.g., if using ``num_hidden_layers=3`` and ``n_components=2``\, and there are 100 features (columns), the hidden layer sizes for ``midpoint`` will be: [51, 27, 14]. If a single string or integer is supplied, the model will use the same number of output units for each hidden layer. If a list of integers or strings is supplied, the model will use the values supplied in the list. The list length must be equal to the ``num_hidden_layers`` and all hidden layer sizes must be > n_components. Defaults to "midpoint".
+
+        hidden_activation (str, optional): The activation function to use for the hidden layers. See tf.keras.activations for more info. Supported activation functions include: ["elu", "selu", "leaky_relu", "prelu", "relu"]. Each activation function has some advantages and disadvantages and determines the curve and non-linearity of gradient descent. Some are also faster than others. See https://towardsdatascience.com/7-popular-activation-functions-you-should-know-in-deep-learning-and-how-to-use-them-with-keras-and-27b4d838dfe6 for more information. Note that using ``hidden_activation="selu"`` will force ``weights_initializer`` to be "lecun_normal". Defaults to "elu".
+
+        optimizer (str, optional): The optimizer to use with gradient descent. Supported options are: "adam", "sgd", and "adagrad". See tf.keras.optimizers for more info. Defaults to "adam".
+
+        learning_rate (float, optional): The learning rate for the optimizer. Adjust if the loss is learning too slowly or quickly. If you are getting overfitting, it is likely too high, and likewise underfitting can occur when the learning rate is too low. Defaults to 0.01.
+
+        lr_patience (int, optional): Number of epochs without loss improvement to wait before reducing the learning rate. Defaults to 1.0.
+
+        weights_initializer (str, optional): Initializer to use for the model weights. See tf.keras.initializers for more info. Defaults to "glorot_normal".
+
+        l1_penalty (float, optional): L1 regularization penalty to apply. Adjust if the model is over or underfitting. If this value is too high, underfitting can occur, and vice versa. Defaults to 1e-6.
+
+        l2_penalty (float, optional) L2 regularization penalty to apply. If this value is too high, underfitting can occur, and vice versa. Defaults to 1e-6.
+
+        dropout_rate (float, optional): Neuron dropout rate during training. Dropout randomly disables ``dropout_rate`` proportion of neurons during training, which can reduce overfitting. E.g., if dropout_rate is set to 0.2, then 20% of the neurons are randomly dropped out per epoch. Adjust if the model is over or underfitting. Must be a float in the range [0, 1]. . Defaults to 0.2.
+
+        sample_weights (str, Dict[int, float], or None, optional): Weights for the 012-encoded classes during training. If None, then does not weight classes. If set to "auto", then class weights are automatically calculated for each column. If a dictionary is passed, it must contain 0, 1, and 2 as the keys and the class weights as the values. E.g., {0: 1.0, 1: 1.0, 2: 1.0}. The dictionary is then used as the overall class weights. If you wanted to prevent the model from learning to predict heterozygotes, for example, you could set the class weights to {0: 1.0, 1: 0.0, 2: 1.0}. Defaults to None (equal weighting).
+
+        gridsearch_method (str, optional): Grid search method to use. Supported options include: {"gridsearch", "randomized_gridsearch", "genetic_algorithm"}. "gridsearch" uses GridSearchCV to test every possible parameter combination. "randomized_gridsearch" picks ``grid_iter`` random combinations of parameters to test. "genetic_algorithm" uses a genetic algorithm via the sklearn-genetic-opt GASearchCV module to do the grid search. If set to None, then does not do a grid search. If doing a grid search, "randomized_search" takes the least amount of time because it does not have to test all parameters. "genetic_algorithm" takes the longest. See the scikit-learn GridSearchCV and RandomizedSearchCV documentation for the "gridsearch" and "randomized_gridsearch" options, and the sklearn-genetic-opt GASearchCV documentation for the "genetic_algorithm" option. Defaults to "gridsearch".
+
+        grid_iter (int, optional): Number of iterations to use for randomized and genetic algorithm grid searches. For randomized grid search, ``grid_iter`` parameter combinations will be randomly sampled. For the genetic algorithm, this determines how many generations the genetic algorithm will run. Defaults to 80.
+
+        scoring_metric (str, optional): Scoring metric to use for the grid search. Supported options include: {"auc_macro", "auc_micro", "precision_recall_macro", "precision_recall_micro", "accuracy"}. Note that all metrics are automatically calculated when doing a grid search, the results of which are logged to a CSV file. However, when refitting following the grid search, the value passed to ``scoring_metric`` is used to select the best parameters. If you wish to choose the best parameters from a different metric, that information will also be in the CSV file. "auc_macro" and "auc_micro" get the AUC (area under curve) score for the ROC (Receiver Operating Characteristic) curve. The ROC curves plot the false positive rate (X-axis) versus the true positive rate (Y-axis) for each 012-encoded class and for the macro and micro averages among classes. The false positive rate is defined as: ``False Positive Rate = False Positives / (False Positives + True Negatives)`` and the true positive rate is defined as ``True Positive Rate = True Positives / (True Positives + False Negatives)``\. Macro averaging places equal importance on each class, whereas the micro average is the global average across all classes. AUC scores allow the ROC curve, and thus the model's classification skill, to be summarized as a single number. "precision_recall_macro" and "precision_recall_micro" create Precision-Recall (PR) curves for each class plus the macro and micro averages among classes. Precision is defined as ``True Positives / (True Positives + False Positives)`` and recall is defined as ``Recall = True Positives / (True Positives + False Negatives)``\. Reviewing both precision and recall is useful in cases where there is an imbalance in the observations between the two classes. For example, if there are many examples of major alleles (class 0) and only a few examples of minor alleles (class 2). PR curves take into account the use the Average Precision (AP) instead of AUC. AUC and AP are similar metrics, but AP summarizes a precision-recall curve as the weighted mean of precisions achieved at each probability threshold, with the increase in recall from the previous threshold used as the weight. On the contrary, AUC uses linear interpolation with the trapezoidal rule to calculate the area under the curve. "accuracy" calculates ``number of correct predictions / total predictions``\, but can often be misleading when used without considering the model's classification skill for each class. Defaults to "auc_macro".
+
+        population_size (int or str, optional): Only used for the genetic algorithm grid search. Size of the initial population to sample randomly generated individuals. If set to "auto", then ``population_size`` is calculated as ``15 * n_parameters``\. If set to an integer, then uses the integer value as ``population_size``\. If you need to speed up the genetic algorithm grid search, try decreasing this parameter. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to "auto".
+
+        tournament_size (int, optional): For genetic algorithm grid search only. Number of individuals to perform tournament selection. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to 3.
+
+        elitism (bool, optional): For genetic algorithm grid search only. If set to True, takes the ``tournament_size`` best solution to the next generation. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to True.
+
+        crossover_probability (float, optional): For genetic algorithm grid search only. Probability of crossover operation between two individuals. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to 0.8.
+
+        mutation_probability (float, optional): For genetic algorithm grid search only. Probability of child mutation. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to 0.2.
+
+        ga_algorithm (str, optional): For genetic algorithm grid search only. Evolutionary algorithm to use. Supported options include: {"eaMuPlusLambda", "eaMuCommaLambda", "eaSimple"}. If you need to speed up the genetic algorithm grid search, try setting ``algorithm`` to "euSimple", at the expense of evolutionary model robustness. See more details in the DEAP algorithms documentation (https://deap.readthedocs.io). Defaults to "eaMuPlusLambda".
+
+        sim_strategy (str, optional): Strategy to use for simulating missing data. Only used to validate the accuracy of the imputation. The final model will be trained with the non-simulated dataset. Supported options include: {"random", "nonrandom", "nonrandom_weighted"}. "random" randomly simulates missing data. When set to "nonrandom", branches from ``GenotypeData.guidetree`` will be randomly sampled to generate missing data on descendant nodes. For "nonrandom_weighted", missing data will be placed on nodes proportionally to their branch lengths (e.g., to generate data distributed as might be the case with mutation-disruption of RAD sites). If using the "nonrandom" or "nonrandom_weighted" options, a guide tree is required to have been initialized in the passed ``genotype_data`` object. Defaults to "random".
+
+        sim_prop_missing (float, optional): Proportion of missing data to use with missing data simulation. Defaults to 0.1.
+
+        disable_progressbar (bool, optional): Whether to disable the tqdm progress bar. Useful if you are doing the imputation on e.g. a high-performance computing cluster, where sometimes tqdm does not work correctly when being written to a file. If False, uses tqdm progress bar. If True, does not use tqdm. Defaults to False.
+
+        n_jobs (int, optional): Number of parallel jobs to use in the grid search if ``gridparams`` is not None. -1 means use all available processors. Defaults to 1.
+
+        verbose (int, optional): Verbosity flag. The higher, the more verbose. Possible values are 0, 1, or 2. 0 = silent, 1 = progress bar, 2 = one line per epoch. Note that the progress bar is not particularly useful when logged to a file, so verbose=0 or verbose=2 is recommended when not running interactively. Setting verbose higher than 0 is useful for initial runs and debugging, but can slow down training. Defaults to 0.
+
+    Attributes:
+        imputed (GenotypeData): New GenotypeData instance with imputed data.
+        best_params (Dict[str, Any]): Best found parameters from grid search.
+
+    Example:
+        >>> data = GenotypeData(
+        >>>    filename="test.str",
+        >>>    filetype="structure2rowPopID",
+        >>>    guidetree="test.tre",
+        >>>    qmatrix_iqtree="test.iqtree"
+        >>> )
+        >>>
+        >>> sae = ImputeStandardAutoEncoder(
+        >>>     genotype_data=data,
+        >>>     learning_rate=0.001,
+        >>>     n_components=5,
+        >>>     epochs=200,
+        >>> )
+        >>>
+        >>> # Get the imputed data.
+        >>> sae_gtdata = sae.imputed
+    """
+
+    def __init__(
+        self,
+        genotype_data,
+        *,
+        prefix="output",
+        gridparams=None,
+        validation_split=0.2,
+        column_subset=1.0,
+        epochs=100,
+        batch_size=32,
+        n_components=3,
+        early_stop_gen=25,
+        num_hidden_layers=1,
+        hidden_layer_sizes="midpoint",
+        hidden_activation="elu",
+        optimizer="adam",
+        learning_rate=0.01,
+        lr_patience=1,
+        weights_initializer="glorot_normal",
+        l1_penalty=1e-6,
+        l2_penalty=1e-6,
+        dropout_rate=0.2,
+        sample_weights=None,
+        gridsearch_method="gridsearch",
+        grid_iter=80,
+        scoring_metric="auc_macro",
+        population_size="auto",
+        tournament_size=3,
+        elitism=True,
+        crossover_probability=0.8,
+        mutation_probability=0.2,
+        ga_algorithm="eaMuPlusLambda",
+        sim_strategy="random",
+        sim_prop_missing=0.1,
+        disable_progressbar=False,
+        n_jobs=1,
+        verbose=0,
+    ):
+
+        # Get local variables into dictionary object
+        all_kwargs = locals()
+
+        self.clf = SAE
         self.clf_type = "classifier"
 
         imp_kwargs = {
@@ -1339,80 +1527,73 @@ class ImputeUBP(Impute):
     Args:
         genotype_data (GenotypeData object): Input data initialized as GenotypeData object. Required positional argument.
 
-        prefix (str, optional): Prefix for output files. Defaults to "output".
+        prefix (str): Prefix for output files. Defaults to "output".
 
-        gridparams (Dict[str, Any] or None or None, optional): Dictionary with keys=keyword arguments for the specified estimator and values=lists of parameter values or distributions. If ``gridparams=None``\, a grid search is not performed, otherwise ``gridparams`` will be used to specify parameter ranges or distributions for the grid search. If using ``gridsearch_method="gridsearch"``, then the ``gridparams`` values can be lists of or numpy arrays. If using ``gridsearch_method="randomized_gridsearch"``\, distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). If using the genetic algorithm grid search by setting ``gridsearch_method="genetic_algorithm"``\, the parameters can be specified as ``sklearn_genetic.space`` objects. The grid search will determine the optimal parameters as those that maximize accuracy (or minimize root mean squared error for BayesianRidge regressor). NOTE: Takes a long time, so run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. Defaults to None.
+        gridparams (Dict[str, Any] or None, optional): Dictionary with keys=keyword arguments for the specified estimator and values=lists of parameter values or distributions. If ``gridparams=None``\, a grid search is not performed, otherwise ``gridparams`` will be used to specify parameter ranges or distributions for the grid search. If using ``gridsearch_method="gridsearch"``, then the ``gridparams`` values can be lists of or numpy arrays. If using ``gridsearch_method="randomized_gridsearch"``\, distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). If using the genetic algorithm grid search by setting ``gridsearch_method="genetic_algorithm"``\, the parameters can be specified as ``sklearn_genetic.space`` objects. The grid search will determine the optimal parameters as those that maximize accuracy (or minimize root mean squared error for BayesianRidge regressor). If it takes a long time, run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. Defaults to None (no gridsearch performed).
 
-        do_validation (bool, optional): Whether to validate the imputation if not doing a grid search. This validation method randomly replaces between 15% and 50% of the known, non-missing genotypes in ``n_features * column_subset`` of the features. It then imputes the newly missing genotypes for which we know the true values and calculates validation scores. This procedure is replicated ``cv`` times and a mean, median, minimum, maximum, lower 95% confidence interval (CI) of the mean, and the upper 95% CI are calculated and saved to a CSV file. ``gridparams`` must be set to None for ``do_validation`` to work. Calculating a validation score can be turned off altogether by setting ``do_validation`` to False. Defaults to False.
+        validation_split (float, optional): Proportion of training dataset to set aside for loss validation during model training. Defaults to 0.2.
 
-        column_subset (int or float, optional): If float, proportion of the dataset to randomly subset for the grid search or validation. Should be between 0 and 1, and should also be small, because the grid search or validation takes a long time. If int, subset ``column_subset`` columns. If float, subset ``int(n_features * column_subset)`` columns. Defaults to 0.1.
+        column_subset (int or float, optional): If float is provided, gets the proportion of the dataset to randomly subset for the grid search or validation. Subsets ``int(n_features * column_subset)`` columns and Should be in the range [0, 1]. It can be small if the grid search or validation takes a long time. If int is provided, subset ``column_subset`` columns. Defaults to 1.0.
 
-        batch_size (int, optional): Batch size per epoch to train the model with.
+        epochs (int, optional): Number of epochs (cycles through the data) to run during training.Defaults to 100.
 
-        n_components (int, optional): Number of components to use as the input data. Defaults to 3.
+        batch_size (int, optional): Batch size to train the model with. Model training per epoch is performed over multiple subsets of samples (rows) of size ``batch_size``\. Defaults to 32.
 
-        early_stop_gen (int, optional): If neural network and genetic algorithm see ``early_stop_gen`` consecutive generations without improvement in the scoring metric, an early stopping callback is implemented. This saves time by reducing the number of epochs and generations the they have to perform. Defaults to 25.
+        n_components (int, optional): Number of components (latent dimensions) to compress the input features to. Defaults to 3.
 
-        num_hidden_layers (int, optional): Number of hidden layers to use in the model. Adjust if overfitting occurs. Defaults to 3.
+        early_stop_gen (int, optional): Only used with the genetic algorithm grid search option. Stop training early if the model sees ``early_stop_gen`` consecutive generations without improvement to the scoring metric. This can save training time by reducing the number of epochs and generations that are performed. Defaults to 25.
 
-        hidden_layer_sizes (str, List[int], List[str], or int, optional): Number of neurons to use in hidden layers. If string or a list of strings is supplied, the strings must be either "midpoint", "sqrt", or "log2". "midpoint" will calculate the midpoint as ``(n_features + n_components) / 2``\. If "sqrt" is supplied, the square root of the number of features will be used to calculate the output units. If "log2" is supplied, the units will be calculated as ``log2(n_features)``\. hidden_layer_sizes will calculate and set the number of output units for each hidden layer. If one string or integer is supplied, the model will use the same number of output units for each hidden layer. If a list of integers or strings is supplied, the model will use the values supplied in the list, which can differ. The list length must be equal to the ``num_hidden_layers``\. Defaults to "midpoint".
+        num_hidden_layers (int, optional): Number of hidden layers to use in the model. Adjust if overfitting or underfitting occurs. Defaults to 1.
 
-        optimizer (str, optional): The optimizer to use with gradient descent. Possible value include: "adam", "sgd", and "adagrad" are supported. See tf.keras.optimizers for more info. Defaults to "adam".
+        hidden_layer_sizes (str, List[int], List[str], or int, optional): Number of neurons to use in the hidden layers. If string or a list of strings is passed, the strings must be either "midpoint", "sqrt", or "log2". "midpoint" will calculate the midpoint as ``(n_features + n_components) / 2``\. If "sqrt" is supplied, the square root of the number of features will be used to calculate the output units. If "log2" is supplied, the units will be calculated as ``log2(n_features)``\. hidden_layer_sizes will calculate and set the number of output units for each hidden layer. If multiple hidden layers are supplied, each subsequent layer's dimensions are further reduced by the "midpoint", "sqrt", or "log2". E.g., if using ``num_hidden_layers=3`` and ``n_components=2``\, and there are 100 features (columns), the hidden layer sizes for ``midpoint`` will be: [51, 27, 14]. If a single string or integer is supplied, the model will use the same number of output units for each hidden layer. If a list of integers or strings is supplied, the model will use the values supplied in the list. The list length must be equal to the ``num_hidden_layers`` and all hidden layer sizes must be > n_components. Defaults to "midpoint".
 
-        hidden_activation (str, optional): The activation function to use for the hidden layers. See tf.keras.activations for more info. Supported activation functions include: {"elu", "selu", "leaky_relu", "prelu", "relu"}. Each activation function has some advantages and disadvantages and determines the curve and non-linearity of gradient descent. Some are also faster than others. See https://towardsdatascience.com/7-popular-activation-functions-you-should-know-in-deep-learning-and-how-to-use-them-with-keras-and-27b4d838dfe6 for more information. Note that using ``hidden_activation="selu"`` will force ``weights_initializer`` to be "lecun_normal". Defaults to "elu".
+        hidden_activation (str, optional): The activation function to use for the hidden layers. See tf.keras.activations for more info. Supported activation functions include: ["elu", "selu", "leaky_relu", "prelu", "relu"]. Each activation function has some advantages and disadvantages and determines the curve and non-linearity of gradient descent. Some are also faster than others. See https://towardsdatascience.com/7-popular-activation-functions-you-should-know-in-deep-learning-and-how-to-use-them-with-keras-and-27b4d838dfe6 for more information. Note that using ``hidden_activation="selu"`` will force ``weights_initializer`` to be "lecun_normal". Defaults to "elu".
 
-        learning_rate (float, optional): The learning rate for the optimizers. Adjust if the loss is learning too slowly. Defaults to 0.1.
+        optimizer (str, optional): The optimizer to use with gradient descent. Supported options are: "adam", "sgd", and "adagrad". See tf.keras.optimizers for more info. Defaults to "adam".
 
-        lr_patience (int, optional): Number of epochs with no loss improvement to wait before reducing the learning rate.
+        learning_rate (float, optional): The learning rate for the optimizer. Adjust if the loss is learning too slowly or quickly. If you are getting overfitting, it is likely too high, and likewise underfitting can occur when the learning rate is too low. Defaults to 0.01.
 
-        epochs (int, optional): Number of epochs to run if the ``early_stop_gen`` criterion is not met.
+        lr_patience (int, optional): Number of epochs without loss improvement to wait before reducing the learning rate. Defaults to 1.0.
 
         weights_initializer (str, optional): Initializer to use for the model weights. See tf.keras.initializers for more info. Defaults to "glorot_normal".
 
-        l1_penalty (float, optional): L1 regularization penalty to apply to reduce overfitting. Defaults to 1e-6.
+        l1_penalty (float, optional): L1 regularization penalty to apply. Adjust if the model is over or underfitting. If this value is too high, underfitting can occur, and vice versa. Defaults to 1e-6.
 
-        l2_penalty (float, optional) L2 regularization penalty to apply to reduce overfitting. Defaults to 1e-6.
+        l2_penalty (float, optional) L2 regularization penalty to apply. If this value is too high, underfitting can occur, and vice versa. Defaults to 1e-6.
 
-        dropout_rate (float, optional): Neuron dropout rate during training to reduce overfitting. Must be a float between 0 and 1. E.g., if dropout_rate is set to 0.2, then 20% of the neurons are randomly dropped out per epoch. Defaults to 0.2.
+        dropout_rate (float, optional): Neuron dropout rate during training. Dropout randomly disables ``dropout_rate`` proportion of neurons during training, which can reduce overfitting. E.g., if dropout_rate is set to 0.2, then 20% of the neurons are randomly dropped out per epoch. Adjust if the model is over or underfitting. Must be a float in the range [0, 1]. . Defaults to 0.2.
 
-        sample_weights (str, Dict[int, float], or None, optional): Weights for the 012-encoded classes during training. If None, then does not weight classes. If set to "auto", then class weights are automatically calculated for each column. If a dictionary is passed, it must contain 0, 1, and 2 as the keys and the class weights as the values. E.g., {0: 1.0, 1: 1.0, 2: 1.0}. The dictionary is then used as they overall class weights. If you wanted to prevent the model from learning to predict heterozygotes, for example, you could set the class weights to {0: 1.0, 1: 0.0, 2: 1.0}. Defaults to None (no weighting).
+        sample_weights (str, Dict[int, float], or None, optional): Weights for the 012-encoded classes during training. If None, then does not weight classes. If set to "auto", then class weights are automatically calculated for each column. If a dictionary is passed, it must contain 0, 1, and 2 as the keys and the class weights as the values. E.g., {0: 1.0, 1: 1.0, 2: 1.0}. The dictionary is then used as the overall class weights. If you wanted to prevent the model from learning to predict heterozygotes, for example, you could set the class weights to {0: 1.0, 1: 0.0, 2: 1.0}. Defaults to None (equal weighting).
 
-        cv (int): Number of cross-validation replicates to perform. Defaults to 5.
+        gridsearch_method (str, optional): Grid search method to use. Supported options include: {"gridsearch", "randomized_gridsearch", "genetic_algorithm"}. "gridsearch" uses GridSearchCV to test every possible parameter combination. "randomized_gridsearch" picks ``grid_iter`` random combinations of parameters to test. "genetic_algorithm" uses a genetic algorithm via the sklearn-genetic-opt GASearchCV module to do the grid search. If set to None, then does not do a grid search. If doing a grid search, "randomized_search" takes the least amount of time because it does not have to test all parameters. "genetic_algorithm" takes the longest. See the scikit-learn GridSearchCV and RandomizedSearchCV documentation for the "gridsearch" and "randomized_gridsearch" options, and the sklearn-genetic-opt GASearchCV documentation for the "genetic_algorithm" option. Defaults to "gridsearch".
 
-        gridsearch_method (str, optional): Grid search method to use. Supported options include: {"gridsearch", "randomized_gridsearch", and "genetic_algorithm"}. Whether to use a genetic algorithm for the grid search. "gridsearch" uses GridSearchCV to test every possible parameter combination. "randomized_gridsearch" picks ``grid_iter`` random combinations of parameters to test. "genetic_algorithm" uses a genetic algorithm via sklearn-genetic-opt GASearchCV to do the grid search. If set to None, then does not do a grid search. If doing a grid search, "randomized_search" takes the least amount of time because it does not have to test all parameters. "genetic_algorithm" takes the longest. See the scikit-learn GridSearchCV and RandomizedSearchCV documentation for the "gridsearch" and "randomized_gridsearch" options, and the sklearn-genetic-opt GASearchCV documentation for the "genetic_algorithm" option. Defaults to "gridsearch".
+        grid_iter (int, optional): Number of iterations to use for randomized and genetic algorithm grid searches. For randomized grid search, ``grid_iter`` parameter combinations will be randomly sampled. For the genetic algorithm, this determines how many generations the genetic algorithm will run. Defaults to 80.
 
-        grid_iter (int, optional): Number of iterations for randomized and genetic algorithm grid searches. Defaults to 80.
+        scoring_metric (str, optional): Scoring metric to use for the grid search. Supported options include: {"auc_macro", "auc_micro", "precision_recall_macro", "precision_recall_micro", "accuracy"}. Note that all metrics are automatically calculated when doing a grid search, the results of which are logged to a CSV file. However, when refitting following the grid search, the value passed to ``scoring_metric`` is used to select the best parameters. If you wish to choose the best parameters from a different metric, that information will also be in the CSV file. "auc_macro" and "auc_micro" get the AUC (area under curve) score for the ROC (Receiver Operating Characteristic) curve. The ROC curves plot the false positive rate (X-axis) versus the true positive rate (Y-axis) for each 012-encoded class and for the macro and micro averages among classes. The false positive rate is defined as: ``False Positive Rate = False Positives / (False Positives + True Negatives)`` and the true positive rate is defined as ``True Positive Rate = True Positives / (True Positives + False Negatives)``\. Macro averaging places equal importance on each class, whereas the micro average is the global average across all classes. AUC scores allow the ROC curve, and thus the model's classification skill, to be summarized as a single number. "precision_recall_macro" and "precision_recall_micro" create Precision-Recall (PR) curves for each class plus the macro and micro averages among classes. Precision is defined as ``True Positives / (True Positives + False Positives)`` and recall is defined as ``Recall = True Positives / (True Positives + False Negatives)``\. Reviewing both precision and recall is useful in cases where there is an imbalance in the observations between the two classes. For example, if there are many examples of major alleles (class 0) and only a few examples of minor alleles (class 2). PR curves take into account the use the Average Precision (AP) instead of AUC. AUC and AP are similar metrics, but AP summarizes a precision-recall curve as the weighted mean of precisions achieved at each probability threshold, with the increase in recall from the previous threshold used as the weight. On the contrary, AUC uses linear interpolation with the trapezoidal rule to calculate the area under the curve. "accuracy" calculates ``number of correct predictions / total predictions``\, but can often be misleading when used without considering the model's classification skill for each class. Defaults to "auc_macro".
 
-        population_size (int or str, optional): For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. If set to "auto", then ``population_size`` is calculated as ``15 * n_parameters``\. If set to an integer, then uses the integer value as ``population_size``\. If you need to speed up the genetic algorithm grid search, try decreasing this parameter. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io). Defaults to "auto".
+        population_size (int or str, optional): Only used for the genetic algorithm grid search. Size of the initial population to sample randomly generated individuals. If set to "auto", then ``population_size`` is calculated as ``15 * n_parameters``\. If set to an integer, then uses the integer value as ``population_size``\. If you need to speed up the genetic algorithm grid search, try decreasing this parameter. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to "auto".
 
-        tournament_size (int, optional): For genetic algorithm grid search: Number of individuals to perform tournament selection. See GASearchCV documentation. Defaults to 3.
+        tournament_size (int, optional): For genetic algorithm grid search only. Number of individuals to perform tournament selection. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to 3.
 
-        elitism (bool, optional): For genetic algorithm grid search:     If True takes the tournament_size best solution to the next generation. See GASearchCV documentation. Defaults to True.
+        elitism (bool, optional): For genetic algorithm grid search only. If set to True, takes the ``tournament_size`` best solution to the next generation. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to True.
 
-        crossover_probability (float, optional): For genetic algorithm grid search: Probability of crossover operation between two individuals. See GASearchCV documentation. Defaults to 0.8.
+        crossover_probability (float, optional): For genetic algorithm grid search only. Probability of crossover operation between two individuals. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to 0.8.
 
-        mutation_probability (float, optional): For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation. Defaults to 0.2.
+        mutation_probability (float, optional): For genetic algorithm grid search only. Probability of child mutation. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to 0.2.
 
-        ga_algorithm (str, optional): For genetic algorithm grid search: Evolutionary algorithm to use. Supported options include: {"eaMuPlusLambda", "eaMuCommaLambda", "eaSimple"}. If you need to speed up the genetic algorithm grid search, try setting ``algorithm`` to "euSimple", at the expense of evolutionary model robustness. See more details in the DEAP algorithms documentation (https://deap.readthedocs.io). Defaults to "eaMuPlusLambda".
+        ga_algorithm (str, optional): For genetic algorithm grid search only. Evolutionary algorithm to use. Supported options include: {"eaMuPlusLambda", "eaMuCommaLambda", "eaSimple"}. If you need to speed up the genetic algorithm grid search, try setting ``algorithm`` to "euSimple", at the expense of evolutionary model robustness. See more details in the DEAP algorithms documentation (https://deap.readthedocs.io). Defaults to "eaMuPlusLambda".
 
-        scoring_metric (str, optional): Scoring metric to use for GridSearchCV or genetic algorithm grid searches. Supported options include "auc_macro", "auc_micro", "precision_recall_macro", "precision_recall_micro", and "accuracy". Note that all metrics are calculated when doing a grid search, the results of which are saved to a CSV file. However, when refitting following the grid search, the value passed to ``scoring_metric`` is used to select the best parameters. If you wish to choose the best parameters from a different metric, that information will also be in the CSV file. "auc_macro" and "auc_micro" get the AUC (area under curve) score for the ROC (Receiver Operating Characteristic) curve. The ROC curves plot the false positive rate (X-axis) versus the true positive rate (Y-axis) for each 012-encoded class and for the macro and micro averages among classes. The false positive rate is defined as: ``False Positive Rate = False Positives / (False Positives + True Negatives)`` and the true positive rate is defined as ``True Positive Rate = True Positives / (True Positives + False Negatives)``\. Macro averaging places equal importance on each class, whereas the micro average is the global average across all classes. AUC scores allow the ROC curve, and thus the model's classification skill, to be summarized as a single number. "precision_recall_macro" and "precision_recall_micro" create Precision-Recall (PR) curves for each class plus the macro and micro averages among classes. Precision is defined as ``True Positives / (True Positives + False Positives)`` and recall is defined as ``Recall = True Positives / (True Positives + False Negatives)``\. Reviewing both precision and recall is useful in cases where there is an imbalance in the observations between the two classes. For example, if there are many examples of major alleles (class 0) and only a few examples of minor alleles (class 2). PR curves take into account the use the Average Precision (AP) instead of AUC. AUC and AP are similar metrics, but AP summarizes a precision-recall curve as the weighted mean of precisions achieved at each probability threshold, with the increase in recall from the previous threshold used as the weight. On the contrary, AUC uses linear interpolation with the trapezoidal rule to calculate the area under the curve, which can sometimes be overly optimistic for Precision-Recall curves. Thus, AP scores are used instead. "accuracy" calculates ``number of correct predictions / total predictions``\, but can often be misleading when used without considering the model's classification skill for each class. Defaults to "auc_macro".
-
-        sim_strategy (str, optional): Strategy to use for simulating missing data. Only used to validate the accuracy of the imputation. The final model will be trained with the non-simulated dataset. Supported options include: "random", "nonrandom", and "nonrandom_weighted". "random" randomly simulates missing data. When set to "nonrandom", branches from ``GenotypeData.guidetree`` will be randomly sampled to generate missing data on descendant nodes. For "nonrandom_weighted", missing data will be placed on nodes proportionally to their branch lengths (e.g., to generate data distributed as might be the case with mutation-disruption of RAD sites). Defaults to "random".
+        sim_strategy (str, optional): Strategy to use for simulating missing data. Only used to validate the accuracy of the imputation. The final model will be trained with the non-simulated dataset. Supported options include: {"random", "nonrandom", "nonrandom_weighted"}. "random" randomly simulates missing data. When set to "nonrandom", branches from ``GenotypeData.guidetree`` will be randomly sampled to generate missing data on descendant nodes. For "nonrandom_weighted", missing data will be placed on nodes proportionally to their branch lengths (e.g., to generate data distributed as might be the case with mutation-disruption of RAD sites). If using the "nonrandom" or "nonrandom_weighted" options, a guide tree is required to have been initialized in the passed ``genotype_data`` object. Defaults to "random".
 
         sim_prop_missing (float, optional): Proportion of missing data to use with missing data simulation. Defaults to 0.1.
 
-        disable_progressbar (bool, optional): Whether to disable the tqdm progress bar. Useful if you are doing the imputation on e.g. a high-performance computing cluster, where sometimes tqdm does not work correctly. If False, uses tqdm progress bar. If True, does not use tqdm. Defaults to False.
-
-        chunk_size (int or float, optional): Number of loci for which to perform IterativeImputer at one time. Useful for reducing the memory usage if you are running out of RAM. If integer is specified, selects ``chunk_size`` loci at a time. If a float is specified, selects ``math.ceil(total_loci * chunk_size)`` loci at a time. Defaults to 1.0 (all features).
+        disable_progressbar (bool, optional): Whether to disable the tqdm progress bar. Useful if you are doing the imputation on e.g. a high-performance computing cluster, where sometimes tqdm does not work correctly when being written to a file. If False, uses tqdm progress bar. If True, does not use tqdm. Defaults to False.
 
         n_jobs (int, optional): Number of parallel jobs to use in the grid search if ``gridparams`` is not None. -1 means use all available processors. Defaults to 1.
 
         verbose (int, optional): Verbosity flag. The higher, the more verbose. Possible values are 0, 1, or 2. 0 = silent, 1 = progress bar, 2 = one line per epoch. Note that the progress bar is not particularly useful when logged to a file, so verbose=0 or verbose=2 is recommended when not running interactively. Setting verbose higher than 0 is useful for initial runs and debugging, but can slow down training. Defaults to 0.
 
-
     Attributes:
-        nlpca (bool): If True, does NLPCA model. Otherwise does UBP.
-        clf (sklearn or neural network classifier): Estimator to use.
         imputed (GenotypeData): New GenotypeData instance with imputed data.
         best_params (Dict[str, Any]): Best found parameters from grid search.
 
@@ -1426,11 +1607,13 @@ class ImputeUBP(Impute):
         >>>
         >>> ubp = ImputeUBP(
         >>>     genotype_data=data,
-        >>>     cv=5,
-        >>>     learning_rate=0.05,
+        >>>     learning_rate=0.001,
+        >>>     n_components=5
         >>> )
         >>>
+        >>> # Get the imputed data.
         >>> ubp_gtdata = ubp.imputed
+
 
     References:
         .. [1] Gashler, M. S., Smith, M. R., Morris, R., & Martinez, T. (2016). Missing value imputation with unsupervised backpropagation. Computational Intelligence, 32(2), 196-215.
@@ -1446,36 +1629,33 @@ class ImputeUBP(Impute):
         *,
         prefix="output",
         gridparams=None,
-        do_validation=False,
-        column_subset=0.1,
+        column_subset=1.0,
+        epochs=100,
         batch_size=32,
         n_components=3,
         early_stop_gen=25,
-        num_hidden_layers=3,
+        num_hidden_layers=1,
         hidden_layer_sizes="midpoint",
-        optimizer="adam",
         hidden_activation="elu",
-        learning_rate=0.1,
-        epochs=100,
+        optimizer="adam",
+        learning_rate=0.01,
         weights_initializer="glorot_normal",
         l1_penalty=1e-6,
         l2_penalty=1e-6,
         dropout_rate=0.2,
         sample_weights=None,
-        cv=5,
         gridsearch_method="gridsearch",
         grid_iter=80,
+        scoring_metric="auc_macro",
         population_size="auto",
         tournament_size=3,
         elitism=True,
         crossover_probability=0.8,
         mutation_probability=0.2,
         ga_algorithm="eaMuPlusLambda",
-        scoring_metric="auc_macro",
         sim_strategy="random",
         sim_prop_missing=0.1,
         disable_progressbar=False,
-        chunk_size=1.0,
         n_jobs=1,
         verbose=0,
     ):
@@ -1518,77 +1698,75 @@ class ImputeNLPCA(ImputeUBP):
     Args:
         genotype_data (GenotypeData object): Input data initialized as GenotypeData object. Required positional argument.
 
-        prefix (str, optional): Prefix for output files. Defaults to "output".
+        prefix (str): Prefix for output files. Defaults to "output".
 
-        gridparams (Dict[str, Any] or None or None, optional): Dictionary with keys=keyword arguments for the specified estimator and values=lists of parameter values or distributions. If ``gridparams=None``\, a grid search is not performed, otherwise ``gridparams`` will be used to specify parameter ranges or distributions for the grid search. If using ``gridsearch_method="gridsearch"``, then the ``gridparams`` values can be lists of or numpy arrays. If using ``gridsearch_method="randomized_gridsearch"``\, distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). If using the genetic algorithm grid search by setting ``gridsearch_method="genetic_algorithm"``\, the parameters can be specified as ``sklearn_genetic.space`` objects. The grid search will determine the optimal parameters as those that maximize accuracy (or minimize root mean squared error for BayesianRidge regressor). NOTE: Takes a long time, so run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. Defaults to None.
+        gridparams (Dict[str, Any] or None, optional): Dictionary with keys=keyword arguments for the specified estimator and values=lists of parameter values or distributions. If ``gridparams=None``\, a grid search is not performed, otherwise ``gridparams`` will be used to specify parameter ranges or distributions for the grid search. If using ``gridsearch_method="gridsearch"``, then the ``gridparams`` values can be lists of or numpy arrays. If using ``gridsearch_method="randomized_gridsearch"``\, distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). If using the genetic algorithm grid search by setting ``gridsearch_method="genetic_algorithm"``\, the parameters can be specified as ``sklearn_genetic.space`` objects. The grid search will determine the optimal parameters as those that maximize accuracy (or minimize root mean squared error for BayesianRidge regressor). If it takes a long time, run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. Defaults to None (no gridsearch performed).
 
-        do_validation (bool, optional): Whether to validate the imputation if not doing a grid search. This validation method randomly replaces between 15% and 50% of the known, non-missing genotypes in ``n_features * column_subset`` of the features. It then imputes the newly missing genotypes for which we know the true values and calculates validation scores. This procedure is replicated ``cv`` times and a mean, median, minimum, maximum, lower 95% confidence interval (CI) of the mean, and the upper 95% CI are calculated and saved to a CSV file. ``gridparams`` must be set to None for ``do_validation`` to work. Calculating a validation score can be turned off altogether by setting ``do_validation`` to False. Defaults to False.
+        validation_split (float, optional): Proportion of training dataset to set aside for loss validation during model training. Defaults to 0.2.
 
-        column_subset (int or float, optional): If float, proportion of the dataset to randomly subset for the grid search or validation. Should be between 0 and 1, and should also be small, because the grid search or validation takes a long time. If int, subset ``column_subset`` columns. If float, subset ``int(n_features * column_subset)`` columns. Defaults to 0.1.
+        column_subset (int or float, optional): If float is provided, gets the proportion of the dataset to randomly subset for the grid search or validation. Subsets ``int(n_features * column_subset)`` columns and Should be in the range [0, 1]. It can be small if the grid search or validation takes a long time. If int is provided, subset ``column_subset`` columns. Defaults to 1.0.
 
-        batch_size (int, optional): Batch size per epoch to train the model with.
+        epochs (int, optional): Number of epochs (cycles through the data) to run during training.Defaults to 100.
 
-        n_components (int, optional): Number of components to use as the input data. Defaults to 3.
+        batch_size (int, optional): Batch size to train the model with. Model training per epoch is performed over multiple subsets of samples (rows) of size ``batch_size``\. Defaults to 32.
 
-        early_stop_gen (int, optional): If neural network and genetic algorithm see ``early_stop_gen`` consecutive generations without improvement in the scoring metric, an early stopping callback is implemented. This saves time by reducing the number of epochs and generations the they have to perform. Defaults to 25.
+        n_components (int, optional): Number of components (latent dimensions) to compress the input features to. Defaults to 3.
 
-        num_hidden_layers (int, optional): Number of hidden layers to use in the model. Adjust if overfitting occurs. Defaults to 3.
+        early_stop_gen (int, optional): Only used with the genetic algorithm grid search option. Stop training early if the model sees ``early_stop_gen`` consecutive generations without improvement to the scoring metric. This can save training time by reducing the number of epochs and generations that are performed. Defaults to 25.
 
-        hidden_layer_sizes (str, List[int], List[str], or int, optional): Number of neurons to use in hidden layers. If string or a list of strings is supplied, the strings must be either "midpoint", "sqrt", or "log2". "midpoint" will calculate the midpoint as ``(n_features + n_components) / 2``\. If "sqrt" is supplied, the square root of the number of features will be used to calculate the output units. If "log2" is supplied, the units will be calculated as ``log2(n_features)``\. hidden_layer_sizes will calculate and set the number of output units for each hidden layer. If one string or integer is supplied, the model will use the same number of output units for each hidden layer. If a list of integers or strings is supplied, the model will use the values supplied in the list, which can differ. The list length must be equal to the ``num_hidden_layers``\. Defaults to "midpoint".
+        num_hidden_layers (int, optional): Number of hidden layers to use in the model. Adjust if overfitting or underfitting occurs. Defaults to 1.
 
-        optimizer (str, optional): The optimizer to use with gradient descent. Possible value include: "adam", "sgd", and "adagrad" are supported. See tf.keras.optimizers for more info. Defaults to "adam".
+        hidden_layer_sizes (str, List[int], List[str], or int, optional): Number of neurons to use in the hidden layers. If string or a list of strings is passed, the strings must be either "midpoint", "sqrt", or "log2". "midpoint" will calculate the midpoint as ``(n_features + n_components) / 2``\. If "sqrt" is supplied, the square root of the number of features will be used to calculate the output units. If "log2" is supplied, the units will be calculated as ``log2(n_features)``\. hidden_layer_sizes will calculate and set the number of output units for each hidden layer. If multiple hidden layers are supplied, each subsequent layer's dimensions are further reduced by the "midpoint", "sqrt", or "log2". E.g., if using ``num_hidden_layers=3`` and ``n_components=2``\, and there are 100 features (columns), the hidden layer sizes for ``midpoint`` will be: [51, 27, 14]. If a single string or integer is supplied, the model will use the same number of output units for each hidden layer. If a list of integers or strings is supplied, the model will use the values supplied in the list. The list length must be equal to the ``num_hidden_layers`` and all hidden layer sizes must be > n_components. Defaults to "midpoint".
 
-        hidden_activation (str, optional): The activation function to use for the hidden layers. See tf.keras.activations for more info. Supported activation functions include: {"elu", "selu", "leaky_relu", "prelu", "relu"}. Each activation function has some advantages and disadvantages and determines the curve and non-linearity of gradient descent. Some are also faster than others. See https://towardsdatascience.com/7-popular-activation-functions-you-should-know-in-deep-learning-and-how-to-use-them-with-keras-and-27b4d838dfe6 for more information. Note that using ``hidden_activation="selu"`` will force ``weights_initializer`` to be "lecun_normal". Defaults to "elu".
+        hidden_activation (str, optional): The activation function to use for the hidden layers. See tf.keras.activations for more info. Supported activation functions include: ["elu", "selu", "leaky_relu", "prelu", "relu"]. Each activation function has some advantages and disadvantages and determines the curve and non-linearity of gradient descent. Some are also faster than others. See https://towardsdatascience.com/7-popular-activation-functions-you-should-know-in-deep-learning-and-how-to-use-them-with-keras-and-27b4d838dfe6 for more information. Note that using ``hidden_activation="selu"`` will force ``weights_initializer`` to be "lecun_normal". Defaults to "elu".
 
-        learning_rate (float, optional): The learning rate for the optimizers. Adjust if the loss is learning too slowly. Defaults to 0.1.
+        optimizer (str, optional): The optimizer to use with gradient descent. Supported options are: "adam", "sgd", and "adagrad". See tf.keras.optimizers for more info. Defaults to "adam".
 
-        lr_patience (int, optional): Number of epochs with no loss improvement to wait before reducing the learning rate.
+        learning_rate (float, optional): The learning rate for the optimizer. Adjust if the loss is learning too slowly or quickly. If you are getting overfitting, it is likely too high, and likewise underfitting can occur when the learning rate is too low. Defaults to 0.01.
 
-        epochs (int, optional): Number of epochs to run if the ``early_stop_gen`` criterion is not met.
+        lr_patience (int, optional): Number of epochs without loss improvement to wait before reducing the learning rate. Defaults to 1.0.
 
         weights_initializer (str, optional): Initializer to use for the model weights. See tf.keras.initializers for more info. Defaults to "glorot_normal".
 
-        l1_penalty (float, optional): L1 regularization penalty to apply to reduce overfitting. Defaults to 0.01.
+        l1_penalty (float, optional): L1 regularization penalty to apply. Adjust if the model is over or underfitting. If this value is too high, underfitting can occur, and vice versa. Defaults to 1e-6.
 
-        l2_penalty (float, optional) L2 regularization penalty to apply to reduce overfitting. Defaults to 0.01.
+        l2_penalty (float, optional) L2 regularization penalty to apply. If this value is too high, underfitting can occur, and vice versa. Defaults to 1e-6.
 
-        dropout_rate (float, optional): Neuron dropout rate during training to reduce overfitting. Must be a float between 0 and 1. E.g., if dropout_rate is set to 0.2, then 20% of the neurons are randomly dropped out per epoch. Defaults to 0.2.
+        dropout_rate (float, optional): Neuron dropout rate during training. Dropout randomly disables ``dropout_rate`` proportion of neurons during training, which can reduce overfitting. E.g., if dropout_rate is set to 0.2, then 20% of the neurons are randomly dropped out per epoch. Adjust if the model is over or underfitting. Must be a float in the range [0, 1]. . Defaults to 0.2.
 
-        sample_weights (str, Dict[int, float], or None, optional): Weights for the 012-encoded classes during training. If None, then does not weight classes. If set to "auto", then class weights are automatically calculated for each column. If a dictionary is passed, it must contain 0, 1, and 2 as the keys and the class weights as the values. E.g., {0: 1.0, 1: 1.0, 2: 1.0}. The dictionary is then used as they overall class weights. If you wanted to prevent the model from learning to predict heterozygotes, for example, you could set the class weights to {0: 1.0, 1: 0.0, 2: 1.0}. Defaults to None (no weighting).
+        sample_weights (str, Dict[int, float], or None, optional): Weights for the 012-encoded classes during training. If None, then does not weight classes. If set to "auto", then class weights are automatically calculated for each column. If a dictionary is passed, it must contain 0, 1, and 2 as the keys and the class weights as the values. E.g., {0: 1.0, 1: 1.0, 2: 1.0}. The dictionary is then used as the overall class weights. If you wanted to prevent the model from learning to predict heterozygotes, for example, you could set the class weights to {0: 1.0, 1: 0.0, 2: 1.0}. Defaults to None (equal weighting).
 
-        cv (int): Number of cross-validation replicates to perform. Defaults to 5.
+        gridsearch_method (str, optional): Grid search method to use. Supported options include: {"gridsearch", "randomized_gridsearch", "genetic_algorithm"}. "gridsearch" uses GridSearchCV to test every possible parameter combination. "randomized_gridsearch" picks ``grid_iter`` random combinations of parameters to test. "genetic_algorithm" uses a genetic algorithm via the sklearn-genetic-opt GASearchCV module to do the grid search. If set to None, then does not do a grid search. If doing a grid search, "randomized_search" takes the least amount of time because it does not have to test all parameters. "genetic_algorithm" takes the longest. See the scikit-learn GridSearchCV and RandomizedSearchCV documentation for the "gridsearch" and "randomized_gridsearch" options, and the sklearn-genetic-opt GASearchCV documentation for the "genetic_algorithm" option. Defaults to "gridsearch".
 
-        gridsearch_method (str, optional): Grid search method to use. Supported options include: {"gridsearch", "randomized_gridsearch", and "genetic_algorithm"}. Whether to use a genetic algorithm for the grid search. "gridsearch" uses GridSearchCV to test every possible parameter combination. "randomized_gridsearch" picks ``grid_iter`` random combinations of parameters to test. "genetic_algorithm" uses a genetic algorithm via sklearn-genetic-opt GASearchCV to do the grid search. If set to None, then does not do a grid search. If doing a grid search, "randomized_search" takes the least amount of time because it does not have to test all parameters. "genetic_algorithm" takes the longest. See the scikit-learn GridSearchCV and RandomizedSearchCV documentation for the "gridsearch" and "randomized_gridsearch" options, and the sklearn-genetic-opt GASearchCV documentation for the "genetic_algorithm" option. Defaults to "gridsearch".
+        grid_iter (int, optional): Number of iterations to use for randomized and genetic algorithm grid searches. For randomized grid search, ``grid_iter`` parameter combinations will be randomly sampled. For the genetic algorithm, this determines how many generations the genetic algorithm will run. Defaults to 80.
 
-        grid_iter (int, optional): Number of iterations for randomized and genetic algorithm grid searches. Defaults to 80.
+        scoring_metric (str, optional): Scoring metric to use for the grid search. Supported options include: {"auc_macro", "auc_micro", "precision_recall_macro", "precision_recall_micro", "accuracy"}. Note that all metrics are automatically calculated when doing a grid search, the results of which are logged to a CSV file. However, when refitting following the grid search, the value passed to ``scoring_metric`` is used to select the best parameters. If you wish to choose the best parameters from a different metric, that information will also be in the CSV file. "auc_macro" and "auc_micro" get the AUC (area under curve) score for the ROC (Receiver Operating Characteristic) curve. The ROC curves plot the false positive rate (X-axis) versus the true positive rate (Y-axis) for each 012-encoded class and for the macro and micro averages among classes. The false positive rate is defined as: ``False Positive Rate = False Positives / (False Positives + True Negatives)`` and the true positive rate is defined as ``True Positive Rate = True Positives / (True Positives + False Negatives)``\. Macro averaging places equal importance on each class, whereas the micro average is the global average across all classes. AUC scores allow the ROC curve, and thus the model's classification skill, to be summarized as a single number. "precision_recall_macro" and "precision_recall_micro" create Precision-Recall (PR) curves for each class plus the macro and micro averages among classes. Precision is defined as ``True Positives / (True Positives + False Positives)`` and recall is defined as ``Recall = True Positives / (True Positives + False Negatives)``\. Reviewing both precision and recall is useful in cases where there is an imbalance in the observations between the two classes. For example, if there are many examples of major alleles (class 0) and only a few examples of minor alleles (class 2). PR curves take into account the use the Average Precision (AP) instead of AUC. AUC and AP are similar metrics, but AP summarizes a precision-recall curve as the weighted mean of precisions achieved at each probability threshold, with the increase in recall from the previous threshold used as the weight. On the contrary, AUC uses linear interpolation with the trapezoidal rule to calculate the area under the curve. "accuracy" calculates ``number of correct predictions / total predictions``\, but can often be misleading when used without considering the model's classification skill for each class. Defaults to "auc_macro".
 
-        population_size (int or str, optional): For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. If set to "auto", then ``population_size`` is calculated as ``15 * n_parameters``\. If set to an integer, then uses the integer value as ``population_size``\. If you need to speed up the genetic algorithm grid search, try decreasing this parameter. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io). Defaults to "auto".
+        population_size (int or str, optional): Only used for the genetic algorithm grid search. Size of the initial population to sample randomly generated individuals. If set to "auto", then ``population_size`` is calculated as ``15 * n_parameters``\. If set to an integer, then uses the integer value as ``population_size``\. If you need to speed up the genetic algorithm grid search, try decreasing this parameter. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to "auto".
 
-        tournament_size (int, optional): For genetic algorithm grid search: Number of individuals to perform tournament selection. See GASearchCV documentation. Defaults to 3.
+        tournament_size (int, optional): For genetic algorithm grid search only. Number of individuals to perform tournament selection. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to 3.
 
-        elitism (bool, optional): For genetic algorithm grid search:     If True takes the tournament_size best solution to the next generation. See GASearchCV documentation. Defaults to True.
+        elitism (bool, optional): For genetic algorithm grid search only. If set to True, takes the ``tournament_size`` best solution to the next generation. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to True.
 
-        crossover_probability (float, optional): For genetic algorithm grid search: Probability of crossover operation between two individuals. See GASearchCV documentation. Defaults to 0.8.
+        crossover_probability (float, optional): For genetic algorithm grid search only. Probability of crossover operation between two individuals. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to 0.8.
 
-        mutation_probability (float, optional): For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation. Defaults to 0.2.
+        mutation_probability (float, optional): For genetic algorithm grid search only. Probability of child mutation. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to 0.2.
 
-        ga_algorithm (str, optional): For genetic algorithm grid search: Evolutionary algorithm to use. Supported options include: {"eaMuPlusLambda", "eaMuCommaLambda", "eaSimple"}. If you need to speed up the genetic algorithm grid search, try setting ``algorithm`` to "euSimple", at the expense of evolutionary model robustness. See more details in the DEAP algorithms documentation (https://deap.readthedocs.io). Defaults to "eaMuPlusLambda".
+        ga_algorithm (str, optional): For genetic algorithm grid search only. Evolutionary algorithm to use. Supported options include: {"eaMuPlusLambda", "eaMuCommaLambda", "eaSimple"}. If you need to speed up the genetic algorithm grid search, try setting ``algorithm`` to "euSimple", at the expense of evolutionary model robustness. See more details in the DEAP algorithms documentation (https://deap.readthedocs.io). Defaults to "eaMuPlusLambda".
 
-        scoring_metric (str, optional): Scoring metric to use for GridSearchCV or genetic algorithm grid searches. Supported options include "auc_macro", "auc_micro", "precision_recall_macro", "precision_recall_micro", and "accuracy". Note that all metrics are calculated when doing a grid search, the results of which are saved to a CSV file. However, when refitting following the grid search, the value passed to ``scoring_metric`` is used to select the best parameters. If you wish to choose the best parameters from a different metric, that information will also be in the CSV file. "auc_macro" and "auc_micro" get the AUC (area under curve) score for the ROC (Receiver Operating Characteristic) curve. The ROC curves plot the false positive rate (X-axis) versus the true positive rate (Y-axis) for each 012-encoded class and for the macro and micro averages among classes. The false positive rate is defined as: ``False Positive Rate = False Positives / (False Positives + True Negatives)`` and the true positive rate is defined as ``True Positive Rate = True Positives / (True Positives + False Negatives)``\. Macro averaging places equal importance on each class, whereas the micro average is the global average across all classes. AUC scores allow the ROC curve, and thus the model's classification skill, to be summarized as a single number. "precision_recall_macro" and "precision_recall_micro" create Precision-Recall (PR) curves for each class plus the macro and micro averages among classes. Precision is defined as ``True Positives / (True Positives + False Positives)`` and recall is defined as ``Recall = True Positives / (True Positives + False Negatives)``\. Reviewing both precision and recall is useful in cases where there is an imbalance in the observations between the two classes. For example, if there are many examples of major alleles (class 0) and only a few examples of minor alleles (class 2). PR curves take into account the use the Average Precision (AP) instead of AUC. AUC and AP are similar metrics, but AP summarizes a precision-recall curve as the weighted mean of precisions achieved at each probability threshold, with the increase in recall from the previous threshold used as the weight. On the contrary, AUC uses linear interpolation with the trapezoidal rule to calculate the area under the curve, which can sometimes be overly optimistic for Precision-Recall curves. Thus, AP scores are used instead. "accuracy" calculates ``number of correct predictions / total predictions``\, but can often be misleading when used without considering the model's classification skill for each class. Defaults to "auc_macro".
-
-        sim_strategy (str, optional): Strategy to use for simulating missing data. Only used to validate the accuracy of the imputation. The final model will be trained with the non-simulated dataset. Supported options include: "random", "nonrandom", and "nonrandom_weighted". "random" randomly simulates missing data. When set to "nonrandom", branches from ``GenotypeData.guidetree`` will be randomly sampled to generate missing data on descendant nodes. For "nonrandom_weighted", missing data will be placed on nodes proportionally to their branch lengths (e.g., to generate data distributed as might be the case with mutation-disruption of RAD sites). Defaults to "random".
+        sim_strategy (str, optional): Strategy to use for simulating missing data. Only used to validate the accuracy of the imputation. The final model will be trained with the non-simulated dataset. Supported options include: {"random", "nonrandom", "nonrandom_weighted"}. "random" randomly simulates missing data. When set to "nonrandom", branches from ``GenotypeData.guidetree`` will be randomly sampled to generate missing data on descendant nodes. For "nonrandom_weighted", missing data will be placed on nodes proportionally to their branch lengths (e.g., to generate data distributed as might be the case with mutation-disruption of RAD sites). If using the "nonrandom" or "nonrandom_weighted" options, a guide tree is required to have been initialized in the passed ``genotype_data`` object. Defaults to "random".
 
         sim_prop_missing (float, optional): Proportion of missing data to use with missing data simulation. Defaults to 0.1.
 
-        str_encodings (Dict[str, int], optional): Integer encodings for nucleotides if input file was in STRUCTURE format. Only used if ``initial_strategy="phylogeny"``\. Defaults to {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}.
-
-        disable_progressbar (bool, optional): Whether to disable the tqdm progress bar. Useful if you are doing the imputation on e.g. a high-performance computing cluster, where sometimes tqdm does not work correctly. If False, uses tqdm progress bar. If True, does not use tqdm. Defaults to False.
-
-        chunk_size (int or float, optional): Number of loci for which to perform IterativeImputer at one time. Useful for reducing the memory usage if you are running out of RAM. If integer is specified, selects ``chunk_size`` loci at a time. If a float is specified, selects ``math.ceil(total_loci * chunk_size)`` loci at a time. Defaults to 1.0 (all features).
+        disable_progressbar (bool, optional): Whether to disable the tqdm progress bar. Useful if you are doing the imputation on e.g. a high-performance computing cluster, where sometimes tqdm does not work correctly when being written to a file. If False, uses tqdm progress bar. If True, does not use tqdm. Defaults to False.
 
         n_jobs (int, optional): Number of parallel jobs to use in the grid search if ``gridparams`` is not None. -1 means use all available processors. Defaults to 1.
 
         verbose (int, optional): Verbosity flag. The higher, the more verbose. Possible values are 0, 1, or 2. 0 = silent, 1 = progress bar, 2 = one line per epoch. Note that the progress bar is not particularly useful when logged to a file, so verbose=0 or verbose=2 is recommended when not running interactively. Setting verbose higher than 0 is useful for initial runs and debugging, but can slow down training. Defaults to 0.
+
+    Attributes:
+        imputed (GenotypeData): New GenotypeData instance with imputed data.
+        best_params (Dict[str, Any]): Best found parameters from grid search.
 
     Example:
         >>> data = GenotypeData(
@@ -1600,8 +1778,8 @@ class ImputeNLPCA(ImputeUBP):
         >>>
         >>> nlpca = ImputeNLPCA(
         >>>     genotype_data=data,
-        >>>     cv=5,
-        >>>     learning_rate=0.05,
+        >>>     learning_rate=0.001,
+        >>>     epochs=200
         >>> )
         >>>
         >>> nlpca_gtdata = nlpca.imputed
