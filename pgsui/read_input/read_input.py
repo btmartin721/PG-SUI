@@ -121,14 +121,13 @@ class GenotypeData:
         self.q = None
         self.site_rates = None
         self.tree = None
+        self.int_iupac = None
 
         if self.qmatrix_iqtree is not None and self.qmatrix is not None:
             raise TypeError("qmatrix_iqtree and qmatrix cannot both be defined")
 
         if self.siterates_iqtree is not None and self.siterates is not None:
-            raise TypeError(
-                "siterates_iqtree and siterates cannot both be defined"
-            )
+            raise TypeError("siterates_iqtree and siterates cannot both be defined")
 
         if self.filetype is not None:
             self._parse_filetype(filetype, popmapfile)
@@ -186,9 +185,7 @@ class GenotypeData:
                     self.filetype = "structure1rowPopID"
                     self.read_structure(onerow=True, popids=True)
 
-                elif popmapfile is not None and filetype.lower().endswith(
-                    "popid"
-                ):
+                elif popmapfile is not None and filetype.lower().endswith("popid"):
                     print(
                         "WARNING: popmapfile was not None but provided "
                         "filetype was structure1rowPopID. Using populations "
@@ -205,9 +202,7 @@ class GenotypeData:
                     )
 
                 else:
-                    raise ValueError(
-                        f"Unsupported filetype provided: {filetype}"
-                    )
+                    raise ValueError(f"Unsupported filetype provided: {filetype}")
 
             elif filetype.lower().startswith("structure2row"):
                 if popmapfile is not None and filetype.lower().endswith("row"):
@@ -218,9 +213,7 @@ class GenotypeData:
                     self.filetype = "structure2rowPopID"
                     self.read_structure(onerow=False, popids=True)
 
-                elif popmapfile is not None and filetype.lower().endswith(
-                    "popid"
-                ):
+                elif popmapfile is not None and filetype.lower().endswith("popid"):
                     print(
                         "WARNING: popmapfile was not None, but provided "
                         "filetype was structure2rowPopID. Using populations "
@@ -260,9 +253,7 @@ class GenotypeData:
         elif self.filetype == filetype:
             pass
         else:
-            raise TypeError(
-                "GenotypeData read_XX() call does not match filetype!\n"
-            )
+            raise TypeError("GenotypeData read_XX() call does not match filetype!\n")
 
     def read_tree(self, treefile: str) -> tt.tree:
         """Read Newick-style phylogenetic tree into toytree object.
@@ -296,9 +287,7 @@ class GenotypeData:
         q = self._blank_q_matrix()
 
         if not label:
-            print(
-                "Warning: Assuming the following nucleotide order: A, C, G, T"
-            )
+            print("Warning: Assuming the following nucleotide order: A, C, G, T")
 
         with open(fname, "r") as fin:
             header = True
@@ -372,9 +361,7 @@ class GenotypeData:
         qdf = pd.DataFrame(q)
         return qdf.T
 
-    def _blank_q_matrix(
-        self, default: float = 0.0
-    ) -> Dict[str, Dict[str, float]]:
+    def _blank_q_matrix(self, default: float = 0.0) -> Dict[str, Dict[str, float]]:
         q: Dict[str, Dict[str, float]] = dict()
         for nuc1 in ["A", "C", "G", "T"]:
             q[nuc1] = dict()
@@ -443,7 +430,7 @@ class GenotypeData:
         return s
 
     def read_structure(self, onerow: bool = False, popids: bool = True) -> None:
-        """Read a structure file with two rows per individual.
+        """Read a structure file with one or two rows per individual.
 
         Args:
             onerow (bool, optional): True if file is in one-row format. False if two-row format. Defaults to False.
@@ -525,8 +512,9 @@ class GenotypeData:
             print("Done!")
             print("\nConverting genotypes to one-hot encoding...")
 
-        # Convert snp_data to onehot encoding format
+        # Convert snp_data to onehot encoding format and integer 0-9 encoded format.
         self.convert_onehot(snp_data)
+        self.convert_int_iupac(snp_data)
 
         if self.verbose:
             print("Done!")
@@ -544,8 +532,7 @@ class GenotypeData:
 
         if self.verbose:
             print(
-                f"\nFound {self.num_snps} SNPs and {self.num_inds} "
-                f"individuals...\n"
+                f"\nFound {self.num_snps} SNPs and {self.num_inds} " f"individuals...\n"
             )
 
         # Make sure all sequences are the same length.
@@ -662,6 +649,7 @@ class GenotypeData:
 
         # Convert snp_data to onehot format.
         self.convert_onehot(snp_data)
+        self.convert_int_iupac(snp_data)
 
         if self.verbose:
             print("Done!")
@@ -678,9 +666,7 @@ class GenotypeData:
 
         # Error handling if incorrect number of individuals in header.
         if len(self.samples) != num_inds:
-            raise ValueError(
-                "Incorrect number of individuals listed in header\n"
-            )
+            raise ValueError("Incorrect number of individuals listed in header\n")
 
     def read_phylip_tree_imputation(self, aln: str) -> Dict[str, List[str]]:
         """Function to read an alignment file.
@@ -781,9 +767,7 @@ class GenotypeData:
 
                 # If monomorphic
                 if num_alleles < 2:
-                    warnings.warn(
-                        f"Monomorphic site detected at SNP column {j+1}.\n"
-                    )
+                    warnings.warn(f"Monomorphic site detected at SNP column {j+1}.\n")
                     """
                     ***TO-DO***: Check here if column is all-missing. What to
                     do in this case? Error out?
@@ -1038,6 +1022,89 @@ class GenotypeData:
 
             return np.array(onehot_outer_list)
 
+    def convert_int_iupac(
+        self,
+        snp_data: Union[np.ndarray, List[List[int]]],
+        encodings_dict: Optional[Dict[str, int]] = None,
+    ) -> np.ndarray:
+        """Convert input data to integer-encoded format (0-9) based on IUPAC codes.
+
+        Args:
+            snp_data (numpy.ndarray of shape (n_samples, n_SNPs) or List[List[int]]): Input 012-encoded data.
+
+            encodings_dict (Dict[str, int] or None): Encodings to convert structure to phylip format.
+
+        Returns:
+            numpy.ndarray: One-hot encoded data.
+        """
+
+        if self.filetype == "phylip" and encodings_dict is None:
+            onehot_dict = {
+                "A": 0,
+                "T": 1,
+                "G": 2,
+                "C": 3,
+                "W": 4,
+                "R": 5,
+                "M": 6,
+                "K": 7,
+                "Y": 8,
+                "S": 9,
+                "-": -9,
+                "N": -9,
+            }
+
+        elif (
+            self.filetype.startswith("structure1row")
+            or self.filetype.startswith("structure2row")
+            and encodings_dict is None
+        ):
+            onehot_dict = {
+                "1/1": 0,
+                "2/2": 1,
+                "3/3": 2,
+                "4/4": 3,
+                "1/2": 4,
+                "2/1": 4,
+                "1/3": 5,
+                "3/1": 5,
+                "1/4": 6,
+                "4/1": 6,
+                "2/3": 7,
+                "3/2": 7,
+                "2/4": 8,
+                "4/2": 8,
+                "3/4": 9,
+                "4/3": 9,
+                "-9/-9": -9,
+            }
+
+        else:
+            if isinstance(snp_data, np.ndarray):
+                snp_data = snp_data.tolist()
+
+            onehot_dict = encodings_dict
+
+        onehot_outer_list = list()
+
+        if encodings_dict is None:
+            for i in range(len(self.samples)):
+                onehot_list = list()
+                for j in range(len(snp_data[0])):
+                    onehot_list.append(onehot_dict[snp_data[i][j]])
+                onehot_outer_list.append(onehot_list)
+
+            self.int_iupac = np.array(onehot_outer_list)
+
+        else:
+            for i in range(len(snp_data)):
+                onehot_list = list()
+                for j in range(len(snp_data[0])):
+                    onehot_list.append(onehot_dict[snp_data[i][j]])
+                onehot_outer_list.append(onehot_list)
+
+            return np.array(onehot_outer_list)
+
     def read_popmap(self, popmapfile: Optional[str]) -> None:
         """Read population map from file.
 
@@ -1076,8 +1143,8 @@ class GenotypeData:
             if sample in my_popmap:
                 self.pops.append(my_popmap[sample])
 
-    def decode_imputed(self, X, write_output=True, prefix="output"):
-        """Decode 012-encoded imputed data to STRUCTURE or PHYLIP format.
+    def decode_imputed(self, X, write_output=True, prefix="output", is_vae=False):
+        """Decode 012-encoded or 0-9 integer-encoded imputed data to STRUCTURE or PHYLIP format.
 
         Args:
             X (pandas.DataFrame, numpy.ndarray, or List[List[int]]): 012-encoded imputed data to decode.
@@ -1096,9 +1163,9 @@ class GenotypeData:
 
         nuc = {
             "A/A": "A",
+            "T/T": "T",
             "G/G": "G",
             "C/C": "C",
-            "T/T": "T",
             "A/G": "R",
             "G/A": "R",
             "C/T": "Y",
@@ -1113,27 +1180,57 @@ class GenotypeData:
             "C/A": "M",
         }
 
+        ft = self.filetype.lower()
+
+        if ft.startswith("phylip"):
+            is_phylip = True
+        else:
+            is_phylip = False
+
         df_decoded = df.copy()
 
-        dreplace = dict()
-        for col, ref, alt in zip(df.columns, self.ref, self.alt):
-            # if site is monomorphic, set alt and ref state the same
-            if alt is None:
-                alt = ref
-            ref2 = f"{ref}/{ref}"
-            alt2 = f"{alt}/{alt}"
-            het2 = f"{ref}/{alt}"
+        # VAE uses [A,T,G,C] encodings. The other NN methods use [0,1,2] encodings.
+        if is_vae:
+            classes_int = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+            classes_string = [str(x) for x in classes_int]
+            if is_phylip:
+                gt = ["A", "T", "G", "C", "W", "R", "M", "K", "Y", "S"]
+            else:
+                gt = [
+                    "1/1",
+                    "2/2",
+                    "3/3",
+                    "4/4",
+                    "1/2",
+                    "1/3",
+                    "1/4",
+                    "2/3",
+                    "2/4",
+                    "3/4",
+                ]
+            d = dict(zip(classes_int, gt))
+            dstr = dict(zip(classes_string, gt))
+            d.update(dstr)
+            dreplace = {col: d for col in list(df.columns)}
+        else:
+            dreplace = dict()
+            for col, ref, alt in zip(df.columns, self.ref, self.alt):
+                # if site is monomorphic, set alt and ref state the same
+                if alt is None:
+                    alt = ref
+                ref2 = f"{ref}/{ref}"
+                alt2 = f"{alt}/{alt}"
+                het2 = f"{ref}/{alt}"
 
-            if self.filetype.lower().startswith("phylip"):
-                ref2 = nuc[ref2]
-                alt2 = nuc[alt2]
-                het2 = nuc[het2]
-            d = {"0": ref2, 0: ref2, "1": het2, 1: het2, "2": alt2, 2: alt2}
-            dreplace[col] = d
+                if is_phylip:
+                    ref2 = nuc[ref2]
+                    alt2 = nuc[alt2]
+                    het2 = nuc[het2]
+
+                d = {"0": ref2, 0: ref2, "1": het2, 1: het2, "2": alt2, 2: alt2}
+                dreplace[col] = d
 
         df_decoded.replace(dreplace, inplace=True)
-
-        ft = self.filetype.lower()
 
         if write_output:
             outfile = f"{prefix}_imputed"
@@ -1154,6 +1251,7 @@ class GenotypeData:
                 df_decoded.insert(0, "sampleID", self.samples)
                 df_decoded.insert(1, "popID", self.pops)
 
+                # Transform each element to a separate row.
                 df_decoded = (
                     df_decoded.set_index(["sampleID", "popID"])
                     .apply(pd.Series.explode)
@@ -1278,12 +1376,8 @@ class GenotypeData:
         self._report2file(loc, report_path, "locus_missingness.csv")
 
         if self.pops is not None:
-            self._report2file(
-                poploc, report_path, "per_pop_and_locus_missingness.csv"
-            )
-            self._report2file(
-                poptotal, report_path, "population_missingness.csv"
-            )
+            self._report2file(poploc, report_path, "per_pop_and_locus_missingness.csv")
+            self._report2file(poptotal, report_path, "population_missingness.csv")
             self._report2file(
                 indpop,
                 report_path,
