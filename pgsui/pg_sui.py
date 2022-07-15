@@ -113,15 +113,15 @@ def main():
 
     # Some are commented out for testing purposes.
     grid_params = {
-        # "learning_rate": learning_rate,
-        # "l1_penalty": l1_penalty,
-        # "l2_penalty": l2_penalty,
+        "learning_rate": learning_rate,
+        "l1_penalty": l1_penalty,
+        "l2_penalty": l2_penalty,
         # "hidden_layer_sizes": hidden_layer_sizes,
         # "n_components": n_components,
-        "dropout_rate": dropout_rate,
+        # "dropout_rate": dropout_rate,
         # "optimizer": optimizer,
         # "num_hidden_layers": num_hidden_layers,
-        "hidden_activation": hidden_activation,
+        # "hidden_activation": hidden_activation,
     }
 
     vae = ImputeVAE(
@@ -136,7 +136,7 @@ def main():
         dropout_rate=0.2,
         hidden_activation="relu",
         batch_size=32,
-        l1_penalty=0.0,
+        l1_penalty=1e-6,
         l2_penalty=1e-6,
         # gridparams=grid_params,
         n_jobs=4,
