@@ -39,7 +39,9 @@ tf.get_logger().setLevel(logging.ERROR)
 
 # Monkey patching deprecation utils to supress warnings.
 # noinspection PyUnusedLocal
-def deprecated(date, instructions, warn_once=True):  # pylint: disable=unused-argument
+def deprecated(
+    date, instructions, warn_once=True
+):  # pylint: disable=unused-argument
     def deprecated_wrapper(func):
         return func
 
@@ -292,7 +294,9 @@ class AutoEncoderFeatureTransformer(BaseEstimator, TransformerMixin):
                 f"Invalid value passed to num_classes in AutoEncoderFeatureTransformer. Only 3 or 4 are supported, but got {self.num_classes}."
             )
 
-        enc_func = self.encode_012 if self.num_classes == 3 else self.encode_vae
+        enc_func = (
+            self.encode_012 if self.num_classes == 3 else self.encode_vae
+        )
 
         # Encode the data.
         self.X_train = enc_func(X)
@@ -348,18 +352,19 @@ class AutoEncoderFeatureTransformer(BaseEstimator, TransformerMixin):
         Returns:
             pandas.DataFrame: One-hot encoded data, ignoring missing values (np.nan). multi-label categories will be encoded as 0.5. Otherwise, it will be 1.0.
         """
+        # return np.where(X >= 0.5, 1.0, 0.0)
         Xt = np.zeros(shape=(X.shape[0], X.shape[1], 4))
         mappings = {
             0: [1.0, 0.0, 0.0, 0.0],
             1: [0.0, 1.0, 0.0, 0.0],
             2: [0.0, 0.0, 1.0, 0.0],
             3: [0.0, 0.0, 0.0, 1.0],
-            4: [0.5, 0.5, 0.0, 0.0],
-            5: [0.5, 0.0, 0.5, 0.0],
-            6: [0.5, 0.0, 0.0, 0.5],
-            7: [0.0, 0.5, 0.5, 0.0],
-            8: [0.0, 0.5, 0.0, 0.5],
-            9: [0.0, 0.0, 0.5, 0.5],
+            4: [1.0, 1.0, 0.0, 0.0],
+            5: [1.0, 0.0, 1.0, 0.0],
+            6: [1.0, 0.0, 0.0, 1.0],
+            7: [0.0, 1.0, 1.0, 0.0],
+            8: [0.0, 1.0, 0.0, 1.0],
+            9: [0.0, 0.0, 1.0, 1.0],
             -9: [np.nan, np.nan, np.nan, np.nan],
         }
         for row in np.arange(X.shape[0]):
@@ -817,7 +822,8 @@ class RandomizeMissingTransformer(BaseEstimator, TransformerMixin):
 
         for col in self.cols_:
             data_drop_rate = np.random.choice(
-                np.arange(self.min_missing_prop, self.max_missing_prop, 0.02), 1
+                np.arange(self.min_missing_prop, self.max_missing_prop, 0.02),
+                1,
             )[0]
 
             drop_ind = np.random.choice(
@@ -1017,7 +1023,8 @@ class ImputePhyloTransformer(GenotypeData, BaseEstimator, TransformerMixin):
                 self.column_subset_ = self.column_subset_.tolist()
 
             genotypes = {
-                k: [v[i] for i in self.column_subset_] for k, v in genotypes.items()
+                k: [v[i] for i in self.column_subset_]
+                for k, v in genotypes.items()
             }
 
         # For each SNP:
@@ -1071,7 +1078,9 @@ class ImputePhyloTransformer(GenotypeData, BaseEstimator, TransformerMixin):
                                 else:
                                     sum = [
                                         sum[i] + val
-                                        for i, val in enumerate(list(pt[allele]))
+                                        for i, val in enumerate(
+                                            list(pt[allele])
+                                        )
                                     ]
 
                             if node_lik[node.idx] is None:
@@ -1085,7 +1094,8 @@ class ImputePhyloTransformer(GenotypeData, BaseEstimator, TransformerMixin):
                         else:
                             # raise error
                             sys.exit(
-                                f"Error: Taxon {child.name} not found in " f"genotypes"
+                                f"Error: Taxon {child.name} not found in "
+                                f"genotypes"
                             )
 
                     else:
@@ -1095,7 +1105,8 @@ class ImputePhyloTransformer(GenotypeData, BaseEstimator, TransformerMixin):
 
                         else:
                             node_lik[node.idx] = [
-                                l[i] * val for i, val in enumerate(node_lik[node.idx])
+                                l[i] * val
+                                for i, val in enumerate(node_lik[node.idx])
                             ]
 
             # infer most likely states for tips with missing data
@@ -1108,19 +1119,25 @@ class ImputePhyloTransformer(GenotypeData, BaseEstimator, TransformerMixin):
                     # actual data
                     # is found
                     # node = tree.search_nodes(name=samp)[0]
-                    node = tree.idx_dict[tree.get_mrca_idx_from_tip_labels(names=samp)]
+                    node = tree.idx_dict[
+                        tree.get_mrca_idx_from_tip_labels(names=samp)
+                    ]
                     dist = node.dist
                     node = node.up
                     imputed = None
 
                     while node and imputed is None:
-                        if self._all_missing(tree, node.idx, snp_index, genotypes):
+                        if self._all_missing(
+                            tree, node.idx, snp_index, genotypes
+                        ):
                             dist += node.dist
                             node = node.up
 
                         else:
                             pt = self._transition_probs(site_Q, dist)
-                            lik = self._get_internal_lik(pt, node_lik[node.idx])
+                            lik = self._get_internal_lik(
+                                pt, node_lik[node.idx]
+                            )
                             maxpos = lik.index(max(lik))
                             if maxpos == 0:
                                 imputed = "A"
@@ -1269,13 +1286,19 @@ class ImputePhyloTransformer(GenotypeData, BaseEstimator, TransformerMixin):
             raise TypeError("genotype_data and alnfile cannot both be defined")
 
         if genotype_data is None and self.alnfile is None:
-            raise TypeError("Either genotype_data or phylipfle must be defined")
+            raise TypeError(
+                "Either genotype_data or phylipfle must be defined"
+            )
 
         if genotype_data.tree is None and self.treefile is None:
-            raise TypeError("Either genotype_data.tree or treefile must be defined")
+            raise TypeError(
+                "Either genotype_data.tree or treefile must be defined"
+            )
 
         if genotype_data is None and self.filetype_ is None:
-            raise TypeError("filetype must be defined if genotype_data is None")
+            raise TypeError(
+                "filetype must be defined if genotype_data is None"
+            )
 
         if (
             genotype_data is None
@@ -1288,7 +1311,9 @@ class ImputePhyloTransformer(GenotypeData, BaseEstimator, TransformerMixin):
             )
 
         if self.qmatrix is not None and self.qmatrix_iqtree is not None:
-            raise TypeError("qmatrix and qmatrix_iqtree cannot both be defined")
+            raise TypeError(
+                "qmatrix and qmatrix_iqtree cannot both be defined"
+            )
 
     def _print_q(self, q: pd.DataFrame) -> None:
         """Print Rate Matrix Q.
@@ -1449,7 +1474,9 @@ class ImputePhyloTransformer(GenotypeData, BaseEstimator, TransformerMixin):
                 return False
         return True
 
-    def _get_internal_lik(self, pt: pd.DataFrame, lik_arr: List[float]) -> List[float]:
+    def _get_internal_lik(
+        self, pt: pd.DataFrame, lik_arr: List[float]
+    ) -> List[float]:
         """Get ancestral state likelihoods for internal nodes of the tree.
 
         Postorder traversal to calculate internal ancestral state likelihoods (tips -> root).
@@ -1562,7 +1589,9 @@ class ImputePhyloTransformer(GenotypeData, BaseEstimator, TransformerMixin):
         return ret
 
 
-class ImputeAlleleFreqTransformer(GenotypeData, BaseEstimator, TransformerMixin):
+class ImputeAlleleFreqTransformer(
+    GenotypeData, BaseEstimator, TransformerMixin
+):
     """Impute missing data by global or by-population allele frequency. Population IDs can be sepcified with the pops argument. if pops is None, then imputation is by global allele frequency. If pops is not None, then imputation is by population-wise allele frequency. A list of population IDs in the appropriate format can be obtained from the GenotypeData object as GenotypeData.populations.
 
     Args:
@@ -1963,7 +1992,9 @@ class ImputeNMFTransformer(BaseEstimator, TransformerMixin):
             expected = original[:, j]
             options = np.unique(expected[expected != 0])
             for i in range(n_row):
-                transform = min(options, key=lambda x: abs(x - predicted[i, j]))
+                transform = min(
+                    options, key=lambda x: abs(x - predicted[i, j])
+                )
                 tR[i, j] = transform
         tR = tR - 1
         tR[tR < 0] = -9
@@ -2095,7 +2126,10 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
             # Make sure no entirely missing columns were simulated.
             self._validate_mask()
 
-        elif self.strategy == "nonrandom" or self.strategy == "nonrandom_weighted":
+        elif (
+            self.strategy == "nonrandom"
+            or self.strategy == "nonrandom_weighted"
+        ):
             if self.genotype_data.tree is None:
                 raise TypeError(
                     "SimGenotypeData.tree cannot be NoneType when "
@@ -2183,10 +2217,14 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
             self._validate_mask()
 
         else:
-            raise ValueError("Invalid SimGenotypeData.strategy value:", self.strategy)
+            raise ValueError(
+                "Invalid SimGenotypeData.strategy value:", self.strategy
+            )
 
         # Get all missing values.
-        self.all_missing_mask_ = np.logical_or(self.mask_, self.original_missing_mask_)
+        self.all_missing_mask_ = np.logical_or(
+            self.mask_, self.original_missing_mask_
+        )
         # Get values where original value was not missing and simulated.
         # data is missing.
         self.sim_missing_mask_ = np.logical_and(
@@ -2253,7 +2291,9 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
                     continue
 
             if tips_only and internal_only:
-                raise ValueError("tips_only and internal_only cannot both be True")
+                raise ValueError(
+                    "tips_only and internal_only cannot both be True"
+                )
 
             if tips_only:
                 if not node.is_leaf():
