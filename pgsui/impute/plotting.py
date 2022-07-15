@@ -812,3 +812,19 @@ class Plotting:
             raise ValueError(
                 f"nn_method must be either 'NLPCA', 'UBP', or 'VAE', but got {nn_method}"
             )
+
+    @staticmethod
+    def plot_certainty_heatmap(y_certainty, sample_ids=None, prefix="output"):
+        fig = plt.figure()
+        hm = sns.heatmap(
+            data=y_certainty,
+            cmap="viridis",
+            vmin=0.0,
+            vmax=1.0,
+            cbar_kws={"label": "Prob."},
+        )
+        hm.set_xlabel("Site")
+        hm.set_ylabel("Sample")
+        hm.set_title("Probabilities of Uncertain Sites")
+        fig.tight_layout()
+        fig.savefig(f"{prefix}_uncertainty.png", bbox_inches="tight")
