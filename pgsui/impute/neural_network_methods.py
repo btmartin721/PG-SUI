@@ -126,96 +126,226 @@ class NeuralNetworkMethods:
 
     @staticmethod
     def encode_vae(X):
-        """Convert 012-encoded data to one-hot encodings.
+        """Encode 0-9 integer data in one-hot format.
         Args:
             X (numpy.ndarray): Input array with 012-encoded data and -9 as the missing data value.
         Returns:
-            pandas.DataFrame: One-hot encoded data, ignoring missing values (np.nan).
+            pandas.DataFrame: One-hot encoded data, ignoring missing values (np.nan). multi-label categories will be encoded as 0.5. Otherwise, it will be 1.0.
         """
-        Xt = np.zeros(shape=(X.shape[0], X.shape[1], 3))
+        # return np.where(X >= 0.5, 1.0, 0.0)
+        try:
+            Xt = np.zeros(shape=(X.shape[0], X.shape[1], 4))
+        except IndexError:
+            Xt = np.zeros(shape=(X.shape[0],))
         mappings = {
             0: [1.0, 0.0, 0.0, 0.0],
             1: [0.0, 1.0, 0.0, 0.0],
             2: [0.0, 0.0, 1.0, 0.0],
             3: [0.0, 0.0, 0.0, 1.0],
-            4: [0.5, 0.5, 0.0, 0.0],
-            5: [0.5, 0.0, 0.5, 0.0],
-            6: [0.5, 0.0, 0.0, 0.5],
-            7: [0.0, 0.5, 0.5, 0.0],
-            8: [0.0, 0.5, 0.0, 0.5],
-            9: [0.0, 0.0, 0.5, 0.5],
+            4: [1.0, 1.0, 0.0, 0.0],
+            5: [1.0, 0.0, 1.0, 0.0],
+            6: [1.0, 0.0, 0.0, 1.0],
+            7: [0.0, 1.0, 1.0, 0.0],
+            8: [0.0, 1.0, 0.0, 1.0],
+            9: [0.0, 0.0, 1.0, 1.0],
             -9: [np.nan, np.nan, np.nan, np.nan],
         }
-        for row in np.arange(X.shape[0]):
-            Xt[row] = [mappings[enc] for enc in X[row]]
+        try:
+            for row in np.arange(X.shape[0]):
+                Xt[row] = [mappings[enc] for enc in X[row]]
+        except TypeError:
+            Xt = [mappings[enc] for enc in X]
         return Xt
 
     @classmethod
-    def decode_masked(cls, y):
-        """Evaluate model predictions by decoding from one-hot encoding to 012-encoded format.
+    def decode_masked(
+        cls,
+        y_pred_proba,
+        is_multiclass=False,
+        threshold=0.5,
+        return_proba=False,
+        return_multilab=False,
+    ):
+        """Evaluate model predictions by decoding from one-hot encoding to integer-encoded format.
 
-        Gets the index of the highest predicted value to obtain the 012-encodings or integer encodings.
+        Gets the index of the highest predicted value to obtain the integer encodings or integer encodings.
 
         Calucalates highest predicted value for each row vector and each class, setting the most likely class to 1.0.
 
         Args:
             y (numpy.ndarray): Model predictions of shape (n_samples * n_features,). Array should be flattened and masked.
 
+            is_multiclass (bool, optional): True if using multiclass data with softmax activation. False if using multilabel data with sigmoid activation. Defaults to False.
+
+            threshold (float, optional): If using multilabel, then set the threshold for determining 1 or 0 predictions. Defaults to 0.5.
+
+            return_proba (bool, optional): If True, returns probabilities for unresolved values where all multilabel probabilities were below the threshold. Defaults to False.
+
+            return_multilab (bool, optional): If True, returns the multilabel encodings instead of integer encodings. Defaults to False.
+
         Returns:
-            numpy.ndarray: Imputed one-hot encoded values.
+            numpy.ndarray: Imputed integer-encoded values.
 
-            pandas.DataFrame: One-hot encoded pandas DataFrame with no missing values.
+            numpy.ndarray (optional): Probabilities for each call, with those above the threshold set to 1.0 and those below the threshold between 0 and 1.
         """
-        Xprob = y
-        Xt = np.apply_along_axis(cls.mle, axis=-1, arr=Xprob)
-        Xpred = np.argmax(Xt, axis=-1)
-        return Xpred
+        y_unresolved_certainty = None
+        if is_multiclass:
+            y_pred = cls.decode_multiclass(y_pred_proba)
+        else:
+            # Call 0s and 1s based on threshold.
+            pred_multilab = np.where(y_pred_proba >= threshold, 1.0, 0.0)
 
-    @classmethod
-    def decode_integer(cls, y):
-        Xprob = y
+            pred_multilab = cls.zero_extra_categories(
+                y_pred_proba, pred_multilab, threshold=threshold
+            )
 
-    @classmethod
-    def decode_binary_multilab(cls, y, missing_val=-1):
-        """Evaluate model predictions by decoding from binary multi-label to 012-encoded format.
+            pred_multilab_decoded = cls.decode_binary_multilab(pred_multilab)
 
-        If sigmoid activation output is >0.5, gets encoded as 1.0; else 0.0. If both categories are > 0.5, then it is heterozygote.
+            # Check if there are still any missing values.
+            still_missing = np.all(pred_multilab == 0, axis=-1)
+
+            if return_multilab:
+                still_missing_bin = np.all(
+                    pred_multilab == 0, axis=-1, keepdims=True
+                )
+
+            # Do multiclass prediction with argmax then get the probabilities
+            # if any unresolved values.
+            if np.any(still_missing):
+                # Get the argmax with the highest probability if
+                # all classes are below threshold.
+                y_multi = cls.decode_multiclass(y_pred_proba)
+                y_multi_bin = cls.decode_multiclass(
+                    y_pred_proba, reduce_dim=False
+                )
+
+                y_pred = np.where(
+                    still_missing, y_multi, pred_multilab_decoded
+                )
+
+                if return_multilab:
+                    y_pred_bin = np.where(
+                        still_missing_bin, y_multi_bin, pred_multilab
+                    )
+
+                if return_proba:
+                    # Get max value as base call.
+                    y_pred_proba_max = y_pred_proba.max(axis=-1)
+
+                    # Get probability of max value that was < threshold.
+                    y_unresolved_certainty = np.where(
+                        still_missing, y_pred_proba_max, 1.0
+                    )
+
+            else:
+                y_pred = pred_multilab_decoded
+
+        y_pred = y_pred.astype(np.int)
+
+        if return_multilab:
+            y_pred = y_pred_bin
+
+        if return_proba:
+            return y_pred, y_unresolved_certainty
+        else:
+            return y_pred
+
+    @staticmethod
+    def zero_extra_categories(y_pred_proba, pred_multilab, threshold=0.5):
+        """Check if any prediction probabilities have >2 values above threshold.
+
+        If >2, then it sets the two with the lowest probabilities to 0.0.
 
         Args:
-            y (numpy.ndarray): Model predictions of shape (n_samples * n_features,). Array should be flattened and masked.
+            y_pred_proba (numpy.ndarray): Prediction probabilities (sigmoid activation) of shape (n_samples, n_features, num_classes) or (n_samples * n_features, num_classes).
+
+            pred_multilab (numpy.ndarray): Multi-label decodings. Inner arrays should have only 0s and 1s. Should be of shape (n_samples, n_features, num_classes) or (n_samples * n_features, num_classes).
+
+            threshold (float, optional): Threshold to use to set decoded multilabel values to 0s (< threshold) or 1s (>= threshold). Defaults to 0.5.
+        """
+        # Check if multi-labels have >2 1s.
+        multi_cats = np.where(
+            np.count_nonzero(pred_multilab, axis=-1) > 2, True, False
+        )
+
+        # If >2 1s, set the extras with lowest probabilities to 0.0.
+        if np.any(multi_cats):
+            n_dims = len(y_pred_proba.shape)
+            if n_dims == 2:
+                for row in np.arange(y_pred_proba.shape[0]):
+                    # Get lowest two values.
+                    idx = np.argpartition(y_pred_proba[row], 2)[0:2]
+                    y_pred_proba[row, idx] = 0.0
+
+            elif n_dims == 3:
+                for row in np.arange(y_pred_proba.shape[0]):
+                    for col in np.arange(y_pred_proba.shape[1]):
+                        idx = np.argpartition(y_pred_proba[row, col], 2)[0:2]
+                        y_pred_proba[row, col, idx] = 0.0
+
+            else:
+                raise IndexError(
+                    f"Incorrect number of dimensions for y_pred_proba: {n_dims}"
+                )
+
+            pred_multilab = np.where(y_pred_proba >= threshold, 1.0, 0.0)
+        return pred_multilab
+
+    @classmethod
+    def decode_multiclass(cls, y_pred_proba, reduce_dim=True):
+        yt = np.apply_along_axis(cls.mle, axis=-1, arr=y_pred_proba)
+        if reduce_dim:
+            return np.argmax(yt, axis=-1)
+        else:
+            return yt
+
+    @classmethod
+    def decode_binary_multilab(cls, y_pred):
+        """Decode multi-label sigmoid probabilities to integer encodings.
+
+        The predictions should have already undergone sigmoid activation and should be probabilities.
+
+        If sigmoid activation output is >0.5, gets encoded as 1.0; else 0.0. If more than one category is > 0.5, then it is a heterozygote.
+
+        Args:
+            y_pred (numpy.ndarray): Model predictions of shape (n_samples * n_features, num_classes) or (n_samples, n_features, num_classes). A threshold should already have been applied to set each class to 0 or 1.
 
         Returns:
-            numpy.ndarray: Imputed one-hot encoded values.
-
-            pandas.DataFrame: One-hot encoded pandas DataFrame with no missing values.
+            numpy.ndarray: Integer-decoded multilabel predictions of shape (n_samples * n_features) or (n_samples, n_features).
         """
-        y_pred_sigmoid = y
+        bin_mapping = [
+            np.array([1.0, 0.0, 0.0, 0.0]),
+            np.array([0.0, 1.0, 0.0, 0.0]),
+            np.array([0.0, 0.0, 1.0, 0.0]),
+            np.array([0.0, 0.0, 0.0, 1.0]),
+            np.array([1.0, 1.0, 0.0, 0.0]),
+            np.array([1.0, 0.0, 1.0, 0.0]),
+            np.array([1.0, 0.0, 0.0, 1.0]),
+            np.array([0.0, 1.0, 1.0, 0.0]),
+            np.array([0.0, 1.0, 0.0, 1.0]),
+            np.array([0.0, 0.0, 1.0, 1.0]),
+            np.array([0.0, 0.0, 0.0, 0.0]),
+        ]
 
-        y_012 = np.zeros((y_pred_sigmoid.shape[0], y_pred_sigmoid.shape[1]))
-        yt = np.where(y_pred_sigmoid >= 0.5, 1.0, 0.0)
-        bin_mappings = {
-            0: np.array([1, 0]),
-            1: np.array([1, 1]),
-            2: np.array([0, 1]),
-            -9: np.array([0, 0]),
-        }
+        # Get integer mappings.
+        int_mapping = list(range(10))
+        int_mapping.append(-9)
+        int_mapping = np.array(int_mapping)
 
-        for row in np.arange(y_pred_sigmoid.shape[0]):
-            for col in np.arange(y_pred_sigmoid.shape[1]):
-                y_012[row, col] = [
-                    k
-                    for k, v in bin_mappings.items()
-                    if np.array_equal(v, yt[row, col])
-                ][0]
+        # Convert each inner array to a string.
+        # E.g., ['[1, 0, 0, 0]', '[1, 1, 0, 0]']
+        # This is so they can be used as dictionary keys.
+        bin_mapping = [np.array2string(x) for x in bin_mapping]
 
-        return cls.encode_onehot(y_012, missing_val=missing_val)
+        # Zip two lists to dictionary with bin_mapping and int_mapping
+        # as keys and values
+        bin_mapping = dict(zip(bin_mapping, int_mapping))
 
-        # y_012[row] = [
-        #     bin_mappings[k] for k, v in bin_mappings.items() if v == yt[row]
-        # ][0]
-        return y_012
+        # Convert each inner array to a string. E.g., ['[0, 1, 0, 0]'].
+        y_pred_str = np.apply_along_axis(np.array2string, -1, y_pred)
 
-        # ypred = np.where(np.all(yt == 1), 1, a)
+        # Convert string arrays to integers using dictionary key.
+        return np.vectorize(bin_mapping.get)(y_pred_str)
 
     @staticmethod
     def encode_categorical(X):
@@ -582,8 +712,8 @@ class NeuralNetworkMethods:
             opt = tf.keras.optimizers.RMSProp
 
         if vae:
-            loss = NeuralNetworkMethods.make_masked_categorical_crossentropy()
-            metrics = [NeuralNetworkMethods.make_masked_categorical_accuracy()]
+            loss = NeuralNetworkMethods.make_masked_binary_crossentropy()
+            metrics = [NeuralNetworkMethods.make_masked_binary_accuracy()]
 
         else:
             # Doing grid search. Params are callables.
@@ -640,8 +770,8 @@ class NeuralNetworkMethods:
         return np.square(np.subtract(X_true[mask], X_pred[mask])).mean()
 
     @staticmethod
-    def make_masked_binary_accuracy(num_classes=2):
-        """Make categorical crossentropy loss function with missing mask.
+    def make_masked_binary_accuracy():
+        """Make binary accuracy metric with missing mask.
 
         Returns:
             callable: Function that calculates categorical crossentropy loss.
@@ -649,21 +779,18 @@ class NeuralNetworkMethods:
 
         @tf.function
         def masked_binary_accuracy(y_true, y_pred, sample_weight=None):
-            """Custom loss function for neural network model with missing mask.
+            """Custom neural network metric function with missing mask.
+
             Ignores missing data in the calculation of the loss function.
+
             Args:
-                y_true (tensorflow.tensor): Input one-hot encoded 3D tensor.
-                y_pred (tensorflow.tensor): Predicted values.
+                y_true (tensorflow.Tensor): Input multilabel encoded 3D tensor.
+                y_pred (tensorflow.Tensor): Predicted values from model.
                 sample_weight (numpy.ndarray): 2D matrix of sample weights.
 
             Returns:
-                float: Mean squared error loss value with missing data masked.
+                float: Binary accuracy calculated with missing data masked.
             """
-            s = tf.shape(y_true)
-            y_true = tf.reshape(
-                y_true, shape=[s[0], s[1] // num_classes, num_classes]
-            )
-
             y_true_masked = tf.boolean_mask(
                 y_true, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
             )
@@ -689,7 +816,7 @@ class NeuralNetworkMethods:
         return masked_binary_accuracy
 
     @staticmethod
-    def make_masked_binary_crossentropy(num_classes=2):
+    def make_masked_binary_crossentropy():
         """Make binary crossentropy loss function with missing mask.
 
         Args:
@@ -701,22 +828,20 @@ class NeuralNetworkMethods:
 
         @tf.function
         def masked_binary_crossentropy(y_true, y_pred, sample_weight=None):
-            """Custom loss function for neural network model with missing mask.
+            """Custom loss function for with missing mask applied.
+
             Ignores missing data in the calculation of the loss function.
 
             Args:
                 y_true (tensorflow.tensor): Input one-hot encoded 3D tensor.
-                y_pred (tensorflow.tensor): Predicted values.
+
+                y_pred (tensorflow.tensor): Predicted values, should have undergone sigmoid activation.
+
                 sample_weight (numpy.ndarray): 2D matrix of sample weights.
 
             Returns:
-                float: Mean squared error loss value with missing data masked.
+                float: Binary crossentropy loss value.
             """
-            s = tf.shape(y_true)
-            y_true = tf.reshape(
-                y_true, shape=[s[0], s[1] // num_classes, num_classes]
-            )
-
             # Mask out missing values.
             y_true_masked = tf.boolean_mask(
                 y_true, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
