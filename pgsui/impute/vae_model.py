@@ -330,7 +330,7 @@ class Decoder(tf.keras.layers.Layer):
             num_classes,
             kernel_initializer=kernel_initializer,
             kernel_regularizer=kernel_regularizer,
-            activation="softmax",
+            activation="sigmoid",
         )
         self.dropout_layer = Dropout(dropout_rate)
 
@@ -387,7 +387,7 @@ class VAEModel(tf.keras.Model):
         # self.kl_beta._trainable = False
 
         self.nn_ = NeuralNetworkMethods()
-        self.categorical_accuracy = self.nn_.make_masked_categorical_accuracy()
+        self.binary_accuracy = self.nn_.make_masked_binary_accuracy()
 
         self.total_loss_tracker = tf.keras.metrics.Mean(name="loss")
         self.reconstruction_loss_tracker = tf.keras.metrics.Mean(
@@ -398,7 +398,6 @@ class VAEModel(tf.keras.Model):
 
         # y_train[1] dimension.
         self.n_features = output_shape
-        n_features = self.n_features
 
         self.n_components = n_components
         self.weights_initializer = weights_initializer
@@ -418,7 +417,7 @@ class VAEModel(tf.keras.Model):
         )
 
         hidden_layer_sizes = nn.get_hidden_layer_sizes(
-            n_features, self.n_components, hidden_layer_sizes, vae=True
+            self.n_features, self.n_components, hidden_layer_sizes, vae=True
         )
 
         hidden_layer_sizes = [h * self.num_classes for h in hidden_layer_sizes]
@@ -450,7 +449,7 @@ class VAEModel(tf.keras.Model):
             )
 
         self.encoder = Encoder(
-            n_features,
+            self.n_features,
             self.num_classes,
             self.n_components,
             hidden_layer_sizes,
@@ -464,7 +463,7 @@ class VAEModel(tf.keras.Model):
         hidden_layer_sizes.reverse()
 
         self.decoder = Decoder(
-            n_features,
+            self.n_features,
             self.num_classes,
             self.n_components,
             hidden_layer_sizes,
@@ -542,9 +541,10 @@ class VAEModel(tf.keras.Model):
         ### 'rank', then convert y_true to a tensor object."
         # self.compiled_metrics.update_state(
         self.accuracy_tracker.update_state(
-            self.categorical_accuracy(
+            self.binary_accuracy(
                 y,
                 reconstruction,
+                sample_weight=sample_weight,
             )
         )
 
@@ -579,9 +579,10 @@ class VAEModel(tf.keras.Model):
         total_loss = reconstruction_loss + regularization_loss
 
         self.accuracy_tracker.update_state(
-            self.categorical_accuracy(
+            self.binary_accuracy(
                 y,
                 reconstruction,
+                sample_weight=sample_weight,
             )
         )
 
