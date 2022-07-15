@@ -139,9 +139,9 @@ class Impute:
         if self.clf == VAE or self.clf == SAE or self.clf == UBP:
             self.algorithm = "nn"
             if self.clf == VAE:
-                self.using_vae = True
+                self.using_basecat = True
             else:
-                self.using_vae = False
+                self.using_basecat = False
         else:
             self.nn_method = None
             self.algorithm = "ii"
@@ -398,7 +398,7 @@ class Impute:
             imp012,
             write_output=True,
             prefix=self.prefix,
-            is_vae=self.using_vae,
+            is_nuc=self.using_basecat,
         )
 
         ft = genotype_data.filetype
