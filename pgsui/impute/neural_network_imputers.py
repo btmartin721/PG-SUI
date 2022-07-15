@@ -370,7 +370,19 @@ class VAE(BaseEstimator, TransformerMixin):
         y_missing_idx = np.flatnonzero(self.original_missing_mask_)
         y_pred, z_mean, z_log_var, z = model(y_train, training=False)
         y_pred = self.tt_.inverse_transform(y_pred)
-        y_pred_decoded = self.nn_.decode_masked(y_pred)
+        y_pred_decoded, y_pred_certainty = self.nn_.decode_masked(
+            y_pred, return_proba=True
+        )
+
+        # There were some predicted values below the binary threshold.
+        if y_pred_certainty is not None:
+            plotting = Plotting()
+            plotting.plot_certainty_heatmap(
+                y_pred_certainty,
+                self.genotype_data.individuals,
+                prefix=self.prefix,
+            )
+
         y_pred_1d = y_pred_decoded.ravel()
 
         # Only replace originally missing values at missing indexes.
@@ -443,7 +455,7 @@ class VAE(BaseEstimator, TransformerMixin):
             compile_params,
             fit_params,
             scoring=scoring,
-            testing=False,
+            testing=True,
         )
 
         histories.append(best_history)
@@ -635,7 +647,7 @@ class VAE(BaseEstimator, TransformerMixin):
             y_pred,
             missing_mask=self.sim_missing_mask_,
             is_vae=True,
-            testing=False,
+            testing=testing,
         )
 
         return (
