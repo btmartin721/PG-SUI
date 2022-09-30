@@ -106,7 +106,7 @@ def main():
     hidden_activation = ["elu", "relu"]
     num_hidden_layers = [1, 2, 3, 4, 5]
     hidden_layer_sizes = ["sqrt", "midpoint"]
-    n_components = [2, 4, 6, 8, 10, 20, 30]
+    n_components = [2, 4, 6]
     dropout_rate = [0.0, 0.2, 0.4]
     # batch_size = [16, 32, 48, 64]
     optimizer = ["adam", "sgd", "adagrad"]
@@ -117,12 +117,14 @@ def main():
         "l1_penalty": l1_penalty,
         "l2_penalty": l2_penalty,
         # "hidden_layer_sizes": hidden_layer_sizes,
-        # "n_components": n_components,
-        # "dropout_rate": dropout_rate,
+        "n_components": n_components,
+        "dropout_rate": dropout_rate,
         # "optimizer": optimizer,
         # "num_hidden_layers": num_hidden_layers,
         # "hidden_activation": hidden_activation,
     }
+
+    sys.exit()
 
     vae = ImputeVAE(
         data,
@@ -130,20 +132,20 @@ def main():
         epochs=100,
         column_subset=1.0,
         learning_rate=0.01,
-        num_hidden_layers=2,
+        num_hidden_layers=3,
         hidden_layer_sizes="midpoint",
         verbose=1,
         dropout_rate=0.2,
-        hidden_activation="relu",
+        hidden_activation="elu",
         batch_size=32,
-        l1_penalty=1e-6,
-        l2_penalty=1e-6,
+        l1_penalty=0.001,
+        l2_penalty=0.001,
         # gridparams=grid_params,
         n_jobs=4,
         grid_iter=5,
         sim_strategy="nonrandom_weighted",
         sim_prop_missing=0.5,
-        scoring_metric="precision_recall_macro",
+        scoring_metric="hamming",
         gridsearch_method="gridsearch",
         early_stop_gen=5,
         n_components=3,

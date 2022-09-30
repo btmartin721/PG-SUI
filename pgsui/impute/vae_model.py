@@ -44,8 +44,6 @@ from tensorflow.keras.layers import (
     PReLU,
 )
 
-import tensorflow_probability as tfp
-
 from tensorflow.keras.regularizers import l1_l2
 from tensorflow.keras import Sequential, Model
 from tensorflow.keras import backend as K
@@ -118,7 +116,7 @@ class Encoder(tf.keras.layers.Layer):
     ):
         super(Encoder, self).__init__(name=name, **kwargs)
 
-        self.beta = beta
+        self.beta = beta * latent_dim
 
         self.dense2 = None
         self.dense3 = None
@@ -195,7 +193,9 @@ class Encoder(tf.keras.layers.Layer):
             name="z",
         )
 
-        self.kldivergence = KLDivergenceLoss(beta=beta, name="KLDivergence")
+        self.kldivergence = KLDivergenceLoss(
+            beta=self.beta, name="KLDivergence"
+        )
 
         self.dense_latent = Dense(
             latent_dim,
@@ -384,7 +384,10 @@ class VAEModel(tf.keras.Model):
     ):
         super(VAEModel, self).__init__()
 
+        # self.kl_beta = K.variable(0.0)
         # self.kl_beta._trainable = False
+
+        self.kl_beta = kl_beta
 
         self.nn_ = NeuralNetworkMethods()
         self.binary_accuracy = self.nn_.make_masked_binary_accuracy()
@@ -407,7 +410,6 @@ class VAEModel(tf.keras.Model):
         self.l1_penalty = l1_penalty
         self.l2_penalty = l2_penalty
         self.dropout_rate = dropout_rate
-        self.kl_beta = kl_beta
         self.num_classes = num_classes
 
         nn = NeuralNetworkMethods()
@@ -526,7 +528,7 @@ class VAEModel(tf.keras.Model):
                 sample_weight=sample_weight,
             )
 
-            # Includes KL Divergence Loss.
+            # Doesn't include KL Divergence Loss.
             regularization_loss = sum(self.losses)
 
             total_loss = reconstruction_loss + regularization_loss

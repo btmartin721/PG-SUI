@@ -607,7 +607,7 @@ class MLPClassifier(KerasClassifier):
 
         elif scoring_metric == "accuracy":
             y_pred_masked_decoded = NeuralNetworkMethods.decode_masked(
-                y_pred_masked
+                y_true_masked, y_pred_masked
             )
             return accuracy_score(y_true_masked, y_pred_masked_decoded)
 
@@ -621,7 +621,7 @@ class MLPClassifier(KerasClassifier):
             print(y_true_masked)
 
             y_pred_masked_decoded = NeuralNetworkMethods.decode_masked(
-                y_pred_masked
+                y_true_masked, y_pred_masked
             )
 
             print(y_pred_masked_decoded)

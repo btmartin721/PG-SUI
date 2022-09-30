@@ -13,6 +13,8 @@ from sklearn.utils.class_weight import (
     compute_class_weight,
 )
 
+from sklearn.metrics import f1_score
+
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 logging.getLogger("tensorflow").disabled = True
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -155,16 +157,23 @@ class NeuralNetworkMethods:
                 Xt[row] = [mappings[enc] for enc in X[row]]
         except TypeError:
             Xt = [mappings[enc] for enc in X]
+
+        if not isinstance(Xt, np.ndarray):
+            Xt = np.array(Xt)
         return Xt
 
     @classmethod
     def decode_masked(
         cls,
+        y_true_bin,
         y_pred_proba,
         is_multiclass=False,
-        threshold=0.5,
         return_proba=False,
         return_multilab=False,
+        predict_still_missing=True,
+        threshold_increment=0.1,
+        multilabel_averaging="macro",
+        missing_mask=None,
     ):
         """Evaluate model predictions by decoding from one-hot encoding to integer-encoded format.
 
@@ -173,7 +182,9 @@ class NeuralNetworkMethods:
         Calucalates highest predicted value for each row vector and each class, setting the most likely class to 1.0.
 
         Args:
-            y (numpy.ndarray): Model predictions of shape (n_samples * n_features,). Array should be flattened and masked.
+            y_true_bin (numpy.ndarray): True multilabel target values of shape (n_samples * n_features, num_classes). Array should be flattened and masked.
+
+            y_pred_proba (numpy.ndarray): Multilabel model predictions of shape (n_samples * n_features, num_classes). Array should be flattened and masked.
 
             is_multiclass (bool, optional): True if using multiclass data with softmax activation. False if using multilabel data with sigmoid activation. Defaults to False.
 
@@ -183,6 +194,14 @@ class NeuralNetworkMethods:
 
             return_multilab (bool, optional): If True, returns the multilabel encodings instead of integer encodings. Defaults to False.
 
+            predict_still_missing (bool, optional): If True, values that are still missing after decoding are decoded using the maximum probability (i.e., with np.argmax). If False, then it is possible that some missing data might still remain after decoding if none of the multilabel probabilities are above the threshold. Defaults to True.
+
+            threshold_increment (float, optional): How much to increment threshold when searching for optimal threshold. Should be > 0 and < 1. Defaults to 0.1.
+
+            multilabel_averaging (str): Method to use for averaging F1 score among multilabel classes. Supported options are: {"macro", "micro", "weighted", "samples"}. Defaults to "macro".
+
+            missing_mask (numpy.ndarray, optional): Missing mask with missing values encoded as 1's and nonmissing as 0. Only used if not None. Defaults to None.
+
         Returns:
             numpy.ndarray: Imputed integer-encoded values.
 
@@ -190,65 +209,151 @@ class NeuralNetworkMethods:
         """
         y_unresolved_certainty = None
         if is_multiclass:
+            # Softmax predictions.
             y_pred = cls.decode_multiclass(y_pred_proba)
         else:
+            if y_true_bin.shape[-1] != 4:
+                y_true_bin = cls.encode_vae(y_true_bin)
+
+            # Binary multilabel predictions.
+            threshold = cls.get_optimal_threshold(
+                y_true_bin,
+                y_pred_proba,
+                increment=threshold_increment,
+                average_method=multilabel_averaging,
+                missing_mask=missing_mask,
+            )
+
             # Call 0s and 1s based on threshold.
             pred_multilab = np.where(y_pred_proba >= threshold, 1.0, 0.0)
 
-            pred_multilab = cls.zero_extra_categories(
-                y_pred_proba, pred_multilab, threshold=threshold
-            )
+            # pred_multilab = cls.zero_extra_categories(
+            #     y_pred_proba, pred_multilab, threshold=threshold
+            # )
 
             pred_multilab_decoded = cls.decode_binary_multilab(pred_multilab)
 
-            # Check if there are still any missing values.
-            still_missing = np.all(pred_multilab == 0, axis=-1)
-
-            if return_multilab:
-                still_missing_bin = np.all(
-                    pred_multilab == 0, axis=-1, keepdims=True
-                )
-
-            # Do multiclass prediction with argmax then get the probabilities
-            # if any unresolved values.
-            if np.any(still_missing):
-                # Get the argmax with the highest probability if
-                # all classes are below threshold.
-                y_multi = cls.decode_multiclass(y_pred_proba)
-                y_multi_bin = cls.decode_multiclass(
-                    y_pred_proba, reduce_dim=False
-                )
-
-                y_pred = np.where(
-                    still_missing, y_multi, pred_multilab_decoded
-                )
+            if predict_still_missing:
+                # Check if there are still any missing values.
+                still_missing = np.all(pred_multilab == 0, axis=-1)
 
                 if return_multilab:
-                    y_pred_bin = np.where(
-                        still_missing_bin, y_multi_bin, pred_multilab
+                    still_missing_bin = np.all(
+                        pred_multilab == 0, axis=-1, keepdims=True
                     )
 
-                if return_proba:
-                    # Get max value as base call.
-                    y_pred_proba_max = y_pred_proba.max(axis=-1)
-
-                    # Get probability of max value that was < threshold.
-                    y_unresolved_certainty = np.where(
-                        still_missing, y_pred_proba_max, 1.0
+                # Do multiclass prediction with argmax then get the probabilities
+                # if any unresolved values.
+                if np.any(still_missing):
+                    # Get the argmax with the highest probability if
+                    # all classes are below threshold.
+                    y_multi = cls.decode_multiclass(y_pred_proba)
+                    y_multi_bin = cls.decode_multiclass(
+                        y_pred_proba, reduce_dim=False
                     )
 
+                    y_pred = np.where(
+                        still_missing, y_multi, pred_multilab_decoded
+                    )
+
+                    if return_multilab:
+                        y_pred_bin = np.where(
+                            still_missing_bin, y_multi_bin, pred_multilab
+                        )
+
+                        y_pred = y_pred_bin
+
+                    if return_proba:
+                        # Get max value as base call.
+                        y_pred_proba_max = y_pred_proba.max(axis=-1)
+
+                        # Get probability of max value that was < threshold.
+                        y_unresolved_certainty = np.where(
+                            still_missing, y_pred_proba_max, 1.0
+                        )
+
+                else:
+                    if return_multilab:
+                        y_pred = pred_multilab
+                    else:
+                        y_pred = pred_multilab_decoded
             else:
-                y_pred = pred_multilab_decoded
+                if return_multilab:
+                    y_pred = pred_multilab
+                else:
+                    y_pred = pred_multilab_decoded
 
         y_pred = y_pred.astype(np.int)
-
-        if return_multilab:
-            y_pred = y_pred_bin
 
         if return_proba:
             return y_pred, y_unresolved_certainty
         else:
             return y_pred
+
+    @classmethod
+    def get_optimal_threshold(
+        cls,
+        y_true_bin,
+        y_pred_proba,
+        increment=0.1,
+        average_method="macro",
+        missing_mask=None,
+    ):
+        """Increment to find the optimal decoding threshold.
+
+        Args:
+            y_true_bin (numpy.ndarray): True multilabel values of shape (n_samples * n_features, num_classes).
+
+            y_pred_proba (numpy.ndarray): Multilabel prediction probabilities of shape (n_features * n_samples, num_classes).
+
+            increment (float, optional): How much to increment when searching for optimal threshold. Should be > 0 and < 1. Defaults to 0.1.
+
+            average_method (str, optional): Method to use for averaging the F1 score across multilabel classes. Possible options include {"macro", "micro", "weighted", "samples"}. Defaults to "macro".
+
+            missing_mask (numpy.ndarray, optional): Missing value mask with missing values encoded as 1's and non-missing values as 0's. Only used if not None. Defaults to None.
+
+        Returns:
+            float: Optimal decoding threshold.
+        """
+        thresholds = np.arange(0, 1, increment)
+
+        nonmissing_mask = np.where(y_true_bin != -1)
+
+        # This is only supposed to get applied during the final transform,
+        # when the original missing data is replaced with predictions.
+        # If this isn't done here, it ends up having -1 values in it,
+        # which causes the f1_score function to throw an error.
+        y_true_bin = y_true_bin[nonmissing_mask]
+        y_pred_proba = y_pred_proba[nonmissing_mask]
+
+        scores = [
+            f1_score(
+                y_true_bin,
+                np.where(y_pred_proba >= t, 1.0, 0.0),
+                average=average_method,
+            )
+            for t in thresholds
+        ]
+
+        return thresholds[np.argmax(scores)]
+
+    @classmethod
+    def flatten_bin_encodings(cls, y):
+        """Flatten first two dimensions of binary encodings to (num_samples * num_features, num_classes).
+
+        Args:
+            y (numpy.ndarray): Numpy array with 3-dimensional shape of (n_samples, num_features, num_classes).
+
+        Returns:
+            numpy.ndarray: Array of shape (n_samples * num_features, num_classes).
+
+        Raises:
+            ValueError: Input shape must be 3-dimensional.
+        """
+        if len(y.shape) != 3:
+            raise ValueError("Input array must be 3-dimensional")
+
+        return y.reshape(y.shape[0] * y.shape[1], y.shape[2])
 
     @staticmethod
     def zero_extra_categories(y_pred_proba, pred_multilab, threshold=0.5):
@@ -313,39 +418,49 @@ class NeuralNetworkMethods:
         Returns:
             numpy.ndarray: Integer-decoded multilabel predictions of shape (n_samples * n_features) or (n_samples, n_features).
         """
-        bin_mapping = [
-            np.array([1.0, 0.0, 0.0, 0.0]),
-            np.array([0.0, 1.0, 0.0, 0.0]),
-            np.array([0.0, 0.0, 1.0, 0.0]),
-            np.array([0.0, 0.0, 0.0, 1.0]),
-            np.array([1.0, 1.0, 0.0, 0.0]),
-            np.array([1.0, 0.0, 1.0, 0.0]),
-            np.array([1.0, 0.0, 0.0, 1.0]),
-            np.array([0.0, 1.0, 1.0, 0.0]),
-            np.array([0.0, 1.0, 0.0, 1.0]),
-            np.array([0.0, 0.0, 1.0, 1.0]),
-            np.array([0.0, 0.0, 0.0, 0.0]),
-        ]
+        y_pred_idx = y_pred.astype(int)
+        y_pred_idx = y_pred_idx.astype(str)
+        if len(y_pred_idx.shape) < 3:
+            y_pred_idx = np.array(
+                [
+                    "".join(np.where(row == "1")[0].astype(str))
+                    for row in y_pred_idx
+                ]
+            )
+        else:
+            y_pred_idx = np.array(
+                [
+                    "".join(np.where(col == "1")[0].astype(str))
+                    for row in y_pred_idx
+                    for col in row
+                ]
+            )
 
-        # Get integer mappings.
-        int_mapping = list(range(10))
-        int_mapping.append(-9)
-        int_mapping = np.array(int_mapping)
+        try:
+            Xt = np.zeros(shape=(y_pred.shape[0], y_pred.shape[1], 4))
+        except IndexError:
+            Xt = np.zeros(shape=(y_pred.shape[0],))
 
-        # Convert each inner array to a string.
-        # E.g., ['[1, 0, 0, 0]', '[1, 1, 0, 0]']
-        # This is so they can be used as dictionary keys.
-        bin_mapping = [np.array2string(x) for x in bin_mapping]
+        mappings = {
+            "0": 0,
+            "1": 1,
+            "2": 2,
+            "3": 3,
+            "01": 4,
+            "02": 5,
+            "03": 6,
+            "12": 7,
+            "13": 8,
+            "34": 9,
+            "-9": -9,
+            "": -9,
+        }
 
-        # Zip two lists to dictionary with bin_mapping and int_mapping
-        # as keys and values
-        bin_mapping = dict(zip(bin_mapping, int_mapping))
+        Xt = [mappings[enc] for enc in y_pred_idx]
 
-        # Convert each inner array to a string. E.g., ['[0, 1, 0, 0]'].
-        y_pred_str = np.apply_along_axis(np.array2string, -1, y_pred)
-
-        # Convert string arrays to integers using dictionary key.
-        return np.vectorize(bin_mapping.get)(y_pred_str)
+        if not isinstance(Xt, np.ndarray):
+            Xt = np.array(Xt)
+        return Xt
 
     @staticmethod
     def encode_categorical(X):
@@ -1053,3 +1168,29 @@ class NeuralNetworkMethods:
                         sample_weight[y_true[:, i] == j, i] = w[j]
 
         return sample_weight
+
+    @staticmethod
+    def write_gt_state_probs(y_pred, y_pred_1d, y_true, y_true_1d):
+        bin_mapping = np.array(
+            [np.array2string(x) for row in y_pred for x in row]
+        )
+
+        bin_mapping = np.reshape(bin_mapping, y_pred_1d.shape)
+
+        y_true_2d = np.reshape(y_true_1d, y_true.shape)
+        bin_mapping_2d = np.reshape(bin_mapping, y_true.shape)
+        y_pred_2d = np.reshape(y_pred_1d, y_true.shape)
+
+        gt_dist = list()
+        for yt, yp, ypd in zip(y_true_2d, bin_mapping_2d, y_pred_2d):
+            sites = dict()
+            for i, yt_site in enumerate(yt):
+                sites[
+                    f"Site Index {i},Probability Vector,Imputed Genotype,Expected Genotype"
+                ] = f"{i},{yp[i]},{ypd[i]},{yt_site}"
+            gt_dist.append(sites)
+
+        gt_df = pd.DataFrame.from_records(gt_dist)
+        gt_df.to_csv(
+            "genotype_stateProbs_truths.csv", index=False, header=False
+        )

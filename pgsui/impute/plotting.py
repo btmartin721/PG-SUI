@@ -11,6 +11,7 @@ import plotly.express as px
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from sklearn_genetic.utils import logbook_to_pandas
+from sklearn.metrics import ConfusionMatrixDisplay
 
 try:
     from .neural_network_methods import NeuralNetworkMethods
@@ -46,7 +47,6 @@ class Plotting:
         tot = len(filter_col)
         cols = 4
         rows = int(np.ceil(tot / cols))
-        remainder = tot % cols
 
         fig = plt.figure(1, figsize=(20, 10))
         fig.tight_layout(pad=3.0)
@@ -56,7 +56,6 @@ class Plotting:
         plt.rc("font", **font)
 
         for i, p in enumerate(filter_col, start=1):
-
             ax = fig.add_subplot(rows, cols, i)
 
             # Plot each metric.
@@ -113,8 +112,11 @@ class Plotting:
         fig = plt.figure(figsize=(20, 10))
 
         acc = round(metrics["accuracy"] * 100, 2)
+        ham = round(metrics["hamming"], 2)
 
-        fig.suptitle(f"Performance Metrics\nAccuracy: {acc}")
+        fig.suptitle(
+            f"Performance Metrics\nAccuracy: {acc}\nHamming Loss: {ham}"
+        )
         axs = fig.subplots(nrows=1, ncols=2)
         plt.subplots_adjust(hspace=0.5)
 
@@ -828,3 +830,42 @@ class Plotting:
         hm.set_title("Probabilities of Uncertain Sites")
         fig.tight_layout()
         fig.savefig(f"{prefix}_uncertainty.png", bbox_inches="tight")
+
+    @staticmethod
+    def plot_confusion_matrix(y_true_1d, y_pred_1d):
+        fig, ax = plt.subplots(1, 1, figsize=(15, 15))
+        ConfusionMatrixDisplay.from_predictions(
+            y_true=y_true_1d, y_pred=y_pred_1d, ax=ax
+        )
+        fig.savefig("vae_confusion_matrix.png")
+
+    @staticmethod
+    def plot_gt_distribution(df):
+        df = misc.validate_input_type(df, return_type="df")
+        df_melt = pd.melt(df, value_name="Count")
+        cnts = df_melt["Count"].value_counts()
+        cnts.index.names = ["Genotype"]
+        cnts = pd.DataFrame(cnts).reset_index()
+        cnts.sort_values(by="Genotype", inplace=True)
+        cnts["Genotype"] = cnts["Genotype"].astype(str)
+
+        fig, ax = plt.subplots(1, 1, figsize=(15, 15))
+        g = sns.barplot(x="Genotype", y="Count", data=cnts, ax=ax)
+        g.set_xlabel("Integer-encoded Genotype")
+        g.set_ylabel("Count")
+        g.set_title("Genotype Counts")
+        for p in g.patches:
+            g.annotate(
+                f"{p.get_height():.1f}",
+                (p.get_x() + 0.25, p.get_height() + 0.01),
+                xytext=(0, 1),
+                textcoords="offset points",
+                va="bottom",
+            )
+
+        fig.savefig(
+            "genotype_distributions.png",
+            bbox_inches="tight",
+            facecolor="white",
+        )
+        plt.close()

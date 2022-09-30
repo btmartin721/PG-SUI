@@ -1118,6 +1118,7 @@ class GenotypeData:
                 onehot_outer_list.append(onehot_list)
 
             self.int_iupac = np.array(onehot_outer_list)
+            self.plot_allele_distribution()
 
         else:
             for i in range(len(snp_data)):
@@ -1526,6 +1527,19 @@ class GenotypeData:
             numpy.ndarray of shape (n_samples, n_SNPs): One-hot encoded numpy array.
         """
         return self.onehot
+
+    @property
+    def genotypes_int_df(self):
+        """Integer-encoded (0-9 including IUPAC characters) snps format.
+
+        Returns:
+            pandas.DataFrame: DataFrame of shape (n_samples, n_SNPs), integer-encoded from 0-9 with IUPAC characters.
+        """
+        return pd.DataFrame(self.int_iupac)
+
+    def plot_allele_distribution(self):
+        plotting = Plotting()
+        plotting.plot_gt_distribution(self.int_iupac)
 
 
 def merge_alleles(

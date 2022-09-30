@@ -1,4 +1,5 @@
 import math
+import sys
 
 import numpy as np
 import pandas as pd
@@ -75,7 +76,9 @@ class CyclicalAnnealingCallback(tf.keras.callbacks.Callback):
         """
         idx = epoch - 1
         new_weight = self.arr[idx]
-        tf.keras.backend.set_value(self.model.kl_beta, new_weight)
+
+        tf.keras.backend.set_value(
+            self.model.kl_beta, new_weight)
 
     def _linear_cycle_range(self):
         """Get an array with a linear cycle curve ranging from 0 to 1 for n_iter epochs.
@@ -89,7 +92,9 @@ class CyclicalAnnealingCallback(tf.keras.callbacks.Callback):
         period = self.n_iter / self.n_cycle
 
         # Linear schedule
-        step = (self.stop - self.start) / (period * self.ratio)  # linear schedule
+        step = (self.stop - self.start) / (
+            period * self.ratio
+        )  # linear schedule
 
         for c in range(self.n_cycle):
             v, i = self.start, 0
@@ -110,13 +115,17 @@ class CyclicalAnnealingCallback(tf.keras.callbacks.Callback):
         """
         L = np.ones(self.n_iter)
         period = self.n_iter / self.n_cycle
-        step = (self.stop - self.start) / (period * self.ratio)  # step is in [0,1]
+        step = (self.stop - self.start) / (
+            period * self.ratio
+        )  # step is in [0,1]
 
         for c in range(self.n_cycle):
             v, i = self.start, 0
 
             while v <= self.stop:
-                L[int(i + c * period)] = 1.0 / (1.0 + np.exp(-(v * 12.0 - 6.0)))
+                L[int(i + c * period)] = 1.0 / (
+                    1.0 + np.exp(-(v * 12.0 - 6.0))
+                )
                 v += step
                 i += 1
         return L
@@ -131,7 +140,9 @@ class CyclicalAnnealingCallback(tf.keras.callbacks.Callback):
         """
         L = np.ones(self.n_iter)
         period = self.n_iter / self.n_cycle
-        step = (self.stop - self.start) / (period * self.ratio)  # step is in [0,1]
+        step = (self.stop - self.start) / (
+            period * self.ratio
+        )  # step is in [0,1]
 
         for c in range(self.n_cycle):
             v, i = self.start, 0

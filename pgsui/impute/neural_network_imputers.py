@@ -12,6 +12,7 @@ from matplotlib import pyplot as plt
 
 # Grid search imports
 from sklearn.model_selection import GridSearchCV, RandomizedSearchCV
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 
 # Scikit-learn imports
 from sklearn.base import BaseEstimator, TransformerMixin
@@ -184,7 +185,7 @@ class VAE(BaseEstimator, TransformerMixin):
         l1_penalty=0.0001,
         l2_penalty=0.0001,
         dropout_rate=0.2,
-        kl_beta=1.0,
+        kl_beta=tf.Variable(1.0, trainable=False),
         validation_split=0.2,
         sample_weights=False,
         grid_iter=80,
@@ -195,6 +196,7 @@ class VAE(BaseEstimator, TransformerMixin):
         sim_prop_missing=0.1,
         n_jobs=1,
         verbose=0,
+        **kwargs,
     ):
         super().__init__()
 
@@ -230,6 +232,8 @@ class VAE(BaseEstimator, TransformerMixin):
         self.verbose = verbose
 
         self.num_classes = 4
+
+        self.testing = True
 
     @timer
     def fit(self, X):
@@ -270,8 +274,8 @@ class VAE(BaseEstimator, TransformerMixin):
         self.y_original_ = y.copy()
         self.y_simulated_ = sim.fit_transform(self.y_original_)
 
-        # Get values where original value was not missing and simulated.
-        # data is missing.
+        # Get values where original value was not missing but missing data
+        # was simulated.
         self.sim_missing_mask_ = sim.sim_missing_mask_
 
         # Original missing data.
@@ -282,15 +286,19 @@ class VAE(BaseEstimator, TransformerMixin):
 
         # Binary encode y to get y_train.
         self.tt_ = AutoEncoderFeatureTransformer(num_classes=self.num_classes)
+
+        # Just y_original with missing values encoded as -1.
         y_train = self.tt_.fit_transform(self.y_original_)
 
         if self.gridparams is not None:
             self.scoring_metrics_ = [
                 "precision_recall_macro",
                 "precision_recall_micro",
+                "f1_score",
                 "auc_macro",
                 "auc_micro",
                 "accuracy",
+                "hamming",
             ]
 
         (
@@ -371,7 +379,7 @@ class VAE(BaseEstimator, TransformerMixin):
         y_pred, z_mean, z_log_var, z = model(y_train, training=False)
         y_pred = self.tt_.inverse_transform(y_pred)
         y_pred_decoded, y_pred_certainty = self.nn_.decode_masked(
-            y_pred, return_proba=True
+            y_train, y_pred, return_proba=True
         )
 
         # There were some predicted values below the binary threshold.
@@ -389,6 +397,10 @@ class VAE(BaseEstimator, TransformerMixin):
         for i in np.arange(y_size):
             if i in y_missing_idx:
                 y_true_1d[i] = y_pred_1d[i]
+
+        if self.testing:
+            self.nn_.write_gt_state_probs(y_pred, y_pred_1d, y_true, y_true_1d)
+            Plotting.plot_confusion_matrix(y_true_1d, y_pred_1d)
 
         # Return to original shape.
         return np.reshape(y_true_1d, y_true.shape)
@@ -455,7 +467,7 @@ class VAE(BaseEstimator, TransformerMixin):
             compile_params,
             fit_params,
             scoring=scoring,
-            testing=True,
+            testing=False,
         )
 
         histories.append(best_history)
@@ -680,6 +692,7 @@ class VAE(BaseEstimator, TransformerMixin):
             ReduceLROnPlateau(
                 patience=self.lr_patience, min_lr=1e-6, min_delta=1e-6
             ),
+            # CyclicalAnnealingCallback(self.epochs, schedule_type="sigmoid"),
         ]
 
         search_mode = True if self.run_gridsearch_ else False
@@ -703,7 +716,7 @@ class VAE(BaseEstimator, TransformerMixin):
             "l1_penalty": self.l1_penalty,
             "l2_penalty": self.l2_penalty,
             "dropout_rate": self.dropout_rate,
-            "kl_beta": self.kl_beta,
+            "kl_beta": 1.0 / self.batch_size,
         }
 
         fit_verbose = 1 if self.verbose == 2 else 0
@@ -1017,7 +1030,7 @@ class SAE(BaseEstimator, TransformerMixin):
         y_missing_idx = np.flatnonzero(self.original_missing_mask_)
         y_pred, z_mean, z_log_var = model(y_train, training=False)
         y_pred = self.tt_.inverse_transform(y_pred)
-        y_pred_decoded = self.nn_.decode_masked(y_pred)
+        y_pred_decoded = self.nn_.decode_masked(y_train, y_pred)
         y_pred_1d = y_pred_decoded.ravel()
 
         # Only replace originally missing values at missing indexes.
