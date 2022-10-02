@@ -62,7 +62,10 @@ cce = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
 cce_proba = tf.keras.losses.CategoricalCrossentropy()
 cca = tf.keras.metrics.CategoricalAccuracy()
 ba = tf.keras.metrics.BinaryAccuracy()
-bce = tf.keras.losses.BinaryCrossentropy()
+bce = tf.keras.losses.BinaryCrossentropy(from_logits=True)
+# bfce = tf.keras.losses.BinaryFocalCrossentropy(
+#     from_logits=True, apply_class_balancing=True
+# )
 
 
 class NeuralNetworkMethods:
@@ -227,9 +230,9 @@ class NeuralNetworkMethods:
             # Call 0s and 1s based on threshold.
             pred_multilab = np.where(y_pred_proba >= threshold, 1.0, 0.0)
 
-            # pred_multilab = cls.zero_extra_categories(
-            #     y_pred_proba, pred_multilab, threshold=threshold
-            # )
+            pred_multilab = cls.zero_extra_categories(
+                y_pred_proba, pred_multilab, threshold=threshold
+            )
 
             pred_multilab_decoded = cls.decode_binary_multilab(pred_multilab)
 
@@ -252,9 +255,18 @@ class NeuralNetworkMethods:
                         y_pred_proba, reduce_dim=False
                     )
 
-                    y_pred = np.where(
-                        still_missing, y_multi, pred_multilab_decoded
-                    )
+                    try:
+                        y_pred = np.where(
+                            still_missing, y_multi, pred_multilab_decoded
+                        )
+                    except ValueError:
+                        y_pred = np.where(
+                            still_missing,
+                            y_multi,
+                            np.reshape(
+                                pred_multilab_decoded, still_missing.shape
+                            ),
+                        )
 
                     if return_multilab:
                         y_pred_bin = np.where(
@@ -369,32 +381,47 @@ class NeuralNetworkMethods:
             threshold (float, optional): Threshold to use to set decoded multilabel values to 0s (< threshold) or 1s (>= threshold). Defaults to 0.5.
         """
         # Check if multi-labels have >2 1s.
-        multi_cats = np.where(
-            np.count_nonzero(pred_multilab, axis=-1) > 2, True, False
+        # multi_cats = np.where(
+        #     np.count_nonzero(pred_multilab, axis=-1) > 2, True, False
+        # )
+
+        # # If >2 1s, set the extras with lowest probabilities to 0.0.
+        # if np.any(multi_cats):
+        #     n_dims = len(y_pred_proba.shape)
+        #     if n_dims == 2:
+        #         for row in np.arange(y_pred_proba.shape[0]):
+        #             indices = (y_pred_proba[row]).argsort()[:2]
+        #             pred_multilab[row, indices] = 0.0
+        #             # Get lowest two values.
+        #             # idx = np.argpartition(y_pred_proba[row], 2)[0:2]
+        #             # y_pred_proba[row, idx] = 0.0
+
+        #     elif n_dims == 3:
+        #         for row in np.arange(y_pred_proba.shape[0]):
+        #             for col in np.arange(y_pred_proba.shape[1]):
+        #                 indices = (y_pred_proba[row, col]).argsort()[:2]
+        #                 pred_multilab[row, col, indices] = 0.0
+        #                 # idx = np.argpartition(y_pred_proba[row, col], 2)[0:2]
+        #                 # y_pred_proba[row, col, idx] = 0.0
+
+        #     else:
+        #         raise IndexError(
+        #             f"Incorrect number of dimensions for y_pred_proba: {n_dims}"
+        #         )
+
+        k = 2
+        idx = np.argpartition(y_pred_proba.ravel(), k)
+        indices = tuple(
+            np.array(np.unravel_index(idx, y_pred_proba.shape))[
+                :, range(min(k, 0), max(k, 0))
+            ]
         )
 
-        # If >2 1s, set the extras with lowest probabilities to 0.0.
-        if np.any(multi_cats):
-            n_dims = len(y_pred_proba.shape)
-            if n_dims == 2:
-                for row in np.arange(y_pred_proba.shape[0]):
-                    # Get lowest two values.
-                    idx = np.argpartition(y_pred_proba[row], 2)[0:2]
-                    y_pred_proba[row, idx] = 0.0
+        y_pred_proba[indices] = 0.0
+        # if you want it in a list of indices . . .
+        # return np.array(np.unravel_index(idx, arr.shape))[:, range(k)].transpose().tolist()
 
-            elif n_dims == 3:
-                for row in np.arange(y_pred_proba.shape[0]):
-                    for col in np.arange(y_pred_proba.shape[1]):
-                        idx = np.argpartition(y_pred_proba[row, col], 2)[0:2]
-                        y_pred_proba[row, col, idx] = 0.0
-
-            else:
-                raise IndexError(
-                    f"Incorrect number of dimensions for y_pred_proba: {n_dims}"
-                )
-
-            pred_multilab = np.where(y_pred_proba >= threshold, 1.0, 0.0)
-        return pred_multilab
+        return np.where(y_pred_proba >= threshold, 1.0, 0.0)
 
     @classmethod
     def decode_multiclass(cls, y_pred_proba, reduce_dim=True):
@@ -451,7 +478,7 @@ class NeuralNetworkMethods:
             "03": 6,
             "12": 7,
             "13": 8,
-            "34": 9,
+            "23": 9,
             "-9": -9,
             "": -9,
         }
@@ -914,18 +941,10 @@ class NeuralNetworkMethods:
                 y_pred, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
             )
 
-            if sample_weight is not None:
-                sample_weight_masked = tf.boolean_mask(
-                    tf.convert_to_tensor(sample_weight),
-                    tf.reduce_any(tf.not_equal(y_true, -1), axis=2),
-                )
-            else:
-                sample_weight_masked = None
-
             return ba(
                 y_true_masked,
                 y_pred_masked,
-                sample_weight=sample_weight_masked,
+                sample_weight=sample_weight,
             )
 
         return masked_binary_accuracy
@@ -966,19 +985,13 @@ class NeuralNetworkMethods:
                 y_pred, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
             )
 
-            if sample_weight is not None:
-                sample_weight_masked = tf.boolean_mask(
-                    tf.convert_to_tensor(sample_weight),
-                    tf.reduce_any(tf.not_equal(y_true, -1), axis=2),
-                )
-            else:
-                sample_weight_masked = None
-
             return bce(
                 y_true_masked,
                 y_pred_masked,
-                sample_weight=sample_weight_masked,
+                # sample_weight=sample_weight,
             )
+
+            
 
         return masked_binary_crossentropy
 
