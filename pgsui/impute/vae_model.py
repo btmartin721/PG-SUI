@@ -40,6 +40,7 @@ from tensorflow.keras.layers import (
     Reshape,
     Activation,
     Flatten,
+    BatchNormalization,
     LeakyReLU,
     PReLU,
 )
@@ -124,20 +125,22 @@ class Encoder(tf.keras.layers.Layer):
         self.dense5 = None
 
         # for layer_size in hidden_layer_sizes:
-        self.dense_init = Dense(
-            num_classes // 2,
-            input_shape=(n_features, num_classes),
-            activation=activation,
-            kernel_initializer=kernel_initializer,
-            kernel_regularizer=kernel_regularizer,
-            name="Encoder1",
-        )
+        # self.dense_init = Dense(
+        #     num_classes // 2,
+        #     input_shape=(n_features, num_classes),
+        #     activation=activation,
+        #     kernel_initializer=kernel_initializer,
+        #     kernel_regularizer=kernel_regularizer,
+        #     name="Encoder1",
+        # )
 
-        # n_features * num_classes.
-        self.flatten = Flatten()
+        # # n_features * num_classes.
+        # self.flatten = Flatten()
+        self.flatten = tf.keras.layers.Flatten()
 
         self.dense1 = Dense(
             hidden_layer_sizes[0],
+            input_shape=(n_features * num_classes,),
             activation=activation,
             kernel_initializer=kernel_initializer,
             kernel_regularizer=kernel_regularizer,
@@ -207,37 +210,33 @@ class Encoder(tf.keras.layers.Layer):
 
         self.dropout_layer = Dropout(dropout_rate)
 
-        # self.batch_norm_layer1 = BatchNormalization(center=False, scale=False)
-        # self.batch_norm_layer2 = BatchNormalization(center=False, scale=False)
-        # self.batch_norm_layer3 = BatchNormalization(center=False, scale=False)
-        # self.batch_norm_layer4 = BatchNormalization(center=False, scale=False)
-        # self.batch_norm_layer5 = BatchNormalization(center=False, scale=False)
+        self.batch_norm_layer1 = BatchNormalization(center=False, scale=False)
+        self.batch_norm_layer2 = BatchNormalization(center=False, scale=False)
+        self.batch_norm_layer3 = BatchNormalization(center=False, scale=False)
+        self.batch_norm_layer4 = BatchNormalization(center=False, scale=False)
+        self.batch_norm_layer5 = BatchNormalization(center=False, scale=False)
 
     def call(self, inputs, training=None):
-        # x = self.flatten(inputs)
-        x = self.dense_init(inputs)
-        # x = self.batch_norm_layer1(x, training=training)
-        # x = self.dropout_layer(x, training=training)
-        x = self.flatten(x)
+        x = self.flatten(inputs)
         x = self.dense1(x)
         x = self.dropout_layer(x, training=training)
-        # x = self.batch_norm_layer1(x, training=training)
+        x = self.batch_norm_layer1(x, training=training)
         if self.dense2 is not None:
             x = self.dense2(x)
             x = self.dropout_layer(x, training=training)
-            # x = self.batch_norm_layer2(x, training=training)
+            x = self.batch_norm_layer2(x, training=training)
         if self.dense3 is not None:
             x = self.dense3(x)
             x = self.dropout_layer(x, training=training)
-            # x = self.batch_norm_layer3(x, training=training)
+            x = self.batch_norm_layer3(x, training=training)
         if self.dense4 is not None:
             x = self.dense4(x)
             x = self.dropout_layer(x, training=training)
-            # x = self.batch_norm_layer4(x, training=training)
+            x = self.batch_norm_layer4(x, training=training)
         if self.dense5 is not None:
             x = self.dense5(x)
             x = self.dropout_layer(x, training=training)
-            # x = self.batch_norm_layer5(x, training=training)
+            x = self.batch_norm_layer5(x, training=training)
 
         x = self.dense_latent(x)
         z_mean = self.dense_z_mean(x)
@@ -317,54 +316,53 @@ class Decoder(tf.keras.layers.Layer):
             )
 
         # No activation for final layer.
-        self.dense_expanded = Dense(
-            n_features * (num_classes // 2),
+        self.dense_output = Dense(
+            n_features * num_classes,
             kernel_initializer=kernel_initializer,
             kernel_regularizer=kernel_regularizer,
-            activation=None,
             name="DecoderExpanded",
         )
 
-        self.rshp = Reshape((n_features, num_classes // 2))
-        self.dense_output = Dense(
-            num_classes,
-            kernel_initializer=kernel_initializer,
-            kernel_regularizer=kernel_regularizer,
-            activation="sigmoid",
-        )
+        self.rshp = Reshape((n_features, num_classes))
+        # self.dense_output = Dense(
+        #     num_classes,
+        #     kernel_initializer=kernel_initializer,
+        #     kernel_regularizer=kernel_regularizer,
+        #     activation="sigmoid",
+        # )
         self.dropout_layer = Dropout(dropout_rate)
 
-        # self.batch_norm_layer1 = BatchNormalization(center=False, scale=False)
-        # self.batch_norm_layer2 = BatchNormalization(center=False, scale=False)
-        # self.batch_norm_layer3 = BatchNormalization(center=False, scale=False)
-        # self.batch_norm_layer4 = BatchNormalization(center=False, scale=False)
-        # self.batch_norm_layer5 = BatchNormalization(center=False, scale=False)
+        self.batch_norm_layer1 = BatchNormalization(center=False, scale=False)
+        self.batch_norm_layer2 = BatchNormalization(center=False, scale=False)
+        self.batch_norm_layer3 = BatchNormalization(center=False, scale=False)
+        self.batch_norm_layer4 = BatchNormalization(center=False, scale=False)
+        self.batch_norm_layer5 = BatchNormalization(center=False, scale=False)
 
     def call(self, inputs, training=None):
         # x = self.flatten(inputs)
         x = self.dense1(inputs)
         x = self.dropout_layer(x, training=training)
-        # x = self.batch_norm_layer1(x, training=training)
+        x = self.batch_norm_layer1(x, training=training)
         if self.dense2 is not None:
             x = self.dense2(x)
             x = self.dropout_layer(x, training=training)
-            # x = self.batch_norm_layer2(x, training=training)
+            x = self.batch_norm_layer2(x, training=training)
         if self.dense3 is not None:
             x = self.dense3(x)
             x = self.dropout_layer(x, training=training)
-            # x = self.batch_norm_layer3(x, training=training)
+            x = self.batch_norm_layer3(x, training=training)
         if self.dense4 is not None:
             x = self.dense4(x)
             x = self.dropout_layer(x, training=training)
-            # x = self.batch_norm_layer4(x, training=training)
+            x = self.batch_norm_layer4(x, training=training)
         if self.dense5 is not None:
             x = self.dense5(x)
             x = self.dropout_layer(x, training=training)
-            # x = self.batch_norm_layer5(x, training=training)
+            x = self.batch_norm_layer5(x, training=training)
 
-        x = self.dense_expanded(x)
-        x = self.rshp(x)
-        return self.dense_output(x)
+        x = self.dense_output(x)
+        return self.rshp(x)
+        # return self.dense_output(x)
 
 
 class VAEModel(tf.keras.Model):
@@ -381,6 +379,7 @@ class VAEModel(tf.keras.Model):
         dropout_rate=0.2,
         kl_beta=1.0,
         num_classes=4,
+        sample_weight=None,
     ):
         super(VAEModel, self).__init__()
 
@@ -388,6 +387,7 @@ class VAEModel(tf.keras.Model):
         # self.kl_beta._trainable = False
 
         self.kl_beta = kl_beta
+        self.sample_weight = sample_weight
 
         self.nn_ = NeuralNetworkMethods()
         self.binary_accuracy = self.nn_.make_masked_binary_accuracy()
@@ -518,6 +518,14 @@ class VAEModel(tf.keras.Model):
         else:
             raise TypeError("Target y must be supplied to fit for this model.")
 
+        if sample_weight is not None:
+            sample_weight_masked = tf.boolean_mask(
+                tf.convert_to_tensor(sample_weight),
+                tf.reduce_any(tf.not_equal(y, -1), axis=2),
+            )
+        else:
+            sample_weight_masked = None
+
         with tf.GradientTape() as tape:
             reconstruction, z_mean, z_log_var, z = self(x, training=True)
 
@@ -525,7 +533,7 @@ class VAEModel(tf.keras.Model):
             reconstruction_loss = self.compiled_loss(
                 y,
                 reconstruction,
-                sample_weight=sample_weight,
+                sample_weight=sample_weight_masked,
             )
 
             # Doesn't include KL Divergence Loss.
@@ -546,7 +554,7 @@ class VAEModel(tf.keras.Model):
             self.binary_accuracy(
                 y,
                 reconstruction,
-                sample_weight=sample_weight,
+                sample_weight=self.sample_weight,
             )
         )
 
@@ -568,11 +576,19 @@ class VAEModel(tf.keras.Model):
         else:
             raise TypeError("Target y must be supplied to fit in this model.")
 
+        if sample_weight is not None:
+            sample_weight_masked = tf.boolean_mask(
+                tf.convert_to_tensor(sample_weight),
+                tf.reduce_any(tf.not_equal(y, -1), axis=2),
+            )
+        else:
+            sample_weight_masked = None
+
         reconstruction, z_mean, z_log_var, z = self(x, training=False)
         reconstruction_loss = self.compiled_loss(
             y,
             reconstruction,
-            sample_weight=sample_weight,
+            sample_weight=sample_weight_masked,
         )
 
         # Includes KL Divergence Loss.
@@ -584,7 +600,7 @@ class VAEModel(tf.keras.Model):
             self.binary_accuracy(
                 y,
                 reconstruction,
-                sample_weight=sample_weight,
+                sample_weight=sample_weight_masked,
             )
         )
 
