@@ -279,6 +279,7 @@ class VAEClassifier(KerasClassifier):
         kl_beta=1.0,
         n_components=3,
         num_classes=4,
+        sample_weight=None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -294,6 +295,7 @@ class VAEClassifier(KerasClassifier):
         self.kl_beta = kl_beta
         self.n_components = n_components
         self.num_classes = num_classes
+        self.sample_weight = sample_weight
 
     def _keras_build_fn(self, compile_kwargs):
         """Build model with custom parameters.
@@ -316,6 +318,7 @@ class VAEClassifier(KerasClassifier):
             dropout_rate=self.dropout_rate,
             kl_beta=self.kl_beta,
             num_classes=self.num_classes,
+            sample_weight=self.sample_weight,
         )
 
         model.compile(
