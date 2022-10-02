@@ -14,7 +14,7 @@
             "console": "integratedTerminal",
             "args": [
                 "-p",
-                "pgsui/example_data/phylip_files/test_n100.phy",
+                "pgsui/example_data/phylip_files/test_n500.phy",
                 "-m",
                 "pgsui/example_data/popmaps/test.popmap",
                 "-t",
