@@ -92,7 +92,7 @@ def main():
             popmapfile=args.popmap,
             guidetree=args.treefile,
             qmatrix_iqtree=args.iqtree,
-            siterates_iqtree="pgsui/example_data/trees/test_n100.rate",
+            siterates_iqtree="pgsui/example_data/trees/test_n500.rate",
         )
 
     data.missingness_reports(prefix=args.prefix, plot_format="png")
@@ -124,8 +124,6 @@ def main():
         # "hidden_activation": hidden_activation,
     }
 
-    sys.exit()
-
     vae = ImputeVAE(
         data,
         disable_progressbar=False,
@@ -149,8 +147,8 @@ def main():
         gridsearch_method="gridsearch",
         early_stop_gen=5,
         n_components=3,
-        validation_split=0.2,
-        # sample_weights={0: 1.0, 1: 0.0, 2: 1.0},
+        validation_split=0.0,
+        # sample_weights="auto",
     )
 
     # vae = ImputeNLPCA(
