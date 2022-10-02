@@ -162,6 +162,9 @@ class VAE(BaseEstimator, TransformerMixin):
     n_jobs (int, optional): Number of parallel jobs to use in the grid search if ``gridparams`` is not None. -1 means use all available processors. Defaults to 1.
 
     verbose (int, optional): Verbosity setting. Can be 0, 1, or 2. 0 is the least and 2 is the most verbose. Defaults to 0.
+
+    ToDo:
+        Fix sample_weight for multi-label encodings.
     """
 
     def __init__(
@@ -554,6 +557,7 @@ class VAE(BaseEstimator, TransformerMixin):
             epochs=fit_params["epochs"],
             verbose=0,
             fit__validation_split=fit_params["validation_split"],
+            fit__sample_weight=fit_params["sample_weight"],
             score__missing_mask=self.sim_missing_mask_,
             score__scoring_metric=self.scoring_metric,
             score__is_vae=True,
@@ -629,7 +633,10 @@ class VAE(BaseEstimator, TransformerMixin):
                         f"{self.gridsearch_method}"
                     )
 
-                search.fit(y_true, y=y_true)
+                search.fit(
+                    y_true,
+                    y=y_true,
+                )
 
             best_params = search.best_params_
             best_score = search.best_score_
@@ -641,7 +648,10 @@ class VAE(BaseEstimator, TransformerMixin):
             cv_results.to_csv(fp, index=False)
 
         else:
-            clf.fit(y_true, y=y_true)
+            clf.fit(
+                y_true,
+                y=y_true,
+            )
             best_params = None
             best_score = None
             search = None
@@ -716,7 +726,7 @@ class VAE(BaseEstimator, TransformerMixin):
             "l1_penalty": self.l1_penalty,
             "l2_penalty": self.l2_penalty,
             "dropout_rate": self.dropout_rate,
-            "kl_beta": 1.0 / self.batch_size,
+            "kl_beta": 1.0 / y_train.shape[0],
         }
 
         fit_verbose = 1 if self.verbose == 2 else 0
