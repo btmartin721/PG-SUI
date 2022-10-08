@@ -178,6 +178,7 @@ class ImputePhylo(GenotypeData):
                 qmatrix=genotype_data.qmatrix,
                 siterates=genotype_data.siterates,
                 siterates_iqtree=genotype_data.siterates_iqtree,
+                prefix=genotype_data.prefix,
                 verbose=False,
             )
 
@@ -966,6 +967,7 @@ class ImputeAlleleFreq(GenotypeData):
                 qmatrix=genotype_data.qmatrix,
                 siterates=genotype_data.siterates,
                 siterates_iqtree=genotype_data.siterates_iqtree,
+                prefix=genotype_data.prefix,
                 verbose=False,
             )
 
@@ -1097,7 +1099,9 @@ class ImputeAlleleFreq(GenotypeData):
         Raises:
             TypeError: If X is of unsupported type.
         """
-        outfile = os.path.join(f"{self.prefix}_output", "alignments", "imputed_012.csv")
+        outfile = os.path.join(
+            f"{self.prefix}_output", "alignments", "imputed_012.csv"
+        )
 
         if isinstance(X, pd.DataFrame):
             df = X
@@ -1227,6 +1231,7 @@ class ImputeNMF(GenotypeData):
                 qmatrix=genotype_data.qmatrix,
                 siterates=genotype_data.siterates,
                 siterates_iqtree=genotype_data.siterates_iqtree,
+                prefix=genotype_data.prefix,
                 verbose=False,
             )
 
@@ -1354,7 +1359,9 @@ class ImputeNMF(GenotypeData):
         Raises:
             TypeError: If X is of unsupported type.
         """
-        outfile = os.path.join(f"{self.prefix}_output", "alignments", "imputed_012.csv")
+        outfile = os.path.join(
+            f"{self.prefix}_output", "alignments", "imputed_012.csv"
+        )
 
         if isinstance(X, pd.DataFrame):
             df = X
