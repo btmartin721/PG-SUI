@@ -117,13 +117,13 @@ def main():
     # Some are commented out for testing purposes.
     grid_params = {
         "learning_rate": learning_rate,
-        # "l1_penalty": l1_penalty,
-        # "l2_penalty": l2_penalty,
+        "l1_penalty": l1_penalty,
+        "l2_penalty": l2_penalty,
         # "hidden_layer_sizes": hidden_layer_sizes,
-        # "n_components": n_components,
-        # "dropout_rate": dropout_rate,
+        "n_components": n_components,
+        "dropout_rate": dropout_rate,
         # "optimizer": optimizer,
-        # "num_hidden_layers": num_hidden_layers,
+        "num_hidden_layers": num_hidden_layers,
         "hidden_activation": hidden_activation,
     }
 
