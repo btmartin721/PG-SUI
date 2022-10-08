@@ -44,7 +44,7 @@ class Scorers:
         Returns:
             Dict[str, Any]: Dictionary with true and false positive rates along probability threshold curve per class, micro and macro tpr and fpr curves averaged across classes, and AUC scores per-class and for micro and macro averages.
         """
-        num_classes = 4 if is_vae else 3
+        num_classes = 10 if is_vae else 3
         cats = range(num_classes)
 
         # Get only classes that appear in y_true.
@@ -125,7 +125,7 @@ class Scorers:
          Returns:
             Dict[str, Any]: Dictionary with precision and recall curves per class and micro and macro averaged across classes, plus AP scores per-class and for micro and macro averages.
         """
-        num_classes = 4 if is_vae else 3
+        num_classes = 10 if is_vae else 3
         cats = range(num_classes)
 
         # Get only classes that appear in y_true.
@@ -150,11 +150,11 @@ class Scorers:
             y_pred_012 = nn.decode_masked(
                 y_true_bin,
                 y_pred_proba_bin,
-                return_multilab=True,
-                predict_still_missing=False,
+                is_multiclass=True,
+                return_int=False,
             )
 
-            y_true = nn.encode_vae(y_true)
+            y_true = nn.encode_multiclass(y_true)
 
         # Make confusion matrix to get true negatives and true positives.
         mcm = multilabel_confusion_matrix(y_true, y_pred_012)
@@ -371,7 +371,7 @@ class Scorers:
 
         if nn_model:
             y_pred_masked_decoded = nn.decode_masked(
-                y_true_masked, y_pred_masked, is_multiclass=False
+                y_true_masked, y_pred_masked, is_multiclass=True
             )
         else:
             y_pred_masked_decoded = y_pred_masked
@@ -418,7 +418,7 @@ class Scorers:
 
         if nn_model:
             y_pred_masked_decoded = nn.decode_masked(
-                y_true_masked, y_pred_masked, is_multiclass=False
+                y_true_masked, y_pred_masked, is_multiclass=True
             )
         else:
             y_pred_masked_decoded = y_pred_masked
@@ -681,22 +681,32 @@ class Scorers:
             y_pred_masked,
             is_vae=is_vae,
         )
+
         acc = accuracy_score(
             y_true_masked,
             nn.decode_masked(
-                y_true_masked, y_pred_masked, predict_still_missing=False
+                y_true_masked,
+                y_pred_masked,
+                is_multiclass=True,
+                return_int=True,
             ),
         )
         ham = hamming_loss(
             y_true_masked,
             nn.decode_masked(
-                y_true_masked, y_pred_masked, predict_still_missing=False
+                y_true_masked,
+                y_pred_masked,
+                is_multiclass=True,
+                return_int=True,
             ),
         )
 
         if testing:
             y_pred_masked_decoded = nn.decode_masked(
-                y_true_masked, y_pred_masked, predict_still_missing=False
+                y_true_masked,
+                y_pred_masked,
+                is_multiclass=True,
+                return_int=True,
             )
 
             print(y_pred_masked.shape)
