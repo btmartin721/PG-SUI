@@ -255,6 +255,13 @@ def generate_012_genotypes(
     return X
 
 
+def unique2D_subarray(a):
+    """Get unique subarrays for each column from numpy array."""
+    dtype1 = np.dtype((np.void, a.dtype.itemsize * np.prod(a.shape[1:])))
+    b = np.ascontiguousarray(a.reshape(a.shape[0], -1)).view(dtype1)
+    return a[np.unique(b, return_index=1, axis=-1)[1]]
+
+
 def _remove_nonbiallelic(df, cv=5):
     """Remove non-biallelic sites from pandas.DataFrame.
 
