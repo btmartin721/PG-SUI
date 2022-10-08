@@ -184,7 +184,9 @@ class Impute:
                         "gridsearch_method argument must equal 'genetic_algorithm' if gridparams values are of type sklearn_genetic.space"
                     )
 
-        self.logfilepath = f"{self.prefix}_imputer_progress_log.txt"
+        self.logfilepath = os.path.join(
+            f"{self.prefix}_output", "logs", "imputer_progress_log.txt"
+        )
 
         self.invalid_indexes = None
 
@@ -193,6 +195,22 @@ class Impute:
             os.remove(self.logfilepath)
         except OSError:
             pass
+
+        Path(os.path.join(f"{self.prefix}_output", "plots")).mkdir(
+            parents=True, exist_ok=True
+        )
+
+        Path(os.path.join(f"{self.prefix}_output", "logs")).mkdir(
+            parents=True, exist_ok=True
+        )
+
+        Path(os.path.join(f"{self.prefix}_output", "reports")).mkdir(
+            parents=True, exist_ok=True
+        )
+
+        Path(os.path.join(f"{self.prefix}_output", "alignments")).mkdir(
+            parents=True, exist_ok=True
+        )
 
     @timer
     def fit_predict(
@@ -212,7 +230,10 @@ class Impute:
 
         # Test if output file can be written to
         try:
-            outfile = f"{self.prefix}_imputed_012.csv"
+            outfile = os.path.join(
+                f"{self.prefix}_output", "alignments", "imputed_012.csv"
+            )
+
             with open(outfile, "w") as fout:
                 pass
         except IOError as e:
@@ -248,21 +269,31 @@ class Impute:
         return imp_data, best_params
 
     def write_imputed(
-        self, data: Union[pd.DataFrame, np.ndarray, List[List[int]]]
+        self,
+        data: Union[pd.DataFrame, np.ndarray, List[List[int]]],
+        prefix: str = "imputer",
     ) -> None:
         """Save imputed data to disk as a CSV file.
 
         Args:
             data (pandas.DataFrame, numpy.ndarray, or List[List[int]]): Object returned from ``fit_predict()``\.
 
+            prefix (str, optional): Prefix to use for output directory. Defaults to 'imputer'.
+
         Raises:
             TypeError: Must be of type pandas.DataFrame, numpy.array, or List[List[int]].
         """
 
-        outfile = f"{self.prefix}_imputed_012.csv"
+        outfile = os.path.join(
+            f"{prefix}_output", "alignments", "imputed_012.csv"
+        )
 
         if isinstance(data, pd.DataFrame):
-            data.to_csv(outfile, header=False, index=False)
+            data.to_csv(
+                outfile,
+                header=False,
+                index=False,
+            )
 
         elif isinstance(data, np.ndarray):
             np.savetxt(outfile, data, delimiter=",")
@@ -494,8 +525,12 @@ class Impute:
             best_params (dict): Best parameters found in grid search.
         """
 
-        best_score_outfile = f"{self.prefix}_imputed_best_score.csv"
-        best_params_outfile = f"{self.prefix}_imputed_best_params.csv"
+        best_score_outfile = os.path.join(
+            f"{self.prefix}_output", "reports", "imputed_best_score.csv"
+        )
+        best_params_outfile = os.path.join(
+            f"{self.prefix}_output", "reports", "imputed_best_params.csv"
+        )
 
         if isinstance(df_scores, pd.DataFrame):
             df_scores.to_csv(
@@ -929,7 +964,9 @@ class Impute:
 
         df_scores = df_scores.round(2)
 
-        outfile = f"{self.prefix}_imputed_best_score.csv"
+        outfile = os.path.join(
+            f"{self.prefix}_output", "reports", "imputed_best_score.csv"
+        )
         df_scores.to_csv(outfile, header=True, index=False)
 
         del results_list
