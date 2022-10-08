@@ -19,6 +19,7 @@ import toytree as tt
 
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import OneHotEncoder
 
 # Import tensorflow with reduced warnings.
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
@@ -271,8 +272,9 @@ class AutoEncoderFeatureTransformer(BaseEstimator, TransformerMixin):
         num_classes (int, optional): The number of classes in the last axis dimention of the input array. Defaults to 3.
     """
 
-    def __init__(self, num_classes=3):
+    def __init__(self, num_classes=3, return_int=False):
         self.num_classes = num_classes
+        self.return_int = return_int
 
     def fit(self, X):
         """set attributes used to transform X (input features).
@@ -289,14 +291,12 @@ class AutoEncoderFeatureTransformer(BaseEstimator, TransformerMixin):
             enc_func = self.encode_012
         elif self.num_classes == 4:
             enc_func = self.encode_vae
+        elif self.num_classes == 10:
+            enc_func = self.encode_multiclass
         else:
             raise ValueError(
                 f"Invalid value passed to num_classes in AutoEncoderFeatureTransformer. Only 3 or 4 are supported, but got {self.num_classes}."
             )
-
-        enc_func = (
-            self.encode_012 if self.num_classes == 3 else self.encode_vae
-        )
 
         # Encode the data.
         self.X_train = enc_func(X)
@@ -320,12 +320,16 @@ class AutoEncoderFeatureTransformer(BaseEstimator, TransformerMixin):
         Returns:
             numpy.ndarray: Transformed target data in one-hot format of shape (n_samples, n_features, num_classes).
         """
-        X = misc.validate_input_type(X, return_type="array")
-        return self._fill(self.X_train, self.missing_mask_)
+        if self.return_int:
+            return X
+        else:
+            X = misc.validate_input_type(X, return_type="array")
+            return self._fill(self.X_train, self.missing_mask_)
 
     def inverse_transform(self, y):
         """Transform target to output format."""
-        return y.numpy()
+        # return y.numpy()
+        return tf.nn.softmax(y).numpy()
 
     def encode_012(self, X):
         """Convert 012-encoded data to one-hot encodings.
@@ -346,13 +350,12 @@ class AutoEncoderFeatureTransformer(BaseEstimator, TransformerMixin):
         return Xt
 
     def encode_vae(self, X):
-        """Encode 0-9 integer data in one-hot format.
+        """Encode 0-9 integer data in multi-label one-hot format.
         Args:
             X (numpy.ndarray): Input array with 012-encoded data and -9 as the missing data value.
         Returns:
             pandas.DataFrame: One-hot encoded data, ignoring missing values (np.nan). multi-label categories will be encoded as 0.5. Otherwise, it will be 1.0.
         """
-        # return np.where(X >= 0.5, 1.0, 0.0)
         Xt = np.zeros(shape=(X.shape[0], X.shape[1], 4))
         mappings = {
             0: [1.0, 0.0, 0.0, 0.0],
@@ -367,6 +370,28 @@ class AutoEncoderFeatureTransformer(BaseEstimator, TransformerMixin):
             9: [0.0, 0.0, 1.0, 1.0],
             -9: [np.nan, np.nan, np.nan, np.nan],
         }
+        for row in np.arange(X.shape[0]):
+            Xt[row] = [mappings[enc] for enc in X[row]]
+        return Xt
+
+    def encode_multiclass(self, X, num_classes=10, missing_value=-9):
+        """Encode 0-9 integer data in multi-class one-hot format.
+
+        Missing values get encoded as ``[np.nan] * num_classes``
+        Args:
+            X (numpy.ndarray): Input array with 012-encoded data and ``missing_value`` as the missing data value.
+
+            num_classes (int, optional): Number of classes to use. Defaults to 10.
+
+            missing_value (int, optional): Missing data value to replace with ``[np.nan] * num_classes``\. Defaults to -9.
+        Returns:
+            pandas.DataFrame: Multi-class one-hot encoded data, ignoring missing values (np.nan).
+        """
+        int_cats, ohe_arr = np.arange(num_classes), np.eye(num_classes)
+        mappings = dict(zip(int_cats, ohe_arr))
+        mappings[missing_value] = np.array([np.nan] * num_classes)
+
+        Xt = np.zeros(shape=(X.shape[0], X.shape[1], num_classes))
         for row in np.arange(X.shape[0]):
             Xt[row] = [mappings[enc] for enc in X[row]]
         return Xt
