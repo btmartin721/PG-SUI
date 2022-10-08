@@ -65,6 +65,7 @@ def main():
                 popmapfile=args.popmap,
                 guidetree=args.treefile,
                 qmatrix_iqtree=args.iqtree,
+                prefix=args.prefix,
             )
         else:
             data = GenotypeData(
@@ -73,6 +74,7 @@ def main():
                 popmapfile=args.popmap,
                 guidetree=args.treefile,
                 qmatrix_iqtree=args.iqtree,
+                prefix=args.prefix,
             )
 
     if args.phylip:
@@ -92,7 +94,8 @@ def main():
             popmapfile=args.popmap,
             guidetree=args.treefile,
             qmatrix_iqtree=args.iqtree,
-            siterates_iqtree="pgsui/example_data/trees/test_n100.rate",
+            siterates_iqtree=args.site_rate,
+            prefix=args.prefix,
         )
 
     data.missingness_reports(prefix=args.prefix, plot_format="png")
@@ -114,13 +117,13 @@ def main():
     # Some are commented out for testing purposes.
     grid_params = {
         "learning_rate": learning_rate,
-        "l1_penalty": l1_penalty,
-        "l2_penalty": l2_penalty,
+        # "l1_penalty": l1_penalty,
+        # "l2_penalty": l2_penalty,
         # "hidden_layer_sizes": hidden_layer_sizes,
-        "n_components": n_components,
-        "dropout_rate": dropout_rate,
+        # "n_components": n_components,
+        # "dropout_rate": dropout_rate,
         # "optimizer": optimizer,
-        "num_hidden_layers": num_hidden_layers,
+        # "num_hidden_layers": num_hidden_layers,
         "hidden_activation": hidden_activation,
     }
 
@@ -149,6 +152,7 @@ def main():
         n_components=3,
         validation_split=0.0,
         sample_weights="auto",
+        prefix=args.prefix,
     )
 
     # vae = ImputeNLPCA(
@@ -192,6 +196,7 @@ def main():
         plot_format="png",
         center=True,
         scale=False,
+        prefix=args.prefix,
         # n_axes=3,
     )
 
@@ -240,6 +245,13 @@ def get_arguments():
         help=".iqtree output file containing Rate Matrix Q",
     )
 
+    filetype_args.add_argument(
+        "--site_rate",
+        type=str,
+        required=False,
+        help="Specify site rate input file.",
+    )
+
     # Structure Arguments
     structure_args.add_argument(
         "--onerow_perind",
@@ -268,16 +280,10 @@ def get_arguments():
         "--prefix",
         type=str,
         required=False,
-        default="output",
-        help="Prefix for output files",
+        default="imputer",
+        help="Prefix for output directory. Output directory will be '<prefix>_output'",
     )
 
-    optional_args.add_argument(
-        "--resume_imputed",
-        type=str,
-        required=False,
-        help="Read in imputed data from a file instead of doing the imputation",
-    )
     # Add help menu
     optional_args.add_argument(
         "-h", "--help", action="help", help="Displays this help menu"
