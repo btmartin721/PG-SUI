@@ -261,7 +261,7 @@ class VAEClassifier(KerasClassifier):
 
         n_components (int, optional): Number of components to use for input V. Defaults to 3.
 
-        num_classes (int, optional): Number of classes in y_train. [A,G,C,T]-encoded data should have 4 classes. Defaults to 4.
+        num_classes (int, optional): Number of classes in y_train. [A,G,C,T...IUPAC codes]-encoded data should have 10 classes. Defaults to 10.
 
         kwargs (Any): Other keyword arguments to route to fit, compile, callbacks, etc. Should have the routing prefix (e.g., optimizer__learning_rate=0.01).
     """
@@ -278,7 +278,7 @@ class VAEClassifier(KerasClassifier):
         dropout_rate=0.2,
         kl_beta=1.0,
         n_components=3,
-        num_classes=4,
+        num_classes=10,
         sample_weight=None,
         **kwargs,
     ):
@@ -325,7 +325,8 @@ class VAEClassifier(KerasClassifier):
             optimizer=compile_kwargs["optimizer"],
             loss=compile_kwargs["loss"],
             metrics=compile_kwargs["metrics"],
-            run_eagerly=False,
+            run_eagerly=compile_kwargs["run_eagerly"],
+            sample_weight_mode="temporal",
         )
 
         return model
@@ -346,7 +347,9 @@ class VAEClassifier(KerasClassifier):
         Returns:
             NNOutputTransformer: NNOutputTransformer object that includes fit(), transform(), and inverse_transform() methods.
         """
-        return AutoEncoderFeatureTransformer(num_classes=self.num_classes)
+        return AutoEncoderFeatureTransformer(
+            num_classes=self.num_classes, return_int=True
+        )
 
     def predict(self, X, **kwargs):
         """Returns predictions for the given test data.
