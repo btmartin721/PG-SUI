@@ -65,6 +65,7 @@ try:
     from ..utils.misc import timer
     from ..utils.misc import isnotebook
     from ..utils.misc import validate_input_type
+    from ..utils.misc import unique2D_subarray
     from .neural_network_methods import NeuralNetworkMethods, DisabledCV
     from .scorers import Scorers
     from .plotting import Plotting
@@ -79,6 +80,7 @@ except (ModuleNotFoundError, ValueError):
     from utils.misc import timer
     from utils.misc import isnotebook
     from utils.misc import validate_input_type
+    from utils.misc import unique2D_subarray
     from impute.neural_network_methods import NeuralNetworkMethods, DisabledCV
     from impute.scorers import Scorers
     from impute.plotting import Plotting
@@ -234,7 +236,8 @@ class VAE(BaseEstimator, TransformerMixin):
         self.n_jobs = n_jobs
         self.verbose = verbose
 
-        self.num_classes = 4
+        self.num_classes = 10
+        self.is_vae = True
 
         self.testing = True
 
@@ -341,20 +344,30 @@ class VAE(BaseEstimator, TransformerMixin):
                 print(f"\nBest score: {self.best_score_}")
             plotting.plot_grid_search(self.search_.cv_results_, self.prefix)
 
-        plotting.plot_history(self.histories_, "VAE")
+        plotting.plot_history(self.histories_, "VAE", prefix=self.prefix)
         plotting.plot_metrics(self.metrics_, self.num_classes, self.prefix)
 
         if self.ga_:
             plot_fitness_evolution(self.search_)
             plt.savefig(
-                f"{self.prefix}_fitness_evolution.pdf", bbox_inches="tight"
+                os.path.join(
+                    f"{self.prefix}_output", "plots", "fitness_evolution.pdf"
+                ),
+                bbox_inches="tight",
+                facecolor="white",
             )
             plt.cla()
             plt.clf()
             plt.close()
 
             g = plotting.plot_search_space(self.search_)
-            plt.savefig(f"{self.prefix}_search_space.pdf", bbox_inches="tight")
+            plt.savefig(
+                os.path.join(
+                    f"{self.prefix}_output", "plots", "search_space.pdf"
+                ),
+                bbox_inches="tight",
+                facecolor="white",
+            )
             plt.cla()
             plt.clf()
             plt.close()
@@ -372,6 +385,7 @@ class VAE(BaseEstimator, TransformerMixin):
         """
         y = X
         y = validate_input_type(y, return_type="array")
+        y_pred_certainty = None
 
         model = self.models_[0]
         y_true = y.copy()
@@ -381,9 +395,15 @@ class VAE(BaseEstimator, TransformerMixin):
         y_missing_idx = np.flatnonzero(self.original_missing_mask_)
         y_pred, z_mean, z_log_var, z = model(y_train, training=False)
         y_pred = self.tt_.inverse_transform(y_pred)
-        y_pred_decoded, y_pred_certainty = self.nn_.decode_masked(
-            y_train, y_pred, return_proba=True
+        y_pred_decoded = self.nn_.decode_masked(
+            y_train,
+            y_pred,
+            is_multiclass=True,
+            return_int=True,
         )
+        # y_pred_decoded, y_pred_certainty = self.nn_.decode_masked(
+        #     y_train, y_pred, return_proba=True
+        # )
 
         # There were some predicted values below the binary threshold.
         if y_pred_certainty is not None:
@@ -403,7 +423,9 @@ class VAE(BaseEstimator, TransformerMixin):
 
         if self.testing:
             self.nn_.write_gt_state_probs(y_pred, y_pred_1d, y_true, y_true_1d)
-            Plotting.plot_confusion_matrix(y_true_1d, y_pred_1d)
+            Plotting.plot_confusion_matrix(
+                y_true_1d, y_pred_1d, prefix=self.prefix
+            )
 
         # Return to original shape.
         return np.reshape(y_true_1d, y_true.shape)
@@ -452,7 +474,9 @@ class VAE(BaseEstimator, TransformerMixin):
 
         if self.run_gridsearch_:
             scoring = scorers.make_multimetric_scorer(
-                self.scoring_metrics_, self.sim_missing_mask_, is_vae=True
+                self.scoring_metrics_,
+                self.sim_missing_mask_,
+                is_vae=self.is_vae,
             )
 
         (
@@ -553,14 +577,15 @@ class VAE(BaseEstimator, TransformerMixin):
             optimizer__learning_rate=compile_params["learning_rate"],
             loss=compile_params["loss"],
             metrics=compile_params["metrics"],
+            run_eagerly=compile_params["run_eagerly"],
             callbacks=fit_params["callbacks"],
             epochs=fit_params["epochs"],
             verbose=0,
+            # class_weight=fit_params["sample_weight"],
             fit__validation_split=fit_params["validation_split"],
-            fit__sample_weight=fit_params["sample_weight"],
             score__missing_mask=self.sim_missing_mask_,
             score__scoring_metric=self.scoring_metric,
-            score__is_vae=True,
+            score__is_vae=self.is_vae,
         )
 
         if self.run_gridsearch_:
@@ -601,6 +626,12 @@ class VAE(BaseEstimator, TransformerMixin):
                 search.fit(y_true, y_true, callbacks=callback)
 
             else:
+                # Write GridSearchCV to log file instead of STDOUT.
+                if self.verbose >= 10:
+                    old_stdout = sys.stdout
+                    log_file = open("gridsearch_logfile.txt", "w")
+                    sys.stdout = log_file
+
                 if self.gridsearch_method.lower() == "gridsearch":
                     # Do GridSearchCV
                     search = GridSearchCV(
@@ -633,25 +664,26 @@ class VAE(BaseEstimator, TransformerMixin):
                         f"{self.gridsearch_method}"
                     )
 
-                search.fit(
-                    y_true,
-                    y=y_true,
-                )
+                search.fit(y_true, y=y_true)
+
+                if self.verbose >= 10:
+                    # Make sure to revert STDOUT back to original.
+                    sys.stdout = old_stdout
+                    log_file.close()
 
             best_params = search.best_params_
             best_score = search.best_score_
             best_clf = search.best_estimator_
 
-            fp = f"{self.prefix}_vae_cvresults.csv"
+            fp = os.path.join(
+                f"{self.prefix}_output", "reports", "vae_cvresults.csv"
+            )
 
             cv_results = pd.DataFrame(search.cv_results_)
             cv_results.to_csv(fp, index=False)
 
         else:
-            clf.fit(
-                y_true,
-                y=y_true,
-            )
+            clf.fit(y_true, y=y_true)
             best_params = None
             best_score = None
             search = None
@@ -668,7 +700,7 @@ class VAE(BaseEstimator, TransformerMixin):
             y_true,
             y_pred,
             missing_mask=self.sim_missing_mask_,
-            is_vae=True,
+            is_vae=self.is_vae,
             testing=testing,
         )
 
@@ -712,7 +744,31 @@ class VAE(BaseEstimator, TransformerMixin):
                 TqdmCallback(epochs=self.epochs, verbose=0, desc="Epoch: ")
             )
 
-        compile_params = self.nn_.set_compile_params(self.optimizer, vae=True)
+        if self.sample_weights == "auto" or self.sample_weights == "logsmooth":
+            # Get class weights for each column.
+            sample_weights = self.nn_.get_class_weights(
+                self.y_original_,
+                self.original_missing_mask_,
+                return_1d=True,
+                method=self.sample_weights,
+            )
+            # sample_weights = self.nn_.normalize_data(sample_weights)
+
+        elif isinstance(self.sample_weights, dict):
+            for i in range(self.num_classes):
+                if self.sample_weights[i] == 0.0:
+                    self.sim_missing_mask_[self.y_original_ == i] = False
+
+            sample_weights = self.nn_.get_class_weights(
+                self.y_original_, user_weights=self.sample_weights
+            )
+
+        else:
+            sample_weights = None
+
+        compile_params = self.nn_.set_compile_params(
+            self.optimizer, sample_weights, vae=True
+        )
         compile_params["learning_rate"] = self.learning_rate
 
         model_params = {
@@ -738,28 +794,8 @@ class VAE(BaseEstimator, TransformerMixin):
             "validation_split": self.validation_split,
             "shuffle": True,
             "verbose": fit_verbose,
+            "sample_weight": sample_weights,
         }
-
-        if self.sample_weights == "auto":
-            # Get class weights for each column.
-            sample_weights = self.nn_.get_class_weights(
-                self.y_original_, self.original_missing_mask_
-            )
-            sample_weights = self.nn_.normalize_data(sample_weights)
-
-        elif isinstance(self.sample_weights, dict):
-            for i in range(self.num_classes):
-                if self.sample_weights[i] == 0.0:
-                    self.sim_missing_mask_[self.y_original_ == i] = False
-
-            sample_weights = self.nn_.get_class_weights(
-                self.y_original_, user_weights=self.sample_weights
-            )
-
-        else:
-            sample_weights = None
-
-        fit_params["sample_weight"] = sample_weights
 
         if self.run_gridsearch_ and "learning_rate" in self.gridparams:
             self.gridparams["optimizer__learning_rate"] = self.gridparams[
@@ -1000,20 +1036,30 @@ class SAE(BaseEstimator, TransformerMixin):
                 print(f"\nBest score: {self.best_score_}")
             plotting.plot_grid_search(self.search_.cv_results_, self.prefix)
 
-        plotting.plot_history(self.histories_, "SAE")
+        plotting.plot_history(self.histories_, "SAE", prefix=self.prefix)
         plotting.plot_metrics(self.metrics_, self.num_classes, self.prefix)
 
         if self.ga_:
             plot_fitness_evolution(self.search_)
             plt.savefig(
-                f"{self.prefix}_fitness_evolution.pdf", bbox_inches="tight"
+                os.path.join(
+                    f"{self.prefix}_output", "plots", "fitness_evolution.pdf"
+                ),
+                bbox_inches="tight",
+                facecolor="white",
             )
             plt.cla()
             plt.clf()
             plt.close()
 
             g = plotting.plot_search_space(self.search_)
-            plt.savefig(f"{self.prefix}_search_space.pdf", bbox_inches="tight")
+            plt.savefig(
+                os.path.join(
+                    f"{self.prefix}_output", "plots", "search_space.pdf"
+                ),
+                bbox_inches="tight",
+                facecolor="white",
+            )
             plt.cla()
             plt.clf()
             plt.close()
@@ -1280,7 +1326,9 @@ class SAE(BaseEstimator, TransformerMixin):
             best_score = search.best_score_
             best_clf = search.best_estimator_
 
-            fp = f"{self.prefix}_vae_cvresults.csv"
+            fp = os.path.join(
+                f"{self.prefix}_output", "reports", "vae_cvresults.csv"
+            )
 
             cv_results = pd.DataFrame(search.cv_results_)
             cv_results.to_csv(fp, index=False)
@@ -1637,20 +1685,30 @@ class UBP(BaseEstimator, TransformerMixin):
 
         nn_method = "NLPCA" if self.nlpca else "UBP"
 
-        plotting.plot_history(self.histories_, nn_method)
+        plotting.plot_history(self.histories_, nn_method, prefix=self.prefix)
         plotting.plot_metrics(self.metrics_, self.num_classes, self.prefix)
 
         if self.ga_:
             plot_fitness_evolution(self.search_)
             plt.savefig(
-                f"{self.prefix}_fitness_evolution.pdf", bbox_inches="tight"
+                os.path.join(
+                    f"{self.prefix}_output", "plots", "fitness_evolution.pdf"
+                ),
+                bbox_inches="tight",
+                facecolor="white",
             )
             plt.cla()
             plt.clf()
             plt.close()
 
             g = plotting.plot_search_space(self.search_)
-            plt.savefig(f"{self.prefix}_search_space.pdf", bbox_inches="tight")
+            plt.savefig(
+                os.path.join(
+                    f"{self.prefix}_output", "plots", "search_space.pdf"
+                ),
+                bbox_inches="tight",
+                facecolor="white",
+            )
             plt.cla()
             plt.clf()
             plt.close()
@@ -2059,9 +2117,15 @@ class UBP(BaseEstimator, TransformerMixin):
             best_clf = search.best_estimator_
 
             if phase is not None:
-                fp = f"{self.prefix}_ubp_cvresults_phase{phase}.csv"
+                fp = os.path.join(
+                    f"{self.prefix}_output",
+                    "reports",
+                    "ubp_cvresults_phase{phase}.csv",
+                )
             else:
-                fp = f"{self.prefix}_nlpca_cvresults.csv"
+                fp = os.path.join(
+                    f"{self.prefix}_output", "reports", "nlpca_cvresults.csv"
+                )
 
             cv_results = pd.DataFrame(search.cv_results_)
             cv_results.to_csv(fp, index=False)
