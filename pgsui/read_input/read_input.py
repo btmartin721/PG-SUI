@@ -1168,7 +1168,7 @@ class GenotypeData:
                 self.pops.append(my_popmap[sample])
 
     def decode_imputed(
-        self, X, write_output=True, prefix="output", is_nuc=False
+        self, X, write_output=True, prefix="imputer", is_nuc=False
     ):
         """Decode 012-encoded or 0-9 integer-encoded imputed data to STRUCTURE or PHYLIP format.
 
@@ -1269,7 +1269,9 @@ class GenotypeData:
         df_decoded.replace(dreplace, inplace=True)
 
         if write_output:
-            outfile = f"{prefix}_imputed"
+            outfile = os.path.join(
+                f"{self.prefix}_output", "alignments", "imputed"
+            )
 
         if ft.startswith("structure"):
 
@@ -1339,7 +1341,7 @@ class GenotypeData:
     def missingness_reports(
         self,
         zoom=True,
-        prefix=None,
+        prefix="imputer",
         horizontal_space=0.6,
         vertical_space=0.6,
         bar_color="gray",
@@ -1371,7 +1373,7 @@ class GenotypeData:
         Args:
             zoom (bool, optional): If True, zooms in to the missing proportion range on some of the plots. If False, the plot range is fixed at [0, 1]. Defaults to True.
 
-            prefix (str, optional): Prefix for output directory and files. Plots and files will be written to a directory called <prefix>_reports. The report directory will be created if it does not already exist. If prefix is None, then the reports directory will not have a prefix. Defaults to None.
+            prefix (str, optional): Prefix for output directory and files. Plots and files will be written to a directory called <prefix>_reports. The report directory will be created if it does not already exist. If prefix is None, then the reports directory will not have a prefix. Defaults to 'imputer'.
 
             horizontal_space (float, optional): Set width spacing between subplots. If your plot are overlapping horizontally, increase horizontal_space. If your plots are too far apart, decrease it. Defaults to 0.6.
 
@@ -1399,9 +1401,10 @@ class GenotypeData:
         df = pd.DataFrame(self.snps)
         df.replace(-9, np.nan, inplace=True)
 
-        report_path = "reports"
+        report_path = os.path.join(f"{self.prefix}_output", "reports")
+
         if prefix is not None:
-            report_path = f"{prefix}_{report_path}"
+            report_path = os.path.join(f"{self.prefix}_output", "reports")
         os.makedirs(report_path, exist_ok=True)
 
         loc, ind, poploc, poptotal, indpop = Plotting.visualize_missingness(
