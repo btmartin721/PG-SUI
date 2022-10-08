@@ -92,21 +92,21 @@ def main():
             popmapfile=args.popmap,
             guidetree=args.treefile,
             qmatrix_iqtree=args.iqtree,
-            siterates_iqtree="pgsui/example_data/trees/test_n500.rate",
+            siterates_iqtree="pgsui/example_data/trees/test_n100.rate",
         )
 
     data.missingness_reports(prefix=args.prefix, plot_format="png")
 
     # For GridSearchCV. Generate parameters to sample from.
-    learning_rate = [float(10) ** x for x in np.arange(-5, -1)]
+    learning_rate = [float(10) ** x for x in np.arange(-4, -1)]
     l1_penalty = [float(10) ** x for x in np.arange(-6, -1)]
     l1_penalty.append(0.0)
     l2_penalty = [float(10) ** x for x in np.arange(-6, -1)]
     l2_penalty.append(0.0)
     hidden_activation = ["elu", "relu"]
-    num_hidden_layers = [1, 2, 3, 4, 5]
+    num_hidden_layers = [1, 2, 3]
     hidden_layer_sizes = ["sqrt", "midpoint"]
-    n_components = [2, 4, 6]
+    n_components = [2, 3, 5, 10]
     dropout_rate = [0.0, 0.2, 0.4]
     # batch_size = [16, 32, 48, 64]
     optimizer = ["adam", "sgd", "adagrad"]
@@ -120,35 +120,35 @@ def main():
         "n_components": n_components,
         "dropout_rate": dropout_rate,
         # "optimizer": optimizer,
-        # "num_hidden_layers": num_hidden_layers,
-        # "hidden_activation": hidden_activation,
+        "num_hidden_layers": num_hidden_layers,
+        "hidden_activation": hidden_activation,
     }
 
     vae = ImputeVAE(
         data,
-        disable_progressbar=False,
+        disable_progressbar=True,
         epochs=100,
         column_subset=1.0,
-        learning_rate=0.01,
-        num_hidden_layers=3,
+        learning_rate=0.001,
+        num_hidden_layers=1,
         hidden_layer_sizes="midpoint",
-        verbose=1,
+        verbose=10,
         dropout_rate=0.2,
         hidden_activation="elu",
         batch_size=32,
-        l1_penalty=0.001,
-        l2_penalty=0.001,
-        # gridparams=grid_params,
+        l1_penalty=0.01,
+        l2_penalty=0.01,
+        gridparams=grid_params,
         n_jobs=4,
         grid_iter=5,
         sim_strategy="nonrandom_weighted",
         sim_prop_missing=0.5,
-        scoring_metric="hamming",
+        scoring_metric="f1_score",
         gridsearch_method="gridsearch",
         early_stop_gen=5,
         n_components=3,
         validation_split=0.0,
-        # sample_weights="auto",
+        sample_weights="auto",
     )
 
     # vae = ImputeNLPCA(
