@@ -59,13 +59,36 @@ class DisabledCV:
 
 # For VAE. Necessary to initialize outside of class for use with tf.function decorator.
 cce = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
+scce = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
 cce_proba = tf.keras.losses.CategoricalCrossentropy()
 cca = tf.keras.metrics.CategoricalAccuracy()
+scca = tf.keras.metrics.SparseCategoricalAccuracy()
 ba = tf.keras.metrics.BinaryAccuracy()
 bce = tf.keras.losses.BinaryCrossentropy(from_logits=True)
 # bfce = tf.keras.losses.BinaryFocalCrossentropy(
 #     from_logits=True, apply_class_balancing=True
 # )
+
+
+# class WeightedSCCE(tf.keras.losses.Loss):
+#     def __init__(self, class_weight, from_logits=False, name="weighted_scce"):
+#         if class_weight is None or all(v == 1.0 for v in class_weight):
+#             self.class_weight = None
+#         else:
+#             self.class_weight = tf.convert_to_tensor(
+#                 class_weight, dtype=tf.float32
+#             )
+#         self.reduction = tf.keras.losses.Reduction.NONE
+#         self.unreduced_scce = tf.keras.losses.SparseCategoricalCrossentropy(
+#             from_logits=from_logits, name=name, reduction=self.reduction
+#         )
+
+#     def __call__(self, y_true, y_pred, sample_weight=None):
+#         loss = self.unreduced_scce(y_true, y_pred, sample_weight)
+#         if self.class_weight is not None:
+#             weight_mask = tf.gather(self.class_weight, y_true)
+#             loss = tf.math.multiply(loss, weight_mask)
+#         return loss
 
 
 class NeuralNetworkMethods:
@@ -165,14 +188,49 @@ class NeuralNetworkMethods:
             Xt = np.array(Xt)
         return Xt
 
+    @staticmethod
+    def encode_multiclass(X, num_classes=10, missing_value=-9):
+        """Encode 0-9 integer data in multi-class one-hot format.
+
+        Missing values get encoded as ``[np.nan] * num_classes``
+        Args:
+            X (numpy.ndarray): Input array with 012-encoded data and ``missing_value`` as the missing data value.
+
+            num_classes (int, optional): Number of classes to use. Defaults to 10.
+
+            missing_value (int, optional): Missing data value to replace with ``[np.nan] * num_classes``\. Defaults to -9.
+        Returns:
+            pandas.DataFrame: Multi-class one-hot encoded data, ignoring missing values (np.nan).
+        """
+        int_cats, ohe_arr = np.arange(num_classes), np.eye(num_classes)
+        mappings = dict(zip(int_cats, ohe_arr))
+        mappings[missing_value] = np.array([np.nan] * num_classes)
+
+        try:
+            Xt = np.zeros(shape=(X.shape[0], X.shape[1], num_classes))
+        except IndexError:
+            Xt = np.zeros(shape=(X.shape[0],))
+
+        try:
+            for row in np.arange(X.shape[0]):
+                Xt[row] = [mappings[enc] for enc in X[row]]
+        except TypeError:
+            Xt = [mappings[enc] for enc in X]
+
+        if not isinstance(Xt, np.ndarray):
+            Xt = np.array(Xt)
+
+        return Xt
+
     @classmethod
     def decode_masked(
         cls,
         y_true_bin,
         y_pred_proba,
-        is_multiclass=False,
+        is_multiclass=True,
         return_proba=False,
         return_multilab=False,
+        return_int=True,
         predict_still_missing=True,
         threshold_increment=0.1,
         multilabel_averaging="macro",
@@ -189,13 +247,15 @@ class NeuralNetworkMethods:
 
             y_pred_proba (numpy.ndarray): Multilabel model predictions of shape (n_samples * n_features, num_classes). Array should be flattened and masked.
 
-            is_multiclass (bool, optional): True if using multiclass data with softmax activation. False if using multilabel data with sigmoid activation. Defaults to False.
+            is_multiclass (bool, optional): True if using multiclass data with softmax activation. False if using multilabel data with sigmoid activation. Defaults to True.
 
             threshold (float, optional): If using multilabel, then set the threshold for determining 1 or 0 predictions. Defaults to 0.5.
 
             return_proba (bool, optional): If True, returns probabilities for unresolved values where all multilabel probabilities were below the threshold. Defaults to False.
 
-            return_multilab (bool, optional): If True, returns the multilabel encodings instead of integer encodings. Defaults to False.
+            return_multilab (bool, optional): If True, returns the multilabel encodings instead of integer encodings (if doing multilabel classification). Defaults to False.
+
+            return_int (bool, optional): If True, returns the integer encodings instead of onehot encodings (if doing multiclass classification). Defaults to False.
 
             predict_still_missing (bool, optional): If True, values that are still missing after decoding are decoded using the maximum probability (i.e., with np.argmax). If False, then it is possible that some missing data might still remain after decoding if none of the multilabel probabilities are above the threshold. Defaults to True.
 
@@ -213,10 +273,15 @@ class NeuralNetworkMethods:
         y_unresolved_certainty = None
         if is_multiclass:
             # Softmax predictions.
-            y_pred = cls.decode_multiclass(y_pred_proba)
+            # If reduce_dim is True, will return integer encodings.
+            # Otherwise, returns one-hot encodings.
+            y_pred = cls.decode_multiclass(y_pred_proba, reduce_dim=return_int)
         else:
             if y_true_bin.shape[-1] != 4:
-                y_true_bin = cls.encode_vae(y_true_bin)
+                if y_true_bin.shape[-1] != 10:
+                    y_true_bin = cls.encode_vae(y_true_bin)
+                else:
+                    y_true_bin = cls.encode_multiclass(y_true_bin)
 
             # Binary multilabel predictions.
             threshold = cls.get_optimal_threshold(
@@ -380,35 +445,6 @@ class NeuralNetworkMethods:
 
             threshold (float, optional): Threshold to use to set decoded multilabel values to 0s (< threshold) or 1s (>= threshold). Defaults to 0.5.
         """
-        # Check if multi-labels have >2 1s.
-        # multi_cats = np.where(
-        #     np.count_nonzero(pred_multilab, axis=-1) > 2, True, False
-        # )
-
-        # # If >2 1s, set the extras with lowest probabilities to 0.0.
-        # if np.any(multi_cats):
-        #     n_dims = len(y_pred_proba.shape)
-        #     if n_dims == 2:
-        #         for row in np.arange(y_pred_proba.shape[0]):
-        #             indices = (y_pred_proba[row]).argsort()[:2]
-        #             pred_multilab[row, indices] = 0.0
-        #             # Get lowest two values.
-        #             # idx = np.argpartition(y_pred_proba[row], 2)[0:2]
-        #             # y_pred_proba[row, idx] = 0.0
-
-        #     elif n_dims == 3:
-        #         for row in np.arange(y_pred_proba.shape[0]):
-        #             for col in np.arange(y_pred_proba.shape[1]):
-        #                 indices = (y_pred_proba[row, col]).argsort()[:2]
-        #                 pred_multilab[row, col, indices] = 0.0
-        #                 # idx = np.argpartition(y_pred_proba[row, col], 2)[0:2]
-        #                 # y_pred_proba[row, col, idx] = 0.0
-
-        #     else:
-        #         raise IndexError(
-        #             f"Incorrect number of dimensions for y_pred_proba: {n_dims}"
-        #         )
-
         k = 2
         idx = np.argpartition(y_pred_proba.ravel(), k)
         indices = tuple(
@@ -418,13 +454,21 @@ class NeuralNetworkMethods:
         )
 
         y_pred_proba[indices] = 0.0
-        # if you want it in a list of indices . . .
-        # return np.array(np.unravel_index(idx, arr.shape))[:, range(k)].transpose().tolist()
 
         return np.where(y_pred_proba >= threshold, 1.0, 0.0)
 
     @classmethod
     def decode_multiclass(cls, y_pred_proba, reduce_dim=True):
+        """Decode probabilities to either one-hot or integer encodings.
+
+        Args:
+            y_pred_proba (numpy.ndarray): Probabilities to decode.
+
+            reduce_dim (bool, optional): If True, returns integer encodings of one fewer dimension than ``y_pred_proba``\. Otherwise, returns one-hot encodings where the class with the maximum probability is a 1 and every other class is 0. Defaults to True.
+
+        Returns:
+            numpy.ndarray: Integer or one-hot-encoded predictions.
+        """
         yt = np.apply_along_axis(cls.mle, axis=-1, arr=y_pred_proba)
         if reduce_dim:
             return np.argmax(yt, axis=-1)
@@ -635,8 +679,6 @@ class NeuralNetworkMethods:
                 units = round((units + n_components) / 2)
             elif func == "sqrt":
                 units = round(math.sqrt(units))
-                print(units)
-                sys.exit()
             elif func == "log2":
                 units = round(math.log(units, 2))
             elif isinstance(func, int):
@@ -827,7 +869,7 @@ class NeuralNetworkMethods:
                 batch_size //= 2
         return batch_size
 
-    def set_compile_params(self, optimizer, vae=False):
+    def set_compile_params(self, optimizer, sample_weights, vae=False):
         """Set compile parameters to use.
 
         Returns:
@@ -854,8 +896,16 @@ class NeuralNetworkMethods:
             opt = tf.keras.optimizers.RMSProp
 
         if vae:
-            loss = NeuralNetworkMethods.make_masked_binary_crossentropy()
-            metrics = [NeuralNetworkMethods.make_masked_binary_accuracy()]
+            loss = NeuralNetworkMethods.make_masked_categorical_crossentropy(
+                class_weight=sample_weights, is_vae=vae
+            )
+
+            # This is also called in vae_model.py and autoencoder.py.
+            metrics = [
+                NeuralNetworkMethods.make_masked_categorical_accuracy(
+                    class_weight=sample_weights, is_vae=vae
+                )
+            ]
 
         else:
             # Doing grid search. Params are callables.
@@ -991,19 +1041,21 @@ class NeuralNetworkMethods:
                 # sample_weight=sample_weight,
             )
 
-            
-
         return masked_binary_crossentropy
 
     @staticmethod
-    def make_masked_categorical_accuracy():
+    def make_masked_categorical_accuracy(class_weight=None, is_vae=False):
         """Make categorical crossentropy loss function with missing mask.
+
+        Args:
+            class_weight (Dict[int, float): Weights for each class.
+            is_vae (bool, optional): Whether using VAE model. Defaults to False.
 
         Returns:
             callable: Function that calculates categorical crossentropy loss.
         """
 
-        # @tf.function
+        @tf.function
         def masked_categorical_accuracy(y_true, y_pred, sample_weight=None):
             """Custom loss function for neural network model with missing mask.
             Ignores missing data in the calculation of the loss function.
@@ -1015,30 +1067,84 @@ class NeuralNetworkMethods:
             Returns:
                 float: Mean squared error loss value with missing data masked.
             """
-            y_true_masked = tf.boolean_mask(
-                y_true, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
-            )
+            if not is_vae:
+                # Mask out missing values.
+                y_true_masked = tf.boolean_mask(
+                    y_true,
+                    tf.reduce_any(tf.not_equal(y_true, -1), axis=-1),
+                )
 
-            y_pred_masked = tf.boolean_mask(
-                y_pred, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
-            )
+                y_pred_masked = tf.boolean_mask(
+                    y_pred,
+                    tf.reduce_any(tf.not_equal(y_true, -1), axis=-1),
+                )
 
-            return cca(y_true_masked, y_pred_masked)
+                if sample_weight is not None:
+                    sample_weight_masked = tf.boolean_mask(
+                        tf.convert_to_tensor(sample_weight),
+                        tf.reduce_any(tf.not_equal(y_true, -1), axis=-1),
+                    )
+                else:
+                    sample_weight_masked = None
+            else:
+                y_true = tf.cast(y_true, tf.int32)
+                y_true = tf.reshape(y_true, [-1])
+                dims = tf.shape(y_pred)
+                y_pred_masked = tf.reshape(
+                    y_pred, [dims[0] * dims[1], dims[2]]
+                )
+
+                y_true_masked = tf.where(
+                    condition=tf.math.equal(y_true, -9), x=0, y=y_true
+                )
+
+                if class_weight is not None:
+                    # build a lookup table to map the class_weight dictionary
+                    # to y_true_masked. This will result in a 2D sample_weight
+                    # tensor for use with the sample_weight argument in the
+                    # loss function.
+                    # Source: https://stackoverflow.com/questions/35316250/tensorflow-dictionary-lookup-with-string-tensor
+                    # Answer by Praveen Kulkarni.
+                    table = tf.lookup.StaticHashTable(
+                        initializer=tf.lookup.KeyValueTensorInitializer(
+                            keys=tf.constant(list(class_weight.keys())),
+                            values=tf.constant(list(class_weight.values())),
+                        ),
+                        default_value=tf.constant(0.0),
+                        name="class_weight",
+                    )
+
+                    sample_weight_masked = table.lookup(y_true)
+                    sample_weight_masked = tf.reshape(
+                        sample_weight_masked, [-1]
+                    )
+                else:
+                    sample_weight_masked = None
+
+            acc_func = scca if is_vae else cca
+
+            return acc_func(
+                y_true_masked,
+                y_pred_masked,
+                sample_weight=sample_weight_masked,
+            )
 
         return masked_categorical_accuracy
 
     @staticmethod
-    def make_masked_categorical_crossentropy():
+    def make_masked_categorical_crossentropy(class_weight=None, is_vae=False):
         """Make categorical crossentropy loss function with missing mask.
 
         Args:
-            kl_weight (float, optional): KL Divergence weight to use.
+            class_weight (Dict[int, float]): Weights for each class. Defaults to None.
+
+            is_vae (bool, optional): Whether using VAE model. Defaults to False.
 
         Returns:
             callable: Function that calculates categorical crossentropy loss.
         """
 
-        # @tf.function
+        @tf.function
         def masked_categorical_crossentropy(
             y_true, y_pred, sample_weight=None
         ):
@@ -1049,28 +1155,68 @@ class NeuralNetworkMethods:
                 y_true (tensorflow.tensor): Input one-hot encoded 3D tensor.
                 y_pred (tensorflow.tensor): Predicted values.
                 sample_weight (numpy.ndarray): 2D matrix of sample weights.
+                class_weight (Dict[int, float] or None, optional): A dictionary with classes as keys and class weights as values. Defaults to None.
 
             Returns:
                 float: Mean squared error loss value with missing data masked.
             """
-            # Mask out missing values.
-            y_true_masked = tf.boolean_mask(
-                y_true, tf.reduce_any(tf.not_equal(y_true, -1), axis=-1)
-            )
-
-            y_pred_masked = tf.boolean_mask(
-                y_pred, tf.reduce_any(tf.not_equal(y_true, -1), axis=-1)
-            )
-
-            if sample_weight is not None:
-                sample_weight_masked = tf.boolean_mask(
-                    tf.convert_to_tensor(sample_weight),
+            if not is_vae:
+                # Mask out missing values.
+                y_true_masked = tf.boolean_mask(
+                    y_true,
                     tf.reduce_any(tf.not_equal(y_true, -1), axis=-1),
                 )
-            else:
-                sample_weight_masked = None
 
-            return cce_proba(
+                y_pred_masked = tf.boolean_mask(
+                    y_pred,
+                    tf.reduce_any(tf.not_equal(y_true, -1), axis=-1),
+                )
+
+                if sample_weight is not None:
+                    sample_weight_masked = tf.boolean_mask(
+                        tf.convert_to_tensor(sample_weight),
+                        tf.reduce_any(tf.not_equal(y_true, -1), axis=-1),
+                    )
+                else:
+                    sample_weight_masked = None
+            else:
+                y_true = tf.cast(y_true, tf.int32)
+                y_true = tf.reshape(y_true, [-1])
+
+                dims = tf.shape(y_pred)
+                y_pred_masked = tf.reshape(
+                    y_pred, [dims[0] * dims[1], dims[2]]
+                )
+                y_true_masked = tf.where(
+                    condition=tf.math.equal(y_true, -9), x=0, y=y_true
+                )
+
+                if class_weight is not None:
+                    # build a lookup table to map the class_weight dictionary
+                    # to y_true_masked. This will result in a 2D sample_weight
+                    # tensor for use with the sample_weight argument in the
+                    # loss function.
+                    # Source: https://stackoverflow.com/questions/35316250/tensorflow-dictionary-lookup-with-string-tensor
+                    # Answer by Praveen Kulkarni.
+                    table = tf.lookup.StaticHashTable(
+                        initializer=tf.lookup.KeyValueTensorInitializer(
+                            keys=tf.constant(list(class_weight.keys())),
+                            values=tf.constant(list(class_weight.values())),
+                        ),
+                        default_value=tf.constant(0.0),
+                        name="class_weight",
+                    )
+
+                    sample_weight_masked = table.lookup(y_true)
+                    sample_weight_masked = tf.reshape(
+                        sample_weight_masked, [-1]
+                    )
+                else:
+                    sample_weight_masked = None
+
+            loss_func = scce if is_vae else cce_proba
+
+            return loss_func(
                 y_true_masked,
                 y_pred_masked,
                 sample_weight=sample_weight_masked,
@@ -1141,7 +1287,31 @@ class NeuralNetworkMethods:
         return (data - np.min(data)) / (np.max(data) - np.min(data))
 
     @staticmethod
-    def get_class_weights(y_true, original_missing_mask, user_weights=None):
+    def normalize_sum_to_1(d, target=1.0):
+        factor = target / sum(d.values())
+        return {k: v * factor for k, v in d.items()}
+
+    @staticmethod
+    def smooth_weights(d, mu=0.15):
+        total = np.sum(list(d.values()))
+        keys = d.keys()
+        class_weight = dict()
+
+        for k in keys:
+            score = math.log(mu * total / float(d[k]))
+            class_weight[k] = score if score > 1.0 else 1.0
+
+        return class_weight
+
+    @classmethod
+    def get_class_weights(
+        cls,
+        y_true,
+        original_missing_mask,
+        user_weights=None,
+        return_1d=False,
+        method="auto",
+    ):
         """Get class weights for each column in a 2D matrix.
 
         Args:
@@ -1151,8 +1321,10 @@ class NeuralNetworkMethods:
 
             user_weights (Dict[int, float], optional): Class weights if user-provided.
 
+            return_1d (bool, optional): If True, returns a dictionary of class weights, with integer encodings as keys and the corresponding class weights as keys. If False, returns 2D sample_weight matrix. Defaults to False.
+
         Returns:
-            numpy.ndarray: Class weights per column of shape (n_samples, n_features).
+            numpy.ndarray or Dict[int, float]: Sample weights per column of shape (n_samples, n_features) if return_1d is False. Dictionary of class weights if True.
         """
         # Get list of class_weights (per-column).
         class_weights = list()
@@ -1161,6 +1333,29 @@ class NeuralNetworkMethods:
             # Set user-defined sample_weights
             for k in user_weights.keys():
                 sample_weight[y_true == k] = user_weights[k]
+
+        elif return_1d:
+            y_true_1d = y_true.flatten()
+
+            if method == "auto":
+                sample_weight = dict(
+                    zip(
+                        np.unique(y_true_1d),
+                        compute_class_weight(
+                            "balanced",
+                            classes=np.unique(y_true_1d),
+                            y=y_true_1d,
+                        ),
+                    )
+                )
+
+            elif method == "logsmooth":
+                counts = np.unique(y_true_1d, return_counts=True)
+                sample_weight = dict(zip(counts[0], counts[1]))
+                sample_weight.pop(-9)
+                sample_weight = cls.smooth_weights(sample_weight)
+                sample_weight[-9] = 0.0
+
         else:
             # Automatically get class weights to set sample_weight.
             for i in np.arange(y_true.shape[1]):
@@ -1183,7 +1378,9 @@ class NeuralNetworkMethods:
         return sample_weight
 
     @staticmethod
-    def write_gt_state_probs(y_pred, y_pred_1d, y_true, y_true_1d):
+    def write_gt_state_probs(
+        y_pred, y_pred_1d, y_true, y_true_1d, prefix="imputer"
+    ):
         bin_mapping = np.array(
             [np.array2string(x) for row in y_pred for x in row]
         )
@@ -1205,5 +1402,9 @@ class NeuralNetworkMethods:
 
         gt_df = pd.DataFrame.from_records(gt_dist)
         gt_df.to_csv(
-            "genotype_stateProbs_truths.csv", index=False, header=False
+            os.path.join(
+                f"{prefix}_output", "logs", "genotype_stateProbs_truths.csv"
+            ),
+            index=False,
+            header=False,
         )
