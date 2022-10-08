@@ -220,23 +220,23 @@ class Encoder(tf.keras.layers.Layer):
         x = self.flatten(inputs)
         x = self.dense1(x)
         x = self.dropout_layer(x, training=training)
-        x = self.batch_norm_layer1(x, training=training)
+        # x = self.batch_norm_layer1(x, training=training)
         if self.dense2 is not None:
             x = self.dense2(x)
             x = self.dropout_layer(x, training=training)
-            x = self.batch_norm_layer2(x, training=training)
+            # x = self.batch_norm_layer2(x, training=training)
         if self.dense3 is not None:
             x = self.dense3(x)
             x = self.dropout_layer(x, training=training)
-            x = self.batch_norm_layer3(x, training=training)
+            # x = self.batch_norm_layer3(x, training=training)
         if self.dense4 is not None:
             x = self.dense4(x)
             x = self.dropout_layer(x, training=training)
-            x = self.batch_norm_layer4(x, training=training)
+            # x = self.batch_norm_layer4(x, training=training)
         if self.dense5 is not None:
             x = self.dense5(x)
             x = self.dropout_layer(x, training=training)
-            x = self.batch_norm_layer5(x, training=training)
+            # x = self.batch_norm_layer5(x, training=training)
 
         x = self.dense_latent(x)
         z_mean = self.dense_z_mean(x)
@@ -342,23 +342,23 @@ class Decoder(tf.keras.layers.Layer):
         # x = self.flatten(inputs)
         x = self.dense1(inputs)
         x = self.dropout_layer(x, training=training)
-        x = self.batch_norm_layer1(x, training=training)
+        # x = self.batch_norm_layer1(x, training=training)
         if self.dense2 is not None:
             x = self.dense2(x)
             x = self.dropout_layer(x, training=training)
-            x = self.batch_norm_layer2(x, training=training)
+            # x = self.batch_norm_layer2(x, training=training)
         if self.dense3 is not None:
             x = self.dense3(x)
             x = self.dropout_layer(x, training=training)
-            x = self.batch_norm_layer3(x, training=training)
+            # x = self.batch_norm_layer3(x, training=training)
         if self.dense4 is not None:
             x = self.dense4(x)
             x = self.dropout_layer(x, training=training)
-            x = self.batch_norm_layer4(x, training=training)
+            # x = self.batch_norm_layer4(x, training=training)
         if self.dense5 is not None:
             x = self.dense5(x)
             x = self.dropout_layer(x, training=training)
-            x = self.batch_norm_layer5(x, training=training)
+            # x = self.batch_norm_layer5(x, training=training)
 
         x = self.dense_output(x)
         return self.rshp(x)
@@ -378,7 +378,7 @@ class VAEModel(tf.keras.Model):
         l2_penalty=1e-6,
         dropout_rate=0.2,
         kl_beta=1.0,
-        num_classes=4,
+        num_classes=10,
         sample_weight=None,
     ):
         super(VAEModel, self).__init__()
@@ -390,7 +390,9 @@ class VAEModel(tf.keras.Model):
         self.sample_weight = sample_weight
 
         self.nn_ = NeuralNetworkMethods()
-        self.binary_accuracy = self.nn_.make_masked_binary_accuracy()
+        self.categorical_accuracy = self.nn_.make_masked_categorical_accuracy(
+            is_vae=True
+        )
 
         self.total_loss_tracker = tf.keras.metrics.Mean(name="loss")
         self.reconstruction_loss_tracker = tf.keras.metrics.Mean(
@@ -518,14 +520,6 @@ class VAEModel(tf.keras.Model):
         else:
             raise TypeError("Target y must be supplied to fit for this model.")
 
-        if sample_weight is not None:
-            sample_weight_masked = tf.boolean_mask(
-                tf.convert_to_tensor(sample_weight),
-                tf.reduce_any(tf.not_equal(y, -1), axis=2),
-            )
-        else:
-            sample_weight_masked = None
-
         with tf.GradientTape() as tape:
             reconstruction, z_mean, z_log_var, z = self(x, training=True)
 
@@ -533,7 +527,7 @@ class VAEModel(tf.keras.Model):
             reconstruction_loss = self.compiled_loss(
                 y,
                 reconstruction,
-                sample_weight=sample_weight_masked,
+                sample_weight=sample_weight,
             )
 
             # Doesn't include KL Divergence Loss.
@@ -551,10 +545,10 @@ class VAEModel(tf.keras.Model):
         ### 'rank', then convert y_true to a tensor object."
         # self.compiled_metrics.update_state(
         self.accuracy_tracker.update_state(
-            self.binary_accuracy(
+            self.categorical_accuracy(
                 y,
                 reconstruction,
-                sample_weight=self.sample_weight,
+                sample_weight=sample_weight,
             )
         )
 
@@ -597,7 +591,7 @@ class VAEModel(tf.keras.Model):
         total_loss = reconstruction_loss + regularization_loss
 
         self.accuracy_tracker.update_state(
-            self.binary_accuracy(
+            self.cateogrical_accuracy(
                 y,
                 reconstruction,
                 sample_weight=sample_weight_masked,
