@@ -238,6 +238,7 @@ class IterativeImputerFixedParams(IterativeImputer):
         add_indicator: bool = False,
         genotype_data: Optional[Any] = None,
         str_encodings: Optional[Dict[str, int]] = None,
+        prefix="imputer",
     ) -> None:
         super().__init__(
             estimator=estimator,
