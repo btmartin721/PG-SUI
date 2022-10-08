@@ -1,6 +1,7 @@
 import os
 import sys
 import warnings
+from pathlib import Path
 
 from typing import Optional, Union, List, Dict, Tuple, Any, Callable
 
@@ -45,6 +46,8 @@ class GenotypeData:
             siterates_iqtree (str or None, optional): Path to *.rates file output from IQ-TREE, containing a per-site rate table. If specified, ``ImputePhylo`` will read the site-rates from the IQ-TREE output file. Cannot be used in conjunction with ``siterates`` argument. Not required if the ``siterates`` or ``siterates_iqtree`` options were used with the ``GenotypeData`` object. Defaults to None.
 
             plot_format (str, optional): Format to save report plots. Valid options include: 'pdf', 'svg', 'png', and 'jpeg'. Defaults to "pdf".
+
+            prefix (str, optional): Prefix to use for output directory. Defaults to 'imputer'.
 
             verbose (bool, optional): Verbosity level. Defaults to True.
 
@@ -96,6 +99,7 @@ class GenotypeData:
         siterates: Optional[str] = None,
         siterates_iqtree: Optional[str] = None,
         plot_format: Optional[str] = "pdf",
+        prefix="imputer",
         verbose: bool = True,
     ) -> None:
         self.filename = filename
@@ -107,6 +111,7 @@ class GenotypeData:
         self.siterates = siterates
         self.siterates_iqtree = siterates_iqtree
         self.plot_format = plot_format
+        self.prefix = prefix
         self.verbose = verbose
 
         self.snpsdict: Dict[str, List[Union[str, int]]] = dict()
@@ -1373,7 +1378,7 @@ class GenotypeData:
         Args:
             zoom (bool, optional): If True, zooms in to the missing proportion range on some of the plots. If False, the plot range is fixed at [0, 1]. Defaults to True.
 
-            prefix (str, optional): Prefix for output directory and files. Plots and files will be written to a directory called <prefix>_reports. The report directory will be created if it does not already exist. If prefix is None, then the reports directory will not have a prefix. Defaults to 'imputer'.
+            prefix (str, optional): Prefix for output directory and files. Plots and files will be written to a directory called <prefix>_reports. The report directory will be created if it does not already exist. Defaults to 'imputer'.
 
             horizontal_space (float, optional): Set width spacing between subplots. If your plot are overlapping horizontally, increase horizontal_space. If your plots are too far apart, decrease it. Defaults to 0.6.
 
@@ -1408,7 +1413,7 @@ class GenotypeData:
         os.makedirs(report_path, exist_ok=True)
 
         loc, ind, poploc, poptotal, indpop = Plotting.visualize_missingness(
-            self, df, report_path, **params
+            self, df, **params
         )
 
         self._report2file(ind, report_path, "individual_missingness.csv")
@@ -1432,6 +1437,12 @@ class GenotypeData:
         df.to_csv(
             os.path.join(report_path, mypath), header=header, index=False
         )
+
+    def plot_allele_distribution(self):
+        plot_path = os.path.join(f"{self.prefix}_output", "plots")
+        Path(plot_path).mkdir(parents=True, exist_ok=True)
+        plotting = Plotting()
+        plotting.plot_gt_distribution(self.int_iupac, plot_path)
 
     def calc_missing(self, df, use_pops=True):
         # Get missing value counts per-locus.
@@ -1539,10 +1550,6 @@ class GenotypeData:
             pandas.DataFrame: DataFrame of shape (n_samples, n_SNPs), integer-encoded from 0-9 with IUPAC characters.
         """
         return pd.DataFrame(self.int_iupac)
-
-    def plot_allele_distribution(self):
-        plotting = Plotting()
-        plotting.plot_gt_distribution(self.int_iupac)
 
 
 def merge_alleles(
