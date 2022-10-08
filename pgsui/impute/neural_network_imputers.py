@@ -173,7 +173,7 @@ class VAE(BaseEstimator, TransformerMixin):
         self,
         genotype_data=None,
         *,
-        prefix="output",
+        prefix="imputer",
         gridparams=None,
         disable_progressbar=False,
         batch_size=32,
@@ -422,7 +422,9 @@ class VAE(BaseEstimator, TransformerMixin):
                 y_true_1d[i] = y_pred_1d[i]
 
         if self.testing:
-            self.nn_.write_gt_state_probs(y_pred, y_pred_1d, y_true, y_true_1d)
+            self.nn_.write_gt_state_probs(
+                y_pred, y_pred_1d, y_true, y_true_1d, prefix=self.prefix
+            )
             Plotting.plot_confusion_matrix(
                 y_true_1d, y_pred_1d, prefix=self.prefix
             )
@@ -629,7 +631,14 @@ class VAE(BaseEstimator, TransformerMixin):
                 # Write GridSearchCV to log file instead of STDOUT.
                 if self.verbose >= 10:
                     old_stdout = sys.stdout
-                    log_file = open("gridsearch_logfile.txt", "w")
+                    log_file = open(
+                        os.path.join(
+                            f"{self.prefix}_output",
+                            "logs",
+                            "gridsearch_progress_log.txt",
+                        ),
+                        "w",
+                    )
                     sys.stdout = log_file
 
                 if self.gridsearch_method.lower() == "gridsearch":
@@ -727,7 +736,9 @@ class VAE(BaseEstimator, TransformerMixin):
         """
         # For CSVLogger() callback.
         append = False
-        logfile = f"{self.prefix}_vae_log.csv"
+        logfile = os.path.join(
+            f"{self.prefix}_output", "logs", "vae_training_log.csv"
+        )
 
         callbacks = [
             CSVLogger(filename=logfile, append=append),
@@ -875,7 +886,7 @@ class SAE(BaseEstimator, TransformerMixin):
         self,
         genotype_data=None,
         *,
-        prefix="output",
+        prefix="imputer",
         gridparams=None,
         disable_progressbar=False,
         batch_size=32,
@@ -1377,7 +1388,9 @@ class SAE(BaseEstimator, TransformerMixin):
         """
         # For CSVLogger() callback.
         append = False
-        logfile = f"{self.prefix}_vae_log.csv"
+        logfile = os.path.join(
+            f"{self.prefix}_output", "logs", "sae_training_log.csv"
+        )
 
         callbacks = [
             CSVLogger(filename=logfile, append=append),
@@ -1522,7 +1535,7 @@ class UBP(BaseEstimator, TransformerMixin):
         self,
         genotype_data,
         *,
-        prefix="output",
+        prefix="imputer",
         gridparams=None,
         disable_progressbar=False,
         nlpca=False,
