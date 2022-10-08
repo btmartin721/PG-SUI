@@ -446,6 +446,7 @@ class Impute:
             qmatrix=genotype_data.qmatrix,
             siterates=genotype_data.siterates,
             siterates_iqtree=genotype_data.siterates_iqtree,
+            prefix=genotype_data.prefix,
             verbose=False,
         )
 
@@ -1004,6 +1005,7 @@ class Impute:
                     imputer = self.clf(
                         self.imp_kwargs["genotype_data"],
                         disable_progressbar=self.disable_progressbar,
+                        prefix=self.prefix,
                         **self.clf_kwargs,
                     )
                     df_imp = pd.DataFrame(
@@ -1173,11 +1175,11 @@ class Impute:
         do_validation = kwargs.pop("do_validation", False)
         verbose = kwargs.get("verbose", 0)
         disable_progressbar = kwargs.get("disable_progressbar", False)
-        prefix = kwargs.get("prefix", "output")
+        prefix = kwargs.get("prefix", "imputer")
         do_gridsearch = False if kwargs["gridparams"] is None else True
 
         if prefix is None:
-            prefix = "output"
+            prefix = "imputer"
 
         imp_kwargs = kwargs.copy()
         clf_kwargs = kwargs.copy()
@@ -1498,7 +1500,9 @@ class Impute:
                 df_stg[col] = df_stg[col].replace({pd.NA: np.nan})
             # df_stg.fillna(-9, inplace=True)
 
-            imputer = self.clf(**self.clf_kwargs, **self.imp_kwargs)
+            imputer = self.clf(
+                prefix=self.prefix, **self.clf_kwargs, **self.imp_kwargs
+            )
 
             df_imp = pd.DataFrame(
                 imputer.fit_transform(df_stg.to_numpy()),
