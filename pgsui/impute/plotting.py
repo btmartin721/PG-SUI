@@ -1,6 +1,7 @@
 import os
 import sys
 from itertools import cycle
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -94,7 +95,7 @@ class Plotting:
                 f"{prefix}_output", "plots", "gridsearch_metrics.pdf"
             ),
             bbox_inches="tight",
-            facecolor="white"
+            facecolor="white",
         )
 
     @staticmethod
@@ -297,7 +298,6 @@ class Plotting:
     def visualize_missingness(
         genotype_data,
         df,
-        report_path,
         zoom=True,
         prefix="imputer",
         horizontal_space=0.6,
@@ -313,8 +313,6 @@ class Plotting:
             genotype_data (GenotypeData): Initialized GentoypeData object.
 
             df (pandas.DataFrame): DataFrame with snps to visualize.
-
-            report_path (str): Path to report directory where plots are saved.
 
             zoom (bool, optional): If True, zooms in to the missing proportion range on some of the plots. If False, the plot range is fixed at [0, 1]. Defaults to True.
 
@@ -462,10 +460,10 @@ class Plotting:
 
         fig.savefig(
             os.path.join(
-                f"{prefix}_output", "reports", f"missingness.{plot_format}"
+                f"{prefix}_output", "plots", f"missingness.{plot_format}"
             ),
             bbox_inches="tight",
-            facecolor="white"
+            facecolor="white",
         )
         plt.cla()
         plt.clf()
@@ -477,7 +475,7 @@ class Plotting:
     def run_and_plot_pca(
         original_genotype_data,
         imputer_object,
-        prefix="output",
+        prefix="imputer",
         n_components=3,
         center=True,
         scale=False,
@@ -504,7 +502,7 @@ class Plotting:
 
         The plot is saved as both an interactive HTML file and as a static image. Each population is represented by point shapes. The interactive plot has associated metadata when hovering over the points.
 
-        Files are saved to a reports directory as <prefix>_reports/imputed_pca.<plot_format|html>. Supported image formats include: "pdf", "svg", "png", and "jpeg" (or "jpg").
+        Files are saved to a reports directory as <prefix>_output/imputed_pca.<plot_format|html>. Supported image formats include: "pdf", "svg", "png", and "jpeg" (or "jpg").
 
         Args:
             original_genotype_data (GenotypeData): Original GenotypeData object that was input into the imputer.
@@ -513,7 +511,7 @@ class Plotting:
 
             original_012 (pandas.DataFrame, numpy.ndarray, or List[List[int]], optional): Original 012-encoded genotypes (before imputing). Missing values are encoded as -9. This object can be obtained as ``df = GenotypeData.genotypes012_df``.
 
-            prefix (str, optional): Prefix for report directory. Plots will be save to a directory called <prefix>_reports/imputed_pca<html|plot_format>. Report directory will be created if it does not already exist. If prefix is None, the reports directory will not have a prefix. Defaults to "output".
+            prefix (str, optional): Prefix for report directory. Plots will be save to a directory called <prefix>_output/imputed_pca<html|plot_format>. Report directory will be created if it does not already exist. Defaults to "imputer".
 
             n_components (int, optional): Number of principal components to include in the PCA. Defaults to 3.
 
@@ -563,10 +561,8 @@ class Plotting:
             >>>
             >>>explvar = pca.explained_variance_ratio_
         """
-        report_path = "reports"
-        if prefix is not None:
-            report_path = f"{prefix}_reports"
-        os.makedirs(report_path, exist_ok=True)
+        report_path = os.path.join(f"{prefix}_output", "plots")
+        Path(report_path).mkdir(parents=True, exist_ok=True)
 
         if n_axes > 3:
             raise ValueError(
@@ -861,7 +857,7 @@ class Plotting:
         )
 
     @staticmethod
-    def plot_gt_distribution(df, prefix="imputer"):
+    def plot_gt_distribution(df, plot_path):
         df = misc.validate_input_type(df, return_type="df")
         df_melt = pd.melt(df, value_name="Count")
         cnts = df_melt["Count"].value_counts()
@@ -885,9 +881,7 @@ class Plotting:
             )
 
         fig.savefig(
-            os.path.join(
-                f"{prefix}_output", "plots", "genotype_distributions.png"
-            ),
+            os.path.join(plot_path, "genotype_distributions.png"),
             bbox_inches="tight",
             facecolor="white",
         )
