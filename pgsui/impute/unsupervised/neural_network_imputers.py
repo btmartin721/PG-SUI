@@ -62,16 +62,16 @@ from tensorflow.keras.callbacks import (
 
 # Custom module imports
 try:
-    from ..utils.misc import timer
-    from ..utils.misc import isnotebook
-    from ..utils.misc import validate_input_type
-    from ..utils.misc import unique2D_subarray
+    from ...utils.misc import timer
+    from ...utils.misc import isnotebook
+    from ...utils.misc import validate_input_type
+    from ...utils.misc import unique2D_subarray
     from .neural_network_methods import NeuralNetworkMethods, DisabledCV
-    from .scorers import Scorers
-    from .plotting import Plotting
+    from ...utils.scorers import Scorers
+    from ...utils.plotting import Plotting
     from .callbacks import UBPCallbacks, CyclicalAnnealingCallback
     from .keras_classifiers import VAEClassifier, MLPClassifier, SAEClassifier
-    from ..data_processing.transformers import (
+    from ...data_processing.transformers import (
         SimGenotypeDataTransformer,
         TargetTransformer,
         AutoEncoderFeatureTransformer,
@@ -81,11 +81,17 @@ except (ModuleNotFoundError, ValueError):
     from utils.misc import isnotebook
     from utils.misc import validate_input_type
     from utils.misc import unique2D_subarray
-    from impute.neural_network_methods import NeuralNetworkMethods, DisabledCV
-    from impute.scorers import Scorers
-    from impute.plotting import Plotting
-    from impute.callbacks import UBPCallbacks, CyclicalAnnealingCallback
-    from impute.keras_classifiers import (
+    from impute.unsupervised.neural_network_methods import (
+        NeuralNetworkMethods,
+        DisabledCV,
+    )
+    from utils.scorers import Scorers
+    from utils.plotting import Plotting
+    from impute.unsupervised.callbacks import (
+        UBPCallbacks,
+        CyclicalAnnealingCallback,
+    )
+    from impute.unsupervised.keras_classifiers import (
         VAEClassifier,
         MLPClassifier,
         SAEClassifier,

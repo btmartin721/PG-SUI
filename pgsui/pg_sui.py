@@ -22,7 +22,7 @@ from impute.estimators import (
     ImputeStandardAutoEncoder,
 )
 from impute.simple_imputers import ImputePhylo, ImputeAlleleFreq
-from impute.plotting import Plotting
+from utils.plotting import Plotting
 
 # from read_input.read_input import GenotypeData
 # from impute.estimators import *
@@ -132,16 +132,16 @@ def main():
         disable_progressbar=True,
         epochs=100,
         column_subset=1.0,
-        learning_rate=0.001,
-        num_hidden_layers=1,
+        learning_rate=0.0001,
+        num_hidden_layers=3,
         hidden_layer_sizes="midpoint",
         verbose=10,
         dropout_rate=0.2,
         hidden_activation="elu",
         batch_size=32,
         l1_penalty=0.01,
-        l2_penalty=0.01,
-        gridparams=grid_params,
+        l2_penalty=0.0,
+        # gridparams=grid_params,
         n_jobs=4,
         grid_iter=5,
         sim_strategy="nonrandom_weighted",
@@ -149,7 +149,7 @@ def main():
         scoring_metric="f1_score",
         gridsearch_method="gridsearch",
         early_stop_gen=5,
-        n_components=3,
+        n_components=5,
         validation_split=0.0,
         sample_weights="auto",
         prefix=args.prefix,

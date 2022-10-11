@@ -7,7 +7,7 @@ from joblib import Parallel
 
 
 try:
-    from ..utils.misc import isnotebook
+    from ...utils.misc import isnotebook
 except:
     from utils.misc import isnotebook
 

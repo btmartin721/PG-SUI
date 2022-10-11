@@ -15,10 +15,12 @@ from sklearn_genetic.utils import logbook_to_pandas
 from sklearn.metrics import ConfusionMatrixDisplay
 
 try:
-    from .neural_network_methods import NeuralNetworkMethods
-    from ..utils import misc
+    from ..impute.unsupervised.neural_network_methods import (
+        NeuralNetworkMethods,
+    )
+    from . import misc
 except (ModuleNotFoundError, ValueError):
-    from impute.neural_network_methods import NeuralNetworkMethods
+    from impute.unsupervised.neural_network_methods import NeuralNetworkMethods
     from utils import misc
 
 

@@ -39,9 +39,13 @@ from sklearn_genetic.space import Continuous, Categorical, Integer
 
 # Custom module imports
 try:
-    from .iterative_imputer_gridsearch import IterativeImputerGridSearch
-    from .iterative_imputer_fixedparams import IterativeImputerFixedParams
-    from .neural_network_imputers import VAE, UBP, SAE
+    from .supervised.iterative_imputer_gridsearch import (
+        IterativeImputerGridSearch,
+    )
+    from .supervised.iterative_imputer_fixedparams import (
+        IterativeImputerFixedParams,
+    )
+    from .unsupervised.neural_network_imputers import VAE, UBP, SAE
     from ..read_input.read_input import GenotypeData
     from . import simple_imputers
     from ..utils.misc import get_processor_name
@@ -54,11 +58,11 @@ try:
         SimGenotypeDataTransformer,
     )
 except (ModuleNotFoundError, ValueError):
-    from impute.iterative_imputer_gridsearch import IterativeImputerGridSearch
-    from impute.iterative_imputer_fixedparams import (
+    from impute.supervised.iterative_imputer_gridsearch import IterativeImputerGridSearch
+    from impute.supervised.iterative_imputer_fixedparams import (
         IterativeImputerFixedParams,
     )
-    from impute.neural_network_imputers import VAE, UBP, SAE
+    from impute.unsupervised.neural_network_imputers import VAE, UBP, SAE
     from read_input.read_input import GenotypeData
     from impute import simple_imputers
     from utils.misc import get_processor_name

@@ -15,11 +15,11 @@ import toytree as tt
 
 try:
     from .popmap_file import ReadPopmap
-    from ..impute.plotting import Plotting
+    from ..utils.plotting import Plotting
     from ..utils import sequence_tools, misc
 except (ModuleNotFoundError, ValueError):
     from read_input.popmap_file import ReadPopmap
-    from impute.plotting import Plotting
+    from utils.plotting import Plotting
     from utils import sequence_tools, misc
 
 

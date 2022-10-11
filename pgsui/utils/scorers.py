@@ -18,9 +18,11 @@ from sklearn.metrics import (
 from sklearn.preprocessing import label_binarize
 
 try:
-    from .neural_network_methods import NeuralNetworkMethods
+    from ..impute.unsupervised.neural_network_methods import (
+        NeuralNetworkMethods,
+    )
 except (ModuleNotFoundError, ValueError):
-    from impute.neural_network_methods import NeuralNetworkMethods
+    from impute.unsupervised.neural_network_methods import NeuralNetworkMethods
 
 
 class Scorers:

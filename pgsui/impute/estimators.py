@@ -21,7 +21,7 @@ try:
     from ..read_input.read_input import GenotypeData
 
     from .impute import Impute
-    from .neural_network_imputers import VAE, UBP, SAE
+    from .unsupervised.neural_network_imputers import VAE, UBP, SAE
 
     from ..utils.misc import get_processor_name
     from ..utils.misc import isnotebook
@@ -29,7 +29,7 @@ except (ModuleNotFoundError, ValueError):
     from read_input.read_input import GenotypeData
 
     from impute.impute import Impute
-    from impute.neural_network_imputers import VAE, UBP, SAE
+    from impute.unsupervised.neural_network_imputers import VAE, UBP, SAE
 
     from utils.misc import get_processor_name
     from utils.misc import isnotebook

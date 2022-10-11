@@ -51,9 +51,9 @@ from tensorflow.keras.regularizers import l1_l2
 
 # Custom Modules
 try:
-    from .neural_network_methods import NeuralNetworkMethods
+    from ..neural_network_methods import NeuralNetworkMethods
 except (ModuleNotFoundError, ValueError):
-    from impute.neural_network_methods import NeuralNetworkMethods
+    from impute.unsupervised.neural_network_methods import NeuralNetworkMethods
 
 
 class UBPPhase1(tf.keras.Model):
@@ -313,7 +313,9 @@ class UBPPhase1(tf.keras.Model):
         # Refine the watched variables with
         # gradient descent backpropagation
         gradients = tape.gradient(loss, self.trainable_variables)
-        self.optimizer.apply_gradients(zip(gradients, self.trainable_variables))
+        self.optimizer.apply_gradients(
+            zip(gradients, self.trainable_variables)
+        )
 
         # Apply separate gradients to v.
         vgrad = tape.gradient(loss, src)
@@ -726,7 +728,9 @@ class UBPPhase2(tf.keras.Model):
 
         # Refine the watched variables with backpropagation
         gradients = tape.gradient(loss, self.trainable_variables)
-        self.optimizer.apply_gradients(zip(gradients, self.trainable_variables))
+        self.optimizer.apply_gradients(
+            zip(gradients, self.trainable_variables)
+        )
 
         ### NOTE: If you get the error, "'tuple' object has no attribute
         ### 'rank', then convert y_true to a tensor object."
@@ -1111,7 +1115,9 @@ class UBPPhase3(tf.keras.Model):
         # Refine the watched variables with
         # gradient descent backpropagation
         gradients = tape.gradient(loss, self.trainable_variables)
-        self.optimizer.apply_gradients(zip(gradients, self.trainable_variables))
+        self.optimizer.apply_gradients(
+            zip(gradients, self.trainable_variables)
+        )
 
         # Apply separate gradients to v.
         vgrad = tape.gradient(loss, src)

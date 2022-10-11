@@ -7,24 +7,28 @@ from sklearn.metrics import accuracy_score
 from scikeras.wrappers import KerasClassifier
 
 try:
+    from ...utils.scorers import Scorers
     from .neural_network_methods import NeuralNetworkMethods
-    from .scorers import Scorers
-    from .vae_model import VAEModel
+    from .models.vae_model import VAEModel
     from impute.autoencoder_model import AutoEncoderModel
-    from .nlpca_model import NLPCAModel
-    from .ubp_model import UBPPhase1, UBPPhase2, UBPPhase3
-    from ..data_processing.transformers import (
+    from .models.nlpca_model import NLPCAModel
+    from .models.ubp_model import UBPPhase1, UBPPhase2, UBPPhase3
+    from ...data_processing.transformers import (
         MLPTargetTransformer,
         UBPInputTransformer,
         AutoEncoderFeatureTransformer,
     )
 except (ModuleNotFoundError, ValueError):
-    from impute.neural_network_methods import NeuralNetworkMethods
-    from impute.scorers import Scorers
-    from impute.vae_model import VAEModel
-    from impute.autoencoder_model import AutoEncoderModel
-    from impute.nlpca_model import NLPCAModel
-    from impute.ubp_model import UBPPhase1, UBPPhase2, UBPPhase3
+    from utils.scorers import Scorers
+    from impute.unsupervised.neural_network_methods import NeuralNetworkMethods
+    from impute.unsupervised.models.vae_model import VAEModel
+    from impute.unsupervised.models.autoencoder_model import AutoEncoderModel
+    from impute.unsupervised.models.nlpca_model import NLPCAModel
+    from impute.unsupervised.models.ubp_model import (
+        UBPPhase1,
+        UBPPhase2,
+        UBPPhase3,
+    )
     from data_processing.transformers import (
         MLPTargetTransformer,
         UBPInputTransformer,

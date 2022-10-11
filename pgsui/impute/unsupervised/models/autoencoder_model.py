@@ -50,9 +50,9 @@ from tensorflow.keras import backend as K
 
 # Custom Modules
 try:
-    from .neural_network_methods import NeuralNetworkMethods
+    from ..neural_network_methods import NeuralNetworkMethods
 except (ModuleNotFoundError, ValueError):
-    from impute.neural_network_methods import NeuralNetworkMethods
+    from impute.unsupervised.neural_network_methods import NeuralNetworkMethods
 
 
 class Encoder(tf.keras.layers.Layer):
