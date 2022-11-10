@@ -77,8 +77,7 @@ class CyclicalAnnealingCallback(tf.keras.callbacks.Callback):
         idx = epoch - 1
         new_weight = self.arr[idx]
 
-        tf.keras.backend.set_value(
-            self.model.kl_beta, new_weight)
+        tf.keras.backend.set_value(self.model.kl_beta, new_weight)
 
     def _linear_cycle_range(self):
         """Get an array with a linear cycle curve ranging from 0 to 1 for n_iter epochs.
@@ -152,6 +151,46 @@ class CyclicalAnnealingCallback(tf.keras.callbacks.Callback):
                 v += step
                 i += 1
         return L
+
+
+class VAECallbacks(tf.keras.callbacks.Callback):
+    """Custom callbacks to use with subclassed VAE Keras model.
+
+    Requires y, missing_mask, and sample_weight to be input variables to be properties with setters in the subclassed model.
+    """
+
+    def __init__(self):
+        self.indices = None
+
+    def on_epoch_begin(self, epoch, logs=None):
+        """Shuffle input and target at start of epoch."""
+        y = self.model.y.copy()
+        missing_mask = self.model.missing_mask
+        sample_weight = self.model.sample_weight
+
+        n_samples = len(y)
+        self.indices = np.arange(n_samples)
+        np.random.shuffle(self.indices)
+
+        self.model.y = y[self.indices]
+        self.model.missing_mask = missing_mask[self.indices]
+
+        if sample_weight is not None:
+            self.model.sample_weight = sample_weight[self.indices]
+
+    def on_train_batch_begin(self, batch, logs=None):
+        """Get batch index."""
+        self.model.batch_idx = batch
+
+    def on_epoch_end(self, epoch, logs=None):
+        """Unsort the row indices."""
+        unshuffled = np.argsort(self.indices)
+
+        self.model.y = self.model.y[unshuffled]
+        self.model.missing_mask = self.model.missing_mask[unshuffled]
+
+        if self.model.sample_weight is not None:
+            self.model.sample_weight = self.model.sample_weight[unshuffled]
 
 
 class UBPCallbacks(tf.keras.callbacks.Callback):

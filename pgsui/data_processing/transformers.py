@@ -270,11 +270,16 @@ class AutoEncoderFeatureTransformer(BaseEstimator, TransformerMixin):
 
     Args:
         num_classes (int, optional): The number of classes in the last axis dimention of the input array. Defaults to 3.
+
+        return_int (bool, optional): Whether to return an integer-encoded array (If True) or a one-hot or multi-label encoded array (If False.). Defaults to False.
+
+        activate (str or None, optional): If not None, then does the appropriate activation. Multilabel learning uses sigmoid activation, and multiclass uses softmax. If set to None, then the function assumes that the input has already been activated. Possible values include: {None, 'sigmoid', 'softmax'}. Defaults to None.
     """
 
-    def __init__(self, num_classes=3, return_int=False):
+    def __init__(self, num_classes=3, return_int=False, activate=None):
         self.num_classes = num_classes
         self.return_int = return_int
+        self.activate = activate
 
     def fit(self, X):
         """set attributes used to transform X (input features).
@@ -290,7 +295,7 @@ class AutoEncoderFeatureTransformer(BaseEstimator, TransformerMixin):
         if self.num_classes == 3:
             enc_func = self.encode_012
         elif self.num_classes == 4:
-            enc_func = self.encode_vae
+            enc_func = self.encode_multilab
         elif self.num_classes == 10:
             enc_func = self.encode_multiclass
         else:
@@ -327,9 +332,21 @@ class AutoEncoderFeatureTransformer(BaseEstimator, TransformerMixin):
             return self._fill(self.X_train, self.missing_mask_)
 
     def inverse_transform(self, y):
-        """Transform target to output format."""
-        # return y.numpy()
-        return tf.nn.softmax(y).numpy()
+        """Transform target to output format.
+
+        Args:
+            y (numpy.ndarray): Array to inverse transform.
+        """
+        if self.activate is None:
+            return y.numpy()
+        elif self.activate == "softmax":
+            return tf.nn.softmax(y).numpy()
+        elif self.activate == "sigmoid":
+            return tf.nn.sigmoid(y).numpy()
+        else:
+            raise ValueError(
+                f"Invalid value passed to keyword argument activate. Valid options include: None, 'softmax', or 'sigmoid', but got {self.activate}"
+            )
 
     def encode_012(self, X):
         """Convert 012-encoded data to one-hot encodings.
@@ -349,10 +366,12 @@ class AutoEncoderFeatureTransformer(BaseEstimator, TransformerMixin):
             Xt[row] = [mappings[enc] for enc in X[row]]
         return Xt
 
-    def encode_vae(self, X):
+    def encode_multilab(self, X, multilab_value=0.5):
         """Encode 0-9 integer data in multi-label one-hot format.
         Args:
             X (numpy.ndarray): Input array with 012-encoded data and -9 as the missing data value.
+
+            multilab_value (float): Value to use for multilabel target encodings. Defaults to 0.5.
         Returns:
             pandas.DataFrame: One-hot encoded data, ignoring missing values (np.nan). multi-label categories will be encoded as 0.5. Otherwise, it will be 1.0.
         """
@@ -362,12 +381,12 @@ class AutoEncoderFeatureTransformer(BaseEstimator, TransformerMixin):
             1: [0.0, 1.0, 0.0, 0.0],
             2: [0.0, 0.0, 1.0, 0.0],
             3: [0.0, 0.0, 0.0, 1.0],
-            4: [1.0, 1.0, 0.0, 0.0],
-            5: [1.0, 0.0, 1.0, 0.0],
-            6: [1.0, 0.0, 0.0, 1.0],
-            7: [0.0, 1.0, 1.0, 0.0],
-            8: [0.0, 1.0, 0.0, 1.0],
-            9: [0.0, 0.0, 1.0, 1.0],
+            4: [multilab_value, multilab_value, 0.0, 0.0],
+            5: [multilab_value, 0.0, multilab_value, 0.0],
+            6: [multilab_value, 0.0, 0.0, multilab_value],
+            7: [0.0, multilab_value, multilab_value, 0.0],
+            8: [0.0, multilab_value, 0.0, multilab_value],
+            9: [0.0, 0.0, multilab_value, multilab_value],
             -9: [np.nan, np.nan, np.nan, np.nan],
         }
         for row in np.arange(X.shape[0]):

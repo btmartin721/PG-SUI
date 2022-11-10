@@ -58,7 +58,9 @@ try:
         SimGenotypeDataTransformer,
     )
 except (ModuleNotFoundError, ValueError):
-    from impute.supervised.iterative_imputer_gridsearch import IterativeImputerGridSearch
+    from impute.supervised.iterative_imputer_gridsearch import (
+        IterativeImputerGridSearch,
+    )
     from impute.supervised.iterative_imputer_fixedparams import (
         IterativeImputerFixedParams,
     )
@@ -172,6 +174,7 @@ class Impute:
             self.chunk_size,
             self.do_validation,
             self.do_gridsearch,
+            self.testing,
         ) = self._gather_impute_settings(kwargs)
 
         if self.algorithm == "ii":
@@ -1006,6 +1009,8 @@ class Impute:
         for i, Xchunk in enumerate(df_chunks, start=1):
             if self.clf_type == "classifier":
                 if self.algorithm == "nn":
+                    if self.clf == VAE:
+                        self.clf_kwargs["testing"] = self.testing
                     imputer = self.clf(
                         self.imp_kwargs["genotype_data"],
                         disable_progressbar=self.disable_progressbar,
@@ -1180,6 +1185,7 @@ class Impute:
         verbose = kwargs.get("verbose", 0)
         disable_progressbar = kwargs.get("disable_progressbar", False)
         prefix = kwargs.get("prefix", "imputer")
+        testing = kwargs.get("testing", False)
         do_gridsearch = False if kwargs["gridparams"] is None else True
 
         if prefix is None:
@@ -1273,6 +1279,7 @@ class Impute:
             chunk_size,
             do_validation,
             do_gridsearch,
+            testing,
         )
 
     def _format_features(

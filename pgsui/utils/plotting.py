@@ -851,12 +851,15 @@ class Plotting:
         ConfusionMatrixDisplay.from_predictions(
             y_true=y_true_1d, y_pred=y_pred_1d, ax=ax
         )
-        fig.savefig(
-            os.path.join(
-                f"{prefix}_output", "plots", "vae_confusion_matrix.png"
-            ),
-            facecolor="white",
+
+        outfile = os.path.join(
+            f"{prefix}_output", "plots", "vae_confusion_matrix.png"
         )
+
+        if os.path.isfile(outfile):
+            os.remove(outfile)
+
+        fig.savefig(outfile, facecolor="white")
 
     @staticmethod
     def plot_gt_distribution(df, plot_path):
@@ -888,3 +891,21 @@ class Plotting:
             facecolor="white",
         )
         plt.close()
+
+    @staticmethod
+    def plot_label_clusters(z_mean, data, labels, prefix="imputer"):
+        """display a 2D plot of the digit classes in the latent space."""
+        fig, ax = plt.subplots(1, 1, figsize=(15, 15))
+
+        ax.scatter(z_mean[:, 0], z_mean[:, 1])
+        ax.set_xlabel("z[0]")
+        ax.set_ylabel("z[1]")
+
+        outfile = os.path.join(
+            f"{prefix}_output", "plots", "vae_label_clusters.png"
+        )
+
+        if os.path.isfile(outfile):
+            os.remove(outfile)
+
+        fig.savefig(outfile, facecolor="white", bbox_inches="tight")

@@ -1271,6 +1271,8 @@ class ImputeVAE(Impute):
 
         verbose (int, optional): Verbosity flag. The higher, the more verbose. Possible values are 0, 1, or 2. 0 = silent, 1 = progress bar, 2 = one line per epoch. Note that the progress bar is not particularly useful when logged to a file, so verbose=0 or verbose=2 is recommended when not running interactively. Setting verbose higher than 0 is useful for initial runs and debugging, but can slow down training. Defaults to 0.
 
+        kwargs (Dict[str, Any], optional): Possible options include: {"testing": True/False}. If testing is True, a confusion matrix plot will be created showing model performance. Arrays of the true and predicted values will also be printed to STDOUT. testing defaults to False.
+
     Attributes:
         imputed (GenotypeData): New GenotypeData instance with imputed data.
         best_params (Dict[str, Any]): Best found parameters from grid search.
@@ -1329,6 +1331,7 @@ class ImputeVAE(Impute):
         disable_progressbar=False,
         n_jobs=1,
         verbose=0,
+        **kwargs,
     ):
 
         # Get local variables into dictionary object
@@ -1342,13 +1345,15 @@ class ImputeVAE(Impute):
         }
 
         all_kwargs.update(imp_kwargs)
+        all_kwargs["testing"] = kwargs.get("testing", False)
+        all_kwargs.pop("kwargs")
 
         super().__init__(self.clf, self.clf_type, all_kwargs)
 
         if genotype_data is None:
             raise TypeError("genotype_data cannot be NoneType")
 
-        X = genotype_data.int_iupac
+        X = genotype_data.genotypes012_array
 
         if not isinstance(X, pd.DataFrame):
             df = pd.DataFrame(X)

@@ -64,7 +64,7 @@ cce_proba = tf.keras.losses.CategoricalCrossentropy()
 cca = tf.keras.metrics.CategoricalAccuracy()
 scca = tf.keras.metrics.SparseCategoricalAccuracy()
 ba = tf.keras.metrics.BinaryAccuracy()
-bce = tf.keras.losses.BinaryCrossentropy(from_logits=True)
+bce = tf.keras.losses.BinaryCrossentropy()
 # bfce = tf.keras.losses.BinaryFocalCrossentropy(
 #     from_logits=True, apply_class_balancing=True
 # )
@@ -153,10 +153,12 @@ class NeuralNetworkMethods:
         return Xt
 
     @staticmethod
-    def encode_vae(X):
+    def encode_multilab(X, num_classes=4):
         """Encode 0-9 integer data in one-hot format.
         Args:
             X (numpy.ndarray): Input array with 012-encoded data and -9 as the missing data value.
+
+            num_classes (int, optional): Number of multi-label classes to use. Mostly for compatibility with encode_multiclass. Defaults to 4.
         Returns:
             pandas.DataFrame: One-hot encoded data, ignoring missing values (np.nan). multi-label categories will be encoded as 0.5. Otherwise, it will be 1.0.
         """
@@ -232,7 +234,7 @@ class NeuralNetworkMethods:
         return_multilab=False,
         return_int=True,
         predict_still_missing=True,
-        threshold_increment=0.1,
+        threshold_increment=0.05,
         multilabel_averaging="macro",
         missing_mask=None,
     ):
@@ -259,7 +261,7 @@ class NeuralNetworkMethods:
 
             predict_still_missing (bool, optional): If True, values that are still missing after decoding are decoded using the maximum probability (i.e., with np.argmax). If False, then it is possible that some missing data might still remain after decoding if none of the multilabel probabilities are above the threshold. Defaults to True.
 
-            threshold_increment (float, optional): How much to increment threshold when searching for optimal threshold. Should be > 0 and < 1. Defaults to 0.1.
+            threshold_increment (float, optional): How much to increment threshold when searching for optimal threshold. Should be > 0 and < 1. Defaults to 0.05.
 
             multilabel_averaging (str): Method to use for averaging F1 score among multilabel classes. Supported options are: {"macro", "micro", "weighted", "samples"}. Defaults to "macro".
 
@@ -270,6 +272,12 @@ class NeuralNetworkMethods:
 
             numpy.ndarray (optional): Probabilities for each call, with those above the threshold set to 1.0 and those below the threshold between 0 and 1.
         """
+
+        if return_int and return_multilab:
+            raise ValueError(
+                "return_int and return_multilab cannot both be True."
+            )
+
         y_unresolved_certainty = None
         if is_multiclass:
             # Softmax predictions.
@@ -277,27 +285,26 @@ class NeuralNetworkMethods:
             # Otherwise, returns one-hot encodings.
             y_pred = cls.decode_multiclass(y_pred_proba, reduce_dim=return_int)
         else:
+            # Onehot encode if not already one-hot encoded.
             if y_true_bin.shape[-1] != 4:
                 if y_true_bin.shape[-1] != 10:
-                    y_true_bin = cls.encode_vae(y_true_bin)
+                    y_true_bin = cls.encode_multilab(y_true_bin)
                 else:
                     y_true_bin = cls.encode_multiclass(y_true_bin)
+
+            pred_multilab = cls.zero_extra_categories(y_pred_proba)
 
             # Binary multilabel predictions.
             threshold = cls.get_optimal_threshold(
                 y_true_bin,
-                y_pred_proba,
+                pred_multilab,
                 increment=threshold_increment,
                 average_method=multilabel_averaging,
                 missing_mask=missing_mask,
             )
 
             # Call 0s and 1s based on threshold.
-            pred_multilab = np.where(y_pred_proba >= threshold, 1.0, 0.0)
-
-            pred_multilab = cls.zero_extra_categories(
-                y_pred_proba, pred_multilab, threshold=threshold
-            )
+            pred_multilab = np.where(pred_multilab >= threshold, 1.0, 0.0)
 
             pred_multilab_decoded = cls.decode_binary_multilab(pred_multilab)
 
@@ -392,25 +399,41 @@ class NeuralNetworkMethods:
         Returns:
             float: Optimal decoding threshold.
         """
-        thresholds = np.arange(0, 1, increment)
+        y_true = y_true_bin.copy()
+        y_pred = y_pred_proba.copy()
+
+        thresholds = np.arange(increment, 1, increment)
 
         nonmissing_mask = np.where(y_true_bin != -1)
+        num_classes = y_true_bin.shape[-1]
 
         # This is only supposed to get applied during the final transform,
         # when the original missing data is replaced with predictions.
         # If this isn't done here, it ends up having -1 values in it,
         # which causes the f1_score function to throw an error.
-        y_true_bin = y_true_bin[nonmissing_mask]
-        y_pred_proba = y_pred_proba[nonmissing_mask]
+        y_true = y_true[nonmissing_mask]
+        y_pred = y_pred[nonmissing_mask]
+        y_true = np.reshape(y_true, (-1, num_classes))
+        y_pred = np.reshape(y_pred, (-1, num_classes))
 
-        scores = [
-            f1_score(
-                y_true_bin,
-                np.where(y_pred_proba >= t, 1.0, 0.0),
-                average=average_method,
+        # Call 0s and 1s based on threshold.
+
+        scores = list()
+        for t in thresholds:
+            pred_multilab = np.where(y_pred >= t, 1.0, 0.0)
+            pred_multilab_decoded = cls.decode_binary_multilab(pred_multilab)
+            true_multilab_decoded = cls.decode_binary_multilab(y_true)
+
+            # Had to cast them as integers to get rid of a type error during the
+            # final transform() function.
+
+            scores.append(
+                f1_score(
+                    true_multilab_decoded,
+                    pred_multilab_decoded,
+                    average=average_method,
+                )
             )
-            for t in thresholds
-        ]
 
         return thresholds[np.argmax(scores)]
 
@@ -433,7 +456,7 @@ class NeuralNetworkMethods:
         return y.reshape(y.shape[0] * y.shape[1], y.shape[2])
 
     @staticmethod
-    def zero_extra_categories(y_pred_proba, pred_multilab, threshold=0.5):
+    def zero_extra_categories(y_pred_proba, threshold=0.5):
         """Check if any prediction probabilities have >2 values above threshold.
 
         If >2, then it sets the two with the lowest probabilities to 0.0.
@@ -445,17 +468,20 @@ class NeuralNetworkMethods:
 
             threshold (float, optional): Threshold to use to set decoded multilabel values to 0s (< threshold) or 1s (>= threshold). Defaults to 0.5.
         """
-        k = 2
-        idx = np.argpartition(y_pred_proba.ravel(), k)
-        indices = tuple(
-            np.array(np.unravel_index(idx, y_pred_proba.shape))[
-                :, range(min(k, 0), max(k, 0))
-            ]
-        )
+        N = 2
+        y_pred_proba[y_pred_proba.argsort().argsort() < N] = 0.0
+        return y_pred_proba
+        # idx = np.argpartition(y_pred_proba.ravel(), k)
+        # indices = tuple(
+        #     np.array(np.unravel_index(idx, y_pred_proba.shape))[
+        #         :, range(min(k, 0), max(k, 0))
+        #     ]
+        # )
 
-        y_pred_proba[indices] = 0.0
+        # y_pred_proba[indices] = 0.0
+        # return y_pred_proba
 
-        return np.where(y_pred_proba >= threshold, 1.0, 0.0)
+        # return np.where(y_pred_proba >= threshold, 1.0, 0.0)
 
     @classmethod
     def decode_multiclass(cls, y_pred_proba, reduce_dim=True):
@@ -830,7 +856,6 @@ class NeuralNetworkMethods:
             # Using VAE.
             y_true = y[batch_start:batch_end, :]
             v = V[batch_start:batch_end, :]
-            y_train_batch = y_train[batch_start:batch_end, :]
             missing_mask_batch = missing_mask[batch_start:batch_end, :]
 
             if sample_weight is not None:
@@ -845,7 +870,6 @@ class NeuralNetworkMethods:
                 missing_mask_batch,
                 batch_start,
                 batch_end,
-                y_train_batch,
             )
 
     def validate_batch_size(self, X, batch_size):
@@ -896,13 +920,13 @@ class NeuralNetworkMethods:
             opt = tf.keras.optimizers.RMSProp
 
         if vae:
-            loss = NeuralNetworkMethods.make_masked_categorical_crossentropy(
+            loss = NeuralNetworkMethods.make_masked_binary_crossentropy(
                 class_weight=sample_weights, is_vae=vae
             )
 
             # This is also called in vae_model.py and autoencoder.py.
             metrics = [
-                NeuralNetworkMethods.make_masked_categorical_accuracy(
+                NeuralNetworkMethods.make_masked_binary_accuracy(
                     class_weight=sample_weights, is_vae=vae
                 )
             ]
@@ -962,8 +986,13 @@ class NeuralNetworkMethods:
         return np.square(np.subtract(X_true[mask], X_pred[mask])).mean()
 
     @staticmethod
-    def make_masked_binary_accuracy():
+    def make_masked_binary_accuracy(class_weight=None, is_vae=True):
         """Make binary accuracy metric with missing mask.
+
+        Args:
+            class_weight (Dict[int, float], optional): Class weights to reduce class imbalance. Defaults to None.
+
+            is_vae (bool, optional): Whether model is VAE or not. Defaults to True.
 
         Returns:
             callable: Function that calculates categorical crossentropy loss.
@@ -983,28 +1012,38 @@ class NeuralNetworkMethods:
             Returns:
                 float: Binary accuracy calculated with missing data masked.
             """
-            y_true_masked = tf.boolean_mask(
-                y_true, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
-            )
+            # y_true_masked = tf.boolean_mask(
+            #     y_true, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
+            # )
 
-            y_pred_masked = tf.boolean_mask(
-                y_pred, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
-            )
+            # y_pred_masked = tf.boolean_mask(
+            #     y_pred, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
+            # )
+
+            # if sample_weight is not None:
+            #     sample_weight_masked = tf.boolean_mask(
+            #         tf.convert_to_tensor(sample_weight),
+            #         tf.reduce_any(tf.not_equal(y_true, -1), axis=-1),
+            #     )
+            # else:
+            #     sample_weight_masked = None
 
             return ba(
-                y_true_masked,
-                y_pred_masked,
+                y_true,
+                y_pred,
                 sample_weight=sample_weight,
             )
 
         return masked_binary_accuracy
 
     @staticmethod
-    def make_masked_binary_crossentropy():
+    def make_masked_binary_crossentropy(class_weight=None, is_vae=True):
         """Make binary crossentropy loss function with missing mask.
 
         Args:
-            num_classes (int, optional): Number of classes used. Defaults to 2.
+            class_weight (Dict[int, float], optional): Class weights to reduce class imbalance. Defaults to None.
+
+            is_vae (bool, optional): Whether model is VAE or not. Defaults to True.
 
         Returns:
             callable: Function that calculates categorical crossentropy loss.
@@ -1026,19 +1065,72 @@ class NeuralNetworkMethods:
             Returns:
                 float: Binary crossentropy loss value.
             """
-            # Mask out missing values.
-            y_true_masked = tf.boolean_mask(
-                y_true, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
-            )
+            # # Mask out missing values.
+            # y_true_masked = tf.boolean_mask(
+            #     y_true, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
+            # )
 
-            y_pred_masked = tf.boolean_mask(
-                y_pred, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
-            )
+            # y_pred_masked = tf.boolean_mask(
+            #     y_pred, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
+            # )
+
+            # if sample_weight is not None:
+            #     sample_weight_masked = tf.boolean_mask(
+            #         tf.convert_to_tensor(sample_weight),
+            #         tf.reduce_any(tf.not_equal(y_true, -1), axis=-1),
+            #     )
+            # else:
+            #     print(sample_weight)
+            #     sys.exit()
+            #     y_true_bin = y_true.copy()
+            #     y_true = sample_weight.copy()
+            #     y_true = tf.cast(y_true, tf.int32)
+            #     y_true = tf.reshape(y_true, [-1])
+            #     dims = tf.shape(y_pred)
+            #     y_pred_masked = tf.reshape(
+            #         y_pred, [dims[0] * dims[1], dims[2]]
+            #     )
+
+            #     # y_true_masked = tf.where(
+            #     #     condition=tf.math.equal(y_true, -9), x=0, y=y_true
+            #     # )
+
+            #     if class_weight is not None:
+            #         # build a lookup table to map the class_weight dictionary
+            #         # to y_true_masked. This will result in a 2D sample_weight
+            #         # tensor for use with the sample_weight argument in the
+            #         # loss function.
+            #         # Source: https://stackoverflow.com/questions/35316250/tensorflow-dictionary-lookup-with-string-tensor
+            #         # Answer by Praveen Kulkarni.
+            #         table = tf.lookup.StaticHashTable(
+            #             initializer=tf.lookup.KeyValueTensorInitializer(
+            #                 keys=tf.constant(list(class_weight.keys())),
+            #                 values=tf.constant(list(class_weight.values())),
+            #             ),
+            #             default_value=tf.constant(0.0),
+            #             name="class_weight",
+            #         )
+
+            #         sample_weight_masked = table.lookup(y_true)
+            #         sample_weight_masked = tf.reshape(
+            #             sample_weight_masked, [-1]
+            #         )
+            #     else:
+            #         sample_weight_masked = None
+
+            # # Mask out missing values.
+            # # y_true_masked = tf.boolean_mask(
+            # #     y_true, tf.reduce_any(tf.not_equal(y_true_bin, -1), axis=2)
+            # # )
+
+            # # y_pred_masked = tf.boolean_mask(
+            # #     y_pred, tf.reduce_any(tf.not_equal(y_true_bin, -1), axis=2)
+            # # )
 
             return bce(
-                y_true_masked,
-                y_pred_masked,
-                # sample_weight=sample_weight,
+                y_true,
+                y_pred,
+                sample_weight=sample_weight,
             )
 
         return masked_binary_crossentropy
@@ -1087,43 +1179,46 @@ class NeuralNetworkMethods:
                 else:
                     sample_weight_masked = None
             else:
-                y_true = tf.cast(y_true, tf.int32)
-                y_true = tf.reshape(y_true, [-1])
-                dims = tf.shape(y_pred)
-                y_pred_masked = tf.reshape(
-                    y_pred, [dims[0] * dims[1], dims[2]]
-                )
+                y_true_masked = y_true
+                y_pred_masked = y_pred
+                sample_weight_masked = sample_weight
+                # y_true = tf.cast(y_true, tf.int32)
+                # y_true = tf.reshape(y_true, [-1])
+                # dims = tf.shape(y_pred)
+                # y_pred_masked = tf.reshape(
+                #     y_pred, [dims[0] * dims[1], dims[2]]
+                # )
 
-                y_true_masked = tf.where(
-                    condition=tf.math.equal(y_true, -9), x=0, y=y_true
-                )
+                # y_true_masked = tf.where(
+                #     condition=tf.math.equal(y_true, -9), x=0, y=y_true
+                # )
 
-                if class_weight is not None:
-                    # build a lookup table to map the class_weight dictionary
-                    # to y_true_masked. This will result in a 2D sample_weight
-                    # tensor for use with the sample_weight argument in the
-                    # loss function.
-                    # Source: https://stackoverflow.com/questions/35316250/tensorflow-dictionary-lookup-with-string-tensor
-                    # Answer by Praveen Kulkarni.
-                    table = tf.lookup.StaticHashTable(
-                        initializer=tf.lookup.KeyValueTensorInitializer(
-                            keys=tf.constant(list(class_weight.keys())),
-                            values=tf.constant(list(class_weight.values())),
-                        ),
-                        default_value=tf.constant(0.0),
-                        name="class_weight",
-                    )
+                # if class_weight is not None:
+                #     # build a lookup table to map the class_weight dictionary
+                #     # to y_true_masked. This will result in a 2D sample_weight
+                #     # tensor for use with the sample_weight argument in the
+                #     # loss function.
+                #     # Source: https://stackoverflow.com/questions/35316250/tensorflow-dictionary-lookup-with-string-tensor
+                #     # Answer by Praveen Kulkarni.
+                #     table = tf.lookup.StaticHashTable(
+                #         initializer=tf.lookup.KeyValueTensorInitializer(
+                #             keys=tf.constant(list(class_weight.keys())),
+                #             values=tf.constant(list(class_weight.values())),
+                #         ),
+                #         default_value=tf.constant(0.0),
+                #         name="class_weight",
+                #     )
 
-                    sample_weight_masked = table.lookup(y_true)
-                    sample_weight_masked = tf.reshape(
-                        sample_weight_masked, [-1]
-                    )
-                else:
-                    sample_weight_masked = None
+                #     sample_weight_masked = table.lookup(y_true)
+                #     sample_weight_masked = tf.reshape(
+                #         sample_weight_masked, [-1]
+                #     )
+                # else:
+                #     sample_weight_masked = None
 
-            acc_func = scca if is_vae else cca
+            # acc_func = scca if is_vae else cca
 
-            return acc_func(
+            return cca(
                 y_true_masked,
                 y_pred_masked,
                 sample_weight=sample_weight_masked,
@@ -1180,43 +1275,46 @@ class NeuralNetworkMethods:
                 else:
                     sample_weight_masked = None
             else:
-                y_true = tf.cast(y_true, tf.int32)
-                y_true = tf.reshape(y_true, [-1])
+                y_true_masked = y_true
+                y_pred_masked = y_pred
+                sample_weight_masked = sample_weight
+                # y_true = tf.cast(y_true, tf.int32)
+                # y_true = tf.reshape(y_true, [-1])
 
-                dims = tf.shape(y_pred)
-                y_pred_masked = tf.reshape(
-                    y_pred, [dims[0] * dims[1], dims[2]]
-                )
-                y_true_masked = tf.where(
-                    condition=tf.math.equal(y_true, -9), x=0, y=y_true
-                )
+                # dims = tf.shape(y_pred)
+                # y_pred_masked = tf.reshape(
+                #     y_pred, [dims[0] * dims[1], dims[2]]
+                # )
+                # y_true_masked = tf.where(
+                #     condition=tf.math.equal(y_true, -9), x=0, y=y_true
+                # )
 
-                if class_weight is not None:
-                    # build a lookup table to map the class_weight dictionary
-                    # to y_true_masked. This will result in a 2D sample_weight
-                    # tensor for use with the sample_weight argument in the
-                    # loss function.
-                    # Source: https://stackoverflow.com/questions/35316250/tensorflow-dictionary-lookup-with-string-tensor
-                    # Answer by Praveen Kulkarni.
-                    table = tf.lookup.StaticHashTable(
-                        initializer=tf.lookup.KeyValueTensorInitializer(
-                            keys=tf.constant(list(class_weight.keys())),
-                            values=tf.constant(list(class_weight.values())),
-                        ),
-                        default_value=tf.constant(0.0),
-                        name="class_weight",
-                    )
+                # if class_weight is not None:
+                #     # build a lookup table to map the class_weight dictionary
+                #     # to y_true_masked. This will result in a 2D sample_weight
+                #     # tensor for use with the sample_weight argument in the
+                #     # loss function.
+                #     # Source: https://stackoverflow.com/questions/35316250/tensorflow-dictionary-lookup-with-string-tensor
+                #     # Answer by Praveen Kulkarni.
+                #     table = tf.lookup.StaticHashTable(
+                #         initializer=tf.lookup.KeyValueTensorInitializer(
+                #             keys=tf.constant(list(class_weight.keys())),
+                #             values=tf.constant(list(class_weight.values())),
+                #         ),
+                #         default_value=tf.constant(0.0),
+                #         name="class_weight",
+                #     )
 
-                    sample_weight_masked = table.lookup(y_true)
-                    sample_weight_masked = tf.reshape(
-                        sample_weight_masked, [-1]
-                    )
-                else:
-                    sample_weight_masked = None
+                #     sample_weight_masked = table.lookup(y_true)
+                #     sample_weight_masked = tf.reshape(
+                #         sample_weight_masked, [-1]
+                #     )
+                # else:
+                #     sample_weight_masked = None
 
-            loss_func = scce if is_vae else cce_proba
+            # loss_func = scce if is_vae else cce_proba
 
-            return loss_func(
+            return cce(
                 y_true_masked,
                 y_pred_masked,
                 sample_weight=sample_weight_masked,

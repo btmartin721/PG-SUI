@@ -10,7 +10,7 @@ try:
     from ...utils.scorers import Scorers
     from .neural_network_methods import NeuralNetworkMethods
     from .models.vae_model import VAEModel
-    from impute.autoencoder_model import AutoEncoderModel
+    from .models.autoencoder_model import AutoEncoderModel
     from .models.nlpca_model import NLPCAModel
     from .models.ubp_model import UBPPhase1, UBPPhase2, UBPPhase3
     from ...data_processing.transformers import (
@@ -135,72 +135,90 @@ class SAEClassifier(KerasClassifier):
         Returns:
             float: Calculated score.
         """
-        # Get missing mask if provided.
-        # Otherwise default is all missing values (array all True).
         missing_mask = kwargs.get(
             "missing_mask", np.ones(y_true.shape, dtype=bool)
         )
-        is_vae = kwargs.get("is_vae", False)
-
+        nn_model = kwargs.get("nn_model", True)
+        num_classes = kwargs.get("num_classes", 3)
         testing = kwargs.get("testing", False)
-        scoring_metric = kwargs.get("scoring_metric", "accuracy")
 
-        nn = NeuralNetworkMethods()
+        scorers = Scorers()
 
-        if isinstance(y_pred, tuple):
-            y_pred = y_pred[0]
+        return scorers.scorer(
+            y_true,
+            y_pred,
+            missing_mask=missing_mask,
+            num_classes=num_classes,
+            testing=testing,
+        )
+        # Otherwise default is all missing values (array all True).
 
-        y_true_masked = y_true[missing_mask]
-        y_pred_masked = y_pred[missing_mask]
+        # # Get missing mask if provided.
+        # # Otherwise default is all missing values (array all True).
+        # missing_mask = kwargs.get(
+        #     "missing_mask", np.ones(y_true.shape, dtype=bool)
+        # )
+        # num_classes = kwargs.get("is_vae", False)
 
-        if scoring_metric.startswith("auc"):
-            roc_auc = Scorers.compute_roc_auc_micro_macro(
-                y_true_masked, y_pred_masked, missing_mask, is_vae=is_vae
-            )
+        # testing = kwargs.get("testing", False)
+        # scoring_metric = kwargs.get("scoring_metric", "accuracy")
 
-            if scoring_metric == "auc_macro":
-                return roc_auc["macro"]
+        # nn = NeuralNetworkMethods()
 
-            elif scoring_metric == "auc_micro":
-                return roc_auc["micro"]
+        # if isinstance(y_pred, tuple):
+        #     y_pred = y_pred[0]
 
-            else:
-                raise ValueError(
-                    f"Invalid scoring_metric provided: {scoring_metric}"
-                )
+        # y_true_masked = y_true[missing_mask]
+        # y_pred_masked = y_pred[missing_mask]
 
-        elif scoring_metric.startswith("precision"):
-            pr_ap = Scorers.compute_pr(
-                y_true_masked, y_pred_masked, is_vae=is_vae
-            )
+        # if scoring_metric.startswith("auc"):
+        #     roc_auc = Scorers.compute_roc_auc_micro_macro(
+        #         y_true_masked, y_pred_masked, missing_mask, is_vae=is_vae
+        #     )
 
-            if scoring_metric == "precision_recall_macro":
-                return pr_ap["macro"]
+        #     if scoring_metric == "auc_macro":
+        #         return roc_auc["macro"]
 
-            elif scoring_metric == "precision_recall_micro":
-                return pr_ap["micro"]
+        #     elif scoring_metric == "auc_micro":
+        #         return roc_auc["micro"]
 
-            else:
-                raise ValueError(
-                    f"Invalid scoring_metric provided: {scoring_metric}"
-                )
+        #     else:
+        #         raise ValueError(
+        #             f"Invalid scoring_metric provided: {scoring_metric}"
+        #         )
 
-        elif scoring_metric == "accuracy":
-            y_pred_masked_decoded = nn.decode_onehot(y_pred_masked)
-            return accuracy_score(y_true_masked, y_pred_masked_decoded)
+        # elif scoring_metric.startswith("precision"):
+        #     pr_ap = Scorers.compute_pr(
+        #         y_true_masked, y_pred_masked, is_vae=is_vae
+        #     )
 
-        else:
-            raise ValueError(
-                f"Invalid scoring_metric provided: {scoring_metric}"
-            )
+        #     if scoring_metric == "precision_recall_macro":
+        #         return pr_ap["macro"]
 
-        if testing:
-            np.set_printoptions(threshold=np.inf)
-            print(y_true_masked)
+        #     elif scoring_metric == "precision_recall_micro":
+        #         return pr_ap["micro"]
 
-            y_pred_masked_decoded = nn.decode_onehot(y_pred_masked)
+        #     else:
+        #         raise ValueError(
+        #             f"Invalid scoring_metric provided: {scoring_metric}"
+        #         )
 
-            print(y_pred_masked_decoded)
+        # elif scoring_metric == "accuracy":
+        #     y_pred_masked_decoded = nn.decode_onehot(y_pred_masked)
+        #     return accuracy_score(y_true_masked, y_pred_masked_decoded)
+
+        # else:
+        #     raise ValueError(
+        #         f"Invalid scoring_metric provided: {scoring_metric}"
+        #     )
+
+        # if testing:
+        #     np.set_printoptions(threshold=np.inf)
+        #     print(y_true_masked)
+
+        #     y_pred_masked_decoded = nn.decode_onehot(y_pred_masked)
+
+        #     print(y_pred_masked_decoded)
 
     @property
     def feature_encoder(self):
@@ -265,7 +283,9 @@ class VAEClassifier(KerasClassifier):
 
         n_components (int, optional): Number of components to use for input V. Defaults to 3.
 
-        num_classes (int, optional): Number of classes in y_train. [A,G,C,T...IUPAC codes]-encoded data should have 10 classes. Defaults to 10.
+        num_classes (int, optional): Number of classes in y_train. [A,G,C,T...IUPAC codes]-encoded data should have 10 classes. Defaults to 4.
+
+        activate (str or None, optional): If not None, then does the appropriate activation. Multilabel learning uses sigmoid activation, and multiclass uses softmax. If set to None, then the function assumes that the input has already been activated. Possible values include: {None, 'sigmoid', 'softmax'}. Defaults to None.
 
         kwargs (Any): Other keyword arguments to route to fit, compile, callbacks, etc. Should have the routing prefix (e.g., optimizer__learning_rate=0.01).
     """
@@ -282,8 +302,12 @@ class VAEClassifier(KerasClassifier):
         dropout_rate=0.2,
         kl_beta=1.0,
         n_components=3,
-        num_classes=10,
+        num_classes=4,
         sample_weight=None,
+        activate=None,
+        y=None,
+        missing_mask=None,
+        batch_size=None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -300,6 +324,10 @@ class VAEClassifier(KerasClassifier):
         self.n_components = n_components
         self.num_classes = num_classes
         self.sample_weight = sample_weight
+        self.activate = activate
+        self.y = y
+        self.missing_mask = missing_mask
+        self.batch_size = batch_size
 
     def _keras_build_fn(self, compile_kwargs):
         """Build model with custom parameters.
@@ -310,6 +338,7 @@ class VAEClassifier(KerasClassifier):
         Returns:
             tf.keras.Model: Model instance. The chosen model depends on which phase is passed to the class constructor.
         """
+
         model = VAEModel(
             output_shape=self.output_shape,
             n_components=self.n_components,
@@ -323,6 +352,10 @@ class VAEClassifier(KerasClassifier):
             kl_beta=self.kl_beta,
             num_classes=self.num_classes,
             sample_weight=self.sample_weight,
+            missing_mask=self.missing_mask,
+            batch_size=self.batch_size,
+            y=self.y,
+            activation=self.activate,
         )
 
         model.compile(
@@ -330,7 +363,7 @@ class VAEClassifier(KerasClassifier):
             loss=compile_kwargs["loss"],
             metrics=compile_kwargs["metrics"],
             run_eagerly=compile_kwargs["run_eagerly"],
-            sample_weight_mode="temporal",
+            # sample_weight_mode="temporal",
         )
 
         return model
@@ -352,7 +385,8 @@ class VAEClassifier(KerasClassifier):
             NNOutputTransformer: NNOutputTransformer object that includes fit(), transform(), and inverse_transform() methods.
         """
         return AutoEncoderFeatureTransformer(
-            num_classes=self.num_classes, return_int=True
+            num_classes=self.num_classes,
+            activate=self.activate,
         )
 
     def predict(self, X, **kwargs):
@@ -373,7 +407,7 @@ class VAEClassifier(KerasClassifier):
         """
         X_train = self.feature_encoder_.transform(X)
         y_pred, z_mean, z_log_var, z = self.model_(X_train, training=False)
-        return y_pred.numpy(), z_mean, z_log_var, z
+        return self.feature_encoder_.inverse_transform(X), z_mean, z_log_var, z
 
 
 class MLPClassifier(KerasClassifier):

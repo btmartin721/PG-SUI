@@ -2,6 +2,7 @@ import logging
 import os
 import sys
 import warnings
+import math
 
 # Import tensorflow with reduced warnings.
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
@@ -68,14 +69,14 @@ class Sampling(tf.keras.layers.Layer):
         z_sigma = tf.math.exp(0.5 * z_log_var)
         batch = tf.shape(z_mean)[0]
         dim = tf.shape(z_mean)[1]
-        epsilon = tf.random.normal(shape=(batch, dim))
+        epsilon = K.random_normal(shape=(batch, dim))
         return z_mean + z_sigma * epsilon
 
 
 class KLDivergenceLoss(tf.keras.layers.Layer):
     """Layer to calculate KL Divergence loss for VAE."""
 
-    def __init__(self, *args, beta=1.0, **kwargs):
+    def __init__(self, *args, beta=K.variable(1.0), **kwargs):
         self.is_placeholder = True
         super(KLDivergenceLoss, self).__init__(*args, **kwargs)
         self.beta = beta
@@ -111,36 +112,44 @@ class Encoder(tf.keras.layers.Layer):
         activation,
         kernel_initializer,
         kernel_regularizer,
-        beta=1.0,
+        beta,
         name="Encoder",
         **kwargs,
     ):
         super(Encoder, self).__init__(name=name, **kwargs)
 
-        self.beta = beta * latent_dim
+        # self.beta = beta * latent_dim
+
+        self.beta = beta
+        self.latent_dim = latent_dim
+        self.n_features = n_features
+        self.num_classes = num_classes
 
         self.dense2 = None
         self.dense3 = None
         self.dense4 = None
         self.dense5 = None
 
-        # for layer_size in hidden_layer_sizes:
-        # self.dense_init = Dense(
-        #     num_classes // 2,
-        #     input_shape=(n_features, num_classes),
-        #     activation=activation,
-        #     kernel_initializer=kernel_initializer,
-        #     kernel_regularizer=kernel_regularizer,
-        #     name="Encoder1",
+        # self.flatten = tf.keras.layers.Flatten()
+
+        self.conv2d1 = tf.keras.layers.Conv2D(
+            32,
+            3,
+            activation=activation,
+            strides=2,
+            padding="same",
+            input_shape=(n_features, num_classes, 1),
+        )
+
+        # self.conv2d2 = tf.keras.layers.Conv2D(
+        #     64, 3, activation=activation, strides=2, padding="same"
         # )
 
-        # # n_features * num_classes.
-        # self.flatten = Flatten()
         self.flatten = tf.keras.layers.Flatten()
 
         self.dense1 = Dense(
             hidden_layer_sizes[0],
-            input_shape=(n_features * num_classes,),
+            # input_shape=(n_features, num_classes, 1),
             activation=activation,
             kernel_initializer=kernel_initializer,
             kernel_regularizer=kernel_regularizer,
@@ -196,9 +205,9 @@ class Encoder(tf.keras.layers.Layer):
             name="z",
         )
 
-        self.kldivergence = KLDivergenceLoss(
-            beta=self.beta, name="KLDivergence"
-        )
+        # self.kldivergence = KLDivergenceLoss(
+        #     beta=self.beta, name="KLDivergence"
+        # )
 
         self.dense_latent = Dense(
             latent_dim,
@@ -217,7 +226,9 @@ class Encoder(tf.keras.layers.Layer):
         self.batch_norm_layer5 = BatchNormalization(center=False, scale=False)
 
     def call(self, inputs, training=None):
-        x = self.flatten(inputs)
+        x = self.conv2d1(inputs)
+        # x = self.conv2d2(x)
+        x = self.flatten(x)
         x = self.dense1(x)
         x = self.dropout_layer(x, training=training)
         # x = self.batch_norm_layer1(x, training=training)
@@ -242,9 +253,19 @@ class Encoder(tf.keras.layers.Layer):
         z_mean = self.dense_z_mean(x)
         z_log_var = self.dense_z_log_var(x)
         z = self.sampling([z_mean, z_log_var])
-        z_mean, z_log_var = self.kldivergence([z_mean, z_log_var])
+        # z_mean, z_log_var = self.kldivergence([z_mean, z_log_var])
 
         return z_mean, z_log_var, z
+
+    def model(self):
+        """Here so that mymodel.model().summary() can be called for debugging."""
+        x = tf.keras.Input(shape=(self.n_features, self.num_classes, 1))
+        return tf.keras.Model(inputs=[x], outputs=self.call(x))
+
+    def set_model_outputs(self):
+        x = tf.keras.Input(shape=(self.latent_dim,))
+        model = tf.keras.Model(inputs=[x], outputs=self.call(x))
+        self.outputs = model.outputs
 
 
 class Decoder(tf.keras.layers.Layer):
@@ -260,10 +281,16 @@ class Decoder(tf.keras.layers.Layer):
         activation,
         kernel_initializer,
         kernel_regularizer,
+        output_activation,
         name="Decoder",
         **kwargs,
     ):
         super(Decoder, self).__init__(name=name, **kwargs)
+
+        self.latent_dim = latent_dim
+        self.n_features = n_features
+        self.num_classes = num_classes
+        self.output_activation = output_activation
 
         self.dense2 = None
         self.dense3 = None
@@ -271,7 +298,7 @@ class Decoder(tf.keras.layers.Layer):
         self.dense5 = None
 
         self.dense1 = Dense(
-            hidden_layer_sizes[0],
+            hidden_layer_sizes[0] * 32,
             input_shape=(latent_dim,),
             activation=activation,
             kernel_initializer=kernel_initializer,
@@ -281,7 +308,7 @@ class Decoder(tf.keras.layers.Layer):
 
         if len(hidden_layer_sizes) >= 2:
             self.dense2 = Dense(
-                hidden_layer_sizes[1],
+                hidden_layer_sizes[1] * 32,
                 activation=activation,
                 kernel_initializer=kernel_initializer,
                 kernel_regularizer=kernel_regularizer,
@@ -290,7 +317,7 @@ class Decoder(tf.keras.layers.Layer):
 
         if len(hidden_layer_sizes) >= 3:
             self.dense3 = Dense(
-                hidden_layer_sizes[2],
+                hidden_layer_sizes[2] * 32,
                 activation=activation,
                 kernel_initializer=kernel_initializer,
                 kernel_regularizer=kernel_regularizer,
@@ -299,7 +326,7 @@ class Decoder(tf.keras.layers.Layer):
 
         if len(hidden_layer_sizes) >= 4:
             self.dense4 = Dense(
-                hidden_layer_sizes[3],
+                hidden_layer_sizes[3] * 32,
                 activation=activation,
                 kernel_initializer=kernel_initializer,
                 kernel_regularizer=kernel_regularizer,
@@ -308,7 +335,7 @@ class Decoder(tf.keras.layers.Layer):
 
         if len(hidden_layer_sizes) == 5:
             self.dense5 = Dense(
-                hidden_layer_sizes[4],
+                hidden_layer_sizes[4] * 32,
                 activation=activation,
                 kernel_initializer=kernel_initializer,
                 kernel_regularizer=kernel_regularizer,
@@ -317,13 +344,34 @@ class Decoder(tf.keras.layers.Layer):
 
         # No activation for final layer.
         self.dense_output = Dense(
-            n_features * num_classes,
+            int(math.ceil(n_features / 2))
+            * int(math.ceil(num_classes / 2))
+            * 32,
             kernel_initializer=kernel_initializer,
             kernel_regularizer=kernel_regularizer,
             name="DecoderExpanded",
         )
 
-        self.rshp = Reshape((n_features, num_classes))
+        self.rshp = Reshape(
+            (
+                int(math.ceil(n_features / 2)),
+                int(math.ceil((num_classes / 2))),
+                32,
+            )
+        )
+
+        self.conv2dt1 = tf.keras.layers.Conv2DTranspose(
+            32, 3, activation=activation, strides=2, padding="same"
+        )
+
+        self.conv2dt2 = tf.keras.layers.Conv2DTranspose(
+            1, 3, activation=output_activation, padding="same"
+        )
+
+        # self.rshp = Reshape((n_features, num_classes))
+
+        # if output_activation is not None:
+        #     self.act = Activation(output_activation)
         # self.dense_output = Dense(
         #     num_classes,
         #     kernel_initializer=kernel_initializer,
@@ -361,13 +409,31 @@ class Decoder(tf.keras.layers.Layer):
             # x = self.batch_norm_layer5(x, training=training)
 
         x = self.dense_output(x)
-        return self.rshp(x)
+        x = self.rshp(x)
+
+        x = self.conv2dt1(x)
+        x = self.conv2dt2(x)
+        # x = self.rshp(x)
+        # if self.output_activation is not None:
+        #     x = self.act(x)
+        return x
         # return self.dense_output(x)
+
+    def model(self):
+        """Here so that mymodel.model().summary() can be called for debugging."""
+        x = tf.keras.Input(shape=(self.latent_dim,))
+        return tf.keras.Model(inputs=[x], outputs=self.call(x))
+
+    def set_model_outputs(self):
+        x = tf.keras.Input(shape=(self.latent_dim,))
+        model = tf.keras.Model(inputs=[x], outputs=self.call(x))
+        self.outputs = model.outputs
 
 
 class VAEModel(tf.keras.Model):
     def __init__(
         self,
+        y=None,
         output_shape=None,
         n_components=3,
         weights_initializer="glorot_normal",
@@ -378,19 +444,30 @@ class VAEModel(tf.keras.Model):
         l2_penalty=1e-6,
         dropout_rate=0.2,
         kl_beta=1.0,
-        num_classes=10,
+        num_classes=4,
         sample_weight=None,
+        batch_size=32,
+        missing_mask=None,
+        activation=None,
     ):
         super(VAEModel, self).__init__()
 
-        # self.kl_beta = K.variable(0.0)
-        # self.kl_beta._trainable = False
+        self._y = y
+        self._missing_mask = missing_mask
+        self._sample_weight = sample_weight
+        self._batch_idx = 0
+        self._batch_size = batch_size
+        self.output_activation = activation
 
-        self.kl_beta = kl_beta
+        # If using cyclical annealing, use this instead of argument kl_beta.
+        self.kl_beta = K.variable(0.0)
+        self.kl_beta._trainable = False
+
+        # self.kl_beta = kl_beta
         self.sample_weight = sample_weight
 
         self.nn_ = NeuralNetworkMethods()
-        self.categorical_accuracy = self.nn_.make_masked_categorical_accuracy(
+        self.binary_accuracy = self.nn_.make_masked_binary_accuracy(
             is_vae=True
         )
 
@@ -461,7 +538,7 @@ class VAEModel(tf.keras.Model):
             activation,
             kernel_initializer,
             kernel_regularizer,
-            beta=self.kl_beta,
+            self.kl_beta,
         )
 
         hidden_layer_sizes.reverse()
@@ -475,6 +552,7 @@ class VAEModel(tf.keras.Model):
             activation,
             kernel_initializer,
             kernel_regularizer,
+            self.output_activation,
         )
 
     def call(self, inputs, training=None):
@@ -492,11 +570,11 @@ class VAEModel(tf.keras.Model):
 
     def model(self):
         """Here so that mymodel.model().summary() can be called for debugging."""
-        x = tf.keras.Input(shape=(self.n_features, self.num_classes))
+        x = tf.keras.Input(shape=(self.n_features, self.num_classes, 1))
         return tf.keras.Model(inputs=[x], outputs=self.call(x))
 
     def set_model_outputs(self):
-        x = tf.keras.Input(shape=(self.n_features, self.num_classes))
+        x = tf.keras.Input(shape=(self.n_features, self.num_classes, 1))
         model = tf.keras.Model(inputs=[x], outputs=self.call(x))
         self.outputs = model.outputs
 
@@ -511,44 +589,92 @@ class VAEModel(tf.keras.Model):
 
     @tf.function
     def train_step(self, data):
-        if isinstance(data, tuple):
-            if len(data) == 2:
-                x, y = data
-                sample_weight = None
-            else:
-                x, y, sample_weight = data
+        # if isinstance(data, tuple):
+        #     if len(data) == 2:
+        #         x, y = data
+        #         sample_weight = None
+        #     else:
+        #         x, y, sample_weight = data
+        # else:
+        #     raise TypeError("Target y must be supplied to fit for this model.")
+
+        # Set in the UBPCallbacks() callback.
+        y = self._y
+
+        (
+            y,
+            y_true,
+            sample_weight,
+            missing_mask,
+            batch_start,
+            batch_end,
+        ) = self.nn_.prepare_training_batches(
+            y,
+            y,
+            self._batch_size,
+            self._batch_idx,
+            True,
+            self.n_components,
+            self._sample_weight,
+            self._missing_mask,
+            ubp=False,
+        )
+
+        if sample_weight is not None:
+            sample_weight_masked = tf.convert_to_tensor(
+                sample_weight[~missing_mask], dtype=tf.float32
+            )
         else:
-            raise TypeError("Target y must be supplied to fit for this model.")
+            sample_weight_masked = None
+
+        y_true_masked = tf.boolean_mask(
+            tf.convert_to_tensor(y_true, dtype=tf.float32),
+            tf.reduce_any(tf.not_equal(y_true, -1), axis=2),
+        )
+
+        y = np.expand_dims(y, axis=-1)
 
         with tf.GradientTape() as tape:
-            reconstruction, z_mean, z_log_var, z = self(x, training=True)
+            reconstruction, z_mean, z_log_var, z = self(
+                tf.convert_to_tensor(y), training=True
+            )
+
+            y_pred_masked = tf.boolean_mask(
+                reconstruction, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
+            )
 
             # Returns binary crossentropy loss.
             reconstruction_loss = self.compiled_loss(
-                y,
-                reconstruction,
-                sample_weight=sample_weight,
+                y_true_masked,
+                y_pred_masked,
+                sample_weight=sample_weight_masked,
             )
+
+            kl_loss = -0.5 * (
+                1 + z_log_var - K.square(z_mean) - K.exp(z_log_var)
+            )
+
+            kl_loss = tf.reduce_mean(tf.reduce_sum(kl_loss, axis=1))
 
             # Doesn't include KL Divergence Loss.
             regularization_loss = sum(self.losses)
 
-            total_loss = reconstruction_loss + regularization_loss
+            total_loss = reconstruction_loss + kl_loss
 
         grads = tape.gradient(total_loss, self.trainable_weights)
         self.optimizer.apply_gradients(zip(grads, self.trainable_weights))
         self.total_loss_tracker.update_state(total_loss)
         self.reconstruction_loss_tracker.update_state(reconstruction_loss)
-        self.kl_loss_tracker.update_state(regularization_loss)
+        self.kl_loss_tracker.update_state(kl_loss)
 
         ### NOTE: If you get the error, "'tuple' object has no attribute
         ### 'rank', then convert y_true to a tensor object."
         # self.compiled_metrics.update_state(
         self.accuracy_tracker.update_state(
-            self.categorical_accuracy(
-                y,
-                reconstruction,
-                sample_weight=sample_weight,
+            self.binary_accuracy(
+                y_true_masked,
+                y_pred_masked,
+                sample_weight=sample_weight_masked,
             )
         )
 
@@ -608,3 +734,49 @@ class VAEModel(tf.keras.Model):
             "kl_loss": self.kl_loss_tracker.result(),
             "accuracy": self.accuracy_tracker.result(),
         }
+
+    @property
+    def batch_size(self):
+        """Batch (=step) size per epoch."""
+        return self._batch_size
+
+    @property
+    def batch_idx(self):
+        """Current batch (=step) index."""
+        return self._batch_idx
+
+    @property
+    def y(self):
+        return self._y
+
+    @property
+    def missing_mask(self):
+        return self._missing_mask
+
+    @property
+    def sample_weight(self):
+        return self._sample_weight
+
+    @batch_size.setter
+    def batch_size(self, value):
+        """Set batch_size parameter."""
+        self._batch_size = int(value)
+
+    @batch_idx.setter
+    def batch_idx(self, value):
+        """Set current batch (=step) index."""
+        self._batch_idx = int(value)
+
+    @y.setter
+    def y(self, value):
+        """Set y after each epoch."""
+        self._y = value
+
+    @missing_mask.setter
+    def missing_mask(self, value):
+        """Set y after each epoch."""
+        self._missing_mask = value
+
+    @sample_weight.setter
+    def sample_weight(self, value):
+        self._sample_weight = value

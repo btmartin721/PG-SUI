@@ -69,7 +69,11 @@ try:
     from .neural_network_methods import NeuralNetworkMethods, DisabledCV
     from ...utils.scorers import Scorers
     from ...utils.plotting import Plotting
-    from .callbacks import UBPCallbacks, CyclicalAnnealingCallback
+    from .callbacks import (
+        UBPCallbacks,
+        VAECallbacks,
+        CyclicalAnnealingCallback,
+    )
     from .keras_classifiers import VAEClassifier, MLPClassifier, SAEClassifier
     from ...data_processing.transformers import (
         SimGenotypeDataTransformer,
@@ -89,6 +93,7 @@ except (ModuleNotFoundError, ValueError):
     from utils.plotting import Plotting
     from impute.unsupervised.callbacks import (
         UBPCallbacks,
+        VAECallbacks,
         CyclicalAnnealingCallback,
     )
     from impute.unsupervised.keras_classifiers import (
@@ -242,10 +247,9 @@ class VAE(BaseEstimator, TransformerMixin):
         self.n_jobs = n_jobs
         self.verbose = verbose
 
-        self.num_classes = 10
-        self.is_vae = True
-
-        self.testing = True
+        self.num_classes = 4
+        self.activate = None
+        self.testing = kwargs.get("testing", False)
 
     @timer
     def fit(self, X):
@@ -260,7 +264,16 @@ class VAE(BaseEstimator, TransformerMixin):
         Raises:
             TypeError: Must be either pandas.DataFrame, numpy.ndarray, or List[List[int]].
         """
+        self.is_multiclass_ = True if self.num_classes != 4 else False
+        self.do_act_in_model_ = True if self.activate is None else False
         self.run_gridsearch_ = False if self.gridparams is None else True
+
+        if self.do_act_in_model_ and self.is_multiclass_:
+            self.act_func_ = "softmax"
+        elif self.do_act_in_model_ and not self.is_multiclass_:
+            self.act_func_ = "sigmoid"
+        else:
+            self.act_func_ = None
 
         # Treating y as X here for compatibility with UBP/NLPCA.
         # With VAE, y=X anyways.
@@ -297,7 +310,9 @@ class VAE(BaseEstimator, TransformerMixin):
         self.all_missing_ = sim.all_missing_mask_
 
         # Binary encode y to get y_train.
-        self.tt_ = AutoEncoderFeatureTransformer(num_classes=self.num_classes)
+        self.tt_ = AutoEncoderFeatureTransformer(
+            num_classes=self.num_classes, activate=self.activate
+        )
 
         # Just y_original with missing values encoded as -1.
         y_train = self.tt_.fit_transform(self.y_original_)
@@ -399,13 +414,16 @@ class VAE(BaseEstimator, TransformerMixin):
         y_true_1d = y_true.ravel()
         y_size = y_true.size
         y_missing_idx = np.flatnonzero(self.original_missing_mask_)
-        y_pred, z_mean, z_log_var, z = model(y_train, training=False)
+        y_pred, z_mean, z_log_var, z = model(
+            tf.convert_to_tensor(np.expand_dims(y_train, axis=-1)),
+            training=False,
+        )
         y_pred = self.tt_.inverse_transform(y_pred)
+        y_pred = np.squeeze(y_pred, axis=-1)
         y_pred_decoded = self.nn_.decode_masked(
             y_train,
             y_pred,
-            is_multiclass=True,
-            return_int=True,
+            is_multiclass=self.is_multiclass_,
         )
         # y_pred_decoded, y_pred_certainty = self.nn_.decode_masked(
         #     y_train, y_pred, return_proba=True
@@ -434,6 +452,7 @@ class VAE(BaseEstimator, TransformerMixin):
             Plotting.plot_confusion_matrix(
                 y_true_1d, y_pred_1d, prefix=self.prefix
             )
+            Plotting.plot_label_clusters(z_mean, y_train, y_true_1d)
 
         # Return to original shape.
         return np.reshape(y_true_1d, y_true.shape)
@@ -484,7 +503,7 @@ class VAE(BaseEstimator, TransformerMixin):
             scoring = scorers.make_multimetric_scorer(
                 self.scoring_metrics_,
                 self.sim_missing_mask_,
-                is_vae=self.is_vae,
+                num_classes=self.num_classes,
             )
 
         (
@@ -502,7 +521,6 @@ class VAE(BaseEstimator, TransformerMixin):
             compile_params,
             fit_params,
             scoring=scoring,
-            testing=False,
         )
 
         histories.append(best_history)
@@ -527,7 +545,6 @@ class VAE(BaseEstimator, TransformerMixin):
         compile_params,
         fit_params,
         scoring=None,
-        testing=False,
         **kwargs,
     ):
         """Run KerasClassifier with neural network model and grid search.
@@ -544,8 +561,6 @@ class VAE(BaseEstimator, TransformerMixin):
             fit_params (Dict[str, Any]): Dictionary with parameters to be passed to fit in KerasClassifier.
 
             scoring (Dict[str, Callable], optional): Multimetric scorer made using sklearn.metrics.make_scorer. To be used with grid search.
-
-            testing (bool, optional): If True, prints out flattened predictions as 012-encoded y_true and y_pred arrays.
 
         Returns:
             List[tf.keras.Model]: List of keras model objects. One for each phase (len=1 if NLPCA, len=3 if UBP).
@@ -589,11 +604,12 @@ class VAE(BaseEstimator, TransformerMixin):
             callbacks=fit_params["callbacks"],
             epochs=fit_params["epochs"],
             verbose=0,
-            # class_weight=fit_params["sample_weight"],
+            num_classes=self.num_classes,
+            activate=self.act_func_,
             fit__validation_split=fit_params["validation_split"],
             score__missing_mask=self.sim_missing_mask_,
             score__scoring_metric=self.scoring_metric,
-            score__is_vae=self.is_vae,
+            score__num_classes=self.num_classes,
         )
 
         if self.run_gridsearch_:
@@ -707,16 +723,21 @@ class VAE(BaseEstimator, TransformerMixin):
         model = best_clf.model_
         best_history = best_clf.history_
 
-        y_pred, z_mean, z_log_var, z = model(y_train, training=False)
+        y_pred, z_mean, z_log_var, z = model(
+            tf.convert_to_tensor(np.expand_dims(y_train, axis=-1)),
+            training=False,
+        )
+
         y_pred = self.tt_.inverse_transform(y_pred)
+        y_pred = np.squeeze(y_pred, axis=-1)
 
         # Get metric scores.
         metrics = Scorers.scorer(
             y_true,
             y_pred,
             missing_mask=self.sim_missing_mask_,
-            is_vae=self.is_vae,
-            testing=testing,
+            num_classes=self.num_classes,
+            testing=self.testing,
         )
 
         return (
@@ -751,6 +772,7 @@ class VAE(BaseEstimator, TransformerMixin):
             ReduceLROnPlateau(
                 patience=self.lr_patience, min_lr=1e-6, min_delta=1e-6
             ),
+            VAECallbacks(),
             # CyclicalAnnealingCallback(self.epochs, schedule_type="sigmoid"),
         ]
 
@@ -766,7 +788,7 @@ class VAE(BaseEstimator, TransformerMixin):
             sample_weights = self.nn_.get_class_weights(
                 self.y_original_,
                 self.original_missing_mask_,
-                return_1d=True,
+                return_1d=False,
                 method=self.sample_weights,
             )
             # sample_weights = self.nn_.normalize_data(sample_weights)
@@ -789,8 +811,11 @@ class VAE(BaseEstimator, TransformerMixin):
         compile_params["learning_rate"] = self.learning_rate
 
         model_params = {
-            "output_shape": y_train.shape[1],
+            "y": y_train,
             "batch_size": self.batch_size,
+            "sample_weight": sample_weights,
+            "missing_mask": self.original_missing_mask_,
+            "output_shape": y_train.shape[1],
             "weights_initializer": self.weights_initializer,
             "n_components": self.n_components,
             "hidden_layer_sizes": self.hidden_layer_sizes,
