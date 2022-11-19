@@ -3,9 +3,6 @@ import os
 import sys
 import warnings
 
-import numpy as np
-import pandas as pd
-
 # Import tensorflow with reduced warnings.
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 logging.getLogger("tensorflow").disabled = True
