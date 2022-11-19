@@ -6,9 +6,6 @@ import warnings
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # or any {'0', '1', '2', '3'}
 logging.getLogger("tensorflow").disabled = True
 
-import numpy as np
-import pandas as pd
-
 # Import tensorflow with reduced warnings.
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 logging.getLogger("tensorflow").disabled = True
@@ -135,7 +132,6 @@ class UBPPhase1(tf.keras.Model):
         weights_initializer="glorot_normal",
         hidden_layer_sizes="midpoint",
         num_hidden_layers=1,
-        hidden_activation="elu",
         l1_penalty=0.01,
         l2_penalty=0.01,
         dropout_rate=0.2,
@@ -191,19 +187,6 @@ class UBPPhase1(tf.keras.Model):
 
         self.kernel_regularizer = kernel_regularizer
         kernel_initializer = weights_initializer
-
-        if hidden_activation.lower() == "leaky_relu":
-            activation = LeakyReLU(alpha=0.01)
-
-        elif hidden_activation.lower() == "prelu":
-            activation = PReLU()
-
-        elif hidden_activation.lower() == "selu":
-            activation = "selu"
-            kernel_initializer = "lecun_normal"
-
-        else:
-            activation = hidden_activation
 
         # Construct single-layer perceptron.
 
@@ -560,7 +543,7 @@ class UBPPhase2(tf.keras.Model):
         self.dense1 = Dense(
             hidden_layer_sizes[0],
             input_shape=(n_components,),
-            activation=hidden_activation,
+            activation=activation,
             kernel_initializer=kernel_initializer,
             kernel_regularizer=kernel_regularizer,
         )
@@ -568,7 +551,7 @@ class UBPPhase2(tf.keras.Model):
         if num_hidden_layers >= 2:
             self.dense2 = Dense(
                 hidden_layer_sizes[1],
-                activation=hidden_activation,
+                activation=activation,
                 kernel_initializer=kernel_initializer,
                 kernel_regularizer=kernel_regularizer,
             )
@@ -576,7 +559,7 @@ class UBPPhase2(tf.keras.Model):
         if num_hidden_layers >= 3:
             self.dense3 = Dense(
                 hidden_layer_sizes[2],
-                activation=hidden_activation,
+                activation=activation,
                 kernel_initializer=kernel_initializer,
                 kernel_regularizer=kernel_regularizer,
             )
@@ -584,7 +567,7 @@ class UBPPhase2(tf.keras.Model):
         if num_hidden_layers >= 4:
             self.dense4 = Dense(
                 hidden_layer_sizes[3],
-                activation=hidden_activation,
+                activation=activation,
                 kernel_initializer=kernel_initializer,
                 kernel_regularizer=kernel_regularizer,
             )
@@ -592,7 +575,7 @@ class UBPPhase2(tf.keras.Model):
         if num_hidden_layers == 5:
             self.dense5 = Dense(
                 hidden_layer_sizes[4],
-                activation=hidden_activation,
+                activation=activation,
                 kernel_initializer=kernel_initializer,
                 kernel_regularizer=kernel_regularizer,
             )
@@ -682,8 +665,8 @@ class UBPPhase2(tf.keras.Model):
             y_true,
             sample_weight,
             missing_mask,
-            batch_start,
-            batch_end,
+            _,
+            __,
         ) = self.nn.prepare_training_batches(
             self.V_latent_,
             y,
@@ -878,8 +861,6 @@ class UBPPhase3(tf.keras.Model):
         hidden_layer_sizes="midpoint",
         num_hidden_layers=1,
         hidden_activation="elu",
-        l1_penalty=0.01,
-        l2_penalty=0.01,
         dropout_rate=0.2,
         num_classes=3,
         phase=3,
@@ -959,35 +940,35 @@ class UBPPhase3(tf.keras.Model):
         self.dense1 = Dense(
             hidden_layer_sizes[0],
             input_shape=(n_components,),
-            activation=hidden_activation,
+            activation=activation,
             kernel_initializer=kernel_initializer,
         )
 
         if num_hidden_layers >= 2:
             self.dense2 = Dense(
                 hidden_layer_sizes[1],
-                activation=hidden_activation,
+                activation=activation,
                 kernel_initializer=kernel_initializer,
             )
 
         if num_hidden_layers >= 3:
             self.dense3 = Dense(
                 hidden_layer_sizes[2],
-                activation=hidden_activation,
+                activation=activation,
                 kernel_initializer=kernel_initializer,
             )
 
         if num_hidden_layers >= 4:
             self.dense4 = Dense(
                 hidden_layer_sizes[3],
-                activation=hidden_activation,
+                activation=activation,
                 kernel_initializer=kernel_initializer,
             )
 
         if num_hidden_layers == 5:
             self.dense5 = Dense(
                 hidden_layer_sizes[4],
-                activation=hidden_activation,
+                activation=activation,
                 kernel_initializer=kernel_initializer,
             )
 
