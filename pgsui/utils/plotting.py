@@ -15,12 +15,8 @@ from sklearn_genetic.utils import logbook_to_pandas
 from sklearn.metrics import ConfusionMatrixDisplay
 
 try:
-    from ..impute.unsupervised.neural_network_methods import (
-        NeuralNetworkMethods,
-    )
     from . import misc
 except (ModuleNotFoundError, ValueError):
-    from impute.unsupervised.neural_network_methods import NeuralNetworkMethods
     from utils import misc
 
 
@@ -893,13 +889,14 @@ class Plotting:
         plt.close()
 
     @staticmethod
-    def plot_label_clusters(z_mean, data, labels, prefix="imputer"):
+    def plot_label_clusters(z_mean, labels, prefix="imputer"):
         """display a 2D plot of the digit classes in the latent space."""
         fig, ax = plt.subplots(1, 1, figsize=(15, 15))
 
-        ax.scatter(z_mean[:, 0], z_mean[:, 1])
-        ax.set_xlabel("z[0]")
-        ax.set_ylabel("z[1]")
+        if z_mean.shape[1] == 2:
+            sns.scatterplot(z_mean[:, 0], z_mean[:, 1], ax=ax)
+            ax.set_xlabel("Latent Dimension 1")
+            ax.set_ylabel("Latent Dimension 2")
 
         outfile = os.path.join(
             f"{prefix}_output", "plots", "vae_label_clusters.png"
