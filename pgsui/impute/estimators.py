@@ -1,6 +1,6 @@
 # Standard library imports
 import sys
-from typing import Optional, Union, List, Dict, Tuple, Any, Callable
+from typing import Optional, Union, Dict, Any
 
 # Third-party imports
 import numpy as np
@@ -12,27 +12,18 @@ import xgboost as xgb
 from sklearn.ensemble import ExtraTreesClassifier
 from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.experimental import enable_iterative_imputer
 from sklearn.linear_model import BayesianRidge
 from sklearn.neighbors import KNeighborsClassifier
 
 # Custom imports
 try:
-    from ..read_input.read_input import GenotypeData
-
     from .impute import Impute
     from .unsupervised.neural_network_imputers import VAE, UBP, SAE
-
     from ..utils.misc import get_processor_name
-    from ..utils.misc import isnotebook
 except (ModuleNotFoundError, ValueError):
-    from read_input.read_input import GenotypeData
-
     from impute.impute import Impute
     from impute.unsupervised.neural_network_imputers import VAE, UBP, SAE
-
     from utils.misc import get_processor_name
-    from utils.misc import isnotebook
 
 # Requires scikit-learn-intellex package
 if get_processor_name().strip().startswith("Intel"):
@@ -1353,7 +1344,7 @@ class ImputeVAE(Impute):
         if genotype_data is None:
             raise TypeError("genotype_data cannot be NoneType")
 
-        X = genotype_data.genotypes012_array
+        X = genotype_data.int_iupac
 
         if not isinstance(X, pd.DataFrame):
             df = pd.DataFrame(X)
