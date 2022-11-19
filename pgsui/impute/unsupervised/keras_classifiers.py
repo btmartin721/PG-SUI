@@ -1,15 +1,10 @@
 import numpy as np
-import pandas as pd
 import tensorflow as tf
-
-from sklearn.metrics import accuracy_score
 
 from scikeras.wrappers import KerasClassifier
 
 try:
     from ...utils.scorers import Scorers
-    from .neural_network_methods import NeuralNetworkMethods
-    from .models.vae_model import VAEModel
     from .models.autoencoder_model import AutoEncoderModel
     from .models.nlpca_model import NLPCAModel
     from .models.ubp_model import UBPPhase1, UBPPhase2, UBPPhase3
@@ -21,7 +16,9 @@ try:
 except (ModuleNotFoundError, ValueError):
     from utils.scorers import Scorers
     from impute.unsupervised.neural_network_methods import NeuralNetworkMethods
-    from impute.unsupervised.models.vae_model import VAEModel
+    from impute.unsupervised.models.vae_model import (
+        VAEModel,
+    )
     from impute.unsupervised.models.autoencoder_model import AutoEncoderModel
     from impute.unsupervised.models.nlpca_model import NLPCAModel
     from impute.unsupervised.models.ubp_model import (
@@ -138,7 +135,6 @@ class SAEClassifier(KerasClassifier):
         missing_mask = kwargs.get(
             "missing_mask", np.ones(y_true.shape, dtype=bool)
         )
-        nn_model = kwargs.get("nn_model", True)
         num_classes = kwargs.get("num_classes", 3)
         testing = kwargs.get("testing", False)
 
@@ -151,74 +147,6 @@ class SAEClassifier(KerasClassifier):
             num_classes=num_classes,
             testing=testing,
         )
-        # Otherwise default is all missing values (array all True).
-
-        # # Get missing mask if provided.
-        # # Otherwise default is all missing values (array all True).
-        # missing_mask = kwargs.get(
-        #     "missing_mask", np.ones(y_true.shape, dtype=bool)
-        # )
-        # num_classes = kwargs.get("is_vae", False)
-
-        # testing = kwargs.get("testing", False)
-        # scoring_metric = kwargs.get("scoring_metric", "accuracy")
-
-        # nn = NeuralNetworkMethods()
-
-        # if isinstance(y_pred, tuple):
-        #     y_pred = y_pred[0]
-
-        # y_true_masked = y_true[missing_mask]
-        # y_pred_masked = y_pred[missing_mask]
-
-        # if scoring_metric.startswith("auc"):
-        #     roc_auc = Scorers.compute_roc_auc_micro_macro(
-        #         y_true_masked, y_pred_masked, missing_mask, is_vae=is_vae
-        #     )
-
-        #     if scoring_metric == "auc_macro":
-        #         return roc_auc["macro"]
-
-        #     elif scoring_metric == "auc_micro":
-        #         return roc_auc["micro"]
-
-        #     else:
-        #         raise ValueError(
-        #             f"Invalid scoring_metric provided: {scoring_metric}"
-        #         )
-
-        # elif scoring_metric.startswith("precision"):
-        #     pr_ap = Scorers.compute_pr(
-        #         y_true_masked, y_pred_masked, is_vae=is_vae
-        #     )
-
-        #     if scoring_metric == "precision_recall_macro":
-        #         return pr_ap["macro"]
-
-        #     elif scoring_metric == "precision_recall_micro":
-        #         return pr_ap["micro"]
-
-        #     else:
-        #         raise ValueError(
-        #             f"Invalid scoring_metric provided: {scoring_metric}"
-        #         )
-
-        # elif scoring_metric == "accuracy":
-        #     y_pred_masked_decoded = nn.decode_onehot(y_pred_masked)
-        #     return accuracy_score(y_true_masked, y_pred_masked_decoded)
-
-        # else:
-        #     raise ValueError(
-        #         f"Invalid scoring_metric provided: {scoring_metric}"
-        #     )
-
-        # if testing:
-        #     np.set_printoptions(threshold=np.inf)
-        #     print(y_true_masked)
-
-        #     y_pred_masked_decoded = nn.decode_onehot(y_pred_masked)
-
-        #     print(y_pred_masked_decoded)
 
     @property
     def feature_encoder(self):
@@ -355,7 +283,7 @@ class VAEClassifier(KerasClassifier):
             missing_mask=self.missing_mask,
             batch_size=self.batch_size,
             y=self.y,
-            activation=self.activate,
+            final_activation=self.activate,
         )
 
         model.compile(
@@ -405,9 +333,41 @@ class VAEClassifier(KerasClassifier):
         Notes:
             Had to override predict() here in order to do the __call__ with the refined input, V_latent.
         """
-        X_train = self.feature_encoder_.transform(X)
-        y_pred, z_mean, z_log_var, z = self.model_(X_train, training=False)
-        return self.feature_encoder_.inverse_transform(X), z_mean, z_log_var, z
+        X_train = self.target_encoder_.transform(X)
+        y_pred, _, __, ___ = self.model_(X_train, training=False)
+        return self.target_encoder_.inverse_transform(y_pred)
+
+    @staticmethod
+    def scorer(y_true, y_pred, **kwargs):
+        """Scorer for grid search that masks missing data.
+
+        To use this, do not specify a scoring metric when initializing the grid search object. By default if the scoring_metric option is left as None, then it uses the estimator's scoring metric (this one).
+
+        Args:
+            y_true (numpy.ndarray): True target values input to fit().
+
+            y_pred (numpy.ndarray): Predicted target values from estimator. The predictions are modified by self.target_encoder().inverse_transform() before being sent here.
+
+            kwargs (Any): Other parameters sent to sklearn scoring metric. Supported options include missing_mask, scoring_metric, and testing.
+
+        Returns:
+            float: Calculated score.
+        """
+        missing_mask = kwargs.get(
+            "missing_mask", np.ones(y_true.shape, dtype=bool)
+        )
+        num_classes = kwargs.get("num_classes", 3)
+        testing = kwargs.get("testing", False)
+
+        scorers = Scorers()
+
+        return scorers.scorer(
+            y_true,
+            y_pred,
+            missing_mask=missing_mask,
+            num_classes=num_classes,
+            testing=testing,
+        )
 
 
 class MLPClassifier(KerasClassifier):
@@ -418,7 +378,7 @@ class MLPClassifier(KerasClassifier):
 
         y_train (numpy.ndarray): One-hot encoded target data. Defaults to None.
 
-        y_original (numpy.ndarray): Original target data, y, that is not one-hot encoded. Should have shape (n_samples, n_features). Should be 012-encoded. Defaults to None.
+        ubp_weights (tensorflow.Tensor): Weights from UBP model. Fetched by doing model.get_weights() on phase 2 model. Only used if phase 3. Defaults to None.
 
         batch_size (int): Batch size to train with. Defaults to 32.
 
@@ -444,9 +404,9 @@ class MLPClassifier(KerasClassifier):
 
         phase (int or None): Current phase (if doing UBP), or None if doing NLPCA. Defults to None.
 
-        n_components (int): Number of components to use for input V. Defaults to 3.
+        sample_weight (numpy.ndarray): Sample weight matrix for reducing the impact of class imbalance. Should be of shape (n_samples, n_features).
 
-        ubp_weights (tensorflow.Tensor): Weights from UBP model. Fetched by doing model.get_weights() on phase 2 model. Only used if phase 3. Defaults to None.
+        n_components (int): Number of components to use for input V. Defaults to 3.
 
         kwargs (Any): Other keyword arguments to route to fit, compile, callbacks, etc. Should have the routing prefix (e.g., optimizer__learning_rate=0.01).
     """
@@ -531,7 +491,6 @@ class MLPClassifier(KerasClassifier):
                 weights_initializer=self.weights_initializer,
                 hidden_layer_sizes=self.hidden_layer_sizes,
                 num_hidden_layers=self.num_hidden_layers,
-                hidden_activation=self.hidden_activation,
                 l1_penalty=self.l1_penalty,
                 l2_penalty=self.l2_penalty,
                 dropout_rate=self.dropout_rate,
@@ -570,8 +529,6 @@ class MLPClassifier(KerasClassifier):
                 hidden_layer_sizes=self.hidden_layer_sizes,
                 num_hidden_layers=self.num_hidden_layers,
                 hidden_activation=self.hidden_activation,
-                l1_penalty=self.l1_penalty,
-                l2_penalty=self.l2_penalty,
                 dropout_rate=self.dropout_rate,
                 num_classes=self.num_classes,
                 phase=self.phase,
@@ -601,74 +558,29 @@ class MLPClassifier(KerasClassifier):
 
         Args:
             y_true (numpy.ndarray): True target values input to fit().
+
             y_pred (numpy.ndarray): Predicted target values from estimator. The predictions are modified by self.target_encoder().inverse_transform() before being sent here.
+
             kwargs (Any): Other parameters sent to sklearn scoring metric. Supported options include missing_mask, scoring_metric, and testing.
 
         Returns:
             float: Calculated score.
         """
-        # Get missing mask if provided.
-        # Otherwise default is all missing values (array all True).
         missing_mask = kwargs.get(
             "missing_mask", np.ones(y_true.shape, dtype=bool)
         )
-
+        num_classes = kwargs.get("num_classes", 3)
         testing = kwargs.get("testing", False)
-        scoring_metric = kwargs.get("scoring_metric", "accuracy")
 
-        y_true_masked = y_true[missing_mask]
-        y_pred_masked = y_pred[missing_mask]
+        scorers = Scorers()
 
-        if scoring_metric.startswith("auc"):
-            roc_auc = Scorers.compute_roc_auc_micro_macro(
-                y_true_masked, y_pred_masked, missing_mask
-            )
-
-            if scoring_metric == "auc_macro":
-                return roc_auc["macro"]
-
-            elif scoring_metric == "auc_micro":
-                return roc_auc["micro"]
-
-            else:
-                raise ValueError(
-                    f"Invalid scoring_metric provided: {scoring_metric}"
-                )
-
-        elif scoring_metric.startswith("precision"):
-            pr_ap = Scorers.compute_pr(y_true_masked, y_pred_masked)
-
-            if scoring_metric == "precision_recall_macro":
-                return pr_ap["macro"]
-
-            elif scoring_metric == "precision_recall_micro":
-                return pr_ap["micro"]
-
-            else:
-                raise ValueError(
-                    f"Invalid scoring_metric provided: {scoring_metric}"
-                )
-
-        elif scoring_metric == "accuracy":
-            y_pred_masked_decoded = NeuralNetworkMethods.decode_masked(
-                y_true_masked, y_pred_masked
-            )
-            return accuracy_score(y_true_masked, y_pred_masked_decoded)
-
-        else:
-            raise ValueError(
-                f"Invalid scoring_metric provided: {scoring_metric}"
-            )
-
-        if testing:
-            np.set_printoptions(threshold=np.inf)
-            print(y_true_masked)
-
-            y_pred_masked_decoded = NeuralNetworkMethods.decode_masked(
-                y_true_masked, y_pred_masked
-            )
-
-            print(y_pred_masked_decoded)
+        return scorers.scorer(
+            y_true,
+            y_pred,
+            missing_mask=missing_mask,
+            num_classes=num_classes,
+            testing=testing,
+        )
 
     @property
     def feature_encoder(self):
