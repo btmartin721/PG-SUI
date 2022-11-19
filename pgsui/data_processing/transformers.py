@@ -3,9 +3,8 @@ import os
 import logging
 import sys
 import warnings
-from collections import defaultdict
 from pathlib import Path
-from typing import Optional, Union, List, Dict, Tuple, Any, Callable
+from typing import Optional, Union, List, Dict, Tuple, Any
 
 import numpy as np
 import pandas as pd
@@ -19,7 +18,6 @@ import toytree as tt
 
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.impute import SimpleImputer
-from sklearn.preprocessing import OneHotEncoder
 
 # Import tensorflow with reduced warnings.
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
@@ -50,19 +48,25 @@ def deprecated(
 
 
 deprecation.deprecated = deprecated
-from tensorflow.keras.utils import to_categorical
 
 # Custom Modules
 try:
     from ..read_input.read_input import GenotypeData
     from ..utils import misc
     from ..utils.misc import get_processor_name
-    from .simple_imputers import ImputeAlleleFreq, ImputePhylo, ImputeNMF
+    from ..utils.misc import isnotebook
 except (ModuleNotFoundError, ValueError):
     from read_input.read_input import GenotypeData
     from utils import misc
     from utils.misc import get_processor_name
-    from impute.simple_imputers import ImputeAlleleFreq, ImputePhylo, ImputeNMF
+    from utils.misc import isnotebook
+
+is_notebook = isnotebook()
+
+if is_notebook:
+    from tqdm.notebook import tqdm as progressbar
+else:
+    from tqdm import tqdm as progressbar
 
 # Requires scikit-learn-intellex package
 if get_processor_name().strip().startswith("Intel"):
@@ -102,106 +106,6 @@ def encode_onehot(X):
     for row in np.arange(X.shape[0]):
         Xt[row] = [mappings[enc] for enc in X[row]]
     return Xt
-
-
-def encode_binary(X):
-    """Convert 012-encoded data to binary encodings.
-    Args:
-        X (numpy.ndarray): Input array with 012-encoded data and -9 as the missing data value.
-    Returns:
-        pandas.DataFrame: One-hot encoded data, ignoring missing values (np.nan).
-    """
-    Xt = np.zeros(shape=(X.shape[0], X.shape[1], 2))
-    mappings = {
-        0: np.array([1, 0]),
-        1: np.array([1, 1]),
-        2: np.array([0, 1]),
-        -9: np.array([np.nan, np.nan]),
-    }
-    for row in np.arange(X.shape[0]):
-        Xt[row] = [mappings[enc] for enc in X[row]]
-    return Xt
-
-
-def encode_categorical(X):
-    """Encode -9 encoded missing values as np.nan.
-
-    Args:
-        X (numpy.ndarray): 012-encoded genotypes with -9 as missing values.
-
-    Returns:
-        pandas.DataFrame: DataFrame with missing values encoded as np.nan.
-    """
-    np.nan_to_num(X, copy=False, nan=-9.0)
-    X = X.astype(str)
-    X[(X == "-9.0") | (X == "-9")] = "none"
-
-    df = pd.DataFrame(X)
-    df_incomplete = df.copy()
-
-    # Replace 'none' with np.nan
-    for row in df.index:
-        for col in df.columns:
-            if df_incomplete.iat[row, col] == "none":
-                df_incomplete.iat[row, col] = np.nan
-
-    return df_incomplete
-
-
-def decode_onehot(df_dummies):
-    """Decode one-hot format to 012-encoded genotypes.
-
-    One-hot encoded values (df_dummies) are formatted as:
-
-    0_0 0_1 0_2 1_0 1_1 1_2 2_0 2_1 ...
-    0.0 1.0 0.0 1.0 0.0 0.0 1.0 0.0 ...
-    0.0 1.0 0.0 0.0 1.0 0.0 1.0 0.0 ...
-    1.0 0.0 0.0 0.0 0.0 1.0 0.0 1.0 ...
-
-    with the prefix (before "_") being the column number and the suffix (after "_") being the decoded value. The values with the underscores will be the column names of the pandas DataFrame.
-
-    Args:
-        df_dummies (pandas.DataFrame): One-hot encoded imputed data.
-
-    Returns:
-        pandas.DataFrame: 012-encoded imputed data.
-    """
-    pos = defaultdict(list)
-    vals = defaultdict(list)
-
-    for i, c in enumerate(df_dummies.columns):
-        # Get all columns that contain "_" and append each site to a dictionary
-        # of lists with the site number as the keys.
-        # pos is a dictionary of lists with the site position as key and the
-        # indexes for that site position (e.g., 0, 1, or 2) as the values. If a
-        # site only has e.g., 0 and 2, then it will only be of length 2.
-        # The values of vals are the actual one-hot values (0.0 or 1.0).
-        if "_" in c:
-            k, v = c.split("_", 1)
-            pos[k].append(i)
-            vals[k].append(v)
-
-        else:
-            pos["_"].append(i)
-
-    # Decode the one-hot values.
-    # np.argmax gets the index with the highest value (1.0).
-    # Will be 0, 1, or 2.
-    # So if vals[k] is 1.0 for a genotype of 2, then the index returned by
-    # np.argmax will be 2.
-    df = pd.DataFrame(
-        {
-            k: pd.Categorical.from_codes(
-                np.argmax(df_dummies.iloc[:, pos[k]].values, axis=1),
-                vals[k],
-            )
-            for k in vals
-        }
-    )
-
-    df[df_dummies.columns[pos["_"]]] = df_dummies.iloc[:, pos["_"]]
-
-    return df
 
 
 def mle(row):
@@ -337,16 +241,29 @@ class AutoEncoderFeatureTransformer(BaseEstimator, TransformerMixin):
         Args:
             y (numpy.ndarray): Array to inverse transform.
         """
-        if self.activate is None:
-            return y.numpy()
-        elif self.activate == "softmax":
-            return tf.nn.softmax(y).numpy()
-        elif self.activate == "sigmoid":
-            return tf.nn.sigmoid(y).numpy()
-        else:
-            raise ValueError(
-                f"Invalid value passed to keyword argument activate. Valid options include: None, 'softmax', or 'sigmoid', but got {self.activate}"
-            )
+        try:
+            if self.activate is None:
+                return y.numpy()
+            elif self.activate == "softmax":
+                return tf.nn.softmax(y).numpy()
+            elif self.activate == "sigmoid":
+                return tf.nn.sigmoid(y).numpy()
+            else:
+                raise ValueError(
+                    f"Invalid value passed to keyword argument activate. Valid options include: None, 'softmax', or 'sigmoid', but got {self.activate}"
+                )
+        except AttributeError:
+            # If numpy array already.
+            if self.activate is None:
+                return y
+            elif self.activate == "softmax":
+                return tf.nn.softmax(tf.convert_to_tensor(y)).numpy()
+            elif self.activate == "sigmoid":
+                return tf.nn.sigmoid(tf.convert_to_tensor(y)).numpy()
+            else:
+                raise ValueError(
+                    f"Invalid value passed to keyword argument activate. Valid options include: None, 'softmax', or 'sigmoid', but got {self.activate}"
+                )
 
     def encode_012(self, X):
         """Convert 012-encoded data to one-hot encodings.
@@ -366,7 +283,7 @@ class AutoEncoderFeatureTransformer(BaseEstimator, TransformerMixin):
             Xt[row] = [mappings[enc] for enc in X[row]]
         return Xt
 
-    def encode_multilab(self, X, multilab_value=0.5):
+    def encode_multilab(self, X, multilab_value=1.0):
         """Encode 0-9 integer data in multi-label one-hot format.
         Args:
             X (numpy.ndarray): Input array with 012-encoded data and -9 as the missing data value.
@@ -577,9 +494,7 @@ class MLPTargetTransformer(BaseEstimator, TransformerMixin):
         Xpred = np.argmax(Xt, axis=2)
         Xtrue = np.argmax(y, axis=2)
         Xdecoded = np.zeros((Xpred.shape[0], Xpred.shape[1]))
-        for idx, row in enumerate(Xdecoded):
-            imputed_vals = np.zeros(len(row))
-            known_vals = np.zeros(len(row))
+        for idx in np.arange(Xdecoded):
             imputed_idx = np.where(self.observed_mask_[idx] == 0)
             known_idx = np.nonzero(self.observed_mask_[idx])
             Xdecoded[idx, imputed_idx] = Xpred[idx, imputed_idx]
@@ -587,17 +502,19 @@ class MLPTargetTransformer(BaseEstimator, TransformerMixin):
         return Xdecoded.astype("int8")
 
 
-class TargetTransformer(BaseEstimator, TransformerMixin):
-    """Transformer to format target data both before and after model fitting."""
+class UBPTargetTransformer(BaseEstimator, TransformerMixin):
+    """Transformer to format UBP target data both before model fitting.
 
-    def __init__(self, is_vae=False):
-        self.is_vae = is_vae
+    Examples:
+        >>>ubp_tt = UBPTargetTransformer()
+        >>>y_train = ubp_tt.fit_transform(y)
+    """
 
     def fit(self, y):
         """Fit 012-encoded target data.
 
         Args:
-            y (numpy.ndarray): Target data that is 012-encoded.
+            y (numpy.ndarray): Target data that is 012-encoded, of shape (n_samples, n_features).
 
         Returns:
             self: Class instance.
@@ -607,11 +524,8 @@ class TargetTransformer(BaseEstimator, TransformerMixin):
         # Original 012-encoded y
         self.y_decoded_ = y
 
+        # One-hot encode y.
         y_train = encode_onehot(y)
-
-        # One-hot encode y
-        # df = encode_onehot(y)
-        # y_train = df.copy().values
 
         # Get missing and observed data boolean masks.
         self.missing_mask_, self.observed_mask_ = self._get_masks(y_train)
@@ -622,12 +536,12 @@ class TargetTransformer(BaseEstimator, TransformerMixin):
         return self
 
     def transform(self, y):
-        """Transform y_true to one-hot encoded.
+        """Transform 012-encoded target to one-hot encoded format.
 
         Accomodates multiclass-multioutput targets.
 
         Args:
-            y (numpy.ndarray): One-hot encoded target data.
+            y (numpy.ndarray): One-hot encoded target data of shape (n_samples, n_features).
 
         Returns:
             numpy.ndarray: y_true target data.
@@ -637,67 +551,70 @@ class TargetTransformer(BaseEstimator, TransformerMixin):
         return self._fill(y_train, self.missing_mask_)
 
     def inverse_transform(self, y):
-        """Decode y_pred from one-hot to 012-based encoding.
+        """Decode y_predicted from one-hot to 012-integer encoding.
+
+        Performs a softmax activation for multiclass classification.
 
         This allows sklearn.metrics to be used.
 
         Args:
-            y (numpy.ndarray): One-hot encoded predicted probabilities after model fitting.
+            y (numpy.ndarray): One-hot encoded predicted probabilities after model fitting, of shape (n_samples, n_features, num_classes).
 
         Returns:
-            numpy.ndarray: y predictions in same format as y_true.
+            numpy.ndarray: y predictions in same format as y_true (n_samples, n_features).
         """
-        if self.is_vae:
-            return y.numpy()
-        else:
-            return tf.nn.softmax(y).numpy()
+        return tf.nn.softmax(y).numpy()
 
     def _fill(self, data, missing_mask, missing_value=-1, num_classes=3):
-        """Mask missing data as ``missing_value``.
+        """Mask missing data as ``missing_value``\.
 
         Args:
             data (numpy.ndarray): Input with missing values of shape (n_samples, n_features, num_classes).
 
-            missing_mask (np.ndarray(bool)): Missing data mask with True corresponding to a missing value.
+            missing_mask (np.ndarray(bool)): Missing data mask with True corresponding to a missing value, of shape (n_samples, n_features).
 
-            missing_value (int): Value to set missing data to. If a list is provided, then its length should equal the number of one-hot classes.
+            missing_value (int, optional): Value to set missing data to. If a list is provided, then its length should equal the number of one-hot classes. Defaults to -1.
+
+            num_classes (int, optional): Number of classes to use. Defaults to 3.
         """
         if num_classes > 1:
             missing_value = [missing_value] * num_classes
         data[missing_mask] = missing_value
         return data
 
-    def _get_masks(self, X):
-        """Format the provided target data for use with UBP/NLPCA.
+    def _get_masks(self, y):
+        """Format the provided target data for use with UBP/NLPCA models.
 
         Args:
-            y (numpy.ndarray(float)): Input data that will be used as the target.
+            y (numpy.ndarray(float)): Input data that will be used as the target of shape (n_samples, n_features, num_classes).
 
         Returns:
             numpy.ndarray(float): Missing data mask, with missing values encoded as 1's and non-missing as 0's.
 
             numpy.ndarray(float): Observed data mask, with non-missing values encoded as 1's and missing values as 0's.
         """
-        missing_mask = self._create_missing_mask(X)
+        missing_mask = self._create_missing_mask(y)
         observed_mask = ~missing_mask
         return missing_mask, observed_mask
 
     def _create_missing_mask(self, data):
         """Creates a missing data mask with boolean values.
+
         Args:
             data (numpy.ndarray): Data to generate missing mask from, of shape (n_samples, n_features, n_classes).
+
         Returns:
             numpy.ndarray(bool): Boolean mask of missing values of shape (n_samples, n_features), with True corresponding to a missing data point.
         """
         return np.isnan(data).all(axis=2)
 
     def _decode(self, y):
-        """Evaluate VAE predictions by calculating the highest predicted value.
+        """Evaluate UBP/NLPCA predictions by calculating the argmax.
 
         Calucalates highest predicted value for each row vector and each class, setting the most likely class to 1.0.
 
         Args:
-            y (numpy.ndarray): Input one-hot encoded data.
+            y (numpy.ndarray): Input one-hot encoded data of shape (n_samples, n_features, num_classes).
 
         Returns:
             numpy.ndarray: Imputed one-hot encoded values.
@@ -709,177 +626,12 @@ class TargetTransformer(BaseEstimator, TransformerMixin):
         Xpred = np.argmax(Xt, axis=2)
         Xtrue = np.argmax(y, axis=2)
         Xdecoded = np.zeros((Xpred.shape[0], Xpred.shape[1]))
-        for idx, row in enumerate(Xdecoded):
-            imputed_vals = np.zeros(len(row))
-            known_vals = np.zeros(len(row))
+        for idx in np.arange(Xdecoded):
             imputed_idx = np.where(self.observed_mask_[idx] == 0)
             known_idx = np.nonzero(self.observed_mask_[idx])
             Xdecoded[idx, imputed_idx] = Xpred[idx, imputed_idx]
             Xdecoded[idx, known_idx] = Xtrue[idx, known_idx]
         return Xdecoded.astype("int8")
-
-
-class RandomizeMissingTransformer(BaseEstimator, TransformerMixin):
-    """Replace random columns and rows with np.nan.
-
-    Function to select ``col_selection_rate * columns`` columns in a pandas DataFrame and change anywhere from 15% to 50% of the values in each of those columns to np.nan (missing data). Since we know the true values of the ones changed to np.nan, we can assess the accuracy of the classifier and do a grid search.
-
-    Args:
-        initial_strategy (str): Initial strategy to simple impute with.
-
-        genotype_data (GenotypeData): Initialized GenotypeData object.
-
-        str_encodings (Dict[str, Any]): STRUCTURE file encodings.
-
-        pops (List[Union[str, int]]): List of population IDs.
-
-        col_selection_rate (float): Number of columns for which to randomly introduce missing data. Defaults to 1.0 (all columns).
-
-    Attributes:
-        cols_ (numpy.ndarray): Columns to introduce missing data to. The number of columns with missing data are determined with the ``col_selection_rate`` argument.
-
-        simple_imputer_ (ImputePhylo, ImputeAlleleFreq, ImputeNMF, or SimpleImputer): Simple imputer instance. The type depends on ``initial_strategy``\.
-
-        input_params_ (Dict[str, Any]): Parameters to input into self.simple_imputer_.
-
-        df_filled_ (pandas.DataFrame): DataFrame with values imputed initially with sklearn.impute.SimpleImputer, ImputeAlleleFreq (by populations) or ImputePhylo.
-    """
-
-    def __init__(
-        self,
-        initial_strategy,
-        genotype_data,
-        str_encodings,
-        pops,
-        col_selection_rate=1.0,
-        min_missing_prop=0.15,
-        max_missing_prop=0.5,
-    ):
-        self.initial_strategy = initial_strategy
-        self.genotype_data = genotype_data
-        self.str_encodings = str_encodings
-        self.pops = pops
-        self.col_selection_rate = col_selection_rate
-        self.min_missing_prop = min_missing_prop
-        self.max_missing_prop = max_missing_prop
-
-    def fit(self, X):
-        """Fit to input data.
-
-        Args:
-            X (pandas.DataFrame): 012-encoded genotypes to extract columns from.
-
-        Returns:
-            self: Class instance.
-
-        Raises:
-            TypeError: X must be a pandas.DataFrame object.
-        """
-        # Code adapted from: https://medium.com/analytics-vidhya/using-scikit-learns-iterative-imputer-694c3cca34de
-
-        if not isinstance(X, pd.DataFrame):
-            df = pd.DataFrame(X)
-        else:
-            df = X.copy()
-
-        self.cols_ = np.random.choice(
-            df.columns,
-            int(len(df.columns) * self.col_selection_rate),
-            replace=False,
-        )
-
-        if self.initial_strategy == "populations":
-            simple_imputer = ImputeAlleleFreq
-            self.input_params_ = dict(
-                genotype_data=self.genotype_data,
-                pops=self.pops,
-                by_populations=True,
-                missing=-9,
-                write_output=False,
-                verbose=False,
-                validation_mode=True,
-            )
-
-        elif self.initial_strategy == "phylogeny":
-            simple_imputer = ImputePhylo
-            self.input_params_ = dict(
-                genotype_data=self.genotype_data,
-                str_encodings=self.str_encodings,
-                write_output=False,
-                disable_progressbar=True,
-                validation_mode=True,
-            )
-
-        elif self.initial_strategy == "nmf":
-            simple_imputer = ImputeNMF
-            self.input_params_ = dict(
-                gt=df.fillna(-9).to_numpy(),
-                missing=-9,
-                write_output=False,
-                verbose=False,
-                validation_mode=True,
-            )
-
-        else:
-            # Fill in unknown values with sklearn.impute.SimpleImputer
-            simple_imputer = SimpleImputer
-            self.input_params_ = dict(strategy=self.initial_strategy_)
-
-        self.simple_imputer_ = simple_imputer(**self.input_params_)
-
-        # initialize.
-        self.df_filled_ = None
-
-        return self
-
-    def transform(self, X):
-        """Transform input data X.
-
-        Randomly introduces missing data into the self.df_filled_ DataFrame.
-
-        Args:
-            X (pandas.DataFrame): 012-encoded DataFrame.
-
-        Returns:
-            pandas.DataFrame: DataFrame with randomly introduced missing values.
-        """
-        if not isinstance(X, pd.DataFrame):
-            df = pd.DataFrame(X)
-        else:
-            df = X.copy()
-
-        if self.initial_strategy == "most_frequent":
-            self.df_filled_ = pd.DataFrame(
-                simple_imputer.fit_transform(df.fillna(-9).values)
-            )
-
-        else:
-            self.df_filled_ = self.simple_imputer_.imputed
-            if self.initial_strategy == "populations":
-                # For some reason the df gets converted to integers with
-                # pd.NA values instead of np.nan. Bandaid fix here.
-                self.df_filled_ = self.df_filled_.astype(np.float)
-                self.df_filled_.replace(pd.NA, np.nan, inplace=True)
-
-        # Randomly choose rows (samples) to introduce missing data to
-        df_defiled = self.df_filled_.copy()
-
-        for col in self.cols_:
-            data_drop_rate = np.random.choice(
-                np.arange(self.min_missing_prop, self.max_missing_prop, 0.02),
-                1,
-            )[0]
-
-            drop_ind = np.random.choice(
-                np.arange(len(self.df_filled_[col])),
-                size=int(len(self.df_filled_[col]) * data_drop_rate),
-                replace=False,
-            )
-
-            # Introduce random np.nan values
-            df_defiled.loc[drop_ind, col] = np.nan
-
-        return df_defiled
 
 
 class ImputePhyloTransformer(GenotypeData, BaseEstimator, TransformerMixin):
@@ -978,7 +730,7 @@ class ImputePhyloTransformer(GenotypeData, BaseEstimator, TransformerMixin):
         """Fit to input data.
 
         Args:
-            X (GenotypeData): Instantiated GenotypeData object with data to impute.
+            X (GenotypeData): Instantiated GenotypeData object with data to impute of shape ``(n_samples, n_features)``\.
         """
         self._validate_arguments(X)
 
@@ -1241,7 +993,7 @@ class ImputePhyloTransformer(GenotypeData, BaseEstimator, TransformerMixin):
             filetype = genotype_data.filetype
 
         elif self.alnfile is not None:
-            self.parse_filetype(filetype_, genotype_data.popmapfile)
+            self.parse_filetype(filetype, genotype_data.popmapfile)
 
         if genotype_data.tree is not None and self.treefile is None:
             tree = genotype_data.tree
@@ -1463,7 +1215,6 @@ class ImputePhyloTransformer(GenotypeData, BaseEstimator, TransformerMixin):
         """
 
         # print(tree.get_tip_labels())
-        sizes = [8 if i in bads else 0 for i in tree.get_tip_labels()]
         colors = [genotypes[i][pos] for i in tree.get_tip_labels()]
         labels = colors
 
@@ -1482,7 +1233,7 @@ class ImputePhyloTransformer(GenotypeData, BaseEstimator, TransformerMixin):
             "node_labels": False,
         }
 
-        canvas, axes, mark = tree.draw(
+        canvas, _, __ = tree.draw(
             tip_labels_colors=colors,
             tip_labels=labels,
             width=400,
@@ -1798,7 +1549,6 @@ class ImputeAlleleFreqTransformer(
         df.replace(self.missing, np.nan, inplace=True)
 
         data = pd.DataFrame()
-        valid_cols = list()
         bad_cnt = 0
         if self.pops_ is not None:
             # Impute per-population mode.
