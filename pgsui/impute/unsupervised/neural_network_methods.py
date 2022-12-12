@@ -62,9 +62,6 @@ cce = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
 cca = tf.keras.metrics.CategoricalAccuracy()
 ba = tf.keras.metrics.BinaryAccuracy()
 bce = tf.keras.losses.BinaryCrossentropy()
-# scce = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
-# cce_proba = tf.keras.losses.CategoricalCrossentropy()
-# scca = tf.keras.metrics.SparseCategoricalAccuracy()
 
 
 class NeuralNetworkMethods:
@@ -863,14 +860,14 @@ class NeuralNetworkMethods:
         return batch_size
 
     def set_compile_params(
-        self, optimizer, sample_weights, vae=False, act_func="softmax"
+        self, optimizer, sample_weights=None, vae=False, act_func="softmax"
     ):
         """Set compile parameters to use.
 
         Args:
             optimizer (str): Keras optimizer to use. Possible options include: {"adam", "sgd", "adagrad", "adadelta", "adamax", "ftrl", "nadam", "rmsprop"}.
 
-            sample_weights (numpy.ndarray): Sample weight matrix of shape (n_samples, n_features).
+            sample_weights (numpy.ndarray, optional): Sample weight matrix of shape (n_samples, n_features). Defaults to None.
 
             vae (bool, optional): Whether using the VAE model. Defaults to False.
 
@@ -914,14 +911,7 @@ class NeuralNetworkMethods:
                     f"act_func must be either 'softmax' or 'sigmoid', but got {act_func}"
                 )
 
-            loss = loss_func(class_weight=sample_weights, is_vae=vae)
-
-            # # This is also called in vae_model.py and autoencoder.py.
-            # metrics = [
-            #     NeuralNetworkMethods.make_masked_binary_accuracy(
-            #         class_weight=sample_weights, is_vae=vae
-            #     )
-            # ]
+            loss = loss_func()
             metrics = None
 
         else:
@@ -1051,7 +1041,7 @@ class NeuralNetworkMethods:
         return masked_binary_crossentropy
 
     @staticmethod
-    def make_masked_categorical_accuracy(class_weight=None, is_vae=False):
+    def make_masked_categorical_accuracy():
         """Make categorical crossentropy loss function with missing mask.
 
         Args:
@@ -1074,46 +1064,28 @@ class NeuralNetworkMethods:
             Returns:
                 float: Mean squared error loss value with missing data masked.
             """
-            if not is_vae:
-                # Mask out missing values.
-                y_true_masked = tf.boolean_mask(
-                    y_true,
-                    tf.reduce_any(tf.not_equal(y_true, -1), axis=-1),
-                )
+            # # Mask out missing values.
+            # y_true_masked = tf.boolean_mask(
+            #     y_true,
+            #     tf.reduce_any(tf.not_equal(y_true, -1), axis=-1),
+            # )
 
-                y_pred_masked = tf.boolean_mask(
-                    y_pred,
-                    tf.reduce_any(tf.not_equal(y_true, -1), axis=-1),
-                )
-
-                if sample_weight is not None:
-                    sample_weight_masked = tf.boolean_mask(
-                        tf.convert_to_tensor(sample_weight),
-                        tf.reduce_any(tf.not_equal(y_true, -1), axis=-1),
-                    )
-                else:
-                    sample_weight_masked = None
-            else:
-                y_true_masked = y_true
-                y_pred_masked = y_pred
-                sample_weight_masked = sample_weight
+            # y_pred_masked = tf.boolean_mask(
+            #     y_pred,
+            #     tf.reduce_any(tf.not_equal(y_true, -1), axis=-1),
+            # )
 
             return cca(
-                y_true_masked,
-                y_pred_masked,
-                sample_weight=sample_weight_masked,
+                y_true,
+                y_pred,
+                sample_weight=sample_weight,
             )
 
         return masked_categorical_accuracy
 
     @staticmethod
-    def make_masked_categorical_crossentropy(class_weight=None, is_vae=False):
+    def make_masked_categorical_crossentropy():
         """Make categorical crossentropy loss function with missing mask.
-
-        Args:
-            class_weight (Dict[int, float]): Weights for each class. Defaults to None.
-
-            is_vae (bool, optional): Whether using VAE model. Defaults to False.
 
         Returns:
             callable: Function that calculates categorical crossentropy loss.
@@ -1130,39 +1102,25 @@ class NeuralNetworkMethods:
                 y_true (tensorflow.tensor): Input one-hot encoded 3D tensor.
                 y_pred (tensorflow.tensor): Predicted values.
                 sample_weight (numpy.ndarray): 2D matrix of sample weights.
-                class_weight (Dict[int, float] or None, optional): A dictionary with classes as keys and class weights as values. Defaults to None.
 
             Returns:
                 float: Mean squared error loss value with missing data masked.
             """
-            if not is_vae:
-                # Mask out missing values.
-                y_true_masked = tf.boolean_mask(
-                    y_true,
-                    tf.reduce_any(tf.not_equal(y_true, -1), axis=-1),
-                )
+            # Mask out missing values.
+            # y_true_masked = tf.boolean_mask(
+            #     y_true,
+            #     tf.reduce_any(tf.not_equal(y_true, -1), axis=-1),
+            # )
 
-                y_pred_masked = tf.boolean_mask(
-                    y_pred,
-                    tf.reduce_any(tf.not_equal(y_true, -1), axis=-1),
-                )
-
-                if sample_weight is not None:
-                    sample_weight_masked = tf.boolean_mask(
-                        tf.convert_to_tensor(sample_weight),
-                        tf.reduce_any(tf.not_equal(y_true, -1), axis=-1),
-                    )
-                else:
-                    sample_weight_masked = None
-            else:
-                y_true_masked = y_true
-                y_pred_masked = y_pred
-                sample_weight_masked = sample_weight
+            # y_pred_masked = tf.boolean_mask(
+            #     y_pred,
+            #     tf.reduce_any(tf.not_equal(y_true, -1), axis=-1),
+            # )
 
             return cce(
-                y_true_masked,
-                y_pred_masked,
-                sample_weight=sample_weight_masked,
+                y_true,
+                y_pred,
+                sample_weight=sample_weight,
             )
 
         return masked_categorical_crossentropy
