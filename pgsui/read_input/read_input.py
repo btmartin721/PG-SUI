@@ -1,6 +1,7 @@
 import os
 import sys
 import warnings
+from pathlib import Path
 
 from typing import Optional, Union, List, Dict, Tuple, Any, Callable
 
@@ -14,11 +15,11 @@ import toytree as tt
 
 try:
     from .popmap_file import ReadPopmap
-    from ..impute.plotting import Plotting
+    from ..utils.plotting import Plotting
     from ..utils import sequence_tools, misc
 except (ModuleNotFoundError, ValueError):
     from read_input.popmap_file import ReadPopmap
-    from impute.plotting import Plotting
+    from utils.plotting import Plotting
     from utils import sequence_tools, misc
 
 
@@ -45,6 +46,8 @@ class GenotypeData:
             siterates_iqtree (str or None, optional): Path to *.rates file output from IQ-TREE, containing a per-site rate table. If specified, ``ImputePhylo`` will read the site-rates from the IQ-TREE output file. Cannot be used in conjunction with ``siterates`` argument. Not required if the ``siterates`` or ``siterates_iqtree`` options were used with the ``GenotypeData`` object. Defaults to None.
 
             plot_format (str, optional): Format to save report plots. Valid options include: 'pdf', 'svg', 'png', and 'jpeg'. Defaults to "pdf".
+
+            prefix (str, optional): Prefix to use for output directory. Defaults to 'imputer'.
 
             verbose (bool, optional): Verbosity level. Defaults to True.
 
@@ -96,6 +99,7 @@ class GenotypeData:
         siterates: Optional[str] = None,
         siterates_iqtree: Optional[str] = None,
         plot_format: Optional[str] = "pdf",
+        prefix="imputer",
         verbose: bool = True,
     ) -> None:
         self.filename = filename
@@ -107,6 +111,7 @@ class GenotypeData:
         self.siterates = siterates
         self.siterates_iqtree = siterates_iqtree
         self.plot_format = plot_format
+        self.prefix = prefix
         self.verbose = verbose
 
         self.snpsdict: Dict[str, List[Union[str, int]]] = dict()
@@ -124,10 +129,14 @@ class GenotypeData:
         self.int_iupac = None
 
         if self.qmatrix_iqtree is not None and self.qmatrix is not None:
-            raise TypeError("qmatrix_iqtree and qmatrix cannot both be defined")
+            raise TypeError(
+                "qmatrix_iqtree and qmatrix cannot both be defined"
+            )
 
         if self.siterates_iqtree is not None and self.siterates is not None:
-            raise TypeError("siterates_iqtree and siterates cannot both be defined")
+            raise TypeError(
+                "siterates_iqtree and siterates cannot both be defined"
+            )
 
         if self.filetype is not None:
             self._parse_filetype(filetype, popmapfile)
@@ -185,7 +194,9 @@ class GenotypeData:
                     self.filetype = "structure1rowPopID"
                     self.read_structure(onerow=True, popids=True)
 
-                elif popmapfile is not None and filetype.lower().endswith("popid"):
+                elif popmapfile is not None and filetype.lower().endswith(
+                    "popid"
+                ):
                     print(
                         "WARNING: popmapfile was not None but provided "
                         "filetype was structure1rowPopID. Using populations "
@@ -202,7 +213,9 @@ class GenotypeData:
                     )
 
                 else:
-                    raise ValueError(f"Unsupported filetype provided: {filetype}")
+                    raise ValueError(
+                        f"Unsupported filetype provided: {filetype}"
+                    )
 
             elif filetype.lower().startswith("structure2row"):
                 if popmapfile is not None and filetype.lower().endswith("row"):
@@ -213,7 +226,9 @@ class GenotypeData:
                     self.filetype = "structure2rowPopID"
                     self.read_structure(onerow=False, popids=True)
 
-                elif popmapfile is not None and filetype.lower().endswith("popid"):
+                elif popmapfile is not None and filetype.lower().endswith(
+                    "popid"
+                ):
                     print(
                         "WARNING: popmapfile was not None, but provided "
                         "filetype was structure2rowPopID. Using populations "
@@ -253,7 +268,9 @@ class GenotypeData:
         elif self.filetype == filetype:
             pass
         else:
-            raise TypeError("GenotypeData read_XX() call does not match filetype!\n")
+            raise TypeError(
+                "GenotypeData read_XX() call does not match filetype!\n"
+            )
 
     def read_tree(self, treefile: str) -> tt.tree:
         """Read Newick-style phylogenetic tree into toytree object.
@@ -287,7 +304,9 @@ class GenotypeData:
         q = self._blank_q_matrix()
 
         if not label:
-            print("Warning: Assuming the following nucleotide order: A, C, G, T")
+            print(
+                "Warning: Assuming the following nucleotide order: A, C, G, T"
+            )
 
         with open(fname, "r") as fin:
             header = True
@@ -361,7 +380,9 @@ class GenotypeData:
         qdf = pd.DataFrame(q)
         return qdf.T
 
-    def _blank_q_matrix(self, default: float = 0.0) -> Dict[str, Dict[str, float]]:
+    def _blank_q_matrix(
+        self, default: float = 0.0
+    ) -> Dict[str, Dict[str, float]]:
         q: Dict[str, Dict[str, float]] = dict()
         for nuc1 in ["A", "C", "G", "T"]:
             q[nuc1] = dict()
@@ -429,7 +450,9 @@ class GenotypeData:
         fin.close()
         return s
 
-    def read_structure(self, onerow: bool = False, popids: bool = True) -> None:
+    def read_structure(
+        self, onerow: bool = False, popids: bool = True
+    ) -> None:
         """Read a structure file with one or two rows per individual.
 
         Args:
@@ -532,7 +555,8 @@ class GenotypeData:
 
         if self.verbose:
             print(
-                f"\nFound {self.num_snps} SNPs and {self.num_inds} " f"individuals...\n"
+                f"\nFound {self.num_snps} SNPs and {self.num_inds} "
+                f"individuals...\n"
             )
 
         # Make sure all sequences are the same length.
@@ -666,7 +690,9 @@ class GenotypeData:
 
         # Error handling if incorrect number of individuals in header.
         if len(self.samples) != num_inds:
-            raise ValueError("Incorrect number of individuals listed in header\n")
+            raise ValueError(
+                "Incorrect number of individuals listed in header\n"
+            )
 
     def read_phylip_tree_imputation(self, aln: str) -> Dict[str, List[str]]:
         """Function to read an alignment file.
@@ -767,7 +793,9 @@ class GenotypeData:
 
                 # If monomorphic
                 if num_alleles < 2:
-                    warnings.warn(f"Monomorphic site detected at SNP column {j+1}.\n")
+                    warnings.warn(
+                        f"Monomorphic site detected at SNP column {j+1}.\n"
+                    )
                     """
                     ***TO-DO***: Check here if column is all-missing. What to
                     do in this case? Error out?
@@ -1095,6 +1123,7 @@ class GenotypeData:
                 onehot_outer_list.append(onehot_list)
 
             self.int_iupac = np.array(onehot_outer_list)
+            self.plot_allele_distribution()
 
         else:
             for i in range(len(snp_data)):
@@ -1143,7 +1172,9 @@ class GenotypeData:
             if sample in my_popmap:
                 self.pops.append(my_popmap[sample])
 
-    def decode_imputed(self, X, write_output=True, prefix="output", is_vae=False):
+    def decode_imputed(
+        self, X, write_output=True, prefix="imputer", is_nuc=False
+    ):
         """Decode 012-encoded or 0-9 integer-encoded imputed data to STRUCTURE or PHYLIP format.
 
         Args:
@@ -1152,6 +1183,8 @@ class GenotypeData:
             write_output (bool, optional): If True, saves output to file on disk. Otherwise just makes a GenotypeData attribute. Defaults to True.
 
             prefix (str, optional): Prefix to append to output file. Defaults to "output".
+
+            is_nuc (bool, optional): Whether using nucelotide encodings instead of 012 encodings. Defaults to False.
 
         Returns:
             str: Filename that imputed data was written to.
@@ -1190,8 +1223,8 @@ class GenotypeData:
         df_decoded = df.copy()
 
         # VAE uses [A,T,G,C] encodings. The other NN methods use [0,1,2] encodings.
-        if is_vae:
-            classes_int = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+        if is_nuc:
+            classes_int = range(10)
             classes_string = [str(x) for x in classes_int]
             if is_phylip:
                 gt = ["A", "T", "G", "C", "W", "R", "M", "K", "Y", "S"]
@@ -1212,6 +1245,7 @@ class GenotypeData:
             dstr = dict(zip(classes_string, gt))
             d.update(dstr)
             dreplace = {col: d for col in list(df.columns)}
+
         else:
             dreplace = dict()
             for col, ref, alt in zip(df.columns, self.ref, self.alt):
@@ -1227,13 +1261,22 @@ class GenotypeData:
                     alt2 = nuc[alt2]
                     het2 = nuc[het2]
 
-                d = {"0": ref2, 0: ref2, "1": het2, 1: het2, "2": alt2, 2: alt2}
+                d = {
+                    "0": ref2,
+                    0: ref2,
+                    "1": het2,
+                    1: het2,
+                    "2": alt2,
+                    2: alt2,
+                }
                 dreplace[col] = d
 
         df_decoded.replace(dreplace, inplace=True)
 
         if write_output:
-            outfile = f"{prefix}_imputed"
+            outfile = os.path.join(
+                f"{self.prefix}_output", "alignments", "imputed"
+            )
 
         if ft.startswith("structure"):
 
@@ -1303,7 +1346,7 @@ class GenotypeData:
     def missingness_reports(
         self,
         zoom=True,
-        prefix=None,
+        prefix="imputer",
         horizontal_space=0.6,
         vertical_space=0.6,
         bar_color="gray",
@@ -1335,7 +1378,7 @@ class GenotypeData:
         Args:
             zoom (bool, optional): If True, zooms in to the missing proportion range on some of the plots. If False, the plot range is fixed at [0, 1]. Defaults to True.
 
-            prefix (str, optional): Prefix for output directory and files. Plots and files will be written to a directory called <prefix>_reports. The report directory will be created if it does not already exist. If prefix is None, then the reports directory will not have a prefix. Defaults to None.
+            prefix (str, optional): Prefix for output directory and files. Plots and files will be written to a directory called <prefix>_reports. The report directory will be created if it does not already exist. Defaults to 'imputer'.
 
             horizontal_space (float, optional): Set width spacing between subplots. If your plot are overlapping horizontally, increase horizontal_space. If your plots are too far apart, decrease it. Defaults to 0.6.
 
@@ -1363,21 +1406,26 @@ class GenotypeData:
         df = pd.DataFrame(self.snps)
         df.replace(-9, np.nan, inplace=True)
 
-        report_path = "reports"
+        report_path = os.path.join(f"{self.prefix}_output", "reports")
+
         if prefix is not None:
-            report_path = f"{prefix}_{report_path}"
+            report_path = os.path.join(f"{self.prefix}_output", "reports")
         os.makedirs(report_path, exist_ok=True)
 
         loc, ind, poploc, poptotal, indpop = Plotting.visualize_missingness(
-            self, df, report_path, **params
+            self, df, **params
         )
 
         self._report2file(ind, report_path, "individual_missingness.csv")
         self._report2file(loc, report_path, "locus_missingness.csv")
 
         if self.pops is not None:
-            self._report2file(poploc, report_path, "per_pop_and_locus_missingness.csv")
-            self._report2file(poptotal, report_path, "population_missingness.csv")
+            self._report2file(
+                poploc, report_path, "per_pop_and_locus_missingness.csv"
+            )
+            self._report2file(
+                poptotal, report_path, "population_missingness.csv"
+            )
             self._report2file(
                 indpop,
                 report_path,
@@ -1386,7 +1434,15 @@ class GenotypeData:
             )
 
     def _report2file(self, df, report_path, mypath, header=False):
-        df.to_csv(os.path.join(report_path, mypath), header=header, index=False)
+        df.to_csv(
+            os.path.join(report_path, mypath), header=header, index=False
+        )
+
+    def plot_allele_distribution(self):
+        plot_path = os.path.join(f"{self.prefix}_output", "plots")
+        Path(plot_path).mkdir(parents=True, exist_ok=True)
+        plotting = Plotting()
+        plotting.plot_gt_distribution(self.int_iupac, plot_path)
 
     def calc_missing(self, df, use_pops=True):
         # Get missing value counts per-locus.
@@ -1485,6 +1541,15 @@ class GenotypeData:
             numpy.ndarray of shape (n_samples, n_SNPs): One-hot encoded numpy array.
         """
         return self.onehot
+
+    @property
+    def genotypes_int_df(self):
+        """Integer-encoded (0-9 including IUPAC characters) snps format.
+
+        Returns:
+            pandas.DataFrame: DataFrame of shape (n_samples, n_SNPs), integer-encoded from 0-9 with IUPAC characters.
+        """
+        return pd.DataFrame(self.int_iupac)
 
 
 def merge_alleles(

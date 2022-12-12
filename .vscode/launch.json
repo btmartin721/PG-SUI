@@ -20,7 +20,9 @@
                 "-t",
                 "pgsui/example_data/trees/test.tre",
                 "-i",
-                "pgsui/example_data/trees/test.iqtree"
+                "pgsui/example_data/trees/test.iqtree",
+                "--site_rate",
+                "pgsui/example_data/trees/test_n100.rate"
             ]
         }
     ]

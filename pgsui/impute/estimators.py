@@ -1,6 +1,6 @@
 # Standard library imports
 import sys
-from typing import Optional, Union, List, Dict, Tuple, Any, Callable
+from typing import Optional, Union, Dict, Any
 
 # Third-party imports
 import numpy as np
@@ -12,27 +12,18 @@ import xgboost as xgb
 from sklearn.ensemble import ExtraTreesClassifier
 from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.experimental import enable_iterative_imputer
 from sklearn.linear_model import BayesianRidge
 from sklearn.neighbors import KNeighborsClassifier
 
 # Custom imports
 try:
-    from ..read_input.read_input import GenotypeData
-
     from .impute import Impute
-    from .neural_network_imputers import VAE, UBP, SAE
-
+    from .unsupervised.neural_network_imputers import VAE, UBP, SAE
     from ..utils.misc import get_processor_name
-    from ..utils.misc import isnotebook
 except (ModuleNotFoundError, ValueError):
-    from read_input.read_input import GenotypeData
-
     from impute.impute import Impute
-    from impute.neural_network_imputers import VAE, UBP, SAE
-
+    from impute.unsupervised.neural_network_imputers import VAE, UBP, SAE
     from utils.misc import get_processor_name
-    from utils.misc import isnotebook
 
 # Requires scikit-learn-intellex package
 if get_processor_name().strip().startswith("Intel"):
@@ -1247,7 +1238,7 @@ class ImputeVAE(Impute):
 
         grid_iter (int, optional): Number of iterations to use for randomized and genetic algorithm grid searches. For randomized grid search, ``grid_iter`` parameter combinations will be randomly sampled. For the genetic algorithm, this determines how many generations the genetic algorithm will run. Defaults to 80.
 
-        scoring_metric (str, optional): Scoring metric to use for the grid search. Supported options include: {"auc_macro", "auc_micro", "precision_recall_macro", "precision_recall_micro", "accuracy"}. Note that all metrics are automatically calculated when doing a grid search, the results of which are logged to a CSV file. However, when refitting following the grid search, the value passed to ``scoring_metric`` is used to select the best parameters. If you wish to choose the best parameters from a different metric, that information will also be in the CSV file. "auc_macro" and "auc_micro" get the AUC (area under curve) score for the ROC (Receiver Operating Characteristic) curve. The ROC curves plot the false positive rate (X-axis) versus the true positive rate (Y-axis) for each 012-encoded class and for the macro and micro averages among classes. The false positive rate is defined as: ``False Positive Rate = False Positives / (False Positives + True Negatives)`` and the true positive rate is defined as ``True Positive Rate = True Positives / (True Positives + False Negatives)``\. Macro averaging places equal importance on each class, whereas the micro average is the global average across all classes. AUC scores allow the ROC curve, and thus the model's classification skill, to be summarized as a single number. "precision_recall_macro" and "precision_recall_micro" create Precision-Recall (PR) curves for each class plus the macro and micro averages among classes. Precision is defined as ``True Positives / (True Positives + False Positives)`` and recall is defined as ``Recall = True Positives / (True Positives + False Negatives)``\. Reviewing both precision and recall is useful in cases where there is an imbalance in the observations between the two classes. For example, if there are many examples of major alleles (class 0) and only a few examples of minor alleles (class 2). PR curves take into account the use the Average Precision (AP) instead of AUC. AUC and AP are similar metrics, but AP summarizes a precision-recall curve as the weighted mean of precisions achieved at each probability threshold, with the increase in recall from the previous threshold used as the weight. On the contrary, AUC uses linear interpolation with the trapezoidal rule to calculate the area under the curve. "accuracy" calculates ``number of correct predictions / total predictions``\, but can often be misleading when used without considering the model's classification skill for each class. Defaults to "auc_macro".
+        scoring_metric (str, optional): Scoring metric to use for the grid search. Supported options include: {"auc_macro", "auc_micro", "precision_recall_macro", "precision_recall_micro", "accuracy", "hamming"}. Note that all metrics are automatically calculated when doing a grid search, the results of which are logged to a CSV file. However, when refitting following the grid search, the value passed to ``scoring_metric`` is used to select the best parameters. If you wish to choose the best parameters from a different metric, that information will also be in the CSV file. "auc_macro" and "auc_micro" get the AUC (area under curve) score for the ROC (Receiver Operating Characteristic) curve. The ROC curves plot the false positive rate (X-axis) versus the true positive rate (Y-axis) for each 012-encoded class and for the macro and micro averages among classes. The false positive rate is defined as: ``False Positive Rate = False Positives / (False Positives + True Negatives)`` and the true positive rate is defined as ``True Positive Rate = True Positives / (True Positives + False Negatives)``\. Macro averaging places equal importance on each class, whereas the micro average is the global average across all classes. AUC scores allow the ROC curve, and thus the model's classification skill, to be summarized as a single number. "precision_recall_macro" and "precision_recall_micro" create Precision-Recall (PR) curves for each class plus the macro and micro averages among classes. Precision is defined as ``True Positives / (True Positives + False Positives)`` and recall is defined as ``Recall = True Positives / (True Positives + False Negatives)``\. Reviewing both precision and recall is useful in cases where there is an imbalance in the observations between the two classes. For example, if there are many examples of major alleles (class 0) and only a few examples of minor alleles (class 2). PR curves take into account the use the Average Precision (AP) instead of AUC. AUC and AP are similar metrics, but AP summarizes a precision-recall curve as the weighted mean of precisions achieved at each probability threshold, with the increase in recall from the previous threshold used as the weight. On the contrary, AUC uses linear interpolation with the trapezoidal rule to calculate the area under the curve. "accuracy" calculates ``number of correct predictions / total predictions``\, but can often be misleading when used without considering the model's classification skill for each class. Defaults to "auc_macro".
 
         population_size (int or str, optional): Only used for the genetic algorithm grid search. Size of the initial population to sample randomly generated individuals. If set to "auto", then ``population_size`` is calculated as ``15 * n_parameters``\. If set to an integer, then uses the integer value as ``population_size``\. If you need to speed up the genetic algorithm grid search, try decreasing this parameter. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to "auto".
 
@@ -1270,6 +1261,8 @@ class ImputeVAE(Impute):
         n_jobs (int, optional): Number of parallel jobs to use in the grid search if ``gridparams`` is not None. -1 means use all available processors. Defaults to 1.
 
         verbose (int, optional): Verbosity flag. The higher, the more verbose. Possible values are 0, 1, or 2. 0 = silent, 1 = progress bar, 2 = one line per epoch. Note that the progress bar is not particularly useful when logged to a file, so verbose=0 or verbose=2 is recommended when not running interactively. Setting verbose higher than 0 is useful for initial runs and debugging, but can slow down training. Defaults to 0.
+
+        kwargs (Dict[str, Any], optional): Possible options include: {"testing": True/False}. If testing is True, a confusion matrix plot will be created showing model performance. Arrays of the true and predicted values will also be printed to STDOUT. testing defaults to False.
 
     Attributes:
         imputed (GenotypeData): New GenotypeData instance with imputed data.
@@ -1296,7 +1289,7 @@ class ImputeVAE(Impute):
         self,
         genotype_data,
         *,
-        prefix="output",
+        prefix="imputer",
         gridparams=None,
         validation_split=0.2,
         column_subset=1.0,
@@ -1329,6 +1322,7 @@ class ImputeVAE(Impute):
         disable_progressbar=False,
         n_jobs=1,
         verbose=0,
+        **kwargs,
     ):
 
         # Get local variables into dictionary object
@@ -1342,6 +1336,8 @@ class ImputeVAE(Impute):
         }
 
         all_kwargs.update(imp_kwargs)
+        all_kwargs["testing"] = kwargs.get("testing", False)
+        all_kwargs.pop("kwargs")
 
         super().__init__(self.clf, self.clf_type, all_kwargs)
 
@@ -1457,7 +1453,7 @@ class ImputeStandardAutoEncoder(Impute):
         self,
         genotype_data,
         *,
-        prefix="output",
+        prefix="imputer",
         gridparams=None,
         validation_split=0.2,
         column_subset=1.0,
@@ -1627,7 +1623,7 @@ class ImputeUBP(Impute):
         self,
         genotype_data,
         *,
-        prefix="output",
+        prefix="imputer",
         gridparams=None,
         column_subset=1.0,
         epochs=100,

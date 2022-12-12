@@ -1,50 +1,62 @@
 import sys
 
 import numpy as np
-import pandas as pd
 
 from sklearn.metrics import (
     roc_curve,
     auc,
     accuracy_score,
+    hamming_loss,
     make_scorer,
     precision_recall_curve,
     average_precision_score,
     multilabel_confusion_matrix,
+    f1_score,
 )
 
 from sklearn.preprocessing import label_binarize
 
 try:
-    from .neural_network_methods import NeuralNetworkMethods
+    from ..impute.unsupervised.neural_network_methods import (
+        NeuralNetworkMethods,
+    )
 except (ModuleNotFoundError, ValueError):
-    from impute.neural_network_methods import NeuralNetworkMethods
+    from impute.unsupervised.neural_network_methods import NeuralNetworkMethods
 
 
 class Scorers:
     @staticmethod
-    def compute_roc_auc_micro_macro(y_true, y_pred, is_vae=False):
+    def compute_roc_auc_micro_macro(
+        y_true, y_pred, num_classes=3, binarize_pred=True
+    ):
         """Compute ROC curve with AUC scores.
 
         ROC (Receiver Operating Characteristic) curves and AUC (area under curve) scores are computed per-class and for micro and macro averages.
 
         Args:
-            y_true (numpy.ndarray): Ravelled numpy array of shape (n_samples * n_features,).
+            y_true (numpy.ndarray): Ravelled numpy array of shape (n_samples * n_features,). y_true should be integer-encoded.
 
-            y_pred (numpy.ndarray): Ravelled numpy array of shape (n_samples * n_features,).
+            y_pred (numpy.ndarray): Ravelled numpy array of shape (n_samples * n_features,). y_pred should be probabilities.
+
+            num_classes (int, optional): How many classes to use. Defaults to 3.
+
+            binarize_pred (bool, optional): Whether to binarize y_pred. If False, y_pred should be probabilities of each class. Defaults to True.
 
         Returns:
             Dict[str, Any]: Dictionary with true and false positive rates along probability threshold curve per class, micro and macro tpr and fpr curves averaged across classes, and AUC scores per-class and for micro and macro averages.
         """
-        num_classes = 4 if is_vae else 3
-        cats = [0, 1, 2, 3] if is_vae else [0, 1, 2]
+        cats = range(num_classes)
 
         # Get only classes that appear in y_true.
-        classes = [i for i in range(num_classes) if i in y_true]
+        classes = [i for i in cats if i in y_true]
 
         # Binarize the output for use with ROC-AUC.
         y_true_bin = label_binarize(y_true, classes=cats)
-        y_pred_bin = label_binarize(y_pred, classes=cats)
+
+        if binarize_pred:
+            y_pred_bin = label_binarize(y_pred, classes=cats)
+        else:
+            y_pred_bin = y_pred
 
         for i in range(y_true_bin.shape[1]):
             if i not in classes:
@@ -96,7 +108,7 @@ class Scorers:
         return roc_auc
 
     @staticmethod
-    def compute_pr(y_true, y_pred, nn_model=True, is_vae=False):
+    def compute_pr(y_true, y_pred, use_int_encodings=False, num_classes=3):
         """Compute precision-recall curve with Average Precision scores.
 
         PR and AP scores are computed per-class and for micro and macro averages.
@@ -104,43 +116,58 @@ class Scorers:
         Args:
             y_true (numpy.ndarray): Ravelled numpy array of shape (n_samples * n_features,).
 
-            y_pred (numpy.ndarray): Ravelled numpy array of shape (n_samples * n_features,).
+            y_pred (numpy.ndarray): Ravelled numpy array of shape (n_samples * n_features,). y_pred should be integer-encoded.
 
-            nn_model (bool, optional): Whether the imputer model is a neural network model.
+            use_int_encodings (bool, optional): Whether the imputer model is a neural network model. Defaults to False.
 
-        Returns:
+            num_classes (int, optional): How many classes to use. Defaults to 3.
+
+         Returns:
             Dict[str, Any]: Dictionary with precision and recall curves per class and micro and macro averaged across classes, plus AP scores per-class and for micro and macro averages.
         """
-        num_classes = 4 if is_vae else 3
-        cats = [0, 1, 2, 3] if is_vae else [0, 1, 2]
+        cats = range(num_classes)
+        is_multiclass = True if num_classes != 4 else False
 
         # Get only classes that appear in y_true.
-        classes = [i for i in range(num_classes) if i in y_true]
+        classes = [i for i in cats if i in y_true]
 
-        # Binarize the output fo use with ROC-AUC.
+        # Binarize the output for use with ROC-AUC.
         y_true_bin = label_binarize(y_true, classes=cats)
         y_pred_proba_bin = y_pred
 
-        for i in range(y_true_bin.shape[1]):
-            if i not in classes:
-                y_true_bin = np.delete(y_true_bin, i, axis=-1)
-                y_pred_proba_bin = np.delete(y_pred_proba_bin, i, axis=-1)
+        if is_multiclass:
+            for i in range(y_true_bin.shape[1]):
+                if i not in classes:
+                    y_true_bin = np.delete(y_true_bin, i, axis=-1)
+                    y_pred_proba_bin = np.delete(y_pred_proba_bin, i, axis=-1)
 
-        n_classes = len(classes)
-
-        if nn_model:
-            nn = NeuralNetworkMethods()
-            y_pred_012 = nn.decode_masked(y_pred_proba_bin)
+        nn = NeuralNetworkMethods()
+        if use_int_encodings:
+            y_pred_012 = nn.decode_masked(y_true_bin, y_pred_proba_bin)
+            thresh = 0.5
         else:
-            y_pred_012 = y_pred_proba_bin.copy()
+            y_pred_012 = nn.decode_masked(
+                y_true_bin,
+                y_pred_proba_bin,
+                is_multiclass=is_multiclass,
+                return_int=False,
+                return_multilab=True,
+            )
+
+            encode_func = (
+                nn.encode_multiclass if is_multiclass else nn.encode_multilab
+            )
+
+            y_true = encode_func(y_true, num_classes=num_classes)
 
         # Make confusion matrix to get true negatives and true positives.
         mcm = multilabel_confusion_matrix(y_true, y_pred_012)
+
         tn = np.sum(mcm[:, 0, 0])
-        tn /= n_classes
+        tn /= num_classes
 
         tp = np.sum(mcm[:, 1, 1])
-        tp /= n_classes
+        tp /= num_classes
 
         baseline = tp / (tn + tp)
 
@@ -169,6 +196,19 @@ class Scorers:
             y_true_bin, y_pred_proba_bin, average="macro"
         )
 
+        if use_int_encodings:
+            y_pred_012 = (
+                nn.decode_masked(
+                    y_true_bin,
+                    y_pred_proba_bin,
+                    threshold=thresh,
+                    return_multilab=True,
+                    predict_still_missing=False,
+                ),
+            )
+
+        f1 = f1_score(y_true_bin, y_pred_012, average="macro")
+
         # Aggregate all recalls
         all_recall = np.unique(np.concatenate([recall[i] for i in classes]))
 
@@ -178,7 +218,7 @@ class Scorers:
             mean_precision += np.interp(all_recall, precision[i], recall[i])
 
         # Finally, average it and compute AUC.
-        mean_precision /= n_classes
+        mean_precision /= num_classes
 
         recall["macro"] = all_recall
         precision["macro"] = mean_precision
@@ -187,6 +227,7 @@ class Scorers:
 
         results["micro"] = average_precision["micro"]
         results["macro"] = average_precision["macro"]
+        results["f1_score"] = f1
         results["recall_macro"] = all_recall
         results["precision_macro"] = mean_precision
         results["recall_micro"] = recall["micro"]
@@ -239,7 +280,9 @@ class Scorers:
         y_pred_masked = y_pred[missing_mask]
 
         if nn_model:
-            y_pred_masked_decoded = nn.decode_masked(y_pred_masked)
+            y_pred_masked_decoded = nn.decode_masked(
+                y_true_masked, y_pred_masked, predict_still_missing=False
+            )
         else:
             y_pred_masked_decoded = y_pred_masked
 
@@ -251,6 +294,58 @@ class Scorers:
             print(y_pred_masked_decoded)
 
         return acc
+
+    @staticmethod
+    def hamming_scorer(y_true, y_pred, **kwargs):
+        """Get Hamming score for grid search.
+
+        If provided, only calculates score where missing_mask is True (i.e., data were missing). This is so that users can simulate missing data for known values, and then the predictions for only those known values can be evaluated.
+
+        Args:
+            y_true (numpy.ndarray): 012-encoded true target values.
+
+            y_pred (tensorflow.EagerTensor): Predictions from model as probabilities. They must first be decoded to use with hamming_scorer.
+
+            kwargs (Any): Keyword arguments to use with scorer. Supported options include ``missing_mask`` and ``testing``\.
+
+        Returns:
+            float: Metric score by comparing y_true and y_pred.
+        """
+        # Get missing mask if provided.
+        # Otherwise default is all missing values (array all True).
+
+        missing_mask = kwargs.get("missing_mask")
+        testing = kwargs.get("testing", False)
+        nn_model = kwargs.get("nn_model", True)
+        num_classes = kwargs.get("num_classes", 3)
+
+        is_multiclass = True if num_classes != 4 else False
+
+        y_pred = Scorers.check_if_tuple(y_pred)
+
+        if nn_model:
+            nn = NeuralNetworkMethods()
+
+        y_true_masked = y_true[missing_mask]
+        y_pred_masked = y_pred[missing_mask]
+
+        if nn_model:
+            y_pred_masked_decoded = nn.decode_masked(
+                y_true_masked,
+                y_pred_masked,
+                predict_still_missing=False,
+            )
+        else:
+            y_pred_masked_decoded = y_pred_masked
+
+        ham = hamming_loss(y_true_masked, y_pred_masked_decoded)
+
+        if testing:
+            np.set_printoptions(threshold=np.inf)
+            print(y_true_masked)
+            print(y_pred_masked_decoded)
+
+        return ham
 
     @staticmethod
     def auc_macro(y_true, y_pred, **kwargs):
@@ -271,9 +366,11 @@ class Scorers:
         # Get missing mask if provided.
         # Otherwise default is all missing values (array all True).
         missing_mask = kwargs.get("missing_mask")
-        is_vae = kwargs.get("is_vae", False)
+        num_classes = kwargs.get("num_classes", 3)
         nn_model = kwargs.get("nn_model", True)
         testing = kwargs.get("testing", False)
+
+        is_multiclass = True if num_classes != 4 else False
 
         y_pred = Scorers.check_if_tuple(y_pred)
 
@@ -284,12 +381,17 @@ class Scorers:
         y_pred_masked = y_pred[missing_mask]
 
         if nn_model:
-            y_pred_masked_decoded = nn.decode_masked(y_pred_masked)
+            y_pred_masked_decoded = nn.decode_masked(
+                y_true_masked, y_pred_masked, is_multiclass=is_multiclass
+            )
         else:
             y_pred_masked_decoded = y_pred_masked
 
         roc_auc = Scorers.compute_roc_auc_micro_macro(
-            y_true_masked, y_pred_masked_decoded, is_vae=is_vae
+            y_true_masked,
+            y_pred_masked,
+            num_classes=num_classes,
+            binarize_pred=False,
         )
 
         return roc_auc["macro"]
@@ -314,8 +416,9 @@ class Scorers:
         # Otherwise default is all missing values (array all True).
         missing_mask = kwargs.get("missing_mask")
         nn_model = kwargs.get("nn_model", True)
-        is_vae = kwargs.get("is_vae", False)
-        testing = kwargs.get("testing", False)
+        num_classes = kwargs.get("num_classes", 3)
+
+        is_multiclass = True if num_classes != 4 else False
 
         y_pred = Scorers.check_if_tuple(y_pred)
 
@@ -326,12 +429,17 @@ class Scorers:
         y_pred_masked = y_pred[missing_mask]
 
         if nn_model:
-            y_pred_masked_decoded = nn.decode_masked(y_pred_masked)
+            y_pred_masked_decoded = nn.decode_masked(
+                y_true_masked, y_pred_masked, is_multiclass=is_multiclass
+            )
         else:
             y_pred_masked_decoded = y_pred_masked
 
         roc_auc = Scorers.compute_roc_auc_micro_macro(
-            y_true_masked, y_pred_masked_decoded, is_vae=is_vae
+            y_true_masked,
+            y_pred_masked,
+            num_classes=num_classes,
+            binarize_pred=False,
         )
 
         return roc_auc["micro"]
@@ -356,7 +464,40 @@ class Scorers:
         # Get missing mask if provided.
         # Otherwise default is all missing values (array all True).
         missing_mask = kwargs.get("missing_mask")
-        is_vae = kwargs.get("is_vae", False)
+        num_classes = kwargs.get("num_classes", 3)
+        testing = kwargs.get("testing", False)
+
+        y_pred = Scorers.check_if_tuple(y_pred)
+
+        y_true_masked = y_true[missing_mask]
+        y_pred_masked = y_pred[missing_mask]
+
+        pr_ap = Scorers.compute_pr(
+            y_true_masked, y_pred_masked, num_classes=num_classes
+        )
+
+        return pr_ap["macro"]
+
+    @staticmethod
+    def pr_samples(y_true, y_pred, **kwargs):
+        """Get Precision-Recall score with samples averaging for grid search.
+
+        If provided, only calculates score where missing_mask is True (i.e., data were missing). This is so that users can simulate missing data for known values, and then the predictions for only those known values can be evaluated.
+
+        Args:
+            y_true (numpy.ndarray): 012-encoded true target values.
+
+            y_pred (tensorflow.EagerTensor): Predictions from model as probabilities.
+
+            kwargs (Any): Keyword arguments to use with scorer. Supported options include ``missing_mask`` and ``testing``\.
+
+        Returns:
+            float: Metric score by comparing y_true and y_pred.
+        """
+        # Get missing mask if provided.
+        # Otherwise default is all missing values (array all True).
+        missing_mask = kwargs.get("missing_mask")
+        num_classes = kwargs.get("num_classes", 3)
         testing = kwargs.get("testing", False)
 
         y_pred = Scorers.check_if_tuple(y_pred)
@@ -366,9 +507,43 @@ class Scorers:
         y_true_masked = y_true[missing_mask]
         y_pred_masked = y_pred[missing_mask]
 
-        pr_ap = Scorers.compute_pr(y_true_masked, y_pred_masked, is_vae=is_vae)
+        pr_ap = Scorers.compute_pr(
+            y_true_masked, y_pred_masked, num_classes=num_classes
+        )
 
-        return pr_ap["macro"]
+        return pr_ap["samples"]
+
+    @staticmethod
+    def f1_samples(y_true, y_pred, **kwargs):
+        """Get F1 score with samples averaging for grid search.
+
+        If provided, only calculates score where missing_mask is True (i.e., data were missing). This is so that users can simulate missing data for known values, and then the predictions for only those known values can be evaluated.
+
+        Args:
+            y_true (numpy.ndarray): 012-encoded true target values.
+
+            y_pred (tensorflow.EagerTensor): Predictions from model as probabilities.
+
+            kwargs (Any): Keyword arguments to use with scorer. Supported options include ``missing_mask`` and ``testing``\.
+
+        Returns:
+            float: Metric score by comparing y_true and y_pred.
+        """
+        # Get missing mask if provided.
+        # Otherwise default is all missing values (array all True).
+        missing_mask = kwargs.get("missing_mask")
+        num_classes = kwargs.get("num_classes", 3)
+
+        y_pred = Scorers.check_if_tuple(y_pred)
+
+        y_true_masked = y_true[missing_mask]
+        y_pred_masked = y_pred[missing_mask]
+
+        pr_ap = Scorers.compute_pr(
+            y_true_masked, y_pred_masked, num_classes=num_classes
+        )
+
+        return pr_ap["f1_score"]
 
     @staticmethod
     def pr_micro(y_true, y_pred, **kwargs):
@@ -389,7 +564,7 @@ class Scorers:
         # Get missing mask if provided.
         # Otherwise default is all missing values (array all True).
         missing_mask = kwargs.get("missing_mask")
-        is_vae = kwargs.get("is_vae", False)
+        num_classes = kwargs.get("num_classes", 3)
         testing = kwargs.get("testing", False)
 
         y_pred = Scorers.check_if_tuple(y_pred)
@@ -399,13 +574,15 @@ class Scorers:
         y_true_masked = y_true[missing_mask]
         y_pred_masked = y_pred[missing_mask]
 
-        pr_ap = Scorers.compute_pr(y_true_masked, y_pred_masked, is_vae=is_vae)
+        pr_ap = Scorers.compute_pr(
+            y_true_masked, y_pred_masked, num_classes=num_classes
+        )
 
         return pr_ap["micro"]
 
     @classmethod
     def make_multimetric_scorer(
-        cls, metrics, missing_mask, is_vae=False, testing=False
+        cls, metrics, missing_mask, num_classes=3, testing=False
     ):
         """Get all scoring metrics and make an sklearn scorer.
 
@@ -414,7 +591,7 @@ class Scorers:
 
             missing_mask (numpy.ndarray): Missing mask to use to demarcate values to use with scoring.
 
-            is_vae (boo, optional): Whether using the VAE (variational autoencoder) model. Defaults to False.
+            num_classes (int, optional): How many classes to use. Defaults to 3.
 
             testing (bool, optional): True if in test mode, wherein it prints y_true and y_pred_decoded as 1D lists for comparison. Otherwise False. Defaults to False.
         Returns:
@@ -432,35 +609,57 @@ class Scorers:
                 scorers["accuracy"] = make_scorer(
                     cls.accuracy_scorer,
                     missing_mask=missing_mask,
-                    is_vae=is_vae,
+                    num_classes=num_classes,
                     testing=testing,
+                )
+            elif item.lower() == "hamming":
+                scorers["hamming"] = make_scorer(
+                    cls.hamming_scorer,
+                    missing_mask=missing_mask,
+                    num_classes=num_classes,
+                    testing=testing,
+                    greater_is_better=False,
                 )
             elif item.lower() == "auc_macro":
                 scorers["auc_macro"] = make_scorer(
                     cls.auc_macro,
                     missing_mask=missing_mask,
-                    is_vae=is_vae,
+                    num_classes=num_classes,
                     testing=testing,
                 )
             elif item.lower() == "auc_micro":
                 scorers["auc_micro"] = make_scorer(
                     cls.auc_micro,
                     missing_mask=missing_mask,
-                    is_vae=is_vae,
+                    num_classes=num_classes,
                     testing=testing,
                 )
             elif item.lower() == "precision_recall_macro":
                 scorers["precision_recall_macro"] = make_scorer(
                     cls.pr_macro,
                     missing_mask=missing_mask,
-                    is_vae=is_vae,
+                    num_classes=num_classes,
                     testing=testing,
                 )
             elif item.lower() == "precision_recall_micro":
                 scorers["precision_recall_micro"] = make_scorer(
                     cls.pr_micro,
                     missing_mask=missing_mask,
-                    is_vae=is_vae,
+                    num_classes=num_classes,
+                    testing=testing,
+                )
+            elif item.lower() == "precision_recall_samples":
+                scorers["precision_recall_samples"] = make_scorer(
+                    cls.pr_samples,
+                    missing_mask=missing_mask,
+                    num_classes=num_classes,
+                    testing=testing,
+                )
+            elif item.lower() == "f1_score":
+                scorers["f1_score"] = make_scorer(
+                    cls.f1_samples,
+                    missing_mask=missing_mask,
+                    num_classes=num_classes,
                     testing=testing,
                 )
             else:
@@ -471,10 +670,14 @@ class Scorers:
     def scorer(y_true, y_pred, **kwargs):
         # Get missing mask if provided.
         # Otherwise default is all missing values (array all True).
-        missing_mask = kwargs.get("missing_mask", np.ones(y_true.shape, dtype=bool))
+        missing_mask = kwargs.get(
+            "missing_mask", np.ones(y_true.shape, dtype=bool)
+        )
         nn_model = kwargs.get("nn_model", True)
-        is_vae = kwargs.get("is_vae", False)
+        num_classes = kwargs.get("num_classes", 3)
         testing = kwargs.get("testing", False)
+
+        is_multiclass = True if num_classes != 4 else False
 
         if nn_model:
             nn = NeuralNetworkMethods()
@@ -486,22 +689,64 @@ class Scorers:
         y_true_masked = y_true[missing_mask]
         y_pred_masked = y_pred[missing_mask]
 
-        y_pred_masked_decoded = nn.decode_masked(y_pred_masked)
-
         roc_auc = Scorers.compute_roc_auc_micro_macro(
-            y_true_masked, y_pred_masked_decoded, is_vae=is_vae
+            y_true_masked,
+            y_pred_masked,
+            num_classes=num_classes,
+            binarize_pred=False,
         )
-        pr_ap = Scorers.compute_pr(y_true_masked, y_pred_masked, is_vae=is_vae)
-        acc = accuracy_score(y_true_masked, y_pred_masked_decoded)
+
+        pr_ap = Scorers.compute_pr(
+            y_true_masked,
+            y_pred_masked,
+            num_classes=num_classes,
+        )
+
+        acc = accuracy_score(
+            y_true_masked,
+            nn.decode_masked(
+                y_true_masked,
+                y_pred_masked,
+                is_multiclass=is_multiclass,
+                return_int=True,
+            ),
+        )
+        ham = hamming_loss(
+            y_true_masked,
+            nn.decode_masked(
+                y_true_masked,
+                y_pred_masked,
+                is_multiclass=is_multiclass,
+                return_int=True,
+            ),
+        )
 
         if testing:
-            np.set_printoptions(threshold=np.inf)
-            print(y_true_masked)
-            print(y_pred_masked_decoded)
+            y_pred_masked_decoded = nn.decode_masked(
+                y_true_masked,
+                y_pred_masked,
+                is_multiclass=is_multiclass,
+                return_int=True,
+            )
+
+            bin_mapping = [np.array2string(x) for x in y_pred_masked]
+
+            with open("genotype_dist.csv", "w") as fout:
+                fout.write(
+                    "site,prob_vector,imputed_genotype,expected_genotype\n"
+                )
+                for i, (yt, yp, ypd) in enumerate(
+                    zip(y_true_masked, bin_mapping, y_pred_masked_decoded)
+                ):
+                    fout.write(f"{i},{yp},{ypd},{yt}\n")
+            # np.set_printoptions(threshold=np.inf)
+            # print(y_true_masked)
+            # print(y_pred_masked_decoded)
 
         metrics = dict()
         metrics["accuracy"] = acc
         metrics["roc_auc"] = roc_auc
         metrics["precision_recall"] = pr_ap
+        metrics["hamming"] = ham
 
         return metrics

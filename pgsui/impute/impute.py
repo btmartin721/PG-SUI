@@ -39,9 +39,13 @@ from sklearn_genetic.space import Continuous, Categorical, Integer
 
 # Custom module imports
 try:
-    from .iterative_imputer_gridsearch import IterativeImputerGridSearch
-    from .iterative_imputer_fixedparams import IterativeImputerFixedParams
-    from .neural_network_imputers import VAE, UBP, SAE
+    from .supervised.iterative_imputer_gridsearch import (
+        IterativeImputerGridSearch,
+    )
+    from .supervised.iterative_imputer_fixedparams import (
+        IterativeImputerFixedParams,
+    )
+    from .unsupervised.neural_network_imputers import VAE, UBP, SAE
     from ..read_input.read_input import GenotypeData
     from . import simple_imputers
     from ..utils.misc import get_processor_name
@@ -54,11 +58,13 @@ try:
         SimGenotypeDataTransformer,
     )
 except (ModuleNotFoundError, ValueError):
-    from impute.iterative_imputer_gridsearch import IterativeImputerGridSearch
-    from impute.iterative_imputer_fixedparams import (
+    from impute.supervised.iterative_imputer_gridsearch import (
+        IterativeImputerGridSearch,
+    )
+    from impute.supervised.iterative_imputer_fixedparams import (
         IterativeImputerFixedParams,
     )
-    from impute.neural_network_imputers import VAE, UBP, SAE
+    from impute.unsupervised.neural_network_imputers import VAE, UBP, SAE
     from read_input.read_input import GenotypeData
     from impute import simple_imputers
     from utils.misc import get_processor_name
@@ -139,9 +145,9 @@ class Impute:
         if self.clf == VAE or self.clf == SAE or self.clf == UBP:
             self.algorithm = "nn"
             if self.clf == VAE:
-                self.using_vae = True
+                self.using_basecat = True
             else:
-                self.using_vae = False
+                self.using_basecat = False
         else:
             self.nn_method = None
             self.algorithm = "ii"
@@ -168,6 +174,7 @@ class Impute:
             self.chunk_size,
             self.do_validation,
             self.do_gridsearch,
+            self.testing,
         ) = self._gather_impute_settings(kwargs)
 
         if self.algorithm == "ii":
@@ -184,7 +191,9 @@ class Impute:
                         "gridsearch_method argument must equal 'genetic_algorithm' if gridparams values are of type sklearn_genetic.space"
                     )
 
-        self.logfilepath = f"{self.prefix}_imputer_progress_log.txt"
+        self.logfilepath = os.path.join(
+            f"{self.prefix}_output", "logs", "imputer_progress_log.txt"
+        )
 
         self.invalid_indexes = None
 
@@ -193,6 +202,22 @@ class Impute:
             os.remove(self.logfilepath)
         except OSError:
             pass
+
+        Path(os.path.join(f"{self.prefix}_output", "plots")).mkdir(
+            parents=True, exist_ok=True
+        )
+
+        Path(os.path.join(f"{self.prefix}_output", "logs")).mkdir(
+            parents=True, exist_ok=True
+        )
+
+        Path(os.path.join(f"{self.prefix}_output", "reports")).mkdir(
+            parents=True, exist_ok=True
+        )
+
+        Path(os.path.join(f"{self.prefix}_output", "alignments")).mkdir(
+            parents=True, exist_ok=True
+        )
 
     @timer
     def fit_predict(
@@ -212,7 +237,10 @@ class Impute:
 
         # Test if output file can be written to
         try:
-            outfile = f"{self.prefix}_imputed_012.csv"
+            outfile = os.path.join(
+                f"{self.prefix}_output", "alignments", "imputed_012.csv"
+            )
+
             with open(outfile, "w") as fout:
                 pass
         except IOError as e:
@@ -248,21 +276,31 @@ class Impute:
         return imp_data, best_params
 
     def write_imputed(
-        self, data: Union[pd.DataFrame, np.ndarray, List[List[int]]]
+        self,
+        data: Union[pd.DataFrame, np.ndarray, List[List[int]]],
+        prefix: str = "imputer",
     ) -> None:
         """Save imputed data to disk as a CSV file.
 
         Args:
             data (pandas.DataFrame, numpy.ndarray, or List[List[int]]): Object returned from ``fit_predict()``\.
 
+            prefix (str, optional): Prefix to use for output directory. Defaults to 'imputer'.
+
         Raises:
             TypeError: Must be of type pandas.DataFrame, numpy.array, or List[List[int]].
         """
 
-        outfile = f"{self.prefix}_imputed_012.csv"
+        outfile = os.path.join(
+            f"{prefix}_output", "alignments", "imputed_012.csv"
+        )
 
         if isinstance(data, pd.DataFrame):
-            data.to_csv(outfile, header=False, index=False)
+            data.to_csv(
+                outfile,
+                header=False,
+                index=False,
+            )
 
         elif isinstance(data, np.ndarray):
             np.savetxt(outfile, data, delimiter=",")
@@ -398,7 +436,7 @@ class Impute:
             imp012,
             write_output=True,
             prefix=self.prefix,
-            is_vae=self.using_vae,
+            is_nuc=self.using_basecat,
         )
 
         ft = genotype_data.filetype
@@ -415,6 +453,7 @@ class Impute:
             qmatrix=genotype_data.qmatrix,
             siterates=genotype_data.siterates,
             siterates_iqtree=genotype_data.siterates_iqtree,
+            prefix=genotype_data.prefix,
             verbose=False,
         )
 
@@ -494,8 +533,12 @@ class Impute:
             best_params (dict): Best parameters found in grid search.
         """
 
-        best_score_outfile = f"{self.prefix}_imputed_best_score.csv"
-        best_params_outfile = f"{self.prefix}_imputed_best_params.csv"
+        best_score_outfile = os.path.join(
+            f"{self.prefix}_output", "reports", "imputed_best_score.csv"
+        )
+        best_params_outfile = os.path.join(
+            f"{self.prefix}_output", "reports", "imputed_best_params.csv"
+        )
 
         if isinstance(df_scores, pd.DataFrame):
             df_scores.to_csv(
@@ -929,7 +972,9 @@ class Impute:
 
         df_scores = df_scores.round(2)
 
-        outfile = f"{self.prefix}_imputed_best_score.csv"
+        outfile = os.path.join(
+            f"{self.prefix}_output", "reports", "imputed_best_score.csv"
+        )
         df_scores.to_csv(outfile, header=True, index=False)
 
         del results_list
@@ -964,9 +1009,12 @@ class Impute:
         for i, Xchunk in enumerate(df_chunks, start=1):
             if self.clf_type == "classifier":
                 if self.algorithm == "nn":
+                    if self.clf == VAE:
+                        self.clf_kwargs["testing"] = self.testing
                     imputer = self.clf(
                         self.imp_kwargs["genotype_data"],
                         disable_progressbar=self.disable_progressbar,
+                        prefix=self.prefix,
                         **self.clf_kwargs,
                     )
                     df_imp = pd.DataFrame(
@@ -1136,11 +1184,12 @@ class Impute:
         do_validation = kwargs.pop("do_validation", False)
         verbose = kwargs.get("verbose", 0)
         disable_progressbar = kwargs.get("disable_progressbar", False)
-        prefix = kwargs.get("prefix", "output")
+        prefix = kwargs.get("prefix", "imputer")
+        testing = kwargs.get("testing", False)
         do_gridsearch = False if kwargs["gridparams"] is None else True
 
         if prefix is None:
-            prefix = "output"
+            prefix = "imputer"
 
         imp_kwargs = kwargs.copy()
         clf_kwargs = kwargs.copy()
@@ -1230,6 +1279,7 @@ class Impute:
             chunk_size,
             do_validation,
             do_gridsearch,
+            testing,
         )
 
     def _format_features(
@@ -1461,7 +1511,9 @@ class Impute:
                 df_stg[col] = df_stg[col].replace({pd.NA: np.nan})
             # df_stg.fillna(-9, inplace=True)
 
-            imputer = self.clf(**self.clf_kwargs, **self.imp_kwargs)
+            imputer = self.clf(
+                prefix=self.prefix, **self.clf_kwargs, **self.imp_kwargs
+            )
 
             df_imp = pd.DataFrame(
                 imputer.fit_transform(df_stg.to_numpy()),

@@ -1,6 +1,7 @@
 import os
 import sys
 from itertools import cycle
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -11,12 +12,11 @@ import plotly.express as px
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from sklearn_genetic.utils import logbook_to_pandas
+from sklearn.metrics import ConfusionMatrixDisplay
 
 try:
-    from .neural_network_methods import NeuralNetworkMethods
-    from ..utils import misc
+    from . import misc
 except (ModuleNotFoundError, ValueError):
-    from impute.neural_network_methods import NeuralNetworkMethods
     from utils import misc
 
 
@@ -46,7 +46,6 @@ class Plotting:
         tot = len(filter_col)
         cols = 4
         rows = int(np.ceil(tot / cols))
-        remainder = tot % cols
 
         fig = plt.figure(1, figsize=(20, 10))
         fig.tight_layout(pad=3.0)
@@ -56,7 +55,6 @@ class Plotting:
         plt.rc("font", **font)
 
         for i, p in enumerate(filter_col, start=1):
-
             ax = fig.add_subplot(rows, cols, i)
 
             # Plot each metric.
@@ -90,7 +88,13 @@ class Plotting:
             ax.set_ylabel("Max Score")
             ax.set_ylim([0, 1])
 
-        fig.savefig(f"{prefix}_gridsearch.pdf", bbox_inches="tight")
+        fig.savefig(
+            os.path.join(
+                f"{prefix}_output", "plots", "gridsearch_metrics.pdf"
+            ),
+            bbox_inches="tight",
+            facecolor="white",
+        )
 
     @staticmethod
     def plot_metrics(metrics, num_classes, prefix):
@@ -109,12 +113,15 @@ class Plotting:
         font = {"size": 12}
         plt.rc("font", **font)
 
-        fn = f"{prefix}_metrics_plot.pdf"
+        fn = os.path.join(f"{prefix}_output", "plots", "auc_pr_curves.pdf")
         fig = plt.figure(figsize=(20, 10))
 
         acc = round(metrics["accuracy"] * 100, 2)
+        ham = round(metrics["hamming"], 2)
 
-        fig.suptitle(f"Performance Metrics\nAccuracy: {acc}")
+        fig.suptitle(
+            f"Performance Metrics\nAccuracy: {acc}\nHamming Loss: {ham}"
+        )
         axs = fig.subplots(nrows=1, ncols=2)
         plt.subplots_adjust(hspace=0.5)
 
@@ -218,7 +225,7 @@ class Plotting:
             ax.set_title(f"{title}")
             ax.legend(loc="best")
 
-        fig.savefig(fn, bbox_inches="tight")
+        fig.savefig(fn, bbox_inches="tight", facecolor="white")
         plt.close()
         plt.clf()
         plt.cla()
@@ -289,9 +296,8 @@ class Plotting:
     def visualize_missingness(
         genotype_data,
         df,
-        report_path,
         zoom=True,
-        prefix=None,
+        prefix="imputer",
         horizontal_space=0.6,
         vertical_space=0.6,
         bar_color="gray",
@@ -306,11 +312,9 @@ class Plotting:
 
             df (pandas.DataFrame): DataFrame with snps to visualize.
 
-            report_path (str): Path to report directory where plots are saved.
-
             zoom (bool, optional): If True, zooms in to the missing proportion range on some of the plots. If False, the plot range is fixed at [0, 1]. Defaults to True.
 
-            prefix (str, optional): Prefix for output directory and files. Plots and files will be written to a directory called <prefix>_reports. The report directory will be created if it does not already exist. If prefix is None, then the reports directory will not have a prefix. Defaults to None.
+            prefix (str, optional): Prefix for output directory and files. Plots and files will be written to a directory called <prefix>_reports. The report directory will be created if it does not already exist. If prefix is None, then the reports directory will not have a prefix. Defaults to 'imputer'.
 
             horizontal_space (float, optional): Set width spacing between subplots. If your plot are overlapping horizontally, increase horizontal_space. If your plots are too far apart, decrease it. Defaults to 0.6.
 
@@ -453,8 +457,11 @@ class Plotting:
             g.get_legend().set_title(None)
 
         fig.savefig(
-            os.path.join(report_path, f"missingness.{plot_format}"),
+            os.path.join(
+                f"{prefix}_output", "plots", f"missingness.{plot_format}"
+            ),
             bbox_inches="tight",
+            facecolor="white",
         )
         plt.cla()
         plt.clf()
@@ -466,7 +473,7 @@ class Plotting:
     def run_and_plot_pca(
         original_genotype_data,
         imputer_object,
-        prefix="output",
+        prefix="imputer",
         n_components=3,
         center=True,
         scale=False,
@@ -493,7 +500,7 @@ class Plotting:
 
         The plot is saved as both an interactive HTML file and as a static image. Each population is represented by point shapes. The interactive plot has associated metadata when hovering over the points.
 
-        Files are saved to a reports directory as <prefix>_reports/imputed_pca.<plot_format|html>. Supported image formats include: "pdf", "svg", "png", and "jpeg" (or "jpg").
+        Files are saved to a reports directory as <prefix>_output/imputed_pca.<plot_format|html>. Supported image formats include: "pdf", "svg", "png", and "jpeg" (or "jpg").
 
         Args:
             original_genotype_data (GenotypeData): Original GenotypeData object that was input into the imputer.
@@ -502,7 +509,7 @@ class Plotting:
 
             original_012 (pandas.DataFrame, numpy.ndarray, or List[List[int]], optional): Original 012-encoded genotypes (before imputing). Missing values are encoded as -9. This object can be obtained as ``df = GenotypeData.genotypes012_df``.
 
-            prefix (str, optional): Prefix for report directory. Plots will be save to a directory called <prefix>_reports/imputed_pca<html|plot_format>. Report directory will be created if it does not already exist. If prefix is None, the reports directory will not have a prefix. Defaults to "output".
+            prefix (str, optional): Prefix for report directory. Plots will be save to a directory called <prefix>_output/imputed_pca<html|plot_format>. Report directory will be created if it does not already exist. Defaults to "imputer".
 
             n_components (int, optional): Number of principal components to include in the PCA. Defaults to 3.
 
@@ -552,10 +559,8 @@ class Plotting:
             >>>
             >>>explvar = pca.explained_variance_ratio_
         """
-        report_path = "reports"
-        if prefix is not None:
-            report_path = f"{prefix}_reports"
-        os.makedirs(report_path, exist_ok=True)
+        report_path = os.path.join(f"{prefix}_output", "plots")
+        Path(report_path).mkdir(parents=True, exist_ok=True)
 
         if n_axes > 3:
             raise ValueError(
@@ -676,19 +681,22 @@ class Plotting:
         return components, model
 
     @staticmethod
-    def plot_history(lod, nn_method):
+    def plot_history(lod, nn_method, prefix="imputer"):
         """Plot model history traces. Will be saved to file.
 
         Args:
             lod (List[tf.keras.callbacks.History]): List of history objects.
             nn_method (str): Neural network method to plot. Possible options include: 'NLPCA', 'UBP', or 'VAE'. NLPCA and VAE get plotted the same, but UBP does it differently due to its three phases.
+            prefix (str, optional): Prefix to use for output directory. Defaults to 'imputer'.
 
         Raises:
             ValueError: nn_method must be either 'NLPCA', 'UBP', or 'VAE'.
         """
         if nn_method == "NLPCA" or nn_method == "VAE" or nn_method == "SAE":
             title = nn_method
-            fn = f"histplot_{nn_method}.pdf"
+            fn = os.path.join(
+                f"{prefix}_output", "plots", f"histplot_{nn_method}.pdf"
+            )
 
             if nn_method == "VAE":
                 fig, axes = plt.subplots(2, 2)
@@ -767,7 +775,7 @@ class Plotting:
             ax2.set_xlabel("Epoch")
             ax2.legend(labels, loc="best")
 
-            fig.savefig(fn, bbox_inches="tight")
+            fig.savefig(fn, bbox_inches="tight", facecolor="white")
 
             plt.close()
             plt.clf()
@@ -776,7 +784,7 @@ class Plotting:
             fig = plt.figure(figsize=(12, 16))
             fig.suptitle(nn_method)
             fig.tight_layout(h_pad=2.0, w_pad=2.0)
-            fn = "histplot_ubp.pdf"
+            fn = os.path.join(f"{prefix}_output", "plots", "histplot_ubp.pdf")
 
             idx = 1
             for i, history in enumerate(lod, start=1):
@@ -803,7 +811,7 @@ class Plotting:
 
                 idx += 2
 
-            plt.savefig(fn, bbox_inches="tight")
+            plt.savefig(fn, bbox_inches="tight", facecolor="white")
 
             plt.close()
             plt.clf()
@@ -812,3 +820,89 @@ class Plotting:
             raise ValueError(
                 f"nn_method must be either 'NLPCA', 'UBP', or 'VAE', but got {nn_method}"
             )
+
+    @staticmethod
+    def plot_certainty_heatmap(y_certainty, sample_ids=None, prefix="imputer"):
+        fig = plt.figure()
+        hm = sns.heatmap(
+            data=y_certainty,
+            cmap="viridis",
+            vmin=0.0,
+            vmax=1.0,
+            cbar_kws={"label": "Prob."},
+        )
+        hm.set_xlabel("Site")
+        hm.set_ylabel("Sample")
+        hm.set_title("Probabilities of Uncertain Sites")
+        fig.tight_layout()
+        fig.savefig(
+            os.path.join(f"{prefix}_output", "plots", f"uncertainty_plot.png"),
+            bbox_inches="tight",
+            facecolor="white",
+        )
+
+    @staticmethod
+    def plot_confusion_matrix(y_true_1d, y_pred_1d, prefix="imputer"):
+        fig, ax = plt.subplots(1, 1, figsize=(15, 15))
+        ConfusionMatrixDisplay.from_predictions(
+            y_true=y_true_1d, y_pred=y_pred_1d, ax=ax
+        )
+
+        outfile = os.path.join(
+            f"{prefix}_output", "plots", "vae_confusion_matrix.png"
+        )
+
+        if os.path.isfile(outfile):
+            os.remove(outfile)
+
+        fig.savefig(outfile, facecolor="white")
+
+    @staticmethod
+    def plot_gt_distribution(df, plot_path):
+        df = misc.validate_input_type(df, return_type="df")
+        df_melt = pd.melt(df, value_name="Count")
+        cnts = df_melt["Count"].value_counts()
+        cnts.index.names = ["Genotype"]
+        cnts = pd.DataFrame(cnts).reset_index()
+        cnts.sort_values(by="Genotype", inplace=True)
+        cnts["Genotype"] = cnts["Genotype"].astype(str)
+
+        fig, ax = plt.subplots(1, 1, figsize=(15, 15))
+        g = sns.barplot(x="Genotype", y="Count", data=cnts, ax=ax)
+        g.set_xlabel("Integer-encoded Genotype")
+        g.set_ylabel("Count")
+        g.set_title("Genotype Counts")
+        for p in g.patches:
+            g.annotate(
+                f"{p.get_height():.1f}",
+                (p.get_x() + 0.25, p.get_height() + 0.01),
+                xytext=(0, 1),
+                textcoords="offset points",
+                va="bottom",
+            )
+
+        fig.savefig(
+            os.path.join(plot_path, "genotype_distributions.png"),
+            bbox_inches="tight",
+            facecolor="white",
+        )
+        plt.close()
+
+    @staticmethod
+    def plot_label_clusters(z_mean, labels, prefix="imputer"):
+        """display a 2D plot of the digit classes in the latent space."""
+        fig, ax = plt.subplots(1, 1, figsize=(15, 15))
+
+        if z_mean.shape[1] == 2:
+            sns.scatterplot(z_mean[:, 0], z_mean[:, 1], ax=ax)
+            ax.set_xlabel("Latent Dimension 1")
+            ax.set_ylabel("Latent Dimension 2")
+
+        outfile = os.path.join(
+            f"{prefix}_output", "plots", "vae_label_clusters.png"
+        )
+
+        if os.path.isfile(outfile):
+            os.remove(outfile)
+
+        fig.savefig(outfile, facecolor="white", bbox_inches="tight")

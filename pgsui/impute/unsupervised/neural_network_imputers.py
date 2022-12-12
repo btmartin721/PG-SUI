@@ -61,35 +61,46 @@ from tensorflow.keras.callbacks import (
 
 # Custom module imports
 try:
-    from ..utils.misc import timer
-    from ..utils.misc import isnotebook
-    from ..utils.misc import validate_input_type
+    from ...utils.misc import timer
+    from ...utils.misc import isnotebook
+    from ...utils.misc import validate_input_type
     from .neural_network_methods import NeuralNetworkMethods, DisabledCV
-    from .scorers import Scorers
-    from .plotting import Plotting
-    from .callbacks import UBPCallbacks, CyclicalAnnealingCallback
+    from ...utils.scorers import Scorers
+    from ...utils.plotting import Plotting
+    from .callbacks import (
+        UBPCallbacks,
+        VAECallbacks,
+        CyclicalAnnealingCallback,
+    )
     from .keras_classifiers import VAEClassifier, MLPClassifier, SAEClassifier
-    from ..data_processing.transformers import (
+    from ...data_processing.transformers import (
         SimGenotypeDataTransformer,
-        TargetTransformer,
+        UBPTargetTransformer,
         AutoEncoderFeatureTransformer,
     )
 except (ModuleNotFoundError, ValueError):
     from utils.misc import timer
     from utils.misc import isnotebook
     from utils.misc import validate_input_type
-    from impute.neural_network_methods import NeuralNetworkMethods, DisabledCV
-    from impute.scorers import Scorers
-    from impute.plotting import Plotting
-    from impute.callbacks import UBPCallbacks, CyclicalAnnealingCallback
-    from impute.keras_classifiers import (
+    from impute.unsupervised.neural_network_methods import (
+        NeuralNetworkMethods,
+        DisabledCV,
+    )
+    from utils.scorers import Scorers
+    from utils.plotting import Plotting
+    from impute.unsupervised.callbacks import (
+        UBPCallbacks,
+        VAECallbacks,
+        CyclicalAnnealingCallback,
+    )
+    from impute.unsupervised.keras_classifiers import (
         VAEClassifier,
         MLPClassifier,
         SAEClassifier,
     )
     from data_processing.transformers import (
         SimGenotypeDataTransformer,
-        TargetTransformer,
+        UBPTargetTransformer,
         AutoEncoderFeatureTransformer,
     )
 
@@ -161,13 +172,16 @@ class VAE(BaseEstimator, TransformerMixin):
     n_jobs (int, optional): Number of parallel jobs to use in the grid search if ``gridparams`` is not None. -1 means use all available processors. Defaults to 1.
 
     verbose (int, optional): Verbosity setting. Can be 0, 1, or 2. 0 is the least and 2 is the most verbose. Defaults to 0.
+
+    ToDo:
+        Fix sample_weight for multi-label encodings.
     """
 
     def __init__(
         self,
         genotype_data=None,
         *,
-        prefix="output",
+        prefix="imputer",
         gridparams=None,
         disable_progressbar=False,
         batch_size=32,
@@ -184,7 +198,7 @@ class VAE(BaseEstimator, TransformerMixin):
         l1_penalty=0.0001,
         l2_penalty=0.0001,
         dropout_rate=0.2,
-        kl_beta=1.0,
+        kl_beta=tf.Variable(1.0, trainable=False),
         validation_split=0.2,
         sample_weights=False,
         grid_iter=80,
@@ -195,6 +209,7 @@ class VAE(BaseEstimator, TransformerMixin):
         sim_prop_missing=0.1,
         n_jobs=1,
         verbose=0,
+        **kwargs,
     ):
         super().__init__()
 
@@ -230,6 +245,8 @@ class VAE(BaseEstimator, TransformerMixin):
         self.verbose = verbose
 
         self.num_classes = 4
+        self.activate = None
+        self.testing = kwargs.get("testing", False)
 
     @timer
     def fit(self, X):
@@ -244,7 +261,16 @@ class VAE(BaseEstimator, TransformerMixin):
         Raises:
             TypeError: Must be either pandas.DataFrame, numpy.ndarray, or List[List[int]].
         """
+        self.is_multiclass_ = True if self.num_classes != 4 else False
+        self.do_act_in_model_ = True if self.activate is None else False
         self.run_gridsearch_ = False if self.gridparams is None else True
+
+        if self.do_act_in_model_ and self.is_multiclass_:
+            self.act_func_ = "softmax"
+        elif self.do_act_in_model_ and not self.is_multiclass_:
+            self.act_func_ = "sigmoid"
+        else:
+            self.act_func_ = None
 
         # Treating y as X here for compatibility with UBP/NLPCA.
         # With VAE, y=X anyways.
@@ -270,8 +296,8 @@ class VAE(BaseEstimator, TransformerMixin):
         self.y_original_ = y.copy()
         self.y_simulated_ = sim.fit_transform(self.y_original_)
 
-        # Get values where original value was not missing and simulated.
-        # data is missing.
+        # Get values where original value was not missing but missing data
+        # was simulated.
         self.sim_missing_mask_ = sim.sim_missing_mask_
 
         # Original missing data.
@@ -281,16 +307,22 @@ class VAE(BaseEstimator, TransformerMixin):
         self.all_missing_ = sim.all_missing_mask_
 
         # Binary encode y to get y_train.
-        self.tt_ = AutoEncoderFeatureTransformer(num_classes=self.num_classes)
+        self.tt_ = AutoEncoderFeatureTransformer(
+            num_classes=self.num_classes, activate=self.activate
+        )
+
+        # Just y_original with missing values encoded as -1.
         y_train = self.tt_.fit_transform(self.y_original_)
 
         if self.gridparams is not None:
             self.scoring_metrics_ = [
                 "precision_recall_macro",
                 "precision_recall_micro",
+                "f1_score",
                 "auc_macro",
                 "auc_micro",
                 "accuracy",
+                "hamming",
             ]
 
         (
@@ -330,20 +362,30 @@ class VAE(BaseEstimator, TransformerMixin):
                 print(f"\nBest score: {self.best_score_}")
             plotting.plot_grid_search(self.search_.cv_results_, self.prefix)
 
-        plotting.plot_history(self.histories_, "VAE")
+        plotting.plot_history(self.histories_, "VAE", prefix=self.prefix)
         plotting.plot_metrics(self.metrics_, self.num_classes, self.prefix)
 
         if self.ga_:
             plot_fitness_evolution(self.search_)
             plt.savefig(
-                f"{self.prefix}_fitness_evolution.pdf", bbox_inches="tight"
+                os.path.join(
+                    f"{self.prefix}_output", "plots", "fitness_evolution.pdf"
+                ),
+                bbox_inches="tight",
+                facecolor="white",
             )
             plt.cla()
             plt.clf()
             plt.close()
 
             g = plotting.plot_search_space(self.search_)
-            plt.savefig(f"{self.prefix}_search_space.pdf", bbox_inches="tight")
+            plt.savefig(
+                os.path.join(
+                    f"{self.prefix}_output", "plots", "search_space.pdf"
+                ),
+                bbox_inches="tight",
+                facecolor="white",
+            )
             plt.cla()
             plt.clf()
             plt.close()
@@ -361,6 +403,7 @@ class VAE(BaseEstimator, TransformerMixin):
         """
         y = X
         y = validate_input_type(y, return_type="array")
+        y_pred_certainty = None
 
         model = self.models_[0]
         y_true = y.copy()
@@ -368,15 +411,47 @@ class VAE(BaseEstimator, TransformerMixin):
         y_true_1d = y_true.ravel()
         y_size = y_true.size
         y_missing_idx = np.flatnonzero(self.original_missing_mask_)
-        y_pred, z_mean, z_log_var, z = model(y_train, training=False)
+        y_pred, z_mean, z_log_var, z = model(
+            tf.convert_to_tensor(y_train),
+            training=False,
+        )
         y_pred = self.tt_.inverse_transform(y_pred)
-        y_pred_decoded = self.nn_.decode_masked(y_pred)
+
+        y_pred_decoded = self.nn_.decode_masked(
+            y_train,
+            y_pred,
+            is_multiclass=self.is_multiclass_,
+        )
+        # y_pred_decoded, y_pred_certainty = self.nn_.decode_masked(
+        #     y_train, y_pred, return_proba=True
+        # )
+
+        # There were some predicted values below the binary threshold.
+        if y_pred_certainty is not None:
+            plotting = Plotting()
+            plotting.plot_certainty_heatmap(
+                y_pred_certainty,
+                self.genotype_data.individuals,
+                prefix=self.prefix,
+            )
+
         y_pred_1d = y_pred_decoded.ravel()
 
         # Only replace originally missing values at missing indexes.
         for i in np.arange(y_size):
             if i in y_missing_idx:
                 y_true_1d[i] = y_pred_1d[i]
+
+        if self.testing:
+            self.nn_.write_gt_state_probs(
+                y_pred, y_pred_1d, y_true, y_true_1d, prefix=self.prefix
+            )
+
+            Plotting.plot_label_clusters(z_mean, y_true_1d)
+
+        Plotting.plot_confusion_matrix(
+            y_true_1d, y_pred_1d, prefix=self.prefix
+        )
 
         # Return to original shape.
         return np.reshape(y_true_1d, y_true.shape)
@@ -425,7 +500,9 @@ class VAE(BaseEstimator, TransformerMixin):
 
         if self.run_gridsearch_:
             scoring = scorers.make_multimetric_scorer(
-                self.scoring_metrics_, self.sim_missing_mask_, is_vae=True
+                self.scoring_metrics_,
+                self.sim_missing_mask_,
+                num_classes=self.num_classes,
             )
 
         (
@@ -443,7 +520,6 @@ class VAE(BaseEstimator, TransformerMixin):
             compile_params,
             fit_params,
             scoring=scoring,
-            testing=False,
         )
 
         histories.append(best_history)
@@ -468,7 +544,6 @@ class VAE(BaseEstimator, TransformerMixin):
         compile_params,
         fit_params,
         scoring=None,
-        testing=False,
         **kwargs,
     ):
         """Run KerasClassifier with neural network model and grid search.
@@ -485,8 +560,6 @@ class VAE(BaseEstimator, TransformerMixin):
             fit_params (Dict[str, Any]): Dictionary with parameters to be passed to fit in KerasClassifier.
 
             scoring (Dict[str, Callable], optional): Multimetric scorer made using sklearn.metrics.make_scorer. To be used with grid search.
-
-            testing (bool, optional): If True, prints out flattened predictions as 012-encoded y_true and y_pred arrays.
 
         Returns:
             List[tf.keras.Model]: List of keras model objects. One for each phase (len=1 if NLPCA, len=3 if UBP).
@@ -517,7 +590,7 @@ class VAE(BaseEstimator, TransformerMixin):
 
         if not self.disable_progressbar and not self.run_gridsearch_:
             fit_params["callbacks"][-1] = TqdmCallback(
-                epochs=self.epochs, verbose=0, desc=desc
+                epochs=self.epochs, verbose=self.verbose, desc=desc
             )
 
         clf = VAEClassifier(
@@ -526,13 +599,16 @@ class VAE(BaseEstimator, TransformerMixin):
             optimizer__learning_rate=compile_params["learning_rate"],
             loss=compile_params["loss"],
             metrics=compile_params["metrics"],
+            run_eagerly=compile_params["run_eagerly"],
             callbacks=fit_params["callbacks"],
             epochs=fit_params["epochs"],
             verbose=0,
+            num_classes=self.num_classes,
+            activate=self.act_func_,
             fit__validation_split=fit_params["validation_split"],
             score__missing_mask=self.sim_missing_mask_,
             score__scoring_metric=self.scoring_metric,
-            score__is_vae=True,
+            score__num_classes=self.num_classes,
         )
 
         if self.run_gridsearch_:
@@ -573,6 +649,19 @@ class VAE(BaseEstimator, TransformerMixin):
                 search.fit(y_true, y_true, callbacks=callback)
 
             else:
+                # Write GridSearchCV to log file instead of STDOUT.
+                if self.verbose >= 10:
+                    old_stdout = sys.stdout
+                    log_file = open(
+                        os.path.join(
+                            f"{self.prefix}_output",
+                            "logs",
+                            "gridsearch_progress_log.txt",
+                        ),
+                        "w",
+                    )
+                    sys.stdout = log_file
+
                 if self.gridsearch_method.lower() == "gridsearch":
                     # Do GridSearchCV
                     search = GridSearchCV(
@@ -607,11 +696,18 @@ class VAE(BaseEstimator, TransformerMixin):
 
                 search.fit(y_true, y=y_true)
 
+                if self.verbose >= 10:
+                    # Make sure to revert STDOUT back to original.
+                    sys.stdout = old_stdout
+                    log_file.close()
+
             best_params = search.best_params_
             best_score = search.best_score_
             best_clf = search.best_estimator_
 
-            fp = f"{self.prefix}_vae_cvresults.csv"
+            fp = os.path.join(
+                f"{self.prefix}_output", "reports", "vae_cvresults.csv"
+            )
 
             cv_results = pd.DataFrame(search.cv_results_)
             cv_results.to_csv(fp, index=False)
@@ -626,7 +722,11 @@ class VAE(BaseEstimator, TransformerMixin):
         model = best_clf.model_
         best_history = best_clf.history_
 
-        y_pred, z_mean, z_log_var, z = model(y_train, training=False)
+        y_pred, _, __, ___ = model(
+            tf.convert_to_tensor(y_train),
+            training=False,
+        )
+
         y_pred = self.tt_.inverse_transform(y_pred)
 
         # Get metric scores.
@@ -634,8 +734,8 @@ class VAE(BaseEstimator, TransformerMixin):
             y_true,
             y_pred,
             missing_mask=self.sim_missing_mask_,
-            is_vae=True,
-            testing=False,
+            num_classes=self.num_classes,
+            testing=self.testing,
         )
 
         return (
@@ -661,13 +761,17 @@ class VAE(BaseEstimator, TransformerMixin):
         """
         # For CSVLogger() callback.
         append = False
-        logfile = f"{self.prefix}_vae_log.csv"
+        logfile = os.path.join(
+            f"{self.prefix}_output", "logs", "vae_training_log.csv"
+        )
 
         callbacks = [
             CSVLogger(filename=logfile, append=append),
             ReduceLROnPlateau(
                 patience=self.lr_patience, min_lr=1e-6, min_delta=1e-6
             ),
+            VAECallbacks(),
+            CyclicalAnnealingCallback(self.epochs, schedule_type="sigmoid"),
         ]
 
         search_mode = True if self.run_gridsearch_ else False
@@ -677,40 +781,15 @@ class VAE(BaseEstimator, TransformerMixin):
                 TqdmCallback(epochs=self.epochs, verbose=0, desc="Epoch: ")
             )
 
-        compile_params = self.nn_.set_compile_params(self.optimizer, vae=True)
-        compile_params["learning_rate"] = self.learning_rate
-
-        model_params = {
-            "output_shape": y_train.shape[1],
-            "batch_size": self.batch_size,
-            "weights_initializer": self.weights_initializer,
-            "n_components": self.n_components,
-            "hidden_layer_sizes": self.hidden_layer_sizes,
-            "num_hidden_layers": self.num_hidden_layers,
-            "hidden_activation": self.hidden_activation,
-            "l1_penalty": self.l1_penalty,
-            "l2_penalty": self.l2_penalty,
-            "dropout_rate": self.dropout_rate,
-            "kl_beta": self.kl_beta,
-        }
-
-        fit_verbose = 1 if self.verbose == 2 else 0
-
-        fit_params = {
-            "batch_size": self.batch_size,
-            "epochs": self.epochs,
-            "callbacks": callbacks,
-            "validation_split": self.validation_split,
-            "shuffle": True,
-            "verbose": fit_verbose,
-        }
-
-        if self.sample_weights == "auto":
+        if self.sample_weights == "auto" or self.sample_weights == "logsmooth":
             # Get class weights for each column.
             sample_weights = self.nn_.get_class_weights(
-                self.y_original_, self.original_missing_mask_
+                self.y_original_,
+                self.original_missing_mask_,
+                return_1d=False,
+                method=self.sample_weights,
             )
-            sample_weights = self.nn_.normalize_data(sample_weights)
+            # sample_weights = self.nn_.normalize_data(sample_weights)
 
         elif isinstance(self.sample_weights, dict):
             for i in range(self.num_classes):
@@ -724,7 +803,39 @@ class VAE(BaseEstimator, TransformerMixin):
         else:
             sample_weights = None
 
-        fit_params["sample_weight"] = sample_weights
+        compile_params = self.nn_.set_compile_params(
+            self.optimizer, sample_weights, vae=True, act_func=self.act_func_
+        )
+        compile_params["learning_rate"] = self.learning_rate
+
+        model_params = {
+            "y": y_train,
+            "batch_size": self.batch_size,
+            "sample_weight": sample_weights,
+            "missing_mask": self.original_missing_mask_,
+            "output_shape": y_train.shape[1],
+            "weights_initializer": self.weights_initializer,
+            "n_components": self.n_components,
+            "hidden_layer_sizes": self.hidden_layer_sizes,
+            "num_hidden_layers": self.num_hidden_layers,
+            "hidden_activation": self.hidden_activation,
+            "l1_penalty": self.l1_penalty,
+            "l2_penalty": self.l2_penalty,
+            "dropout_rate": self.dropout_rate,
+            "kl_beta": 1.0 / y_train.shape[0],
+        }
+
+        fit_verbose = 1 if self.verbose == 2 else 0
+
+        fit_params = {
+            "batch_size": self.batch_size,
+            "epochs": self.epochs,
+            "callbacks": callbacks,
+            "validation_split": self.validation_split,
+            "shuffle": True,
+            "verbose": fit_verbose,
+            "sample_weight": sample_weights,
+        }
 
         if self.run_gridsearch_ and "learning_rate" in self.gridparams:
             self.gridparams["optimizer__learning_rate"] = self.gridparams[
@@ -743,68 +854,69 @@ class VAE(BaseEstimator, TransformerMixin):
 class SAE(BaseEstimator, TransformerMixin):
     """Class to impute missing data using a standard Autoencoder (SAE) neural network.
 
-    genotype_data (GenotypeData): Input GenotypeData instance.
+    Args:
+        genotype_data (GenotypeData): Input GenotypeData instance.
 
-    prefix (str, optional): Prefix for output files. Defaults to "output".
+        prefix (str, optional): Prefix for output files. Defaults to "imputer".
 
-    gridparams (Dict[str, Any] or None, optional): Dictionary with keys=keyword arguments for the specified estimator and values=lists of parameter values or distributions. If using GridSearchCV, distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). ``gridparams`` will be used for a randomized grid search with cross-validation. If using the genetic algorithm grid search (GASearchCV) by setting ``ga=True``\, the parameters can be specified as ``sklearn_genetic.space`` objects. The grid search will determine the optimal parameters as those that maximize accuracy (or minimize root mean squared error for BayesianRidge regressor). NOTE: Takes a long time, so run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. If ``gridparams=None``\, a grid search is not performed. Defaults to None.
+        gridparams (Dict[str, Any] or None, optional): Dictionary with keys=keyword arguments for the specified estimator and values=lists of parameter values or distributions. If using GridSearchCV, distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). ``gridparams`` will be used for a randomized grid search with cross-validation. If using the genetic algorithm grid search (GASearchCV) by setting ``ga=True``\, the parameters can be specified as ``sklearn_genetic.space`` objects. The grid search will determine the optimal parameters as those that maximize accuracy (or minimize root mean squared error for BayesianRidge regressor). NOTE: Takes a long time, so run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. If ``gridparams=None``\, a grid search is not performed. Defaults to None.
 
-    disable_progressbar (bool, optional): Whether to disable the tqdm progress bar. Useful if you are doing the imputation on e.g. a high-performance computing cluster, where sometimes tqdm does not work correctly. If False, uses tqdm progress bar. If True, does not use tqdm. Defaults to False.
+        disable_progressbar (bool, optional): Whether to disable the tqdm progress bar. Useful if you are doing the imputation on e.g. a high-performance computing cluster, where sometimes tqdm does not work correctly. If False, uses tqdm progress bar. If True, does not use tqdm. Defaults to False.
 
-    batch_size (int, optional): Batch size per epoch to train the model with.
+        batch_size (int, optional): Batch size per epoch to train the model with. Defaults to 32.
 
-    n_components (int, optional): Number of components to use as the input data. Defaults to 3.
+        n_components (int, optional): Number of components to use as the input data. Defaults to 3.
 
-    early_stop_gen (int, optional): Early stopping criterion for epochs. Training will stop if the loss (error) does not decrease past the tolerance level for ``early_stop_gen`` epochs. Will save the optimal model and reload it once ``early_stop_gen`` has been reached. Defaults to 25.
+        early_stop_gen (int, optional): Early stopping criterion for epochs. Training will stop if the loss (error) does not decrease past the tolerance level for ``early_stop_gen`` epochs. Will save the optimal model and reload it once ``early_stop_gen`` has been reached. Defaults to 25.
 
-    num_hidden_layers (int, optional): Number of hidden layers to use in the model. Adjust if overfitting occurs. Defaults to 3.
+        num_hidden_layers (int, optional): Number of hidden layers to use in the model. Adjust if overfitting occurs. Defaults to 3.
 
-    hidden_layer_sizes (str, List[int], List[str], or int, optional): Number of neurons to use in hidden layers. If string or a list of strings is supplied, the strings must be either "midpoint", "sqrt", or "log2". "midpoint" will calculate the midpoint as ``(n_features + n_components) / 2``. If "sqrt" is supplied, the square root of the number of features will be used to calculate the output units. If "log2" is supplied, the units will be calculated as ``log2(n_features)``. hidden_layer_sizes will calculate and set the number of output units for each hidden layer. If one string or integer is supplied, the model will use the same number of output units for each hidden layer. If a list of integers or strings is supplied, the model will use the values supplied in the list, which can differ. The list length must be equal to the ``num_hidden_layers``. Defaults to "midpoint".
+        hidden_layer_sizes (str, List[int], List[str], or int, optional): Number of neurons to use in hidden layers. If string or a list of strings is supplied, the strings must be either "midpoint", "sqrt", or "log2". "midpoint" will calculate the midpoint as ``(n_features + n_components) / 2``. If "sqrt" is supplied, the square root of the number of features will be used to calculate the output units. If "log2" is supplied, the units will be calculated as ``log2(n_features)``. hidden_layer_sizes will calculate and set the number of output units for each hidden layer. If one string or integer is supplied, the model will use the same number of output units for each hidden layer. If a list of integers or strings is supplied, the model will use the values supplied in the list, which can differ. The list length must be equal to the ``num_hidden_layers``. Defaults to "midpoint".
 
-    optimizer (str, optional): The optimizer to use with gradient descent. Possible value include: "adam", "sgd", "adagrad", "adadelta", "adamax", "ftrl", "nadam", and "rmsprop" are supported. See tf.keras.optimizers for more info. Defaults to "adam".
+        optimizer (str, optional): The optimizer to use with gradient descent. Possible value include: "adam", "sgd", "adagrad", "adadelta", "adamax", "ftrl", "nadam", and "rmsprop" are supported. See tf.keras.optimizers for more info. Defaults to "adam".
 
-    hidden_activation (str, optional): The activation function to use for the hidden layers. See tf.keras.activations for more info. Commonly used activation functions include "elu", "relu", and "sigmoid". Defaults to "elu".
+        hidden_activation (str, optional): The activation function to use for the hidden layers. See tf.keras.activations for more info. Commonly used activation functions include "elu", "relu", and "sigmoid". Defaults to "elu".
 
-    learning_rate (float, optional): The learning rate for the optimizers. Adjust if the loss is learning too slowly. Defaults to 0.1.
+        learning_rate (float, optional): The learning rate for the optimizers. Adjust if the loss is learning too slowly. Defaults to 0.01.
 
-    lr_patience (int, optional): Number of epochs with no loss improvement to wait before reducing the learning rate.
+        lr_patience (int, optional): Number of epochs with no loss improvement to wait before reducing the learning rate. Defaults to 1.
 
-    epochs (int, optional): Maximum number of epochs to run if the ``early_stop_gen`` criterion is not met.
+        epochs (int, optional): Maximum number of epochs to run if the ``early_stop_gen`` criterion is not met. Defaults to 100.
 
-    weights_initializer (str, optional): Initializer to use for the model weights. See tf.keras.initializers for more info. Defaults to "glorot_normal".
+        weights_initializer (str, optional): Initializer to use for the model weights. See tf.keras.initializers for more info. Defaults to "glorot_normal".
 
-    l1_penalty (float, optional): L1 regularization penalty to apply to reduce overfitting. Defaults to 0.01.
+        l1_penalty (float, optional): L1 regularization penalty to apply to reduce overfitting. Defaults to 0.0001.
 
-    l2_penalty (float, optional): L2 regularization penalty to apply to reduce overfitting. Defaults to 0.01.
+        l2_penalty (float, optional): L2 regularization penalty to apply to reduce overfitting. Defaults to 0.0001.
 
-    dropout_rate (float, optional): Dropout rate during training to reduce overfitting. Must be a float between 0 and 1. Defaults to 0.2.
+        dropout_rate (float, optional): Dropout rate during training to reduce overfitting. Must be a float between 0 and 1. Defaults to 0.2.
 
-    recurrent_weight (float, optional): Recurrent weight to calculate predictions. Defaults to 0.5.
+        validation_split (float, optional): Validation split proportion to use. Defaults to 0.2.
 
-    sample_weights (str or Dict[int, float], optional): Whether to weight each genotype by its class frequency. If ``sample_weights='auto'`` then it automatically calculates sample weights based on genotype class frequencies per locus; for example, if there are a lot more 0s and fewer 2s, then it will balance out the classes by weighting each genotype accordingly. ``sample_weights`` can also be a dictionary with the genotypes (0, 1, and 2) as the keys and the weights as the keys. If ``sample_weights`` is anything else, then they are not calculated. Defaults to False.
+        sample_weights (str or Dict[int, float], optional): Whether to weight each genotype by its class frequency. If ``sample_weights='auto'`` then it automatically calculates sample weights based on genotype class frequencies per locus; for example, if there are a lot more 0s and fewer 2s, then it will balance out the classes by weighting each genotype accordingly. ``sample_weights`` can also be a dictionary with the genotypes (0, 1, and 2) as the keys and the weights as the keys. If ``sample_weights`` is anything else, then they are not calculated. Defaults to False.
 
-    grid_iter (int, optional): Number of iterations for grid search. Defaults to 50.
+        grid_iter (int, optional): Number of iterations for grid search. Defaults to 80.
 
-    gridsearch_method (str, optional): Grid search method to use. Possible options include: 'gridsearch', 'randomized_gridsearch', and 'genetic_algorithm'. 'gridsearch' runs all possible permutations of parameters, 'randomized_gridsearch' runs a random subset of parameters, and 'genetic_algorithm' uses a genetic algorithm gridsearch (via GASearchCV). Defaults to 'gridsearch'.
+        gridsearch_method (str, optional): Grid search method to use. Possible options include: 'gridsearch', 'randomized_gridsearch', and 'genetic_algorithm'. 'gridsearch' runs all possible permutations of parameters, 'randomized_gridsearch' runs a random subset of parameters, and 'genetic_algorithm' uses a genetic algorithm gridsearch (via GASearchCV). Defaults to 'gridsearch'.
 
-    ga_kwargs (Dict[str, Any] or None): Keyword arguments to be passed to a Genetic Algorithm grid search. Only used if ``ga==True``\.
+        ga_kwargs (Dict[str, Any] or None, optional): Keyword arguments to be passed to a Genetic Algorithm grid search. Only used if ``ga==True``\. Defaults to None.
 
-    scoring_metric (str, optional): Scoring metric to use for randomized or genetic algorithm grid searches. See https://scikit-learn.org/stable/modules/model_evaluation.html for supported options. Defaults to "accuracy".
+        scoring_metric (str, optional): Scoring metric to use for randomized or genetic algorithm grid searches. See https://scikit-learn.org/stable/modules/model_evaluation.html for supported options. Defaults to "auc_macro".
 
-    sim_strategy (str, optional): Strategy to use for simulating missing data. Only used to validate the accuracy of the imputation. The final model will be trained with the non-simulated dataset. Supported options include: "random", "nonrandom", and "nonrandom_weighted". "random" randomly simulates missing data. When set to "nonrandom", branches from ``GenotypeData.guidetree`` will be randomly sampled to generate missing data on descendant nodes. For "nonrandom_weighted", missing data will be placed on nodes proportionally to their branch lengths (e.g., to generate data distributed as might be the case with mutation-disruption of RAD sites). Defaults to "random".
+        sim_strategy (str, optional): Strategy to use for simulating missing data. Only used to validate the accuracy of the imputation. The final model will be trained with the non-simulated dataset. Supported options include: "random", "nonrandom", and "nonrandom_weighted". "random" randomly simulates missing data. When set to "nonrandom", branches from ``GenotypeData.guidetree`` will be randomly sampled to generate missing data on descendant nodes. For "nonrandom_weighted", missing data will be placed on nodes proportionally to their branch lengths (e.g., to generate data distributed as might be the case with mutation-disruption of RAD sites). Defaults to "random".
 
-    sim_prop_missing (float, optional): Proportion of missing data to simulate with the SimGenotypeDataTransformer. Defaults to 0.1.
+        sim_prop_missing (float, optional): Proportion of missing data to simulate with the SimGenotypeDataTransformer. Defaults to 0.1.
 
-    n_jobs (int, optional): Number of parallel jobs to use in the grid search if ``gridparams`` is not None. -1 means use all available processors. Defaults to 1.
+        n_jobs (int, optional): Number of parallel jobs to use in the grid search if ``gridparams`` is not None. -1 means use all available processors. Defaults to 1.
 
-    verbose (int, optional): Verbosity setting. Can be 0, 1, or 2. 0 is the least and 2 is the most verbose. Defaults to 0.
+        verbose (int, optional): Verbosity setting. Can be 0, 1, or 2. 0 is the least and 2 is the most verbose. Defaults to 0.
     """
 
     def __init__(
         self,
         genotype_data=None,
         *,
-        prefix="output",
+        prefix="imputer",
         gridparams=None,
         disable_progressbar=False,
         batch_size=32,
@@ -865,13 +977,14 @@ class SAE(BaseEstimator, TransformerMixin):
         self.verbose = verbose
 
         self.num_classes = 3
+        self.activate = "softmax"
 
     @timer
     def fit(self, X):
         """Train the VAE model on input data X.
 
         Args:
-            X (pandas.DataFrame, numpy.ndarray, or List[List[int]]): Input 012-encoded genotypes.
+            X (pandas.DataFrame, numpy.ndarray, or List[List[int]]): Input 012-encoded genotypes. Must be of shape ``(n_samples, n_features)``\.
 
         Returns:
             self: Current instance; allows method chaining.
@@ -916,13 +1029,17 @@ class SAE(BaseEstimator, TransformerMixin):
         self.all_missing_ = sim.all_missing_mask_
 
         # Onehot encode y to get y_train.
-        self.tt_ = AutoEncoderFeatureTransformer(num_classes=self.num_classes)
+        self.tt_ = AutoEncoderFeatureTransformer(
+            num_classes=self.num_classes, activate=self.activate
+        )
+
         y_train = self.tt_.fit_transform(self.y_original_)
 
         if self.gridparams is not None:
             self.scoring_metrics_ = [
                 "precision_recall_macro",
                 "precision_recall_micro",
+                "f1_score",
                 "auc_macro",
                 "auc_micro",
                 "accuracy",
@@ -965,20 +1082,30 @@ class SAE(BaseEstimator, TransformerMixin):
                 print(f"\nBest score: {self.best_score_}")
             plotting.plot_grid_search(self.search_.cv_results_, self.prefix)
 
-        plotting.plot_history(self.histories_, "SAE")
+        plotting.plot_history(self.histories_, "SAE", prefix=self.prefix)
         plotting.plot_metrics(self.metrics_, self.num_classes, self.prefix)
 
         if self.ga_:
             plot_fitness_evolution(self.search_)
             plt.savefig(
-                f"{self.prefix}_fitness_evolution.pdf", bbox_inches="tight"
+                os.path.join(
+                    f"{self.prefix}_output", "plots", "fitness_evolution.pdf"
+                ),
+                bbox_inches="tight",
+                facecolor="white",
             )
             plt.cla()
             plt.clf()
             plt.close()
 
             g = plotting.plot_search_space(self.search_)
-            plt.savefig(f"{self.prefix}_search_space.pdf", bbox_inches="tight")
+            plt.savefig(
+                os.path.join(
+                    f"{self.prefix}_output", "plots", "search_space.pdf"
+                ),
+                bbox_inches="tight",
+                facecolor="white",
+            )
             plt.cla()
             plt.clf()
             plt.close()
@@ -1003,15 +1130,19 @@ class SAE(BaseEstimator, TransformerMixin):
         y_true_1d = y_true.ravel()
         y_size = y_true.size
         y_missing_idx = np.flatnonzero(self.original_missing_mask_)
-        y_pred, z_mean, z_log_var = model(y_train, training=False)
+        y_pred = model(y_train, training=False)
         y_pred = self.tt_.inverse_transform(y_pred)
-        y_pred_decoded = self.nn_.decode_masked(y_pred)
+        y_pred_decoded = self.nn_.decode_masked(y_train, y_pred)
         y_pred_1d = y_pred_decoded.ravel()
 
         # Only replace originally missing values at missing indexes.
         for i in np.arange(y_size):
             if i in y_missing_idx:
                 y_true_1d[i] = y_pred_1d[i]
+
+        Plotting.plot_confusion_matrix(
+            y_true_1d, y_pred_1d, prefix=self.prefix
+        )
 
         return np.reshape(y_true_1d, y_true.shape)
 
@@ -1163,7 +1294,6 @@ class SAE(BaseEstimator, TransformerMixin):
             callbacks=fit_params["callbacks"],
             epochs=fit_params["epochs"],
             verbose=0,
-            fit__sample_weight=fit_params["sample_weight"],
             fit__validation_split=fit_params["validation_split"],
             score__missing_mask=self.sim_missing_mask_,
             score__scoring_metric=self.scoring_metric,
@@ -1245,7 +1375,9 @@ class SAE(BaseEstimator, TransformerMixin):
             best_score = search.best_score_
             best_clf = search.best_estimator_
 
-            fp = f"{self.prefix}_vae_cvresults.csv"
+            fp = os.path.join(
+                f"{self.prefix}_output", "reports", "vae_cvresults.csv"
+            )
 
             cv_results = pd.DataFrame(search.cv_results_)
             cv_results.to_csv(fp, index=False)
@@ -1260,7 +1392,7 @@ class SAE(BaseEstimator, TransformerMixin):
         model = best_clf.model_
         best_history = best_clf.history_
 
-        y_pred, z_mean, z_log_var = model(y_train, training=False)
+        y_pred = model(y_train, training=False)
         y_pred = self.tt_.inverse_transform(y_pred)
 
         # Get metric scores.
@@ -1294,13 +1426,16 @@ class SAE(BaseEstimator, TransformerMixin):
         """
         # For CSVLogger() callback.
         append = False
-        logfile = f"{self.prefix}_vae_log.csv"
+        logfile = os.path.join(
+            f"{self.prefix}_output", "logs", "sae_training_log.csv"
+        )
 
         callbacks = [
             CSVLogger(filename=logfile, append=append),
             ReduceLROnPlateau(
                 patience=self.lr_patience, min_lr=1e-6, min_delta=1e-6
             ),
+            VAECallbacks(),
         ]
 
         search_mode = True if self.run_gridsearch_ else False
@@ -1314,7 +1449,9 @@ class SAE(BaseEstimator, TransformerMixin):
         compile_params["learning_rate"] = self.learning_rate
 
         model_params = {
+            "y": y_train,
             "output_shape": y_train.shape[1],
+            "missing_mask": self.original_missing_mask_,
             "batch_size": self.batch_size,
             "weights_initializer": self.weights_initializer,
             "n_components": self.n_components,
@@ -1350,13 +1487,15 @@ class SAE(BaseEstimator, TransformerMixin):
                     self.sim_missing_mask_[self.y_original_ == i] = False
 
             sample_weights = self.nn_.get_class_weights(
-                self.y_original_, user_weights=self.sample_weights
+                self.y_original_,
+                self.original_missing_mask_,
+                user_weights=self.sample_weights,
             )
 
         else:
             sample_weights = None
 
-        fit_params["sample_weight"] = sample_weights
+        model_params["sample_weight"] = sample_weights
 
         if self.run_gridsearch_ and "learning_rate" in self.gridparams:
             self.gridparams["optimizer__learning_rate"] = self.gridparams[
@@ -1439,7 +1578,7 @@ class UBP(BaseEstimator, TransformerMixin):
         self,
         genotype_data,
         *,
-        prefix="output",
+        prefix="imputer",
         gridparams=None,
         disable_progressbar=False,
         nlpca=False,
@@ -1552,7 +1691,7 @@ class UBP(BaseEstimator, TransformerMixin):
         # X is the randomly initialized model input (V)
         # V is initialized with small, random values.
         # y is the actual input data, one-hot encoded.
-        self.tt_ = TargetTransformer()
+        self.tt_ = UBPTargetTransformer()
         y_train = self.tt_.fit_transform(self.y_original_)
 
         if self.gridparams is not None:
@@ -1561,6 +1700,7 @@ class UBP(BaseEstimator, TransformerMixin):
                 "precision_recall_micro",
                 "auc_macro",
                 "auc_micro",
+                "f1_score",
                 "accuracy",
             ]
 
@@ -1602,20 +1742,30 @@ class UBP(BaseEstimator, TransformerMixin):
 
         nn_method = "NLPCA" if self.nlpca else "UBP"
 
-        plotting.plot_history(self.histories_, nn_method)
+        plotting.plot_history(self.histories_, nn_method, prefix=self.prefix)
         plotting.plot_metrics(self.metrics_, self.num_classes, self.prefix)
 
         if self.ga_:
             plot_fitness_evolution(self.search_)
             plt.savefig(
-                f"{self.prefix}_fitness_evolution.pdf", bbox_inches="tight"
+                os.path.join(
+                    f"{self.prefix}_output", "plots", "fitness_evolution.pdf"
+                ),
+                bbox_inches="tight",
+                facecolor="white",
             )
             plt.cla()
             plt.clf()
             plt.close()
 
             g = plotting.plot_search_space(self.search_)
-            plt.savefig(f"{self.prefix}_search_space.pdf", bbox_inches="tight")
+            plt.savefig(
+                os.path.join(
+                    f"{self.prefix}_output", "plots", "search_space.pdf"
+                ),
+                bbox_inches="tight",
+                facecolor="white",
+            )
             plt.cla()
             plt.clf()
             plt.close()
@@ -1644,17 +1794,23 @@ class UBP(BaseEstimator, TransformerMixin):
         y_true = y.copy()
         y_true_1d = y_true.ravel()
 
+        y_train = self.tt_.transform(y_true)
+
         y_size = y_true.size
         y_missing_idx = np.flatnonzero(self.original_missing_mask_)
 
         y_pred_proba = model(model.V_latent, training=False)
         y_pred_proba = tf.nn.softmax(y_pred_proba).numpy()
-        y_pred_decoded = self.nn_.decode_masked(y_pred_proba)
+        y_pred_decoded = self.nn_.decode_masked(y_train, y_pred_proba)
         y_pred_1d = y_pred_decoded.ravel()
 
         for i in np.arange(y_size):
             if i in y_missing_idx:
                 y_true_1d[i] = y_pred_1d[i]
+
+        Plotting.plot_confusion_matrix(
+            y_true_1d, y_pred_1d, prefix=self.prefix
+        )
 
         return np.reshape(y_true_1d, y_true.shape)
 
@@ -1831,6 +1987,8 @@ class UBP(BaseEstimator, TransformerMixin):
                     model_params["V"] = {
                         n_components_searched: model.V_latent.copy()
                     }
+                    model_params["n_components"] = n_components_searched
+                    self.n_components = n_components_searched
                     self.gridparams.pop("n_components")
 
                 else:
@@ -1881,13 +2039,13 @@ class UBP(BaseEstimator, TransformerMixin):
 
             fit_params (Dict[str, Any]): Dictionary with parameters to be passed to fit in KerasClassifier.
 
-            ubp_weights (tf.Tensor): Model weights from second phase of UBP.
+            ubp_weights (tf.Tensor, optional): Model weights from second phase of UBP. Only used if ``phase==3``\. Defaults to None.
 
-            phase (int): Current phase of UBP.
+            phase (int, optional): Current phase of UBP. None if doing NLPCA. Defaults to None.
 
-            scoring (Dict[str, Callable], optional): Multimetric scorer made using sklearn.metrics.make_scorer. To be used with grid search.
+            scoring (Dict[str, Callable], optional): Multimetric scorer made using sklearn.metrics.make_scorer. To be used with grid search. Defaults to None.
 
-            testing (bool, optional): If True, prints out flattened predictions as 012-encoded y_true and y_pred arrays.
+            testing (bool, optional): If True, prints out flattened predictions as 012-encoded y_true and y_pred arrays. Defaults to False.
 
         Returns:
             numpy.ndarray: Refined reduced-dimensional input of shape (n_samples, n_components).
@@ -1930,7 +2088,6 @@ class UBP(BaseEstimator, TransformerMixin):
         clf = MLPClassifier(
             V,
             y_train,
-            y_true,
             **model_params,
             ubp_weights=ubp_weights,
             optimizer=compile_params["optimizer"],
@@ -2024,9 +2181,15 @@ class UBP(BaseEstimator, TransformerMixin):
             best_clf = search.best_estimator_
 
             if phase is not None:
-                fp = f"{self.prefix}_ubp_cvresults_phase{phase}.csv"
+                fp = os.path.join(
+                    f"{self.prefix}_output",
+                    "reports",
+                    "ubp_cvresults_phase{phase}.csv",
+                )
             else:
-                fp = f"{self.prefix}_nlpca_cvresults.csv"
+                fp = os.path.join(
+                    f"{self.prefix}_output", "reports", "nlpca_cvresults.csv"
+                )
 
             cv_results = pd.DataFrame(search.cv_results_)
             cv_results.to_csv(fp, index=False)
@@ -2146,7 +2309,9 @@ class UBP(BaseEstimator, TransformerMixin):
 
         if self.sample_weights == "auto":
             # Get class weights for each column.
-            sample_weights = self.nn_.get_class_weights(self.y_original_)
+            sample_weights = self.nn_.get_class_weights(
+                self.y_original_, self.original_missing_mask_
+            )
             sample_weights = self.nn_.normalize_data(sample_weights)
 
         elif isinstance(self.sample_weights, dict):
@@ -2194,17 +2359,25 @@ class UBP(BaseEstimator, TransformerMixin):
         """
         vinput = dict()
         if search_mode:
-            if self.n_components < 2:
-                raise ValueError("n_components must be >= 2.")
-
-            elif self.n_components == 2:
-                vinput[2] = self.nn_.init_weights(
-                    y_train.shape[0], self.n_components
-                )
-
+            if "n_components" in self.gridparams:
+                n_components = self.gridparams["n_components"]
             else:
-                for i in range(2, self.n_components + 1):
-                    vinput[i] = self.nn_.init_weights(y_train.shape[0], i)
+                n_components = self.n_components
+
+            if not isinstance(n_components, int):
+                if min(n_components) < 2:
+                    raise ValueError(
+                        f"n_components must be >= 2, but a value of {n_components} was specified."
+                    )
+
+                elif len(n_components) == 1:
+                    vinput[n_components[0]] = self.nn_.init_weights(
+                        y_train.shape[0], n_components[0]
+                    )
+
+                else:
+                    for c in n_components:
+                        vinput[c] = self.nn_.init_weights(y_train.shape[0], c)
 
         else:
             vinput[self.n_components] = self.nn_.init_weights(

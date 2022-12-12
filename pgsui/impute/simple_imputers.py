@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 import warnings
@@ -177,6 +178,7 @@ class ImputePhylo(GenotypeData):
                 qmatrix=genotype_data.qmatrix,
                 siterates=genotype_data.siterates,
                 siterates_iqtree=genotype_data.siterates_iqtree,
+                prefix=genotype_data.prefix,
                 verbose=False,
             )
 
@@ -359,7 +361,9 @@ class ImputePhylo(GenotypeData):
 
                         else:
                             pt = self._transition_probs(site_Q, dist)
-                            lik = self._get_internal_lik(pt, node_lik[node.idx])
+                            lik = self._get_internal_lik(
+                                pt, node_lik[node.idx]
+                            )
                             maxpos = lik.index(max(lik))
                             if maxpos == 0:
                                 imputed = "A"
@@ -516,7 +520,9 @@ class ImputePhylo(GenotypeData):
             raise TypeError("genotype_data and alnfile cannot both be defined")
 
         if genotype_data is None and self.alnfile is None:
-            raise TypeError("Either genotype_data or phylipfle must be defined")
+            raise TypeError(
+                "Either genotype_data or phylipfle must be defined"
+            )
 
         if genotype_data.tree is None and self.treefile is None:
             raise TypeError(
@@ -524,7 +530,9 @@ class ImputePhylo(GenotypeData):
             )
 
         if genotype_data is None and self.filetype is None:
-            raise TypeError("filetype must be defined if genotype_data is None")
+            raise TypeError(
+                "filetype must be defined if genotype_data is None"
+            )
 
         if (
             genotype_data is None
@@ -537,7 +545,9 @@ class ImputePhylo(GenotypeData):
             )
 
         if self.qmatrix is not None and self.qmatrix_iqtree is not None:
-            raise TypeError("qmatrix and qmatrix_iqtree cannot both be defined")
+            raise TypeError(
+                "qmatrix and qmatrix_iqtree cannot both be defined"
+            )
 
     def _print_q(self, q: pd.DataFrame) -> None:
         """Print Rate Matrix Q.
@@ -936,7 +946,9 @@ class ImputeAlleleFreq(GenotypeData):
                     imputed012, write_output=True, prefix=prefix
                 )
             else:
-                imputed_filename = f"{prefix}_012.csv"
+                imputed_filename = os.path.join(
+                    f"{self.prefix}_output", "alignments", "012.csv"
+                )
                 imp_df = pd.DataFrame(imputed012)
                 imp_df.insert(0, "sampleID", genotype_data.samples)
                 imp_df.to_csv(imputed_filename, index=False, header=False)
@@ -955,6 +967,7 @@ class ImputeAlleleFreq(GenotypeData):
                 qmatrix=genotype_data.qmatrix,
                 siterates=genotype_data.siterates,
                 siterates_iqtree=genotype_data.siterates_iqtree,
+                prefix=genotype_data.prefix,
                 verbose=False,
             )
 
@@ -1086,7 +1099,9 @@ class ImputeAlleleFreq(GenotypeData):
         Raises:
             TypeError: If X is of unsupported type.
         """
-        outfile = f"{self.prefix}_imputed_012.csv"
+        outfile = os.path.join(
+            f"{self.prefix}_output", "alignments", "imputed_012.csv"
+        )
 
         if isinstance(X, pd.DataFrame):
             df = X
@@ -1216,6 +1231,7 @@ class ImputeNMF(GenotypeData):
                 qmatrix=genotype_data.qmatrix,
                 siterates=genotype_data.siterates,
                 siterates_iqtree=genotype_data.siterates_iqtree,
+                prefix=genotype_data.prefix,
                 verbose=False,
             )
 
@@ -1318,7 +1334,9 @@ class ImputeNMF(GenotypeData):
             expected = original[:, j]
             options = np.unique(expected[expected != 0])
             for i in range(n_row):
-                transform = min(options, key=lambda x: abs(x - predicted[i, j]))
+                transform = min(
+                    options, key=lambda x: abs(x - predicted[i, j])
+                )
                 tR[i, j] = transform
         tR = tR - 1
         tR[tR < 0] = -9
@@ -1341,7 +1359,9 @@ class ImputeNMF(GenotypeData):
         Raises:
             TypeError: If X is of unsupported type.
         """
-        outfile = f"{self.prefix}_imputed_012.csv"
+        outfile = os.path.join(
+            f"{self.prefix}_output", "alignments", "imputed_012.csv"
+        )
 
         if isinstance(X, pd.DataFrame):
             df = X

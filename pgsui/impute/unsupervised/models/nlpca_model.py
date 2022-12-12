@@ -3,9 +3,6 @@ import os
 import sys
 import warnings
 
-import numpy as np
-import pandas as pd
-
 # Import tensorflow with reduced warnings.
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 logging.getLogger("tensorflow").disabled = True
@@ -25,7 +22,9 @@ tf.get_logger().setLevel(logging.ERROR)
 
 # Monkey patching deprecation utils to supress warnings.
 # noinspection PyUnusedLocal
-def deprecated(date, instructions, warn_once=True):  # pylint: disable=unused-argument
+def deprecated(
+    date, instructions, warn_once=True
+):  # pylint: disable=unused-argument
     def deprecated_wrapper(func):
         return func
 
@@ -46,9 +45,9 @@ from tensorflow.keras.regularizers import l1_l2
 
 # Custom Modules
 try:
-    from .neural_network_methods import NeuralNetworkMethods
+    from ..neural_network_methods import NeuralNetworkMethods
 except (ModuleNotFoundError, ValueError):
-    from impute.neural_network_methods import NeuralNetworkMethods
+    from impute.unsupervised.neural_network_methods import NeuralNetworkMethods
 
 
 class NLPCAModel(tf.keras.Model):
@@ -384,7 +383,9 @@ class NLPCAModel(tf.keras.Model):
         # Refine the watched variables with
         # gradient descent backpropagation
         gradients = tape.gradient(loss, self.trainable_variables)
-        self.optimizer.apply_gradients(zip(gradients, self.trainable_variables))
+        self.optimizer.apply_gradients(
+            zip(gradients, self.trainable_variables)
+        )
 
         # Apply separate gradients to v.
         vgrad = tape.gradient(loss, src)
