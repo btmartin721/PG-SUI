@@ -62,6 +62,7 @@ class SAEClassifier(KerasClassifier):
 
     def __init__(
         self,
+        y=None,
         output_shape=None,
         weights_initializer="glorot_normal",
         hidden_layer_sizes=None,
@@ -71,11 +72,14 @@ class SAEClassifier(KerasClassifier):
         l2_penalty=0.01,
         dropout_rate=0.2,
         n_components=3,
+        sample_weight=None,
+        missing_mask=None,
         num_classes=3,
         **kwargs,
     ):
         super().__init__(**kwargs)
 
+        self.y = y
         self.output_shape = output_shape
         self.weights_initializer = weights_initializer
         self.hidden_layer_sizes = hidden_layer_sizes
@@ -85,6 +89,8 @@ class SAEClassifier(KerasClassifier):
         self.l2_penalty = l2_penalty
         self.dropout_rate = dropout_rate
         self.n_components = n_components
+        self.sample_weight = sample_weight
+        self.missing_mask = missing_mask
         self.num_classes = num_classes
 
     def _keras_build_fn(self, compile_kwargs):
@@ -97,6 +103,7 @@ class SAEClassifier(KerasClassifier):
             tf.keras.Model: Model instance. The chosen model depends on which phase is passed to the class constructor.
         """
         model = AutoEncoderModel(
+            self.y,
             output_shape=self.output_shape,
             n_components=self.n_components,
             weights_initializer=self.weights_initializer,
@@ -106,6 +113,8 @@ class SAEClassifier(KerasClassifier):
             l1_penalty=self.l1_penalty,
             l2_penalty=self.l2_penalty,
             dropout_rate=self.dropout_rate,
+            sample_weight=self.sample_weight,
+            missing_mask=self.missing_mask,
             num_classes=self.num_classes,
         )
 
@@ -183,8 +192,8 @@ class SAEClassifier(KerasClassifier):
             Had to override predict() here in order to do the __call__ with the refined input, V_latent.
         """
         X_train = self.feature_encoder_.transform(X)
-        y_pred, z_mean, z_log_var = self.model_(X_train, training=False)
-        return y_pred.numpy(), z_mean, z_log_var
+        y_pred = self.model_(X_train, training=False)
+        return y_pred.numpy()
 
 
 class VAEClassifier(KerasClassifier):
