@@ -101,10 +101,10 @@ def main():
     data.missingness_reports(prefix=args.prefix, plot_format="png")
 
     # For GridSearchCV. Generate parameters to sample from.
-    learning_rate = [float(10) ** x for x in np.arange(-5, -1)]
-    l1_penalty = [float(10) ** x for x in np.arange(-6, -1)]
+    learning_rate = [float(10) ** x for x in np.arange(-4, -1)]
+    l1_penalty = [float(10) ** x for x in np.arange(-5, -1)]
     l1_penalty.append(0.0)
-    l2_penalty = [float(10) ** x for x in np.arange(-6, -1)]
+    l2_penalty = [float(10) ** x for x in np.arange(-5, -1)]
     l2_penalty.append(0.0)
     hidden_activation = ["elu", "relu"]
     num_hidden_layers = [1, 2, 3]
@@ -117,17 +117,17 @@ def main():
     # Some are commented out for testing purposes.
     grid_params = {
         "learning_rate": learning_rate,
-        "l1_penalty": l1_penalty,
-        "l2_penalty": l2_penalty,
+        # "l1_penalty": l1_penalty,
+        # "l2_penalty": l2_penalty,
         # "hidden_layer_sizes": hidden_layer_sizes,
         "n_components": n_components,
         # "dropout_rate": dropout_rate,
         # # "optimizer": optimizer,
-        "num_hidden_layers": num_hidden_layers,
+        # "num_hidden_layers": num_hidden_layers,
         # "hidden_activation": hidden_activation,
     }
 
-    vae = ImputeVAE(
+    vae = ImputeNLPCA(
         data,
         disable_progressbar=True,
         epochs=100,
@@ -139,10 +139,10 @@ def main():
         dropout_rate=0.2,
         hidden_activation="elu",
         batch_size=32,
-        l1_penalty=1e-6,
-        l2_penalty=1e-6,
-        gridparams=grid_params,
-        n_jobs=32,
+        l1_penalty=0.0001,
+        l2_penalty=0.0001,
+        # gridparams=grid_params,
+        n_jobs=4,
         grid_iter=5,
         sim_strategy="nonrandom_weighted",
         sim_prop_missing=0.5,
@@ -150,7 +150,7 @@ def main():
         gridsearch_method="gridsearch",
         early_stop_gen=25,
         n_components=3,
-        sample_weights="auto",
+        # sample_weights="auto",
         prefix=args.prefix,
     )
 
