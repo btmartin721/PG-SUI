@@ -136,7 +136,6 @@ class Scorers:
         y_pred_proba_bin = y_pred
 
         if is_multiclass:
-            print("YESSSSSSSSSSS")
             for i in range(y_true_bin.shape[1]):
                 if i not in classes:
                     y_true_bin = np.delete(y_true_bin, i, axis=-1)
@@ -534,11 +533,8 @@ class Scorers:
         # Otherwise default is all missing values (array all True).
         missing_mask = kwargs.get("missing_mask")
         num_classes = kwargs.get("num_classes", 3)
-        testing = kwargs.get("testing", False)
 
         y_pred = Scorers.check_if_tuple(y_pred)
-
-        nn = NeuralNetworkMethods()
 
         y_true_masked = y_true[missing_mask]
         y_pred_masked = y_pred[missing_mask]
