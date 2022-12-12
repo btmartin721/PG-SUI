@@ -977,6 +977,7 @@ class SAE(BaseEstimator, TransformerMixin):
         self.verbose = verbose
 
         self.num_classes = 3
+        self.activate = "softmax"
 
     @timer
     def fit(self, X):
@@ -1028,13 +1029,17 @@ class SAE(BaseEstimator, TransformerMixin):
         self.all_missing_ = sim.all_missing_mask_
 
         # Onehot encode y to get y_train.
-        self.tt_ = AutoEncoderFeatureTransformer(num_classes=self.num_classes)
+        self.tt_ = AutoEncoderFeatureTransformer(
+            num_classes=self.num_classes, activate=self.activate
+        )
+
         y_train = self.tt_.fit_transform(self.y_original_)
 
         if self.gridparams is not None:
             self.scoring_metrics_ = [
                 "precision_recall_macro",
                 "precision_recall_micro",
+                "f1_score",
                 "auc_macro",
                 "auc_micro",
                 "accuracy",
@@ -1289,7 +1294,6 @@ class SAE(BaseEstimator, TransformerMixin):
             callbacks=fit_params["callbacks"],
             epochs=fit_params["epochs"],
             verbose=0,
-            fit__sample_weight=fit_params["sample_weight"],
             fit__validation_split=fit_params["validation_split"],
             score__missing_mask=self.sim_missing_mask_,
             score__scoring_metric=self.scoring_metric,
@@ -1431,6 +1435,7 @@ class SAE(BaseEstimator, TransformerMixin):
             ReduceLROnPlateau(
                 patience=self.lr_patience, min_lr=1e-6, min_delta=1e-6
             ),
+            VAECallbacks(),
         ]
 
         search_mode = True if self.run_gridsearch_ else False
@@ -1444,7 +1449,9 @@ class SAE(BaseEstimator, TransformerMixin):
         compile_params["learning_rate"] = self.learning_rate
 
         model_params = {
+            "y": y_train,
             "output_shape": y_train.shape[1],
+            "missing_mask": self.original_missing_mask_,
             "batch_size": self.batch_size,
             "weights_initializer": self.weights_initializer,
             "n_components": self.n_components,
@@ -1480,13 +1487,15 @@ class SAE(BaseEstimator, TransformerMixin):
                     self.sim_missing_mask_[self.y_original_ == i] = False
 
             sample_weights = self.nn_.get_class_weights(
-                self.y_original_, user_weights=self.sample_weights
+                self.y_original_,
+                self.original_missing_mask_,
+                user_weights=self.sample_weights,
             )
 
         else:
             sample_weights = None
 
-        fit_params["sample_weight"] = sample_weights
+        model_params["sample_weight"] = sample_weights
 
         if self.run_gridsearch_ and "learning_rate" in self.gridparams:
             self.gridparams["optimizer__learning_rate"] = self.gridparams[
@@ -1691,6 +1700,7 @@ class UBP(BaseEstimator, TransformerMixin):
                 "precision_recall_micro",
                 "auc_macro",
                 "auc_micro",
+                "f1_score",
                 "accuracy",
             ]
 
@@ -1977,6 +1987,8 @@ class UBP(BaseEstimator, TransformerMixin):
                     model_params["V"] = {
                         n_components_searched: model.V_latent.copy()
                     }
+                    model_params["n_components"] = n_components_searched
+                    self.n_components = n_components_searched
                     self.gridparams.pop("n_components")
 
                 else:
@@ -2297,7 +2309,9 @@ class UBP(BaseEstimator, TransformerMixin):
 
         if self.sample_weights == "auto":
             # Get class weights for each column.
-            sample_weights = self.nn_.get_class_weights(self.y_original_)
+            sample_weights = self.nn_.get_class_weights(
+                self.y_original_, self.original_missing_mask_
+            )
             sample_weights = self.nn_.normalize_data(sample_weights)
 
         elif isinstance(self.sample_weights, dict):
@@ -2345,17 +2359,25 @@ class UBP(BaseEstimator, TransformerMixin):
         """
         vinput = dict()
         if search_mode:
-            if self.n_components < 2:
-                raise ValueError("n_components must be >= 2.")
-
-            elif self.n_components == 2:
-                vinput[2] = self.nn_.init_weights(
-                    y_train.shape[0], self.n_components
-                )
-
+            if "n_components" in self.gridparams:
+                n_components = self.gridparams["n_components"]
             else:
-                for i in range(2, self.n_components + 1):
-                    vinput[i] = self.nn_.init_weights(y_train.shape[0], i)
+                n_components = self.n_components
+
+            if not isinstance(n_components, int):
+                if min(n_components) < 2:
+                    raise ValueError(
+                        f"n_components must be >= 2, but a value of {n_components} was specified."
+                    )
+
+                elif len(n_components) == 1:
+                    vinput[n_components[0]] = self.nn_.init_weights(
+                        y_train.shape[0], n_components[0]
+                    )
+
+                else:
+                    for c in n_components:
+                        vinput[c] = self.nn_.init_weights(y_train.shape[0], c)
 
         else:
             vinput[self.n_components] = self.nn_.init_weights(
