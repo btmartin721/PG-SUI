@@ -36,7 +36,6 @@ from tensorflow.keras.layers import (
     Dropout,
     Dense,
     Reshape,
-    Activation,
     Flatten,
     LeakyReLU,
     PReLU,
@@ -290,6 +289,7 @@ class AutoEncoderModel(tf.keras.Model):
 
     def __init__(
         self,
+        y,
         batch_size=32,
         output_shape=None,
         n_components=3,
@@ -301,6 +301,7 @@ class AutoEncoderModel(tf.keras.Model):
         l2_penalty=1e-6,
         dropout_rate=0.2,
         sample_weight=None,
+        missing_mask=None,
         num_classes=3,
     ):
         super(AutoEncoderModel, self).__init__()
@@ -314,7 +315,11 @@ class AutoEncoderModel(tf.keras.Model):
         )
         self.accuracy_tracker = tf.keras.metrics.Mean(name="accuracy")
 
-        self.batch_size = batch_size
+        self._y = y
+        self._batch_idx = 0
+        self._batch_size = batch_size
+        self._sample_weight = sample_weight
+        self._missing_mask = missing_mask
 
         # y_train[1] dimension.
         self.n_features = output_shape
@@ -393,8 +398,6 @@ class AutoEncoderModel(tf.keras.Model):
             kernel_regularizer,
         )
 
-        self.decoded_output = Activation("softmax")
-
     def call(self, inputs, training=None):
         """Call the model on a particular input.
 
@@ -405,8 +408,7 @@ class AutoEncoderModel(tf.keras.Model):
             tf.Tensor: Output predictions. Will be one-hot encoded.
         """
         x = self.encoder(inputs)
-        reconstruction = self.decoder(x)
-        return self.decoded_output(reconstruction)
+        return self.decoder(x)
 
     def model(self):
         """Here so that mymodel.model().summary() can be called for debugging."""
@@ -423,34 +425,58 @@ class AutoEncoderModel(tf.keras.Model):
         return [
             self.total_loss_tracker,
             self.reconstruction_loss_tracker,
-            # self.kl_loss_tracker,
             self.accuracy_tracker,
         ]
 
     @tf.function
     def train_step(self, data):
-        if isinstance(data, tuple):
-            if len(data) == 2:
-                x, y = data
-                sample_weight = None
-            else:
-                x, y, sample_weight = data
+        y = self._y
+
+        (
+            y_true,
+            sample_weight,
+            missing_mask,
+        ) = self.nn_.prepare_training_batches(
+            y,
+            y,
+            self._batch_size,
+            self._batch_idx,
+            True,
+            self.n_components,
+            self._sample_weight,
+            self._missing_mask,
+            ubp=False,
+        )
+
+        if sample_weight is not None:
+            sample_weight_masked = tf.convert_to_tensor(
+                sample_weight[~missing_mask], dtype=tf.float32
+            )
         else:
-            raise TypeError("Target y must be supplied to fit for this model.")
+            sample_weight_masked = None
+
+        y_true_masked = tf.boolean_mask(
+            tf.convert_to_tensor(y_true, dtype=tf.float32),
+            tf.reduce_any(tf.not_equal(y_true, -1), axis=2),
+        )
 
         with tf.GradientTape() as tape:
-            reconstruction, z_mean, z_log_var = self(x, training=True)
+            reconstruction = self(y_true, training=True)
+
+            y_pred_masked = tf.boolean_mask(
+                reconstruction, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
+            )
 
             # Returns binary crossentropy loss.
             reconstruction_loss = self.compiled_loss(
-                y,
-                reconstruction,
-                sample_weight=sample_weight,
+                y_true_masked,
+                y_pred_masked,
+                sample_weight=sample_weight_masked,
             )
 
             regularization_loss = sum(self.losses)
 
-            total_loss = reconstruction_loss + regularization_loss  # + kl_loss
+            total_loss = reconstruction_loss + regularization_loss
 
         grads = tape.gradient(total_loss, self.trainable_weights)
         self.optimizer.apply_gradients(zip(grads, self.trainable_weights))
@@ -462,8 +488,9 @@ class AutoEncoderModel(tf.keras.Model):
         # self.compiled_metrics.update_state(
         self.accuracy_tracker.update_state(
             self.categorical_accuracy(
-                y,
-                reconstruction,
+                y_true_masked,
+                y_pred_masked,
+                sample_weight=sample_weight_masked,
             )
         )
 
@@ -475,20 +502,46 @@ class AutoEncoderModel(tf.keras.Model):
 
     @tf.function
     def test_step(self, data):
-        if isinstance(data, tuple):
-            if len(data) == 2:
-                x, y = data
-                sample_weight = None
-            else:
-                x, y, sample_weight = data
-        else:
-            raise TypeError("Target y must be supplied to fit in this model.")
+        y = self._y
 
-        reconstruction, z_mean, z_log_var = self(x, training=False)
-        reconstruction_loss = self.compiled_loss(
+        (
+            y_true,
+            sample_weight,
+            missing_mask,
+        ) = self.nn_.prepare_training_batches(
             y,
-            reconstruction,
-            sample_weight=sample_weight,
+            y,
+            self._batch_size,
+            self._batch_idx,
+            True,
+            self.n_components,
+            self._sample_weight,
+            self._missing_mask,
+            ubp=False,
+        )
+
+        if sample_weight is not None:
+            sample_weight_masked = tf.convert_to_tensor(
+                sample_weight[~missing_mask], dtype=tf.float32
+            )
+        else:
+            sample_weight_masked = None
+
+        y_true_masked = tf.boolean_mask(
+            tf.convert_to_tensor(y_true, dtype=tf.float32),
+            tf.reduce_any(tf.not_equal(y_true, -1), axis=2),
+        )
+
+        reconstruction = self(y_true, training=False)
+
+        y_pred_masked = tf.boolean_mask(
+            reconstruction, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
+        )
+
+        reconstruction_loss = self.compiled_loss(
+            y_true_masked,
+            y_pred_masked,
+            sample_weight=sample_weight_masked,
         )
 
         regularization_loss = sum(self.losses)
@@ -497,8 +550,9 @@ class AutoEncoderModel(tf.keras.Model):
 
         self.accuracy_tracker.update_state(
             self.categorical_accuracy(
-                y,
-                reconstruction,
+                y_true_masked,
+                y_pred_masked,
+                sample_weight=sample_weight_masked,
             )
         )
 
@@ -510,3 +564,49 @@ class AutoEncoderModel(tf.keras.Model):
             "reconstruction_loss": self.reconstruction_loss_tracker.result(),
             "accuracy": self.accuracy_tracker.result(),
         }
+
+    @property
+    def batch_size(self):
+        """Batch (=step) size per epoch."""
+        return self._batch_size
+
+    @property
+    def batch_idx(self):
+        """Current batch (=step) index."""
+        return self._batch_idx
+
+    @property
+    def y(self):
+        return self._y
+
+    @property
+    def missing_mask(self):
+        return self._missing_mask
+
+    @property
+    def sample_weight(self):
+        return self._sample_weight
+
+    @batch_size.setter
+    def batch_size(self, value):
+        """Set batch_size parameter."""
+        self._batch_size = int(value)
+
+    @batch_idx.setter
+    def batch_idx(self, value):
+        """Set current batch (=step) index."""
+        self._batch_idx = int(value)
+
+    @y.setter
+    def y(self, value):
+        """Set y after each epoch."""
+        self._y = value
+
+    @missing_mask.setter
+    def missing_mask(self, value):
+        """Set y after each epoch."""
+        self._missing_mask = value
+
+    @sample_weight.setter
+    def sample_weight(self, value):
+        self._sample_weight = value
