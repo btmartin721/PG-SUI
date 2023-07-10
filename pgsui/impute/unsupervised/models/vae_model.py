@@ -19,6 +19,7 @@ from tensorflow.python.util import deprecation
 tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 tf.get_logger().setLevel(logging.ERROR)
 
+
 # Monkey patching deprecation utils to supress warnings.
 # noinspection PyUnusedLocal
 def deprecated(
@@ -48,7 +49,7 @@ from tensorflow.keras import backend as K
 # Custom Modules
 try:
     from ..neural_network_methods import NeuralNetworkMethods
-except (ModuleNotFoundError, ValueError):
+except (ModuleNotFoundError, ValueError, ImportError):
     from impute.unsupervised.neural_network_methods import NeuralNetworkMethods
 
 
@@ -237,8 +238,15 @@ class Encoder(tf.keras.layers.Layer):
         x = self.dense_latent(x)
         z_mean = self.dense_z_mean(x)
         z_log_var = self.dense_z_log_var(x)
+
+        # Compute the KL divergence
+        kl_loss = -0.5 * tf.reduce_sum(
+            1 + z_log_var - tf.square(z_mean) - tf.exp(z_log_var), axis=-1
+        )
+        # Add the KL divergence to the model's total loss
+        self.add_loss(self.beta * tf.reduce_mean(kl_loss))
+
         z = self.sampling([z_mean, z_log_var])
-        # z_mean, z_log_var = self.kldivergence([z_mean, z_log_var])
 
         return z_mean, z_log_var, z
 
@@ -387,7 +395,7 @@ class VAEModel(tf.keras.Model):
         self._batch_size = batch_size
         self._y = y
         self._final_activation = final_activation
-        if num_classes == 10:
+        if num_classes == 10 or num_classes == 3:
             self.acc_func = tf.keras.metrics.categorical_accuracy
         elif num_classes == 4:
             self.acc_func = tf.keras.metrics.binary_accuracy
@@ -398,7 +406,7 @@ class VAEModel(tf.keras.Model):
         self.reconstruction_loss_tracker = tf.keras.metrics.Mean(
             name="reconstruction_loss"
         )
-        self.kl_loss_tracker = tf.keras.metrics.Mean(name="kl_loss")
+        # self.kl_loss_tracker = tf.keras.metrics.Mean(name="kl_loss")
         self.accuracy_tracker = tf.keras.metrics.Mean(name="accuracy")
 
         # y_train[1] dimension.
@@ -510,13 +518,12 @@ class VAEModel(tf.keras.Model):
         return [
             self.total_loss_tracker,
             self.reconstruction_loss_tracker,
-            self.kl_loss_tracker,
+            # self.kl_loss_tracker,
             self.accuracy_tracker,
         ]
 
     @tf.function
     def train_step(self, data):
-
         y = self._y
 
         (
@@ -561,21 +568,21 @@ class VAEModel(tf.keras.Model):
                 sample_weight=sample_weight_masked,
             )
 
-            kl_loss = self.kl_beta * tf.reduce_mean(
-                -0.5
-                * tf.reduce_sum(
-                    z_log_var
-                    - tf.math.square(z_mean)
-                    - tf.math.exp(z_log_var)
-                    + 1,
-                    axis=-1,
-                )
-            )
+            # kl_loss = self.kl_beta * tf.reduce_mean(
+            #     -0.5
+            #     * tf.reduce_sum(
+            #         z_log_var
+            #         - tf.math.square(z_mean)
+            #         - tf.math.exp(z_log_var)
+            #         + 1,
+            #         axis=-1,
+            #     )
+            # )
 
             # Doesn't include KL Divergence Loss.
             regularization_loss = sum(self.losses)
 
-            total_loss = reconstruction_loss + kl_loss + regularization_loss
+            total_loss = reconstruction_loss + regularization_loss
 
         grads = tape.gradient(total_loss, self.trainable_variables)
         self.optimizer.apply_gradients(zip(grads, self.trainable_variables))
@@ -592,14 +599,14 @@ class VAEModel(tf.keras.Model):
 
         self.total_loss_tracker.update_state(total_loss)
         self.reconstruction_loss_tracker.update_state(reconstruction_loss)
-        self.kl_loss_tracker.update_state(kl_loss)
+        # self.kl_loss_tracker.update_state(kl_loss)
 
         # return {m.name: m.result() for m in self.metrics}
 
         return {
             "loss": self.total_loss_tracker.result(),
             "reconstruction_loss": self.reconstruction_loss_tracker.result(),
-            "kl_loss": self.kl_loss_tracker.result(),
+            # "kl_loss": self.kl_loss_tracker.result(),
             "accuracy": self.accuracy_tracker.result(),
         }
 
