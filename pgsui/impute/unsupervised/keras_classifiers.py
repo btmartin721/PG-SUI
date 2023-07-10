@@ -13,7 +13,7 @@ try:
         UBPInputTransformer,
         AutoEncoderFeatureTransformer,
     )
-except (ModuleNotFoundError, ValueError):
+except (ModuleNotFoundError, ValueError, ImportError):
     from utils.scorers import Scorers
     from impute.unsupervised.neural_network_methods import NeuralNetworkMethods
     from impute.unsupervised.models.vae_model import (

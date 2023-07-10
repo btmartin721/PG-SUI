@@ -31,6 +31,7 @@ from tensorflow.python.util import deprecation
 tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 tf.get_logger().setLevel(logging.ERROR)
 
+
 # Monkey patching deprecation utils to supress warnings.
 # noinspection PyUnusedLocal
 def deprecated(
@@ -340,7 +341,7 @@ class NeuralNetworkMethods:
                 else:
                     y_pred = pred_multilab_decoded
 
-        y_pred = y_pred.astype(np.int)
+        y_pred = y_pred.astype(int)
 
         if return_proba:
             return y_pred, y_unresolved_certainty
@@ -790,7 +791,6 @@ class NeuralNetworkMethods:
             batch_size = batch_end - batch_start
 
         if ubp:
-
             # override batches. This model refines the input to fit the output, so
             # v_batch and y_true have to be overridden.
             y_true = y[batch_start:batch_end, :]
@@ -881,21 +881,21 @@ class NeuralNetworkMethods:
             ValueError: Invalid act_func argument supplied.
         """
         if optimizer.lower() == "adam":
-            opt = tf.keras.optimizers.Adam
+            opt = tf.keras.optimizers.legacy.Adam
         elif optimizer.lower() == "sgd":
-            opt = tf.keras.optimizers.SGD
+            opt = tf.keras.optimizers.legacy.SGD
         elif optimizer.lower() == "adagrad":
-            opt = tf.keras.optimizers.Adagrad
+            opt = tf.keras.optimizers.legacy.Adagrad
         elif optimizer.lower() == "adadelta":
-            opt = tf.keras.optimizers.Adadelta
+            opt = tf.keras.optimizers.legacy.Adadelta
         elif optimizer.lower() == "adamax":
-            opt = tf.keras.optimizers.Adamax
+            opt = tf.keras.optimizers.legacy.Adamax
         elif optimizer.lower() == "ftrl":
-            opt = tf.keras.optimizers.Ftrl
+            opt = tf.keras.optimizers.legacy.Ftrl
         elif optimizer.lower() == "nadam":
-            opt = tf.keras.optimizers.Nadam
+            opt = tf.keras.optimizers.legacy.Nadam
         elif optimizer.lower() == "rmsprop":
-            opt = tf.keras.optimizers.RMSProp
+            opt = tf.keras.optimizers.legacy.RMSProp
 
         if vae:
             if act_func == "softmax":
@@ -923,7 +923,7 @@ class NeuralNetworkMethods:
             "optimizer": opt,
             "loss": loss,
             "metrics": metrics,
-            "run_eagerly": True,
+            "run_eagerly": False,
         }
 
     @staticmethod
@@ -1280,7 +1280,7 @@ class NeuralNetworkMethods:
 
     @staticmethod
     def write_gt_state_probs(
-        y_pred, y_pred_1d, y_true, y_true_1d, prefix="imputer"
+        y_pred, y_pred_1d, y_true, y_true_1d, nn_method, prefix="imputer"
     ):
         bin_mapping = np.array(
             [np.array2string(x) for row in y_pred for x in row]
@@ -1304,7 +1304,11 @@ class NeuralNetworkMethods:
         gt_df = pd.DataFrame.from_records(gt_dist)
         gt_df.to_csv(
             os.path.join(
-                f"{prefix}_output", "logs", "genotype_stateProbs_truths.csv"
+                f"{prefix}_output",
+                "logs",
+                "Unsupervised",
+                nn_method,
+                "genotype_state_proba.csv",
             ),
             index=False,
             header=False,

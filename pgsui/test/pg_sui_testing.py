@@ -11,7 +11,7 @@ import scipy.stats as stats
 from sklearn_genetic.space import Continuous, Categorical, Integer
 
 # from pgsui import GenotypeData
-from read_input.read_input import GenotypeData
+from snpio import GenotypeData
 from impute.estimators import (
     ImputeNLPCA,
     ImputeUBP,
@@ -20,7 +20,7 @@ from impute.estimators import (
 )
 from impute.simple_imputers import ImputePhylo
 
-# from read_input.read_input import GenotypeData
+# from snpio import GenotypeData
 # from impute.estimators import *
 # from impute.simple_imputers import ImputeAlleleFreq, ImputePhylo
 
@@ -73,7 +73,6 @@ def main():
 
     if args.phylip:
         if args.pop_ids or args.onerow_perind:
-
             print(
                 "\nPhylip file was used with structure arguments; ignoring "
                 "structure file arguments\n"

@@ -38,6 +38,7 @@ from tensorflow.python.util import deprecation
 tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 tf.get_logger().setLevel(logging.ERROR)
 
+
 # Monkey patching deprecation utils to supress warnings.
 # noinspection PyUnusedLocal
 def deprecated(
@@ -78,7 +79,7 @@ try:
         UBPTargetTransformer,
         AutoEncoderFeatureTransformer,
     )
-except (ModuleNotFoundError, ValueError):
+except (ModuleNotFoundError, ValueError, ImportError):
     from utils.misc import timer
     from utils.misc import isnotebook
     from utils.misc import validate_input_type
@@ -261,6 +262,8 @@ class VAE(BaseEstimator, TransformerMixin):
         Raises:
             TypeError: Must be either pandas.DataFrame, numpy.ndarray, or List[List[int]].
         """
+
+        self.nn_method_ = "VAE"
         self.is_multiclass_ = True if self.num_classes != 4 else False
         self.do_act_in_model_ = True if self.activate is None else False
         self.run_gridsearch_ = False if self.gridparams is None else True
@@ -360,16 +363,24 @@ class VAE(BaseEstimator, TransformerMixin):
                 print("\nBest found parameters:")
                 pprint.pprint(self.best_params_)
                 print(f"\nBest score: {self.best_score_}")
-            plotting.plot_grid_search(self.search_.cv_results_, self.prefix)
+            plotting.plot_grid_search(
+                self.search_.cv_results_, "VAE", self.prefix
+            )
 
         plotting.plot_history(self.histories_, "VAE", prefix=self.prefix)
-        plotting.plot_metrics(self.metrics_, self.num_classes, self.prefix)
+        plotting.plot_metrics(
+            self.metrics_, self.num_classes, self.prefix, "VAE"
+        )
 
         if self.ga_:
             plot_fitness_evolution(self.search_)
             plt.savefig(
                 os.path.join(
-                    f"{self.prefix}_output", "plots", "fitness_evolution.pdf"
+                    f"{self.prefix}_output",
+                    "plots",
+                    "Unsupervised",
+                    self.nn_method_,
+                    "fitness_evolution.pdf",
                 ),
                 bbox_inches="tight",
                 facecolor="white",
@@ -381,7 +392,11 @@ class VAE(BaseEstimator, TransformerMixin):
             g = plotting.plot_search_space(self.search_)
             plt.savefig(
                 os.path.join(
-                    f"{self.prefix}_output", "plots", "search_space.pdf"
+                    f"{self.prefix}_output",
+                    "plots",
+                    "Unsupervised",
+                    self.nn_method_,
+                    "search_space.pdf",
                 ),
                 bbox_inches="tight",
                 facecolor="white",
@@ -426,15 +441,6 @@ class VAE(BaseEstimator, TransformerMixin):
         #     y_train, y_pred, return_proba=True
         # )
 
-        # There were some predicted values below the binary threshold.
-        if y_pred_certainty is not None:
-            plotting = Plotting()
-            plotting.plot_certainty_heatmap(
-                y_pred_certainty,
-                self.genotype_data.individuals,
-                prefix=self.prefix,
-            )
-
         y_pred_1d = y_pred_decoded.ravel()
 
         # Only replace originally missing values at missing indexes.
@@ -442,16 +448,15 @@ class VAE(BaseEstimator, TransformerMixin):
             if i in y_missing_idx:
                 y_true_1d[i] = y_pred_1d[i]
 
-        if self.testing:
-            self.nn_.write_gt_state_probs(
-                y_pred, y_pred_1d, y_true, y_true_1d, prefix=self.prefix
-            )
-
-            Plotting.plot_label_clusters(z_mean, y_true_1d)
+        self.nn_.write_gt_state_probs(
+            y_pred, y_pred_1d, y_true, y_true_1d, "VAE", prefix=self.prefix
+        )
 
         Plotting.plot_confusion_matrix(
-            y_true_1d, y_pred_1d, prefix=self.prefix
+            y_true_1d, y_pred_1d, "VAE", prefix=self.prefix
         )
+
+        Plotting.plot_label_clusters(z_mean, y_true_1d)
 
         # Return to original shape.
         return np.reshape(y_true_1d, y_true.shape)
@@ -605,7 +610,7 @@ class VAE(BaseEstimator, TransformerMixin):
             verbose=0,
             num_classes=self.num_classes,
             activate=self.act_func_,
-            fit__validation_split=fit_params["validation_split"],
+            validation_split=fit_params["validation_split"],
             score__missing_mask=self.sim_missing_mask_,
             score__scoring_metric=self.scoring_metric,
             score__num_classes=self.num_classes,
@@ -656,6 +661,8 @@ class VAE(BaseEstimator, TransformerMixin):
                         os.path.join(
                             f"{self.prefix}_output",
                             "logs",
+                            "Unsupervised",
+                            self.nn_method_,
                             "gridsearch_progress_log.txt",
                         ),
                         "w",
@@ -706,7 +713,11 @@ class VAE(BaseEstimator, TransformerMixin):
             best_clf = search.best_estimator_
 
             fp = os.path.join(
-                f"{self.prefix}_output", "reports", "vae_cvresults.csv"
+                f"{self.prefix}_output",
+                "reports",
+                "Unsupervised",
+                self.nn_method_,
+                f"cvresults_{self.nn_method_}.csv",
             )
 
             cv_results = pd.DataFrame(search.cv_results_)
@@ -762,7 +773,11 @@ class VAE(BaseEstimator, TransformerMixin):
         # For CSVLogger() callback.
         append = False
         logfile = os.path.join(
-            f"{self.prefix}_output", "logs", "vae_training_log.csv"
+            f"{self.prefix}_output",
+            "logs",
+            "Unsupervised",
+            self.nn_method_,
+            "training_log.csv",
         )
 
         callbacks = [
@@ -992,6 +1007,7 @@ class SAE(BaseEstimator, TransformerMixin):
         Raises:
             TypeError: Must be either pandas.DataFrame, numpy.ndarray, or List[List[int]].
         """
+        self.nn_method_ = "SAE"
         self.run_gridsearch_ = False if self.gridparams is None else True
 
         # Treating y as X here for compatibility with UBP/NLPCA.
@@ -1080,16 +1096,24 @@ class SAE(BaseEstimator, TransformerMixin):
                 print("\nBest found parameters:")
                 pprint.pprint(self.best_params_)
                 print(f"\nBest score: {self.best_score_}")
-            plotting.plot_grid_search(self.search_.cv_results_, self.prefix)
+            plotting.plot_grid_search(
+                self.search_.cv_results_, "SAE", self.prefix
+            )
 
         plotting.plot_history(self.histories_, "SAE", prefix=self.prefix)
-        plotting.plot_metrics(self.metrics_, self.num_classes, self.prefix)
+        plotting.plot_metrics(
+            self.metrics_, self.num_classes, self.prefix, "SAE"
+        )
 
         if self.ga_:
             plot_fitness_evolution(self.search_)
             plt.savefig(
                 os.path.join(
-                    f"{self.prefix}_output", "plots", "fitness_evolution.pdf"
+                    f"{self.prefix}_output",
+                    "plots",
+                    "Unsupervised",
+                    self.nn_method_,
+                    "fitness_evolution.pdf",
                 ),
                 bbox_inches="tight",
                 facecolor="white",
@@ -1101,7 +1125,11 @@ class SAE(BaseEstimator, TransformerMixin):
             g = plotting.plot_search_space(self.search_)
             plt.savefig(
                 os.path.join(
-                    f"{self.prefix}_output", "plots", "search_space.pdf"
+                    f"{self.prefix}_output",
+                    "plots",
+                    "Unsupervised",
+                    self.nn_method_,
+                    "search_space.pdf",
                 ),
                 bbox_inches="tight",
                 facecolor="white",
@@ -1140,8 +1168,12 @@ class SAE(BaseEstimator, TransformerMixin):
             if i in y_missing_idx:
                 y_true_1d[i] = y_pred_1d[i]
 
+        self.nn_.write_gt_state_probs(
+            y_pred, y_pred_1d, y_true, y_true_1d, "VAE", prefix=self.prefix
+        )
+
         Plotting.plot_confusion_matrix(
-            y_true_1d, y_pred_1d, prefix=self.prefix
+            y_true_1d, y_pred_1d, "SAE", prefix=self.prefix
         )
 
         return np.reshape(y_true_1d, y_true.shape)
@@ -1337,6 +1369,21 @@ class SAE(BaseEstimator, TransformerMixin):
                 search.fit(y_true, y_true, callbacks=callback)
 
             else:
+                # Write GridSearchCV to log file instead of STDOUT.
+                if self.verbose >= 10:
+                    old_stdout = sys.stdout
+                    log_file = open(
+                        os.path.join(
+                            f"{self.prefix}_output",
+                            "logs",
+                            "Unsupervised",
+                            self.nn_method_,
+                            "gridsearch_progress_log.txt",
+                        ),
+                        "w",
+                    )
+                    sys.stdout = log_file
+
                 if self.gridsearch_method.lower() == "gridsearch":
                     # Do GridSearchCV
                     search = GridSearchCV(
@@ -1376,7 +1423,11 @@ class SAE(BaseEstimator, TransformerMixin):
             best_clf = search.best_estimator_
 
             fp = os.path.join(
-                f"{self.prefix}_output", "reports", "vae_cvresults.csv"
+                f"{self.prefix}_output",
+                "reports",
+                "Unsupervised",
+                self.nn_method_,
+                "cvresults.csv",
             )
 
             cv_results = pd.DataFrame(search.cv_results_)
@@ -1427,7 +1478,11 @@ class SAE(BaseEstimator, TransformerMixin):
         # For CSVLogger() callback.
         append = False
         logfile = os.path.join(
-            f"{self.prefix}_output", "logs", "sae_training_log.csv"
+            f"{self.prefix}_output",
+            "logs",
+            "Unsupervised",
+            self.nn_method_,
+            "training_log.csv",
         )
 
         callbacks = [
@@ -1606,7 +1661,6 @@ class UBP(BaseEstimator, TransformerMixin):
         n_jobs=1,
         verbose=0,
     ):
-
         super().__init__()
 
         # CLF parameters.
@@ -1733,23 +1787,32 @@ class UBP(BaseEstimator, TransformerMixin):
             fit_params,
         )
 
+        nn_method = "NLPCA" if self.nlpca else "UBP"
+        self.nn_method_ = nn_method
+
         if self.gridparams is not None:
             if self.verbose > 0:
                 print("\nBest found parameters:")
                 pprint.pprint(self.best_params_)
                 print(f"\nBest score: {self.best_score_}")
-            plotting.plot_grid_search(self.search_.cv_results_, self.prefix)
-
-        nn_method = "NLPCA" if self.nlpca else "UBP"
+            plotting.plot_grid_search(
+                self.search_.cv_results_, self.nn_method_, self.prefix
+            )
 
         plotting.plot_history(self.histories_, nn_method, prefix=self.prefix)
-        plotting.plot_metrics(self.metrics_, self.num_classes, self.prefix)
+        plotting.plot_metrics(
+            self.metrics_, self.num_classes, self.prefix, nn_method
+        )
 
         if self.ga_:
             plot_fitness_evolution(self.search_)
             plt.savefig(
                 os.path.join(
-                    f"{self.prefix}_output", "plots", "fitness_evolution.pdf"
+                    f"{self.prefix}_output",
+                    "plots",
+                    "Unsupervised",
+                    self.nn_method_,
+                    "fitness_evolution.pdf",
                 ),
                 bbox_inches="tight",
                 facecolor="white",
@@ -1761,7 +1824,11 @@ class UBP(BaseEstimator, TransformerMixin):
             g = plotting.plot_search_space(self.search_)
             plt.savefig(
                 os.path.join(
-                    f"{self.prefix}_output", "plots", "search_space.pdf"
+                    f"{self.prefix}_output",
+                    "plots",
+                    "Unsupervised",
+                    self.nn_method_,
+                    "search_space.pdf",
                 ),
                 bbox_inches="tight",
                 facecolor="white",
@@ -1808,8 +1875,18 @@ class UBP(BaseEstimator, TransformerMixin):
             if i in y_missing_idx:
                 y_true_1d[i] = y_pred_1d[i]
 
+        # TODO: Implement this into UBP/NLPCA
+        self.nn_.write_gt_state_probs(
+            y_pred_proba,
+            y_pred_1d,
+            y_true,
+            y_true_1d,
+            self.nn_method_,
+            prefix=self.prefix,
+        )
+
         Plotting.plot_confusion_matrix(
-            y_true_1d, y_pred_1d, prefix=self.prefix
+            y_true_1d, y_pred_1d, self.nn_method_, prefix=self.prefix
         )
 
         return np.reshape(y_true_1d, y_true.shape)
@@ -1954,7 +2031,6 @@ class UBP(BaseEstimator, TransformerMixin):
             scoring = None
 
         for phase in range(1, 4):
-
             ubp_weights = models[1].get_weights() if phase == 3 else None
 
             (
@@ -2142,6 +2218,21 @@ class UBP(BaseEstimator, TransformerMixin):
                 search.fit(V[self.n_components], y_true, callbacks=callback)
 
             else:
+                # Write GridSearchCV to log file instead of STDOUT.
+                if self.verbose >= 10:
+                    old_stdout = sys.stdout
+                    log_file = open(
+                        os.path.join(
+                            f"{self.prefix}_output",
+                            "logs",
+                            "Unsupervised",
+                            self.nn_method_,
+                            "gridsearch_progress_log.txt",
+                        ),
+                        "w",
+                    )
+                    sys.stdout = log_file
+
                 if self.gridsearch_method.lower() == "gridsearch":
                     # Do GridSearchCV
                     search = GridSearchCV(
@@ -2184,11 +2275,17 @@ class UBP(BaseEstimator, TransformerMixin):
                 fp = os.path.join(
                     f"{self.prefix}_output",
                     "reports",
-                    "ubp_cvresults_phase{phase}.csv",
+                    "Unsupervised",
+                    self.nn_method_,
+                    f"cvresults_phase{phase}.csv",
                 )
             else:
                 fp = os.path.join(
-                    f"{self.prefix}_output", "reports", "nlpca_cvresults.csv"
+                    f"{self.prefix}_output",
+                    "reports",
+                    "Unsupervised",
+                    self.nn_method_,
+                    "cvresults.csv",
                 )
 
             cv_results = pd.DataFrame(search.cv_results_)

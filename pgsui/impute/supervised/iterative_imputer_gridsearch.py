@@ -57,7 +57,7 @@ try:
     from ...utils.misc import get_processor_name
     from ...utils.misc import HiddenPrints
     from ...utils.misc import isnotebook
-except (ModuleNotFoundError, ValueError):
+except (ModuleNotFoundError, ValueError, ImportError):
     from impute import simple_imputers
     from utils.plotting import Plotting
     from utils.misc import get_processor_name
@@ -232,7 +232,7 @@ class IterativeImputerGridSearch(IterativeImputer):
         pops: Optional[List[Union[str, int]]] = None,
         scoring_metric: str = "accuracy",
         early_stop_gen: int = 5,
-        missing_values: Union[int, np.float] = np.nan,
+        missing_values: Union[int, float] = np.nan,
         sample_posterior: bool = False,
         max_iter: int = 10,
         tol: float = 1e-3,
@@ -240,15 +240,14 @@ class IterativeImputerGridSearch(IterativeImputer):
         initial_strategy: str = "populations",
         imputation_order: str = "ascending",
         skip_complete: bool = False,
-        min_value: Union[np.float, int, float] = -np.inf,
-        max_value: Union[np.float, int, float] = np.inf,
+        min_value: Union[float, int, float] = -np.inf,
+        max_value: Union[float, int, float] = np.inf,
         verbose: int = 0,
         random_state: Optional[int] = None,
         add_indicator: bool = False,
         genotype_data: Optional[Any] = None,
         str_encodings: Optional[Dict[str, int]] = None,
     ) -> None:
-
         super().__init__(
             estimator=estimator,
             missing_values=missing_values,
@@ -289,7 +288,7 @@ class IterativeImputerGridSearch(IterativeImputer):
         self.grid_n_jobs = grid_n_jobs
         self.grid_iter = grid_iter
         self.clf_type = clf_type
-        self.ga = ga
+        self.gridsearch_method = gridsearch_method
         self.disable_progressbar = disable_progressbar
         self.progress_update_percent = progress_update_percent
         self.pops = pops
@@ -334,6 +333,9 @@ class IterativeImputerGridSearch(IterativeImputer):
             reset=in_fit,
             force_all_finite=force_all_finite,
         )
+
+        X[X < 0] = np.nan
+
         _check_inputs_dtype(X, self.missing_values)
 
         X_missing_mask = _get_mask(X, self.missing_values)
@@ -489,14 +491,13 @@ class IterativeImputerGridSearch(IterativeImputer):
             search = GridSearchCV(
                 estimator,
                 param_grid=self.gridparams,
-                n_iter=self.grid_iter,
                 scoring=self.scoring_metric,
                 n_jobs=self.grid_n_jobs,
                 cv=cross_val,
             )
 
         # Do genetic algorithm
-        else:
+        elif self.gridsearch_method == "genetic_algorithm":
             with HiddenPrints():
                 search = GASearchCV(
                     estimator=estimator,
@@ -508,6 +509,10 @@ class IterativeImputerGridSearch(IterativeImputer):
                     verbose=False,
                     **self.ga_kwargs,
                 )
+        else:
+            raise ValueError(
+                f"Invalid gridsearch_method provided: {self.gridsearch_method}. Supported options are 'gridsearch', 'randomized_gridsearch', and 'genetic_algorithm'"
+            )
 
         missing_row_mask = mask_missing_values[:, feat_idx]
         if fit_mode:
@@ -709,7 +714,6 @@ class IterativeImputerGridSearch(IterativeImputer):
             desc="Iteration: ",
             disable=self.disable_progressbar,
         ):
-
             if self.gridsearch_method == "genetic_algorithm":
                 iter_list.append(self.n_iter_)
 
@@ -755,7 +759,6 @@ class IterativeImputerGridSearch(IterativeImputer):
                 ),
                 start=1,
             ):
-
                 neighbor_feat_idx = self._get_neighbor_feat_idx(
                     n_features, feat_idx, abs_corr_mat
                 )

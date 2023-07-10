@@ -15,9 +15,9 @@ import scipy as sp
 from sklearn.base import BaseEstimator, TransformerMixin
 
 try:
-    from .read_input import GenotypeData
-except (ModuleNotFoundError, ValueError):
-    from read_input.read_input import GenotypeData
+    from snpio import GenotypeData
+except (ModuleNotFoundError, ValueError, ImportError):
+    from snpio import GenotypeData
 
 
 class SimGenotypeData(GenotypeData):
@@ -131,7 +131,7 @@ class SimGenotypeData(GenotypeData):
                 [0, 1],
                 size=self.genotypes012_array.shape,
                 p=((1 - self.prop_missing), self.prop_missing),
-            ).astype(np.bool)
+            ).astype(bool)
 
             self.validate_mask()
 
@@ -234,8 +234,8 @@ class SimGenotypeData(GenotypeData):
     def accuracy(self, imputed):
         masked_sites = np.sum(self.mask)
         num_correct = np.sum(
-            self.genotype_data.genotypes012_array[self.mask]
-            == imputed.imputed.genotypes012_array[self.mask]
+            self.genotype_data.genotypes_012(fmt="numpy")[self.mask]
+            == imputed.imputed.genotypes_012(fmt="numpy")[self.mask]
         )
         return num_correct / masked_sites
 

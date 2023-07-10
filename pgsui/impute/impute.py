@@ -12,6 +12,8 @@ from pathlib import Path
 from statistics import mean, median
 from contextlib import redirect_stdout
 from typing import Optional, Union, List, Dict, Tuple, Any, Callable
+from copy import deepcopy
+
 
 # Third party imports
 import numpy as np
@@ -46,7 +48,7 @@ try:
         IterativeImputerFixedParams,
     )
     from .unsupervised.neural_network_imputers import VAE, UBP, SAE
-    from ..read_input.read_input import GenotypeData
+    from snpio import GenotypeData
     from . import simple_imputers
     from ..utils.misc import get_processor_name
     from ..utils.misc import isnotebook
@@ -57,7 +59,7 @@ try:
         ImputeNMFTransformer,
         SimGenotypeDataTransformer,
     )
-except (ModuleNotFoundError, ValueError):
+except (ModuleNotFoundError, ValueError, ImportError):
     from impute.supervised.iterative_imputer_gridsearch import (
         IterativeImputerGridSearch,
     )
@@ -65,7 +67,7 @@ except (ModuleNotFoundError, ValueError):
         IterativeImputerFixedParams,
     )
     from impute.unsupervised.neural_network_imputers import VAE, UBP, SAE
-    from read_input.read_input import GenotypeData
+    from snpio import GenotypeData
     from impute import simple_imputers
     from utils.misc import get_processor_name
     from utils.misc import get_processor_name
@@ -144,13 +146,12 @@ class Impute:
 
         if self.clf == VAE or self.clf == SAE or self.clf == UBP:
             self.algorithm = "nn"
-            if self.clf == VAE:
-                self.using_basecat = True
-            else:
-                self.using_basecat = False
+            self.imp_method = "Unsupervised"
         else:
-            self.nn_method = None
             self.algorithm = "ii"
+            self.imp_method = "Supervised"
+        
+        self.imp_name = self.clf.__name__
 
         try:
             self.pops = kwargs["genotype_data"].populations
@@ -192,7 +193,11 @@ class Impute:
                     )
 
         self.logfilepath = os.path.join(
-            f"{self.prefix}_output", "logs", "imputer_progress_log.txt"
+            f"{self.prefix}_output",
+            "logs",
+            self.imp_method,
+            self.imp_name,
+            f"imputer_progress_log.txt",
         )
 
         self.invalid_indexes = None
@@ -203,19 +208,19 @@ class Impute:
         except OSError:
             pass
 
-        Path(os.path.join(f"{self.prefix}_output", "plots")).mkdir(
+        Path(os.path.join(f"{self.prefix}_output", "plots", self.imp_method, self.imp_name)).mkdir(
             parents=True, exist_ok=True
         )
 
-        Path(os.path.join(f"{self.prefix}_output", "logs")).mkdir(
+        Path(os.path.join(f"{self.prefix}_output", "logs", self.imp_method, self.imp_name)).mkdir(
             parents=True, exist_ok=True
         )
 
-        Path(os.path.join(f"{self.prefix}_output", "reports")).mkdir(
+        Path(os.path.join(f"{self.prefix}_output", "reports", self.imp_method, self.imp_name)).mkdir(
             parents=True, exist_ok=True
         )
 
-        Path(os.path.join(f"{self.prefix}_output", "alignments")).mkdir(
+        Path(os.path.join(f"{self.prefix}_output", "alignments", self.imp_method, self.imp_name)).mkdir(
             parents=True, exist_ok=True
         )
 
@@ -238,7 +243,7 @@ class Impute:
         # Test if output file can be written to
         try:
             outfile = os.path.join(
-                f"{self.prefix}_output", "alignments", "imputed_012.csv"
+                f"{self.prefix}_output", "alignments", self.imp_method, self.imp_name, "imputed_012.csv"
             )
 
             with open(outfile, "w") as fout:
@@ -292,7 +297,7 @@ class Impute:
         """
 
         outfile = os.path.join(
-            f"{prefix}_output", "alignments", "imputed_012.csv"
+            f"{prefix}_output", "alignments", self.imp_method, self.imp_name, "imputed_012.csv"
         )
 
         if isinstance(data, pd.DataFrame):
@@ -432,30 +437,37 @@ class Impute:
         Returns:
             GenotypeData: GenotypeData object with imputed data.
         """
-        imputed_filename = genotype_data.decode_imputed(
-            imp012,
-            write_output=True,
-            prefix=self.prefix,
-            is_nuc=self.using_basecat,
-        )
+        # imputed_filename = genotype_data.decode_012(
+        #     imp012,
+        #     write_output=True,
+        #     prefix=self.prefix,
+        #     is_nuc=self.using_basecat,
+        # )
 
-        ft = genotype_data.filetype
+        imputed_gd = deepcopy(genotype_data)
 
-        if ft.lower().startswith("structure") and ft.lower().endswith("row"):
-            ft += "PopID"
+        if self.clf == VAE:
+            if len(imp012.shape) == 3:
+                if imp012.shape[-1] == 4:
+                    imputed_gd.genotypes_onehot = imp012
+                else:
+                    raise ValueError("Invalid shape for imputed output.")
+            elif len(imp012.shape) == 2:
+                if isinstance(imp012, pd.DataFrame):
+                    imp012 = imp012.to_numpy()
+                imp012 = imp012.astype(int)
+                if np.max(imp012) > 2:
+                    imputed_gd.genotypes_int = imp012
+                else:
+                    imputed_gd.genotypes_012 = imp012
+            else:
+                raise ValueError(
+                    f"Invalid shape for imputed output: {imp012.shape}"
+                )
+        else:
+            imputed_gd.genotypes_012 = imp012
 
-        return GenotypeData(
-            filename=imputed_filename,
-            filetype=ft,
-            popmapfile=genotype_data.popmapfile,
-            guidetree=genotype_data.guidetree,
-            qmatrix_iqtree=genotype_data.qmatrix_iqtree,
-            qmatrix=genotype_data.qmatrix,
-            siterates=genotype_data.siterates,
-            siterates_iqtree=genotype_data.siterates_iqtree,
-            prefix=genotype_data.prefix,
-            verbose=False,
-        )
+        return imputed_gd
 
     def _subset_data_for_gridsearch(
         self,
@@ -534,10 +546,10 @@ class Impute:
         """
 
         best_score_outfile = os.path.join(
-            f"{self.prefix}_output", "reports", "imputed_best_score.csv"
+            f"{self.prefix}_output", "reports", self.imp_method, self.imp_name, "imputed_best_score.csv"
         )
         best_params_outfile = os.path.join(
-            f"{self.prefix}_output", "reports", "imputed_best_params.csv"
+            f"{self.prefix}_output", "reports", self.imp_method, self.imp_name, "imputed_best_params.csv"
         )
 
         if isinstance(df_scores, pd.DataFrame):
@@ -651,6 +663,7 @@ class Impute:
 
         df_chunks = self._df2chunks(df, self.chunk_size)
         imputed_df = self._impute_df(df_chunks, imputer)
+        imputed_df = imputed_df.astype(str)
 
         if self.disable_progressbar:
             if self.verbose > 0:
@@ -883,7 +896,6 @@ class Impute:
             ),
             start=1,
         ):
-
             if self.disable_progressbar:
                 perc = int((cnt / self.cv) * 100)
                 if self.verbose > 0:
@@ -973,7 +985,7 @@ class Impute:
         df_scores = df_scores.round(2)
 
         outfile = os.path.join(
-            f"{self.prefix}_output", "reports", "imputed_best_score.csv"
+            f"{self.prefix}_output", "reports", self.imp_method, self.imp_name, "imputed_best_score.csv"
         )
         df_scores.to_csv(outfile, header=True, index=False)
 
@@ -1024,21 +1036,19 @@ class Impute:
                     df_imp = df_imp.astype("Int8")
 
                 else:
-                    df_imp = pd.DataFrame(
-                        imputer.fit_transform(Xchunk, valid_cols=cols_to_keep),
-                        dtype="Int8",
+                    imp, params_list, score_list = imputer.fit_transform(
+                        Xchunk, valid_cols=cols_to_keep
                     )
+                    df_imp = pd.DataFrame(imp)
 
                 imputed_chunks.append(df_imp)
 
             else:
                 # Regressor. Needs to be rounded to integer first.
-                df_imp = pd.DataFrame(
-                    imputer.fit_transform(
-                        Xchunk,
-                        valid_cols=cols_to_keep,
-                    )
+                imp, params_list, score_list = imputer.fit_transform(
+                    Xchunk, valid_cols=cols_to_keep
                 )
+                df_imp = pd.DataFrame(imp)
                 df_imp = df_imp.round(0).astype("Int8")
 
                 imputed_chunks.append(df_imp)
@@ -1212,7 +1222,7 @@ class Impute:
         ]
 
         if self.algorithm == "ii":
-            imp_keys.append(
+            imp_keys.extend(
                 [
                     "n_nearest_features",
                     "max_iter",
@@ -1231,6 +1241,7 @@ class Impute:
             "crossover_probability",
             "mutation_probability",
             "ga_algorithm",
+            "early_stop_gen",
         ]
 
         to_remove = ["self", "__class__"]
@@ -1666,22 +1677,18 @@ class Impute:
             by_populations = True if strategy == "populations" else False
             simple = ImputeAlleleFreqTransformer(
                 by_populations=by_populations,
-                output_format=output_format,
                 verbose=False,
                 iterative_mode=True,
             )
 
         elif strategy == "phylogeny":
             simple = ImputePhyloTransformer(
-                str_encodings=str_encodings,
-                output_format=output_format,
                 disable_progressbar=True,
                 save_plots=False,
             )
 
         elif strategy == "nmf":
             simple = ImputeNMFTransformer(
-                output_format=output_format,
                 verbose=False,
                 iterative_mode=True,
             )
