@@ -1,0 +1,376 @@
+IQ-TREE 2.0.3 built Dec 19 2020
+
+Input file name: test.phy
+Type of analysis: ModelFinder + tree reconstruction
+Random seed number: 775642
+
+REFERENCES
+----------
+
+To cite IQ-TREE please use:
+
+Bui Quang Minh, Heiko A. Schmidt, Olga Chernomor, Dominik Schrempf,
+Michael D. Woodhams, Arndt von Haeseler, and Robert Lanfear (2020)
+IQ-TREE 2: New models and efficient methods for phylogenetic inference
+in the genomic era. Mol. Biol. Evol., in press.
+https://doi.org/10.1093/molbev/msaa015
+
+To cite ModelFinder please use: 
+
+Subha Kalyaanamoorthy, Bui Quang Minh, Thomas KF Wong, Arndt von Haeseler,
+and Lars S Jermiin (2017) ModelFinder: Fast model selection for
+accurate phylogenetic estimates. Nature Methods, 14:587–589.
+https://doi.org/10.1038/nmeth.4285
+
+SEQUENCE ALIGNMENT
+------------------
+
+Input data: 117 sequences with 2024 nucleotide sites
+Number of constant sites: 1037 (= 51.2352% of all sites)
+Number of invariant (constant or ambiguous constant) sites: 1037 (= 51.2352% of all sites)
+Number of parsimony informative sites: 527
+Number of distinct site patterns: 2019
+
+ModelFinder
+-----------
+
+Best-fit model according to BIC: TVM+F+R3
+
+List of models sorted by BIC scores: 
+
+Model                  LogL         AIC      w-AIC        AICc     w-AICc         BIC      w-BIC
+TVM+F+R3         -15773.516   32031.033 +    0.702   32097.070 +    0.769   33389.338 +    0.978
+GTR+F+R3         -15773.501   32033.002 +    0.262   32099.623 +    0.215   33396.920 -   0.0221
+GTR+F+R4         -15773.509   32037.018 -   0.0352   32104.813 -    0.016   33412.162 - 1.08e-05
+TPM2u+F+R3       -15829.334   32138.668 - 2.98e-24   32203.547 - 5.82e-24   33485.747 - 1.14e-21
+TPM2+F+R3        -15829.334   32138.668 - 2.98e-24   32203.547 - 5.82e-24   33485.747 - 1.14e-21
+TPM3+F+R3        -15829.467   32138.934 - 2.61e-24   32203.813 - 5.09e-24   33486.013 - 9.94e-22
+TPM3u+F+R3       -15829.467   32138.934 - 2.61e-24   32203.813 - 5.09e-24   33486.013 - 9.94e-22
+TIM2+F+R3        -15829.275   32140.550 - 1.16e-24   32206.007 -  1.7e-24   33493.242 - 2.68e-23
+TIM3+F+R3        -15829.467   32140.934 - 9.59e-25   32206.391 -  1.4e-24   33493.627 - 2.21e-23
+K3Pu+F+R3        -15835.784   32151.568 - 4.71e-27   32216.448 - 9.19e-27   33498.648 - 1.79e-24
+GTR+F+R2         -15835.529   32153.058 - 2.23e-27   32218.515 - 3.27e-27   33505.750 - 5.15e-26
+TIM+F+R3         -15835.765   32153.530 - 1.76e-27   32218.987 - 2.58e-27   33506.222 - 4.07e-26
+TVMe+R3          -15866.844   32211.689 - 4.15e-40   32275.994 - 1.08e-39   33553.155 - 2.62e-36
+K3P+R3           -15875.608   32225.217 - 4.79e-43   32288.381 -  2.2e-42   33555.457 - 8.28e-37
+SYM+R3           -15866.526   32213.053 -  2.1e-40   32277.932 -  4.1e-40   33560.132 -    8e-38
+TIMe+R3          -15875.217   32226.434 -  2.6e-43   32290.167 - 9.03e-43   33562.288 - 2.72e-38
+HKY+F+R3         -15871.993   32221.987 - 2.41e-42   32286.292 - 6.27e-42   33563.453 - 1.52e-38
+TN+F+R3          -15871.980   32223.959 - 8.98e-43   32288.839 - 1.75e-42   33571.039 - 3.42e-40
+TIM2e+R3         -15880.340   32236.679 - 1.55e-45   32300.413 - 5.38e-45   33572.533 - 1.62e-40
+K2P+R3           -15889.511   32251.022 - 1.19e-48   32313.620 - 7.29e-48   33575.650 - 3.41e-41
+TNe+R3           -15889.117   32252.233 - 6.51e-49   32315.398 -    3e-48   33582.474 - 1.13e-42
+TIM3e+R3         -15886.243   32248.486 - 4.24e-48   32312.220 - 1.47e-47   33584.340 - 4.43e-43
+GTR+F+G4         -15989.342   32458.685 - 9.62e-94   32523.564 - 1.88e-93   33805.764 - 3.67e-91
+GTR+F+I+G4       -15986.561   32455.122 - 5.71e-93   32520.579 - 8.36e-93   33807.814 - 1.32e-91
+GTR+F+I          -16291.919   33063.837 - 3.77e-225   33128.717 - 7.36e-225   34410.917 - 1.44e-222
+JC+R3            -16515.818   33501.637 - 3.23e-320   33563.672 - 2.61e-319   34820.652 - 1.53e-311
+GTR+F            -16582.865   33643.730 -        0   33708.035 -        0   34985.197 -        0
+F81+F+R3         -16605.759   33687.517 -        0   33751.250 -        0   35023.371 -        0
+
+AIC, w-AIC   : Akaike information criterion scores and weights.
+AICc, w-AICc : Corrected AIC scores and weights.
+BIC, w-BIC   : Bayesian information criterion scores and weights.
+
+Plus signs denote the 95% confidence sets.
+Minus signs denote significant exclusion.
+
+SUBSTITUTION PROCESS
+--------------------
+
+Model of substitution: TVM+F+R3
+
+Rate parameter R:
+
+  A-C: 0.9333
+  A-G: 4.3530
+  A-T: 1.4254
+  C-G: 0.2807
+  C-T: 4.3530
+  G-T: 1.0000
+
+State frequencies: (empirical counts from alignment)
+
+  pi(A) = 0.1741
+  pi(C) = 0.3485
+  pi(G) = 0.3216
+  pi(T) = 0.1558
+
+Rate matrix Q:
+
+  A    -1.482    0.2476     1.066     0.169
+  C    0.1237   -0.7085   0.06871    0.5161
+  G    0.5769   0.07446   -0.7699    0.1186
+  T    0.1889     1.155    0.2448    -1.588
+
+Model of rate heterogeneity: FreeRate with 3 categories
+Site proportion and rates:  (0.8521,0.4153) (0.1217,2.843) (0.02616,11.47)
+
+ Category  Relative_rate  Proportion
+  1         0.4153         0.8521
+  2         2.843          0.1217
+  3         11.47          0.02616
+
+MAXIMUM LIKELIHOOD TREE
+-----------------------
+
+Log-likelihood of the tree: -15653.1974 (s.e. 429.1785)
+Unconstrained log-likelihood (without tree): -15400.9153
+Number of free parameters (#branches + #model parameters): 242
+Akaike information criterion (AIC) score: 31790.3949
+Corrected Akaike information criterion (AICc) score: 31856.4319
+Bayesian information criterion (BIC) score: 33148.7000
+
+Total tree length (sum of branch lengths): 1.2296
+Sum of internal branch lengths: 0.4067 (33.0807% of tree length)
+
+WARNING: 13 near-zero internal branches (<0.0005) should be treated with caution
+         Such branches are denoted by '**' in the figure below
+
+NOTE: Tree is UNROOTED although outgroup taxon 'GUFL_BXGU36_AA14' is drawn at root
+
++--GUFL_BXGU36_AA14
+| (Node1)
+|           +---GUFL_BX626
+|        +--| (Node5)
+|        |  |                                                        +---DSAZ_BX1213
+|        |  |                                                     +--| (Node14)
+|        |  |                                                     |  +--DSNM_BXDS02
+|        |  |                    +--------------------------------| (Node13)
+|        |  |                    |                                |                                +--ONWI_BX489
+|        |  |                    |                                |                             +--| (Node25)
+|        |  |                    |                                |                             |  |  +--ONWI_BX491
+|        |  |                    |                                |                             |  +--| (Node26)
+|        |  |                    |                                |                             |     +--ONWI_BX490
+|        |  |                    |                                |                          +--| (Node24)
+|        |  |                    |                                |                          |  +--ONWI_BX495
+|        |  |                    |                                |                       +--| (Node23)
+|        |  |                    |                                |                       |  |  +--ONWI_BX493
+|        |  |                    |                                |                       |  +--| (Node27)
+|        |  |                    |                                |                       |     +--ONWI_BX497
+|        |  |                    |                                |                    +--| (Node22)
+|        |  |                    |                                |                    |  +--ONWI_BX486
+|        |  |                    |                                |                 +--| (Node21)
+|        |  |                    |                                |                 |  +--ONNE_BXON58_433x2
+|        |  |                    |                                |              +--| (Node20)
+|        |  |                    |                                |              |  +--ONCO_BX601
+|        |  |                    |                                |           +--| (Node19)
+|        |  |                    |                                |           |  +--ONKS_BXON61_133
+|        |  |                    |                                |        +--| (Node18)
+|        |  |                    |                                |        |  |  +--ONCO_BX580
+|        |  |                    |                                |        |  +--| (Node28)
+|        |  |                    |                                |        |     +--ONCO_BX602
+|        |  |                    |                                |     +--| (Node17)
+|        |  |                    |                                |     |  +--ONTX_BXON46_153
+|        |  |                    |                                |  +--| (Node16)
+|        |  |                    |                                |  |  +--ONTX_BXON45_150
+|        |  |                    |                                +--| (Node15)
+|        |  |                    |                                   +--ONCO_BX588
+|        |  |                 +**| (Node12)
+|        |  |                 |  |           +--FLFL_BXFL01
+|        |  |                 |  +-----------| (Node29)
+|        |  |                 |              +--FLFL_BX683
+|        |  |              +--| (Node11)
+|        |  |              |  |        +--EASC_BXEA43_1307
+|        |  |              |  |     +--| (Node32)
+|        |  |              |  |     |  |                    +--EAGA_BXEA49_564
+|        |  |              |  |     |  |                 +--| (Node39)
+|        |  |              |  |     |  |                 |  +--TCAL_BXTC93
+|        |  |              |  |     |  |              +--| (Node38)
+|        |  |              |  |     |  |              |  +--EAGA_BXEA34_665
+|        |  |              |  |     |  |           +--| (Node37)
+|        |  |              |  |     |  |           |  |  +--EAVA_BX101
+|        |  |              |  |     |  |           |  +--| (Node40)
+|        |  |              |  |     |  |           |     +--EAGA_BXEA33_663
+|        |  |              |  |     |  |        +--| (Node36)
+|        |  |              |  |     |  |        |  |                       +--EAGA_BX660
+|        |  |              |  |     |  |        |  |                    +**| (Node48)
+|        |  |              |  |     |  |        |  |                    |  |  +--EASC_BX1115
+|        |  |              |  |     |  |        |  |                    |  +--| (Node49)
+|        |  |              |  |     |  |        |  |                    |     +--EAGA_BXEA15_654
+|        |  |              |  |     |  |        |  |                 +--| (Node47)
+|        |  |              |  |     |  |        |  |                 |  +--EAGA_BX346
+|        |  |              |  |     |  |        |  |              +--| (Node46)
+|        |  |              |  |     |  |        |  |              |  +--TCAL_BX273
+|        |  |              |  |     |  |        |  |           +**| (Node45)
+|        |  |              |  |     |  |        |  |           |  |     +--TCAL_BX612
+|        |  |              |  |     |  |        |  |           |  |  +**| (Node51)
+|        |  |              |  |     |  |        |  |           |  |  |  +--EASC_BXEA41_1305
+|        |  |              |  |     |  |        |  |           |  +--| (Node50)
+|        |  |              |  |     |  |        |  |           |     +--EAGA_BXEA25
+|        |  |              |  |     |  |        |  |        +--| (Node44)
+|        |  |              |  |     |  |        |  |        |  +--EAGA_BXEA32_662
+|        |  |              |  |     |  |        |  |     +--| (Node43)
+|        |  |              |  |     |  |        |  |     |  +--TCAL_BX279
+|        |  |              |  |     |  |        |  |  +**| (Node42)
+|        |  |              |  |     |  |        |  |  |  |     +--EAAL_BXEA27
+|        |  |              |  |     |  |        |  |  |  |  +--| (Node53)
+|        |  |              |  |     |  |        |  |  |  |  |  +--EAGA_BXEA31_659
+|        |  |              |  |     |  |        |  |  |  +--| (Node52)
+|        |  |              |  |     |  |        |  |  |     +--EAGA_BX301
+|        |  |              |  |     |  |        |  +--| (Node41)
+|        |  |              |  |     |  |        |     +--EATN_BXEA02_36x2
+|        |  |              |  |     |  |     +--| (Node35)
+|        |  |              |  |     |  |     |  |        +--EASC_BXEA42_1306
+|        |  |              |  |     |  |     |  |     +**| (Node56)
+|        |  |              |  |     |  |     |  |     |  +--TCAL_BXTC110
+|        |  |              |  |     |  |     |  |  +--| (Node55)
+|        |  |              |  |     |  |     |  |  |  +--EASC_BXEA40_1304
+|        |  |              |  |     |  |     |  +--| (Node54)
+|        |  |              |  |     |  |     |     |  +--EASC_BX1109
+|        |  |              |  |     |  |     |     +--| (Node57)
+|        |  |              |  |     |  |     |        +--TCGA_BX344
+|        |  |              |  |     |  |  +--| (Node34)
+|        |  |              |  |     |  |  |  |  +--EAGA_BX472
+|        |  |              |  |     |  |  |  +--| (Node58)
+|        |  |              |  |     |  |  |     +-----EASC_BX1112
+|        |  |              |  |     |  +--| (Node33)
+|        |  |              |  |     |     |        +--EAGA_BXEA35_666
+|        |  |              |  |     |     |     +--| (Node61)
+|        |  |              |  |     |     |     |  +--TCAL_BXTC80
+|        |  |              |  |     |     |  +--| (Node60)
+|        |  |              |  |     |     |  |  +--TCAL_BXTC92
+|        |  |              |  |     |     +--| (Node59)
+|        |  |              |  |     |        +--EAGA_BXEA21
+|        |  |              |  |  +--| (Node31)
+|        |  |              |  |  |  |  +--EASC_BX1108
+|        |  |              |  |  |  +--| (Node62)
+|        |  |              |  |  |     |     +--EAVA_BX320
+|        |  |              |  |  |     |  +--| (Node64)
+|        |  |              |  |  |     |  |  +**EAVA_BX321
+|        |  |              |  |  |     +--| (Node63)
+|        |  |              |  |  |        +---EASC_BX1114
+|        |  |              |  +--| (Node30)
+|        |  |              |     +--EASC_BX1110
+|        |  |           +**| (Node10)
+|        |  |           |  +--EAGA_BXEA17
+|        |  |        +--| (Node9)
+|        |  |        |  |                     +---TTLA_BXTT35_1486
+|        |  |        |  |                  +--| (Node71)
+|        |  |        |  |                  |  +--TTTX_BX223
+|        |  |        |  |               +--| (Node70)
+|        |  |        |  |               |  |  +--TTLA_BXTT37_1492
+|        |  |        |  |               |  +--| (Node72)
+|        |  |        |  |               |     +--TTTX_BX228
+|        |  |        |  |            +--| (Node69)
+|        |  |        |  |            |  |  +--TTLA_BXTT34_1482
+|        |  |        |  |            |  +**| (Node73)
+|        |  |        |  |            |     +--TTLA_BXTT36_1491
+|        |  |        |  |         +--| (Node68)
+|        |  |        |  |         |  |  +--TTLA_BX421
+|        |  |        |  |         |  +--| (Node74)
+|        |  |        |  |         |     +--TTLA_BX422
+|        |  |        |  |      +--| (Node67)
+|        |  |        |  |      |  |        +---TTAR_BX507
+|        |  |        |  |      |  |     +--| (Node77)
+|        |  |        |  |      |  |     |  +--TTLA_BXTT38_1493
+|        |  |        |  |      |  |  +--| (Node76)
+|        |  |        |  |      |  |  |  |        +--TTTX_BX225
+|        |  |        |  |      |  |  |  |     +--| (Node80)
+|        |  |        |  |      |  |  |  |     |  +--TTLA_BXTT13
+|        |  |        |  |      |  |  |  |  +**| (Node79)
+|        |  |        |  |      |  |  |  |  |  +--TTLA_BXTT39_1498
+|        |  |        |  |      |  |  |  +--| (Node78)
+|        |  |        |  |      |  |  |     +--TTAR_BX987
+|        |  |        |  |      |  +--| (Node75)
+|        |  |        |  |      |     |     +--TTTX_BX227
+|        |  |        |  |      |     |  +--| (Node82)
+|        |  |        |  |      |     |  |  +--TTTX_BX222
+|        |  |        |  |      |     +--| (Node81)
+|        |  |        |  |      |        +---TTAR_BX984
+|        |  |        |  |   +--| (Node66)
+|        |  |        |  |   |  +---TTKS_BXTT20_78
+|        |  |        |  +---| (Node65)
+|        |  |        |      |          +--MXMX_BX1195
+|        |  |        |      |       +--| (Node84)
+|        |  |        |      |       |  +--MXMX_BX1194
+|        |  |        |      +-------| (Node83)
+|        |  |        |              +--MXMX_BX1196
+|        |  |     +--| (Node8)
+|        |  |     |  +--TCAL_BXTC63
+|        |  |  +--| (Node7)
+|        |  |  |  +--GUMS_BXGU69_AA43
+|        |  +--| (Node6)
+|        |     |                          +---GUMS_BXGU68_AA42
+|        |     |                       +--| (Node93)
+|        |     |                       |  +--GUMS_BXGU67_AA41
+|        |     |                    +--| (Node92)
+|        |     |                    |  |  +--GUMS_BXGU50_T69
+|        |     |                    |  +--| (Node94)
+|        |     |                    |     +--GUMS_BXGU56_T83
+|        |     |                 +--| (Node91)
+|        |     |                 |  |  +--GUMS_BXGU43_T55
+|        |     |                 |  +--| (Node95)
+|        |     |                 |     |      +--CHCH_BX1191
+|        |     |                 |     +------| (Node96)
+|        |     |                 |            +--CHCH_BX1193
+|        |     |              +--| (Node90)
+|        |     |              |  +--GUMS_BXGU75_AA49
+|        |     |           +**| (Node89)
+|        |     |           |  +--GUMS_BXGU58_T92
+|        |     |        +--| (Node88)
+|        |     |        |  +--GUMS_BX200
+|        |     |     +--| (Node87)
+|        |     |     |  |        +--GUMS_BXGU53_T72
+|        |     |     |  |     +--| (Node99)
+|        |     |     |  |     |  |              +--GUMS_BXGU78_AA52
+|        |     |     |  |     |  |           +--| (Node104)
+|        |     |     |  |     |  |           |  +--GUMS_BXGU77_AA51
+|        |     |     |  |     |  |        +--| (Node103)
+|        |     |     |  |     |  |        |  +--GUMS_BXGU74_AA48
+|        |     |     |  |     |  |     +**| (Node102)
+|        |     |     |  |     |  |     |  +--GUMS_BXGU72_AA46
+|        |     |     |  |     |  |  +--| (Node101)
+|        |     |     |  |     |  |  |  |  +--GUMS_BXGU76_AA50
+|        |     |     |  |     |  |  |  +--| (Node105)
+|        |     |     |  |     |  |  |     +--GUMS_BXGU71_AA45
+|        |     |     |  |     |  +--| (Node100)
+|        |     |     |  |     |     |     +--GUMS_BXGU73_AA47
+|        |     |     |  |     |     |  +--| (Node107)
+|        |     |     |  |     |     |  |  +--GUMS_BXGU54_T73
+|        |     |     |  |     |     +--| (Node106)
+|        |     |     |  |     |        +--GUMS_BXGU79_AA73
+|        |     |     |  |  +**| (Node98)
+|        |     |     |  |  |  +--GUMS_BXGU48_T62
+|        |     |     |  +--| (Node97)
+|        |     |     |     |  +--GUMS_BXGU44_T56
+|        |     |     |     +--| (Node108)
+|        |     |     |        +--GUMS_BXGU45_T59
+|        |     |  +--| (Node86)
+|        |     |  |  +--GUMS_BXGU47_T61
+|        |     +**| (Node85)
+|        |        +--GUMS_BXGU49_T66
+|     +--| (Node4)
+|     |  +--GUFL_BXGU61_U57
+|  +--| (Node3)
+|  |  |        +--GUFL_BXGU65_AA39
+|  |  |     +--| (Node111)
+|  |  |     |  +--GUFL_BXGU35_AA13
+|  |  |  +--| (Node110)
+|  |  |  |  +--GUFL_BX685
+|  |  +--| (Node109)
+|  |     +--GUFL_BX503
++--| (Node2)
+|  |        +--GUFL_BX684
+|  |     +--| (Node114)
+|  |     |  +--GUFL_BXGU33
+|  |  +--| (Node113)
+|  |  |  +--GUFL_BXGU63_AA37
+|  +--| (Node112)
+|     +--GUFL_BX504
+|
+|  +--GUFL_BXGU32
++--| (Node115)
+   +--GUFL_BXGU62_AA36
+
+Tree in newick format:
+
+(GUFL_BXGU36_AA14:0.0090571372,((((GUFL_BX626:0.0120860631,(((((((((DSAZ_BX1213:0.0117118915,DSNM_BXDS02:0.0051276155)Node14:0.0069010759,(((((((((((ONWI_BX489:0.0038916900,(ONWI_BX491:0.0054883485,ONWI_BX490:0.0047145957)Node26:0.0033326314)Node25:0.0025816030,ONWI_BX495:0.0028742004)Node24:0.0049082855,(ONWI_BX493:0.0031152981,ONWI_BX497:0.0053218744)Node27:0.0032828007)Node23:0.0033086140,ONWI_BX486:0.0068928231)Node22:0.0050434140,ONNE_BXON58_433x2:0.0041063595)Node21:0.0057146968,ONCO_BX601:0.0066793911)Node20:0.0052773269,ONKS_BXON61_133:0.0056849021)Node19:0.0014060409,(ONCO_BX580:0.0071943863,ONCO_BX602:0.0085428237)Node28:0.0011047776)Node18:0.0032570358,ONTX_BXON46_153:0.0102922078)Node17:0.0028031944,ONTX_BXON45_150:0.0086268113)Node16:0.0014274647,ONCO_BX588:0.0101439527)Node15:0.0027699209)Node13:0.0943996614,(FLFL_BXFL01:0.0109854159,FLFL_BX683:0.0079342296)Node29:0.0364194840)Node12:0.0000024084,(((EASC_BXEA43_1307:0.0083216380,(((((((EAGA_BXEA49_564:0.0109749616,TCAL_BXTC93:0.0065336702)Node39:0.0008730058,EAGA_BXEA34_665:0.0045346391)Node38:0.0017941673,(EAVA_BX101:0.0034837894,EAGA_BXEA33_663:0.0068837460)Node40:0.0008111142)Node37:0.0023187766,((((((((EAGA_BX660:0.0044682648,(EASC_BX1115:0.0099816462,EAGA_BXEA15_654:0.0031526699)Node49:0.0010196396)Node48:0.0000020641,EAGA_BX346:0.0058951174)Node47:0.0011354081,TCAL_BX273:0.0074295336)Node46:0.0012655117,((TCAL_BX612:0.0050616116,EASC_BXEA41_1305:0.0048238768)Node51:0.0000028256,EAGA_BXEA25:0.0087253730)Node50:0.0014288342)Node45:0.0000024847,EAGA_BXEA32_662:0.0094479795)Node44:0.0013449085,TCAL_BX279:0.0077334654)Node43:0.0005534305,((EAAL_BXEA27:0.0089103010,EAGA_BXEA31_659:0.0052639063)Node53:0.0013348306,EAGA_BX301:0.0110166270)Node52:0.0012005495)Node42:0.0000020672,EATN_BXEA02_36x2:0.0085164225)Node41:0.0012979446)Node36:0.0013171826,(((EASC_BXEA42_1306:0.0098074157,TCAL_BXTC110:0.0051618801)Node56:0.0000023316,EASC_BXEA40_1304:0.0032560084)Node55:0.0022441526,(EASC_BX1109:0.0032472290,TCGA_BX344:0.0049512219)Node57:0.0041831085)Node54:0.0006695561)Node35:0.0006212839,(EAGA_BX472:0.0100801713,EASC_BX1112:0.0171357008)Node58:0.0043533338)Node34:0.0021788873,(((EAGA_BXEA35_666:0.0101887448,TCAL_BXTC80:0.0036703604)Node61:0.0011383222,TCAL_BXTC92:0.0074644343)Node60:0.0005104655,EAGA_BXEA21:0.0102582531)Node59:0.0010246992)Node33:0.0013049609)Node32:0.0011517365,(EASC_BX1108:0.0110284924,((EAVA_BX320:0.0072845092,EAVA_BX321:0.0000027535)Node64:0.0061137961,EASC_BX1114:0.0123616806)Node63:0.0023532735)Node62:0.0029134203)Node31:0.0027729273,EASC_BX1110:0.0110299730)Node30:0.0044832665)Node11:0.0010626937,EAGA_BXEA17:0.0006450030)Node10:0.0000021689,(((((((TTLA_BXTT35_1486:0.0118943164,TTTX_BX223:0.0085964607)Node71:0.0016209694,(TTLA_BXTT37_1492:0.0095506833,TTTX_BX228:0.0107615375)Node72:0.0014952946)Node70:0.0007004597,(TTLA_BXTT34_1482:0.0080231591,TTLA_BXTT36_1491:0.0052581846)Node73:0.0000026611)Node69:0.0006217382,(TTLA_BX421:0.0054163609,TTLA_BX422:0.0050084203)Node74:0.0019534286)Node68:0.0029593517,(((TTAR_BX507:0.0119739906,TTLA_BXTT38_1493:0.0067166616)Node77:0.0033470336,(((TTTX_BX225:0.0087077114,TTLA_BXTT13:0.0068223246)Node80:0.0019702379,TTLA_BXTT39_1498:0.0092486554)Node79:0.0000020645,TTAR_BX987:0.0111451569)Node78:0.0009250443)Node76:0.0021394325,((TTTX_BX227:0.0074245564,TTTX_BX222:0.0082147455)Node82:0.0026068456,TTAR_BX984:0.0112913641)Node81:0.0017854642)Node75:0.0009583925)Node67:0.0042392907,TTKS_BXTT20_78:0.0137992791)Node66:0.0016902294,((MXMX_BX1195:0.0058415830,MXMX_BX1194:0.0063988689)Node84:0.0029649667,MXMX_BX1196:0.0068375567)Node83:0.0241049736)Node65:0.0117122702)Node9:0.0024596482,TCAL_BXTC63:0.0096124711)Node8:0.0016413207,GUMS_BXGU69_AA43:0.0017912086)Node7:0.0033593740,(((((((((GUMS_BXGU68_AA42:0.0131021128,GUMS_BXGU67_AA41:0.0043002930)Node93:0.0019219787,(GUMS_BXGU50_T69:0.0049702632,GUMS_BXGU56_T83:0.0091275506)Node94:0.0025875102)Node92:0.0020467560,(GUMS_BXGU43_T55:0.0038081694,(CHCH_BX1191:0.0025155911,CHCH_BX1193:0.0023475492)Node96:0.0216909741)Node95:0.0014497424)Node91:0.0007001525,GUMS_BXGU75_AA49:0.0073793464)Node90:0.0020570715,GUMS_BXGU58_T92:0.0096502780)Node89:0.0000020959,GUMS_BX200:0.0101802312)Node88:0.0027401890,(((GUMS_BXGU53_T72:0.0077490835,(((((GUMS_BXGU78_AA52:0.0031387217,GUMS_BXGU77_AA51:0.0051403889)Node104:0.0045749882,GUMS_BXGU74_AA48:0.0044727172)Node103:0.0019357593,GUMS_BXGU72_AA46:0.0083370317)Node102:0.0000021167,(GUMS_BXGU76_AA50:0.0096198077,GUMS_BXGU71_AA45:0.0070143203)Node105:0.0013000801)Node101:0.0017415653,((GUMS_BXGU73_AA47:0.0063923125,GUMS_BXGU54_T73:0.0062793022)Node107:0.0042509082,GUMS_BXGU79_AA73:0.0054351052)Node106:0.0030793276)Node100:0.0013444711)Node99:0.0020089226,GUMS_BXGU48_T62:0.0047296580)Node98:0.0000020031,(GUMS_BXGU44_T56:0.0036759223,GUMS_BXGU45_T59:0.0064034317)Node108:0.0014587179)Node97:0.0016167069)Node87:0.0016456452,GUMS_BXGU47_T61:0.0054357791)Node86:0.0016083720,GUMS_BXGU49_T66:0.0058910558)Node85:0.0000020162)Node6:0.0080405467)Node5:0.0054870490,GUFL_BXGU61_U57:0.0028202955)Node4:0.0011880443,(((GUFL_BXGU65_AA39:0.0040842875,GUFL_BXGU35_AA13:0.0085040996)Node111:0.0019704967,GUFL_BX685:0.0041363687)Node110:0.0013079941,GUFL_BX503:0.0032633584)Node109:0.0014597802)Node3:0.0017953479,(((GUFL_BX684:0.0046220800,GUFL_BXGU33:0.0042146783)Node114:0.0022389664,GUFL_BXGU63_AA37:0.0092771831)Node113:0.0016794802,GUFL_BX504:0.0042155870)Node112:0.0011262208)Node2:0.0013875795,(GUFL_BXGU32:0.0050283880,GUFL_BXGU62_AA36:0.0060131354)Node115:0.0013080428)Node1;
+
+TIME STAMP
+----------
+
+Date and time: Fri May  7 14:04:53 2021
+Total CPU time used: 810.809 seconds (0h:13m:30s)
+Total wall-clock time used: 436.894 seconds (0h:7m:16s)
+

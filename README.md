@@ -1,171 +1,233 @@
-# Super Deli  
 
-![Super Deli Logo](https://github.com/btmartin721/super_deli/blob/master/logos/full_logo_1280x640.png)
+<img src="https://github.com/btmartin721/PG-SUI/blob/master/img/pgsui-logo-faded.png" alt="PG-SUI Logo" width="50%" height="50%">
 
-A comprehensive machine learning species delimitation package
 
-## Requirements
+# PG-SUI
 
-+ python == 3.7
+Population Genomic Supervised and Unsupervised Imputation
+
+## About PG-SUI
+
+NOTE: PG-SUI is not fully functional yet and is changing daily. We will issue a full release when it is fully functional.
+
+PG-SUI is a Python 3 API that uses machine learning to impute missing values from population genomic SNP data. There are several supervised and unsupervised machine learning algorithms available to impute missing data, as well as some non-machine learning imputers that are useful. 
+
+### Supervised Imputation Methods
+
+Supervised methods utilze the scikit-learn's IterativeImputer, which is based on the MICE (Multivariate Imputation by Chained Equations) algorithm [[1]](#1), and iterates over each SNP site (i.e., feature) while uses the N nearest neighbor features to inform the imputation. The number of nearest features can be adjusted by users. IterativeImputer currently works with any of the following scikit-learn classifiers: 
+
+    + K-Nearest Neighbors
+    + Random Forest
+    + Extra Trees
+    + Gradient Boosting
+    + XGBoost
+    + LightGBM
+
+See the scikit-learn documentation (https://scikit-learn.org) for more information on IterativeImputer and each of the classifiers.
+
+### Unsupervised Imputation Methods
+
+Unsupervised imputers include three custom neural network models:
+
+    + Variational Autoencoder (VAE) [[2]](#2)
+    + Non-linear Principal Component Analysis (NLPCA) [[3]](#3)
+    + Unsupervised Backpropagation (UBP) [[4]](#4)
+
+VAE models train themselves to reconstruct their input (i.e., the genotypes. To use VAE for imputation, the missing values are masked and the VAE model gets trained to reconstruct only on known values. Once the model is trained, it is then used to predict the missing values.
+
+NLPCA initializes random, reduced-dimensional input, then trains itself by using the known values (i.e., genotypes) as targets and refining the random input until it accurately predicts the genotype output. The trained model can then predict the missing values.
+
+UBP is an extension of NLPCA that runs over three phases. Phase 1 refines the randomly generated, reduced-dimensional input in a single layer perceptron neural network to obtain good initial input values. Phase 2 uses the refined reduced-dimensional input from phase 1 as input into a multi-layer perceptron (MLP), but in Phase 2 only the neural network weights are refined. Phase three uses an MLP to refine both the weights and the reduced-dimensional input. Once the model is trained, it can be used to predict the missing values.
+
+### Non-Machine Learning Methods
+
+We also include several non-machine learning options for imputing missing data, including:
+
+    + Per-population mode per SNP site
+    + Global mode per SNP site
+    + Using a phylogeny as input to inform the imputation
+    + Matrix Factorization
+
+These four "simple" imputation methods can be used as standalone imputers, as the initial imputation strategy for IterativeImputer (at least one method is required to be chosen), and to validate the accuracy of both IterativeImputer and the neural network models.
+
+## Dependencies
+
++ python >= 3.7
 + pandas == 1.2.5
 + numpy == 1.20
-+ matplotlib
-+ seaborn
-+ kneed
-+ tqdm
-+ jupyterlab
-+ scikit-learn == 0.24
-+ scikit-learn-extra
-+ sklearn-genetic-opt >= 0.6.0
-+ toytree
 + scipy >= 1.6.2 and < 1.7.0
++ matplotlib
++ plotly
++ kaleido
++ seaborn
++ jupyterlab
++ tqdm
++ toytree
++ scikit-learn >= 1.0
++ tensorflow >= 2.7
++ keras
++ xgboost
++ lightgbm
++ scikeras >= 0.6.0
 
-Python versions other than 3.7 are not currently supported.  
+### Installation
 
-The requirements can mostly be installed with conda. The only module that isn't available on conda is sklearn-genetic-opt, which can be installed via pip.
+The requirements can be installed with conda and pip. sklearn-genetic-opt and scikeras are only avaiable via pip, and scikeras requires tensorflow >= 2.7 and scikit-learn >= 1.0. Since tensorflow 2.7 is not yet available on conda channels, you must install it with pip here.
 
 ```
-conda create -n super_deli python=3.7
-conda activate super_deli
+conda create -n pg-sui python=3.8
+conda activate pg-sui
 
-conda install matplotlib seaborn jupyterlab scikit-learn tqdm pandas=1.2.5 numpy=1.20.2 scipy=1.6.2 xgboost lightgbm tensorflow keras
+conda install matplotlib seaborn jupyterlab scikit-learn=1.0 tqdm pandas=1.2.5 numpy=1.20.2 scipy=1.6.2 xgboost lightgbm
 
 # Only works if using Intel CPUs; speeds up processing
 conda install scikit-learn-intelex
 
-conda install -c conda-forge toytree scikit-learn-extra kneed
+conda install -c conda-forge toytree kaleido
+
+# For PCA plots.
+conda install -c plotly plotly
 
 # For genetic algorithm plotting functions
 pip install sklearn-genetic-opt[all]
+
+pip install scikeras
+
+pip install tensorflow-cpu==2.7
 ```
 
-## Input files
+#### Installation troubleshooting
 
-Takes a structure or phylip file and a popmap file as input.  
+##### "use_2to3 is invalid" error
+
+Users running setuptools v58 may encounter this error during the last step of installation, using pip to install sklearn-genetic-opt:
+
+```
+ERROR: Command errored out with exit status 1:
+   command: /Users/tyler/miniforge3/envs/pg-sui/bin/python3.8 -c 'import io, os, sys, setuptools, tokenize; sys.argv[0] = '"'"'/private/var/folders/6x/t6g4kn711z5cxmc2_tvq0mlw0000gn/T/pip-install-6y5g_mhs/deap_1d32f65d60a44056bd7031f3aad44571/setup.py'"'"'; __file__='"'"'/private/var/folders/6x/t6g4kn711z5cxmc2_tvq0mlw0000gn/T/pip-install-6y5g_mhs/deap_1d32f65d60a44056bd7031f3aad44571/setup.py'"'"';f = getattr(tokenize, '"'"'open'"'"', open)(__file__) if os.path.exists(__file__) else io.StringIO('"'"'from setuptools import setup; setup()'"'"');code = f.read().replace('"'"'\r\n'"'"', '"'"'\n'"'"');f.close();exec(compile(code, __file__, '"'"'exec'"'"'))' egg_info --egg-base /private/var/folders/6x/t6g4kn711z5cxmc2_tvq0mlw0000gn/T/pip-pip-egg-info-7hg3hcq2
+       cwd: /private/var/folders/6x/t6g4kn711z5cxmc2_tvq0mlw0000gn/T/pip-install-6y5g_mhs/deap_1d32f65d60a44056bd7031f3aad44571/
+  Complete output (1 lines):
+  error in deap setup command: use_2to3 is invalid.
+```
+
+This occurs during the installation of DEAP, one of the dependencies for sklearn-genetic-opt. As a workaround, first downgrade setuptools, and then proceed with the installation as normal:
+```
+pip install setuptools==57
+pip install sklearn-genetic-opt[all]
+
+```
+
+##### Mac ARM architecture
+
+PG-SUI has been tested on the new Mac M1 chips and is working fine, but some changes to the installation process were necessary as of 9-December-21. Installation was successful using the following:
+
+```
+### Install Miniforge3 instead of Miniconda3
+### Download: https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-MacOSX-arm64.sh
+bash ~/Downloads/Miniforge3-MacOSX-arm64.sh
+
+#close and re-open terminal
+
+#create and activate conda environment
+conda create -n pg-sui python
+
+#activate environment
+conda activate pg-sui
+
+#install packages
+conda install -c conda-forge matplotlib seaborn jupyterlab scikit-learn tqdm pandas=1.2.5 numpy=1.20.2 scipy=1.6.2 xgboost lightgbm tensorflow keras sklearn-genetic toytree
+
+#downgrade setuptools (may or may not be necessary)
+pip install setuptools==57
+
+#install sklearn-genetic-opt and mlflow
+pip install sklearn-genetic-opt mlflow
+
+```
+
+Any other problems we run into testing on the Mac ARM architecture will be adjusted here. Note that the step installing scikit-learn-intelex was skipped here. PG-SUI will automatically detect the CPU architecture you are running, and forgo importing this package (which will only work on Intel processors)
+
+## Input Data
+
+Takes a STRUCTURE or PHYLIP file and a population map (popmap) file as input.  
 There are a number of options for the structure file format. See the help menu:
 
-```python super_deli.py -h```  
+```python pg_sui.py -h``` 
 
-## API Pipeline (so far)
+You can read your input files like this:
 
 ```
 # Read in PHYLIP or STRUCTURE-formatted file
-# and impute missing data
-# Various imputation options are supported thus far
 data = GenotypeData(...)
-data.impute_missing(...)
+```
 
-# Initialize DimReduction object
-# Instance used for most functions downstream
-dr = DimReduction(data.imputed_df, ...)
+The data can be retrieved as a pandas DataFrame, a 2D numpy array, or a 2D list, each with shape (n_samples, n_SNPs):
 
-# Run Principal Component Analysis
-# Can be used as input for runRandomForestUML()
-pca = runPCA(dr, ...)
-pca.plot() # makes a scatterplot
+```
+df = data.genotypes012_df
+arr = data.genotypes012_array
+l = data.genotypes012_list
+```
 
-# Random Forest unsupervised
-rf = runRandomForestUML(dr, ...)
+You can also retrieve the number of individuals and SNP sites:
 
-# runMDS can be used with random forest dissimilarity matrix (recommended),
-# which is accessible as a runRandomForest class property like below.
-rf_cmds = runMDS(dr, metric=True, dissimilarity_matrix=rf.dissimilarity_matrix, ...)
+```
+num_inds = data.indcount
+num_snps = data.snpcount
+```
 
-# Or it can be run on the raw RF output like this:
-rf_cmds = runMDS(dr, metric=True, rf=rf.rf_model, ...)
+And to retrieve a list of sample IDs or population IDs:
 
-# Then it can be plotted by calling plot:
-rf_cmds.plot()
+```
+inds = data.individuals
+pops = data.populations
+```
 
-PAM clustering can then be run on the MDS output:
-cmds_pam = PamClustering(rf_cmds, dr, ...)
+## Supported Imputation Methods
 
-# And mean silhouette widths can be used to determine PAM optimal K
-cmds_pam.msw(plot_msw=True)
+There are numerous supported algorithms to impute missing data. Each one can be run by calling the corresponding class.
 
-# If you don't want to plot it, set plot_msw=False.
-# In that case it will just get the average silhouette scores for each K.
-# If plot_msw=True, it will also get average silhouette scores plus make
-# some neat plots.
+```
+# Various imputation options are supported
 
-# isoMDS can be run by setting metric=False in runMDS()
-rf_isomds = runMDS(dr, metric=False, ...)
-rf_isomds.plot()
+# Supervised IterativeImputer classifiers
+knn = ImputeKNN(...) # K-Nearest Neighbors
+rf = ImputeRandomForest(...) # Random Forest or Extra Trees
+gb = ImputeGradientBoosting(...) # Gradient Boosting
+xgb = ImputeXGBoost(...) # XGBoost
+lgbm = ImputeLightGBM(...) # LightGBM
 
-isomds_pam = PamClustering(rf_cmds, dr, ...)
-isomds_pam.msw(...)
+# Non-machine learning methods
 
-# t-SNE can be run in the same way
-tsne = runTSNE(dr, ...)
-tsne.plot()
+# Use phylogeny to inform imputation
+phylo = ImputePhylo(...)
 
-tsne_pam = PamClustering(tsne, dr, ...)
-tsne_pam.msw(...)
+# Use by-population or global allele frequency to inform imputation
+pop_af = ImputeAlleleFreq(by_populations=True, ...)
+global_af = ImputeAlleleFreq(by_populations=False, ...)
+
+mf = ImputeMF(...) # Matrix factorization
+
+# Unsupervised neural network models
+
+vae = ImputeVAE(...) # Variational autoencoder
+nlpca = ImputeNLPCA(...) # Nonlinear PCA
+ubp = ImputeUBP(...) # Unsupervised backpropagation
 ```
 
 ## To-Dos
 
-
-To-Do's:
-
-- Get data in a format so that dimensionality reduction can be done.
 - read_vcf
-- aligning across K algorithms 
-- genotype imputation (i.e. by a priori population and globally) -- as method to GenotypeData 
-- DelimitationModel Class with each UML method class inheriting? Or something like that.
+- matrix factorization
+- simulations
+- Documentation
 
-Notes:
-- Can calculate AIC for k-means, or other clustering methods? See https://stackoverflow.com/questions/15839774/how-to-calculate-bic-for-k-means-clustering-in-r#:~:text=The%20AIC%20can%20be%20calculated,2*m*k)%20%7D 
+## References:
+   
+    <a id="1">[1]</a>Stef van Buuren, Karin Groothuis-Oudshoorn (2011). mice: Multivariate Imputation by Chained Equations in R. Journal of Statistical Software 45: 1-67.
 
-Dimension reduction  
-1. ~~Using scikit-allel to do PCA~~  
-2. ~~cMDS~~  
-3. ~~isoMDS~~  
-4. DAPC -- with a priori groups, or groups from other algorithms, or an analog of find.clusters (=kmeans)
-5. Others?
+     <a id="2">[2]</a>Kingma, D.P. & Welling, M. (2013). Auto-encoding variational bayes. In: Proceedings  of  the  International Conference on Learning Representations (ICLR). arXiv:1312.6114 [stat.ML].
 
-Clustering algorithms
-1. K-Means
-2. Hierarchical clustering
-3. DBSCAN  
-4. ~~PAM~~  
-5. Others?
-
-Decision Trees  
-1. ~~Random Forest~~  
-
-Deep Learning
-1. Variational autoencoders
-2. Convolutional neural networks
-3. Others?
-
-Accuracy plotting and comparisons
-1. Plot accuracy and model loss
-2. AUC plots
-3. Comparing across algorithms and models
-4. Allow users to compare everything to assess what's best for their dataset
-
-Plot replicates and align K across replicates
-1. Aligning K across replicates
-2. Stacked barplots
-
-Use unsupervised learning to predict labels for supervised algorithms
-1. XGBoost
-2. Logistic Regression
-3. Bayesian Regression
-4. Linear Discriminant Analysis
-5. K-Nearest Neighbors
-6. Stochastic Gradient Descent
-7. LightGBM
-8. Naive Bayes
-9. AdaBoost
-10. Random Forests 
-
-Semi-supervised learning  
-
-~~Phylogenetic trees to impute missing data~~  
-
-Phylogenetic trees to supervise machine learning analyses
-
-
-Give users a multitude of statistics
+    <a id="3">[3]</a>Scholz, M., Kaplan, F., Guy, C. L., Kopka, J., & Selbig, J. (2005). Non-linear PCA: a missing data approach. Bioinformatics, 21(20), 3887-3895.
+    
+    <a id="4">[4]</a>Gashler, M. S., Smith, M. R., Morris, R., & Martinez, T. (2016). Missing value imputation with unsupervised backpropagation. Computational Intelligence, 32(2), 196-215.
