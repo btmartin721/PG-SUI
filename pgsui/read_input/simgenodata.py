@@ -228,7 +228,7 @@ class SimGenotypeData(GenotypeData):
         i = 0
         for column in self.mask.T:
             if np.sum(column) == column.size:
-                self.mask[np.random.randint(0, mask.shape[0]), i] = False
+                self.mask[np.random.randint(0, self.mask.shape[0]), i] = False
             i = i + 1
 
     def accuracy(self, imputed):
@@ -311,4 +311,4 @@ class SimGenotypeData(GenotypeData):
         Returns:
             float: Total number of masked alleles divided by SNP matrix size.
         """
-        return np.sum(np.mask) / mask.size
+        return np.sum(np.mask) / self.mask.size
