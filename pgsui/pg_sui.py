@@ -6,29 +6,19 @@ import sys
 
 import numpy as np
 import pandas as pd
-import scipy.stats as stats
 
 from sklearn_genetic.space import Continuous, Categorical, Integer
 
-# from pgsui.impute.estimators import ImputeStandardAutoEncoder
-
 from snpio import GenotypeData
 from snpio import Plotting
-from impute.estimators import (
+from pgsui.impute.estimators import (
     ImputeNLPCA,
     ImputeUBP,
     ImputeRandomForest,
     ImputeStandardAutoEncoder,
     ImputeVAE,
 )
-from impute.simple_imputers import ImputePhylo, ImputeAlleleFreq
-
-# from snpio import GenotypeData
-# from impute.estimators import *
-# from impute.simple_imputers import ImputeAlleleFreq, ImputePhylo
-
-# from read_input import GenotypeData
-# from estimators import *
+from pgsui.impute.simple_imputers import ImputePhylo, ImputeAlleleFreq
 
 
 def main():
@@ -125,51 +115,7 @@ def main():
     #     # "hidden_activation": hidden_activation,
     # }
 
-    # grid_params = {
-    #     "max_features": ["sqrt", None],
-    # }
-
-    # nlpca = ImputeStandardAutoEncoder(
-    #     data,
-    #     disable_progressbar=True,
-    #     epochs=100,
-    #     column_subset=1.0,
-    #     learning_rate=0.01,
-    #     num_hidden_layers=1,
-    #     hidden_layer_sizes="midpoint",
-    #     verbose=10,
-    #     dropout_rate=0.2,
-    #     hidden_activation="elu",
-    #     batch_size=32,
-    #     l1_penalty=0.0001,
-    #     l2_penalty=0.0001,
-    #     # gridparams=grid_params,
-    #     n_jobs=4,
-    #     grid_iter=5,
-    #     sim_strategy="nonrandom_weighted",
-    #     sim_prop_missing=0.5,
-    #     scoring_metric="f1_score",
-    #     gridsearch_method="gridsearch",
-    #     early_stop_gen=25,
-    #     n_components=3,
-    #     # sample_weights="auto",
-    #     prefix=args.prefix,
-    # )
-
-    # rf = ImputeRandomForest(
-    #     data,
-    #     disable_progressbar=True,
-    #     initial_strategy="phylogeny",
-    #     gridparams=grid_params,
-    #     n_jobs=3,
-    #     cv=2,
-    # )
-
-    # gd_imp = rf.genotype_data_imputed
-    # print(rf.imputed.snp_data)
-    # print(np.array(rf.imputed.snp_data).shape)
-
-    vae = ImputeStandardAutoEncoder(
+    imp = ImputeUBP(
         data,
         disable_progressbar=False,
         epochs=100,
@@ -197,12 +143,7 @@ def main():
         # sample_weights="auto",
     )
 
-    gd_imp = vae.imputed
-
-    # af_glb = ImputeAlleleFreq(genotype_data=data)
-
-    # phylo = ImputePhylo(genotype_data=data)
-    # af_glb = ImputeAlleleFreq(genotype_data=data)
+    gd_imp = imp.imputed
 
     components, model = Plotting.run_pca(
         data,
