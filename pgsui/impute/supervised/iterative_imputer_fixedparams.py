@@ -558,14 +558,7 @@ class IterativeImputerFixedParams(IterativeImputer):
                 f"'tol' should be a non-negative float. Got {self.tol} instead"
             )
 
-        if self.estimator is None:
-            from ..linear_model import BayesianRidge
-
-            self._estimator = BayesianRidge()
-        else:
-            self._estimator = clone(self.estimator)
-
-        # self.imputation_sequence_ = []
+        self._estimator = clone(self.estimator)
 
         self.initial_imputer_ = None
 
