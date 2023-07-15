@@ -8,8 +8,6 @@ Population Genomic Supervised and Unsupervised Imputation
 
 ## About PG-SUI
 
-NOTE: PG-SUI is not fully functional yet and is changing daily. We will issue a full release when it is fully functional.
-
 PG-SUI is a Python 3 API that uses machine learning to impute missing values from population genomic SNP data. There are several supervised and unsupervised machine learning algorithms available to impute missing data, as well as some non-machine learning imputers that are useful. 
 
 ### Supervised Imputation Methods
@@ -30,10 +28,13 @@ See the scikit-learn documentation (https://scikit-learn.org) for more informati
 Unsupervised imputers include three custom neural network models:
 
     + Variational Autoencoder (VAE) [[2]](#2)
+    + Standard Autoencoder (SAE)
     + Non-linear Principal Component Analysis (NLPCA) [[3]](#3)
     + Unsupervised Backpropagation (UBP) [[4]](#4)
 
-VAE models train themselves to reconstruct their input (i.e., the genotypes. To use VAE for imputation, the missing values are masked and the VAE model gets trained to reconstruct only on known values. Once the model is trained, it is then used to predict the missing values.
+VAE models train themselves to reconstruct their input (i.e., the genotypes). To use VAE for imputation, the missing values are masked and the VAE model gets trained to reconstruct only on known values. Once the model is trained, it is then used to predict the missing values.
+
+SAE is a standard autoencoder that trains the input to predict itself. As with VAE, missing values are masked and the model gets trained only on known values. Predictions are then made on the missing values.
 
 NLPCA initializes random, reduced-dimensional input, then trains itself by using the known values (i.e., genotypes) as targets and refining the random input until it accurately predicts the genotype output. The trained model can then predict the missing values.
 
@@ -52,48 +53,66 @@ These four "simple" imputation methods can be used as standalone imputers, as th
 
 ## Dependencies
 
-+ python >= 3.7
-+ pandas == 1.2.5
-+ numpy == 1.20
-+ scipy >= 1.6.2 and < 1.7.0
++ python >= 3.8
++ pandas
++ numpy
++ scipy
 + matplotlib
++ seaborn
 + plotly
 + kaleido
-+ seaborn
 + jupyterlab
 + tqdm
 + toytree
-+ scikit-learn >= 1.0
++ pyvolve
++ scikit-learn
 + tensorflow >= 2.7
-+ keras
++ keras >= 2.7
 + xgboost
 + lightgbm
 + scikeras >= 0.6.0
++ snpio
 
-### Installation
+## Installation
 
-The requirements can be installed with conda and pip. sklearn-genetic-opt and scikeras are only avaiable via pip, and scikeras requires tensorflow >= 2.7 and scikit-learn >= 1.0. Since tensorflow 2.7 is not yet available on conda channels, you must install it with pip here.
+You must first install the SNPio dependency: https://github.com/btmartin721/SNPio  
+
+Once SNPio is installed, make sure you are in the project's root directory (the same directory that contains setup.py). Then installation can be done with:
 
 ```
-conda create -n pg-sui python=3.8
+pip install .
+```
+
+If you have an Intel CPU and want to use the sklearn-genetic-intelex package to speed up scikit-learn calculations, you can do:
+
+```
+pip install .[intel]
+```
+
+### Manual Install
+
+If you want to install everything manually, the requirements can be installed with conda and pip. sklearn-genetic-opt and scikeras are only avaiable via pip, and scikeras requires tensorflow >= 2.7 and scikit-learn >= 1.0.
+
+```
+conda create -n pg-sui python
 conda activate pg-sui
 
-conda install matplotlib seaborn jupyterlab scikit-learn=1.0 tqdm pandas=1.2.5 numpy=1.20.2 scipy=1.6.2 xgboost lightgbm
+conda install matplotlib seaborn jupyterlab scikit-learn tqdm pandas numpy scipy xgboost lightgbm kaleido
 
 # Only works if using Intel CPUs; speeds up processing
 conda install scikit-learn-intelex
 
 conda install -c conda-forge toytree kaleido
 
-# For PCA plots.
+conda install -c bioconda pyvolve
+
 conda install -c plotly plotly
 
-# For genetic algorithm plotting functions
 pip install sklearn-genetic-opt[all]
 
 pip install scikeras
 
-pip install tensorflow-cpu==2.7
+pip install tensorflow-cpu
 ```
 
 #### Installation troubleshooting
@@ -126,7 +145,7 @@ PG-SUI has been tested on the new Mac M1 chips and is working fine, but some cha
 ### Download: https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-MacOSX-arm64.sh
 bash ~/Downloads/Miniforge3-MacOSX-arm64.sh
 
-#close and re-open terminal
+# Close and re-open terminal #
 
 #create and activate conda environment
 conda create -n pg-sui python
@@ -135,7 +154,8 @@ conda create -n pg-sui python
 conda activate pg-sui
 
 #install packages
-conda install -c conda-forge matplotlib seaborn jupyterlab scikit-learn tqdm pandas=1.2.5 numpy=1.20.2 scipy=1.6.2 xgboost lightgbm tensorflow keras sklearn-genetic toytree
+conda install -c conda-forge matplotlib seaborn jupyterlab scikit-learn tqdm pandas numpy scipy xgboost lightgbm tensorflow keras sklearn-genetic-opt toytree
+conda install -c bioconda pyvolve
 
 #downgrade setuptools (may or may not be necessary)
 pip install setuptools==57
@@ -152,73 +172,66 @@ Any other problems we run into testing on the Mac ARM architecture will be adjus
 Takes a STRUCTURE or PHYLIP file and a population map (popmap) file as input.  
 There are a number of options for the structure file format. See the help menu:
 
-```python pg_sui.py -h``` 
+```
+python pg_sui.py -h
+``` 
 
 You can read your input files like this:
 
 ```
 # Read in PHYLIP or STRUCTURE-formatted file
-data = GenotypeData(...)
-```
-
-The data can be retrieved as a pandas DataFrame, a 2D numpy array, or a 2D list, each with shape (n_samples, n_SNPs):
-
-```
-df = data.genotypes012_df
-arr = data.genotypes012_array
-l = data.genotypes012_list
-```
-
-You can also retrieve the number of individuals and SNP sites:
-
-```
-num_inds = data.indcount
-num_snps = data.snpcount
-```
-
-And to retrieve a list of sample IDs or population IDs:
-
-```
-inds = data.individuals
-pops = data.populations
+data = GenotypeData(*args, **kwargs)
 ```
 
 ## Supported Imputation Methods
 
-There are numerous supported algorithms to impute missing data. Each one can be run by calling the corresponding class.
+There are numerous supported algorithms to impute missing data. Each one can be run by calling the corresponding class. You must provide a GenotypeData instance as the first positional argument.
+
+### Supervised Imputers
+
+Various supervised imputation options are supported:
 
 ```
-# Various imputation options are supported
-
 # Supervised IterativeImputer classifiers
-knn = ImputeKNN(...) # K-Nearest Neighbors
-rf = ImputeRandomForest(...) # Random Forest or Extra Trees
-gb = ImputeGradientBoosting(...) # Gradient Boosting
-xgb = ImputeXGBoost(...) # XGBoost
-lgbm = ImputeLightGBM(...) # LightGBM
+knn = ImputeKNN(data, **kwargs) # K-Nearest Neighbors
+rf = ImputeRandomForest(data, **kwargs) # Random Forest or Extra Trees
+gb = ImputeGradientBoosting(data, **kwargs) # Gradient Boosting
+xgb = ImputeXGBoost(data, **kwargs) # XGBoost
+lgbm = ImputeLightGBM(data, **kwargs) # LightGBM
+```
 
-# Non-machine learning methods
+### Non-machine learning methods
 
-# Use phylogeny to inform imputation
-phylo = ImputePhylo(...)
+Use phylogeny to inform imputation:
 
-# Use by-population or global allele frequency to inform imputation
-pop_af = ImputeAlleleFreq(by_populations=True, ...)
-global_af = ImputeAlleleFreq(by_populations=False, ...)
+```
+phylo = ImputePhylo(data, **kwargs)
+```
 
-mf = ImputeMF(...) # Matrix factorization
+Use by-population or global allele frequency to inform imputation
 
-# Unsupervised neural network models
+```
+pop_af = ImputeAlleleFreq(data, by_populations=True, **kwargs)
+global_af = ImputeAlleleFreq(data, by_populations=False, *kkwargs)
+```
 
-vae = ImputeVAE(...) # Variational autoencoder
-nlpca = ImputeNLPCA(...) # Nonlinear PCA
-ubp = ImputeUBP(...) # Unsupervised backpropagation
+Non-matrix factorization:
+
+```
+nmf = ImputeNMF(*args, **kwargs) # Matrix factorization
+```
+
+### Unsupervised Neural Networks
+
+```
+vae = ImputeVAE(data, **kwargs) # Variational autoencoder
+nlpca = ImputeNLPCA(data, **kwargs) # Nonlinear PCA
+ubp = ImputeUBP(data, **kwargs) # Unsupervised backpropagation
+sae = ImputeStandardAutoEncoder(data, **kwargs)
 ```
 
 ## To-Dos
 
-- read_vcf
-- matrix factorization
 - simulations
 - Documentation
 
