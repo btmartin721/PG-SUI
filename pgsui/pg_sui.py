@@ -6,30 +6,19 @@ import sys
 
 import numpy as np
 import pandas as pd
-import scipy.stats as stats
 
 from sklearn_genetic.space import Continuous, Categorical, Integer
 
-# from pgsui.impute.estimators import ImputeStandardAutoEncoder
-
-# from pgsui import GenotypeData
-from read_input.read_input import GenotypeData
-from impute.estimators import (
+from snpio import GenotypeData
+from snpio import Plotting
+from pgsui.impute.estimators import (
     ImputeNLPCA,
     ImputeUBP,
     ImputeRandomForest,
     ImputeStandardAutoEncoder,
     ImputeVAE,
 )
-from impute.simple_imputers import ImputePhylo, ImputeAlleleFreq
-from utils.plotting import Plotting
-
-# from read_input.read_input import GenotypeData
-# from impute.estimators import *
-# from impute.simple_imputers import ImputeAlleleFreq, ImputePhylo
-
-# from read_input import GenotypeData
-# from estimators import *
+from pgsui.impute.simple_imputers import ImputePhylo, ImputeAlleleFreq
 
 
 def main():
@@ -79,7 +68,6 @@ def main():
 
     if args.phylip:
         if args.pop_ids or args.onerow_perind:
-
             print(
                 "\nPhylip file was used with structure arguments; ignoring "
                 "structure file arguments\n"
@@ -115,88 +103,63 @@ def main():
     optimizer = ["adam", "sgd", "adagrad"]
 
     # Some are commented out for testing purposes.
-    grid_params = {
-        "learning_rate": learning_rate,
-        # "l1_penalty": l1_penalty,
-        # "l2_penalty": l2_penalty,
-        # "hidden_layer_sizes": hidden_layer_sizes,
-        "n_components": n_components,
-        # "dropout_rate": dropout_rate,
-        # # "optimizer": optimizer,
-        # "num_hidden_layers": num_hidden_layers,
-        # "hidden_activation": hidden_activation,
-    }
+    # grid_params = {
+    #     "learning_rate": learning_rate,
+    #     # "l1_penalty": l1_penalty,
+    #     # "l2_penalty": l2_penalty,
+    #     # "hidden_layer_sizes": hidden_layer_sizes,
+    #     "n_components": n_components,
+    #     # "dropout_rate": dropout_rate,
+    #     # # "optimizer": optimizer,
+    #     # "num_hidden_layers": num_hidden_layers,
+    #     # "hidden_activation": hidden_activation,
+    # }
 
-    vae = ImputeNLPCA(
+    imp = ImputeUBP(
         data,
-        disable_progressbar=True,
+        disable_progressbar=False,
         epochs=100,
+        cv=3,
         column_subset=1.0,
         learning_rate=0.01,
         num_hidden_layers=1,
         hidden_layer_sizes="midpoint",
         verbose=10,
         dropout_rate=0.2,
-        hidden_activation="elu",
+        hidden_activation="relu",
         batch_size=32,
-        l1_penalty=0.0001,
-        l2_penalty=0.0001,
+        l1_penalty=1e-6,
+        l2_penalty=1e-6,
         # gridparams=grid_params,
         n_jobs=4,
         grid_iter=5,
         sim_strategy="nonrandom_weighted",
         sim_prop_missing=0.5,
-        scoring_metric="f1_score",
+        scoring_metric="precision_recall_macro",
         gridsearch_method="gridsearch",
-        early_stop_gen=25,
+        early_stop_gen=5,
         n_components=3,
+        # sample_weights={0: 1.0, 1: 0.0, 2: 1.0},
         # sample_weights="auto",
-        prefix=args.prefix,
     )
 
-    # vae = ImputeNLPCA(
-    #     data,
-    #     disable_progressbar=False,
-    #     epochs=100,
-    #     cv=3,
-    #     column_subset=1.0,
-    #     learning_rate=0.01,
-    #     num_hidden_layers=1,
-    #     hidden_layer_sizes="midpoint",
-    #     verbose=1,
-    #     dropout_rate=0.2,
-    #     hidden_activation="relu",
-    #     batch_size=32,
-    #     l1_penalty=1e-6,
-    #     l2_penalty=1e-6,
-    #     # gridparams=grid_params,
-    #     n_jobs=4,
-    #     grid_iter=5,
-    #     sim_strategy="nonrandom_weighted",
-    #     sim_prop_missing=0.5,
-    #     scoring_metric="precision_recall_macro",
-    #     gridsearch_method="gridsearch",
-    #     early_stop_gen=5,
-    #     n_components=3,
-    #     # sample_weights={0: 1.0, 1: 0.0, 2: 1.0},
-    #     # sample_weights="auto",
-    # )
+    gd_imp = imp.imputed
 
-    # af_glb = ImputeAlleleFreq(genotype_data=data)
-
-    # phylo = ImputePhylo(genotype_data=data)
-    # af_glb = ImputeAlleleFreq(genotype_data=data)
-
-    plotting = Plotting()
-
-    components, model = plotting.run_and_plot_pca(
+    components, model = Plotting.run_pca(
         data,
-        vae,
         plot_format="png",
         center=True,
         scale=False,
         prefix=args.prefix,
         # n_axes=3,
+    )
+
+    components_imp, model_imp = Plotting.run_pca(
+        gd_imp,
+        plot_format="png",
+        center=True,
+        scale=False,
+        prefix=args.prefix + "_imputed",
     )
 
 

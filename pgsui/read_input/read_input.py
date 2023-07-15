@@ -17,7 +17,7 @@ try:
     from .popmap_file import ReadPopmap
     from ..utils.plotting import Plotting
     from ..utils import sequence_tools, misc
-except (ModuleNotFoundError, ValueError):
+except (ModuleNotFoundError, ValueError, ImportError):
     from read_input.popmap_file import ReadPopmap
     from utils.plotting import Plotting
     from utils import sequence_tools, misc
@@ -790,7 +790,6 @@ class GenotypeData:
 
             num_alleles = sequence_tools.count_alleles(loc, vcf=vcf)
             if num_alleles != 2:
-
                 # If monomorphic
                 if num_alleles < 2:
                     warnings.warn(
@@ -1279,11 +1278,9 @@ class GenotypeData:
             )
 
         if ft.startswith("structure"):
-
             of = f"{outfile}.str"
 
             if ft.startswith("structure2row"):
-
                 for col in df_decoded.columns:
                     df_decoded[col] = (
                         df_decoded[col]
@@ -1531,7 +1528,7 @@ class GenotypeData:
         """
         df = pd.DataFrame.from_records(self.snps)
         df.replace(to_replace=-9.0, value=np.nan, inplace=True)
-        return df.astype(np.float32)
+        return df.astype(float)
 
     @property
     def genotypes_onehot(self) -> Union[np.ndarray, List[List[List[float]]]]:

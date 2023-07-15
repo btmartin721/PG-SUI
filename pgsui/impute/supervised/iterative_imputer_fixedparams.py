@@ -38,7 +38,7 @@ try:
     from ...utils.misc import get_processor_name
     from ...utils.misc import HiddenPrints
     from ...utils.misc import isnotebook
-except (ModuleNotFoundError, ValueError):
+except (ModuleNotFoundError, ValueError, ImportError):
     from impute import simple_imputers
     from utils.misc import get_processor_name
     from utils.misc import HiddenPrints
@@ -136,6 +136,8 @@ class IterativeImputerFixedParams(IterativeImputer):
 
         str_encodings (dict(str: int), optional): Integer encodings used in STRUCTURE-formatted file. Should be a dictionary with keys=nucleotides and values=integer encodings. The missing data encoding should also be included. Argument is ignored if using a PHYLIP-formatted file. Defaults to {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}
 
+        kwargs (Dict[str, Any]): For compatibility with grid search IterativeImputer.
+
     Attributes:
         initial_imputer_ (sklearn.impute.SimpleImputer):  Imputer used to initialize the missing values.
 
@@ -223,7 +225,7 @@ class IterativeImputerFixedParams(IterativeImputer):
         disable_progressbar: bool = False,
         progress_update_percent: Optional[int] = None,
         pops: Optional[List[Union[str, int]]] = None,
-        missing_values: Union[np.float, int] = np.nan,
+        missing_values: Union[float, int] = np.nan,
         sample_posterior: bool = False,
         max_iter: int = 10,
         tol: float = 1e-3,
@@ -231,14 +233,15 @@ class IterativeImputerFixedParams(IterativeImputer):
         initial_strategy: str = "mean",
         imputation_order: str = "ascending",
         skip_complete: bool = False,
-        min_value: Union[np.float, int, float] = -np.inf,
-        max_value: Union[np.float, int, float] = np.inf,
+        min_value: Union[int, float] = -np.inf,
+        max_value: Union[int, float] = np.inf,
         verbose: int = 0,
         random_state: Optional[int] = None,
         add_indicator: bool = False,
         genotype_data: Optional[Any] = None,
         str_encodings: Optional[Dict[str, int]] = None,
         prefix="imputer",
+        **kwargs,
     ) -> None:
         super().__init__(
             estimator=estimator,
@@ -320,6 +323,9 @@ class IterativeImputerFixedParams(IterativeImputer):
             reset=in_fit,
             force_all_finite=force_all_finite,
         )
+
+        X[X < 0] = np.nan
+
         _check_inputs_dtype(X, self.missing_values)
 
         X_missing_mask = _get_mask(X, self.missing_values)
@@ -327,29 +333,60 @@ class IterativeImputerFixedParams(IterativeImputer):
 
         if self.initial_strategy == "populations":
             self.initial_imputer_ = simple_imputers.ImputeAlleleFreq(
+                self.genotype_data,
                 gt=np.nan_to_num(X, nan=-9).tolist(),
                 pops=self.pops,
                 by_populations=True,
                 missing=-9,
-                write_output=False,
                 verbose=False,
                 iterative_mode=True,
                 validation_mode=True,
             )
 
-            X_filled = self.initial_imputer_.imputed.to_numpy()
+            X_filled = np.array(self.initial_imputer_.imputed)
             Xt = X.copy()
+
+        elif self.initial_strategy == "phylogeny":
+            if (
+                self.genotype_data.qmatrix is None
+                and self.genotype_data.qmatrix_iqtree is None
+            ) or self.genotype_data.guidetree is None:
+                raise AttributeError(
+                    "GenotypeData object was not initialized with "
+                    "qmatrix/ qmatrix_iqtree or guidetree arguments, "
+                    "but initial_strategy == 'phylogeny'"
+                )
+
+            else:
+                self.initial_imputer_ = simple_imputers.ImputePhylo(
+                    genotype_data=self.genotype_data,
+                    str_encodings=self.str_encodings,
+                    write_output=False,
+                    disable_progressbar=True,
+                    column_subset=cols_to_keep,
+                    validation_mode=True,
+                )
+
+                X_filled = self.initial_imputer_.imputed.to_numpy()
+                valid_sites = self.initial_imputer_.valid_sites
+
+                valid_mask = np.flatnonzero(
+                    np.logical_not(np.isnan(valid_sites))
+                )
+
+                Xt = X[:, valid_mask]
+                mask_missing_values = mask_missing_values[:, valid_mask]
 
         elif self.initial_strategy == "nmf":
             self.initial_imputer_ = simple_imputers.ImputeNMF(
+                self.genotype_data,
                 gt=np.nan_to_num(X, nan=-9),
                 missing=-9,
-                write_output=False,
                 verbose=False,
                 validation_mode=True,
             )
 
-            X_filled = self.initial_imputer_.imputed.to_numpy()
+            X_filled = np.array(self.initial_imputer_.imputed)
             Xt = X.copy()
 
         elif self.initial_strategy == "phylogeny":
@@ -521,14 +558,7 @@ class IterativeImputerFixedParams(IterativeImputer):
                 f"'tol' should be a non-negative float. Got {self.tol} instead"
             )
 
-        if self.estimator is None:
-            from ..linear_model import BayesianRidge
-
-            self._estimator = BayesianRidge()
-        else:
-            self._estimator = clone(self.estimator)
-
-        # self.imputation_sequence_ = []
+        self._estimator = clone(self.estimator)
 
         self.initial_imputer_ = None
 
@@ -603,7 +633,6 @@ class IterativeImputerFixedParams(IterativeImputer):
             desc="Iteration: ",
             disable=self.disable_progressbar,
         ):
-
             if self.imputation_order == "random":
                 ordered_idx = self._get_ordered_idx(mask_missing_values)
 
@@ -633,7 +662,6 @@ class IterativeImputerFixedParams(IterativeImputer):
                 ),
                 start=1,
             ):
-
                 neighbor_feat_idx = self._get_neighbor_feat_idx(
                     n_features, feat_idx, abs_corr_mat
                 )
@@ -731,6 +759,10 @@ class IterativeImputerFixedParams(IterativeImputer):
 
         Xt[~mask_missing_values] = X[~mask_missing_values]
 
-        return super(IterativeImputer, self)._concatenate_indicator(
-            Xt, X_indicator
+        return (
+            super(IterativeImputer, self)._concatenate_indicator(
+                Xt, X_indicator
+            ),
+            None,
+            None,
         )

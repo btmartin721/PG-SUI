@@ -1,4 +1,5 @@
 from setuptools import setup, find_packages
+import os
 
 
 def read(fname):
@@ -6,7 +7,7 @@ def read(fname):
 
 
 NAME = "pgsui"
-VERSION = "0.1"
+VERSION = "0.2"
 AUTHORS = "Bradley T. Martin and Tyler K. Chafin"
 AUTHOR_EMAIL = "evobio721@gmail.com"
 MAINTAINER = "Bradley T. Martin"
@@ -45,6 +46,7 @@ setup(
         "vae",
         "ubp",
         "nlpca",
+        "autoencoder",
     ],
     classifiers=[
         "Programming Language :: Python :: 3",
@@ -59,16 +61,16 @@ setup(
     packages=find_packages(),
     # packages=find_packages("pgsui"),
     # package_dir={"": "pgsui"},
-    python_requires=">=3.7,<4",
+    python_requires=">=3.8,<4",
     install_requires=[
         "matplotlib",
         "seaborn",
         "jupyterlab",
         "scikit-learn>=1.0",
         "tqdm",
-        "pandas>=1.2.5,<1.3.0",
-        "numpy>=1.20.2,<1.21",
-        "scipy>=1.6.2,<1.7",
+        "pandas",
+        "numpy",
+        "scipy",
         "xgboost",
         "lightgbm",
         "tensorflow>=2.7",
@@ -89,5 +91,5 @@ setup(
         ]
     },
     include_package_data=True,
-    entry_points={"console_scripts": ["pgsuitest=pgsui.test.test_pgsui:main"]},
+    # entry_points={"console_scripts": ["pgsuitest=pgsui.test.test_pgsui:main"]},
 )

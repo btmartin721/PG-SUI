@@ -20,7 +20,7 @@ try:
     from ..impute.unsupervised.neural_network_methods import (
         NeuralNetworkMethods,
     )
-except (ModuleNotFoundError, ValueError):
+except (ModuleNotFoundError, ValueError, ImportError):
     from impute.unsupervised.neural_network_methods import NeuralNetworkMethods
 
 

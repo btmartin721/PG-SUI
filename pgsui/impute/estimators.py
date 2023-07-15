@@ -20,7 +20,7 @@ try:
     from .impute import Impute
     from .unsupervised.neural_network_imputers import VAE, UBP, SAE
     from ..utils.misc import get_processor_name
-except (ModuleNotFoundError, ValueError):
+except (ModuleNotFoundError, ValueError, ImportError):
     from impute.impute import Impute
     from impute.unsupervised.neural_network_imputers import VAE, UBP, SAE
     from utils.misc import get_processor_name
@@ -205,7 +205,7 @@ class ImputeKNN(Impute):
         super().__init__(self.clf, self.clf_type, kwargs)
 
         self.imputed, self.best_params = self.fit_predict(
-            genotype_data.genotypes012_df
+            genotype_data.genotypes_012(fmt="pandas")
         )
 
 
@@ -241,7 +241,7 @@ class ImputeRandomForest(Impute):
 
         min_weight_fraction_leaf (float, optional): The minimum weighted fraction of the sum total of weights (of all the input samples) required to be at a leaf node. Samples have equal weight when sample_weight is not provided. Defaults to 0.0.
 
-        max_features (str, int, float, or None, optional): The number of features to consider when looking for the best split. If int, then consider "max_features" features at each split. If float, then "max_features" is a fraction and ``int(max_features * n_samples)`` features are considered at each split. If "auto", then ``max_features=sqrt(n_features)``\. If "sqrt", then ``max_features=sqrt(n_features)``\. If "log2", then ``max_features=log2(n_features)``\. If None, then ``max_features=n_features``\. Defaults to "auto".
+        max_features (str, int, float, or None, optional): The number of features to consider when looking for the best split. If int, then consider "max_features" features at each split. If float, then "max_features" is a fraction and ``int(max_features * n_samples)`` features are considered at each split. If "sqrt", then ``max_features=sqrt(n_features)``\. If "log2", then ``max_features=log2(n_features)``\. If None, then ``max_features=n_features``\. Defaults to "sqrt".
 
         max_leaf_nodes (int or None, optional): Grow trees with ``max_leaf_nodes`` in best-first fashion. Best nodes are defined as relative reduction in impurity. If None then unlimited number of leaf nodes. Defaults to None.
 
@@ -355,7 +355,7 @@ class ImputeRandomForest(Impute):
         min_samples_split: Union[int, float] = 2,
         min_samples_leaf: Union[int, float] = 1,
         min_weight_fraction_leaf: float = 0.0,
-        max_features: Optional[Union[str, int, float]] = "auto",
+        max_features: Optional[Union[str, int, float]] = "sqrt",
         max_leaf_nodes: Optional[int] = None,
         min_impurity_decrease: float = 0.0,
         bootstrap: bool = False,
@@ -419,8 +419,36 @@ class ImputeRandomForest(Impute):
         super().__init__(self.clf, self.clf_type, kwargs)
 
         self.imputed, self.best_params = self.fit_predict(
-            genotype_data.genotypes012_df
+            genotype_data.genotypes_012(fmt="pandas")
         )
+
+    @property
+    def genotype_data_imputed(self):
+        return self.imputed
+
+    @property
+    def genotypes_012(self):
+        return self.imputed.genotypes_012
+
+    @property
+    def snp_data(self):
+        return self.imputed.snp_data
+
+    @property
+    def genotypes_onehot(self):
+        return self.imputed.genotypes_onehot
+
+    @property
+    def samples(self):
+        return self.imputed.samples
+
+    @property
+    def populations(self):
+        return self.imputed.populations
+
+    @property
+    def alignment(self):
+        return self.imputed.alignment
 
 
 class ImputeGradientBoosting(Impute):
@@ -610,7 +638,7 @@ class ImputeGradientBoosting(Impute):
         super().__init__(self.clf, self.clf_type, kwargs)
 
         self.imputed, self.best_params = self.fit_predict(
-            genotype_data.genotypes012_df
+            genotype_data.genotypes_012(fmt="pandas")
         )
 
 
@@ -792,7 +820,7 @@ class ImputeBayesianRidge(Impute):
         super().__init__(self.clf, self.clf_type, kwargs)
 
         self.imputed, self.best_params = self.fit_predict(
-            genotype_data.genotypes012_df
+            genotype_data.genotypes_012(fmt="pandas")
         )
 
 
@@ -982,7 +1010,7 @@ class ImputeXGBoost(Impute):
         super().__init__(self.clf, self.clf_type, kwargs)
 
         self.imputed, self.best_params = self.fit_predict(
-            genotype_data.genotypes012_df
+            genotype_data.genotypes_012(fmt="pandas")
         )
 
 
@@ -1171,7 +1199,6 @@ class ImputeLightGBM(Impute):
         n_jobs: int = 1,
         verbose: int = 0,
     ) -> None:
-
         # Get local variables into dictionary object
         kwargs = locals()
 
@@ -1184,7 +1211,7 @@ class ImputeLightGBM(Impute):
         super().__init__(self.clf, self.clf_type, kwargs)
 
         self.imputed, self.best_params = self.fit_predict(
-            genotype_data.genotypes012_df
+            genotype_data.genotypes_012(fmt="pandas")
         )
 
 
@@ -1324,7 +1351,6 @@ class ImputeVAE(Impute):
         verbose=0,
         **kwargs,
     ):
-
         # Get local variables into dictionary object
         all_kwargs = locals()
 
@@ -1336,7 +1362,6 @@ class ImputeVAE(Impute):
         }
 
         all_kwargs.update(imp_kwargs)
-        all_kwargs["testing"] = kwargs.get("testing", False)
         all_kwargs.pop("kwargs")
 
         super().__init__(self.clf, self.clf_type, all_kwargs)
@@ -1344,7 +1369,7 @@ class ImputeVAE(Impute):
         if genotype_data is None:
             raise TypeError("genotype_data cannot be NoneType")
 
-        X = genotype_data.int_iupac
+        X = genotype_data.genotypes_int
 
         if not isinstance(X, pd.DataFrame):
             df = pd.DataFrame(X)
@@ -1486,8 +1511,8 @@ class ImputeStandardAutoEncoder(Impute):
         disable_progressbar=False,
         n_jobs=1,
         verbose=0,
+        **kwargs,
     ):
-
         # Get local variables into dictionary object
         all_kwargs = locals()
 
@@ -1499,13 +1524,14 @@ class ImputeStandardAutoEncoder(Impute):
         }
 
         all_kwargs.update(imp_kwargs)
+        all_kwargs.pop("kwargs")
 
         super().__init__(self.clf, self.clf_type, all_kwargs)
 
         if genotype_data is None:
             raise TypeError("genotype_data cannot be NoneType")
 
-        X = genotype_data.genotypes012_array
+        X = genotype_data.genotypes_012(fmt="numpy")
 
         if not isinstance(X, pd.DataFrame):
             df = pd.DataFrame(X)
@@ -1513,6 +1539,34 @@ class ImputeStandardAutoEncoder(Impute):
             df = X.copy()
 
         self.imputed, self.best_params = self.fit_predict(df)
+
+    @property
+    def genotype_data_imputed(self):
+        return self.imputed
+
+    @property
+    def genotypes_012(self):
+        return self.imputed.genotypes_012
+
+    @property
+    def snp_data(self):
+        return self.imputed.snp_data
+
+    @property
+    def genotypes_onehot(self):
+        return self.imputed.genotypes_onehot
+
+    @property
+    def samples(self):
+        return self.imputed.samples
+
+    @property
+    def populations(self):
+        return self.imputed.populations
+
+    @property
+    def alignment(self):
+        return self.imputed.alignment
 
 
 class ImputeUBP(Impute):
@@ -1654,11 +1708,11 @@ class ImputeUBP(Impute):
         disable_progressbar=False,
         n_jobs=1,
         verbose=0,
+        **kwargs,
     ):
-
         # Get local variables into dictionary object
-        settings = locals()
-        settings["nlpca"] = self.nlpca
+        all_kwargs = locals()
+        all_kwargs["nlpca"] = self.nlpca
 
         self.clf = UBP
         self.clf_type = "classifier"
@@ -1669,14 +1723,15 @@ class ImputeUBP(Impute):
             "str_encodings": {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9},
         }
 
-        settings.update(imp_kwargs)
+        all_kwargs.update(imp_kwargs)
+        all_kwargs.pop("kwargs")
 
         if genotype_data is None:
             raise TypeError("genotype_data cannot be NoneType")
 
-        X = genotype_data.genotypes012_array
+        X = genotype_data.genotypes_012(fmt="numpy")
 
-        super().__init__(self.clf, self.clf_type, settings)
+        super().__init__(self.clf, self.clf_type, all_kwargs)
 
         if not isinstance(X, pd.DataFrame):
             df = pd.DataFrame(X)
@@ -1684,6 +1739,34 @@ class ImputeUBP(Impute):
             df = X.copy()
 
         self.imputed, self.best_params = self.fit_predict(df)
+
+    @property
+    def genotype_data_imputed(self):
+        return self.imputed
+
+    @property
+    def genotypes_012(self):
+        return self.imputed.genotypes_012
+
+    @property
+    def snp_data(self):
+        return self.imputed.snp_data
+
+    @property
+    def genotypes_onehot(self):
+        return self.imputed.genotypes_onehot
+
+    @property
+    def samples(self):
+        return self.imputed.samples
+
+    @property
+    def populations(self):
+        return self.imputed.populations
+
+    @property
+    def alignment(self):
+        return self.imputed.alignment
 
 
 class ImputeNLPCA(ImputeUBP):

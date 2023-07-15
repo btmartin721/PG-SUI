@@ -16,7 +16,7 @@ from sklearn.metrics import ConfusionMatrixDisplay
 
 try:
     from . import misc
-except (ModuleNotFoundError, ValueError):
+except (ModuleNotFoundError, ValueError, ImportError):
     from utils import misc
 
 
@@ -24,13 +24,15 @@ class Plotting:
     """Functions for plotting imputer scoring and results."""
 
     @staticmethod
-    def plot_grid_search(cv_results, prefix):
+    def plot_grid_search(cv_results, nn_method, prefix):
         """Plot cv_results_ from a grid search for each parameter.
 
         Saves a figure to disk.
 
         Args:
             cv_results (numpy.ndarray): the cv_results_ attribute from a trained grid search object.
+
+            nn_method (str): Neural network algorithm name.
 
             prefix (str): Prefix to use for saving the plot to file.
         """
@@ -90,15 +92,19 @@ class Plotting:
 
         fig.savefig(
             os.path.join(
-                f"{prefix}_output", "plots", "gridsearch_metrics.pdf"
+                f"{prefix}_output",
+                "plots",
+                "Unsupervised",
+                nn_method,
+                "gridsearch_metrics.pdf",
             ),
             bbox_inches="tight",
             facecolor="white",
         )
 
     @staticmethod
-    def plot_metrics(metrics, num_classes, prefix):
-        """Plot performance metrics for classifier.
+    def plot_metrics(metrics, num_classes, prefix, nn_method):
+        """Plot AUC-ROC and Precision-Recall performance metrics for neural network classifier.
 
         Saves plot to PDF file on disk.
 
@@ -108,12 +114,20 @@ class Plotting:
             num_classes (int): Number of classes evaluated.
 
             prefix (str): Prefix to use for output plot.
+
+            nn_method (str): Neural network algorithm being used.
         """
         # Set font properties.
         font = {"size": 12}
         plt.rc("font", **font)
 
-        fn = os.path.join(f"{prefix}_output", "plots", "auc_pr_curves.pdf")
+        fn = os.path.join(
+            f"{prefix}_output",
+            "plots",
+            "Unsupervised",
+            nn_method,
+            f"auc_pr_curves.pdf",
+        )
         fig = plt.figure(figsize=(20, 10))
 
         acc = round(metrics["accuracy"] * 100, 2)
@@ -134,7 +148,6 @@ class Plotting:
         metric_list = [roc_auc, pr_ap]
 
         for metric, ax in zip(metric_list, axs):
-
             if "fpr_micro" in metric:
                 prefix1 = "fpr"
                 prefix2 = "tpr"
@@ -578,7 +591,8 @@ class Plotting:
         )
 
         original_df = misc.validate_input_type(
-            original_genotype_data.genotypes012_df, return_type="df"
+            original_genotype_data.genotypes_012(fmt="pandas"),
+            return_type="df",
         )
 
         original_df.replace(-9, np.nan, inplace=True)
@@ -695,15 +709,19 @@ class Plotting:
         if nn_method == "NLPCA" or nn_method == "VAE" or nn_method == "SAE":
             title = nn_method
             fn = os.path.join(
-                f"{prefix}_output", "plots", f"histplot_{nn_method}.pdf"
+                f"{prefix}_output",
+                "plots",
+                "Unsupervised",
+                nn_method,
+                "histplot.pdf",
             )
 
             if nn_method == "VAE":
                 fig, axes = plt.subplots(2, 2)
                 ax1 = axes[0, 0]
                 ax2 = axes[0, 1]
-                ax3 = axes[1, 0]
-                ax4 = axes[1, 1]
+                # ax3 = axes[1, 0]
+                # ax4 = axes[1, 1]
             else:
                 fig, (ax1, ax2) = plt.subplots(1, 2)
             fig.suptitle(title)
@@ -714,15 +732,15 @@ class Plotting:
                 "categorical_accuracy" if nn_method == "NLPCA" else "accuracy"
             )
 
-            if nn_method == "VAE":
-                accval = "val_accuracy"
-                recon_loss = "reconstruction_loss"
-                kl_loss = "kl_loss"
-                val_recon_loss = "val_reconstruction_loss"
-                val_kl_loss = "val_kl_loss"
-                lossval = "val_loss"
+            # if nn_method == "VAE":
+            #     accval = "val_accuracy"
+            #     # recon_loss = "reconstruction_loss"
+            #     # kl_loss = "kl_loss"
+            #     # val_recon_loss = "val_reconstruction_loss"
+            #     # val_kl_loss = "val_kl_loss"
+            #     lossval = "val_loss"
 
-            elif nn_method == "SAE":
+            if nn_method == "SAE":
                 accval = "val_accuracy"
                 lossval = "val_loss"
 
@@ -735,7 +753,7 @@ class Plotting:
             ax1.set_yticks([0.0, 0.25, 0.5, 0.75, 1.0])
 
             labels = ["Train"]
-            if nn_method == "VAE" or nn_method == "SAE":
+            if nn_method == "SAE":
                 # Plot validation accuracy
                 ax1.plot(history[accval])
                 labels.append("Validation")
@@ -743,35 +761,35 @@ class Plotting:
             ax1.legend(labels, loc="best")
 
             # Plot model loss
-            if nn_method == "VAE":
-                # Reconstruction loss only.
-                ax2.plot(history[recon_loss])
-                ax2.plot(history[val_recon_loss])
+            # if nn_method == "VAE":
+            #     # Reconstruction loss only.
+            #     ax2.plot(history["loss"])
+            # ax2.plot(history[val_recon_loss])
 
-                # KL Loss
-                ax3.plot(history[kl_loss])
-                ax3.plot(history[val_kl_loss])
-                ax3.set_title("KL Divergence Loss")
-                ax3.set_ylabel("Loss")
-                ax3.set_xlabel("Epoch")
-                ax3.legend(labels, loc="best")
+            # # KL Loss
+            # ax3.plot(history[kl_loss])
+            # ax3.plot(history[val_kl_loss])
+            # ax3.set_title("KL Divergence Loss")
+            # ax3.set_ylabel("Loss")
+            # ax3.set_xlabel("Epoch")
+            # ax3.legend(labels, loc="best")
 
-                # Total Loss (Reconstruction Loss + KL Loss)
-                ax4.plot(history["loss"])
-                ax4.plot(history[lossval])
-                ax4.set_title("Total Loss (Recon. + KL)")
-                ax4.set_ylabel("Loss")
-                ax4.set_xlabel("Epoch")
-                ax4.legend(labels, loc="best")
+            # Total Loss (Reconstruction Loss + KL Loss)
+            # ax4.plot(history["loss"])
+            # ax4.plot(history[lossval])
+            # ax4.set_title("Total Loss (Recon. + KL)")
+            # ax4.set_ylabel("Loss")
+            # ax4.set_xlabel("Epoch")
+            # ax4.legend(labels, loc="best")
 
-            else:
-                ax2.plot(history["loss"])
+            # else:
+            ax2.plot(history["loss"])
 
-                if nn_method == "SAE":
-                    ax2.plot(history[lossval])
+            if nn_method == "SAE":
+                ax2.plot(history[lossval])
 
-            ax2.set_title(f"Reconstruction Loss")
-            ax2.set_ylabel(f"Loss")
+            ax2.set_title("Total Loss")
+            ax2.set_ylabel("Loss")
             ax2.set_xlabel("Epoch")
             ax2.legend(labels, loc="best")
 
@@ -784,7 +802,13 @@ class Plotting:
             fig = plt.figure(figsize=(12, 16))
             fig.suptitle(nn_method)
             fig.tight_layout(h_pad=2.0, w_pad=2.0)
-            fn = os.path.join(f"{prefix}_output", "plots", "histplot_ubp.pdf")
+            fn = os.path.join(
+                f"{prefix}_output",
+                "plots",
+                "Unsupervised",
+                nn_method,
+                "histplot.pdf",
+            )
 
             idx = 1
             for i, history in enumerate(lod, start=1):
@@ -822,7 +846,9 @@ class Plotting:
             )
 
     @staticmethod
-    def plot_certainty_heatmap(y_certainty, sample_ids=None, prefix="imputer"):
+    def plot_certainty_heatmap(
+        y_certainty, sample_ids=None, nn_method="VAE", prefix="imputer"
+    ):
         fig = plt.figure()
         hm = sns.heatmap(
             data=y_certainty,
@@ -836,20 +862,32 @@ class Plotting:
         hm.set_title("Probabilities of Uncertain Sites")
         fig.tight_layout()
         fig.savefig(
-            os.path.join(f"{prefix}_output", "plots", f"uncertainty_plot.png"),
+            os.path.join(
+                f"{prefix}_output",
+                "plots",
+                "Unsupervised",
+                nn_method,
+                "uncertainty_plot.png",
+            ),
             bbox_inches="tight",
             facecolor="white",
         )
 
     @staticmethod
-    def plot_confusion_matrix(y_true_1d, y_pred_1d, prefix="imputer"):
+    def plot_confusion_matrix(
+        y_true_1d, y_pred_1d, nn_method, prefix="imputer"
+    ):
         fig, ax = plt.subplots(1, 1, figsize=(15, 15))
         ConfusionMatrixDisplay.from_predictions(
             y_true=y_true_1d, y_pred=y_pred_1d, ax=ax
         )
 
         outfile = os.path.join(
-            f"{prefix}_output", "plots", "vae_confusion_matrix.png"
+            f"{prefix}_output",
+            "plots",
+            "Unsupervised",
+            nn_method,
+            f"confusion_matrix_{nn_method}.png",
         )
 
         if os.path.isfile(outfile):
@@ -890,16 +928,19 @@ class Plotting:
 
     @staticmethod
     def plot_label_clusters(z_mean, labels, prefix="imputer"):
-        """display a 2D plot of the digit classes in the latent space."""
+        """Display a 2D plot of the classes in the latent space."""
         fig, ax = plt.subplots(1, 1, figsize=(15, 15))
 
-        if z_mean.shape[1] == 2:
-            sns.scatterplot(z_mean[:, 0], z_mean[:, 1], ax=ax)
-            ax.set_xlabel("Latent Dimension 1")
-            ax.set_ylabel("Latent Dimension 2")
+        sns.scatterplot(x=z_mean[:, 0], y=z_mean[:, 1], ax=ax)
+        ax.set_xlabel("Latent Dimension 1")
+        ax.set_ylabel("Latent Dimension 2")
 
         outfile = os.path.join(
-            f"{prefix}_output", "plots", "vae_label_clusters.png"
+            f"{prefix}_output",
+            "plots",
+            "Unsupervised",
+            "VAE",
+            "label_clusters.png",
         )
 
         if os.path.isfile(outfile):

@@ -12,6 +12,8 @@ from pathlib import Path
 from statistics import mean, median
 from contextlib import redirect_stdout
 from typing import Optional, Union, List, Dict, Tuple, Any, Callable
+from copy import deepcopy
+
 
 # Third party imports
 import numpy as np
@@ -46,7 +48,7 @@ try:
         IterativeImputerFixedParams,
     )
     from .unsupervised.neural_network_imputers import VAE, UBP, SAE
-    from ..read_input.read_input import GenotypeData
+    from snpio import GenotypeData
     from . import simple_imputers
     from ..utils.misc import get_processor_name
     from ..utils.misc import isnotebook
@@ -57,7 +59,7 @@ try:
         ImputeNMFTransformer,
         SimGenotypeDataTransformer,
     )
-except (ModuleNotFoundError, ValueError):
+except (ModuleNotFoundError, ValueError, ImportError):
     from impute.supervised.iterative_imputer_gridsearch import (
         IterativeImputerGridSearch,
     )
@@ -65,7 +67,7 @@ except (ModuleNotFoundError, ValueError):
         IterativeImputerFixedParams,
     )
     from impute.unsupervised.neural_network_imputers import VAE, UBP, SAE
-    from read_input.read_input import GenotypeData
+    from snpio import GenotypeData
     from impute import simple_imputers
     from utils.misc import get_processor_name
     from utils.misc import get_processor_name
@@ -144,13 +146,12 @@ class Impute:
 
         if self.clf == VAE or self.clf == SAE or self.clf == UBP:
             self.algorithm = "nn"
-            if self.clf == VAE:
-                self.using_basecat = True
-            else:
-                self.using_basecat = False
+            self.imp_method = "Unsupervised"
         else:
-            self.nn_method = None
             self.algorithm = "ii"
+            self.imp_method = "Supervised"
+
+        self.imp_name = self.clf.__name__
 
         try:
             self.pops = kwargs["genotype_data"].populations
@@ -192,7 +193,11 @@ class Impute:
                     )
 
         self.logfilepath = os.path.join(
-            f"{self.prefix}_output", "logs", "imputer_progress_log.txt"
+            f"{self.prefix}_output",
+            "logs",
+            self.imp_method,
+            self.imp_name,
+            f"imputer_progress_log.txt",
         )
 
         self.invalid_indexes = None
@@ -203,21 +208,38 @@ class Impute:
         except OSError:
             pass
 
-        Path(os.path.join(f"{self.prefix}_output", "plots")).mkdir(
-            parents=True, exist_ok=True
-        )
+        Path(
+            os.path.join(
+                f"{self.prefix}_output",
+                "plots",
+                self.imp_method,
+                self.imp_name,
+            )
+        ).mkdir(parents=True, exist_ok=True)
 
-        Path(os.path.join(f"{self.prefix}_output", "logs")).mkdir(
-            parents=True, exist_ok=True
-        )
+        Path(
+            os.path.join(
+                f"{self.prefix}_output", "logs", self.imp_method, self.imp_name
+            )
+        ).mkdir(parents=True, exist_ok=True)
 
-        Path(os.path.join(f"{self.prefix}_output", "reports")).mkdir(
-            parents=True, exist_ok=True
-        )
+        Path(
+            os.path.join(
+                f"{self.prefix}_output",
+                "reports",
+                self.imp_method,
+                self.imp_name,
+            )
+        ).mkdir(parents=True, exist_ok=True)
 
-        Path(os.path.join(f"{self.prefix}_output", "alignments")).mkdir(
-            parents=True, exist_ok=True
-        )
+        Path(
+            os.path.join(
+                f"{self.prefix}_output",
+                "alignments",
+                self.imp_method,
+                self.imp_name,
+            )
+        ).mkdir(parents=True, exist_ok=True)
 
     @timer
     def fit_predict(
@@ -238,7 +260,11 @@ class Impute:
         # Test if output file can be written to
         try:
             outfile = os.path.join(
-                f"{self.prefix}_output", "alignments", "imputed_012.csv"
+                f"{self.prefix}_output",
+                "alignments",
+                self.imp_method,
+                self.imp_name,
+                "imputed_012.csv",
             )
 
             with open(outfile, "w") as fout:
@@ -274,59 +300,6 @@ class Impute:
 
         print("\nDone!\n")
         return imp_data, best_params
-
-    def write_imputed(
-        self,
-        data: Union[pd.DataFrame, np.ndarray, List[List[int]]],
-        prefix: str = "imputer",
-    ) -> None:
-        """Save imputed data to disk as a CSV file.
-
-        Args:
-            data (pandas.DataFrame, numpy.ndarray, or List[List[int]]): Object returned from ``fit_predict()``\.
-
-            prefix (str, optional): Prefix to use for output directory. Defaults to 'imputer'.
-
-        Raises:
-            TypeError: Must be of type pandas.DataFrame, numpy.array, or List[List[int]].
-        """
-
-        outfile = os.path.join(
-            f"{prefix}_output", "alignments", "imputed_012.csv"
-        )
-
-        if isinstance(data, pd.DataFrame):
-            data.to_csv(
-                outfile,
-                header=False,
-                index=False,
-            )
-
-        elif isinstance(data, np.ndarray):
-            np.savetxt(outfile, data, delimiter=",")
-
-        elif isinstance(data, list):
-            with open(outfile, "w") as fout:
-                fout.writelines(
-                    ",".join(str(j) for j in i) + "\n" for i in data
-                )
-        else:
-            raise TypeError(
-                "'write_imputed()' takes either a pandas.DataFrame,"
-                " numpy.ndarray, or 2-dimensional list"
-            )
-
-    def read_imputed(self, filename: str) -> pd.DataFrame:
-        """Read in imputed CSV file as formatted by write_imputed.
-
-        Args:
-            filename (str): Name of imputed CSV file to be read.
-
-        Returns:
-            pandas.DataFrame: Imputed data as DataFrame of 8-bit integers.
-        """
-
-        return pd.read_csv(filename, dtype="Int8", header=None)
 
     def _df2chunks(
         self, df: pd.DataFrame, chunk_size: Union[int, float]
@@ -432,30 +405,37 @@ class Impute:
         Returns:
             GenotypeData: GenotypeData object with imputed data.
         """
-        imputed_filename = genotype_data.decode_imputed(
-            imp012,
-            write_output=True,
-            prefix=self.prefix,
-            is_nuc=self.using_basecat,
-        )
+        # imputed_filename = genotype_data.decode_012(
+        #     imp012,
+        #     write_output=True,
+        #     prefix=self.prefix,
+        #     is_nuc=self.using_basecat,
+        # )
 
-        ft = genotype_data.filetype
+        imputed_gd = deepcopy(genotype_data)
 
-        if ft.lower().startswith("structure") and ft.lower().endswith("row"):
-            ft += "PopID"
+        if self.clf == VAE:
+            if len(imp012.shape) == 3:
+                if imp012.shape[-1] == 4:
+                    imputed_gd.genotypes_onehot = imp012
+                else:
+                    raise ValueError("Invalid shape for imputed output.")
+            elif len(imp012.shape) == 2:
+                if isinstance(imp012, pd.DataFrame):
+                    imp012 = imp012.to_numpy()
+                imp012 = imp012.astype(int)
+                if np.max(imp012) > 2:
+                    imputed_gd.genotypes_int = imp012
+                else:
+                    imputed_gd.genotypes_012 = imp012
+            else:
+                raise ValueError(
+                    f"Invalid shape for imputed output: {imp012.shape}"
+                )
+        else:
+            imputed_gd.genotypes_012 = imp012
 
-        return GenotypeData(
-            filename=imputed_filename,
-            filetype=ft,
-            popmapfile=genotype_data.popmapfile,
-            guidetree=genotype_data.guidetree,
-            qmatrix_iqtree=genotype_data.qmatrix_iqtree,
-            qmatrix=genotype_data.qmatrix,
-            siterates=genotype_data.siterates,
-            siterates_iqtree=genotype_data.siterates_iqtree,
-            prefix=genotype_data.prefix,
-            verbose=False,
-        )
+        return imputed_gd
 
     def _subset_data_for_gridsearch(
         self,
@@ -534,10 +514,18 @@ class Impute:
         """
 
         best_score_outfile = os.path.join(
-            f"{self.prefix}_output", "reports", "imputed_best_score.csv"
+            f"{self.prefix}_output",
+            "reports",
+            self.imp_method,
+            self.imp_name,
+            "imputed_best_score.csv",
         )
         best_params_outfile = os.path.join(
-            f"{self.prefix}_output", "reports", "imputed_best_params.csv"
+            f"{self.prefix}_output",
+            "reports",
+            self.imp_method,
+            self.imp_name,
+            "imputed_best_params.csv",
         )
 
         if isinstance(df_scores, pd.DataFrame):
@@ -651,6 +639,7 @@ class Impute:
 
         df_chunks = self._df2chunks(df, self.chunk_size)
         imputed_df = self._impute_df(df_chunks, imputer)
+        imputed_df = imputed_df.astype(str)
 
         if self.disable_progressbar:
             if self.verbose > 0:
@@ -883,7 +872,6 @@ class Impute:
             ),
             start=1,
         ):
-
             if self.disable_progressbar:
                 perc = int((cnt / self.cv) * 100)
                 if self.verbose > 0:
@@ -973,7 +961,11 @@ class Impute:
         df_scores = df_scores.round(2)
 
         outfile = os.path.join(
-            f"{self.prefix}_output", "reports", "imputed_best_score.csv"
+            f"{self.prefix}_output",
+            "reports",
+            self.imp_method,
+            self.imp_name,
+            "imputed_best_score.csv",
         )
         df_scores.to_csv(outfile, header=True, index=False)
 
@@ -1005,14 +997,13 @@ class Impute:
             pandas.DataFrame: Single DataFrame object, with all the imputed chunks concatenated together.
         """
         imputed_chunks = list()
-        num_chunks = len(df_chunks)
         for i, Xchunk in enumerate(df_chunks, start=1):
             if self.clf_type == "classifier":
                 if self.algorithm == "nn":
                     if self.clf == VAE:
                         self.clf_kwargs["testing"] = self.testing
                     imputer = self.clf(
-                        self.imp_kwargs["genotype_data"],
+                        genotype_data=self.imp_kwargs["genotype_data"],
                         disable_progressbar=self.disable_progressbar,
                         prefix=self.prefix,
                         **self.clf_kwargs,
@@ -1024,21 +1015,19 @@ class Impute:
                     df_imp = df_imp.astype("Int8")
 
                 else:
-                    df_imp = pd.DataFrame(
-                        imputer.fit_transform(Xchunk, valid_cols=cols_to_keep),
-                        dtype="Int8",
+                    imp, _, __ = imputer.fit_transform(
+                        Xchunk, valid_cols=cols_to_keep
                     )
+                    df_imp = pd.DataFrame(imp)
 
                 imputed_chunks.append(df_imp)
 
             else:
                 # Regressor. Needs to be rounded to integer first.
-                df_imp = pd.DataFrame(
-                    imputer.fit_transform(
-                        Xchunk,
-                        valid_cols=cols_to_keep,
-                    )
+                imp, _, __ = imputer.fit_transform(
+                    Xchunk, valid_cols=cols_to_keep
                 )
+                df_imp = pd.DataFrame(imp)
                 df_imp = df_imp.round(0).astype("Int8")
 
                 imputed_chunks.append(df_imp)
@@ -1212,7 +1201,7 @@ class Impute:
         ]
 
         if self.algorithm == "ii":
-            imp_keys.append(
+            imp_keys.extend(
                 [
                     "n_nearest_features",
                     "max_iter",
@@ -1231,6 +1220,7 @@ class Impute:
             "crossover_probability",
             "mutation_probability",
             "ga_algorithm",
+            "early_stop_gen",
         ]
 
         to_remove = ["self", "__class__"]
@@ -1282,177 +1272,6 @@ class Impute:
             testing,
         )
 
-    def _format_features(
-        self, df: pd.DataFrame, missing_val: int = -9
-    ) -> pd.DataFrame:
-        """Format a 2D list for input into iterative imputer.
-
-        Args:
-            df (pandas.DataFrame): DataFrame of features with shape (n_samples, n_features).
-
-            missing_val (int, optional): Missing value to replace with numpy.nan. Defaults to -9.
-
-        Returns:
-            pandas.DataFrame: Formatted pandas.DataFrame for input into IterativeImputer.
-        """
-        # Replace missing data with NaN
-        X = df.replace(missing_val, np.nan)
-        return X
-
-    def _defile_dataset(
-        self, df: pd.DataFrame, col_selection_rate: float = 0.40
-    ) -> Tuple[pd.DataFrame, pd.DataFrame, np.ndarray]:
-        """Replace random columns and rows with np.nan.
-
-        Function to select ``col_selection_rate * columns`` columns in a pandas DataFrame and change anywhere from 15% to 50% of the values in each of those columns to np.nan (missing data). Since we know the true values of the ones changed to np.nan, we can assess the accuracy of the classifier and do a grid search.
-
-        Args:
-            df (pandas.DataFrame): 012-encoded genotypes to extract columns from.
-
-            col_selection_rate (float, optional): Proportion of the DataFrame to extract. Defaults to 0.40.
-
-        Returns:
-            pandas.DataFrame: DataFrame with values imputed initially with sklearn.impute.SimpleImputer, ImputeAlleleFreq (by populations) or ImputePhylo.
-            pandas.DataFrame: DataFrame with randomly missing values.
-            numpy.ndarray: Columns that were extracted via random sampling.
-        """
-        # Code adapted from: https://medium.com/analytics-vidhya/using-scikit-learns-iterative-imputer-694c3cca34de
-        cols = np.random.choice(
-            df.columns,
-            int(len(df.columns) * col_selection_rate),
-            replace=False,
-        )
-
-        initial_strategy = self.imp_kwargs["initial_strategy"]
-        gt_data = self.imp_kwargs["genotype_data"]
-        str_enc = self.imp_kwargs["str_encodings"]
-
-        if initial_strategy == "populations":
-            simple_imputer = simple_imputers.ImputeAlleleFreq(
-                genotype_data=self.genotype_data,
-                pops=self.pops,
-                by_populations=True,
-                missing=-9,
-                write_output=False,
-                verbose=False,
-                validation_mode=True,
-            )
-
-            df_defiled = simple_imputer.imputed
-            valid_cols = cols.copy()
-
-        elif initial_strategy == "phylogeny":
-            if self.verbose > 0:
-                print(
-                    "Doing initial imputation with initial_strategy == "
-                    "'phylogeny'..."
-                )
-
-            # NOTE: non-biallelic sites are removed with ImputePhylo
-            simple_imputer = simple_imputers.ImputePhylo(
-                genotype_data=gt_data,
-                str_encodings=str_enc,
-                write_output=False,
-                disable_progressbar=True,
-                validation_mode=True,
-            )
-
-            valid_mask = np.flatnonzero(
-                np.logical_not(np.isnan(simple_imputer.valid_sites))
-            )
-
-            # ImputePhylo resets the column names
-            # So here I switch them back
-            # and remove any columns that were non-biallelic
-            valid_cols = np.sort(self._remove_invalid_cols(cols, valid_mask))
-            new_colnames = self._remove_invalid_cols(
-                np.array(df.columns), valid_mask
-            )
-
-            self.invalid_indexes = self._remove_invalid_cols(
-                np.array(df.columns), valid_mask, validation_mode=False
-            )
-
-            df_defiled = simple_imputer.imputed
-            old_colnames = list(df_defiled.columns)
-            df_defiled.rename(
-                columns={i: j for i, j in zip(old_colnames, new_colnames)},
-                inplace=True,
-            )
-
-        elif initial_strategy == "nmf":
-            simple_imputer = simple_imputers.ImputeNMF(
-                gt=df.fillna(-9).to_numpy(),
-                missing=-9,
-                write_output=False,
-                verbose=False,
-                validation_mode=True,
-            )
-            df_defiled = simple_imputer.imputed
-            valid_cols = cols.copy()
-
-        else:
-            # Fill in unknown values with sklearn.impute.SimpleImputer
-            simple_imputer = SimpleImputer(
-                strategy=self.imp_kwargs["initial_strategy"]
-            )
-
-            df_defiled = pd.DataFrame(
-                simple_imputer.fit_transform(df.fillna(-9).values)
-            )
-            valid_cols = cols.copy()
-
-        del simple_imputer
-        del cols
-        gc.collect()
-
-        self.original_num_cols = len(df_defiled.columns)
-        df_filled = df_defiled.copy()
-
-        # Randomly choose rows (samples) to introduce missing data to
-        for col in valid_cols:
-            data_drop_rate = np.random.choice(np.arange(0.15, 0.5, 0.02), 1)[0]
-
-            drop_ind = np.random.choice(
-                np.arange(len(df_defiled[col])),
-                size=int(len(df_defiled[col]) * data_drop_rate),
-                replace=False,
-            )
-
-            # Introduce random np.nan values
-            df_defiled.loc[drop_ind, col] = np.nan
-
-        return df_filled, df_defiled, valid_cols
-
-    def _remove_invalid_cols(
-        self, arr1: np.ndarray, arr2: np.ndarray, validation_mode: bool = True
-    ) -> Optional[Union[List[int], np.ndarray]]:
-        """Finds set difference between two numpy arrays and returns the values unique to arr1 that are not found in arr2.
-
-        Args:
-            arr1 (numpy.ndarray): 1D Array that contains input values.
-            arr2 (numpy.ndarray): 1D Comparison array.
-            validation_mode (bool, optional): If False, returns indexes to remove. If True, returns numpy.ndarray of remaining column labels.
-
-        Returns:
-            List[int], np.ndarray, or None: List of Bad indexes to remove, numpy.ndarray with invalid column labels removed, or None if no bad columns were found.
-        """
-        bad_idx = list()
-        for i, item in enumerate(arr1):
-            if not np.any(arr2 == item):
-                bad_idx.append(i)
-
-        if not validation_mode:
-            if bad_idx:
-                return bad_idx
-            else:
-                return None
-
-        if bad_idx:
-            return np.delete(arr1, bad_idx)
-        else:
-            return arr1.copy()
-
     def _impute_eval(
         self, df: pd.DataFrame, clf: Optional[Callable]
     ) -> Dict[str, List[Union[float, int]]]:
@@ -1493,13 +1312,6 @@ class Impute:
                     strategy=self.imp_kwargs["sim_strategy"],
                 ).fit_transform(df_known)
             )
-
-        # Code adapted from:
-        # https://medium.com/analytics-vidhya/using-scikit-learns-iterative-imputer-694c3cca34de
-
-        # df_known, df_unknown, cols = self._defile_dataset(
-        #     df, col_selection_rate=self.column_subset
-        # )
 
         df_unknown_slice = df_unknown[cols]
 
@@ -1641,55 +1453,6 @@ class Impute:
         gc.collect()
 
         return scores
-
-    def _initial_imputation(
-        self,
-        strategy,
-        genotype_data,
-        str_encodings,
-        output_format="df",
-    ):
-        """Instantiate and transform the initial imputation.
-
-        The initial imputer used will be the one specified by initial_strategy.
-
-        Args:
-            strategy (str): Initial strategy to use. Can be "most_frequent", "populations", "phylogeny", or "nmf".
-
-        Returns:
-            numpy.ndarray: Imputed array.
-
-        Raises:
-            ValueError: Unsupported strategy argument specified.
-        """
-        if strategy == "most_frequent" or strategy == "populations":
-            by_populations = True if strategy == "populations" else False
-            simple = ImputeAlleleFreqTransformer(
-                by_populations=by_populations,
-                output_format=output_format,
-                verbose=False,
-                iterative_mode=True,
-            )
-
-        elif strategy == "phylogeny":
-            simple = ImputePhyloTransformer(
-                str_encodings=str_encodings,
-                output_format=output_format,
-                disable_progressbar=True,
-                save_plots=False,
-            )
-
-        elif strategy == "nmf":
-            simple = ImputeNMFTransformer(
-                output_format=output_format,
-                verbose=False,
-                iterative_mode=True,
-            )
-
-        else:
-            raise ValueError(f"Invalid strategy value specified: {strategy}")
-
-        return simple.fit_transform(genotype_data)
 
     def _define_iterative_imputer(
         self,

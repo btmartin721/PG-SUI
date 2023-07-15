@@ -11,7 +11,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # noinspection PyPackageRequirements
 import tensorflow as tf
 
-# Disable can't find cuda .dll errors. Also turns of GPU support.
+# Disable can't find cuda .dll errors. Also turns off GPU support.
 tf.config.set_visible_devices([], "GPU")
 
 from tensorflow.python.util import deprecation
@@ -19,6 +19,7 @@ from tensorflow.python.util import deprecation
 # Disable warnings and info logs.
 tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 tf.get_logger().setLevel(logging.ERROR)
+
 
 # Monkey patching deprecation utils to supress warnings.
 # noinspection PyUnusedLocal
@@ -46,7 +47,7 @@ from tensorflow.keras.regularizers import l1_l2
 # Custom Modules
 try:
     from ..neural_network_methods import NeuralNetworkMethods
-except (ModuleNotFoundError, ValueError):
+except (ModuleNotFoundError, ValueError, ImportError):
     from impute.unsupervised.neural_network_methods import NeuralNetworkMethods
 
 
