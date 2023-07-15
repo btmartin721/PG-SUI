@@ -239,7 +239,6 @@ class UBPPhase1(tf.keras.Model):
             Obtain batch_size without using run_eagerly option in compile(). This will allow the step to be run in graph mode, thereby speeding up computation.
         """
         # Set in the UBPCallbacks() callback.
-        # Set in the UBPCallbacks() callback.
         y = self._y
 
         (
