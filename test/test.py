@@ -23,7 +23,7 @@ class TestMyClasses(unittest.TestCase):
     def setUp(self):
         self.genotype_data = GenotypeData(
             filename="pgsui/example_data/phylip_files/test_n100.phy",
-            popmapfile="pgsui/example_data/popmap_files/test.popmap",
+            popmapfile="pgsui/example_data/popmaps/test.popmap",
             guidetree="pgsui/example_data/trees/test.tre",
             qmatrix_iqtree="pgsui/example_data/trees/test.qmat",
             siterates_iqtree="pgsui/example_data/trees/test.rate",
@@ -35,21 +35,24 @@ class TestMyClasses(unittest.TestCase):
         self.transformer = SimGenotypeDataTransformer(
             genotype_data=self.genotype_data, prop_missing=0.1
         )
-        self.transformer.fit(self.genotype_data.snp_data)
+        self.transformer.fit(self.genotype_data.genotypes_012(fmt="numpy"))
         self.simulated_data = self.transformer.transform(
-            self.genotype_data.snp_data
+            self.genotype_data.genotypes_012(fmt="numpy")
         )
 
+        self.genotype_data.genotypes_012 = self.simulated_data
+
     def test_class(self, class_instance):
-        instance = class_instance(self.simulated_data)
-        imputed_data = instance.imputer.snp_data
+        instance = class_instance(self.genotype_data)
+        imputed_data = instance.imputed.genotypes_012(fmt="numpy")
+        imputed_data[imputed_data == -9] = np.nan
 
         # Test that there are no missing values in the imputed data
         self.assertFalse(np.isnan(imputed_data).any())
 
         # Test that the imputed values are close to the original values
         accuracy = self.transformer.accuracy(
-            self.genotype_data.snp_data, imputed_data
+            self.genotypes_012(fmt="numpy"), imputed_data
         )
         self.assertGreaterEqual(accuracy, 0.9)  # adjust this as needed
 
