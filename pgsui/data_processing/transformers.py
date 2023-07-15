@@ -36,6 +36,7 @@ from tensorflow.python.util import deprecation
 tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 tf.get_logger().setLevel(logging.ERROR)
 
+
 # Monkey patching deprecation utils to supress warnings.
 # noinspection PyUnusedLocal
 def deprecated(
@@ -51,12 +52,12 @@ deprecation.deprecated = deprecated
 
 # Custom Modules
 try:
-    from ..read_input.read_input import GenotypeData
+    from snpio import GenotypeData
     from ..utils import misc
     from ..utils.misc import get_processor_name
     from ..utils.misc import isnotebook
-except (ModuleNotFoundError, ValueError):
-    from read_input.read_input import GenotypeData
+except (ModuleNotFoundError, ValueError, ImportError):
+    from snpio import GenotypeData
     from utils import misc
     from utils.misc import get_processor_name
     from utils.misc import isnotebook
@@ -705,7 +706,6 @@ class ImputePhyloTransformer(GenotypeData, BaseEstimator, TransformerMixin):
         disable_progressbar: bool = False,
         **kwargs: Optional[Any],
     ) -> None:
-
         GenotypeData.__init__(self)
 
         self.alnfile = alnfile
@@ -1439,7 +1439,6 @@ class ImputeAlleleFreqTransformer(
         verbose: bool = True,
         **kwargs: Dict[str, Any],
     ) -> None:
-
         GenotypeData.__init__(self)
 
         self.by_populations = by_populations
@@ -1480,7 +1479,6 @@ class ImputeAlleleFreqTransformer(
     def _global_impute(
         self, X: List[List[int]]
     ) -> Union[pd.DataFrame, np.ndarray, List[List[Union[int, float]]]]:
-
         if self.verbose:
             print("\nImputing by global allele frequency...")
 
@@ -1662,7 +1660,6 @@ class ImputeNMFTransformer(BaseEstimator, TransformerMixin):
         verbose: bool = True,
         **kwargs: Dict[str, Any],
     ) -> None:
-
         self.latent_features = latent_features
         self.max_iter = max_iter
         self.learning_rate = learning_rate
@@ -1898,7 +1895,7 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
                     [0, 1],
                     size=Xobs.size,
                     p=((1 - self.prop_missing), self.prop_missing),
-                ).astype(np.bool)
+                ).astype(bool)
 
                 # Make missing data mask.
                 mask = np.zeros(X.size)
@@ -1915,7 +1912,7 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
                     [0, 1],
                     size=X.shape,
                     p=((1 - self.prop_missing), self.prop_missing),
-                ).astype(np.bool)
+                ).astype(bool)
 
             # Make sure no entirely missing columns were simulated.
             self._validate_mask()

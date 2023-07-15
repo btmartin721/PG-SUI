@@ -22,6 +22,7 @@ from tensorflow.python.util import deprecation
 tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 tf.get_logger().setLevel(logging.ERROR)
 
+
 # Monkey patching deprecation utils to supress warnings.
 # noinspection PyUnusedLocal
 def deprecated(
@@ -51,7 +52,7 @@ from tensorflow.keras.regularizers import l1_l2
 # Custom Modules
 try:
     from ...neural_network_methods import NeuralNetworkMethods
-except (ModuleNotFoundError, ValueError):
+except (ModuleNotFoundError, ValueError, ImportError):
     from impute.unsupervised.neural_network_methods import NeuralNetworkMethods
 
 

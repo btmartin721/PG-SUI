@@ -19,6 +19,7 @@ from tensorflow.python.util import deprecation
 tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 tf.get_logger().setLevel(logging.ERROR)
 
+
 # Monkey patching deprecation utils to supress warnings.
 # noinspection PyUnusedLocal
 def deprecated(
@@ -48,7 +49,7 @@ from tensorflow.keras import backend as K
 # Custom Modules
 try:
     from ..neural_network_methods import NeuralNetworkMethods
-except (ModuleNotFoundError, ValueError):
+except (ModuleNotFoundError, ValueError, ImportError):
     from impute.unsupervised.neural_network_methods import NeuralNetworkMethods
 
 
@@ -66,32 +67,6 @@ class Sampling(tf.keras.layers.Layer):
         dim = tf.shape(z_mean)[1]
         epsilon = tf.random.normal(shape=(batch, dim))
         return z_mean + z_sigma * epsilon
-
-
-class KLDivergenceLoss(tf.keras.layers.Layer):
-    """Layer to calculate KL Divergence loss for VAE."""
-
-    def __init__(self, *args, beta=1.0, **kwargs):
-        self.is_placeholder = True
-        super(KLDivergenceLoss, self).__init__(*args, **kwargs)
-        self.beta = beta
-
-    def call(self, inputs):
-        z_mean, z_log_var = inputs
-
-        kl_loss = self.beta * tf.reduce_mean(
-            -0.5
-            * tf.reduce_sum(
-                z_log_var
-                - tf.math.square(z_mean)
-                - tf.math.exp(z_log_var)
-                + 1,
-                axis=-1,
-            )
-        )
-
-        self.add_loss(kl_loss, inputs=inputs)
-        return inputs
 
 
 class Encoder(tf.keras.layers.Layer):
@@ -120,18 +95,7 @@ class Encoder(tf.keras.layers.Layer):
         self.dense4 = None
         self.dense5 = None
 
-        # for layer_size in hidden_layer_sizes:
-        # self.dense_init = Dense(
-        #     num_classes // 2,
-        #     input_shape=(n_features, num_classes),
-        #     activation=activation,
-        #     kernel_initializer=kernel_initializer,
-        #     kernel_regularizer=kernel_regularizer,
-        #     name="Encoder1",
-        # )
-
         # # n_features * num_classes.
-        # self.flatten = Flatten()
         self.flatten = tf.keras.layers.Flatten()
 
         self.dense1 = Dense(
@@ -187,14 +151,10 @@ class Encoder(tf.keras.layers.Layer):
             latent_dim,
             name="z_log_var",
         )
-        # # z_mean and z_log_var are inputs.
+        # z_mean and z_log_var are inputs.
         self.sampling = Sampling(
             name="z",
         )
-
-        # self.kldivergence = KLDivergenceLoss(
-        #     beta=self.beta, name="KLDivergence"
-        # )
 
         self.dense_latent = Dense(
             latent_dim,
@@ -206,11 +166,11 @@ class Encoder(tf.keras.layers.Layer):
 
         self.dropout_layer = Dropout(dropout_rate)
 
-        self.batch_norm_layer1 = BatchNormalization(center=False, scale=False)
-        self.batch_norm_layer2 = BatchNormalization(center=False, scale=False)
-        self.batch_norm_layer3 = BatchNormalization(center=False, scale=False)
-        self.batch_norm_layer4 = BatchNormalization(center=False, scale=False)
-        self.batch_norm_layer5 = BatchNormalization(center=False, scale=False)
+        # self.batch_norm_layer1 = BatchNormalization(center=False, scale=False)
+        # self.batch_norm_layer2 = BatchNormalization(center=False, scale=False)
+        # self.batch_norm_layer3 = BatchNormalization(center=False, scale=False)
+        # self.batch_norm_layer4 = BatchNormalization(center=False, scale=False)
+        # self.batch_norm_layer5 = BatchNormalization(center=False, scale=False)
 
     def call(self, inputs, training=None):
         x = self.flatten(inputs)
@@ -237,8 +197,15 @@ class Encoder(tf.keras.layers.Layer):
         x = self.dense_latent(x)
         z_mean = self.dense_z_mean(x)
         z_log_var = self.dense_z_log_var(x)
+
+        # Compute the KL divergence
+        kl_loss = -0.5 * tf.reduce_sum(
+            1 + z_log_var - tf.square(z_mean) - tf.exp(z_log_var), axis=-1
+        )
+        # Add the KL divergence to the model's total loss
+        self.add_loss(self.beta * tf.reduce_mean(kl_loss))
+
         z = self.sampling([z_mean, z_log_var])
-        # z_mean, z_log_var = self.kldivergence([z_mean, z_log_var])
 
         return z_mean, z_log_var, z
 
@@ -323,11 +290,11 @@ class Decoder(tf.keras.layers.Layer):
 
         self.dropout_layer = Dropout(dropout_rate)
 
-        self.batch_norm_layer1 = BatchNormalization(center=False, scale=False)
-        self.batch_norm_layer2 = BatchNormalization(center=False, scale=False)
-        self.batch_norm_layer3 = BatchNormalization(center=False, scale=False)
-        self.batch_norm_layer4 = BatchNormalization(center=False, scale=False)
-        self.batch_norm_layer5 = BatchNormalization(center=False, scale=False)
+        # self.batch_norm_layer1 = BatchNormalization(center=False, scale=False)
+        # self.batch_norm_layer2 = BatchNormalization(center=False, scale=False)
+        # self.batch_norm_layer3 = BatchNormalization(center=False, scale=False)
+        # self.batch_norm_layer4 = BatchNormalization(center=False, scale=False)
+        # self.batch_norm_layer5 = BatchNormalization(center=False, scale=False)
 
     def call(self, inputs, training=None):
         # x = self.flatten(inputs)
@@ -387,7 +354,7 @@ class VAEModel(tf.keras.Model):
         self._batch_size = batch_size
         self._y = y
         self._final_activation = final_activation
-        if num_classes == 10:
+        if num_classes == 10 or num_classes == 3:
             self.acc_func = tf.keras.metrics.categorical_accuracy
         elif num_classes == 4:
             self.acc_func = tf.keras.metrics.binary_accuracy
@@ -398,7 +365,7 @@ class VAEModel(tf.keras.Model):
         self.reconstruction_loss_tracker = tf.keras.metrics.Mean(
             name="reconstruction_loss"
         )
-        self.kl_loss_tracker = tf.keras.metrics.Mean(name="kl_loss")
+        # self.kl_loss_tracker = tf.keras.metrics.Mean(name="kl_loss")
         self.accuracy_tracker = tf.keras.metrics.Mean(name="accuracy")
 
         # y_train[1] dimension.
@@ -510,13 +477,12 @@ class VAEModel(tf.keras.Model):
         return [
             self.total_loss_tracker,
             self.reconstruction_loss_tracker,
-            self.kl_loss_tracker,
+            # self.kl_loss_tracker,
             self.accuracy_tracker,
         ]
 
     @tf.function
     def train_step(self, data):
-
         y = self._y
 
         (
@@ -561,21 +527,21 @@ class VAEModel(tf.keras.Model):
                 sample_weight=sample_weight_masked,
             )
 
-            kl_loss = self.kl_beta * tf.reduce_mean(
-                -0.5
-                * tf.reduce_sum(
-                    z_log_var
-                    - tf.math.square(z_mean)
-                    - tf.math.exp(z_log_var)
-                    + 1,
-                    axis=-1,
-                )
-            )
+            # kl_loss = self.kl_beta * tf.reduce_mean(
+            #     -0.5
+            #     * tf.reduce_sum(
+            #         z_log_var
+            #         - tf.math.square(z_mean)
+            #         - tf.math.exp(z_log_var)
+            #         + 1,
+            #         axis=-1,
+            #     )
+            # )
 
             # Doesn't include KL Divergence Loss.
             regularization_loss = sum(self.losses)
 
-            total_loss = reconstruction_loss + kl_loss + regularization_loss
+            total_loss = reconstruction_loss + regularization_loss
 
         grads = tape.gradient(total_loss, self.trainable_variables)
         self.optimizer.apply_gradients(zip(grads, self.trainable_variables))
@@ -592,14 +558,14 @@ class VAEModel(tf.keras.Model):
 
         self.total_loss_tracker.update_state(total_loss)
         self.reconstruction_loss_tracker.update_state(reconstruction_loss)
-        self.kl_loss_tracker.update_state(kl_loss)
+        # self.kl_loss_tracker.update_state(kl_loss)
 
         # return {m.name: m.result() for m in self.metrics}
 
         return {
             "loss": self.total_loss_tracker.result(),
             "reconstruction_loss": self.reconstruction_loss_tracker.result(),
-            "kl_loss": self.kl_loss_tracker.result(),
+            # "kl_loss": self.kl_loss_tracker.result(),
             "accuracy": self.accuracy_tracker.result(),
         }
 

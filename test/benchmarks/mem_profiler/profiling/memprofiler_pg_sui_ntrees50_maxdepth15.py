@@ -14,8 +14,8 @@ from utils.misc import get_processor_name
 print(get_processor_name().strip().startswith("Intel"))
 
 # Custom module imports
-from read_input.read_input import GenotypeData
-from impute.impute import *
+from snpio import GenotypeData
+from super_deli_imputer.impute import *
 
 from dim_reduction.dim_reduction import DimReduction
 from dim_reduction.embed import *
@@ -92,23 +92,23 @@ def main():
     # 		disable_progressbar=True
     # )
 
-    # prefix = "profiling_test_ntrees~_maxdepth&"
+    prefix = "profiling_test_ntrees50_maxdepth15"
 
-    # rf_imp = ImputeRandomForest(
-    #         data,
-    #         prefix=prefix,
-    #         n_estimators=100,
-    #         n_nearest_features=3,
-    #         n_jobs=4,
-    #         max_iter=3,
-    #         disable_progressbar=True,
-    #         extratrees=False,
-    #         progress_update_percent=20,
-    #         max_features="log2",
-    #         min_samples_split=6,
-    #         min_samples_leaf=4,
-    #         max_depth=&
-    # )
+    rf_imp = ImputeRandomForest(
+        data,
+        prefix=prefix,
+        n_estimators=50,
+        n_nearest_features=3,
+        n_jobs=1,
+        max_iter=3,
+        disable_progressbar=True,
+        extratrees=False,
+        progress_update_percent=20,
+        max_features="log2",
+        min_samples_split=6,
+        min_samples_leaf=4,
+        max_depth=15,
+    )
 
     # br_imp = ImputeBayesianRidge(data, prefix=prefix, n_iter=100, gridparams=grid_params, grid_iter=3, cv=3, n_jobs=1, max_iter=2, n_nearest_features=3, column_subset=10, ga=True, disable_progressbar=True)
 
@@ -137,18 +137,18 @@ def main():
 
     # pca.plot(plot_3d=True)
 
-    # rf = runRandomForestUML(dimreduction=dr, n_estimators=1000, n_jobs=4, min_samples_leaf=4)
+    # rf = runRandomForestUML(dimreduction=dr, n_estimators=1000, n_jobs=1, min_samples_leaf=4)
 
     # rf_cmds = runMDS(
     # 	dimreduction=dr,
     # 	distances=rf.dissimilarity,
     # 	keep_dims=3,
-    # 	n_jobs=4,
+    # 	n_jobs=1,
     # 	max_iter=1000,
     # 	n_init=25
     # )
 
-    # rf_isomds = runMDS(dr, distances=rf.dissimilarity_matrix, metric=False, keep_dims=3, n_jobs=4, max_iter=1000, n_init=25)
+    # rf_isomds = runMDS(dr, distances=rf.dissimilarity_matrix, metric=False, keep_dims=3, n_jobs=1, max_iter=1000, n_init=25)
 
     # rf_cmds.plot(plot_3d=True)
     # rf_isomds.plot(plot_3d=True)
@@ -188,7 +188,7 @@ def get_arguments():
     """[Parse command-line arguments. Imported with argparse]
 
     Returns:
-        [argparse object]: [contains command-line arguments; accessed as method]
+            [argparse object]: [contains command-line arguments; accessed as method]
     """
 
     parser = argparse.ArgumentParser(

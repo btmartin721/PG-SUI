@@ -8,6 +8,8 @@ from collections import defaultdict
 
 import numpy as np
 import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
 
 from sklearn.utils.class_weight import (
     compute_class_weight,
@@ -30,6 +32,7 @@ from tensorflow.python.util import deprecation
 # Disable warnings and info logs.
 tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 tf.get_logger().setLevel(logging.ERROR)
+
 
 # Monkey patching deprecation utils to supress warnings.
 # noinspection PyUnusedLocal
@@ -340,7 +343,7 @@ class NeuralNetworkMethods:
                 else:
                     y_pred = pred_multilab_decoded
 
-        y_pred = y_pred.astype(np.int)
+        y_pred = y_pred.astype(int)
 
         if return_proba:
             return y_pred, y_unresolved_certainty
@@ -790,7 +793,6 @@ class NeuralNetworkMethods:
             batch_size = batch_end - batch_start
 
         if ubp:
-
             # override batches. This model refines the input to fit the output, so
             # v_batch and y_true have to be overridden.
             y_true = y[batch_start:batch_end, :]
@@ -881,21 +883,21 @@ class NeuralNetworkMethods:
             ValueError: Invalid act_func argument supplied.
         """
         if optimizer.lower() == "adam":
-            opt = tf.keras.optimizers.Adam
+            opt = tf.keras.optimizers.legacy.Adam
         elif optimizer.lower() == "sgd":
-            opt = tf.keras.optimizers.SGD
+            opt = tf.keras.optimizers.legacy.SGD
         elif optimizer.lower() == "adagrad":
-            opt = tf.keras.optimizers.Adagrad
+            opt = tf.keras.optimizers.legacy.Adagrad
         elif optimizer.lower() == "adadelta":
-            opt = tf.keras.optimizers.Adadelta
+            opt = tf.keras.optimizers.legacy.Adadelta
         elif optimizer.lower() == "adamax":
-            opt = tf.keras.optimizers.Adamax
+            opt = tf.keras.optimizers.legacy.Adamax
         elif optimizer.lower() == "ftrl":
-            opt = tf.keras.optimizers.Ftrl
+            opt = tf.keras.optimizers.legacy.Ftrl
         elif optimizer.lower() == "nadam":
-            opt = tf.keras.optimizers.Nadam
+            opt = tf.keras.optimizers.legacy.Nadam
         elif optimizer.lower() == "rmsprop":
-            opt = tf.keras.optimizers.RMSProp
+            opt = tf.keras.optimizers.legacy.RMSProp
 
         if vae:
             if act_func == "softmax":
@@ -923,7 +925,7 @@ class NeuralNetworkMethods:
             "optimizer": opt,
             "loss": loss,
             "metrics": metrics,
-            "run_eagerly": True,
+            "run_eagerly": False,
         }
 
     @staticmethod
@@ -1280,7 +1282,14 @@ class NeuralNetworkMethods:
 
     @staticmethod
     def write_gt_state_probs(
-        y_pred, y_pred_1d, y_true, y_true_1d, prefix="imputer"
+        y_pred,
+        y_pred_1d,
+        y_true,
+        y_true_1d,
+        nn_method,
+        sim_missing_mask,
+        original_missing_mask,
+        prefix="imputer",
     ):
         bin_mapping = np.array(
             [np.array2string(x) for row in y_pred for x in row]
@@ -1292,20 +1301,150 @@ class NeuralNetworkMethods:
         bin_mapping_2d = np.reshape(bin_mapping, y_true.shape)
         y_pred_2d = np.reshape(y_pred_1d, y_true.shape)
 
+        include = np.logical_and(sim_missing_mask, ~original_missing_mask)
+
         gt_dist = list()
-        for yt, yp, ypd in zip(y_true_2d, bin_mapping_2d, y_pred_2d):
+        colors = []
+        for yt, yp, ypd, mask in zip(
+            y_true_2d,
+            bin_mapping_2d,
+            y_pred_2d,
+            include,
+        ):
             sites = dict()
-            for i, yt_site in enumerate(yt):
-                sites[
-                    f"Site Index {i},Probability Vector,Imputed Genotype,Expected Genotype"
-                ] = f"{i},{yp[i]},{ypd[i]},{yt_site}"
+            row_colors = []
+            for i, (yt_site, mask_site) in enumerate(zip(yt, mask)):
+                if mask_site:
+                    sites[
+                        f"Site Index {i},Probability Vector,Imputed Genotype,Expected Genotype"
+                    ] = f"{i},{yp[i]},{ypd[i]},{yt_site}"
+                    if ypd[i] == yt_site:
+                        row_colors.append("blue")
+                    else:
+                        sites[
+                            f"Site Index {i},Probability Vector,Imputed Genotype,Expected Genotype"
+                        ] = f"{i},{yp[i]},{ypd[i]},{yt_site}"
+                        row_colors.append("orange")
+                else:
+                    sites[
+                        f"Site Index {i},Probability Vector,Imputed Genotype,Expected Genotype"
+                    ] = f"{i},{np.array2string(np.array([0.0, 0.0, 0.0]))},0,0"
+                    row_colors.append("gray")
             gt_dist.append(sites)
+            colors.append(row_colors)
 
         gt_df = pd.DataFrame.from_records(gt_dist)
         gt_df.to_csv(
             os.path.join(
-                f"{prefix}_output", "logs", "genotype_stateProbs_truths.csv"
+                f"{prefix}_output",
+                "logs",
+                "Unsupervised",
+                nn_method,
+                "genotype_state_proba.csv",
             ),
             index=False,
             header=False,
         )
+
+        # Reload the data
+
+        data = pd.read_csv(
+            os.path.join(
+                f"{prefix}_output",
+                "logs",
+                "Unsupervised",
+                nn_method,
+                "genotype_state_proba.csv",
+            ),
+            header=None,
+        )
+
+        # Parse the original data into separate dataframes for imputedGT and expectedGT
+        imputedGT_data = data.applymap(lambda x: int(x.split(",")[2]))
+        expectedGT_data = data.applymap(lambda x: int(x.split(",")[3]))
+
+        # Determine the binary mask based on whether imputedGT and expectedGT are the same
+
+        mask = imputedGT_data == expectedGT_data
+
+        # Create a new figure and set its size
+        plt.figure(figsize=(12, 6))
+
+        from matplotlib.colors import ListedColormap
+
+        rgb_colors = sns.color_palette(
+            [color for sublist in colors for color in sublist]
+        )
+        cmap = ListedColormap(rgb_colors)
+
+        # Create a heatmap
+        sns.heatmap(mask, cmap=cmap, cbar=False)
+
+        # Set the title and labels
+        plt.title("Expected Genotypes for Simulated Genotypes")
+        plt.xlabel("Column Index")
+        plt.ylabel("Row Index")
+
+        # Create a custom legend
+        import matplotlib.patches as mpatches
+
+        green_patch = mpatches.Patch(color="blue", label="Agreement")
+        orange_patch = mpatches.Patch(color="orange", label="Disagreement")
+        gray_patch = mpatches.Patch(color="gray", label="Not Simulated")
+
+        plt.legend(
+            handles=[green_patch, orange_patch, gray_patch], loc="lower right"
+        )
+
+        outfile = os.path.join(
+            f"{prefix}_output",
+            "plots",
+            "Unsupervised",
+            nn_method,
+            "gt_state_proba.png",
+        )
+
+        plt.savefig(outfile, bbox_inches="tight", facecolor="white")
+
+    # @staticmethod
+    # def write_gt_state_probs(
+    #     y_pred,
+    #     y_pred_1d,
+    #     y_true,
+    #     y_true_1d,
+    #     nn_method,
+    #     sim_missing_mask,
+    #     original_missing_mask,
+    #     prefix="imputer",
+    # ):
+    #     bin_mapping = np.array(
+    #         [np.array2string(x) for row in y_pred for x in row]
+    #     )
+
+    #     bin_mapping = np.reshape(bin_mapping, y_pred_1d.shape)
+
+    #     y_true_2d = np.reshape(y_true_1d, y_true.shape)
+    #     bin_mapping_2d = np.reshape(bin_mapping, y_true.shape)
+    #     y_pred_2d = np.reshape(y_pred_1d, y_true.shape)
+
+    #     gt_dist = list()
+    #     for yt, yp, ypd in zip(y_true_2d, bin_mapping_2d, y_pred_2d):
+    #         sites = dict()
+    #         for i, yt_site in enumerate(yt):
+    #             sites[
+    #                 f"Site Index {i},Probability Vector,Imputed Genotype,Expected Genotype"
+    #             ] = f"{i},{yp[i]},{ypd[i]},{yt_site}"
+    #         gt_dist.append(sites)
+
+    #     gt_df = pd.DataFrame.from_records(gt_dist)
+    #     gt_df.to_csv(
+    #         os.path.join(
+    #             f"{prefix}_output",
+    #             "logs",
+    #             "Unsupervised",
+    #             nn_method,
+    #             "genotype_state_proba.csv",
+    #         ),
+    #         index=False,
+    #         header=False,
+    #     )
