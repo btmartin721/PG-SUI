@@ -69,32 +69,6 @@ class Sampling(tf.keras.layers.Layer):
         return z_mean + z_sigma * epsilon
 
 
-class KLDivergenceLoss(tf.keras.layers.Layer):
-    """Layer to calculate KL Divergence loss for VAE."""
-
-    def __init__(self, *args, beta=1.0, **kwargs):
-        self.is_placeholder = True
-        super(KLDivergenceLoss, self).__init__(*args, **kwargs)
-        self.beta = beta
-
-    def call(self, inputs):
-        z_mean, z_log_var = inputs
-
-        kl_loss = self.beta * tf.reduce_mean(
-            -0.5
-            * tf.reduce_sum(
-                z_log_var
-                - tf.math.square(z_mean)
-                - tf.math.exp(z_log_var)
-                + 1,
-                axis=-1,
-            )
-        )
-
-        self.add_loss(kl_loss, inputs=inputs)
-        return inputs
-
-
 class Encoder(tf.keras.layers.Layer):
     """VAE encoder to Encode genotypes to (z_mean, z_log_var, z)."""
 
@@ -121,18 +95,7 @@ class Encoder(tf.keras.layers.Layer):
         self.dense4 = None
         self.dense5 = None
 
-        # for layer_size in hidden_layer_sizes:
-        # self.dense_init = Dense(
-        #     num_classes // 2,
-        #     input_shape=(n_features, num_classes),
-        #     activation=activation,
-        #     kernel_initializer=kernel_initializer,
-        #     kernel_regularizer=kernel_regularizer,
-        #     name="Encoder1",
-        # )
-
         # # n_features * num_classes.
-        # self.flatten = Flatten()
         self.flatten = tf.keras.layers.Flatten()
 
         self.dense1 = Dense(
@@ -188,14 +151,10 @@ class Encoder(tf.keras.layers.Layer):
             latent_dim,
             name="z_log_var",
         )
-        # # z_mean and z_log_var are inputs.
+        # z_mean and z_log_var are inputs.
         self.sampling = Sampling(
             name="z",
         )
-
-        # self.kldivergence = KLDivergenceLoss(
-        #     beta=self.beta, name="KLDivergence"
-        # )
 
         self.dense_latent = Dense(
             latent_dim,
@@ -207,11 +166,11 @@ class Encoder(tf.keras.layers.Layer):
 
         self.dropout_layer = Dropout(dropout_rate)
 
-        self.batch_norm_layer1 = BatchNormalization(center=False, scale=False)
-        self.batch_norm_layer2 = BatchNormalization(center=False, scale=False)
-        self.batch_norm_layer3 = BatchNormalization(center=False, scale=False)
-        self.batch_norm_layer4 = BatchNormalization(center=False, scale=False)
-        self.batch_norm_layer5 = BatchNormalization(center=False, scale=False)
+        # self.batch_norm_layer1 = BatchNormalization(center=False, scale=False)
+        # self.batch_norm_layer2 = BatchNormalization(center=False, scale=False)
+        # self.batch_norm_layer3 = BatchNormalization(center=False, scale=False)
+        # self.batch_norm_layer4 = BatchNormalization(center=False, scale=False)
+        # self.batch_norm_layer5 = BatchNormalization(center=False, scale=False)
 
     def call(self, inputs, training=None):
         x = self.flatten(inputs)
@@ -331,11 +290,11 @@ class Decoder(tf.keras.layers.Layer):
 
         self.dropout_layer = Dropout(dropout_rate)
 
-        self.batch_norm_layer1 = BatchNormalization(center=False, scale=False)
-        self.batch_norm_layer2 = BatchNormalization(center=False, scale=False)
-        self.batch_norm_layer3 = BatchNormalization(center=False, scale=False)
-        self.batch_norm_layer4 = BatchNormalization(center=False, scale=False)
-        self.batch_norm_layer5 = BatchNormalization(center=False, scale=False)
+        # self.batch_norm_layer1 = BatchNormalization(center=False, scale=False)
+        # self.batch_norm_layer2 = BatchNormalization(center=False, scale=False)
+        # self.batch_norm_layer3 = BatchNormalization(center=False, scale=False)
+        # self.batch_norm_layer4 = BatchNormalization(center=False, scale=False)
+        # self.batch_norm_layer5 = BatchNormalization(center=False, scale=False)
 
     def call(self, inputs, training=None):
         # x = self.flatten(inputs)
