@@ -32,7 +32,7 @@ if get_processor_name().strip().startswith("Intel"):
 
         patch_sklearn()
         intelex = True
-    except ImportError:
+    except (ImportError, TypeError):
         print(
             "Warning: Intel CPU detected but scikit-learn-intelex is not installed. We recommend installing it to speed up computation."
         )
@@ -999,7 +999,6 @@ class ImputeXGBoost(Impute):
     ) -> None:
         # Get local variables into dictionary object
         kwargs = locals()
-        kwargs["gridparams"] = None
         # kwargs["num_class"] = 3
         # kwargs["use_label_encoder"] = False
 
