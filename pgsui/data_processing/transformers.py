@@ -2041,8 +2041,8 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
         return self._mask_snps(X)
 
     def accuracy(self, X_true, X_pred):
-        masked_sites = np.sum(self.mask_)
-        num_correct = np.sum(X_true[self.mask_] == X_pred[self.mask_])
+        masked_sites = np.sum(self.sim_missing_mask_)
+        num_correct = np.sum(X_true[self.sim_missing_mask_] == X_pred[self.sim_missing_mask_])
         return num_correct / masked_sites
 
     def _sample_tree(
