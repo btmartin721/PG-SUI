@@ -230,7 +230,6 @@ class ImputePhylo:
             disable=self.disable_progressbar,
         ):
 
-            # LATER: Need to get site rates
             rate = 1.0
             if site_rates is not None:
                 rate = site_rates[snp_index]
@@ -460,14 +459,16 @@ class ImputePhylo:
             not df.isin([-9]).any().any()
         ), "Imputation failed...Missing values found in the imputed dataset"
 
-        imp_snps, self.valid_sites, self.valid_sites_count = self.convert_012(
+        (
+            imp_snps,
+            self.valid_sites,
+            self.valid_sites_count,
+        ) = self.genotype_data.convert_012(
             df.to_numpy().tolist(), impute_mode=True
         )
 
         df_imp = pd.DataFrame.from_records(imp_snps)
 
-        if self.validation_mode:
-            return df_imp.to_numpy()
         return df_imp
 
     def nbiallelic(self) -> int:
