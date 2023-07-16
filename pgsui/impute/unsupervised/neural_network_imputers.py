@@ -970,7 +970,7 @@ class VAE(BaseNNImputer):
             self.act_func_,
             **kwargs,
             kl_beta=self.kl_beta,
-            validation_split=self.validaton_split,
+            validation_split=self.validation_split,
         )
 
     def run_vae(
