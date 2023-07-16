@@ -8,6 +8,7 @@ try:
     from .models.autoencoder_model import AutoEncoderModel
     from .models.nlpca_model import NLPCAModel
     from .models.ubp_model import UBPPhase1, UBPPhase2, UBPPhase3
+    from .models.vae_model import VAEModel
     from ...data_processing.transformers import (
         MLPTargetTransformer,
         UBPInputTransformer,
