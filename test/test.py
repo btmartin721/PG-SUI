@@ -57,7 +57,7 @@ class TestMyClasses(unittest.TestCase):
                 self.genotype_data.genotypes_012(fmt="numpy")
             )
 
-    def test_class(self, class_instance):
+    def _test_class(self, class_instance):
         print(f"METHOD: {class_instance.__name__}")
         #with HiddenPrints():
         instance = class_instance(self.simulated_data)
@@ -70,34 +70,34 @@ class TestMyClasses(unittest.TestCase):
         print(f"ACCURACY: {accuracy}")
 
     # def test_ImputeKNN(self):
-    #     self.test_class(ImputeKNN)
+    #     self._test_class(ImputeKNN)
 
     # def test_ImputeRandomForest(self):
-    #     self.test_class(ImputeRandomForest)
+    #     self._test_class(ImputeRandomForest)
 
     # def test_ImputeGradientBoosting(self):
-    #     self.test_class(ImputeGradientBoosting)
+    #     self._test_class(ImputeGradientBoosting)
 
     # def test_ImputeXGBoost(self):
-    #     self.test_class(ImputeXGBoost)
+    #     self._test_class(ImputeXGBoost)
 
     # def test_ImputeLightGBM(self):
-    #     self.test_class(ImputeLightGBM)
+    #     self._test_class(ImputeLightGBM)
 
     # def test_ImputeVAE(self):
-    #     self.test_class(ImputeVAE)
+    #     self._test_class(ImputeVAE)
 
     # def test_ImputeStandardAutoEncoder(self):
-    #     self.test_class(ImputeStandardAutoEncoder)
+    #     self._test_class(ImputeStandardAutoEncoder)
 
     # def test_ImputeUBP(self):
-    #     self.test_class(ImputeUBP)
+    #     self._test_class(ImputeUBP)
 
     # def test_ImputeNLPCA(self):
-    #     self.test_class(ImputeNLPCA)
+    #     self._test_class(ImputeNLPCA)
 
     def test_ImputePhylo(self):
-        self.test_class(ImputePhylo)
+        self._test_class(ImputePhylo)
 
 
 if __name__ == "__main__":
