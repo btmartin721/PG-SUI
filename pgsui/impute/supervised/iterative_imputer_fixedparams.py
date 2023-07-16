@@ -31,6 +31,7 @@ from sklearn.utils._testing import ignore_warnings
 from sklearn.utils import check_random_state, _safe_indexing, is_scalar_nan
 from sklearn.utils._mask import _get_mask
 from sklearn.utils.validation import FLOAT_DTYPES
+from sklearn.preprocessing import LabelEncoder
 
 # Custom function imports
 try:
@@ -50,7 +51,7 @@ if get_processor_name().strip().startswith("Intel"):
         from sklearnex import patch_sklearn
 
         patch_sklearn(verbose=False)
-    except ImportError:
+    except (ImportError, TypeError):
         print(
             "Processor not compatible with scikit-learn-intelex; using "
             "default configuration"
@@ -481,25 +482,37 @@ class IterativeImputerFixedParams(IterativeImputer):
 
             y_train = _safe_indexing(X_filled[:, feat_idx], ~missing_row_mask)
 
-            estimator.fit(X_train, y_train)
+            try:
+                estimator.fit(X_train, y_train)
+                le = None
+            except ValueError as e:
+                # Happens in newer versions of XGBClassifier.
+                if str(e).startswith(
+                    "Invalid classes inferred from unique values of `y`"
+                ):
+                    le = LabelEncoder()
+                    y_train = le.fit_transform(y_train)
+                    estimator.fit(X_train, y_train)
 
         # if no missing values, don't predict
         if np.sum(missing_row_mask) == 0:
             return X_filled
 
-        # get posterior samples if there is at least one missing value
         X_test = _safe_indexing(
             X_filled[:, neighbor_feat_idx], missing_row_mask
         )
 
         if self.sample_posterior:
-            sys.exit(
+            raise NotImplementedError(
                 "sample_posterior is not currently supported. "
                 "Please set sample_posterior to False"
             )
 
         else:
             imputed_values = estimator.predict(X_test)
+
+            if le is not None:
+                imputed_values = le.inverse_transform(imputed_values)
 
             imputed_values = np.clip(
                 imputed_values,
@@ -758,6 +771,7 @@ class IterativeImputerFixedParams(IterativeImputer):
                 )
 
         Xt[~mask_missing_values] = X[~mask_missing_values]
+        Xt = Xt.astype(int)
 
         return (
             super(IterativeImputer, self)._concatenate_indicator(

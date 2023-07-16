@@ -46,9 +46,8 @@ from sklearn.model_selection import StratifiedKFold
 from sklearn_genetic import GASearchCV
 from sklearn_genetic.callbacks import ConsecutiveStopping, DeltaThreshold
 from sklearn_genetic.plots import plot_fitness_evolution
-
-# from sklearn_genetic.space import Continuous, Categorical, Integer
-from sklearn_genetic.utils import logbook_to_pandas
+from sklearn.preprocessing import LabelEncoder
+from sklearn.exceptions import NotFittedError
 
 # Custom function imports
 try:
@@ -70,7 +69,7 @@ if get_processor_name().strip().startswith("Intel"):
         from sklearnex import patch_sklearn
 
         patch_sklearn(verbose=False)
-    except ImportError:
+    except (ImportError, TypeError):
         print(
             "Processor not compatible with scikit-learn-intelex; using "
             "default configuration"
@@ -343,7 +342,7 @@ class IterativeImputerGridSearch(IterativeImputer):
 
         if self.initial_strategy == "populations":
             self.initial_imputer_ = simple_imputers.ImputeAlleleFreq(
-                gt=np.nan_to_num(X, nan=-9).tolist(),
+                self.genotype_data,
                 pops=self.pops,
                 by_populations=True,
                 missing=-9,
@@ -378,7 +377,7 @@ class IterativeImputerGridSearch(IterativeImputer):
                     validation_mode=True,
                 )
 
-                X_filled = self.initial_imputer_.imputed.to_numpy()
+                X_filled = self.initial_imputer_.imputed
                 valid_sites = self.initial_imputer_.valid_sites
 
                 valid_mask = np.flatnonzero(
@@ -390,7 +389,7 @@ class IterativeImputerGridSearch(IterativeImputer):
 
         elif self.initial_strategy == "nmf":
             self.initial_imputer_ = simple_imputers.ImputeNMF(
-                gt=np.nan_to_num(X, nan=-9),
+                self.genotype_data,
                 missing=-9,
                 write_output=False,
                 verbose=False,
@@ -515,6 +514,7 @@ class IterativeImputerGridSearch(IterativeImputer):
             )
 
         missing_row_mask = mask_missing_values[:, feat_idx]
+
         if fit_mode:
             X_train = _safe_indexing(
                 X_filled[:, neighbor_feat_idx], ~missing_row_mask
@@ -522,49 +522,54 @@ class IterativeImputerGridSearch(IterativeImputer):
 
             y_train = _safe_indexing(X_filled[:, feat_idx], ~missing_row_mask)
 
+            le = None
+
             if self.gridsearch_method == "genetic_algorithm":
-                with HiddenPrints():
-                    search.fit(X_train, y_train, callbacks=callback)
+                try:
+                    with HiddenPrints():
+                        search.fit(X_train, y_train)
+                        le = None
+                except ValueError:
+                    le = LabelEncoder()
+                    y_train = le.fit_transform(y_train)
+
+                    with HiddenPrints():
+                        search.fit(X_train, y_train, callbacks=callback)
 
             else:
-                search.fit(X_train, y_train)
+                try:
+                    search.fit(X_train, y_train)
+                except ValueError:
+                    # Happens in newer versions of XGBClassifier.
+                    le = LabelEncoder()
+                    y_train = le.fit_transform(y_train)
+                    search.fit(X_train, y_train)
 
         # if no missing values, don't predict
         if np.sum(missing_row_mask) == 0:
             return X_filled, None
 
-        # get posterior samples if there is at least one missing value
+        if np.all(missing_row_mask):
+            raise TypeError(
+                "All neighbors were missing. Try increasing ``n_nearest_neighbors``"
+            )
+
         X_test = _safe_indexing(
             X_filled[:, neighbor_feat_idx], missing_row_mask
         )
 
         # Currently un-tested with grid search
         if self.sample_posterior:
-            mus, sigmas = search.predict(X_test, return_std=True)
-            imputed_values = np.zeros(mus.shape, dtype=X_filled.dtype)
-            # two types of problems: (1) non-positive sigmas
-            # (2) mus outside legal range of min_value and max_value
-            # (results in inf sample)
-            positive_sigmas = sigmas > 0
-            imputed_values[~positive_sigmas] = mus[~positive_sigmas]
-            mus_too_low = mus < self._min_value[feat_idx]
-            imputed_values[mus_too_low] = self._min_value[feat_idx]
-            mus_too_high = mus > self._max_value[feat_idx]
-            imputed_values[mus_too_high] = self._max_value[feat_idx]
-            # the rest can be sampled without statistical issues
-            inrange_mask = positive_sigmas & ~mus_too_low & ~mus_too_high
-            mus = mus[inrange_mask]
-            sigmas = sigmas[inrange_mask]
-            a = (self._min_value[feat_idx] - mus) / sigmas
-            b = (self._max_value[feat_idx] - mus) / sigmas
-
-            truncated_normal = stats.truncnorm(a=a, b=b, loc=mus, scale=sigmas)
-            imputed_values[inrange_mask] = truncated_normal.rvs(
-                random_state=self.random_state_
+            raise NotImplementedError(
+                "sample_posterior is not implemented in PG-SUI"
             )
 
         else:
             imputed_values = search.predict(X_test)
+
+            if le is not None:
+                imputed_values = le.inverse_transform(imputed_values)
+
             imputed_values = np.clip(
                 imputed_values,
                 self._min_value[feat_idx],
@@ -917,6 +922,7 @@ class IterativeImputerGridSearch(IterativeImputer):
                 )
 
         Xt[~mask_missing_values] = X[~mask_missing_values]
+        Xt = Xt.astype(int)
 
         if self.gridsearch_method == "genetic_algorithm":
             # Remove all files except last iteration

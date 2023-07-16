@@ -45,7 +45,7 @@ if get_processor_name().strip().startswith("Intel"):
 
         patch_sklearn()
         intelex = True
-    except ImportError:
+    except (ImportError, TypeError):
         print(
             "Warning: Intel CPU detected but scikit-learn-intelex is not installed. We recommend installing it to speed up computation."
         )
@@ -466,6 +466,8 @@ class ImputePhylo:
 
         df_imp = pd.DataFrame.from_records(imp_snps)
 
+        if self.validation_mode:
+            return df_imp.to_numpy()
         return df_imp
 
     def nbiallelic(self) -> int:
@@ -1020,7 +1022,9 @@ class ImputeAlleleFreq:
         if self.verbose:
             print("Done!")
 
-        return data.values.tolist(), valid_cols
+        if not self.validation_mode:
+            return data.values.tolist()
+        return data.values, valid_cols
 
     def write2file(
         self, X: Union[pd.DataFrame, np.ndarray, List[List[Union[int, float]]]]
@@ -1140,7 +1144,7 @@ class ImputeNMF:
         genotype_data.genotypes_012 = imputed012
 
         if self.validation_mode:
-            self.imputed = imputed012
+            self.imputed = imputed012.to_numpy()
         else:
             self.imputed = genotype_data
 

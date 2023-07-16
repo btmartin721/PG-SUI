@@ -94,7 +94,7 @@ if get_processor_name().strip().startswith("Intel"):
 
         patch_sklearn()
         intelex = True
-    except ImportError:
+    except (ImportError, TypeError):
         print(
             "Warning: Intel CPU detected but scikit-learn-intelex is not "
             "installed. We recommend installing it to speed up computation."

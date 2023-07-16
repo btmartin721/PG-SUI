@@ -46,6 +46,7 @@ class TestMyClasses(unittest.TestCase):
         instance = class_instance(self.genotype_data)
         imputed_data = instance.imputed.genotypes_012(fmt="numpy")
         imputed_data[imputed_data == -9] = np.nan
+        imputed_data[imputed_data == "-9"] = np.nan
 
         # Test that there are no missing values in the imputed data
         self.assertFalse(np.isnan(imputed_data).any())
