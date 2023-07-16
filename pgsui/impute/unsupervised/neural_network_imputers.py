@@ -182,7 +182,6 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
         activate,
         nn_method,
         num_classes,
-        testing,
         act_func,
         *,
         genotype_data=None,
@@ -215,6 +214,7 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
         kl_beta=tf.Variable(1.0, trainable=False),
         validation_split=0.0,
         nlpca=False,
+        testing=False,
     ):
         self.activate = activate
         self.act_func_ = act_func
@@ -449,7 +449,7 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
                 tf.convert_to_tensor(y_train),
                 training=False,
             )
-        elif model == "SAE":
+        elif self.nn_method_ == "SAE":
             y_pred = model(y_train, training=False)
         else:
             y_pred = model(model.V_latent, training=False)
@@ -742,7 +742,7 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
         elif self.nn_method_ == "SAE":
             y_pred = model(y_train, training=False)
             y_pred = self.tt_.inverse_transform(y_pred)
-        else:
+        elif self.nn_method_ in ["UBP", "NLPCA"]:
             # Third run_clf function
             y_pred_proba = model(model.V_latent, training=False)
             y_pred = self.tt_.inverse_transform(y_pred_proba)
@@ -808,12 +808,14 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
         ]
 
         if self.nn_method_ in ["VAE", "SAE"]:
-            callbacks.append(
-                VAECallbacks(),
-                CyclicalAnnealingCallback(
-                    self.epochs, schedule_type="sigmoid"
-                ),
-            )
+            callbacks.append(VAECallbacks())
+            
+            if self.nn_method_ == "VAE":
+                callbacks.append(
+                    CyclicalAnnealingCallback(
+                        self.epochs, schedule_type="sigmoid"
+                    )
+                )
         else:
             callbacks.append(UBPCallbacks())
 
@@ -829,15 +831,6 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
             compile_params = self.nn_.set_compile_params(self.optimizer)
         else:
             vae = True if self.nn_method_ in ["VAE", "SAE"] else False
-
-            compile_params = self.nn_.set_compile_params(
-                self.optimizer,
-                sample_weights,
-                vae=vae,
-                act_func=self.act_func_,
-            )
-
-        compile_params["learning_rate"] = self.learning_rate
 
         if self.sample_weights == "auto" or self.sample_weights == "logsmooth":
             # Get class weights for each column.
@@ -860,6 +853,17 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
 
         else:
             sample_weights = None
+
+        vae = True if self.nn_method_ == "VAE" else False
+
+        compile_params = self.nn_.set_compile_params(
+            self.optimizer,
+            sample_weights,
+            vae=vae,
+            act_func=self.act_func_,
+        )
+
+        compile_params["learning_rate"] = self.learning_rate
 
         if self.nn_method_ in ["VAE", "SAE"]:
             model_params = {
@@ -966,7 +970,6 @@ class VAE(BaseNNImputer):
             self.activate,
             self.nn_method_,
             self.num_classes,
-            self.testing,
             self.act_func_,
             **kwargs,
             kl_beta=self.kl_beta,
@@ -1062,14 +1065,13 @@ class SAE(BaseNNImputer):
         self.num_classes = 3
         self.activate = "softmax"
         self.nn_method_ = "SAE"
-        self.act_func_ = None
+        self.act_func_ = "softmax"
         self.testing = kwargs.get("testing", False)
 
         super().__init__(
             self.activate,
             self.nn_method_,
             self.num_classes,
-            self.testing,
             self.act_func_,
             **kwargs,
         )
@@ -1168,13 +1170,12 @@ class UBP(BaseNNImputer):
         self.num_classes = 3
         self.testing = kwargs.get("testing", False)
         self.activate = None
-        self.act_func_ = None
+        self.act_func_ = "softmax"
 
         super().__init__(
             self.activate,
             self.nn_method_,
             self.num_classes,
-            self.testing,
             self.act_func_,
             **kwargs,
             nlpca=self.nlpca,

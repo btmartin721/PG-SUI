@@ -19,6 +19,9 @@ from pgsui.impute.simple_imputers import (
     ImputeAlleleFreq
 )
 
+import warnings
+warnings.filterwarnings("error", category=DeprecationWarning)
+
 from snpio import GenotypeData
 from pgsui.data_processing.transformers import SimGenotypeDataTransformer
 import numpy as np
@@ -75,17 +78,11 @@ class TestMyClasses(unittest.TestCase):
     # def test_ImputeRandomForest(self):
     #     self._test_class(ImputeRandomForest)
 
-    # def test_ImputeGradientBoosting(self):
-    #     self._test_class(ImputeGradientBoosting)
-
     # def test_ImputeXGBoost(self):
     #     self._test_class(ImputeXGBoost)
 
-    # def test_ImputeLightGBM(self):
-    #     self._test_class(ImputeLightGBM)
-
-    # def test_ImputeVAE(self):
-    #     self._test_class(ImputeVAE)
+    def test_ImputeVAE(self):
+        self._test_class(ImputeVAE)
 
     # def test_ImputeStandardAutoEncoder(self):
     #     self._test_class(ImputeStandardAutoEncoder)
@@ -96,8 +93,8 @@ class TestMyClasses(unittest.TestCase):
     # def test_ImputeNLPCA(self):
     #     self._test_class(ImputeNLPCA)
 
-    def test_ImputePhylo(self):
-        self._test_class(ImputePhylo)
+    # def test_ImputePhylo(self):
+    #     self._test_class(ImputePhylo)
 
 
 if __name__ == "__main__":
