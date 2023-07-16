@@ -2131,9 +2131,11 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
             raise ValueError(f"Invalid shape of input X: {X.shape}")
 
         Xt = X.copy()
-        for i, row in enumerate(self.mask_):
-            for j in row.nonzero()[0]:
-                Xt[i][j] = mask_val
+        mask_boolean = (self.mask_ != 0)
+        Xt[mask_boolean] = mask_val
+        # for i, row in enumerate(self.mask_):
+        #     for j in row.nonzero()[0]:
+        #         Xt[i][j] = mask_val
         return Xt
 
     @property
