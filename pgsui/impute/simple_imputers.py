@@ -1024,7 +1024,7 @@ class ImputeAlleleFreq:
             print("Done!")
 
         if not self.validation_mode:
-            return data.values.tolist()
+            return data.values.tolist(), valid_cols
         return data.values, valid_cols
 
     def write2file(
