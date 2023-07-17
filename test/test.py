@@ -19,9 +19,6 @@ from pgsui.impute.simple_imputers import (
     ImputeAlleleFreq
 )
 
-import warnings
-warnings.filterwarnings("error", category=DeprecationWarning)
-
 from snpio import GenotypeData
 from pgsui.data_processing.transformers import SimGenotypeDataTransformer
 import numpy as np
@@ -56,6 +53,7 @@ class TestMyClasses(unittest.TestCase):
             )
             self.transformer.fit(self.genotype_data.genotypes_012(fmt="numpy"))
             self.simulated_data = copy.deepcopy(self.genotype_data)
+            
             self.simulated_data.genotypes_012 = self.transformer.transform(
                 self.genotype_data.genotypes_012(fmt="numpy")
             )
@@ -65,36 +63,42 @@ class TestMyClasses(unittest.TestCase):
         #with HiddenPrints():
         instance = class_instance(self.simulated_data)
         imputed_data = instance.imputed.genotypes_012(fmt="numpy")
-
-        # Test that the imputed values are close to the original values
+ 
+         # Test that the imputed values are close to the original values
         accuracy = self.transformer.accuracy(
             self.genotype_data.genotypes_012(fmt="numpy"), imputed_data
         )
         print(f"ACCURACY: {accuracy}")
 
-    # def test_ImputeKNN(self):
-    #     self._test_class(ImputeKNN)
+    def test_ImputeKNN(self):
+        self._test_class(ImputeKNN)
 
-    # def test_ImputeRandomForest(self):
-    #     self._test_class(ImputeRandomForest)
+    def test_ImputeRandomForest(self):
+        self._test_class(ImputeRandomForest)
 
-    # def test_ImputeXGBoost(self):
-    #     self._test_class(ImputeXGBoost)
+    def test_ImputeXGBoost(self):
+        self._test_class(ImputeXGBoost)
 
     def test_ImputeVAE(self):
         self._test_class(ImputeVAE)
 
-    # def test_ImputeStandardAutoEncoder(self):
-    #     self._test_class(ImputeStandardAutoEncoder)
+    def test_ImputeStandardAutoEncoder(self):
+        self._test_class(ImputeStandardAutoEncoder)
 
-    # def test_ImputeUBP(self):
-    #     self._test_class(ImputeUBP)
+    def test_ImputeUBP(self):
+        self._test_class(ImputeUBP)
 
-    # def test_ImputeNLPCA(self):
-    #     self._test_class(ImputeNLPCA)
+    def test_ImputeNLPCA(self):
+        self._test_class(ImputeNLPCA)
 
-    # def test_ImputePhylo(self):
-    #     self._test_class(ImputePhylo)
+    def test_ImputePhylo(self):
+        self._test_class(ImputePhylo)
+
+    def test_ImputeAlleleFreq(self):
+        self._test_class(ImputeAlleleFreq)
+
+    def test_ImputeNMF(self):
+        self._test_class(ImputeNMF)
 
 
 if __name__ == "__main__":
