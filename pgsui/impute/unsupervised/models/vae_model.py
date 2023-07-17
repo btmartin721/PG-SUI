@@ -300,28 +300,21 @@ class Decoder(tf.keras.layers.Layer):
         # x = self.flatten(inputs)
         x = self.dense1(inputs)
         x = self.dropout_layer(x, training=training)
-        # x = self.batch_norm_layer1(x, training=training)
         if self.dense2 is not None:
             x = self.dense2(x)
             x = self.dropout_layer(x, training=training)
-            # x = self.batch_norm_layer2(x, training=training)
         if self.dense3 is not None:
             x = self.dense3(x)
             x = self.dropout_layer(x, training=training)
-            # x = self.batch_norm_layer3(x, training=training)
         if self.dense4 is not None:
             x = self.dense4(x)
             x = self.dropout_layer(x, training=training)
-            # x = self.batch_norm_layer4(x, training=training)
         if self.dense5 is not None:
             x = self.dense5(x)
             x = self.dropout_layer(x, training=training)
-            # x = self.batch_norm_layer5(x, training=training)
 
         x = self.dense_output(x)
         return self.rshp(x)
-        # return self.dense_output(x)
-
 
 class VAEModel(tf.keras.Model):
     def __init__(

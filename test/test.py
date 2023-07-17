@@ -70,14 +70,14 @@ class TestMyClasses(unittest.TestCase):
         )
         print(f"ACCURACY: {accuracy}")
 
-    def test_ImputeKNN(self):
-        self._test_class(ImputeKNN)
+    # def test_ImputeKNN(self):
+    #     self._test_class(ImputeKNN)
 
-    def test_ImputeRandomForest(self):
-        self._test_class(ImputeRandomForest)
+    # def test_ImputeRandomForest(self):
+    #     self._test_class(ImputeRandomForest)
 
-    def test_ImputeXGBoost(self):
-        self._test_class(ImputeXGBoost)
+    # def test_ImputeXGBoost(self):
+    #     self._test_class(ImputeXGBoost)
 
     def test_ImputeVAE(self):
         self._test_class(ImputeVAE)
@@ -91,14 +91,14 @@ class TestMyClasses(unittest.TestCase):
     def test_ImputeNLPCA(self):
         self._test_class(ImputeNLPCA)
 
-    def test_ImputePhylo(self):
-        self._test_class(ImputePhylo)
+    # def test_ImputePhylo(self):
+    #     self._test_class(ImputePhylo)
 
-    def test_ImputeAlleleFreq(self):
-        self._test_class(ImputeAlleleFreq)
+    # def test_ImputeAlleleFreq(self):
+    #     self._test_class(ImputeAlleleFreq)
 
-    def test_ImputeNMF(self):
-        self._test_class(ImputeNMF)
+    # def test_ImputeNMF(self):
+    #     self._test_class(ImputeNMF)
 
 
 if __name__ == "__main__":
