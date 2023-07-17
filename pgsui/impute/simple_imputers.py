@@ -966,22 +966,21 @@ class ImputeAlleleFreq:
         df = df.astype(int)
         df.replace(self.missing, np.nan, inplace=True)
 
-        data = pd.DataFrame()
+        # Initialize an empty list to hold the columns
+        columns = []
         valid_cols = list()
         bad_cnt = 0
+
         if self.pops is not None:
             # Impute per-population mode.
-            # Loop method is faster (by 2X) than no-loop transform.
             df["pops"] = self.pops
             groups = df.groupby(["pops"], sort=False)
 
             for col in df.columns:
                 try:
-                    data[col] = groups[col].transform(
-                        lambda x: x.fillna(x.mode().iloc[0])
-                    )
+                    # Instead of appending to the DataFrame, append to the list
+                    columns.append(groups[col].transform(lambda x: x.fillna(x.mode().iloc[0])))
 
-                    # If all populations contained at least one non-NaN value.
                     if col != "pops":
                         valid_cols.append(col)
 
@@ -990,11 +989,13 @@ class ImputeAlleleFreq:
                         bad_cnt += 1
                         # Impute with global mode, unkless globally missing in which case call as 0.0
                         if df[col].isna().all():
-                            data[col] = df[col].fillna(0.0, inplace=False)
+                            df[col] = df[col].fillna(0.0, inplace=False)
                         else:
-                            data[col] = df[col].fillna(df[col].mode().iloc[0])
+                            df[col] = df[col].fillna(df[col].mode().iloc[0])
                     else:
                         raise
+
+            data = pd.concat(columns, axis=1)
 
             if bad_cnt > 0:
                 print(
@@ -1002,18 +1003,16 @@ class ImputeAlleleFreq:
                     f"mode because some of the populations "
                     f"contained only missing data"
                 )
-
+ 
             data.drop("pops", axis=1, inplace=True)
         else:
             # Impute global mode.
-            # No-loop method was faster for global.
             imp = SimpleImputer(strategy="most_frequent")
 
             # replace any columns that are fully missing 
-            data.loc[:, data.isna().all()] = data.loc[:, data.isna().all()].fillna(0.0)
+            df.loc[:, df.isna().all()] = df.loc[:, df.isna().all()].fillna(0.0)
             
             data = pd.DataFrame(imp.fit_transform(df))
-            # data = df.apply(lambda x: x.fillna(x.mode().iloc[0]), axis=1)
 
         if self.iterative_mode:
             data = data.astype(dtype="float32")
