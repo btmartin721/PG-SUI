@@ -18,6 +18,8 @@ import toytree as tt
 
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.impute import SimpleImputer
+from sklearn.metrics import roc_auc_score, precision_recall_fscore_support, average_precision_score
+from sklearn.preprocessing import label_binarize
 
 # Import tensorflow with reduced warnings.
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
@@ -2044,6 +2046,37 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
         masked_sites = np.sum(self.sim_missing_mask_)
         num_correct = np.sum(X_true[self.sim_missing_mask_] == X_pred[self.sim_missing_mask_])
         return num_correct / masked_sites
+
+    def auc_roc_pr_ap(self, X_true, X_pred):
+        y_true = X_true[self.sim_missing_mask_]
+        y_pred = X_pred[self.sim_missing_mask_]
+
+        # Binarize the output
+        y_true_bin = label_binarize(y_true, classes=[0, 1, 2])
+        y_pred_bin = label_binarize(y_pred, classes=[0, 1, 2])
+
+        # Initialize lists to hold the scores for each class
+        auc_roc_scores = []
+        precision_scores = []
+        recall_scores = []
+        avg_precision_scores = []
+
+        for i in range(y_true_bin.shape[1]):
+            # AUC-ROC score
+            auc_roc = roc_auc_score(y_true_bin[:, i], y_pred_bin[:, i])
+            auc_roc_scores.append(auc_roc)
+
+            # Precision-recall score
+            precision, recall, _, _ = precision_recall_fscore_support(y_true_bin[:, i], y_pred_bin[:, i], average='binary')
+            precision_scores.append(precision)
+            recall_scores.append(recall)
+            
+            # Average precision score
+            avg_precision = average_precision_score(y_true_bin[:, i], y_pred_bin[:, i])
+            avg_precision_scores.append(avg_precision)
+
+        return auc_roc_scores, precision_scores, recall_scores, avg_precision_scores
+
 
     def _sample_tree(
         self,
