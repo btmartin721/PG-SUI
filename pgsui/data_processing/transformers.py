@@ -58,9 +58,9 @@ try:
     from ..utils.misc import isnotebook
 except (ModuleNotFoundError, ValueError, ImportError):
     from snpio import GenotypeData
-    from utils import misc
-    from utils.misc import get_processor_name
-    from utils.misc import isnotebook
+    from pgsui.utils import misc
+    from pgsui.utils.misc import get_processor_name
+    from pgsui.utils.misc import isnotebook
 
 is_notebook = isnotebook()
 
