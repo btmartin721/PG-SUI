@@ -722,7 +722,7 @@ class Impute:
                 cols_to_keep = None
 
             Xt, params_list, score_list = imputer.fit_transform(
-                df_subset, cols_to_keep
+                df, cols_to_keep
             )
 
         if self.verbose > 0:

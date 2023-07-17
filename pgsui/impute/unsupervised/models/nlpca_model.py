@@ -265,32 +265,25 @@ class NLPCAModel(tf.keras.Model):
         Args:
             inputs (tf.keras.Input): Input tensor to forward propagate through the model.
 
-            training (bool or None): Whether in training mode or not. Affects whether dropout is used.
+            training (bool or None): Whether in training mode or not. Affects how dropout behaves.
 
         Returns:
             tf.keras.Model: Output tensor from forward propagation.
-        """
-        if self.dropout_rate == 0.0:
-            training = False
+        """      
         x = self.dense1(inputs)
-        if training:
-            x = self.dropout_layer(x, training=training)
+        x = self.dropout_layer(x, training=training)
         if self.dense2 is not None:
             x = self.dense2(x)
-            if training:
-                x = self.dropout_layer(x, training=training)
+            x = self.dropout_layer(x, training=training)
         if self.dense3 is not None:
             x = self.dense3(x)
-            if training:
-                x = self.dropout_layer(x, training=training)
+            x = self.dropout_layer(x, training=training)
         if self.dense4 is not None:
             x = self.dense4(x)
-            if training:
-                x = self.dropout_layer(x, training=training)
+            x = self.dropout_layer(x, training=training)
         if self.dense5 is not None:
             x = self.dense5(x)
-            if training:
-                x = self.dropout_layer(x, training=training)
+            x = self.dropout_layer(x, training=training)
 
         x = self.output1(x)
         return self.rshp(x)

@@ -539,7 +539,6 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
         # tensorflow builds graphs that
         # will stack if not cleared before
         # building a new model.
-        tf.keras.backend.set_learning_phase(1)
         tf.keras.backend.clear_session()
         self.nn_.reset_seeds()
 

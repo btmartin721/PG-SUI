@@ -46,8 +46,12 @@ from sklearn.model_selection import StratifiedKFold
 from sklearn_genetic import GASearchCV
 from sklearn_genetic.callbacks import ConsecutiveStopping, DeltaThreshold
 from sklearn_genetic.plots import plot_fitness_evolution
-from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import LabelEncoder, OneHotEncoder, OrdinalEncoder
 from sklearn.exceptions import NotFittedError
+from sklearn.utils.class_weight import compute_sample_weight
+from sklearn.pipeline import make_pipeline
+
+from xgboost import XGBClassifier
 
 # Custom function imports
 try:
@@ -295,6 +299,40 @@ class IterativeImputerGridSearch(IterativeImputer):
         self.early_stop_gen = early_stop_gen
         self.missing_values = missing_values
 
+    def _mode_1d(self, array_1d):
+        """Get the mode of a 1D array.
+        
+        Args:
+            array_1d (np.ndarray): 1D array to calculate the mode for.
+
+        Returns:
+            int: Most common value of the 1D array.
+        """
+        # Get unique elements and their corresponding counts
+        vals, counts = np.unique(array_1d, return_counts=True)
+
+        # Get the index of the most frequent element
+        mode_idx = np.argmax(counts)
+
+        # Return the mode
+        return vals[mode_idx]
+    
+    # Define a function to remove columns with a unique count of 1 or 0
+    def remove_single_unique_val_cols(self, array_2d, return_idx=False):
+        # Apply np.unique to each column and get the counts of unique values (excluding np.nan)
+        unique_counts = np.apply_along_axis(lambda x: len(np.unique(x[~np.isnan(x)])), axis=0, arr=array_2d)
+        
+        # Get the column indices where the count of unique values is greater than 1
+        cols_to_keep = np.where(unique_counts > 1)[0]
+
+        # Index into array_2d to keep only these columns
+        array_2d_filtered = array_2d[:, cols_to_keep]
+
+        if return_idx:
+            return cols_to_keep
+        else:
+            return array_2d_filtered
+
     def _initial_imputation(
         self, X: np.ndarray, cols_to_keep: np.ndarray, in_fit: bool = False
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -380,13 +418,6 @@ class IterativeImputerGridSearch(IterativeImputer):
                 X_filled = self.initial_imputer_.imputed
                 valid_sites = self.initial_imputer_.valid_sites
 
-                valid_mask = np.flatnonzero(
-                    np.logical_not(np.isnan(valid_sites))
-                )
-
-                Xt = X[:, valid_mask]
-                mask_missing_values = mask_missing_values[:, valid_mask]
-
         elif self.initial_strategy == "nmf":
             self.initial_imputer_ = simple_imputers.ImputeNMF(
                 self.genotype_data,
@@ -412,11 +443,20 @@ class IterativeImputerGridSearch(IterativeImputer):
                 X_filled = self.initial_imputer_.transform(X)
 
             valid_sites = self.initial_imputer_.statistics_
-            valid_mask = np.flatnonzero(np.logical_not(np.isnan(valid_sites)))
 
-            Xt = X[:, valid_mask]
-            mask_missing_values = mask_missing_values[:, valid_mask]
+        if self.initial_imputer_ != "phylogeny":
+            valid_sites = np.apply_along_axis(self._mode_1d, axis=0, arr=Xt)
+            valid_sites = valid_sites[cols_to_keep]
+        valid_mask = np.flatnonzero(np.logical_not(np.isnan(valid_sites)))
+        Xt = X[:, valid_mask]
+        mask_missing_values = mask_missing_values[:, valid_mask]
+        X_filled = X_filled[:, valid_mask]
 
+        keepers = self.remove_single_unique_val_cols(X_filled, return_idx=True)
+        Xt = Xt[:, keepers]
+        X_filled = X_filled[:, keepers]
+        mask_missing_values = mask_missing_values[:, keepers]
+        
         return Xt, X_filled, mask_missing_values, X_missing_mask
 
     @ignore_warnings(category=UserWarning)
@@ -461,7 +501,7 @@ class IterativeImputerGridSearch(IterativeImputer):
             estimator = clone(self._estimator)
 
         # Modified code
-        cross_val = StratifiedKFold(n_splits=self.grid_cv, shuffle=False)
+        cross_val = StratifiedKFold(n_splits=self.grid_cv, shuffle=True)
 
         # Modified code
         # If regressor
@@ -508,6 +548,9 @@ class IterativeImputerGridSearch(IterativeImputer):
                     verbose=False,
                     **self.ga_kwargs,
                 )
+
+            if type(self._estimator).__name__ == "GradientBoostingClassifier":
+                pipeline = make_pipeline(search)
         else:
             raise ValueError(
                 f"Invalid gridsearch_method provided: {self.gridsearch_method}. Supported options are 'gridsearch', 'randomized_gridsearch', and 'genetic_algorithm'"
@@ -522,41 +565,34 @@ class IterativeImputerGridSearch(IterativeImputer):
 
             y_train = _safe_indexing(X_filled[:, feat_idx], ~missing_row_mask)
 
-            le = None
+            X_train = X_train.astype(int)
+            y_train = y_train.astype(int)
 
-            if self.gridsearch_method == "genetic_algorithm":
-                try:
-                    with HiddenPrints():
-                        search.fit(X_train, y_train)
-                        le = None
-                except ValueError:
-                    le = LabelEncoder()
-                    y_train = le.fit_transform(y_train)
+            if type(self._estimator).__name__ == "GradientBoostingClassifier":
+                sample_weights = compute_sample_weight("balanced", y_train)
+                fit_params = {"sample_weight": sample_weights}
 
-                    with HiddenPrints():
-                        search.fit(X_train, y_train, callbacks=callback)
+                if self.gridsearch_method == "genetic_algorithm":
+                    search.fit(X_train, y_train, callbacks=callback, **fit_params)
+
+                else:
+                    search.fit(X_train, y_train, **fit_params)
 
             else:
-                try:
-                    search.fit(X_train, y_train)
-                except ValueError:
-                    # Happens in newer versions of XGBClassifier.
-                    le = LabelEncoder()
-                    y_train = le.fit_transform(y_train)
+                if self.gridsearch_method == "genetic_algorithm":
+                    search.fit(X_train, y_train, callbacks=callback)
+                else:
                     search.fit(X_train, y_train)
 
         # if no missing values, don't predict
         if np.sum(missing_row_mask) == 0:
             return X_filled, None
 
-        if np.all(missing_row_mask):
-            raise TypeError(
-                "All neighbors were missing. Try increasing ``n_nearest_neighbors``"
-            )
-
         X_test = _safe_indexing(
             X_filled[:, neighbor_feat_idx], missing_row_mask
         )
+
+        X_test = X_test.astype(int)
 
         # Currently un-tested with grid search
         if self.sample_posterior:
@@ -566,9 +602,6 @@ class IterativeImputerGridSearch(IterativeImputer):
 
         else:
             imputed_values = search.predict(X_test)
-
-            if le is not None:
-                imputed_values = le.inverse_transform(imputed_values)
 
             imputed_values = np.clip(
                 imputed_values,
@@ -683,7 +716,7 @@ class IterativeImputerGridSearch(IterativeImputer):
 
         abs_corr_mat = self._get_abs_corr_mat(Xt)
 
-        n_samples, n_features = Xt.shape
+        _, n_features = Xt.shape
 
         if self.verbose > 0:
             print(
@@ -703,7 +736,7 @@ class IterativeImputerGridSearch(IterativeImputer):
             sns.set_style("white")
 
         total_iter = self.max_iter
-
+        
         #######################################
         ### Iterations
         #######################################
@@ -847,6 +880,7 @@ class IterativeImputerGridSearch(IterativeImputer):
                     f"{self.n_iter_}/{self.max_iter}, "
                     f"elapsed time {(time() - start_t):0.2f}"
                 )
+
 
             if not self.sample_posterior:
                 inf_norm = np.linalg.norm(

@@ -492,17 +492,18 @@ class NeuralNetworkMethods:
         """
         y_pred_idx = y_pred.astype(int)
         y_pred_idx = y_pred_idx.astype(str)
+
         if len(y_pred_idx.shape) < 3:
             y_pred_idx = np.array(
                 [
-                    "".join(np.where(row == "1")[0].astype(str))
+                    "".join(np.atleast_1d(row == "1").nonzero()[0].astype(str))
                     for row in y_pred_idx
                 ]
             )
         else:
             y_pred_idx = np.array(
                 [
-                    "".join(np.where(col == "1")[0].astype(str))
+                    "".join(np.atleast_1d(col == "1").nonzero()[0].astype(str))
                     for row in y_pred_idx
                     for col in row
                 ]

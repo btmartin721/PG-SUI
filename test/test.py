@@ -6,7 +6,7 @@ from pgsui.impute.estimators import (
     ImputeKNN,
     ImputeRandomForest,
     ImputeGradientBoosting,
-    ImputeXGBoost,
+    ImputeGradientBoosting,
     ImputeLightGBM,
     ImputeVAE,
     ImputeStandardAutoEncoder,
@@ -18,9 +18,6 @@ from pgsui.impute.simple_imputers import (
     ImputeNMF, 
     ImputeAlleleFreq
 )
-
-import warnings
-warnings.filterwarnings("error", category=DeprecationWarning)
 
 from snpio import GenotypeData
 from pgsui.data_processing.transformers import SimGenotypeDataTransformer
@@ -49,52 +46,99 @@ class TestMyClasses(unittest.TestCase):
                 plot_format="png",
             )
         
-            # Create a SimGenotypeDataTransformer instance and use it to simulate missing data
+            # Create a SimGenotypeDataTransformer instance and use it 
+            # to simulate missing data
             self.transformer = SimGenotypeDataTransformer(
                 genotype_data=self.genotype_data, prop_missing=0.2, 
                 strategy="random"
             )
             self.transformer.fit(self.genotype_data.genotypes_012(fmt="numpy"))
             self.simulated_data = copy.deepcopy(self.genotype_data)
+            
             self.simulated_data.genotypes_012 = self.transformer.transform(
                 self.genotype_data.genotypes_012(fmt="numpy")
             )
 
-    def _test_class(self, class_instance):
+    def _test_class(self, class_instance, do_gridsearch=False):
         print(f"METHOD: {class_instance.__name__}")
-        #with HiddenPrints():
-        instance = class_instance(self.simulated_data)
-        imputed_data = instance.imputed.genotypes_012(fmt="numpy")
 
-        # Test that the imputed values are close to the original values
+        if do_gridsearch:
+            # Do a simple test.
+            if class_instance in [ImputeRandomForest, ImputeGradientBoosting]:
+                param_grid = {"n_estimators": [50, 100]}
+            elif class_instance in [ImputeVAE, ImputeStandardAutoEncoder, ImputeNLPCA, ImputeUBP]:
+                param_grid = {"learning_rate": [0.01, 0.1]}
+            elif class_instance == ImputeKNN:
+                param_grid = {"n_neighbors": [5, 8]}
+        else:
+            param_grid = None
+
+        instance = class_instance(self.simulated_data, gridparams=param_grid)
+        imputed_data = instance.imputed.genotypes_012(fmt="numpy")
+ 
+         # Test that the imputed values are close to the original values
         accuracy = self.transformer.accuracy(
             self.genotype_data.genotypes_012(fmt="numpy"), imputed_data
         )
-        print(f"ACCURACY: {accuracy}")
 
-    # def test_ImputeKNN(self):
-    #     self._test_class(ImputeKNN)
+        auc_roc_scores, precision_scores, recall_scores, avg_precision_scores = self.transformer.auc_roc_pr_ap(self.genotype_data.genotypes_012(fmt="numpy"), imputed_data)
 
-    # def test_ImputeRandomForest(self):
-    #     self._test_class(ImputeRandomForest)
+        print(f"OVERALL ACCURACY: {accuracy}")
+        print(f"AUC-ROC PER CLASS: {auc_roc_scores}")
+        print(f"PRECISION PER CLASS: {precision_scores}")
+        print(f"RECALL PER CLASS: {recall_scores}")
+        print(f"AVERAGE PRECISION PER CLASS: {avg_precision_scores}")
 
-    # def test_ImputeXGBoost(self):
-    #     self._test_class(ImputeXGBoost)
+    def test_ImputeKNN(self):
+        self._test_class(ImputeKNN)
+
+    def test_ImputeRandomForest(self):
+        self._test_class(ImputeRandomForest)
+
+    def test_ImputeGradientBoosting(self):
+        self._test_class(ImputeGradientBoosting)
 
     def test_ImputeVAE(self):
         self._test_class(ImputeVAE)
 
-    # def test_ImputeStandardAutoEncoder(self):
-    #     self._test_class(ImputeStandardAutoEncoder)
+    def test_ImputeStandardAutoEncoder(self):
+        self._test_class(ImputeStandardAutoEncoder)
 
-    # def test_ImputeUBP(self):
-    #     self._test_class(ImputeUBP)
+    def test_ImputeUBP(self):
+        self._test_class(ImputeUBP)
 
-    # def test_ImputeNLPCA(self):
-    #     self._test_class(ImputeNLPCA)
+    def test_ImputeNLPCA(self):
+        self._test_class(ImputeNLPCA)
 
-    # def test_ImputePhylo(self):
-    #     self._test_class(ImputePhylo)
+    def test_ImputeKNN_grid(self):
+        self._test_class(ImputeKNN, do_gridsearch=True)
+
+    def test_ImputeRandomForest_grid(self):
+        self._test_class(ImputeRandomForest, do_gridsearch=True)
+
+    def test_ImputeGradientBoosting_grid(self):
+        self._test_class(ImputeGradientBoosting, do_gridsearch=True)
+
+    def test_ImputeVAE_grid(self):
+        self._test_class(ImputeVAE, do_gridsearch=True)
+
+    def test_ImputeStandardAutoEncoder_grid(self):
+        self._test_class(ImputeStandardAutoEncoder, do_gridsearch=True)
+
+    def test_ImputeUBP_grid(self):
+        self._test_class(ImputeUBP, do_gridsearch=True)
+
+    def test_ImputeNLPCA(self):
+        self._test_class(ImputeNLPCA)
+
+    def test_ImputePhylo(self):
+        self._test_class(ImputePhylo)
+
+    def test_ImputeAlleleFreq(self):
+        self._test_class(ImputeAlleleFreq)
+
+    def test_ImputeNMF(self):
+        self._test_class(ImputeNMF)
 
 
 if __name__ == "__main__":
