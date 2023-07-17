@@ -469,7 +469,7 @@ class ImputeGradientBoosting(Impute):
 
         n_estimators (int, optional): The number of boosting stages to perform. Gradient boosting is fairly robust to over-fitting so a large number usually results in better performance but also increases compute time and required resources. Defaults to 100.
 
-        loss (str, optional): The loss function to be optimized. "deviance" refers to deviance (=logistic regression) for classification with probabilistic outputs. For loss "exponential" gradient boosting recovers the AdaBoost algorithm. Defaults to "deviance".
+        loss (str, optional): The loss function to be optimized. "log_loss" refers to binomial and multinomial deviance, the same as used in logistic regression. It is a good choice for classification with probabilistic outputs. For loss 'exponential', gradient boosting recovers the AdaBoost algorithm. Defaults to "log_loss".
 
         learning_rate (float, optional): Learning rate shrinks the contribution of each tree by ``learning_rate``\. There is a trade-off between ``learning_rate`` and ``n_estimators``\. Defaults to 0.1.
 
@@ -587,7 +587,7 @@ class ImputeGradientBoosting(Impute):
         column_subset: Union[int, float] = 0.1,
         cv: int = 5,
         n_estimators: int = 100,
-        loss: str = "deviance",
+        loss: str = "log_loss",
         learning_rate: float = 0.1,
         subsample: Union[int, float] = 1.0,
         criterion: str = "friedman_mse",
@@ -997,6 +997,9 @@ class ImputeXGBoost(Impute):
         n_jobs: int = 1,
         verbose: int = 0,
     ) -> None:
+        
+        raise NotImplementedError("XGBoost is currently not implemented in PG-SUI.")
+
         # Get local variables into dictionary object
         kwargs = locals()
         # kwargs["num_class"] = 3
@@ -1198,6 +1201,9 @@ class ImputeLightGBM(Impute):
         n_jobs: int = 1,
         verbose: int = 0,
     ) -> None:
+        
+        raise NotImplementedError("LightGBM is currently not implemented in PG-SUI.")
+
         # Get local variables into dictionary object
         kwargs = locals()
 
