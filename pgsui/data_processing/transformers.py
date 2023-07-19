@@ -1665,7 +1665,7 @@ class ImputeAlleleFreqTransformer(
             )
 
 
-class ImputeNMFTransformer(BaseEstimator, TransformerMixin):
+class ImputeMFTransformer(BaseEstimator, TransformerMixin):
     """Impute missing data using matrix factorization. Population IDs can be sepcified with the pops argument. if pops is None, then imputation is by global allele frequency. If pops is not None, then imputation is by population-wise allele frequency. A list of population IDs in the appropriate format can be obtained from the GenotypeData object as GenotypeData.populations.
 
     Args:
@@ -1683,7 +1683,7 @@ class ImputeNMFTransformer(BaseEstimator, TransformerMixin):
 
         verbose (bool, optional): Whether to print status updates. Set to False for no status updates. Defaults to True.
 
-        **kwargs (Dict[str, Any]): Additional keyword arguments to supply. Primarily for internal purposes. Options include: {"iterative_mode": bool}. "iterative_mode" determines whether ``ImputeNMF`` is being used as the initial imputer in ``IterativeImputer``.
+        **kwargs (Dict[str, Any]): Additional keyword arguments to supply. Primarily for internal purposes. Options include: {"iterative_mode": bool}. "iterative_mode" determines whether ``ImputeMF`` is being used as the initial imputer in ``IterativeImputer``.
 
     Attributes:
         imputed_ (pandas.DataFrame, numpy.ndarray, or List[List[int]]): Imputed 012-encoded data.
@@ -1696,12 +1696,12 @@ class ImputeNMFTransformer(BaseEstimator, TransformerMixin):
         >>>    filetype="structure2rowPopID"
         >>>)
         >>>
-        >>>nmf = ImputeNMF(
+        >>>mf = ImputeMF(
         >>>     genotype_data=data,
         >>>     learning_rate=0.1,
         >>>)
         >>>
-        >>>nmf_gtdata = nmf.fit_transform(data)
+        >>>mf_gtdata = mf.fit_transform(data)
     """
 
     def __init__(
@@ -1741,7 +1741,7 @@ class ImputeNMFTransformer(BaseEstimator, TransformerMixin):
         self.imputed_, self.accuracy_ = self._impute(X.genotypes012_array)
 
         if self.verbose:
-            print(f"NMF imputation accuracy: {round(self.accuracy_, 2)}")
+            print(f"MF imputation accuracy: {round(self.accuracy_, 2)}")
 
         return self
 
@@ -1769,7 +1769,7 @@ class ImputeNMFTransformer(BaseEstimator, TransformerMixin):
     def _impute(self, X):
         """Do the imputation."""
         if self.verbose:
-            print(f"Doing NMF imputation...")
+            print(f"Doing MF imputation...")
         R = X.copy()
         R[R == self.missing] = -9
         R = R + 1

@@ -160,7 +160,7 @@ class IterativeImputerGridSearch(IterativeImputer):
 
         n_nearest_features (int, optional): Number of other features to use to estimate the missing values of each feature column. Nearness between features is measured using the absolute correlation coefficient between each feature pair (after initial imputation). To ensure coverage of features throughout the imputation process, the neighbor features are not necessarily nearest,	but are drawn with probability proportional to correlation for each	imputed target feature. Can provide significant speed-up when the number of features is huge. If ``None``\, all features will be used. Defaults to None.
 
-        initial_strategy (str, optional): Which strategy to use to initialize the missing values. Same as the ``strategy`` parameter in :class:`~sklearn.impute.SimpleImputer`	Valid values: "most_frequent", "populations", "nmf", or "phylogeny". Defaults to "populations".
+        initial_strategy (str, optional): Which strategy to use to initialize the missing values. Same as the ``strategy`` parameter in :class:`~sklearn.impute.SimpleImputer`	Valid values: "most_frequent", "populations", "mf", or "phylogeny". Defaults to "populations".
 
         imputation_order (str, optional): The order in which the features will be imputed. Possible values: "ascending" (From features with fewest missing values to most), "descending" (From features with most missing values to fewest, "roman" (Left to right), "arabic" (Right to left),  random" (A random order for each round). Defaults to 'ascending'.
 
@@ -424,8 +424,8 @@ class IterativeImputerGridSearch(IterativeImputer):
                 X_filled = self.initial_imputer_.imputed
                 valid_sites = self.initial_imputer_.valid_sites
 
-        elif self.initial_strategy == "nmf":
-            self.initial_imputer_ = simple_imputers.ImputeNMF(
+        elif self.initial_strategy == "mf":
+            self.initial_imputer_ = simple_imputers.ImputeMF(
                 self.genotype_data,
                 missing=-9,
                 write_output=False,
