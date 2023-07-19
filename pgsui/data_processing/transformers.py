@@ -18,7 +18,11 @@ import toytree as tt
 
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.impute import SimpleImputer
-from sklearn.metrics import roc_auc_score, precision_recall_fscore_support, average_precision_score
+from sklearn.metrics import (
+    roc_auc_score,
+    precision_recall_fscore_support,
+    average_precision_score,
+)
 from sklearn.preprocessing import label_binarize
 
 # Import tensorflow with reduced warnings.
@@ -58,11 +62,17 @@ try:
     from ..utils import misc
     from ..utils.misc import get_processor_name
     from ..utils.misc import isnotebook
+    from ..impute.unsupervised.neural_network_methods import (
+        NeuralNetworkMethods,
+    )
 except (ModuleNotFoundError, ValueError, ImportError):
     from snpio import GenotypeData
     from pgsui.utils import misc
     from pgsui.utils.misc import get_processor_name
     from pgsui.utils.misc import isnotebook
+    from pgsui.impute.unsupervised.neural_network_methods import (
+        NeuralNetworkMethods,
+    )
 
 is_notebook = isnotebook()
 
@@ -188,7 +198,7 @@ class AutoEncoderFeatureTransformer(BaseEstimator, TransformerMixin):
         self.return_int = return_int
         self.activate = activate
 
-    def fit(self, X):
+    def fit(self, X, y=None):
         """set attributes used to transform X (input features).
 
         Args:
@@ -212,12 +222,16 @@ class AutoEncoderFeatureTransformer(BaseEstimator, TransformerMixin):
 
         # Encode the data.
         self.X_train = enc_func(X)
+        self.classes_ = np.arange(self.num_classes)
+        self.n_classes_ = self.num_classes
 
         # Get missing and observed data boolean masks.
         self.missing_mask_, self.observed_mask_ = self._get_masks(self.X_train)
 
         # To accomodate multiclass-multioutput.
         self.n_outputs_expected_ = 1
+
+        self.n_outputs_ = self.X_train.shape[1]
 
         return self
 
@@ -235,10 +249,10 @@ class AutoEncoderFeatureTransformer(BaseEstimator, TransformerMixin):
         if self.return_int:
             return X
         else:
-            X = misc.validate_input_type(X, return_type="array")
+            # X = misc.validate_input_type(X, return_type="array")
             return self._fill(self.X_train, self.missing_mask_)
 
-    def inverse_transform(self, y):
+    def inverse_transform(self, y, return_proba=False):
         """Transform target to output format.
 
         Args:
@@ -246,11 +260,11 @@ class AutoEncoderFeatureTransformer(BaseEstimator, TransformerMixin):
         """
         try:
             if self.activate is None:
-                return y.numpy()
+                y = y.numpy()
             elif self.activate == "softmax":
-                return tf.nn.softmax(y).numpy()
+                y = tf.nn.softmax(y).numpy()
             elif self.activate == "sigmoid":
-                return tf.nn.sigmoid(y).numpy()
+                y = tf.nn.sigmoid(y).numpy()
             else:
                 raise ValueError(
                     f"Invalid value passed to keyword argument activate. Valid options include: None, 'softmax', or 'sigmoid', but got {self.activate}"
@@ -258,15 +272,29 @@ class AutoEncoderFeatureTransformer(BaseEstimator, TransformerMixin):
         except AttributeError:
             # If numpy array already.
             if self.activate is None:
-                return y
+                y = y.copy()
             elif self.activate == "softmax":
-                return tf.nn.softmax(tf.convert_to_tensor(y)).numpy()
+                y = tf.nn.softmax(tf.convert_to_tensor(y)).numpy()
             elif self.activate == "sigmoid":
-                return tf.nn.sigmoid(tf.convert_to_tensor(y)).numpy()
+                y = tf.nn.sigmoid(tf.convert_to_tensor(y)).numpy()
             else:
                 raise ValueError(
-                    f"Invalid value passed to keyword argument activate. Valid options include: None, 'softmax', or 'sigmoid', but got {self.activate}"
+                    f"Invalid value passed to keyword argument activate. Valid options include: None, 'softmax', or 'sigmoid', but got {self.activate1}"
                 )
+
+        # if return_proba:
+        return y
+        # else:
+        #     is_multiclass = True if self.num_classes != 4 else False
+        #     y_pred_decoded = NeuralNetworkMethods.decode_masked(
+        #         self._fill(self.X_train, self.missing_mask_),
+        #         y,
+        #         is_multiclass=is_multiclass,
+        #     )
+        #     return y_pred_decoded
+
+        # print(y_pred_decoded)
+        # return y_pred_decoded
 
     def encode_012(self, X):
         """Convert 012-encoded data to one-hot encodings.
@@ -311,6 +339,35 @@ class AutoEncoderFeatureTransformer(BaseEstimator, TransformerMixin):
         }
         for row in np.arange(X.shape[0]):
             Xt[row] = [mappings[enc] for enc in X[row]]
+        return Xt
+
+    def decode_multilab(self, X, multilab_value=1.0):
+        """Decode one-hot format data back to 0-9 integer data.
+
+        Args:
+            X (numpy.ndarray): Input array with one-hot-encoded data.
+
+            multilab_value (float): Value to use for multilabel target encodings. Defaults to 0.5.
+
+        Returns:
+            pandas.DataFrame: Decoded data, with multi-label categories decoded to their original integer representation.
+        """
+        Xt = np.zeros(shape=(X.shape[0], X.shape[1]))
+        mappings = {
+            tuple([1.0, 0.0, 0.0, 0.0]): 0,
+            tuple([0.0, 1.0, 0.0, 0.0]): 1,
+            tuple([0.0, 0.0, 1.0, 0.0]): 2,
+            tuple([0.0, 0.0, 0.0, 1.0]): 3,
+            tuple([multilab_value, multilab_value, 0.0, 0.0]): 4,
+            tuple([multilab_value, 0.0, multilab_value, 0.0]): 5,
+            tuple([multilab_value, 0.0, 0.0, multilab_value]): 6,
+            tuple([0.0, multilab_value, multilab_value, 0.0]): 7,
+            tuple([0.0, multilab_value, 0.0, multilab_value]): 8,
+            tuple([0.0, 0.0, multilab_value, multilab_value]): 9,
+            tuple([np.nan, np.nan, np.nan, np.nan]): -9,
+        }
+        for row in np.arange(X.shape[0]):
+            Xt[row] = [mappings[tuple(enc)] for enc in X[row]]
         return Xt
 
     def encode_multiclass(self, X, num_classes=10, missing_value=-9):
@@ -2044,7 +2101,9 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
 
     def accuracy(self, X_true, X_pred):
         masked_sites = np.sum(self.sim_missing_mask_)
-        num_correct = np.sum(X_true[self.sim_missing_mask_] == X_pred[self.sim_missing_mask_])
+        num_correct = np.sum(
+            X_true[self.sim_missing_mask_] == X_pred[self.sim_missing_mask_]
+        )
         return num_correct / masked_sites
 
     def auc_roc_pr_ap(self, X_true, X_pred):
@@ -2067,16 +2126,24 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
             auc_roc_scores.append(auc_roc)
 
             # Precision-recall score
-            precision, recall, _, _ = precision_recall_fscore_support(y_true_bin[:, i], y_pred_bin[:, i], average='binary')
+            precision, recall, _, _ = precision_recall_fscore_support(
+                y_true_bin[:, i], y_pred_bin[:, i], average="binary"
+            )
             precision_scores.append(precision)
             recall_scores.append(recall)
-            
+
             # Average precision score
-            avg_precision = average_precision_score(y_true_bin[:, i], y_pred_bin[:, i])
+            avg_precision = average_precision_score(
+                y_true_bin[:, i], y_pred_bin[:, i]
+            )
             avg_precision_scores.append(avg_precision)
 
-        return auc_roc_scores, precision_scores, recall_scores, avg_precision_scores
-
+        return (
+            auc_roc_scores,
+            precision_scores,
+            recall_scores,
+            avg_precision_scores,
+        )
 
     def _sample_tree(
         self,
@@ -2164,7 +2231,7 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
             raise ValueError(f"Invalid shape of input X: {X.shape}")
 
         Xt = X.copy()
-        mask_boolean = (self.mask_ != 0)
+        mask_boolean = self.mask_ != 0
         Xt[mask_boolean] = mask_val
         # for i, row in enumerate(self.mask_):
         #     for j in row.nonzero()[0]:

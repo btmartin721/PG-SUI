@@ -40,10 +40,10 @@ try:
     from ...utils.misc import HiddenPrints
     from ...utils.misc import isnotebook
 except (ModuleNotFoundError, ValueError, ImportError):
-    from impute import simple_imputers
-    from utils.misc import get_processor_name
-    from utils.misc import HiddenPrints
-    from utils.misc import isnotebook
+    from pgsui.impute import simple_imputers
+    from pgsui.utils.misc import get_processor_name
+    from pgsui.utils.misc import HiddenPrints
+    from pgsui.utils.misc import isnotebook
 
 # Uses scikit-learn-intellex package if CPU is Intel
 if get_processor_name().strip().startswith("Intel"):

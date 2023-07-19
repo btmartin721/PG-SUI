@@ -208,7 +208,7 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
         ga_kwargs=None,
         scoring_metric="auc_macro",
         sim_strategy="random",
-        sim_prop_missing=0.1,
+        sim_prop_missing=0.2,
         n_jobs=1,
         verbose=0,
         kl_beta=tf.Variable(1.0, trainable=False),
@@ -445,7 +445,7 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
         y_missing_idx = np.flatnonzero(self.original_missing_mask_)
 
         if self.nn_method_ == "VAE":
-            y_pred, z_mean, z_log_var, z = model(
+            y_pred = model(
                 tf.convert_to_tensor(y_train),
                 training=False,
             )
@@ -486,8 +486,8 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
             y_true_1d, y_pred_1d, self.nn_method_, prefix=self.prefix
         )
 
-        if self.nn_method_ == "VAE":
-            Plotting.plot_label_clusters(z_mean, y_true_1d)
+        # if self.nn_method_ == "VAE":
+        # Plotting.plot_label_clusters(z_mean, y_true_1d)
 
         # Return to original shape.
         return np.reshape(y_true_1d, y_true.shape)
@@ -575,6 +575,7 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
                 score__missing_mask=self.sim_missing_mask_,
                 score__scoring_metric=self.scoring_metric,
                 score__num_classes=self.num_classes,
+                score__n_classes=self.num_classes,
             )
         elif self.nn_method_ == "SAE":
             clf = SAEClassifier(
@@ -586,9 +587,12 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
                 callbacks=fit_params["callbacks"],
                 epochs=fit_params["epochs"],
                 verbose=0,
+                activate=self.act_func_,
                 fit__validation_split=fit_params["validation_split"],
                 score__missing_mask=self.sim_missing_mask_,
                 score__scoring_metric=self.scoring_metric,
+                score__num_classes=self.num_classes,
+                score__n_classes=self.num_classes,
             )
         else:
             clf = MLPClassifier(
@@ -640,8 +644,8 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
                     n_jobs=self.n_jobs,
                     refit=self.scoring_metric,
                     verbose=verbose,
-                    error_score="raise",
                     **self.ga_kwargs,
+                    error_score="raise",
                 )
 
                 if self.nn_method_ in ["UBP", "NLPCA"]:
@@ -697,7 +701,10 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
                         f"{self.gridsearch_method}"
                     )
 
-                search.fit(y_true, y=y_true)
+                if self.nn_method_ in ["UBP", "NLPCA"]:
+                    search.fit(V[self.n_components], y=y_true)
+                else:
+                    search.fit(y_true, y=y_true)
 
                 if self.verbose >= 10:
                     # Make sure to revert STDOUT back to original.
@@ -733,7 +740,7 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
         best_history = best_clf.history_
 
         if self.nn_method_ == "VAE":
-            y_pred, _, __, ___ = model(
+            y_pred = model(
                 tf.convert_to_tensor(y_train),
                 training=False,
             )
@@ -808,7 +815,7 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
 
         if self.nn_method_ in ["VAE", "SAE"]:
             callbacks.append(VAECallbacks())
-            
+
             if self.nn_method_ == "VAE":
                 callbacks.append(
                     CyclicalAnnealingCallback(
@@ -1420,6 +1427,10 @@ class UBP(BaseNNImputer):
                 else:
                     for c in n_components:
                         vinput[c] = self.nn_.init_weights(y_train.shape[0], c)
+            else:
+                vinput[self.n_components] = self.nn_.init_weights(
+                    y_train.shape[0], self.n_components
+                )
 
         else:
             vinput[self.n_components] = self.nn_.init_weights(

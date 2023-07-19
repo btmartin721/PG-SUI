@@ -166,33 +166,22 @@ class Encoder(tf.keras.layers.Layer):
 
         self.dropout_layer = Dropout(dropout_rate)
 
-        # self.batch_norm_layer1 = BatchNormalization(center=False, scale=False)
-        # self.batch_norm_layer2 = BatchNormalization(center=False, scale=False)
-        # self.batch_norm_layer3 = BatchNormalization(center=False, scale=False)
-        # self.batch_norm_layer4 = BatchNormalization(center=False, scale=False)
-        # self.batch_norm_layer5 = BatchNormalization(center=False, scale=False)
-
     def call(self, inputs, training=None):
         x = self.flatten(inputs)
         x = self.dense1(x)
         x = self.dropout_layer(x, training=training)
-        # x = self.batch_norm_layer1(x, training=training)
         if self.dense2 is not None:
             x = self.dense2(x)
             x = self.dropout_layer(x, training=training)
-            # x = self.batch_norm_layer2(x, training=training)
         if self.dense3 is not None:
             x = self.dense3(x)
             x = self.dropout_layer(x, training=training)
-            # x = self.batch_norm_layer3(x, training=training)
         if self.dense4 is not None:
             x = self.dense4(x)
             x = self.dropout_layer(x, training=training)
-            # x = self.batch_norm_layer4(x, training=training)
         if self.dense5 is not None:
             x = self.dense5(x)
             x = self.dropout_layer(x, training=training)
-            # x = self.batch_norm_layer5(x, training=training)
 
         x = self.dense_latent(x)
         z_mean = self.dense_z_mean(x)
@@ -290,14 +279,7 @@ class Decoder(tf.keras.layers.Layer):
 
         self.dropout_layer = Dropout(dropout_rate)
 
-        # self.batch_norm_layer1 = BatchNormalization(center=False, scale=False)
-        # self.batch_norm_layer2 = BatchNormalization(center=False, scale=False)
-        # self.batch_norm_layer3 = BatchNormalization(center=False, scale=False)
-        # self.batch_norm_layer4 = BatchNormalization(center=False, scale=False)
-        # self.batch_norm_layer5 = BatchNormalization(center=False, scale=False)
-
     def call(self, inputs, training=None):
-        # x = self.flatten(inputs)
         x = self.dense1(inputs)
         x = self.dropout_layer(x, training=training)
         if self.dense2 is not None:
@@ -315,6 +297,7 @@ class Decoder(tf.keras.layers.Layer):
 
         x = self.dense_output(x)
         return self.rshp(x)
+
 
 class VAEModel(tf.keras.Model):
     def __init__(
@@ -346,6 +329,7 @@ class VAEModel(tf.keras.Model):
         self._batch_idx = 0
         self._batch_size = batch_size
         self._y = y
+
         self._final_activation = final_activation
         if num_classes == 10 or num_classes == 3:
             self.acc_func = tf.keras.metrics.categorical_accuracy
@@ -453,7 +437,7 @@ class VAEModel(tf.keras.Model):
         reconstruction = self.decoder(z)
         if self._final_activation is not None:
             reconstruction = self.act(reconstruction)
-        return reconstruction, z_mean, z_log_var, z
+        return reconstruction
 
     def model(self):
         """Here so that mymodel.model().summary() can be called for debugging."""
@@ -503,14 +487,15 @@ class VAEModel(tf.keras.Model):
 
         y_true_masked = tf.boolean_mask(
             tf.convert_to_tensor(y_true, dtype=tf.float32),
-            tf.reduce_any(tf.not_equal(y_true, -1), axis=2),
+            tf.reduce_any(tf.not_equal(y_true, -1), axis=-1),
         )
 
         with tf.GradientTape() as tape:
-            reconstruction, z_mean, z_log_var, z = self(y_true, training=True)
+            reconstruction = self(y_true, training=True)
 
             y_pred_masked = tf.boolean_mask(
-                reconstruction, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
+                reconstruction,
+                tf.reduce_any(tf.not_equal(y_true, -1), axis=-1),
             )
 
             # Returns binary crossentropy loss.
@@ -519,17 +504,6 @@ class VAEModel(tf.keras.Model):
                 y_pred_masked,
                 sample_weight=sample_weight_masked,
             )
-
-            # kl_loss = self.kl_beta * tf.reduce_mean(
-            #     -0.5
-            #     * tf.reduce_sum(
-            #         z_log_var
-            #         - tf.math.square(z_mean)
-            #         - tf.math.exp(z_log_var)
-            #         + 1,
-            #         axis=-1,
-            #     )
-            # )
 
             # Doesn't include KL Divergence Loss.
             regularization_loss = sum(self.losses)
