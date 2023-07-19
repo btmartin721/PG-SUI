@@ -125,7 +125,9 @@ class Scorers:
          Returns:
             Dict[str, Any]: Dictionary with precision and recall curves per class and micro and macro averaged across classes, plus AP scores per-class and for micro and macro averages.
         """
+
         cats = range(num_classes)
+
         is_multiclass = True if num_classes != 4 else False
 
         # Get only classes that appear in y_true.
@@ -318,8 +320,6 @@ class Scorers:
         testing = kwargs.get("testing", False)
         nn_model = kwargs.get("nn_model", True)
         num_classes = kwargs.get("num_classes", 3)
-
-        is_multiclass = True if num_classes != 4 else False
 
         y_pred = Scorers.check_if_tuple(y_pred)
 
@@ -670,9 +670,7 @@ class Scorers:
     def scorer(y_true, y_pred, **kwargs):
         # Get missing mask if provided.
         # Otherwise default is all missing values (array all True).
-        missing_mask = kwargs.get(
-            "missing_mask", np.ones(y_true.shape, dtype=bool)
-        )
+        missing_mask = kwargs.get("missing_mask")
         nn_model = kwargs.get("nn_model", True)
         num_classes = kwargs.get("num_classes", 3)
         testing = kwargs.get("testing", False)
