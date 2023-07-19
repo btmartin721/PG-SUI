@@ -1,6 +1,8 @@
 # Standard library imports
 import sys
 from typing import Optional, Union, Dict, Any
+import os
+import warnings
 
 # Third-party imports
 import numpy as np
@@ -19,26 +21,9 @@ from sklearn.neighbors import KNeighborsClassifier
 try:
     from .impute import Impute
     from .unsupervised.neural_network_imputers import VAE, UBP, SAE
-    from ..utils.misc import get_processor_name
 except (ModuleNotFoundError, ValueError, ImportError):
     from impute.impute import Impute
     from impute.unsupervised.neural_network_imputers import VAE, UBP, SAE
-    from utils.misc import get_processor_name
-
-# Requires scikit-learn-intellex package
-if get_processor_name().strip().startswith("Intel"):
-    try:
-        from sklearnex import patch_sklearn
-
-        patch_sklearn()
-        intelex = True
-    except (ImportError, TypeError):
-        print(
-            "Warning: Intel CPU detected but scikit-learn-intelex is not installed. We recommend installing it to speed up computation."
-        )
-        intelex = False
-else:
-    intelex = False
 
 
 class ImputeKNN(Impute):
