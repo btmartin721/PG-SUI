@@ -48,15 +48,9 @@ try:
         IterativeImputerFixedParams,
     )
     from .unsupervised.neural_network_imputers import VAE, UBP, SAE
-    from snpio import GenotypeData
-    from . import simple_imputers
-    from ..utils.misc import get_processor_name
     from ..utils.misc import isnotebook
     from ..utils.misc import timer
     from ..data_processing.transformers import (
-        ImputePhyloTransformer,
-        ImputeAlleleFreqTransformer,
-        ImputeMFTransformer,
         SimGenotypeDataTransformer,
     )
 except (ModuleNotFoundError, ValueError, ImportError):
@@ -67,16 +61,9 @@ except (ModuleNotFoundError, ValueError, ImportError):
         IterativeImputerFixedParams,
     )
     from impute.unsupervised.neural_network_imputers import VAE, UBP, SAE
-    from snpio import GenotypeData
-    from impute import simple_imputers
-    from utils.misc import get_processor_name
-    from utils.misc import get_processor_name
     from utils.misc import isnotebook
     from utils.misc import timer
     from data_processing.transformers import (
-        ImputePhyloTransformer,
-        ImputeAlleleFreqTransformer,
-        ImputeMFTransformer,
         SimGenotypeDataTransformer,
     )
 
