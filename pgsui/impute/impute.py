@@ -56,7 +56,7 @@ try:
     from ..data_processing.transformers import (
         ImputePhyloTransformer,
         ImputeAlleleFreqTransformer,
-        ImputeNMFTransformer,
+        ImputeMFTransformer,
         SimGenotypeDataTransformer,
     )
 except (ModuleNotFoundError, ValueError, ImportError):
@@ -76,7 +76,7 @@ except (ModuleNotFoundError, ValueError, ImportError):
     from data_processing.transformers import (
         ImputePhyloTransformer,
         ImputeAlleleFreqTransformer,
-        ImputeNMFTransformer,
+        ImputeMFTransformer,
         SimGenotypeDataTransformer,
     )
 
@@ -334,12 +334,12 @@ class Impute:
 
         if (
             "initial_strategy" in self.imp_kwargs
-            and self.imp_kwargs["initial_strategy"] == "nmf"
+            and self.imp_kwargs["initial_strategy"] == "mf"
             and chunk_size != 1.0
         ):
             print(
                 "WARNING: Chunking is not supported with initial_strategy == "
-                "'nmf'; Setting chunk_size to 1.0 and imputing entire "
+                "'mf'; Setting chunk_size to 1.0 and imputing entire "
                 "dataset"
             )
 

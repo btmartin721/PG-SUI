@@ -1070,7 +1070,7 @@ class ImputeAlleleFreq:
         df.to_csv(outfile, header=False, index=False)
 
 
-class ImputeNMF:
+class ImputeMF:
     """Impute missing data using matrix factorization. If ``by_populations=False`` then imputation is by global allele frequency. If ``by_populations=True`` then imputation is by population-wise allele frequency.
 
     Args:
@@ -1100,7 +1100,7 @@ class ImputeNMF:
         >>>    popmapfile="test.popmap",
         >>>)
         >>>
-        >>>nmf = ImputeNMF(
+        >>>nmf = ImputeMF(
         >>>    genotype_data=data,
         >>>    by_populations=True,
         >>>)
@@ -1172,7 +1172,7 @@ class ImputeNMF:
     def fit_predict(self, X):
         # imputation
         if self.verbose:
-            print(f"Doing NMF imputation without grid search...")
+            print(f"Doing MF imputation...")
         R = X
         R = R.astype(int)
         R[R == self.missing] = -9
@@ -1273,7 +1273,7 @@ class ImputeNMF:
             f"{self.prefix}_output",
             "alignments",
             "Unsupervised",
-            "ImputeNMF",
+            "ImputeMF",
         )
 
         Path(outfile).mkdir(parents=True, exist_ok=True)
