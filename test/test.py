@@ -84,7 +84,6 @@ class TestMyClasses(unittest.TestCase):
         instance = class_instance(
             self.simulated_data,
             gridparams=param_grid,
-            sim_strategy="random",
         )
         imputed_data = instance.imputed.genotypes_012(fmt="numpy")
 
