@@ -38,21 +38,6 @@ if is_notebook:
 else:
     from tqdm import tqdm as progressbar
 
-# Requires scikit-learn-intellex package
-if get_processor_name().strip().startswith("Intel"):
-    try:
-        from sklearnex import patch_sklearn
-
-        patch_sklearn()
-        intelex = True
-    except (ImportError, TypeError):
-        print(
-            "Warning: Intel CPU detected but scikit-learn-intelex is not installed. We recommend installing it to speed up computation."
-        )
-        intelex = False
-else:
-    intelex = False
-
 # Pandas on pip gives a performance warning when doing the below code.
 # Apparently it's a bug that exists in the pandas version I used here.
 # It can be safely ignored.

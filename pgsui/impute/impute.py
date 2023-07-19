@@ -87,22 +87,6 @@ if is_notebook:
 else:
     from tqdm import tqdm as progressbar
 
-# Requires scikit-learn-intellex package
-if get_processor_name().strip().startswith("Intel"):
-    try:
-        from sklearnex import patch_sklearn
-
-        patch_sklearn()
-        intelex = True
-    except (ImportError, TypeError):
-        print(
-            "Warning: Intel CPU detected but scikit-learn-intelex is not "
-            "installed. We recommend installing it to speed up computation."
-        )
-        intelex = False
-else:
-    intelex = False
-
 
 class Impute:
     """Class to impute missing data from the provided classifier.
