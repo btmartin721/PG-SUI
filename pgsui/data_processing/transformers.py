@@ -81,20 +81,6 @@ if is_notebook:
 else:
     from tqdm import tqdm as progressbar
 
-# Requires scikit-learn-intellex package
-if get_processor_name().strip().startswith("Intel"):
-    try:
-        from sklearnex import patch_sklearn
-
-        patch_sklearn()
-        intelex = True
-    except (ImportError, TypeError):
-        print(
-            "Warning: Intel CPU detected but scikit-learn-intelex is not installed. We recommend installing it to speed up computation."
-        )
-        intelex = False
-else:
-    intelex = False
 
 # Pandas on pip gives a performance warning when doing the below code.
 # Apparently it's a bug that exists in the pandas version I used here.
@@ -2122,19 +2108,19 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
 
         for i in range(y_true_bin.shape[1]):
             # AUC-ROC score
-            auc_roc = roc_auc_score(y_true_bin[:, i], y_pred_bin[:, i])
+            auc_roc = roc_auc_score(y_true_bin[:, i], y_pred_bin[:, i], average="weighted")
             auc_roc_scores.append(auc_roc)
 
             # Precision-recall score
             precision, recall, _, _ = precision_recall_fscore_support(
-                y_true_bin[:, i], y_pred_bin[:, i], average="binary"
+                y_true_bin[:, i], y_pred_bin[:, i], average="weighted"
             )
             precision_scores.append(precision)
             recall_scores.append(recall)
 
             # Average precision score
             avg_precision = average_precision_score(
-                y_true_bin[:, i], y_pred_bin[:, i]
+                y_true_bin[:, i], y_pred_bin[:, i], average="weighted"
             )
             avg_precision_scores.append(avg_precision)
 
