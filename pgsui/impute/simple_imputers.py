@@ -161,7 +161,7 @@ class ImputePhylo:
         genotypes: Dict[str, List[Union[str, int]]],
         Q: pd.DataFrame,
         site_rates=None,
-        minbr=0.0000000001
+        minbr=0.0000000001,
     ) -> pd.DataFrame:
         """Imputes genotype values with a guide tree.
 
@@ -229,7 +229,6 @@ class ImputePhylo:
             leave=True,
             disable=self.disable_progressbar,
         ):
-
             rate = 1.0
             if site_rates is not None:
                 rate = site_rates[snp_index]
@@ -241,7 +240,7 @@ class ImputePhylo:
                 if genotypes[samp][snp_index].upper() == "N":
                     bads.append(samp)
 
-            #postorder traversal to compute likelihood at root
+            # postorder traversal to compute likelihood at root
             node_lik = dict()
             for node in tree.treenode.traverse("postorder"):
                 if node.is_leaf():
@@ -256,7 +255,7 @@ class ImputePhylo:
                     # get transition probs
                     d = child.dist
                     if d < minbr:
-                        d=minbr
+                        d = minbr
                     pt = self._transition_probs(site_Q, d)
                     if child.is_leaf():
                         if child.name in genotypes:
@@ -269,22 +268,26 @@ class ImputePhylo:
                                     genotypes[child.name][snp_index]
                                 ):
                                     if sum is None:
-                                        sum = [Decimal(x) for x in list(pt[allele])]
+                                        sum = [
+                                            Decimal(x)
+                                            for x in list(pt[allele])
+                                        ]
                                     else:
                                         sum = [
                                             Decimal(sum[i]) + Decimal(val)
                                             for i, val in enumerate(
                                                 list(pt[allele])
                                             )
-                                            ]
+                                        ]
                             node_lik[child.idx] = [Decimal(x) for x in sum]
 
-                            #add to likelihood for parent node
+                            # add to likelihood for parent node
                             if node_lik[node.idx] is None:
                                 node_lik[node.idx] = node_lik[child.idx]
                             else:
                                 node_lik[node.idx] = [
-                                    Decimal(node_lik[child.idx][i]) * Decimal(val)
+                                    Decimal(node_lik[child.idx][i])
+                                    * Decimal(val)
                                     for i, val in enumerate(node_lik[node.idx])
                                 ]
                         else:
@@ -304,7 +307,7 @@ class ImputePhylo:
                                 for i, val in enumerate(node_lik[node.idx])
                             ]
 
-            #preorder traversal to get marginal reconstructions at internal nodes
+            # preorder traversal to get marginal reconstructions at internal nodes
             marg = node_lik.copy()
             for node in tree.treenode.traverse("preorder"):
                 if node.is_root():
@@ -313,9 +316,12 @@ class ImputePhylo:
                     continue
                 lik_arr = marg[node.idx]
                 parent_arr = marg[node.up.idx]
-                marg[node.idx] = [Decimal(lik)*(Decimal(parent_arr[i])/Decimal(lik)) for i,lik in enumerate(lik_arr)]
+                marg[node.idx] = [
+                    Decimal(lik) * (Decimal(parent_arr[i]) / Decimal(lik))
+                    for i, lik in enumerate(lik_arr)
+                ]
 
-            #get marginal reconstructions for bad bois
+            # get marginal reconstructions for bad bois
             two_pass = dict()
             for samp in bads:
                 # get most likely state for focal tip
@@ -331,7 +337,7 @@ class ImputePhylo:
                 tol = 0.001
                 imputed = self._get_imputed_nuc(lik)
 
-                #two_pass[samp] = [imputed, lik]
+                # two_pass[samp] = [imputed, lik]
                 genotypes[samp][snp_index] = imputed
 
             # DEPRECATED: RE-ROOTING METHOD OF YANG ET AL
@@ -480,29 +486,24 @@ class ImputePhylo:
         return len(self.imputed.columns)
 
     def _get_imputed_nuc(self, lik_arr):
-            nucmap = {
-                0 : "A",
-                1 : "C",
-                2 : "G",
-                3 : "T"
-            }
-            maxpos = lik_arr.index(max(lik_arr))
-            picks = set([maxpos])
-            # NOT USED:
-            # Experimenting with ways to impute heterozygotes.
-            # Note that LRT isn't appropriate (as I used here) because
-            # the models are not nested & LRTS isn't necessarily expected
-            # to be chisq distributed.
-            # Check out Vuong test and read Lewis et al 2011 (doi: 10.1111/j.2041-210X.2010.00063.x)
-            #
-            # for index, alt in enumerate(lik_arr):
-            #     if index == maxpos:
-            #         continue
-            #     else:
-            #         lr = lrt(lik_arr[maxpos], alt, loglik=False)
-            #         p = chi2.sf(lr)
-            #         print(nucmap[maxpos], ":", str(lrt(lik_arr[maxpos], alt, loglik=False)), p)
-            return(nucmap[maxpos])
+        nucmap = {0: "A", 1: "C", 2: "G", 3: "T"}
+        maxpos = lik_arr.index(max(lik_arr))
+        picks = set([maxpos])
+        # NOT USED:
+        # Experimenting with ways to impute heterozygotes.
+        # Note that LRT isn't appropriate (as I used here) because
+        # the models are not nested & LRTS isn't necessarily expected
+        # to be chisq distributed.
+        # Check out Vuong test and read Lewis et al 2011 (doi: 10.1111/j.2041-210X.2010.00063.x)
+        #
+        # for index, alt in enumerate(lik_arr):
+        #     if index == maxpos:
+        #         continue
+        #     else:
+        #         lr = lrt(lik_arr[maxpos], alt, loglik=False)
+        #         p = chi2.sf(lr)
+        #         print(nucmap[maxpos], ":", str(lrt(lik_arr[maxpos], alt, loglik=False)), p)
+        return nucmap[maxpos]
 
     def _parse_arguments(
         self, genotype_data: Any
@@ -972,6 +973,8 @@ class ImputeAlleleFreq:
         bad_cnt = 0
 
         if self.pops is not None:
+            df = df.copy()
+
             # Impute per-population mode.
             df["pops"] = self.pops
             groups = df.groupby(["pops"], sort=False)
@@ -979,7 +982,11 @@ class ImputeAlleleFreq:
             for col in df.columns:
                 try:
                     # Instead of appending to the DataFrame, append to the list
-                    columns.append(groups[col].transform(lambda x: x.fillna(x.mode().iloc[0])))
+                    columns.append(
+                        groups[col].transform(
+                            lambda x: x.fillna(x.mode().iloc[0])
+                        )
+                    )
 
                     if col != "pops":
                         valid_cols.append(col)
@@ -987,31 +994,33 @@ class ImputeAlleleFreq:
                 except IndexError as e:
                     if str(e).lower().startswith("single positional indexer"):
                         bad_cnt += 1
-                        # Impute with global mode, unkless globally missing in which case call as 0.0
+                        # Impute with global mode, unless globally missing in which case call as 0.0
                         if df[col].isna().all():
-                            df[col] = df[col].fillna(0.0, inplace=False)
+                            columns.append(df[col].fillna(0.0, inplace=False))
                         else:
-                            df[col] = df[col].fillna(df[col].mode().iloc[0])
+                            columns.append(
+                                df[col].fillna(df[col].mode().iloc[0])
+                            )
                     else:
                         raise
 
             data = pd.concat(columns, axis=1)
 
-            if bad_cnt > 0:
-                print(
-                    f"Warning: {bad_cnt} columns were imputed with the global "
-                    f"mode because some of the populations "
+            if bad_cnt > 0 and not self.validation_mode:
+                UserWarning(
+                    f"\n{bad_cnt} columns were imputed with the "
+                    f"global mode because some of the populations "
                     f"contained only missing data"
                 )
- 
+
             data.drop("pops", axis=1, inplace=True)
         else:
             # Impute global mode.
             imp = SimpleImputer(strategy="most_frequent")
 
-            # replace any columns that are fully missing 
+            # replace any columns that are fully missing
             df.loc[:, df.isna().all()] = df.loc[:, df.isna().all()].fillna(0.0)
-            
+
             data = pd.DataFrame(imp.fit_transform(df))
 
         if self.iterative_mode:
