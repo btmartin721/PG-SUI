@@ -17,7 +17,7 @@ from pgsui.impute.estimators import (
     ImputeRandomForest,
     ImputeStandardAutoEncoder,
     ImputeVAE,
-    ImputeGradientBoosting,
+    ImputeXGBoost,
 )
 from pgsui.impute.simple_imputers import ImputePhylo, ImputeAlleleFreq
 
@@ -116,7 +116,7 @@ def main():
     #     # "hidden_activation": hidden_activation,
     # }
 
-    imp = ImputeGradientBoosting(
+    imp = ImputeXGBoost(
         data,
         max_iter=3,
         gridparams={"n_estimators": [100, 200]},
