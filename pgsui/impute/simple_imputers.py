@@ -1291,3 +1291,162 @@ class ImputeMF:
             )
 
         df.to_csv(outfile, header=False, index=False)
+
+class ImputeRefAllele:
+    """Impute missing data by reference allele.
+
+    Args:
+        genotype_data (GenotypeData object): GenotypeData instance.
+
+        missing (int, optional): Missing data value. Defaults to -9.
+
+        verbose (bool, optional): Whether to print status updates. Set to False for no status updates. Defaults to True.
+
+        kwargs (Dict[str, Any]): Additional keyword arguments to supply. Primarily for internal purposes. Options include: {"iterative_mode": bool, validation_mode: bool, gt: List[List[int]]}. "iterative_mode" determines whether ``ImputeRefAllele`` is being used as the initial imputer in ``IterativeImputer``\. ``gt`` is used internally for the simple imputers during grid searches and validation. If ``genotype_data is None`` then ``gt`` cannot also be None, and vice versa. Only one of ``gt`` or ``genotype_data`` can be set.
+
+    Raises:
+        TypeError: genotype_data cannot be NoneType.
+
+    Attributes:
+        imputed (GenotypeData): New GenotypeData instance with imputed data.
+
+    Example:
+        >>>data = GenotypeData(
+        >>>    filename="test.str",
+        >>>    filetype="structure2rowPopID",
+        >>>    popmapfile="test.popmap",
+        >>>)
+        >>>
+        >>>refallele = ImputeRefAllele(
+        >>>     genotype_data=data
+        >>>)
+        >>>
+        >>>gd_refallele = refallele.imputed
+    """
+
+    def __init__(
+        self,
+        genotype_data: GenotypeData,
+        *,
+        missing: int = -9,
+        verbose: bool = True,
+        **kwargs: Dict[str, Any],
+    ) -> None:
+        if genotype_data is None:
+            raise TypeError("GenotypeData instance must be provided.")
+
+        gt = kwargs.get("gt", None)
+
+        if gt is None:
+            gt_list = genotype_data.genotypes_012(fmt="list")
+        else:
+            gt_list = gt
+
+        self.missing = missing
+        self.verbose = verbose
+        self.iterative_mode = kwargs.get("iterative_mode", False)
+        self.validation_mode = kwargs.get("validation_mode", False)
+
+        # Get reference alleles from GenotypeData object
+        self.ref_alleles = genotype_data.ref
+
+        if not self.validation_mode:
+            imputed012 = self.fit_predict(gt_list)
+            genotype_data = deepcopy(genotype_data)
+            genotype_data.genotypes_012 = imputed012
+            self.imputed = genotype_data
+        else:
+            self.imputed= self.fit_predict(gt_list)
+
+    @property
+    def genotypes_012(self):
+        return self.imputed.genotypes_012
+
+    @property
+    def snp_data(self):
+        return self.imputed.snp_data
+
+    @property
+    def alignment(self):
+        return self.imputed.alignment
+
+    def fit_predict(
+            self, X: List[List[Union[int, str]]]
+        ) -> Union[pd.DataFrame, np.ndarray, List[List[Union[int, str]]]]:
+            """Impute missing genotypes using reference alleles.
+
+            Impute using reference alleles. Missing alleles are primarily coded as negative; usually -9.
+
+            Args:
+                X (List[List[Union[int, str]]], numpy.ndarray, or pandas.DataFrame): Genotypes obtained from the GenotypeData object.
+
+            Returns:
+                pandas.DataFrame, numpy.ndarray, or List[List[Union[int, str]]]: Imputed genotypes of same shape as data.
+
+            Raises:
+                TypeError: X must be of type list(list(int or str)), numpy.ndarray, 
+                or pandas.DataFrame, but got {type(X)}
+            """
+            if self.verbose:
+                print("\nImputing missing data with reference alleles...")
+
+            if isinstance(X, (list, np.ndarray)):
+                df = pd.DataFrame(X)
+            elif isinstance(X, pd.DataFrame):
+                df = X.copy()
+            else:
+                raise TypeError(
+                    f"X must be of type list(list(int or str)), numpy.ndarray, "
+                    f"or pandas.DataFrame, but got {type(X)}"
+                )
+
+            df = df.astype(df.dtypes)
+            df.replace(self.missing, np.nan, inplace=True)
+
+            if df.dtypes[0] == int:
+                df.fillna(0, inplace=True)
+            else:
+                for i, ref in enumerate(self.ref_alleles):
+                    df[i].fillna(ref, inplace=True)
+
+            if self.verbose:
+                print("Done!")
+
+            if not self.validation_mode:
+                return df.values.tolist()
+            return df.values
+
+
+    def write2file(
+        self, X: Union[pd.DataFrame, np.ndarray, List[List[Union[int, float]]]]
+    ) -> None:
+        """Write imputed data to file on disk.
+
+        Args:
+            X (pandas.DataFrame, numpy.ndarray, List[List[Union[int, float]]]): Imputed data to write to file.
+
+        Raises:
+            TypeError: If X is of unsupported type.
+        """
+        outfile = os.path.join(
+            f"{self.prefix}_output",
+            "alignments",
+            "Unsupervised",
+            "ImputeRefAllele",
+        )
+
+        Path(outfile).mkdir(parents=True, exist_ok=True)
+
+        outfile = os.path.join(outfile, "imputed_012.csv")
+
+        if isinstance(X, pd.DataFrame):
+            df = X
+        elif isinstance(X, (np.ndarray, list)):
+            df = pd.DataFrame(X)
+        else:
+            raise TypeError(
+                f"Could not write imputed data because it is of incorrect "
+                f"type. Got {type(X)}"
+            )
+
+        df.to_csv(outfile, header=False, index=False)
