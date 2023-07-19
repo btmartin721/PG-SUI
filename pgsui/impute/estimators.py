@@ -629,6 +629,10 @@ class ImputeGradientBoosting(Impute):
         n_jobs: int = 1,
         verbose: int = 0,
     ) -> None:
+        raise NotImplementedError(
+            "ImputeGradientBoosting is not currently implemented in PG-SUI."
+        )
+
         # Get local variables into dictionary object
         kwargs = locals()
 
@@ -997,9 +1001,6 @@ class ImputeXGBoost(Impute):
         n_jobs: int = 1,
         verbose: int = 0,
     ) -> None:
-        
-        raise NotImplementedError("XGBoost is currently not implemented in PG-SUI.")
-
         # Get local variables into dictionary object
         kwargs = locals()
         # kwargs["num_class"] = 3
@@ -1201,8 +1202,9 @@ class ImputeLightGBM(Impute):
         n_jobs: int = 1,
         verbose: int = 0,
     ) -> None:
-        
-        raise NotImplementedError("LightGBM is currently not implemented in PG-SUI.")
+        raise NotImplementedError(
+            "LightGBM is currently not implemented in PG-SUI."
+        )
 
         # Get local variables into dictionary object
         kwargs = locals()
@@ -1350,7 +1352,7 @@ class ImputeVAE(Impute):
         mutation_probability=0.2,
         ga_algorithm="eaMuPlusLambda",
         sim_strategy="random",
-        sim_prop_missing=0.1,
+        sim_prop_missing=0.2,
         disable_progressbar=False,
         n_jobs=1,
         verbose=0,
@@ -1512,7 +1514,7 @@ class ImputeStandardAutoEncoder(Impute):
         mutation_probability=0.2,
         ga_algorithm="eaMuPlusLambda",
         sim_strategy="random",
-        sim_prop_missing=0.1,
+        sim_prop_missing=0.2,
         disable_progressbar=False,
         n_jobs=1,
         verbose=0,
@@ -1709,7 +1711,7 @@ class ImputeUBP(Impute):
         mutation_probability=0.2,
         ga_algorithm="eaMuPlusLambda",
         sim_strategy="random",
-        sim_prop_missing=0.1,
+        sim_prop_missing=0.2,
         disable_progressbar=False,
         n_jobs=1,
         verbose=0,
