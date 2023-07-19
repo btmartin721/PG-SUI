@@ -20,16 +20,10 @@ from sklearn.impute import SimpleImputer
 # Custom imports
 try:
     from snpio import GenotypeData
-    from ..utils import misc
-    from ..utils.misc import get_processor_name
     from ..utils.misc import isnotebook
-    from ..utils.misc import timer
 except (ModuleNotFoundError, ValueError, ImportError):
     from snpio import GenotypeData
-    from utils import misc
-    from utils.misc import get_processor_name
     from utils.misc import isnotebook
-    from utils.misc import timer
 
 is_notebook = isnotebook()
 
@@ -1277,6 +1271,7 @@ class ImputeMF:
 
         df.to_csv(outfile, header=False, index=False)
 
+
 class ImputeRefAllele:
     """Impute missing data by reference allele.
 
@@ -1341,7 +1336,7 @@ class ImputeRefAllele:
             genotype_data.genotypes_012 = imputed012
             self.imputed = genotype_data
         else:
-            self.imputed= self.fit_predict(gt_list)
+            self.imputed = self.fit_predict(gt_list)
 
     @property
     def genotypes_012(self):
@@ -1356,51 +1351,50 @@ class ImputeRefAllele:
         return self.imputed.alignment
 
     def fit_predict(
-            self, X: List[List[Union[int, str]]]
-        ) -> Union[pd.DataFrame, np.ndarray, List[List[Union[int, str]]]]:
-            """Impute missing genotypes using reference alleles.
+        self, X: List[List[Union[int, str]]]
+    ) -> Union[pd.DataFrame, np.ndarray, List[List[Union[int, str]]]]:
+        """Impute missing genotypes using reference alleles.
 
-            Impute using reference alleles. Missing alleles are primarily coded as negative; usually -9.
+        Impute using reference alleles. Missing alleles are primarily coded as negative; usually -9.
 
-            Args:
-                X (List[List[Union[int, str]]], numpy.ndarray, or pandas.DataFrame): Genotypes obtained from the GenotypeData object.
+        Args:
+            X (List[List[Union[int, str]]], numpy.ndarray, or pandas.DataFrame): Genotypes obtained from the GenotypeData object.
 
-            Returns:
-                pandas.DataFrame, numpy.ndarray, or List[List[Union[int, str]]]: Imputed genotypes of same shape as data.
+        Returns:
+            pandas.DataFrame, numpy.ndarray, or List[List[Union[int, str]]]: Imputed genotypes of same shape as data.
 
-            Raises:
-                TypeError: X must be of type list(list(int or str)), numpy.ndarray, 
-                or pandas.DataFrame, but got {type(X)}
-            """
-            if self.verbose:
-                print("\nImputing missing data with reference alleles...")
+        Raises:
+            TypeError: X must be of type list(list(int or str)), numpy.ndarray,
+            or pandas.DataFrame, but got {type(X)}
+        """
+        if self.verbose:
+            print("\nImputing missing data with reference alleles...")
 
-            if isinstance(X, (list, np.ndarray)):
-                df = pd.DataFrame(X)
-            elif isinstance(X, pd.DataFrame):
-                df = X.copy()
-            else:
-                raise TypeError(
-                    f"X must be of type list(list(int or str)), numpy.ndarray, "
-                    f"or pandas.DataFrame, but got {type(X)}"
-                )
+        if isinstance(X, (list, np.ndarray)):
+            df = pd.DataFrame(X)
+        elif isinstance(X, pd.DataFrame):
+            df = X.copy()
+        else:
+            raise TypeError(
+                f"X must be of type list(list(int or str)), numpy.ndarray, "
+                f"or pandas.DataFrame, but got {type(X)}"
+            )
 
-            df = df.astype(df.dtypes)
-            df.replace(self.missing, np.nan, inplace=True)
+        df = df.astype(df.dtypes)
+        df.replace(self.missing, np.nan, inplace=True)
 
-            if df.dtypes[0] == int:
-                df.fillna(0, inplace=True)
-            else:
-                for i, ref in enumerate(self.ref_alleles):
-                    df[i].fillna(ref, inplace=True)
+        if df.dtypes[0] == int:
+            df.fillna(0, inplace=True)
+        else:
+            for i, ref in enumerate(self.ref_alleles):
+                df[i].fillna(ref, inplace=True)
 
-            if self.verbose:
-                print("Done!")
+        if self.verbose:
+            print("Done!")
 
-            if not self.validation_mode:
-                return df.values.tolist()
-            return df.values
-
+        if not self.validation_mode:
+            return df.values.tolist()
+        return df.values
 
     def write2file(
         self, X: Union[pd.DataFrame, np.ndarray, List[List[Union[int, float]]]]
