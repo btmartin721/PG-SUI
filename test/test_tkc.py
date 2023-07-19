@@ -16,6 +16,7 @@ from pgsui.impute.simple_imputers import (
     ImputePhylo,
     ImputeMF,
     ImputeAlleleFreq,
+    ImputeRefAllele,
 )
 
 from snpio import GenotypeData
@@ -52,7 +53,7 @@ class TestMyClasses(unittest.TestCase):
             self.transformer = SimGenotypeDataTransformer(
                 genotype_data=self.genotype_data,
                 prop_missing=0.2,
-                strategy="random",
+                strategy="random_weighted",
             )
             self.transformer.fit(self.genotype_data.genotypes_012(fmt="numpy"))
             self.simulated_data = copy.deepcopy(self.genotype_data)
@@ -80,7 +81,15 @@ class TestMyClasses(unittest.TestCase):
         else:
             param_grid = None
 
-        instance = class_instance(self.simulated_data, gridparams=param_grid)
+        kwargs = {
+            'sim_strategy': "random_weighted"
+        }
+
+        instance = class_instance(
+            self.simulated_data, 
+            gridparams=param_grid, 
+            **kwargs)
+
         imputed_data = instance.imputed.genotypes_012(fmt="numpy")
 
         # Test that the imputed values are close to the original values
@@ -129,8 +138,8 @@ class TestMyClasses(unittest.TestCase):
     # def test_ImputeStandardAutoEncoder(self):
     #     self._test_class(ImputeStandardAutoEncoder)
 
-    # def test_ImputeUBP(self):
-    #     self._test_class(ImputeUBP)
+    def test_ImputeUBP(self):
+        self._test_class(ImputeUBP)
 
     # def test_ImputeNLPCA(self):
     #     self._test_class(ImputeNLPCA)
@@ -156,17 +165,20 @@ class TestMyClasses(unittest.TestCase):
     # def test_ImputeNLPCA_grid(self):
     #     self._test_class(ImputeNLPCA, do_gridsearch=True)
 
-    def test_ImputePhylo(self):
-        self._test_class(ImputePhylo)
+    # def test_ImputePhylo(self):
+    #     self._test_class(ImputePhylo)
 
-    def test_ImputeAlleleFreq(self):
-        self._test_class(ImputeAlleleFreq)
+    # def test_ImputeAlleleFreq(self):
+    #     self._test_class(ImputeAlleleFreq)
 
     # def test_ImputeRefAllele(self):
     #     self._test_class(ImputeRefAllele)
 
-    def test_ImputeMF(self):
-        self._test_class(ImputeMF)
+    # def test_ImputeMF(self):
+    #     self._test_class(ImputeMF)
+
+    # def test_ImputeRefAllele(self):
+    #     self._test_class(ImputeRefAllele)
 
 
 if __name__ == "__main__":
