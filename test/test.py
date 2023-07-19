@@ -16,6 +16,7 @@ from pgsui.impute.simple_imputers import (
     ImputePhylo,
     ImputeMF,
     ImputeAlleleFreq,
+    ImputeRefAllele,
 )
 
 from snpio import GenotypeData
@@ -164,6 +165,9 @@ class TestMyClasses(unittest.TestCase):
 
     def test_ImputeMF(self):
         self._test_class(ImputeMF)
+    
+    def test_ImputeRefAllele(self):
+        self._test_class(ImputeRefAllele)
 
 
 if __name__ == "__main__":
