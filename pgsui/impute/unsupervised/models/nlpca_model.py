@@ -269,7 +269,7 @@ class NLPCAModel(tf.keras.Model):
 
         Returns:
             tf.keras.Model: Output tensor from forward propagation.
-        """      
+        """
         x = self.dense1(inputs)
         x = self.dropout_layer(x, training=training)
         if self.dense2 is not None:
