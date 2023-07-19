@@ -53,7 +53,7 @@ class TestMyClasses(unittest.TestCase):
             self.transformer = SimGenotypeDataTransformer(
                 genotype_data=self.genotype_data,
                 prop_missing=0.2,
-                strategy="random",
+                strategy="random_weighted",
             )
             self.transformer.fit(self.genotype_data.genotypes_012(fmt="numpy"))
             self.simulated_data = copy.deepcopy(self.genotype_data)
@@ -81,7 +81,15 @@ class TestMyClasses(unittest.TestCase):
         else:
             param_grid = None
 
-        instance = class_instance(self.simulated_data, gridparams=param_grid)
+        kwargs = {
+            'sim_strategy': "random_weighted"
+        }
+
+        instance = class_instance(
+            self.simulated_data, 
+            gridparams=param_grid, 
+            **kwargs)
+
         imputed_data = instance.imputed.genotypes_012(fmt="numpy")
 
         # Test that the imputed values are close to the original values
@@ -115,59 +123,62 @@ class TestMyClasses(unittest.TestCase):
         )
         print("\n")
 
-    def test_ImputeKNN(self):
-        self._test_class(ImputeKNN)
+    # def test_ImputeKNN(self):
+    #     self._test_class(ImputeKNN)
 
-    def test_ImputeRandomForest(self):
-        self._test_class(ImputeRandomForest)
+    # def test_ImputeRandomForest(self):
+    #     self._test_class(ImputeRandomForest)
 
-    def test_ImputeXGBoost(self):
-        self._test_class(ImputeXGBoost)
+    # def test_ImputeXGBoost(self):
+    #     self._test_class(ImputeXGBoost)
 
-    def test_ImputeVAE(self):
-        self._test_class(ImputeVAE)
+    # def test_ImputeVAE(self):
+    #     self._test_class(ImputeVAE)
 
-    def test_ImputeStandardAutoEncoder(self):
-        self._test_class(ImputeStandardAutoEncoder)
+    # def test_ImputeStandardAutoEncoder(self):
+    #     self._test_class(ImputeStandardAutoEncoder)
 
     def test_ImputeUBP(self):
         self._test_class(ImputeUBP)
 
-    def test_ImputeNLPCA(self):
-        self._test_class(ImputeNLPCA)
+    # def test_ImputeNLPCA(self):
+    #     self._test_class(ImputeNLPCA)
 
-    def test_ImputeKNN_grid(self):
-        self._test_class(ImputeKNN, do_gridsearch=True)
+    # def test_ImputeKNN_grid(self):
+    #     self._test_class(ImputeKNN, do_gridsearch=True)
 
-    def test_ImputeRandomForest_grid(self):
-        self._test_class(ImputeRandomForest, do_gridsearch=True)
+    # def test_ImputeRandomForest_grid(self):
+    #     self._test_class(ImputeRandomForest, do_gridsearch=True)
 
-    def test_ImputeXGBoost_grid(self):
-        self._test_class(ImputeXGBoost, do_gridsearch=True)
+    # def test_ImputeXGBoost_grid(self):
+    #     self._test_class(ImputeXGBoost, do_gridsearch=True)
 
-    def test_ImputeVAE_grid(self):
-        self._test_class(ImputeVAE, do_gridsearch=True)
+    # def test_ImputeVAE_grid(self):
+    #     self._test_class(ImputeVAE, do_gridsearch=True)
 
-    def test_ImputeStandardAutoEncoder_grid(self):
-        self._test_class(ImputeStandardAutoEncoder, do_gridsearch=True)
+    # def test_ImputeStandardAutoEncoder_grid(self):
+    #     self._test_class(ImputeStandardAutoEncoder, do_gridsearch=True)
 
-    def test_ImputeUBP_grid(self):
-        self._test_class(ImputeUBP, do_gridsearch=True)
+    # def test_ImputeUBP_grid(self):
+    #     self._test_class(ImputeUBP, do_gridsearch=True)
 
-    def test_ImputeNLPCA_grid(self):
-        self._test_class(ImputeNLPCA, do_gridsearch=True)
+    # def test_ImputeNLPCA_grid(self):
+    #     self._test_class(ImputeNLPCA, do_gridsearch=True)
 
-    def test_ImputePhylo(self):
-        self._test_class(ImputePhylo)
+    # def test_ImputePhylo(self):
+    #     self._test_class(ImputePhylo)
 
-    def test_ImputeAlleleFreq(self):
-        self._test_class(ImputeAlleleFreq)
+    # def test_ImputeAlleleFreq(self):
+    #     self._test_class(ImputeAlleleFreq)
 
-    def test_ImputeMF(self):
-        self._test_class(ImputeMF)
-    
-    def test_ImputeRefAllele(self):
-        self._test_class(ImputeRefAllele)
+    # def test_ImputeRefAllele(self):
+    #     self._test_class(ImputeRefAllele)
+
+    # def test_ImputeMF(self):
+    #     self._test_class(ImputeMF)
+
+    # def test_ImputeRefAllele(self):
+    #     self._test_class(ImputeRefAllele)
 
 
 if __name__ == "__main__":

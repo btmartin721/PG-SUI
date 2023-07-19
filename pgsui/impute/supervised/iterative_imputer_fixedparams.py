@@ -117,7 +117,7 @@ class IterativeImputerFixedParams(IterativeImputer):
 
         n_nearest_features (int, optional): Number of other features to use to estimate the missing values of each feature column. Nearness between features is measured using the absolute correlation coefficient between each feature pair (after initial imputation). To ensure coverage of features throughout the imputation process, the neighbor features are not necessarily nearest,	but are drawn with probability proportional to correlation for each	imputed target feature. Can provide significant speed-up when the number of features is huge. If ``None``\, all features will be used. Defaults to None.
 
-        initial_strategy (str, optional): Which strategy to use to initialize the missing values. Same as the ``strategy`` parameter in :class:`~sklearn.impute.SimpleImputer`	Valid values: "mean", "median", "most_frequent", "populations", "phylogeny", "nmf", or "constant". Defaults to "mean".
+        initial_strategy (str, optional): Which strategy to use to initialize the missing values. Same as the ``strategy`` parameter in :class:`~sklearn.impute.SimpleImputer`	Valid values: "mean", "median", "most_frequent", "populations", "phylogeny", "mf", or "constant". Defaults to "mean".
 
         imputation_order (str, optional): The order in which the features will be imputed. Possible values: "ascending" (From features with fewest missing values to most), "descending" (From features with most missing values to fewest, "roman" (Left to right), "arabic" (Right to left),  random" (A random order for each round). Defaults to "ascending".
 
@@ -378,8 +378,8 @@ class IterativeImputerFixedParams(IterativeImputer):
                 Xt = X[:, valid_mask]
                 mask_missing_values = mask_missing_values[:, valid_mask]
 
-        elif self.initial_strategy == "nmf":
-            self.initial_imputer_ = simple_imputers.ImputeNMF(
+        elif self.initial_strategy == "mf":
+            self.initial_imputer_ = simple_imputers.ImputeMF(
                 self.genotype_data,
                 gt=np.nan_to_num(X, nan=-9),
                 missing=-9,

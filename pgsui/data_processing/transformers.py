@@ -1651,7 +1651,7 @@ class ImputeAlleleFreqTransformer(
             )
 
 
-class ImputeNMFTransformer(BaseEstimator, TransformerMixin):
+class ImputeMFTransformer(BaseEstimator, TransformerMixin):
     """Impute missing data using matrix factorization. Population IDs can be sepcified with the pops argument. if pops is None, then imputation is by global allele frequency. If pops is not None, then imputation is by population-wise allele frequency. A list of population IDs in the appropriate format can be obtained from the GenotypeData object as GenotypeData.populations.
 
     Args:
@@ -1669,7 +1669,7 @@ class ImputeNMFTransformer(BaseEstimator, TransformerMixin):
 
         verbose (bool, optional): Whether to print status updates. Set to False for no status updates. Defaults to True.
 
-        **kwargs (Dict[str, Any]): Additional keyword arguments to supply. Primarily for internal purposes. Options include: {"iterative_mode": bool}. "iterative_mode" determines whether ``ImputeNMF`` is being used as the initial imputer in ``IterativeImputer``.
+        **kwargs (Dict[str, Any]): Additional keyword arguments to supply. Primarily for internal purposes. Options include: {"iterative_mode": bool}. "iterative_mode" determines whether ``ImputeMF`` is being used as the initial imputer in ``IterativeImputer``.
 
     Attributes:
         imputed_ (pandas.DataFrame, numpy.ndarray, or List[List[int]]): Imputed 012-encoded data.
@@ -1682,12 +1682,12 @@ class ImputeNMFTransformer(BaseEstimator, TransformerMixin):
         >>>    filetype="structure2rowPopID"
         >>>)
         >>>
-        >>>nmf = ImputeNMF(
+        >>>mf = ImputeMF(
         >>>     genotype_data=data,
         >>>     learning_rate=0.1,
         >>>)
         >>>
-        >>>nmf_gtdata = nmf.fit_transform(data)
+        >>>mf_gtdata = mf.fit_transform(data)
     """
 
     def __init__(
@@ -1727,7 +1727,7 @@ class ImputeNMFTransformer(BaseEstimator, TransformerMixin):
         self.imputed_, self.accuracy_ = self._impute(X.genotypes012_array)
 
         if self.verbose:
-            print(f"NMF imputation accuracy: {round(self.accuracy_, 2)}")
+            print(f"MF imputation accuracy: {round(self.accuracy_, 2)}")
 
         return self
 
@@ -1755,7 +1755,7 @@ class ImputeNMFTransformer(BaseEstimator, TransformerMixin):
     def _impute(self, X):
         """Do the imputation."""
         if self.verbose:
-            print(f"Doing NMF imputation...")
+            print(f"Doing MF imputation...")
         R = X.copy()
         R[R == self.missing] = -9
         R = R + 1
@@ -1854,7 +1854,7 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
 
             prop_missing (float, optional): Proportion of missing data desired in output. Defaults to 0.10
 
-            strategy (str, optional): Strategy for simulating missing data. May be one of: \"nonrandom\", \"nonrandom_weighted\", or \"random\". When set to \"nonrandom\", branches from GenotypeData.guidetree will be randomly sampled to generate missing data on descendant nodes. For \"nonrandom_weighted\", missing data will be placed on nodes proportionally to their branch lengths (e.g., to generate data distributed as might be the case with mutation-disruption of RAD sites). Defaults to \"random\"
+            strategy (str, optional): Strategy for simulating missing data. May be one of: \"nonrandom\", \"nonrandom_weighted\", \"random_weighted\", \"random_weighted_inv\", or \"random\". When set to \"nonrandom\", branches from GenotypeData.guidetree will be randomly sampled to generate missing data on descendant nodes. For \"nonrandom_weighted\", missing data will be placed on nodes proportionally to their branch lengths (e.g., to generate data distributed as might be the case with mutation-disruption of RAD sites). Defaults to \"random\"
 
             missing_val (int, optional): Value that represents missing data. Defaults to -9.
 
@@ -1961,6 +1961,12 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
 
             # Make sure no entirely missing columns were simulated.
             self._validate_mask()
+
+        elif self.strategy == "random_weighted":
+            self.mask_ = self.random_weighted_missing_data(X, inv=False)
+        
+        elif self.strategy == "random_weighted_inv":
+            self.mask_ = self.random_weighted_missing_data(X, inv=True)
 
         elif (
             self.strategy == "nonrandom"
@@ -2131,6 +2137,47 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
             avg_precision_scores,
         )
 
+    def random_weighted_missing_data(self, X, inv=False):
+        # Get unique classes and their counts
+        classes, counts = np.unique(X, return_counts=True)
+        # Compute class weights
+        if inv:
+            class_weights = 1/ counts
+        else:
+            class_weights = counts
+        # Normalize class weights
+        class_weights = class_weights / sum(class_weights)
+
+        # Compute mask
+        if self.mask_missing:
+            # Get indexes where non-missing (Xobs) and missing (Xmiss)
+            Xobs = np.where(~self.original_missing_mask_.ravel())[0]
+            Xmiss = np.where(self.original_missing_mask_.ravel())[0]
+
+            # Generate mask of 0's (non-missing) and 1's (missing)
+            obs_mask = np.random.choice(classes, size=Xobs.size, p=class_weights)
+            obs_mask = (obs_mask == classes[:, None]).argmax(axis=0)
+
+            # Make missing data mask
+            mask = np.zeros(X.size, dtype=bool)
+            mask[Xobs] = obs_mask
+            mask[Xmiss] = 1
+
+            # Reshape from raveled to 2D
+            mask = mask.reshape(X.shape)
+        else:
+            # Generate mask of 0's (non-missing) and 1's (missing)
+            mask = np.random.choice(classes, size=X.size, p=class_weights)
+            mask = (mask == classes[:, None]).argmax(axis=0).reshape(X.shape)
+
+        # Assign mask to self before validation
+        self.mask_ = mask
+
+        self._validate_mask()
+
+        return mask
+
+
     def _sample_tree(
         self,
         internal_only=False,
@@ -2190,6 +2237,8 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
         return self.genotype_data.tree.get_tip_labels(idx=node_idx)
 
     def _validate_mask(self, mask=False):
+        if mask is None:
+            mask = self.mask_
         """Make sure no entirely missing columns are simulated."""
         for i, column in enumerate(self.mask_.T):
             if mask:
