@@ -81,7 +81,10 @@ class TestMyClasses(unittest.TestCase):
         else:
             param_grid = None
 
-        instance = class_instance(self.simulated_data, gridparams=param_grid)
+        instance = class_instance(
+            self.simulated_data,
+            gridparams=param_grid,
+        )
         imputed_data = instance.imputed.genotypes_012(fmt="numpy")
 
         # Test that the imputed values are close to the original values
@@ -165,7 +168,7 @@ class TestMyClasses(unittest.TestCase):
 
     def test_ImputeMF(self):
         self._test_class(ImputeMF)
-    
+
     def test_ImputeRefAllele(self):
         self._test_class(ImputeRefAllele)
 
