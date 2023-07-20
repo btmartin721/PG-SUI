@@ -25,3 +25,5 @@ if get_processor_name().strip().startswith("Intel"):
         intelex = False
 else:
     intelex = False
+
+os.environ["intelex"] = str(intelex)
