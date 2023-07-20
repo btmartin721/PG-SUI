@@ -74,61 +74,6 @@ class NeuralNetworkMethods:
         self.data = None
 
     @staticmethod
-    def decode_onehot(df_dummies):
-        """Decode one-hot format to 012-encoded genotypes.
-
-        Args:
-            df_dummies (pandas.DataFrame): One-hot encoded imputed data.
-
-        Returns:
-            pandas.DataFrame: 012-encoded imputed data.
-        """
-        pos = defaultdict(list)
-        vals = defaultdict(list)
-
-        for i, c in enumerate(df_dummies.columns):
-            if "_" in c:
-                k, v = c.split("_", 1)
-                pos[k].append(i)
-                vals[k].append(v)
-
-            else:
-                pos["_"].append(i)
-
-        df = pd.DataFrame(
-            {
-                k: pd.Categorical.from_codes(
-                    np.argmax(df_dummies.iloc[:, pos[k]].values, axis=1),
-                    vals[k],
-                )
-                for k in vals
-            }
-        )
-
-        df[df_dummies.columns[pos["_"]]] = df_dummies.iloc[:, pos["_"]]
-
-        return df
-
-    @staticmethod
-    def encode_onehot(X, missing_val=np.nan):
-        """Convert 012-encoded data to one-hot encodings.
-        Args:
-            X (numpy.ndarray): Input array with 012-encoded data and -9 as the missing data value.
-        Returns:
-            pandas.DataFrame: One-hot encoded data, ignoring missing values (np.nan).
-        """
-        Xt = np.zeros(shape=(X.shape[0], X.shape[1], 3))
-        mappings = {
-            0: np.array([1, 0, 0]),
-            1: np.array([0, 1, 0]),
-            2: np.array([0, 0, 1]),
-            -9: np.array([missing_val, missing_val, missing_val]),
-        }
-        for row in np.arange(X.shape[0]):
-            Xt[row] = [mappings[enc] for enc in X[row]]
-        return Xt
-
-    @staticmethod
     def encode_multilab(X, num_classes=4):
         """Encode 0-9 integer data in one-hot format.
         Args:
