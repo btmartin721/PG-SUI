@@ -23,10 +23,10 @@ See the `scikit-learn documentation <https://scikit-learn.org>`_ for more inform
 
 Unsupervised imputers include three custom neural network models:
 
-    + Standard Autoencoder (SAE)
-    + Variational Autoencoder (VAE) [[2]](#2)
-    + Non-linear Principal Component Analysis (NLPCA) [[3]](#3)
-    + Unsupervised Backpropagation (UBP) [[4]](#4)
+    + Standard Autoencoder (SAE) [1]_
+    + Variational Autoencoder (VAE) [2]_
+    + Non-linear Principal Component Analysis (NLPCA) [3]_
+    + Unsupervised Backpropagation (UBP) [4]_
 
 To use the unsupervised neural networks for imputation, the real missing values are masked and missing values are simulated for training. The model gets trained to reconstruct only on known values. Once the model is trained, it is then used to predict the real missing values.
 
@@ -49,3 +49,15 @@ We also include several non-machine learning options for imputing missing data, 
     + Matrix Factorization
 
 These four non-machine learning imputation methods can be used as standalone imputers, as the initial imputation strategy for IterativeImputer (at least one method is required to be chosen), and to validate the accuracy of both IterativeImputer and the neural network models.
+
+References
+-----------
+
+.. [1] Hinton, G.E., & Salakhutdinov, R.R. (2006). Reducing the dimensionality of data with neural networks. Science, 313(5786), 504-507.
+
+.. [2] Kingma, D. P., & Welling, M. (2013). Auto-Encoding Variational Bayes. arXiv preprint arXiv:1312.6114.
+
+.. [3] Scholz, M., Kaplan, F., Guy, C. L., Kopka, J., & Selbig, J. (2005). Non-linear PCA: a missing data approach. Bioinformatics, 21(20), 3887-3895.
+
+.. [4] Gashler, M. S., Smith, M. R., Morris, R., & Martinez, T. (2016). Missing value imputation with unsupervised backpropagation. Computational Intelligence, 32(2), 196-215.
+

@@ -1172,7 +1172,7 @@ class ImputeUBP(Impute):
 class ImputeNLPCA(ImputeUBP):
     """Class to impute missing data using inverse non-linear principal component analysis (NLPCA) neural network models. For training, missing values are simulated and the model is trained on the simulated missing values. The real missing values are then predicted by the trained model. The strategy for simulating missing values can be set with the ``sim_strategy`` argument.
 
-    NLPCA [1]_ trains randomly generated, reduced-dimensionality input to predict the correct output. In the case of imputation, the model is trained only on known values, and the trained model is then used to predict the missing values.
+    NLPCA [2]_ trains randomly generated, reduced-dimensionality input to predict the correct output. In the case of imputation, the model is trained only on known values, and the trained model is then used to predict the missing values.
 
     Args:
         **genotype_data (GenotypeData object)**: Input data initialized as GenotypeData object. Required positional argument.
@@ -1265,7 +1265,7 @@ class ImputeNLPCA(ImputeUBP):
         >>> nlpca_gtdata = nlpca.imputed
 
     References:
-    .. [1] Scholz, M., Kaplan, F., Guy, C. L., Kopka, J., & Selbig, J. (2005). Non-linear PCA: a missing data approach. Bioinformatics, 21(20), 3887-3895.
+    .. [2] Scholz, M., Kaplan, F., Guy, C. L., Kopka, J., & Selbig, J. (2005). Non-linear PCA: a missing data approach. Bioinformatics, 21(20), 3887-3895.
     """
 
     nlpca = True

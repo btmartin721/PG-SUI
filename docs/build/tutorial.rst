@@ -14,19 +14,16 @@ PG-SUI (Population Genomic Supervised and Unsupervised Imputation) performs miss
 + The supervised algorithms work by using the N nearest features, based on absolute correlations between loci, to supervise the imputation. The unsupervised deep learning models each have distinct architectures that perform the imputation in different ways. For training the deep learning algorithms, missing values are simulated and the model is trained on the simulated missing values. The real missing values are then predicted by the trained model. The strategy for simulating missing values can be set with the ``sim_strategy`` argument.
 
 + Unsupervised Neural networks
-    + Variational AutoEncoder (VAE)
-    + Standard AutoEncoder (SAE)
-    + Unsupervised backpropagation (UBP)
-    + Non-linear Principal Component Analysis (NLPCA)
+    + Standard AutoEncoder (SAE) [1]_
+    + Variational AutoEncoder (VAE) [2]_
+    + Non-linear Principal Component Analysis (NLPCA) [3]_
+    + Unsupervised backpropagation (UBP) [4]_
 
 + NLPCA
-    + NLPCA [1]_ trains randomly generated, reduced-dimensionality input to predict the correct output. The input is then refined at each backpropagation step until it accurately predict the output.
+    + NLPCA trains randomly generated, reduced-dimensionality input to predict the correct output. The input is then refined at each backpropagation step until it accurately predict the output.
 + UBP
-    + UBP [2]_ is an extension of NLPCA with the input being randomly generated and of reduced dimensionality that gets trained to predict the supplied output based on only known values. It then uses the trained model to predict missing values. However, in contrast to NLPCA, UBP trains the model over three phases. The first is a single layer perceptron used to refine the randomly generated input. The second phase is a multi-layer perceptron that uses the refined reduced-dimension data from the first phase as input. In the second phase, the model weights are refined but not the input. In the third phase, the model weights and the inputs are then refined.
+    + UBP is an extension of NLPCA with the input being randomly generated and of reduced dimensionality that gets trained to predict the supplied output based on only known values. It then uses the trained model to predict missing values. However, in contrast to NLPCA, UBP trains the model over three phases. The first is a single layer perceptron used to refine the randomly generated input. The second phase is a multi-layer perceptron that uses the refined reduced-dimension data from the first phase as input. In the second phase, the model weights are refined but not the input. In the third phase, the model weights and the inputs are then refined.
 
-.. [1] Scholz, M., Kaplan, F., Guy, C. L., Kopka, J., & Selbig, J. (2005). Non-linear PCA: a missing data approach. Bioinformatics, 21(20), 3887-3895.
-
-.. [2] Gashler, M. S., Smith, M. R., Morris, R., & Martinez, T. (2016). Missing value imputation with unsupervised backpropagation. Computational Intelligence, 32(2), 196-215.
 
 + Standard AutoEncoder
     + The SAE model reduces (i.e., encodes) the input, which is the full dataset, to a reduced-dimensional layer, and then trains itself to reconstruct the input (i.e., decodes) from the reduced-dimensional layer. 
@@ -111,7 +108,7 @@ There are numerous supported algorithms to impute missing data. Each one can be 
     nlpca = ImputeNLPCA(genotype_data=data) # Nonlinear PCA
     ubp = ImputeUBP(genotype_data=data) # Unsupervised backpropagation
 
-In each of the above class instantiations, the analysis will automatically run. Each method has its own unique arguments, so look over :doc:`API documentation <pgsui.impute.estimators>` to see what each of the parameters do.
+In each of the above class instantiations, the analysis will automatically run. Each method has its own unique arguments, so look over :doc:`API documentation <pgsui.impute>` to see what each of the parameters do.
 
 The imputed data will be saved as a GenotypeData object that can be accessed from the ``imputed`` property of the class instance. For example:
 
@@ -275,7 +272,7 @@ Three types of grid searches can be run:
 .. note::
     See the scikit-learn `model selection documentation <https://scikit-learn.org/stable/model_selection.html>`_ for more information on GridSearchCV and RandomizedSearchCV.
 
-The genetic algorithm has a suite of parameters that can be adjusted. See the :doc:`documentation <pgsui.impute.estimators>` and `the sklearn-genetic-opt documentation <https://sklearn-genetic-opt.readthedocs.io/en/stable/api/space.html>`_ for more information.
+The genetic algorithm has a suite of parameters that can be adjusted. See the :doc:`documentation <pgsui.impute>` and `the sklearn-genetic-opt documentation <https://sklearn-genetic-opt.readthedocs.io/en/stable/api/space.html>`_ for more information.
 
 
 gridparams
@@ -397,7 +394,7 @@ The neural network imputers can be run in the same way with cross-validation.
 
     nlpca = ImputeNLPCA(genotype_data=data)
 
-This will run it with the default arguments. You might want to adjust some of the parameters. See the relevant :doc:`documentation <pgsui.impute.estimators>` for more information.
+This will run it with the default arguments. You might want to adjust some of the parameters. See the relevant :doc:`documentation <pgsui.impute>` for more information.
 
 The neural network methods print out the current mean squared error with each epoch (cycle through the data). The VAE model will run for a fixed number of epochs, but the NLPCA and UBP models have an early stopping criterion that will checkpoint the model at the first occurrence of the lowest error and stop training after a lack of improvement for a user-defined number of epochs. This is intended to reduce overfitting.
 
@@ -509,3 +506,14 @@ Finally, you can impute using matrix factorization:
 
     ImputeMF(genotype_data=data)
 
+
+References
+-----------
+
+.. [1] Hinton, G.E., & Salakhutdinov, R.R. (2006). Reducing the dimensionality of data with neural networks. Science, 313(5786), 504-507.
+
+.. [2] Kingma, D. P., & Welling, M. (2013). Auto-Encoding Variational Bayes. arXiv preprint arXiv:1312.6114.
+
+.. [3] Scholz, M., Kaplan, F., Guy, C. L., Kopka, J., & Selbig, J. (2005). Non-linear PCA: a missing data approach. Bioinformatics, 21(20), 3887-3895.
+
+.. [4] Gashler, M. S., Smith, M. R., Morris, R., & Martinez, T. (2016). Missing value imputation with unsupervised backpropagation. Computational Intelligence, 32(2), 196-215.

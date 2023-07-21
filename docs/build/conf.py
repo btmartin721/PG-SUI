@@ -62,7 +62,11 @@ exclude_patterns = [
     "../../pgsui/mem_profiler",
     "../../pgsui/pg_sui.py",
     "../../tests/",
-    "example_data",
+    "./pgsui/example_data",
+    "../pgsui/example_data",
+    "../../pgsui/example_Data*",
+    "../../pgsui/example_data",
+    "modules.rst",
 ]
 
 
@@ -71,6 +75,10 @@ exclude_patterns = [
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
 #
+
+# Specify the theme options
+html_toc_maxdepth = 2
+
 html_theme = "sphinx_rtd_theme"
 html_theme_options = {"collapse_navigation": True, "titles_only": True}
 github_url = "https://github.com/btmartin721/PG-SUI"

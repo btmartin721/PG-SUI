@@ -82,7 +82,7 @@ class IterativeImputerFixedParams(IterativeImputer):
 
     Herein, progress status updates, optimizations to save RAM, and several other improvements have been added. IterativeImputer is a multivariate imputer that estimates each feature from all the others. A strategy for imputing missing values by modeling each feature with missing values as a function of other features in a round-robin fashion.Read more in the scikit-learn User Guide for IterativeImputer. scikit-learn versionadded: 0.21. NOTE: This estimator is still **experimental** for now: the predictions and the API might change without any deprecation cycle. To use it, you need to explicitly import ``enable_iterative_imputer``\.
 
-        IterativeImputer is based on the R MICE (Multivariate Imputation by Chained Equationspackage) [1]_. See [2]_ for more information about multiple versus single imputations.
+        IterativeImputer is based on the R MICE (Multivariate Imputation by Chained Equationspackage) [3]_. See [4]_ for more information about multiple versus single imputations.
 
         >>> # explicitly require this experimental feature
         >>> from sklearn.experimental import enable_iterative_imputer
@@ -211,9 +211,9 @@ class IterativeImputerFixedParams(IterativeImputer):
         NOTE: Inductive mode support was removed herein.
 
     References:
-        .. [1] Stef van Buuren, Karin Groothuis-Oudshoorn (2011). mice: Multivariate Imputation by Chained Equations in R. Journal of Statistical Software 45: 1-67.
+        .. [3] Stef van Buuren, Karin Groothuis-Oudshoorn (2011). mice: Multivariate Imputation by Chained Equations in R. Journal of Statistical Software 45: 1-67.
 
-        .. [2] S. F. Buck, (1960). A Method of Estimation of Missing Values in	Multivariate Data Suitable for use with an Electronic Computer. Journal of the Royal Statistical Society 22(2): 302-306.
+        .. [4] S. F. Buck, (1960). A Method of Estimation of Missing Values in	Multivariate Data Suitable for use with an Electronic Computer. Journal of the Royal Statistical Society 22(2): 302-306.
     """
 
     def __init__(
