@@ -24,18 +24,8 @@ from scipy import stats as st
 # from memory_profiler import memory_usage
 
 # Scikit-learn imports
-from sklearn.utils.estimator_checks import check_estimator
-from sklearn.ensemble import ExtraTreesClassifier
-from sklearn.ensemble import GradientBoostingClassifier
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.experimental import enable_iterative_imputer
-from sklearn.impute import SimpleImputer
-from sklearn.linear_model import BayesianRidge
 from sklearn import metrics
-from sklearn.neighbors import KNeighborsClassifier
-
-import xgboost as xgb
-import lightgbm as lgbm
 
 from sklearn_genetic.space import Continuous, Categorical, Integer
 

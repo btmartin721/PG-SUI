@@ -11,15 +11,7 @@ from sklearn_genetic.space import Continuous, Categorical, Integer
 
 from snpio import GenotypeData
 from snpio import Plotting
-from pgsui.impute.estimators import (
-    ImputeNLPCA,
-    ImputeUBP,
-    ImputeRandomForest,
-    ImputeStandardAutoEncoder,
-    ImputeVAE,
-    ImputeXGBoost,
-)
-from pgsui.impute.simple_imputers import ImputePhylo, ImputeAlleleFreq
+from pgsui import *
 
 
 def main():

@@ -11,7 +11,7 @@ VERSION = "0.2"
 AUTHORS = "Bradley T. Martin and Tyler K. Chafin"
 AUTHOR_EMAIL = "evobio721@gmail.com"
 MAINTAINER = "Bradley T. Martin"
-DESCRIPTION = "Python machine learning API to impute missing SNPs"
+DESCRIPTION = "Python machine and deep learning package to impute missing SNPs"
 
 try:
     import pypandoc
@@ -59,8 +59,6 @@ setup(
     ],
     license="GNU General Public License v3 (GPLv3)",
     packages=find_packages(),
-    # packages=find_packages("pgsui"),
-    # package_dir={"": "pgsui"},
     python_requires=">=3.8,<4",
     install_requires=[
         "matplotlib",
@@ -72,7 +70,6 @@ setup(
         "numpy",
         "scipy",
         "xgboost",
-        "lightgbm",
         "tensorflow>=2.7",
         "keras",
         "toytree",
@@ -91,5 +88,4 @@ setup(
         ]
     },
     include_package_data=True,
-    # entry_points={"console_scripts": ["pgsuitest=pgsui.test.test_pgsui:main"]},
 )

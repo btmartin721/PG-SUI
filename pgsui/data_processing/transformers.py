@@ -54,11 +54,9 @@ deprecation.deprecated = deprecated
 # Custom Modules
 try:
     from ..utils import misc
-    from ..utils.misc import isnotebook
 
 except (ModuleNotFoundError, ValueError, ImportError):
     from pgsui.utils import misc
-    from pgsui.utils.misc import isnotebook
 
 
 # Pandas on pip gives a performance warning when doing the below code.

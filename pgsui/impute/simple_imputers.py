@@ -14,7 +14,6 @@ import toyplot as tp
 import toytree as tt
 from decimal import Decimal
 
-from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.impute import SimpleImputer
 
 # Custom imports
@@ -286,7 +285,8 @@ class ImputePhylo:
                                 for i, val in enumerate(node_lik[node.idx])
                             ]
 
-            # preorder traversal to get marginal reconstructions at internal nodes
+            # preorder traversal to get marginal reconstructions at internal 
+            # nodes
             marg = node_lik.copy()
             for node in tree.treenode.traverse("preorder"):
                 if node.is_root():

@@ -1,13 +1,26 @@
-PG-SUI Modules
-==============
+pgsui package
+=============
+
+Subpackages
+-----------
 
 .. toctree::
    :maxdepth: 4
-   :caption: Modules:
 
-   pgsui.read_input
+   pgsui.data_processing
    pgsui.impute
    pgsui.utils
+
+Submodules
+----------
+
+pgsui.pg\_sui module
+--------------------
+
+.. automodule:: pgsui.pg_sui
+   :members:
+   :undoc-members:
+   :show-inheritance:
 
 Module contents
 ---------------
@@ -16,4 +29,3 @@ Module contents
    :members:
    :undoc-members:
    :show-inheritance:
-   :private-members:
