@@ -17,9 +17,7 @@ Supervised methods utilze the scikit-learn's IterativeImputer, which is based on
     + K-Nearest Neighbors
     + Random Forest
     + Extra Trees
-    + Gradient Boosting
     + XGBoost
-    + LightGBM
 
 See the scikit-learn documentation (https://scikit-learn.org) for more information on IterativeImputer and each of the classifiers.
 
@@ -69,7 +67,6 @@ These four "simple" imputation methods can be used as standalone imputers, as th
 + tensorflow >= 2.7
 + keras >= 2.7
 + xgboost
-+ lightgbm
 + scikeras >= 0.6.0
 + snpio
 
