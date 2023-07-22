@@ -8,9 +8,10 @@ PG-SUI Philosophy
 
 PG-SUI is a Python 3 API that uses machine learning to impute missing values from population genomic SNP data. There are several supervised and unsupervised machine learning algorithms available to impute missing data, as well as some non-machine learning imputers that are useful. 
 
-### Supervised Imputation Methods
+Supervised Imputation Methods
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Supervised methods utilze the scikit-learn's IterativeImputer, which is based on the MICE (Multivariate Imputation by Chained Equations) algorithm ([1]_), and iterates over each SNP site (i.e., feature) while uses the N nearest neighbor features to inform the imputation. The number of nearest features can be adjusted by users. IterativeImputer currently works with any of the following scikit-learn classifiers: 
+Supervised methods utilze the scikit-learn's IterativeImputer, which is based on the MICE (Multivariate Imputation by Chained Equations) algorithm[1]_, and iterates over each SNP site (i.e., feature) while uses the N nearest neighbor features to inform the imputation. The number of nearest features can be adjusted by users. IterativeImputer currently works with any of the following scikit-learn classifiers: 
 
 * K-Nearest Neighbors
 * Random Forest
@@ -19,14 +20,15 @@ Supervised methods utilze the scikit-learn's IterativeImputer, which is based on
 
 See the `scikit-learn documentation <https://scikit-learn.org>`_ for more information on IterativeImputer and each of the classifiers.
 
-### Unsupervised Imputation Methods
+Unsupervised Imputation Methods
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Unsupervised imputers include three custom neural network models:
 
-    + Variational Autoencoder (VAE) ([2]_)
-    + Standard Autoencoder (SAE) ([3]_)
-    + Non-linear Principal Component Analysis (NLPCA) ([4]_)
-    + Unsupervised Backpropagation (UBP) ([5]_)
+    + Variational Autoencoder (VAE)[2]_
+    + Standard Autoencoder (SAE)[3]_
+    + Non-linear Principal Component Analysis (NLPCA)[4]_
+    + Unsupervised Backpropagation (UBP)[5]_
 
 To use the unsupervised neural networks for imputation, the real missing values are masked and missing values are simulated for training. The model gets trained to reconstruct only on known values. Once the model is trained, it is then used to predict the real missing values.
 
