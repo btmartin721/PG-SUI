@@ -1120,7 +1120,6 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
         """
         np.save(filename_prefix + "_mask.npy", self.mask_)
         np.save(filename_prefix + "_original_missing_mask.npy", self.original_missing_mask_)
-        np.save(filename_prefix + "_all_missing_mask.npy", self.all_missing_mask_)
 
     def read_mask(self, filename_prefix):
         """Read mask from file.
@@ -1136,13 +1135,13 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
             raise FileNotFoundError(filename_prefix + "_mask.npy" + " does not exist.")
         if not os.path.isfile(filename_prefix + "_original_missing_mask.npy"):
             raise FileNotFoundError(filename_prefix + "_original_missing_mask.npy" + " does not exist.")
-        if not os.path.isfile(filename_prefix + "_all_missing_mask.npy"):
-            raise FileNotFoundError(filename_prefix + "_all_missing_mask.npy" + " does not exist.")
 
         # Load mask from file
         self.mask_ = np.load(filename_prefix + "_mask.npy")
         self.original_missing_mask_ = np.load(filename_prefix + "_original_missing_mask.npy")
-        self.all_missing_mask_ = np.load(filename_prefix + "_all_missing_mask.npy")
+
+        # Recalculate all_missing_mask_ from mask_ and original_missing_mask_
+        self.all_missing_mask_ = np.logical_or(self.mask_, self.original_missing_mask_)
 
         return self.mask_, self.original_missing_mask_, self.all_missing_mask_
 
