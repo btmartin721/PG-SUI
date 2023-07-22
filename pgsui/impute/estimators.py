@@ -189,13 +189,13 @@ class ImputeRandomForest(Impute):
     """Does Random Forest or Extra Trees Iterative imputation of missing data. Iterative imputation uses the n_nearest_features to inform the imputation at each feature (i.e., SNP site), using the N most correlated features per site. The N most correlated features are drawn with probability proportional to correlation for each imputed target feature to ensure coverage of features throughout the imputation process.
 
     Args:
-        **genotype_data (GenotypeData object)**: GenotypeData instance that was used to read in the sequence data.
+        genotype_data (GenotypeData object): GenotypeData instance that was used to read in the sequence data.
 
         prefix (str, optional): Prefix for imputed data's output directory.
 
         write_output (bool, optional): If True, writes imputed data to file on disk. Otherwise just stores it as a class attribute.
 
-        **gridparams (Dict[str, Any] or None or None, optional)**: Dictionary with keys=keyword arguments for the specified estimator and values=lists of parameter values or distributions. If ``gridparams=None``\, a grid search is not performed, otherwise ``gridparams`` will be used to specify parameter ranges or distributions for the grid search. If using ``gridsearch_method="gridsearch"``\, then the ``gridparams`` values can be lists or numpy arrays. If using ``gridsearch_method="randomized_gridsearch"``\, distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). If using the genetic algorithm grid search by setting ``gridsearch_method="genetic_algorithm"``\, the parameters can be specified as ``sklearn_genetic.space`` objects. The grid search will determine the optimal parameters as those that maximize the scoring_methods. NOTE: Takes a long time, so run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. Defaults to None.
+        gridparams (Dict[str, Any] or None or None, optional): Dictionary with keys=keyword arguments for the specified estimator and values=lists of parameter values or distributions. If ``gridparams=None``\, a grid search is not performed, otherwise ``gridparams`` will be used to specify parameter ranges or distributions for the grid search. If using ``gridsearch_method="gridsearch"``\, then the ``gridparams`` values can be lists or numpy arrays. If using ``gridsearch_method="randomized_gridsearch"``\, distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). If using the genetic algorithm grid search by setting ``gridsearch_method="genetic_algorithm"``\, the parameters can be specified as ``sklearn_genetic.space`` objects. The grid search will determine the optimal parameters as those that maximize the scoring_methods. NOTE: Takes a long time, so run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. Defaults to None.
 
         do_validation (bool, optional): Whether to validate the imputation if not doing a grid search. This validation method randomly replaces between 15% and 50% of the known, non-missing genotypes in ``n_features * column_subset`` of the features. It then imputes the newly missing genotypes for which we know the true values and calculates validation scores. This procedure is replicated ``cv`` times and a mean, median, minimum, maximum, lower 95% confidence interval (CI) of the mean, and the upper 95% CI are calculated and saved to a CSV file. ``gridparams`` must be set to None for ``do_validation`` to work. Calculating a validation score can be turned off altogether by setting ``do_validation`` to False. Defaults to False.
 
@@ -610,9 +610,9 @@ class ImputeVAE(Impute):
     """Class to impute missing data using a Variational Autoencoder neural network model. For training, missing values are simulated and the model is trained on the simulated missing values. The real missing values are then predicted by the trained model. The strategy for simulating missing values can be set with the ``sim_strategy`` argument.
 
     Args:
-        **genotype_data (GenotypeData object)**: Input data initialized as GenotypeData object. Required positional argument.
+        genotype_data (GenotypeData object): Input data initialized as GenotypeData object. Required positional argument.
 
-        **prefix (str)**: Prefix for output directory. Defaults to "output".
+        prefix (str): Prefix for output directory. Defaults to "output".
 
         gridparams (Dict[str, Any] or None, optional): Dictionary with keys=keyword arguments for the specified estimator and values=lists of parameter values or distributions. If ``gridparams=None``\, a grid search is not performed, otherwise ``gridparams`` will be used to specify parameter ranges or distributions for the grid search. If using ``gridsearch_method="gridsearch"``\, then the ``gridparams`` values can be lists or numpy arrays. If using ``gridsearch_method="randomized_gridsearch"``\, distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). If using the genetic algorithm grid search by setting ``gridsearch_method="genetic_algorithm"``\, the parameters can be specified as ``sklearn_genetic.space`` objects. The grid search will determine the optimal parameters as those that maximize the scoring metrics. If it takes a long time, run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. Defaults to None (no gridsearch performed).
 
@@ -775,9 +775,9 @@ class ImputeStandardAutoEncoder(Impute):
     """Class to impute missing data using a standard Autoencoder (SAE) neural network model. For training, missing values are simulated and the model is trained on the simulated missing values. The real missing values are then predicted by the trained model. The strategy for simulating missing values can be set with the ``sim_strategy`` argument.
 
     Args:
-        **genotype_data (GenotypeData object)**: Input data initialized as GenotypeData object. Required positional argument.
+        genotype_data (GenotypeData object): Input data initialized as GenotypeData object. Required positional argument.
 
-        **prefix (str)**: Prefix for output directory. Defaults to "output".
+        prefix (str): Prefix for output directory. Defaults to "output".
 
         gridparams (Dict[str, Any] or None, optional): Dictionary with keys=keyword arguments for the specified estimator and values=lists of parameter values or distributions. If ``gridparams=None``\, a grid search is not performed, otherwise ``gridparams`` will be used to specify parameter ranges or distributions for the grid search. If using ``gridsearch_method="gridsearch"``\, then the ``gridparams`` values can be lists or numpy arrays. If using ``gridsearch_method="randomized_gridsearch"``\, distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). If using the genetic algorithm grid search by setting ``gridsearch_method="genetic_algorithm"``\, the parameters can be specified as ``sklearn_genetic.space`` objects. The grid search will determine the optimal parameters as those that maximize the scoring metrics. If it takes a long time, run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. Defaults to None (no gridsearch performed).
 
@@ -968,9 +968,9 @@ class ImputeUBP(Impute):
     UBP [1]_ is an extension of NLPCA [2]_ with the input being randomly generated and of reduced dimensionality that gets trained to predict the supplied output based on only known values. It then uses the trained model to predict missing values. However, in contrast to NLPCA, UBP trains the model over three phases. The first is a single layer perceptron used to refine the randomly generated input. The second phase is a multi-layer perceptron that uses the refined reduced-dimension data from the first phase as input. In the second phase, the model weights are refined but not the input. In the third phase, the model weights and the inputs are then refined.
 
     Args:
-        **genotype_data (GenotypeData object)**: Input data initialized as GenotypeData object. Required positional argument.
+        genotype_data (GenotypeData object): Input data initialized as GenotypeData object. Required positional argument.
 
-        **prefix (str)**: Prefix for output directory. Defaults to "output".
+        prefix (str): Prefix for output directory. Defaults to "output".
 
         gridparams (Dict[str, Any] or None, optional): Dictionary with keys=keyword arguments for the specified estimator and values=lists of parameter values or distributions. If ``gridparams=None``\, a grid search is not performed, otherwise ``gridparams`` will be used to specify parameter ranges or distributions for the grid search. If using ``gridsearch_method="gridsearch"``\, then the ``gridparams`` values can be lists or numpy arrays. If using ``gridsearch_method="randomized_gridsearch"``\, distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). If using the genetic algorithm grid search by setting ``gridsearch_method="genetic_algorithm"``\, the parameters can be specified as ``sklearn_genetic.space`` objects. The grid search will determine the optimal parameters as those that maximize the scoring metrics. If it takes a long time, run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. Defaults to None (no gridsearch performed).
 
@@ -1169,9 +1169,9 @@ class ImputeNLPCA(ImputeUBP):
     NLPCA [2]_ trains randomly generated, reduced-dimensionality input to predict the correct output. In the case of imputation, the model is trained only on known values, and the trained model is then used to predict the missing values.
 
     Args:
-        **genotype_data (GenotypeData object)**: Input data initialized as GenotypeData object. Required positional argument.
+        genotype_data (GenotypeData object): Input data initialized as GenotypeData object. Required positional argument.
 
-        **prefix (str)**: Prefix for output directory. Defaults to "output".
+        prefix (str): Prefix for output directory. Defaults to "output".
 
         gridparams (Dict[str, Any] or None, optional): Dictionary with keys=keyword arguments for the specified estimator and values=lists of parameter values or distributions. If ``gridparams=None``\, a grid search is not performed, otherwise ``gridparams`` will be used to specify parameter ranges or distributions for the grid search. If using ``gridsearch_method="gridsearch"``\, then the ``gridparams`` values can be lists or numpy arrays. If using ``gridsearch_method="randomized_gridsearch"``\, distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). If using the genetic algorithm grid search by setting ``gridsearch_method="genetic_algorithm"``\, the parameters can be specified as ``sklearn_genetic.space`` objects. The grid search will determine the optimal parameters as those that maximize the scoring metrics. If it takes a long time, run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. Defaults to None (no gridsearch performed).
 
