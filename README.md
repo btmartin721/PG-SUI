@@ -12,7 +12,7 @@ PG-SUI is a Python 3 API that uses machine learning to impute missing values fro
 
 ### Supervised Imputation Methods
 
-Supervised methods utilze the scikit-learn's IterativeImputer, which is based on the MICE (Multivariate Imputation by Chained Equations) algorithm [1](#1), and iterates over each SNP site (i.e., feature) while uses the N nearest neighbor features to inform the imputation. The number of nearest features can be adjusted by users. IterativeImputer currently works with any of the following scikit-learn classifiers: 
+Supervised methods utilze the scikit-learn's IterativeImputer, which is based on the MICE (Multivariate Imputation by Chained Equations) algorithm ([1](#1)), and iterates over each SNP site (i.e., feature) while uses the N nearest neighbor features to inform the imputation. The number of nearest features can be adjusted by users. IterativeImputer currently works with any of the following scikit-learn classifiers: 
 
 + K-Nearest Neighbors
 + Random Forest
@@ -24,10 +24,10 @@ See the scikit-learn documentation (https://scikit-learn.org) for more informati
 
 Unsupervised imputers include three custom neural network models:
 
-+ Variational Autoencoder (VAE) [1](#2)
-+ Standard Autoencoder (SAE) [2](#3)
-+ Non-linear Principal Component Analysis (NLPCA) [3](#4)
-+ Unsupervised Backpropagation (UBP) [4](#5)
++ Variational Autoencoder (VAE) ([2](#2))
++ Standard Autoencoder (SAE) ([3](#3))
++ Non-linear Principal Component Analysis (NLPCA) ([4](#4))
++ Unsupervised Backpropagation (UBP) ([5](#5))
 
 VAE models train themselves to reconstruct their input (i.e., the genotypes). To use VAE for imputation, the missing values are masked and the VAE model gets trained to reconstruct only on known values. Once the model is trained, it is then used to predict the missing values.
 
