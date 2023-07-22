@@ -16,7 +16,6 @@ Supervised methods utilze the scikit-learn's IterativeImputer, which is based on
 
     + K-Nearest Neighbors
     + Random Forest
-    + Extra Trees
     + XGBoost
 
 See the scikit-learn documentation (https://scikit-learn.org) for more information on IterativeImputer and each of the classifiers.
@@ -108,7 +107,7 @@ conda install -c plotly plotly
 
 pip install sklearn-genetic-opt[all]
 
-pip install scikeras
+pip install scikeras snpio
 
 pip install tensorflow-cpu
 ```
@@ -167,23 +166,41 @@ Any other problems we run into testing on the Mac ARM architecture will be adjus
 
 ## Input Data
 
-Takes a STRUCTURE or PHYLIP file and a population map (popmap) file as input.  
-There are a number of options for the structure file format. See the help menu:
+You can read your input files as a GenotypeData object from the [SNPio](https://snpio.readthedocs.io/en/latest/) package:
 
 ```
-python pg_sui.py -h
-``` 
 
-You can read your input files like this:
+# Import snpio. Automatically installed with pgsui when using pip.
+from snpio import GenotypeData 
 
-```
-# Read in PHYLIP or STRUCTURE-formatted file
-data = GenotypeData(*args, **kwargs)
+# Read in PHYLIP, VCF, or STRUCTURE-formatted alignments.
+data = GenotypeData(
+    filename="example_data/phylip_files/phylogen_nomx.u.snps.phy",
+    popmapfile="example_data/popmaps/phylogen_nomx.popmap",
+    force_popmap=True,
+    filetype="auto",
+    qmatrix_iqtree="example_data/trees/test.qmat",
+    siterates_iqtree="example_data/trees/test.rate",
+    guidetree="example_data/trees/test.tre",
+    include_pops=["EA", "TT", "GU"], # Only include these populations. There's also an exclude_pops option that will exclude the provided populations.
+)
 ```
 
 ## Supported Imputation Methods
 
 There are numerous supported algorithms to impute missing data. Each one can be run by calling the corresponding class. You must provide a GenotypeData instance as the first positional argument.
+
+You can import all the supported methods with:
+
+```
+from pgsui import *
+```
+
+Or you can import them one at a time.
+
+```
+from pgsui import ImputeVAE
+```
 
 ### Supervised Imputers
 
@@ -191,11 +208,9 @@ Various supervised imputation options are supported:
 
 ```
 # Supervised IterativeImputer classifiers
-knn = ImputeKNN(data, **kwargs) # K-Nearest Neighbors
-rf = ImputeRandomForest(data, **kwargs) # Random Forest or Extra Trees
-gb = ImputeGradientBoosting(data, **kwargs) # Gradient Boosting
-xgb = ImputeXGBoost(data, **kwargs) # XGBoost
-lgbm = ImputeLightGBM(data, **kwargs) # LightGBM
+knn = ImputeKNN(data) # K-Nearest Neighbors
+rf = ImputeRandomForest(data) # Random Forest or Extra Trees
+xgb = ImputeXGBoost(data) # XGBoost
 ```
 
 ### Non-machine learning methods
@@ -203,29 +218,30 @@ lgbm = ImputeLightGBM(data, **kwargs) # LightGBM
 Use phylogeny to inform imputation:
 
 ```
-phylo = ImputePhylo(data, **kwargs)
+phylo = ImputePhylo(data)
 ```
 
 Use by-population or global allele frequency to inform imputation
 
 ```
-pop_af = ImputeAlleleFreq(data, by_populations=True, **kwargs)
-global_af = ImputeAlleleFreq(data, by_populations=False, *kkwargs)
+pop_af = ImputeAlleleFreq(data, by_populations=True)
+global_af = ImputeAlleleFreq(data, by_populations=False)
+ref_af = ImputeRefAllele(data)
 ```
 
 Non-matrix factorization:
 
 ```
-nmf = ImputeNMF(*args, **kwargs) # Matrix factorization
+mf = ImputeMF(*args) # Matrix factorization
 ```
 
 ### Unsupervised Neural Networks
 
 ```
-vae = ImputeVAE(data, **kwargs) # Variational autoencoder
-nlpca = ImputeNLPCA(data, **kwargs) # Nonlinear PCA
-ubp = ImputeUBP(data, **kwargs) # Unsupervised backpropagation
-sae = ImputeStandardAutoEncoder(data, **kwargs)
+vae = ImputeVAE(data) # Variational autoencoder
+nlpca = ImputeNLPCA(data) # Nonlinear PCA
+ubp = ImputeUBP(data) # Unsupervised backpropagation
+sae = ImputeStandardAutoEncoder(data) # standard autoencoder
 ```
 
 ## To-Dos
