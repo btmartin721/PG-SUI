@@ -101,8 +101,6 @@ class ImputeKNN(Impute):
         best_params (Dict[str, Any]): Best found parameters from grid search.
 
     Example:
-        >>> from sklearn_genetic.space import Categorical, Integer, Continuous
-        >>>
         >>> data = GenotypeData(
         >>>     filename="test.str",
         >>>     filetype="auto",
@@ -117,13 +115,13 @@ class ImputeKNN(Impute):
         >>> }
         >>>
         >>> knn = ImputeKNN(
-        >>>      genotype_data=data,
-        >>>      gridparams=grid_params,
-        >>>      cv=5,
-        >>>      gridsearch_method="genetic_algorithm",
-        >>>      n_nearest_features=10,
-        >>>      n_estimators=100,
-        >>>      initial_strategy="phylogeny",
+        >>>     genotype_data=data,
+        >>>     gridparams=grid_params,
+        >>>     cv=5,
+        >>>     gridsearch_method="genetic_algorithm",
+        >>>     n_nearest_features=10,
+        >>>     n_estimators=100,
+        >>>     initial_strategy="phylogeny",
         >>> )
         >>>
         >>> knn_gtdata = knn.imputed
@@ -287,8 +285,6 @@ class ImputeRandomForest(Impute):
         best_params (Dict[str, Any]): Best found parameters from grid search.
 
     Example:
-        >>> from sklearn_genetic.space import Categorical, Integer, Continuous
-        >>>
         >>> data = GenotypeData(
         >>>     filename="test.str",
         >>>     filetype="auto",
@@ -303,13 +299,13 @@ class ImputeRandomForest(Impute):
         >>> }
         >>>
         >>> rf = ImputeRandomForest(
-        >>>      genotype_data=data,
-        >>>      gridparams=grid_params,
-        >>>      cv=5,
-        >>>      gridsearch_method="genetic_algorithm",
-        >>>      n_nearest_features=10,
-        >>>      n_estimators=100,
-        >>>      initial_strategy="phylogeny",
+        >>>     genotype_data=data,
+        >>>     gridparams=grid_params,
+        >>>     cv=5,
+        >>>     gridsearch_method="genetic_algorithm",
+        >>>     n_nearest_features=10,
+        >>>     n_estimators=100,
+        >>>     initial_strategy="phylogeny",
         >>> )
         >>>
         >>> rf_gtdata = rf.imputed
@@ -519,8 +515,6 @@ class ImputeXGBoost(Impute):
         best_params (Dict[str, Any]): Best found parameters from grid search.
 
     Example:
-        >>> from sklearn_genetic.space import Categorical, Integer, Continuous
-        >>>
         >>> data = GenotypeData(
         >>>     filename="test.str",
         >>>     filetype="auto",
@@ -535,13 +529,13 @@ class ImputeXGBoost(Impute):
         >>> }
         >>>
         >>> xgb = ImputeXGBoost(
-        >>>      genotype_data=data,
-        >>>      gridparams=grid_params,
-        >>>      cv=5,
-        >>>      gridsearch_method="genetic_algorithm",
-        >>>      n_nearest_features=10,
-        >>>      n_estimators=100,
-        >>>      initial_strategy="phylogeny",
+        >>>     genotype_data=data,
+        >>>     gridparams=grid_params,
+        >>>     cv=5,
+        >>>     gridsearch_method="genetic_algorithm",
+        >>>     n_nearest_features=10,
+        >>>     n_estimators=100,
+        >>>     initial_strategy="phylogeny",
         >>> )
         >>>
         >>> xgb_gtdata = xgb.imputed
