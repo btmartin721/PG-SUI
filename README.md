@@ -4,11 +4,13 @@
 
 # PG-SUI
 
-Population Genomic Supervised and Unsupervised Imputation
+Population Genomic Supervised and Unsupervised Imputation.
 
 ## About PG-SUI
 
 PG-SUI is a Python 3 API that uses machine learning to impute missing values from population genomic SNP data. There are several supervised and unsupervised machine learning algorithms available to impute missing data, as well as some non-machine learning imputers that are useful. 
+
+Below is some general information and a basic tutorial. For more detailed information, see our [API Documentation](https://pg-sui.readthedocs.io/en/latest/).
 
 ### Supervised Imputation Methods
 
