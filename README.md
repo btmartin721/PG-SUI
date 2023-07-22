@@ -49,11 +49,27 @@ We also include several non-machine learning options for imputing missing data, 
 
 These four "simple" imputation methods can be used as standalone imputers, as the initial imputation strategy for IterativeImputer (at least one method is required to be chosen), and to validate the accuracy of both IterativeImputer and the neural network models.
 
-## Dependencies
+## Installing PG-SUI
+
+The easiest way to install PG-SUI is to use pip:
+
+```
+pip install pgsui
+```
+
+If you have an Intel CPU and want to use the sklearn-genetic-intelex package to speed up scikit-learn computations, you can do:
+
+```
+pip install pgsui[intel]
+```
+
+## Manual Installation
+
+### Dependencies
 
 + python >= 3.8
 + pandas
-+ numpy
++ numpy==1.24.3
 + scipy
 + matplotlib
 + seaborn
@@ -70,21 +86,6 @@ These four "simple" imputation methods can be used as standalone imputers, as th
 + scikeras >= 0.6.0
 + snpio
 
-## Installation
-
-You must first install the SNPio dependency: https://github.com/btmartin721/SNPio  
-
-Once SNPio is installed, make sure you are in the project's root directory (the same directory that contains setup.py). Then installation can be done with:
-
-```
-pip install .
-```
-
-If you have an Intel CPU and want to use the sklearn-genetic-intelex package to speed up scikit-learn calculations, you can do:
-
-```
-pip install .[intel]
-```
 
 ### Manual Install
 
