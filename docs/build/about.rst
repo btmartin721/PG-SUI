@@ -10,7 +10,7 @@ PG-SUI is a Python 3 API that uses machine learning to impute missing values fro
 
 ### Supervised Imputation Methods
 
-Supervised methods utilze the scikit-learn's IterativeImputer, which is based on the MICE (Multivariate Imputation by Chained Equations) algorithm [[1]](#1), and iterates over each SNP site (i.e., feature) while uses the N nearest neighbor features to inform the imputation. The number of nearest features can be adjusted by users. IterativeImputer currently works with any of the following scikit-learn classifiers: 
+Supervised methods utilze the scikit-learn's IterativeImputer, which is based on the MICE (Multivariate Imputation by Chained Equations) algorithm ([1]_), and iterates over each SNP site (i.e., feature) while uses the N nearest neighbor features to inform the imputation. The number of nearest features can be adjusted by users. IterativeImputer currently works with any of the following scikit-learn classifiers: 
 
 * K-Nearest Neighbors
 * Random Forest
@@ -23,10 +23,10 @@ See the `scikit-learn documentation <https://scikit-learn.org>`_ for more inform
 
 Unsupervised imputers include three custom neural network models:
 
-    + Standard Autoencoder (SAE) [1]_
-    + Variational Autoencoder (VAE) [2]_
-    + Non-linear Principal Component Analysis (NLPCA) [3]_
-    + Unsupervised Backpropagation (UBP) [4]_
+    + Variational Autoencoder (VAE) ([2]_)
+    + Standard Autoencoder (SAE) ([3]_)
+    + Non-linear Principal Component Analysis (NLPCA) ([4]_)
+    + Unsupervised Backpropagation (UBP) ([5]_)
 
 To use the unsupervised neural networks for imputation, the real missing values are masked and missing values are simulated for training. The model gets trained to reconstruct only on known values. Once the model is trained, it is then used to predict the real missing values.
 
@@ -53,11 +53,13 @@ These four non-machine learning imputation methods can be used as standalone imp
 References
 -----------
 
-.. [1] Hinton, G.E., & Salakhutdinov, R.R. (2006). Reducing the dimensionality of data with neural networks. Science, 313(5786), 504-507.
+.. [1] Stef van Buuren, Karin Groothuis-Oudshoorn (2011). mice: Multivariate Imputation by Chained Equations in R. Journal of Statistical Software 45: 1-67.
 
 .. [2] Kingma, D. P., & Welling, M. (2013). Auto-Encoding Variational Bayes. arXiv preprint arXiv:1312.6114.
 
-.. [3] Scholz, M., Kaplan, F., Guy, C. L., Kopka, J., & Selbig, J. (2005). Non-linear PCA: a missing data approach. Bioinformatics, 21(20), 3887-3895.
+.. [3] Hinton, G.E., & Salakhutdinov, R.R. (2006). Reducing the dimensionality of data with neural networks. Science, 313(5786), 504-507.
 
-.. [4] Gashler, M. S., Smith, M. R., Morris, R., & Martinez, T. (2016). Missing value imputation with unsupervised backpropagation. Computational Intelligence, 32(2), 196-215.
+.. [4] Scholz, M., Kaplan, F., Guy, C. L., Kopka, J., & Selbig, J. (2005). Non-linear PCA: a missing data approach. Bioinformatics, 21(20), 3887-3895.
+
+.. [5] Gashler, M. S., Smith, M. R., Morris, R., & Martinez, T. (2016). Missing value imputation with unsupervised backpropagation. Computational Intelligence, 32(2), 196-215.
 

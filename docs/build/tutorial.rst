@@ -4,20 +4,20 @@ Tutorial
 PG-SUI Overview
 ________________
 
-PG-SUI (Population Genomic Supervised and Unsupervised Imputation) performs missing data imputation on SNP datasets. We have included seven machine and deep learning algorithms with which to impute, including both supervisee and unsupervised training methods. The currently supported algorithms include:
+PG-SUI (Population Genomic Supervised and Unsupervised Imputation) performs missing data imputation on SNP datasets. We have included seven machine and deep learning algorithms with which to impute, including both supervised and unsupervised training methods. The currently supported algorithms include:
 
 + Supervised
     + XGBoost
     + RandomForest
     + K-Nearest Neighbors
 
-+ The supervised algorithms work by using the N nearest features, based on absolute correlations between loci, to supervise the imputation. The unsupervised deep learning models each have distinct architectures that perform the imputation in different ways. For training the deep learning algorithms, missing values are simulated and the model is trained on the simulated missing values. The real missing values are then predicted by the trained model. The strategy for simulating missing values can be set with the ``sim_strategy`` argument.
++ The supervised algorithms work by using the N nearest features, based on absolute correlations between loci, to supervise the imputation. The algorithm is based on the MICE (Multivariate Imputation by Chained Equations) algorithm implemented in scikit-learn's IterativeImputer ([1]_). The unsupervised deep learning models each have distinct architectures that perform the imputation in different ways. For training the deep learning algorithms, missing values are simulated and the model is trained on the simulated missing values. The real missing values are then predicted by the trained model. The strategy for simulating missing values can be set with the ``sim_strategy`` argument.
 
 + Unsupervised Neural networks
-    + Standard AutoEncoder (SAE) [1]_
     + Variational AutoEncoder (VAE) [2]_
-    + Non-linear Principal Component Analysis (NLPCA) [3]_
-    + Unsupervised backpropagation (UBP) [4]_
+    + Standard AutoEncoder (SAE) [3]_
+    + Non-linear Principal Component Analysis (NLPCA) [4]_
+    + Unsupervised backpropagation (UBP) [5]_
 
 + NLPCA
     + NLPCA trains randomly generated, reduced-dimensionality input to predict the correct output. The input is then refined at each backpropagation step until it accurately predict the output.
@@ -508,10 +508,12 @@ Finally, you can impute using matrix factorization:
 References
 -----------
 
-.. [1] Hinton, G.E., & Salakhutdinov, R.R. (2006). Reducing the dimensionality of data with neural networks. Science, 313(5786), 504-507.
+.. [1] Stef van Buuren, Karin Groothuis-Oudshoorn (2011). mice: Multivariate Imputation by Chained Equations in R. Journal of Statistical Software 45: 1-67.
 
 .. [2] Kingma, D. P., & Welling, M. (2013). Auto-Encoding Variational Bayes. arXiv preprint arXiv:1312.6114.
 
-.. [3] Scholz, M., Kaplan, F., Guy, C. L., Kopka, J., & Selbig, J. (2005). Non-linear PCA: a missing data approach. Bioinformatics, 21(20), 3887-3895.
+.. [3] Hinton, G.E., & Salakhutdinov, R.R. (2006). Reducing the dimensionality of data with neural networks. Science, 313(5786), 504-507.
 
-.. [4] Gashler, M. S., Smith, M. R., Morris, R., & Martinez, T. (2016). Missing value imputation with unsupervised backpropagation. Computational Intelligence, 32(2), 196-215.
+.. [4] Scholz, M., Kaplan, F., Guy, C. L., Kopka, J., & Selbig, J. (2005). Non-linear PCA: a missing data approach. Bioinformatics, 21(20), 3887-3895.
+
+.. [5] Gashler, M. S., Smith, M. R., Morris, R., & Martinez, T. (2016). Missing value imputation with unsupervised backpropagation. Computational Intelligence, 32(2), 196-215.
