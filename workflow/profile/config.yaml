@@ -1,0 +1,10 @@
+---
+snakefile: snakeFile
+cores: 4
+latency-wait: 120
+reason: True
+show-failed-logs: True
+keep-going: True
+printshellcmds: True
+rerun-incomplete: True
+restart-times: 3

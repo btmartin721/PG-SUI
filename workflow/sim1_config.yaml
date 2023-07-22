@@ -1,0 +1,10 @@
+
+# input files and metadata
+out_dir: "test_output"
+
+
+# coverage thresholds for multiQC report
+cov_thresholds:
+ - 10
+ - 30
+ - 50
