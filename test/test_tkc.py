@@ -90,6 +90,9 @@ class TestMyClasses(unittest.TestCase):
             gridparams=param_grid, 
             **kwargs)
 
+        # Write the masks
+        self.transformer.write_mask(filename_prefix="mask_test")
+
         imputed_data = instance.imputed.genotypes_012(fmt="numpy")
 
         # Test that the imputed values are close to the original values
@@ -121,6 +124,32 @@ class TestMyClasses(unittest.TestCase):
         pprint.PrettyPrinter(indent=4, sort_dicts=True).pprint(
             f"AVERAGE PRECISION PER CLASS: {dict(zip(range(3), avg_precision_scores))}"
         )
+
+        # Read masks from file
+        self.transformer.read_mask(filename_prefix="mask_test")
+
+        # Recalculate accuracy after reading in the mask
+        accuracy_after_read = self.transformer.accuracy(
+            self.genotype_data.genotypes_012(fmt="numpy"), imputed_data
+        )
+
+        pprint.PrettyPrinter(indent=4, sort_dicts=True).pprint(
+            f"OVERALL ACCURACY AFTER READ: {accuracy_after_read}"
+        )
+        pprint.PrettyPrinter(indent=4, sort_dicts=True).pprint(
+            f"AUC-ROC PER CLASS AFTER READ: {dict(zip(range(3), auc_roc_scores))}"
+        )
+        pprint.PrettyPrinter(indent=4, sort_dicts=True).pprint(
+            f"PRECISION PER CLASS AFTER READ: {dict(zip(range(3), precision_scores))}"
+        )
+        pprint.PrettyPrinter(indent=4, sort_dicts=True).pprint(
+            f"RECALL PER CLASS AFTER READ: {dict(zip(range(3), recall_scores))}"
+        )
+        pprint.PrettyPrinter(indent=4, sort_dicts=True).pprint(
+            f"AVERAGE PRECISION PER CLASS AFTER READ: {dict(zip(range(3), avg_precision_scores))}"
+        )
+
+
         print("\n")
 
     # def test_ImputeKNN(self):
@@ -132,14 +161,14 @@ class TestMyClasses(unittest.TestCase):
     # def test_ImputeXGBoost(self):
     #     self._test_class(ImputeXGBoost)
 
-    # def test_ImputeVAE(self):
-    #     self._test_class(ImputeVAE)
+    def test_ImputeVAE(self):
+        self._test_class(ImputeVAE)
 
     # def test_ImputeStandardAutoEncoder(self):
     #     self._test_class(ImputeStandardAutoEncoder)
 
-    def test_ImputeUBP(self):
-        self._test_class(ImputeUBP)
+    # def test_ImputeUBP(self):
+    #     self._test_class(ImputeUBP)
 
     # def test_ImputeNLPCA(self):
     #     self._test_class(ImputeNLPCA)
