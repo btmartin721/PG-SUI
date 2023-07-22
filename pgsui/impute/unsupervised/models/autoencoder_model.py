@@ -137,9 +137,7 @@ class Encoder(tf.keras.layers.Layer):
         self.dropout_layer = Dropout(dropout_rate)
 
     def call(self, inputs, training=None):
-        """Forward pass for model.
-        :noindex:
-        """
+        """Forward pass through model."""
         x = self.flatten(inputs)
         x = self.dense1(x)
         x = self.dropout_layer(x, training=training)
@@ -240,18 +238,7 @@ class Decoder(tf.keras.layers.Layer):
         self.dropout_layer = Dropout(dropout_rate)
 
     def call(self, inputs, training=None):
-        """Forward pass through the model.
-        :noindex:
-
-        Args:
-            inputs (tf.Tensor): Inputs to the model.
-
-            training (bool, optional): Affects how the dropout layers behave.
-
-        Returns:
-            tf.Tensor: Outputs from forward pass.
-
-        """
+        """Forward pass through model."""
         x = self.dense1(inputs)
         x = self.dropout_layer(x, training=training)
         if self.dense2 is not None:
@@ -417,37 +404,23 @@ class AutoEncoderModel(tf.keras.Model):
         )
 
     def call(self, inputs, training=None):
-        """Call the model on a particular input.
-        :noindex:
-        Args:
-            input (tf.Tensor): Input tensor. Must be one-hot encoded.
-
-        Returns:
-            tf.Tensor: Output predictions. Will be one-hot encoded.
-        """
+        """Forward pass through model."""
         x = self.encoder(inputs)
         return self.decoder(x)
 
     def model(self):
-        """Here so mymodel.model().summary() can be called for debugging.
-        :noindex:
-        """
+        """To allow model.summary().summar() to be called."""
         x = tf.keras.Input(shape=(self.n_features, self.num_classes))
         return tf.keras.Model(inputs=[x], outputs=self.call(x))
 
     def set_model_outputs(self):
-        """So that model can be built.
-        ":noindex:
-        """
+        """Set expected model outputs."""
         x = tf.keras.Input(shape=(self.n_features, self.num_classes))
         model = tf.keras.Model(inputs=[x], outputs=self.call(x))
         self.outputs = model.outputs
 
     @property
     def metrics(self):
-        """Metrics trackers.
-        :noindex:
-        """
         return [
             self.total_loss_tracker,
             self.reconstruction_loss_tracker,
@@ -456,22 +429,6 @@ class AutoEncoderModel(tf.keras.Model):
 
     @tf.function
     def train_step(self, data):
-        """Custom training loop for one step (=batch) in a single epoch.
-
-        GradientTape records the weights and watched
-        variables (usually tf.Variable objects), which
-        in this case are the weights, during the forward pass.
-        This allows us to run gradient descent during
-        backpropagation to refine the watched variables.
-
-        This function will train on a batch of samples (rows), which can be adjusted with the ``batch_size`` parameter from the estimator.
-
-        Args:
-            data (Tuple[tf.EagerTensor, tf.EagerTensor]): Input tensorflow tensors of shape (batch_size, n_components) and (batch_size, n_features, num_classes).
-
-        Returns:
-            Dict[str, float]: History object that gets returned from fit(). Contains the loss and any metrics specified in compile().
-        """
         y = self._y
 
         (

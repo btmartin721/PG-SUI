@@ -14,6 +14,7 @@ Welcome to PG-SUI's documentation!
    install
    tutorial
    pgsui
+   modules
    
 
 Indices and tables

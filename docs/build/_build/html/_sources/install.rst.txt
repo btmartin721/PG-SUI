@@ -4,13 +4,11 @@ Installation
 Standard Installation
 ----------------------
 
-The best way to install PG-SUI is to just use pip to handle the dependencies. First, make sure you are in the project's root directory (the one with ``setup.py`` in it). Then enter the following command:
+The best way to install PG-SUI is to just use pip:
 
 .. code-block:: bash
 
-    pip install .
-
-You must also install SNPio. See the `SNPio documentation <https://snpio.readthedocs.io/en/latest/>` for more information.
+    pip install pgsui
 
 
 Manual Installation
@@ -36,6 +34,7 @@ If you want to manually install PG-SUI, the dependencies are listed below:
 + xgboost
 + scikeras >= 0.6.0
 + snpio
+
 
 Python versions earlier than 3.8 are not currently supported.  
 

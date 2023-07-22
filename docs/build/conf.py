@@ -66,7 +66,6 @@ exclude_patterns = [
     "../pgsui/example_data",
     "../../pgsui/example_Data*",
     "../../pgsui/example_data",
-    "modules.rst",
 ]
 
 

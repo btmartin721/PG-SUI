@@ -35,18 +35,16 @@ PG-SUI (Population Genomic Supervised and Unsupervised Imputation) performs miss
 Installing PG-SUI
 ------------------
 
-To install PG-SUI, make sure you are in the project's root directory (the one with ``setup.py`` in it) and enter the commmand:
+Use pip to install PG-SUI:
 
 .. code-block:: bash
 
-    pip install .
-
-You must also install SNPio. See the `SNPio documentation <https://snpio.readthedocs.io>`_.
+    pip install pgsui
 
 Input Data
 -----------
 
-To use PG-SUI, you need to load your data into the API using the GenotypeData class from the `SNPio package <https://github.com/btmartin721/SNPio>`_. GenotypeData takes a STRUCTURE, VCF, or PHYLIP file, a population map (popmap) file, and optionally phylogenetic tree and rate matrix files as input. See the `SNPio documentation <https://snpio.readthedocs.io>`_ for more information.
+To use PG-SUI, you need to load your data into the API using the GenotypeData class from the `SNPio package <https://github.com/btmartin721/SNPio>`_, which is automatically installed as a dependency through pip. GenotypeData takes a STRUCTURE, VCF, or PHYLIP file, a population map (popmap) file, and optionally phylogenetic tree and rate matrix files as input. See the `SNPio documentation <https://snpio.readthedocs.io>`_ for more information.
 
 Here is a basic usage for SNPio:
 
