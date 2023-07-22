@@ -3,35 +3,9 @@ import os
 import copy
 import unittest
 import pprint
-from pgsui.impute.estimators import (
-    ImputeKNN,
-    ImputeRandomForest,
-    ImputeXGBoost,
-    ImputeVAE,
-    ImputeStandardAutoEncoder,
-    ImputeUBP,
-    ImputeNLPCA,
-)
-from pgsui.impute.simple_imputers import (
-    ImputePhylo,
-    ImputeMF,
-    ImputeAlleleFreq,
-    ImputeRefAllele,
-)
-
 from snpio import GenotypeData
-from pgsui.data_processing.transformers import SimGenotypeDataTransformer
-import numpy as np
-
-
-class HiddenPrints:
-    def __enter__(self):
-        self._original_stdout = sys.stdout
-        sys.stdout = open(os.devnull, "w")
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        sys.stdout.close()
-        sys.stdout = self._original_stdout
+from pgsui import *
+from pgsui.utils.misc import HiddenPrints
 
 
 class TestMyClasses(unittest.TestCase):

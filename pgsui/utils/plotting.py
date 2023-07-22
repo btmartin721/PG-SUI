@@ -25,12 +25,12 @@ class Plotting:
 
     @staticmethod
     def plot_grid_search(cv_results, nn_method, prefix):
-        """Plot cv_results_ from a grid search for each parameter.
+        """Plot cv_results\_ from a grid search for each parameter.
 
         Saves a figure to disk.
 
         Args:
-            cv_results (numpy.ndarray): the cv_results_ attribute from a trained grid search object.
+            cv_results (np.ndarray): the cv_results\_ attribute from a trained grid search object.
 
             nn_method (str): Neural network algorithm name.
 
@@ -570,7 +570,7 @@ class Plotting:
             >>>    plot_format="png"
             >>>)
             >>>
-            >>>explvar = pca.explained_variance_ratio_
+            >>>explvar = pca.explained_variance_ratio\_
         """
         report_path = os.path.join(f"{prefix}_output", "plots")
         Path(report_path).mkdir(parents=True, exist_ok=True)

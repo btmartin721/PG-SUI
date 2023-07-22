@@ -24,18 +24,8 @@ from scipy import stats as st
 # from memory_profiler import memory_usage
 
 # Scikit-learn imports
-from sklearn.utils.estimator_checks import check_estimator
-from sklearn.ensemble import ExtraTreesClassifier
-from sklearn.ensemble import GradientBoostingClassifier
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.experimental import enable_iterative_imputer
-from sklearn.impute import SimpleImputer
-from sklearn.linear_model import BayesianRidge
 from sklearn import metrics
-from sklearn.neighbors import KNeighborsClassifier
-
-import xgboost as xgb
-import lightgbm as lgbm
 
 from sklearn_genetic.space import Continuous, Categorical, Integer
 
@@ -78,7 +68,7 @@ else:
 class Impute:
     """Class to impute missing data from the provided classifier.
 
-    The Impute class will either run a variational autoencoder or IterativeImputer with the provided estimator. The settings for the provided estimator should be provided as the ``kwargs`` argument as a dictionary object with the estimator's keyword arguments as the keys and the corresponding values. E.g., ``kwargs={"n_jobs", 4, "initial_strategy": "populations"}``\. ``clf_type`` just specifies either "classifier" or "regressor". "regressor" is primarily just for quick and dirty testing.
+    The Impute class will either run a variational autoencoder or IterativeImputer with the provided estimator. The settings for the provided estimator should be provided as the ``kwargs`` argument as a dictionary object with the estimator's keyword arguments as the keys and the corresponding values. E.g., ``kwargs={"n_jobs", 4, "initial_strategy": "populations"}``\. ``clf_type`` just specifies either "classifier" or "regressor". "regressor" is primarily just for quick and dirty testing and is intended for internal use only.
 
     Once the Impute class is initialized, the imputation should be performed with ``fit_predict()``\.
 
@@ -102,10 +92,10 @@ class Impute:
         >>>self.imputed, self.best_params = imputer.fit_predict(df)
         >>>imputer.write_imputed(self.imputed)
         >>>print(self.imputed)
-        [[0, 1, 1, 2],
-        [0, 1, 1, 2],
-        [0, 2, 2, 2],
-        [2, 2, 2, 2]]
+        [[0, 0, 0, 0],
+        [0, 0, 0, 0],
+        [0, 1, 1, 0],
+        [2, 1, 2, 2]]
     """
 
     def __init__(
@@ -376,13 +366,6 @@ class Impute:
         Returns:
             GenotypeData: GenotypeData object with imputed data.
         """
-        # imputed_filename = genotype_data.decode_012(
-        #     imp012,
-        #     write_output=True,
-        #     prefix=self.prefix,
-        #     is_nuc=self.using_basecat,
-        # )
-
         imputed_gd = deepcopy(genotype_data)
 
         if self.clf == VAE:

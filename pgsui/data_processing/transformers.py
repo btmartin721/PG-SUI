@@ -3,8 +3,6 @@ import os
 import logging
 import sys
 import warnings
-from pathlib import Path
-from typing import Optional, Union, List, Dict, Tuple, Any
 
 import numpy as np
 import pandas as pd
@@ -12,9 +10,6 @@ import pandas as pd
 # Third-party imports
 import numpy as np
 import pandas as pd
-import scipy.linalg
-import toyplot.pdf
-import toytree as tt
 
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.impute import SimpleImputer
@@ -58,28 +53,10 @@ deprecation.deprecated = deprecated
 
 # Custom Modules
 try:
-    from snpio import GenotypeData
     from ..utils import misc
-    from ..utils.misc import get_processor_name
-    from ..utils.misc import isnotebook
-    from ..impute.unsupervised.neural_network_methods import (
-        NeuralNetworkMethods,
-    )
+
 except (ModuleNotFoundError, ValueError, ImportError):
-    from snpio import GenotypeData
     from pgsui.utils import misc
-    from pgsui.utils.misc import get_processor_name
-    from pgsui.utils.misc import isnotebook
-    from pgsui.impute.unsupervised.neural_network_methods import (
-        NeuralNetworkMethods,
-    )
-
-is_notebook = isnotebook()
-
-if is_notebook:
-    from tqdm.notebook import tqdm as progressbar
-else:
-    from tqdm import tqdm as progressbar
 
 
 # Pandas on pip gives a performance warning when doing the below code.
@@ -165,7 +142,7 @@ class UBPInputTransformer(BaseEstimator, TransformerMixin):
 
 
 class AutoEncoderFeatureTransformer(BaseEstimator, TransformerMixin):
-    """Transformer to format autoencoder features before model fitting.
+    """Transformer to format autoencoder features and targets before model fitting.
 
     The input data, X, is encoded to one-hot format, and then missing values are filled to [-1] * num_classes.
 
@@ -189,6 +166,8 @@ class AutoEncoderFeatureTransformer(BaseEstimator, TransformerMixin):
 
         Args:
             X (numpy.ndarray): Input integer-encoded numpy array.
+
+            y (None): Just for compatibility with sklearn API.
         """
         X = misc.validate_input_type(X, return_type="array")
 
@@ -203,7 +182,9 @@ class AutoEncoderFeatureTransformer(BaseEstimator, TransformerMixin):
             enc_func = self.encode_multiclass
         else:
             raise ValueError(
-                f"Invalid value passed to num_classes in AutoEncoderFeatureTransformer. Only 3 or 4 are supported, but got {self.num_classes}."
+                f"Invalid value passed to num_classes in "
+                f"AutoEncoderFeatureTransformer. Only 3 or 4 are supported, "
+                f"but got {self.num_classes}."
             )
 
         # Encode the data.
@@ -227,7 +208,7 @@ class AutoEncoderFeatureTransformer(BaseEstimator, TransformerMixin):
         Accomodates multiclass targets with a 3D shape.
 
         Args:
-            y (numpy.ndarray): One-hot encoded target data of shape (n_samples, n_features, num_classes).
+            X (numpy.ndarray): One-hot encoded target data of shape (n_samples, n_features, num_classes).
 
         Returns:
             numpy.ndarray: Transformed target data in one-hot format of shape (n_samples, n_features, num_classes).
@@ -243,6 +224,8 @@ class AutoEncoderFeatureTransformer(BaseEstimator, TransformerMixin):
 
         Args:
             y (numpy.ndarray): Array to inverse transform.
+
+            return_proba (bool): Just for compatibility with scikeras API.
         """
         try:
             if self.activate is None:
@@ -253,7 +236,9 @@ class AutoEncoderFeatureTransformer(BaseEstimator, TransformerMixin):
                 y = tf.nn.sigmoid(y).numpy()
             else:
                 raise ValueError(
-                    f"Invalid value passed to keyword argument activate. Valid options include: None, 'softmax', or 'sigmoid', but got {self.activate}"
+                    f"Invalid value passed to keyword argument activate. Valid "
+                    f"options include: None, 'softmax', or 'sigmoid', but got "
+                    f"{self.activate}"
                 )
         except AttributeError:
             # If numpy array already.
@@ -265,22 +250,11 @@ class AutoEncoderFeatureTransformer(BaseEstimator, TransformerMixin):
                 y = tf.nn.sigmoid(tf.convert_to_tensor(y)).numpy()
             else:
                 raise ValueError(
-                    f"Invalid value passed to keyword argument activate. Valid options include: None, 'softmax', or 'sigmoid', but got {self.activate1}"
+                    f"Invalid value passed to keyword argument activate. Valid "
+                    f"options include: None, 'softmax', or 'sigmoid', but got "
+                    f"{self.activate}"
                 )
-
-        # if return_proba:
         return y
-        # else:
-        #     is_multiclass = True if self.num_classes != 4 else False
-        #     y_pred_decoded = NeuralNetworkMethods.decode_masked(
-        #         self._fill(self.X_train, self.missing_mask_),
-        #         y,
-        #         is_multiclass=is_multiclass,
-        #     )
-        #     return y_pred_decoded
-
-        # print(y_pred_decoded)
-        # return y_pred_decoded
 
     def encode_012(self, X):
         """Convert 012-encoded data to one-hot encodings.
@@ -419,12 +393,7 @@ class AutoEncoderFeatureTransformer(BaseEstimator, TransformerMixin):
 
 
 class MLPTargetTransformer(BaseEstimator, TransformerMixin):
-    """Transformer to format target data both before and after model fitting.
-
-    Args:
-        y_decoded (numpy.ndarray): Original input data that is 012-encoded.
-        model (tf.keras.model.Model): model to use for predicting y.
-    """
+    """Transformer to format UBP / NLPCA target data both before and after model fitting."""
 
     def fit(self, y):
         """Fit 012-encoded target data.
@@ -484,14 +453,16 @@ class MLPTargetTransformer(BaseEstimator, TransformerMixin):
         return tf.nn.softmax(y).numpy()
 
     def _fill(self, data, missing_mask, missing_value=-1, num_classes=3):
-        """Mask missing data as ``missing_value``.
+        """Mask missing data as ``missing_value``\.
 
         Args:
             data (numpy.ndarray): Input with missing values of shape (n_samples, n_features, num_classes).
 
             missing_mask (np.ndarray(bool)): Missing data mask with True corresponding to a missing value.
 
-            missing_value (int): Value to set missing data to. If a list is provided, then its length should equal the number of one-hot classes.
+            missing_value (int): Value to set missing data to. If a list is provided, then its length should equal the number of one-hot classes. Defaults to -1.
+
+            num_classes (int): Number of classes in dataset. Defaults to 3.
         """
         if num_classes > 1:
             missing_value = [missing_value] * num_classes
@@ -502,7 +473,7 @@ class MLPTargetTransformer(BaseEstimator, TransformerMixin):
         """Format the provided target data for use with UBP/NLPCA.
 
         Args:
-            y (numpy.ndarray(float)): Input data that will be used as the target.
+            X (numpy.ndarray(float)): Input data that will be used as the target.
 
         Returns:
             numpy.ndarray(float): Missing data mask, with missing values encoded as 1's and non-missing as 0's.
@@ -523,7 +494,7 @@ class MLPTargetTransformer(BaseEstimator, TransformerMixin):
         return np.isnan(data).all(axis=2)
 
     def _decode(self, y):
-        """Evaluate VAE predictions by calculating the highest predicted value.
+        """Evaluate UBP / NLPCA predictions by calculating the highest predicted value.
 
         Calucalates highest predicted value for each row vector and each class, setting the most likely class to 1.0.
 
@@ -532,8 +503,6 @@ class MLPTargetTransformer(BaseEstimator, TransformerMixin):
 
         Returns:
             numpy.ndarray: Imputed one-hot encoded values.
-
-            pandas.DataFrame: One-hot encoded pandas DataFrame with no missing values.
         """
         Xprob = y
         Xt = np.apply_along_axis(mle, axis=2, arr=Xprob)
@@ -549,7 +518,7 @@ class MLPTargetTransformer(BaseEstimator, TransformerMixin):
 
 
 class UBPTargetTransformer(BaseEstimator, TransformerMixin):
-    """Transformer to format UBP target data both before model fitting.
+    """Transformer to format UBP / NLPCA target data both before model fitting.
 
     Examples:
         >>>ubp_tt = UBPTargetTransformer()
@@ -664,8 +633,6 @@ class UBPTargetTransformer(BaseEstimator, TransformerMixin):
 
         Returns:
             numpy.ndarray: Imputed one-hot encoded values.
-
-            pandas.DataFrame: One-hot encoded pandas DataFrame with no missing values.
         """
         Xprob = y
         Xt = np.apply_along_axis(mle, axis=2, arr=Xprob)
@@ -686,21 +653,21 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
     Copies metadata from a GenotypeData object and simulates user-specified proportion of missing data
 
     Args:
-            genotype_data (GenotypeData): GenotypeData object. Assumes no missing data already present. Defaults to None.
+        genotype_data (GenotypeData object): GenotypeData instance.
 
-            prop_missing (float, optional): Proportion of missing data desired in output. Defaults to 0.10
+        prop_missing (float, optional): Proportion of missing data desired in output. Defaults to 0.1
 
-            strategy (str, optional): Strategy for simulating missing data. May be one of: \"nonrandom\", \"nonrandom_weighted\", \"random_weighted\", \"random_weighted_inv\", or \"random\". When set to \"nonrandom\", branches from GenotypeData.guidetree will be randomly sampled to generate missing data on descendant nodes. For \"nonrandom_weighted\", missing data will be placed on nodes proportionally to their branch lengths (e.g., to generate data distributed as might be the case with mutation-disruption of RAD sites). Defaults to \"random\"
+        strategy (str, optional): Strategy for simulating missing data. May be one of: "nonrandom", "nonrandom_weighted", "random_weighted", "random_weighted_inv", or "random". When set to "nonrandom", branches from GenotypeData.guidetree will be randomly sampled to generate missing data on descendant nodes. For "nonrandom_weighted", missing data will be placed on nodes proportionally to their branch lengths (e.g., to generate data distributed as might be the case with mutation-disruption of RAD sites). Defaults to "random"
 
-            missing_val (int, optional): Value that represents missing data. Defaults to -9.
+        missing_val (int, optional): Value that represents missing data. Defaults to -9.
 
-            mask_missing (bool, optional): True if you want to skip original missing values when simulating new missing data, False otherwise. Defaults to True.
+        mask_missing (bool, optional): True if you want to skip original missing values when simulating new missing data, False otherwise. Defaults to True.
 
-            verbose (bool, optional): Verbosity level. Defaults to 0.
+        verbose (bool, optional): Verbosity level. Defaults to 0.
 
-            tol (float): Tolerance to reach proportion specified in self.prop_missing. Defaults to 1/num_snps*num_inds
+        tol (float): Tolerance to reach proportion specified in self.prop_missing. Defaults to 1/num_snps*num_inds
 
-            max_tries (int): Maximum number of tries to reach targeted missing data proportion within specified tol. Defaults to num_inds.
+        max_tries (int): Maximum number of tries to reach targeted missing data proportion within specified tol. If None, num_inds will be used. Defaults to None.
 
     Attributes:
 
@@ -928,6 +895,16 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
         return self._mask_snps(X)
 
     def accuracy(self, X_true, X_pred):
+        """Calculate imputation accuracy of the simulated genotypes.
+
+        Args:
+            X_true (np.ndarray): True values.
+
+            X_pred (np.ndarray): Imputed values.
+
+        Returns:
+            float: Accuracy score between X_true and X_pred.
+        '"""
         masked_sites = np.sum(self.sim_missing_mask_)
         num_correct = np.sum(
             X_true[self.sim_missing_mask_] == X_pred[self.sim_missing_mask_]
@@ -935,6 +912,20 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
         return num_correct / masked_sites
 
     def auc_roc_pr_ap(self, X_true, X_pred):
+        """Calcuate AUC-ROC, Precision-Recall, and Average Precision (AP).
+
+        Args:
+            X_true (np.ndarray): True values.
+
+            X_pred (np.ndarray): Imputed values.
+
+        Returns:
+            List[float]: List of AUC-ROC scores in order of: 0,1,2.
+            List[float]: List of precision scores in order of: 0,1,2.
+            List[float]: List of recall scores in order of: 0,1,2.
+            List[float]: List of average precision scores in order of 0,1,2.
+
+        """
         y_true = X_true[self.sim_missing_mask_]
         y_pred = X_pred[self.sim_missing_mask_]
 
@@ -976,6 +967,17 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
         )
 
     def random_weighted_missing_data(self, X, inv=False):
+        """Choose values for which to simulate missing data by biasing towards the minority or majority alleles, depending on whether inv is True or False.
+
+        Args:
+            X (np.ndarray): True values.
+
+            inv (bool, optional): If True, then biases towards choosing majority alleles. If False, then biases towards choosing minority alleles. Defaults to False.
+
+        Returns:
+            np.ndarray: X with simulated missing values.
+
+        """
         # Get unique classes and their counts
         classes, counts = np.unique(X, return_counts=True)
         # Compute class weights
@@ -1028,8 +1030,11 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
 
         Args:
             internal_only (bool): Only sample from NON-TIPS. Defaults to False.
+
             tips_only (bool): Only sample from tips. Defaults to False.
+
             skip_root (bool): Exclude sampling of root node. Defaults to True.
+
             weighted (bool): Weight sampling by branch length. Defaults to False.
 
         Returns:
@@ -1076,20 +1081,18 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
         return self.genotype_data.tree.get_tip_labels(idx=node_idx)
 
     def _validate_mask(self, mask=False):
+        """Make sure no entirely missing columns are simulated."""
         if mask is None:
             mask = self.mask_
-        """Make sure no entirely missing columns are simulated."""
         for i, column in enumerate(self.mask_.T):
             if mask:
                 miss_mask = self.original_missing_mask_[:, i]
                 col = column[~miss_mask]
                 obs_idx = np.where(~miss_mask)
                 idx = obs_idx[np.random.choice(np.arange(len(obs_idx)))]
-                mask_subset = self.mask_[~self.original_missing_mask_[:, i], i]
             else:
                 col = column
                 idx = np.random.choice(np.arange(col.shape[0]))
-                mask_subset = self.mask_[:, i]
             if np.sum(col) == col.size:
                 self.mask_[idx, i] = False
 
@@ -1107,9 +1110,6 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
         Xt = X.copy()
         mask_boolean = self.mask_ != 0
         Xt[mask_boolean] = mask_val
-        # for i, row in enumerate(self.mask_):
-        #     for j in row.nonzero()[0]:
-        #         Xt[i][j] = mask_val
         return Xt
 
     @property

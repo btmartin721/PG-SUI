@@ -1,25 +1,43 @@
 Installation
 ============
 
-Requirements
-------------
+Standard Installation
+----------------------
 
-* python >= 3.7
-* pandas == 1.2.5
-* numpy == 1.20
-* scipy >= 1.6.2 and < 1.7.0
-* matplotlib
-* seaborn
-* jupyterlab
-* tqdm
-* toytree
-* scikit-learn >= 0.24
-* tensorflow >= 2.0
-* keras
-* xgboost
-* lightgbm
+The best way to install PG-SUI is to just use pip to handle the dependencies. First, make sure you are in the project's root directory (the one with ``setup.py`` in it). Then enter the following command:
 
-Python versions < 3.7 are not currently supported.  
+.. code-block:: bash
+
+    pip install .
+
+You must also install SNPio. See the `SNPio documentation <https://snpio.readthedocs.io/en/latest/>` for more information.
+
+
+Manual Installation
+--------------------
+
+If you want to manually install PG-SUI, the dependencies are listed below:
+
++ python >= 3.8
++ pandas
++ numpy
++ scipy
++ matplotlib
++ seaborn
++ plotly
++ kaleido
++ jupyterlab
++ tqdm
++ toytree
++ pyvolve
++ scikit-learn
++ tensorflow >= 2.7
++ keras >= 2.7
++ xgboost
++ scikeras >= 0.6.0
++ snpio
+
+Python versions earlier than 3.8 are not currently supported.  
 
 Installing the Dependencies
 ---------------------------
@@ -30,14 +48,14 @@ First, let's create a new conda environment to install the PG-SUI dependencies.
 
 .. code-block:: bash
 
-    conda create -n pg-sui python=3.8
+    conda create -n pg-sui python
     conda activate pg-sui
 
 Now let's install the dependencies. Most are available from the default conda channels, so let's do that first. There are some specific versions that need to be installed, so copy and paste the command below.
 
 .. code-block:: bash
 
-    conda install matplotlib seaborn jupyterlab scikit-learn tqdm pandas=1.2.5 numpy=1.20.2 scipy=1.6.2 xgboost lightgbm tensorflow keras
+    conda install matplotlib seaborn jupyterlab scikit-learn tqdm pandas numpy scipy xgboost tensorflow keras
 
 If you have an Intel processor, then you should also install the ``scikit-learn-intelex`` package. It speeds up computation if you have an intel CPU.
 
@@ -51,11 +69,13 @@ Now we install ``toytree`` using the conda-forge channel, since it isn't availab
 
     conda install -c conda-forge toytree
 
-Finally, let's install ``sklearn-genetic-opt``, which does parameter grid searches using a genetic algorithm. It is only available through pip.
+Finally, let's install ``sklearn-genetic-opt``, which does parameter grid searches using a genetic algorithm, and ``scikeras``, which makes the deep learning models compatible with scikit-learn grid searches. These last two are only available through pip.
 
 .. code-block:: bash
 
-    pip install sklearn-genetic-opt[all]
+    pip install sklearn-genetic-opt[all] scikeras
+
+You must also install SNPio. See the `SNPio documentation <https://snpio.readthedocs.io>`_ for more information.
 
 
 Installation Troubleshooting
@@ -104,7 +124,7 @@ PG-SUI has been tested on the new Mac M1 chips and is working fine, but some cha
     conda activate pg-sui
 
     # Install packages
-    conda install -c conda-forge matplotlib seaborn jupyterlab scikit-learn tqdm pandas=1.2.5 numpy=1.20.2 scipy=1.6.2 xgboost lightgbm tensorflow keras sklearn-genetic toytree
+    conda install -c conda-forge matplotlib seaborn jupyterlab scikit-learn tqdm pandas numpy scipy xgboost tensorflow keras sklearn-genetic toytree
 
     # Downgrade setuptools (may or may not be necessary)
     pip install setuptools==57
