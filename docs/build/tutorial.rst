@@ -11,7 +11,7 @@ PG-SUI (Population Genomic Supervised and Unsupervised Imputation) performs miss
     + RandomForest
     + K-Nearest Neighbors
 
-+ The supervised algorithms work by using the N nearest features, based on absolute correlations between loci, to supervise the imputation. The algorithm is based on the MICE (Multivariate Imputation by Chained Equations) algorithm implemented in scikit-learn's IterativeImputer ([1]_). The unsupervised deep learning models each have distinct architectures that perform the imputation in different ways. For training the deep learning algorithms, missing values are simulated and the model is trained on the simulated missing values. The real missing values are then predicted by the trained model. The strategy for simulating missing values can be set with the ``sim_strategy`` argument.
++ The supervised algorithms work by using the N nearest features, based on absolute correlations between loci, to supervise the imputation. The algorithm is based on the MICE (Multivariate Imputation by Chained Equations) algorithm implemented in scikit-learn's IterativeImputer [1]_. The unsupervised deep learning models each have distinct architectures that perform the imputation in different ways. For training the deep learning algorithms, missing values are simulated and the model is trained on the simulated missing values. The real missing values are then predicted by the trained model. The strategy for simulating missing values can be set with the ``sim_strategy`` argument.
 
 + Unsupervised Neural networks
     + Variational AutoEncoder (VAE) [2]_
