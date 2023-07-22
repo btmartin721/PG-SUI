@@ -101,32 +101,32 @@ class ImputeKNN(Impute):
         best_params (Dict[str, Any]): Best found parameters from grid search.
 
     Example:
-        >>>from sklearn_genetic.space import Categorical, Integer, Continuous
+        >>> from sklearn_genetic.space import Categorical, Integer, Continuous
         >>>
-        >>>data = GenotypeData(
-        >>>    filename="test.str",
-        >>>    filetype="auto",
-        >>>    guidetree="test.tre",
-        >>>    qmatrix_iqtree="test.iqtree"
-        >>>)
+        >>> data = GenotypeData(
+        >>>     filename="test.str",
+        >>>     filetype="auto",
+        >>>     guidetree="test.tre",
+        >>>     qmatrix_iqtree="test.iqtree"
+        >>> )
         >>>
-        >>># Genetic Algorithm grid_params
-        >>>grid_params = {
-        >>>    "n_neighbors": Integer(3, 10),
-        >>>    "leaf_size": Integer(10, 50),
-        >>>}
+        >>> # Genetic Algorithm grid_params
+        >>> grid_params = {
+        >>>     "n_neighbors": Integer(3, 10),
+        >>>     "leaf_size": Integer(10, 50),
+        >>> }
         >>>
-        >>>knn = ImputeKNN(
-        >>>     genotype_data=data,
-        >>>     gridparams=grid_params,
-        >>>     cv=5,
-        >>>     gridsearch_method="genetic_algorithm",
-        >>>     n_nearest_features=10,
-        >>>     n_estimators=100,
-        >>>     initial_strategy="phylogeny",
-        >>>)
+        >>> knn = ImputeKNN(
+        >>>      genotype_data=data,
+        >>>      gridparams=grid_params,
+        >>>      cv=5,
+        >>>      gridsearch_method="genetic_algorithm",
+        >>>      n_nearest_features=10,
+        >>>      n_estimators=100,
+        >>>      initial_strategy="phylogeny",
+        >>> )
         >>>
-        >>>knn_gtdata = knn.imputed
+        >>> knn_gtdata = knn.imputed
     """
 
     def __init__(
@@ -287,32 +287,32 @@ class ImputeRandomForest(Impute):
         best_params (Dict[str, Any]): Best found parameters from grid search.
 
     Example:
-        >>>from sklearn_genetic.space import Categorical, Integer, Continuous
+        >>> from sklearn_genetic.space import Categorical, Integer, Continuous
         >>>
-        >>>data = GenotypeData(
-        >>>    filename="test.str",
-        >>>    filetype="auto",
-        >>>    guidetree="test.tre",
-        >>>    qmatrix_iqtree="test.iqtree"
-        >>>)
+        >>> data = GenotypeData(
+        >>>     filename="test.str",
+        >>>     filetype="auto",
+        >>>     guidetree="test.tre",
+        >>>     qmatrix_iqtree="test.iqtree"
+        >>> )
         >>>
-        >>># Genetic Algorithm grid_params
-        >>>grid_params = {
-        >>>    "min_samples_leaf": Integer(1, 10),
-        >>>    "max_depth": Integer(2, 110),
-        >>>}
+        >>> # Genetic Algorithm grid_params
+        >>> grid_params = {
+        >>>     "min_samples_leaf": Integer(1, 10),
+        >>>     "max_depth": Integer(2, 110),
+        >>> }
         >>>
-        >>>rf = ImputeRandomForest(
-        >>>     genotype_data=data,
-        >>>     gridparams=grid_params,
-        >>>     cv=5,
-        >>>     gridsearch_method="genetic_algorithm",
-        >>>     n_nearest_features=10,
-        >>>     n_estimators=100,
-        >>>     initial_strategy="phylogeny",
-        >>>)
+        >>> rf = ImputeRandomForest(
+        >>>      genotype_data=data,
+        >>>      gridparams=grid_params,
+        >>>      cv=5,
+        >>>      gridsearch_method="genetic_algorithm",
+        >>>      n_nearest_features=10,
+        >>>      n_estimators=100,
+        >>>      initial_strategy="phylogeny",
+        >>> )
         >>>
-        >>>rf_gtdata = rf.imputed
+        >>> rf_gtdata = rf.imputed
     """
 
     def __init__(
@@ -519,32 +519,32 @@ class ImputeXGBoost(Impute):
         best_params (Dict[str, Any]): Best found parameters from grid search.
 
     Example:
-        >>>from sklearn_genetic.space import Categorical, Integer, Continuous
+        >>> from sklearn_genetic.space import Categorical, Integer, Continuous
         >>>
-        >>>data = GenotypeData(
-        >>>    filename="test.str",
-        >>>    filetype="auto",
-        >>>    guidetree="test.tre",
-        >>>    qmatrix_iqtree="test.iqtree"
-        >>>)
+        >>> data = GenotypeData(
+        >>>     filename="test.str",
+        >>>     filetype="auto",
+        >>>     guidetree="test.tre",
+        >>>     qmatrix_iqtree="test.iqtree"
+        >>> )
         >>>
-        >>># Genetic Algorithm grid_params
-        >>>grid_params = {
-        >>>    "learning_rate": Continuous(lower=0.01, upper=0.1),
-        >>>    "max_depth": Integer(2, 110),
-        >>>}
+        >>> # Genetic Algorithm grid_params
+        >>> grid_params = {
+        >>>     "learning_rate": Continuous(lower=0.01, upper=0.1),
+        >>>     "max_depth": Integer(2, 110),
+        >>> }
         >>>
-        >>>xgb = ImputeXGBoost(
-        >>>     genotype_data=data,
-        >>>     gridparams=grid_params,
-        >>>     cv=5,
-        >>>     gridsearch_method="genetic_algorithm",
-        >>>     n_nearest_features=10,
-        >>>     n_estimators=100,
-        >>>     initial_strategy="phylogeny",
-        >>>)
+        >>> xgb = ImputeXGBoost(
+        >>>      genotype_data=data,
+        >>>      gridparams=grid_params,
+        >>>      cv=5,
+        >>>      gridsearch_method="genetic_algorithm",
+        >>>      n_nearest_features=10,
+        >>>      n_estimators=100,
+        >>>      initial_strategy="phylogeny",
+        >>> )
         >>>
-        >>>xgb_gtdata = xgb.imputed
+        >>> xgb_gtdata = xgb.imputed
     """
 
     def __init__(
