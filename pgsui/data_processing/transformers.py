@@ -972,7 +972,7 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
         Args:
             X (np.ndarray): True values.
 
-            inv (bool, optional): If True, then biases towards choosing majority alleles. If False, then biases towards choosing minority alleles. Defaults to False.
+            inv (bool, optional): If True, then biases towards choosing majority alleles. If False, then generates a stratified random sample (class proportions ~= full dataset) Defaults to False.
 
         Returns:
             np.ndarray: X with simulated missing values.
@@ -1111,6 +1111,41 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
         mask_boolean = self.mask_ != 0
         Xt[mask_boolean] = mask_val
         return Xt
+
+    def write_mask(self, filename_prefix):
+        """Write mask to file.
+
+        Args:
+            filename_prefix (str): Prefix for the filenames to write to.
+        """
+        np.save(filename_prefix + "_mask.npy", self.mask_)
+        np.save(filename_prefix + "_original_missing_mask.npy", self.original_missing_mask_)
+        np.save(filename_prefix + "_all_missing_mask.npy", self.all_missing_mask_)
+
+    def read_mask(self, filename_prefix):
+        """Read mask from file.
+
+        Args:
+            filename_prefix (str): Prefix for the filenames to read from.
+
+        Returns:
+            tuple of np.ndarray: The read masks.
+        """
+        # Check if files exist
+        if not os.path.isfile(filename_prefix + "_mask.npy"):
+            raise FileNotFoundError(filename_prefix + "_mask.npy" + " does not exist.")
+        if not os.path.isfile(filename_prefix + "_original_missing_mask.npy"):
+            raise FileNotFoundError(filename_prefix + "_original_missing_mask.npy" + " does not exist.")
+        if not os.path.isfile(filename_prefix + "_all_missing_mask.npy"):
+            raise FileNotFoundError(filename_prefix + "_all_missing_mask.npy" + " does not exist.")
+
+        # Load mask from file
+        self.mask_ = np.load(filename_prefix + "_mask.npy")
+        self.original_missing_mask_ = np.load(filename_prefix + "_original_missing_mask.npy")
+        self.all_missing_mask_ = np.load(filename_prefix + "_all_missing_mask.npy")
+
+        return self.mask_, self.original_missing_mask_, self.all_missing_mask_
+
 
     @property
     def missing_count(self) -> int:
