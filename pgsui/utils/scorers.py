@@ -198,6 +198,10 @@ class Scorers:
             y_true_bin, y_pred_proba_bin, average="macro"
         )
 
+        average_precision["weighted"] = average_precision_score(
+            y_true_bin, y_pred_proba_bin, average="weighted"
+        )
+
         if use_int_encodings:
             y_pred_012 = (
                 nn.decode_masked(
@@ -210,6 +214,7 @@ class Scorers:
             )
 
         f1 = f1_score(y_true_bin, y_pred_012, average="macro")
+        f1_weighted = f1_score(y_true_bin, y_pred_012, average="weighted")
 
         # Aggregate all recalls
         all_recall = np.unique(np.concatenate([recall[i] for i in classes]))
@@ -230,6 +235,7 @@ class Scorers:
         results["micro"] = average_precision["micro"]
         results["macro"] = average_precision["macro"]
         results["f1_score"] = f1
+        results["f1_score_weighted"] = f1_weighted
         results["recall_macro"] = all_recall
         results["precision_macro"] = mean_precision
         results["recall_micro"] = recall["micro"]
@@ -514,8 +520,8 @@ class Scorers:
         return pr_ap["samples"]
 
     @staticmethod
-    def f1_samples(y_true, y_pred, **kwargs):
-        """Get F1 score with samples averaging for grid search.
+    def f1_macro(y_true, y_pred, **kwargs):
+        """Get F1 score with macro averaging for grid search.
 
         If provided, only calculates score where missing_mask is True (i.e., data were missing). This is so that users can simulate missing data for known values, and then the predictions for only those known values can be evaluated.
 
@@ -544,6 +550,37 @@ class Scorers:
         )
 
         return pr_ap["f1_score"]
+
+    def f1_weighted(y_true, y_pred, **kwargs):
+        """Get F1 score with weighted averaging for grid search.
+
+        If provided, only calculates score where missing_mask is True (i.e., data were missing). This is so that users can simulate missing data for known values, and then the predictions for only those known values can be evaluated.
+
+        Args:
+            y_true (numpy.ndarray): 012-encoded true target values.
+
+            y_pred (tensorflow.EagerTensor): Predictions from model as probabilities.
+
+            kwargs (Any): Keyword arguments to use with scorer. Supported options include ``missing_mask`` and ``testing``\.
+
+        Returns:
+            float: Metric score by comparing y_true and y_pred.
+        """
+        # Get missing mask if provided.
+        # Otherwise default is all missing values (array all True).
+        missing_mask = kwargs.get("missing_mask")
+        num_classes = kwargs.get("num_classes", 3)
+
+        y_pred = Scorers.check_if_tuple(y_pred)
+
+        y_true_masked = y_true[missing_mask]
+        y_pred_masked = y_pred[missing_mask]
+
+        pr_ap = Scorers.compute_pr(
+            y_true_masked, y_pred_masked, num_classes=num_classes
+        )
+
+        return pr_ap["f1_score_weighted"]
 
     @staticmethod
     def pr_micro(y_true, y_pred, **kwargs):
@@ -603,67 +640,38 @@ class Scorers:
         if isinstance(metrics, str):
             metrics = [metrics]
 
+        # Create a dictionary mapping metric names to their corresponding methods
+        scoring_methods = {
+            "accuracy": cls.accuracy_scorer,
+            "hamming": cls.hamming_scorer,
+            "auc_macro": cls.auc_macro,
+            "auc_micro": cls.auc_micro,
+            "precision_recall_macro": cls.pr_macro,
+            "precision_recall_micro": cls.pr_micro,
+            "precision_recall_samples": cls.pr_samples,
+            "f1_score": cls.f1_macro,
+            "f1_score_weighted": cls.f1_weighted,
+        }
+
+        # Create a dictionary for the default parameters
+        default_params = {
+            "missing_mask": missing_mask,
+            "num_classes": num_classes,
+            "testing": testing,
+        }
+
         scorers = dict()
         for item in metrics:
-            if item.lower() == "accuracy":
-                scorers["accuracy"] = make_scorer(
-                    cls.accuracy_scorer,
-                    missing_mask=missing_mask,
-                    num_classes=num_classes,
-                    testing=testing,
-                )
-            elif item.lower() == "hamming":
-                scorers["hamming"] = make_scorer(
-                    cls.hamming_scorer,
-                    missing_mask=missing_mask,
-                    num_classes=num_classes,
-                    testing=testing,
-                    greater_is_better=False,
-                )
-            elif item.lower() == "auc_macro":
-                scorers["auc_macro"] = make_scorer(
-                    cls.auc_macro,
-                    missing_mask=missing_mask,
-                    num_classes=num_classes,
-                    testing=testing,
-                )
-            elif item.lower() == "auc_micro":
-                scorers["auc_micro"] = make_scorer(
-                    cls.auc_micro,
-                    missing_mask=missing_mask,
-                    num_classes=num_classes,
-                    testing=testing,
-                )
-            elif item.lower() == "precision_recall_macro":
-                scorers["precision_recall_macro"] = make_scorer(
-                    cls.pr_macro,
-                    missing_mask=missing_mask,
-                    num_classes=num_classes,
-                    testing=testing,
-                )
-            elif item.lower() == "precision_recall_micro":
-                scorers["precision_recall_micro"] = make_scorer(
-                    cls.pr_micro,
-                    missing_mask=missing_mask,
-                    num_classes=num_classes,
-                    testing=testing,
-                )
-            elif item.lower() == "precision_recall_samples":
-                scorers["precision_recall_samples"] = make_scorer(
-                    cls.pr_samples,
-                    missing_mask=missing_mask,
-                    num_classes=num_classes,
-                    testing=testing,
-                )
-            elif item.lower() == "f1_score":
-                scorers["f1_score"] = make_scorer(
-                    cls.f1_samples,
-                    missing_mask=missing_mask,
-                    num_classes=num_classes,
-                    testing=testing,
-                )
-            else:
-                raise ValueError(f"Invalid scoring_metric provided: {item}")
+            item = item.lower()  # Ensure case insensitivity
+
+            if item in scoring_methods:
+                params = default_params.copy()  # Copy the default parameters
+
+                # For the 'hamming' scorer, we need to set 'greater_is_better' to False
+                if item == "hamming":
+                    params["greater_is_better"] = False
+
+                scorers[item] = make_scorer(scoring_methods[item], **params)
         return scorers
 
     @staticmethod

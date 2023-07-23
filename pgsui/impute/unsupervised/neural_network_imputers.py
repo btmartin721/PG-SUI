@@ -318,6 +318,7 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
                 "precision_recall_macro",
                 "precision_recall_micro",
                 "f1_score",
+                "f1_score_weighted",
                 "auc_macro",
                 "auc_micro",
                 "accuracy",

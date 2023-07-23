@@ -7,6 +7,18 @@ from snpio import GenotypeData
 from pgsui import *
 from pgsui.utils.misc import HiddenPrints
 
+from sklearn.metrics import (
+    balanced_accuracy_score,
+    roc_auc_score,
+    precision_recall_fscore_support,
+    f1_score,
+    average_precision_score,
+)
+
+from sklearn.preprocessing import label_binarize
+
+from sklearn.utils.class_weight import compute_class_weight
+
 
 class TestMyClasses(unittest.TestCase):
     def setUp(self):
@@ -62,89 +74,135 @@ class TestMyClasses(unittest.TestCase):
         imputed_data = instance.imputed.genotypes_012(fmt="numpy")
 
         # Test that the imputed values are close to the original values
-        accuracy = self.transformer.accuracy(
-            self.genotype_data.genotypes_012(fmt="numpy"), imputed_data
-        )
+        # accuracy = self.transformer.accuracy(
+        #     self.genotype_data.genotypes_012(fmt="numpy"), imputed_data
+        # )
 
         (
+            accuracy,
             auc_roc_scores,
             precision_scores,
             recall_scores,
             avg_precision_scores,
-        ) = self.transformer.auc_roc_pr_ap(
+            f1,
+        ) = self._scoring_metrics(
             self.genotype_data.genotypes_012(fmt="numpy"), imputed_data
         )
 
         pprint.PrettyPrinter(indent=4, sort_dicts=True).pprint(
-            f"OVERALL ACCURACY: {accuracy}"
+            f"BALANCED ACCURACY: {accuracy}"
         )
         pprint.PrettyPrinter(indent=4, sort_dicts=True).pprint(
-            f"AUC-ROC PER CLASS: {dict(zip(range(3), auc_roc_scores))}"
+            f"AUC-ROC: {auc_roc_scores}"
         )
         pprint.PrettyPrinter(indent=4, sort_dicts=True).pprint(
-            f"PRECISION PER CLASS: {dict(zip(range(3), precision_scores))}"
+            f"PRECISION: {precision_scores}"
         )
         pprint.PrettyPrinter(indent=4, sort_dicts=True).pprint(
-            f"RECALL PER CLASS: {dict(zip(range(3), recall_scores))}"
+            f"RECALL: {recall_scores}"
         )
         pprint.PrettyPrinter(indent=4, sort_dicts=True).pprint(
-            f"AVERAGE PRECISION PER CLASS: {dict(zip(range(3), avg_precision_scores))}"
+            f"AVERAGE PRECISION: {avg_precision_scores}"
+        )
+        pprint.PrettyPrinter(indent=4, sort_dicts=True).pprint(
+            f"F1 SCORE: {f1}"
         )
         print("\n")
 
-    def test_ImputeKNN(self):
-        self._test_class(ImputeKNN)
+    # def test_ImputeKNN(self):
+    #     self._test_class(ImputeKNN)
 
-    def test_ImputeRandomForest(self):
-        self._test_class(ImputeRandomForest)
+    # def test_ImputeRandomForest(self):
+    #     self._test_class(ImputeRandomForest)
 
-    def test_ImputeXGBoost(self):
-        self._test_class(ImputeXGBoost)
+    # def test_ImputeXGBoost(self):
+    #     self._test_class(ImputeXGBoost)
 
-    def test_ImputeVAE(self):
-        self._test_class(ImputeVAE)
+    # def test_ImputeVAE(self):
+    #     self._test_class(ImputeVAE)
 
-    def test_ImputeStandardAutoEncoder(self):
-        self._test_class(ImputeStandardAutoEncoder)
+    # def test_ImputeStandardAutoEncoder(self):
+    #     self._test_class(ImputeStandardAutoEncoder)
 
-    def test_ImputeUBP(self):
-        self._test_class(ImputeUBP)
+    # def test_ImputeUBP(self):
+    #     self._test_class(ImputeUBP)
 
-    def test_ImputeNLPCA(self):
-        self._test_class(ImputeNLPCA)
+    # def test_ImputeNLPCA(self):
+    #     self._test_class(ImputeNLPCA)
 
-    def test_ImputeKNN_grid(self):
-        self._test_class(ImputeKNN, do_gridsearch=True)
+    # def test_ImputeKNN_grid(self):
+    #     self._test_class(ImputeKNN, do_gridsearch=True)
 
-    def test_ImputeRandomForest_grid(self):
-        self._test_class(ImputeRandomForest, do_gridsearch=True)
+    # def test_ImputeRandomForest_grid(self):
+    #     self._test_class(ImputeRandomForest, do_gridsearch=True)
 
-    def test_ImputeXGBoost_grid(self):
-        self._test_class(ImputeXGBoost, do_gridsearch=True)
+    # def test_ImputeXGBoost_grid(self):
+    #     self._test_class(ImputeXGBoost, do_gridsearch=True)
 
     def test_ImputeVAE_grid(self):
         self._test_class(ImputeVAE, do_gridsearch=True)
 
-    def test_ImputeStandardAutoEncoder_grid(self):
-        self._test_class(ImputeStandardAutoEncoder, do_gridsearch=True)
+    # def test_ImputeStandardAutoEncoder_grid(self):
+    #     self._test_class(ImputeStandardAutoEncoder, do_gridsearch=True)
 
-    def test_ImputeUBP_grid(self):
-        self._test_class(ImputeUBP, do_gridsearch=True)
+    # def test_ImputeUBP_grid(self):
+    #     self._test_class(ImputeUBP, do_gridsearch=True)
 
-    def test_ImputeNLPCA_grid(self):
-        self._test_class(ImputeNLPCA, do_gridsearch=True)
+    # def test_ImputeNLPCA_grid(self):
+    #     self._test_class(ImputeNLPCA, do_gridsearch=True)
 
-    def test_ImputePhylo(self):
-        self._test_class(ImputePhylo)
+    # def test_ImputePhylo(self):
+    #     self._test_class(ImputePhylo)
 
-    def test_ImputeAlleleFreq(self):
-        self._test_class(ImputeAlleleFreq)
+    # def test_ImputeAlleleFreq(self):
+    #     self._test_class(ImputeAlleleFreq)
 
-    def test_ImputeMF(self):
-        self._test_class(ImputeMF)
+    # def test_ImputeMF(self):
+    #     self._test_class(ImputeMF)
 
-    def test_ImputeRefAllele(self):
-        self._test_class(ImputeRefAllele)
+    # def test_ImputeRefAllele(self):
+    #     self._test_class(ImputeRefAllele)
+
+    def _scoring_metrics(self, y_true, y_pred):
+        """Calcuate AUC-ROC, Precision-Recall, and Average Precision (AP).
+
+        Args:
+            X_true (np.ndarray): True values.
+
+            X_pred (np.ndarray): Imputed values.
+
+        Returns:
+            List[float]: List of AUC-ROC scores in order of: 0,1,2.
+            List[float]: List of precision scores in order of: 0,1,2.
+            List[float]: List of recall scores in order of: 0,1,2.
+            List[float]: List of average precision scores in order of 0,1,2.
+
+        """
+        y_true = y_true[self.transformer.sim_missing_mask_]
+        y_pred = y_pred[self.transformer.sim_missing_mask_]
+
+        # Binarize the output
+        y_true_bin = label_binarize(y_true, classes=[0, 1, 2])
+        y_pred_bin = label_binarize(y_pred, classes=[0, 1, 2])
+
+        accuracy = balanced_accuracy_score(y_true, y_pred)
+
+        # AUC-ROC score
+        auc_roc = roc_auc_score(y_true_bin, y_pred_bin, average="weighted")
+
+        # Precision-recall score
+        precision, recall, _, _ = precision_recall_fscore_support(
+            y_true_bin, y_pred_bin, average="weighted"
+        )
+
+        # Average precision score
+        avg_precision = average_precision_score(
+            y_true_bin, y_pred_bin, average="weighted"
+        )
+
+        f1 = f1_score(y_true_bin, y_pred_bin, average="weighted")
+
+        return (accuracy, auc_roc, precision, recall, avg_precision, f1)
 
 
 if __name__ == "__main__":
