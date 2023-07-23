@@ -1,5 +1,5 @@
 id_rsa
-
+**/.snakemake/
 __pycache__
 __pycache__/*
 */__pycache__

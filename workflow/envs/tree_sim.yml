@@ -1,0 +1,14 @@
+name: tree_sim
+channels:
+  - bioconda
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pandas
+  - toytree
+  - matplotlib
+  - numpy
+  - pip
+  - pip:
+    - pyvolve 
