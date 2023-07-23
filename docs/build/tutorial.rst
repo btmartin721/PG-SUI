@@ -35,11 +35,11 @@ PG-SUI (Population Genomic Supervised and Unsupervised Imputation) performs miss
 Installing PG-SUI
 ------------------
 
-Use pip to install PG-SUI:
+The easiest way to install PG-SUI is with pip. If you would rather manually install the dependencies, see the :doc:`Installation <install>` page. 
 
 .. code-block:: bash
 
-    pip install pgsui
+    pip install pg-sui
 
 Input Data
 -----------
