@@ -7,7 +7,7 @@ def read(fname):
 
 
 NAME = "pg-sui"
-VERSION = "0.2.3.1"
+VERSION = "0.2.4"
 AUTHORS = "Bradley T. Martin and Tyler K. Chafin"
 AUTHOR_EMAIL = "evobio721@gmail.com"
 MAINTAINER = "Bradley T. Martin"
