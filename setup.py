@@ -6,8 +6,8 @@ def read(fname):
     return open(os.path.join(os.path.dirname(__file__), fname)).read()
 
 
-NAME = "PG-SUI"
-VERSION = "0.2"
+NAME = "pg-sui"
+VERSION = "0.2.2"
 AUTHORS = "Bradley T. Martin and Tyler K. Chafin"
 AUTHOR_EMAIL = "evobio721@gmail.com"
 MAINTAINER = "Bradley T. Martin"
@@ -26,7 +26,10 @@ setup(
     long_description_content_type="text/markdown",
     url="https://github.com/btmartin721/PG-SUI",
     project_urls={
-        "Bug Tracker": "https://github.com/btmartin721/PG-SUI/issues"
+        "Homepage": "https://github.com/btmartin721/PG-SUI",
+        "Documentation": "https://pg-sui.readthedocs.io/en/latest/",
+        "Source": "https://github.com/btmartin721/PG-SUI.git",
+        "Bug Tracker": "https://github.com/btmartin721/PG-SUI/issues",
     },
     keywords=[
         "python",
@@ -41,12 +44,19 @@ setup(
         "ubp",
         "nlpca",
         "autoencoder",
+        "deep learning",
+        "population genomics",
     ],
     classifiers=[
         "Programming Language :: Python :: 3",
-        "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+        "Programming Language :: Python :: 3",
+        "Programming Language :: Python :: 3.8",
+        "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
         "Development Status :: 4 - Beta",
         "Intended Audience :: Science/Research",
+        "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
         "Topic :: Scientific/Engineering :: Bio-Informatics",
         "Operating System :: OS Independent",
         "Natural Language :: English",
@@ -85,7 +95,7 @@ setup(
             "example_data/phylip_files/*.phy",
             "example_data/vcf_files/*",
             "example_data/popmaps/test.popmap",
-            "example_data/trees/test*",
+            "example_data/trees/*",
         ]
     },
     include_package_data=True,

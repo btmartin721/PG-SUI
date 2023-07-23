@@ -8,7 +8,7 @@ The best way to install PG-SUI is to just use pip:
 
 .. code-block:: bash
 
-    pip install pgsui
+    pip install pg-sui
 
 
 Manual Installation

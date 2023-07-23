@@ -1,0 +1,76 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pg-sui"
+version = "0.2.2"
+authors = [
+    { name="Bradley T. Martin", email="evobio721@gmail.com" }, 
+    { name="Tyler K. Chafin", email="tylerkchafin@gmail.com" } 
+]
+description = "Python machine and deep learning package to impute missing SNPs"
+keywords=[
+        "python",
+        "impute",
+        "imputation",
+        "imputer",
+        "machine learning",
+        "neural network",
+        "api",
+        "IterativeImputer",
+        "vae",
+        "ubp",
+        "nlpca",
+        "autoencoder",
+        "deep learning",
+        "population genomics"
+]
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "GPL3 License"}
+classifiers=[
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Operating System :: OS Independent",
+    "Natural Language :: English",
+]
+dependencies = [
+    "matplotlib",
+    "seaborn",
+    "jupyterlab",
+    "scikit-learn>=1.0",
+    "tqdm",
+    "pandas",
+    "numpy==1.24.3",
+    "scipy",
+    "xgboost",
+    "tensorflow",
+    "keras",
+    "toytree",
+    "sklearn-genetic-opt[all]>=0.6.0",
+    "importlib-resources>=1.1.0",
+    "pyvolve",
+    "scikeras",
+    "snpio",
+    "urllib3>=1.26.7,<2.0.0",
+    "typing-extensions<4.6.0",
+]
+
+[project.optional-dependencies]
+docs = ["sphinx<7", "sphinx-rtd-theme", "sphinx-autodoc-typehints"]
+intel = ["scikit-learn-intelex"]
+
+[project.urls]
+"Homepage" = "https://github.com/btmartin721/PG-SUI.git"
+"Documentation" = "https://pg-sui.readthedocs.io/en/latest/"
+"Source" = "https://github.com/btmartin721/PG-SUI.git"
+"Bug Tracker" = "https://github.com/btmartin721/PG-SUI/issues"

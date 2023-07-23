@@ -55,13 +55,13 @@ These four "simple" imputation methods can be used as standalone imputers, as th
 The easiest way to install PG-SUI is to use pip:
 
 ```
-pip install pgsui
+pip install pg-sui
 ```
 
 If you have an Intel CPU and want to use the sklearn-genetic-intelex package to speed up scikit-learn computations, you can do:
 
 ```
-pip install pgsui[intel]
+pip install pg-sui[intel]
 ```
 
 ## Manual Installation
