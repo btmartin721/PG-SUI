@@ -44,7 +44,6 @@ optimal_ubp_model/*
 output*
 *.egg-info
 *.egg
-build/
 venv/
 venv/*
 Rplot*.png
@@ -56,5 +55,5 @@ imputer_output/
 bias_INDV20_popmap.txt
 bias_INDV20_popmap2.txt
 biasINDV20_popmap.txt
-*.yaml
-*.yml
+.pg-sui-pypi
+/build/

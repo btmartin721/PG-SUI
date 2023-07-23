@@ -54,7 +54,7 @@ except (ModuleNotFoundError, ValueError, ImportError):
 class NLPCAModel(tf.keras.Model):
     """NLPCA model to train and use to predict imputations.
 
-    NLPCAModel subclasses the tf.keras.Model and overrides the train_step() and test_step() functions, which do training and evaluation for each batch in each epoch.
+    NLPCAModel subclasses the tf.keras.Model and overrides the train_step function, which does training and evaluation for each batch in each epoch.
 
     Args:
         V (numpy.ndarray(float)): V should have been randomly initialized and will be used as the input data that gets refined during training. Defaults to None.
@@ -89,25 +89,11 @@ class NLPCAModel(tf.keras.Model):
 
         sample_weight (numpy.ndarray, optional): 2D sample weights of shape (n_samples, n_features). Should have values for each class weighted. Defaults to None.
 
-    Methods:
-        call: Does forward pass for model.
-        train_step: Does training for one batch in a single epoch.
-        test_step: Does evaluation for one batch in a single epoch.
-
-    Attributes:
-        V_latent_ (numpy.ndarray(float)): Randomly initialized input that gets refined during training to better predict the targets.
-
-        hidden_layer_sizes (List[Union[int, str]]): Output units for each hidden layer. Length should be the same as the number of hidden layers.
-
-        n_components (int): Number of principal components to use with _V.
-
-        _batch_size (int): Batch size to use per epoch.
-
-        _batch_idx (int): Index of current batch.
-
     Example:
         >>>model = NLPCAModel(V=V, y=y, batch_size=32, missing_mask=missing_mask, output_shape, n_components, weights_initializer, hidden_layer_sizes, num_hidden_layers, hidden_activation, l1_penalty, l2_penalty, dropout_rate, num_classes=3)
+        >>>
         >>>model.compile(optimizer=optimizer, loss=loss_func, metrics=[my_metrics], run_eagerly=True)
+        >>>
         >>>history = model.fit(X, y, batch_size=batch_size, epochs=epochs, callbacks=[MyCallback()], validation_split=validation_split, shuffle=False)
 
     Raises:
@@ -167,10 +153,10 @@ class NLPCAModel(tf.keras.Model):
 
         ### NOTE: I tried using just _V as the input to be refined, but it
         # wasn't getting updated. So I copy it here and it works.
-        # V_latent is refined during train_step().
+        # V_latent is refined during train_step.
         self.V_latent_ = self._V.copy()
 
-        # Initialize parameters used during train_step().
+        # Initialize parameters used during train_step.
         self._batch_idx = 0
         self._batch_size = batch_size
         self.n_components = n_components
@@ -260,43 +246,25 @@ class NLPCAModel(tf.keras.Model):
         self.dropout_layer = Dropout(rate=dropout_rate)
 
     def call(self, inputs, training=None):
-        """Forward propagates inputs through the model defined in __init__().
-
-        Args:
-            inputs (tf.keras.Input): Input tensor to forward propagate through the model.
-
-            training (bool or None): Whether in training mode or not. Affects whether dropout is used.
-
-        Returns:
-            tf.keras.Model: Output tensor from forward propagation.
-        """
-        if self.dropout_rate == 0.0:
-            training = False
         x = self.dense1(inputs)
-        if training:
-            x = self.dropout_layer(x, training=training)
+        x = self.dropout_layer(x, training=training)
         if self.dense2 is not None:
             x = self.dense2(x)
-            if training:
-                x = self.dropout_layer(x, training=training)
+            x = self.dropout_layer(x, training=training)
         if self.dense3 is not None:
             x = self.dense3(x)
-            if training:
-                x = self.dropout_layer(x, training=training)
+            x = self.dropout_layer(x, training=training)
         if self.dense4 is not None:
             x = self.dense4(x)
-            if training:
-                x = self.dropout_layer(x, training=training)
+            x = self.dropout_layer(x, training=training)
         if self.dense5 is not None:
             x = self.dense5(x)
-            if training:
-                x = self.dropout_layer(x, training=training)
+            x = self.dropout_layer(x, training=training)
 
         x = self.output1(x)
         return self.rshp(x)
 
     def model(self):
-        """Here so that mymodel.model().summary() can be called for debugging."""
         x = tf.keras.Input(shape=(self.n_components,))
         return tf.keras.Model(inputs=[x], outputs=self.call(x))
 
@@ -306,27 +274,7 @@ class NLPCAModel(tf.keras.Model):
         self.outputs = model.outputs
 
     def train_step(self, data):
-        """Custom training loop for one step (=batch) in a single epoch.
-
-        GradientTape records the weights and watched
-        variables (usually tf.Variable objects), which
-        in this case are the weights and the input (x),
-        during the forward pass.
-        This allows us to run gradient descent during
-        backpropagation to refine the watched variables.
-
-        This function will train on a batch of samples (rows), which can be adjusted with the ``batch_size`` parameter from the estimator.
-
-        Args:
-            data (Tuple[tf.EagerTensor, tf.EagerTensor]): Input tensorflow variables of shape (batch_size, n_components) and (batch_size, n_features, num_classes).
-
-        Returns:
-            Dict[str, float]: History object that gets returned from fit(). Contains the loss and any metrics specified in compile().
-
-        ToDo:
-            Obtain batch_size without using run_eagerly option in compile(). This will allow the step to be run in graph mode, thereby speeding up computation.
-        """
-        # Set in the UBPCallbacks() callback.
+        """Train step function. Parameters are set in UBPCallbacks callback."""
         y = self._y
 
         (
@@ -414,56 +362,84 @@ class NLPCAModel(tf.keras.Model):
 
     @property
     def V_latent(self):
-        """Randomly initialized input that gets refined during training."""
+        """Randomly initialized input that gets refined during training.
+        :noindex:
+        """
         return self.V_latent_
 
     @property
     def batch_size(self):
-        """Batch (=step) size per epoch."""
+        """Batch (=step) size per epoch.
+        :noindex:
+        """
         return self._batch_size
 
     @property
     def batch_idx(self):
-        """Current batch (=step) index."""
+        """Current batch (=step) index.
+        :noindex:
+        """
         return self._batch_idx
 
     @property
     def y(self):
+        """Full dataset y.
+        :noindex:
+        """
         return self._y
 
     @property
     def missing_mask(self):
+        """Missing mask of shape (y.shape[0], y.shape[1])
+        :noindex:
+        """
         return self._missing_mask
 
     @property
     def sample_weight(self):
+        """Sample weights of shape (y.shape[0], y.shape[1])
+        :noindex:
+        """
         return self._sample_weight
 
     @V_latent.setter
     def V_latent(self, value):
-        """Set randomly initialized input. Gets refined during training."""
+        """Set randomly initialized input. Refined during training.
+        :noindex:
+        """
         self.V_latent_ = value
 
     @batch_size.setter
     def batch_size(self, value):
-        """Set batch_size parameter."""
+        """Set batch_size parameter.
+        :noindex:
+        """
         self._batch_size = int(value)
 
     @batch_idx.setter
     def batch_idx(self, value):
-        """Set current batch (=step) index."""
+        """Set current batch (=step) index.
+        :noindex:
+        """
         self._batch_idx = int(value)
 
     @y.setter
     def y(self, value):
-        """Set y after each epoch."""
+        """Set y after each epoch.
+        :noindex:
+        """
         self._y = value
 
     @missing_mask.setter
     def missing_mask(self, value):
-        """Set y after each epoch."""
+        """Set missing_mask after each epoch.
+        :noindex:
+        """
         self._missing_mask = value
 
     @sample_weight.setter
     def sample_weight(self, value):
+        """Set sample_weight after each epoch.
+        :noindex:
+        """
         self._sample_weight = value

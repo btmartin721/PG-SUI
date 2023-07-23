@@ -46,8 +46,17 @@ from sklearn.model_selection import StratifiedKFold
 from sklearn_genetic import GASearchCV
 from sklearn_genetic.callbacks import ConsecutiveStopping, DeltaThreshold
 from sklearn_genetic.plots import plot_fitness_evolution
-from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import (
+    LabelEncoder,
+    OneHotEncoder,
+    OrdinalEncoder,
+    TargetEncoder,
+)
 from sklearn.exceptions import NotFittedError
+from sklearn.utils.class_weight import compute_sample_weight
+from sklearn.pipeline import make_pipeline
+
+from xgboost import XGBClassifier
 
 # Custom function imports
 try:
@@ -100,7 +109,7 @@ class IterativeImputerGridSearch(IterativeImputer):
 
     Herein, two types of grid searches (RandomizedSearchCV and GASearchCV), progress status updates, and several other improvements have been added. IterativeImputer is a multivariate imputer that estimates each feature from all the others. A strategy for imputing missing values by modeling each feature with missing values as a function of other features in a round-robin fashion.Read more in the scikit-learn User Guide for IterativeImputer. scikit-learn version added: 0.21. NOTE: This estimator is still **experimental** for now: the predictions and the API might change without any deprecation cycle. To use it, you need to explicitly import ``enable_iterative_imputer``\.
 
-    IterativeImputer is based on the R MICE (Multivariate Imputation by Chained Equationspackage) [1]_. See [2]_ for more information about multiple versus single imputations.
+    IterativeImputer is based on the R MICE (Multivariate Imputation by Chained Equationspackage) [van Buuren & Groothuis-Oudshoorn, 2011]_. See [Buck, 1960]_ for more information about multiple versus single imputations.
 
     >>> # explicitly require this experimental feature
     >>> from sklearn.experimental import enable_iterative_imputer
@@ -151,7 +160,7 @@ class IterativeImputerGridSearch(IterativeImputer):
 
         n_nearest_features (int, optional): Number of other features to use to estimate the missing values of each feature column. Nearness between features is measured using the absolute correlation coefficient between each feature pair (after initial imputation). To ensure coverage of features throughout the imputation process, the neighbor features are not necessarily nearest,	but are drawn with probability proportional to correlation for each	imputed target feature. Can provide significant speed-up when the number of features is huge. If ``None``\, all features will be used. Defaults to None.
 
-        initial_strategy (str, optional): Which strategy to use to initialize the missing values. Same as the ``strategy`` parameter in :class:`~sklearn.impute.SimpleImputer`	Valid values: "most_frequent", "populations", "nmf", or "phylogeny". Defaults to "populations".
+        initial_strategy (str, optional): Which strategy to use to initialize the missing values. Same as the ``strategy`` parameter in :class:`~sklearn.impute.SimpleImputer`	Valid values: "most_frequent", "populations", "mf", or "phylogeny". Defaults to "populations".
 
         imputation_order (str, optional): The order in which the features will be imputed. Possible values: "ascending" (From features with fewest missing values to most), "descending" (From features with most missing values to fewest, "roman" (Left to right), "arabic" (Right to left),  random" (A random order for each round). Defaults to 'ascending'.
 
@@ -207,9 +216,9 @@ class IterativeImputerGridSearch(IterativeImputer):
         To support imputation in inductive mode we store each feature's estimator during the ``fit`` phase, and predict without refitting (in order) during	the ``transform`` phase. Features which contain all missing values at ``fit`` are discarded upon ``transform``\.
 
     References:
-        .. [1] Stef van Buuren, Karin Groothuis-Oudshoorn (2011). mice: Multivariate Imputation by Chained Equations in R. Journal of Statistical Software 45: 1-67.
+        .. [van Buuren & Groothuis-Oudshoorn, 2011] Stef van Buuren, Karin Groothuis-Oudshoorn (2011). mice: Multivariate Imputation by Chained Equations in R. Journal of Statistical Software 45: 1-67.
 
-        .. [2] S. F. Buck, (1960). A Method of Estimation of Missing Values in	Multivariate Data Suitable for use with an Electronic Computer. Journal of the Royal Statistical Society 22(2): 302-306.
+        .. [Buck, 1960] S. F. Buck. (1960). A Method of Estimation of Missing Values in	Multivariate Data Suitable for use with an Electronic Computer. Journal of the Royal Statistical Society 22(2): 302-306.
     """
 
     def __init__(
@@ -295,6 +304,42 @@ class IterativeImputerGridSearch(IterativeImputer):
         self.early_stop_gen = early_stop_gen
         self.missing_values = missing_values
 
+    def _mode_1d(self, array_1d):
+        """Get the mode of a 1D array.
+
+        Args:
+            array_1d (np.ndarray): 1D array to calculate the mode for.
+
+        Returns:
+            int: Most common value of the 1D array.
+        """
+        # Get unique elements and their corresponding counts
+        vals, counts = np.unique(array_1d, return_counts=True)
+
+        # Get the index of the most frequent element
+        mode_idx = np.argmax(counts)
+
+        # Return the mode
+        return vals[mode_idx]
+
+    # Define a function to remove columns with a unique count of 1 or 0
+    def remove_single_unique_val_cols(self, array_2d, return_idx=False):
+        # Apply np.unique to each column and get the counts of unique values (excluding np.nan)
+        unique_counts = np.apply_along_axis(
+            lambda x: len(np.unique(x[~np.isnan(x)])), axis=0, arr=array_2d
+        )
+
+        # Get the column indices where the count of unique values is greater than 1
+        cols_to_keep = np.where(unique_counts > 1)[0]
+
+        # Index into array_2d to keep only these columns
+        array_2d_filtered = array_2d[:, cols_to_keep]
+
+        if return_idx:
+            return cols_to_keep
+        else:
+            return array_2d_filtered
+
     def _initial_imputation(
         self, X: np.ndarray, cols_to_keep: np.ndarray, in_fit: bool = False
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -354,7 +399,6 @@ class IterativeImputerGridSearch(IterativeImputer):
             )
 
             X_filled = self.initial_imputer_.imputed
-            Xt = X.copy()
 
         elif self.initial_strategy == "phylogeny":
             if (
@@ -380,15 +424,8 @@ class IterativeImputerGridSearch(IterativeImputer):
                 X_filled = self.initial_imputer_.imputed
                 valid_sites = self.initial_imputer_.valid_sites
 
-                valid_mask = np.flatnonzero(
-                    np.logical_not(np.isnan(valid_sites))
-                )
-
-                Xt = X[:, valid_mask]
-                mask_missing_values = mask_missing_values[:, valid_mask]
-
-        elif self.initial_strategy == "nmf":
-            self.initial_imputer_ = simple_imputers.ImputeNMF(
+        elif self.initial_strategy == "mf":
+            self.initial_imputer_ = simple_imputers.ImputeMF(
                 self.genotype_data,
                 missing=-9,
                 write_output=False,
@@ -398,7 +435,6 @@ class IterativeImputerGridSearch(IterativeImputer):
             )
 
             X_filled = self.initial_imputer_.imputed
-            Xt = X.copy()
 
         else:
             if self.initial_imputer_ is None:
@@ -412,10 +448,16 @@ class IterativeImputerGridSearch(IterativeImputer):
                 X_filled = self.initial_imputer_.transform(X)
 
             valid_sites = self.initial_imputer_.statistics_
-            valid_mask = np.flatnonzero(np.logical_not(np.isnan(valid_sites)))
 
+        Xt = X.copy()
+
+        if self.initial_imputer_ == "phylogeny":
+            valid_sites = np.apply_along_axis(self._mode_1d, axis=0, arr=Xt)
+            valid_sites = valid_sites[cols_to_keep]
+            valid_mask = np.flatnonzero(np.logical_not(np.isnan(valid_sites)))
             Xt = X[:, valid_mask]
             mask_missing_values = mask_missing_values[:, valid_mask]
+            X_filled = X_filled[:, valid_mask]
 
         return Xt, X_filled, mask_missing_values, X_missing_mask
 
@@ -457,11 +499,15 @@ class IterativeImputerGridSearch(IterativeImputer):
                 "estimator should be passed in."
             )
 
+        if type(self._estimator).__name__ == "XGBClassifier":
+            self.gridparams["objective"] = ["multi:softmax"]
+            self.gridparams["num_class"] = [3]
+
         if estimator is None:
             estimator = clone(self._estimator)
 
         # Modified code
-        cross_val = StratifiedKFold(n_splits=self.grid_cv, shuffle=False)
+        cross_val = StratifiedKFold(n_splits=self.grid_cv, shuffle=True)
 
         # Modified code
         # If regressor
@@ -493,6 +539,7 @@ class IterativeImputerGridSearch(IterativeImputer):
                 scoring=self.scoring_metric,
                 n_jobs=self.grid_n_jobs,
                 cv=cross_val,
+                error_score="raise",
             )
 
         # Do genetic algorithm
@@ -508,6 +555,7 @@ class IterativeImputerGridSearch(IterativeImputer):
                     verbose=False,
                     **self.ga_kwargs,
                 )
+
         else:
             raise ValueError(
                 f"Invalid gridsearch_method provided: {self.gridsearch_method}. Supported options are 'gridsearch', 'randomized_gridsearch', and 'genetic_algorithm'"
@@ -521,42 +569,62 @@ class IterativeImputerGridSearch(IterativeImputer):
             )
 
             y_train = _safe_indexing(X_filled[:, feat_idx], ~missing_row_mask)
-
-            le = None
+            X_train = X_train.astype(int)
+            y_train = y_train.astype(int)
 
             if self.gridsearch_method == "genetic_algorithm":
-                try:
-                    with HiddenPrints():
-                        search.fit(X_train, y_train)
-                        le = None
-                except ValueError:
-                    le = LabelEncoder()
-                    y_train = le.fit_transform(y_train)
-
-                    with HiddenPrints():
-                        search.fit(X_train, y_train, callbacks=callback)
-
+                if type(self._estimator).__name__ == "XGBClassifier":
+                    raise NotImplementedError(
+                        "genetic_algorithm is not currently supported with ImputeXGBoost."
+                    )
+                search.fit(X_train, y_train, callbacks=callback)
             else:
-                try:
-                    search.fit(X_train, y_train)
-                except ValueError:
-                    # Happens in newer versions of XGBClassifier.
+                if type(self._estimator).__name__ == "XGBClassifier":
+                    oe = OrdinalEncoder(
+                        categories="auto",
+                        dtype=int,
+                        handle_unknown="use_encoded_value",
+                        unknown_value=-1,
+                    )
+                    X_train = oe.fit_transform(X_train)
+
+                    # Add one dummy sample for each possible class
+                    for class_label in range(
+                        3
+                    ):  # assuming there are 3 classes 0, 1, 2
+                        class_count = np.count_nonzero(y_train == class_label)
+                        if (
+                            class_label not in y_train
+                            or class_count < self.grid_cv
+                        ):
+                            for _ in range(
+                                self.grid_cv - class_count
+                            ):  # add as many dummy samples as there are folds
+                                dummy_sample = np.zeros((1, X_train.shape[1]))
+                                X_train = np.vstack([X_train, dummy_sample])
+                                y_train = np.append(y_train, class_label)
+
+                    # Fit the LabelEncoder after adding the dummy samples
                     le = LabelEncoder()
                     y_train = le.fit_transform(y_train)
+                    sample_weight = compute_sample_weight("balanced", y_train)
+
+                    search.fit(X_train, y_train, sample_weight=sample_weight)
+                else:
                     search.fit(X_train, y_train)
 
         # if no missing values, don't predict
         if np.sum(missing_row_mask) == 0:
             return X_filled, None
 
-        if np.all(missing_row_mask):
-            raise TypeError(
-                "All neighbors were missing. Try increasing ``n_nearest_neighbors``"
-            )
-
         X_test = _safe_indexing(
             X_filled[:, neighbor_feat_idx], missing_row_mask
         )
+
+        X_test = X_test.astype(int)
+
+        if type(self._estimator).__name__ == "XGBClassifier":
+            X_test = oe.transform(X_test)
 
         # Currently un-tested with grid search
         if self.sample_posterior:
@@ -567,7 +635,7 @@ class IterativeImputerGridSearch(IterativeImputer):
         else:
             imputed_values = search.predict(X_test)
 
-            if le is not None:
+            if type(self._estimator).__name__ == "XGBClassifier":
                 imputed_values = le.inverse_transform(imputed_values)
 
             imputed_values = np.clip(
@@ -631,7 +699,7 @@ class IterativeImputerGridSearch(IterativeImputer):
         self.initial_imputer_ = None
 
         X, Xt, mask_missing_values, complete_mask = self._initial_imputation(
-            X, valid_cols, in_fit=True
+            X.copy(), valid_cols, in_fit=True
         )
 
         super(IterativeImputer, self)._fit_indicator(complete_mask)
@@ -683,7 +751,7 @@ class IterativeImputerGridSearch(IterativeImputer):
 
         abs_corr_mat = self._get_abs_corr_mat(Xt)
 
-        n_samples, n_features = Xt.shape
+        _, n_features = Xt.shape
 
         if self.verbose > 0:
             print(

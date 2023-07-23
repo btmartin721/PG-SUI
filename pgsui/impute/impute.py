@@ -24,18 +24,8 @@ from scipy import stats as st
 # from memory_profiler import memory_usage
 
 # Scikit-learn imports
-from sklearn.utils.estimator_checks import check_estimator
-from sklearn.ensemble import ExtraTreesClassifier
-from sklearn.ensemble import GradientBoostingClassifier
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.experimental import enable_iterative_imputer
-from sklearn.impute import SimpleImputer
-from sklearn.linear_model import BayesianRidge
 from sklearn import metrics
-from sklearn.neighbors import KNeighborsClassifier
-
-import xgboost as xgb
-import lightgbm as lgbm
 
 from sklearn_genetic.space import Continuous, Categorical, Integer
 
@@ -48,15 +38,9 @@ try:
         IterativeImputerFixedParams,
     )
     from .unsupervised.neural_network_imputers import VAE, UBP, SAE
-    from snpio import GenotypeData
-    from . import simple_imputers
-    from ..utils.misc import get_processor_name
     from ..utils.misc import isnotebook
     from ..utils.misc import timer
     from ..data_processing.transformers import (
-        ImputePhyloTransformer,
-        ImputeAlleleFreqTransformer,
-        ImputeNMFTransformer,
         SimGenotypeDataTransformer,
     )
 except (ModuleNotFoundError, ValueError, ImportError):
@@ -67,16 +51,9 @@ except (ModuleNotFoundError, ValueError, ImportError):
         IterativeImputerFixedParams,
     )
     from impute.unsupervised.neural_network_imputers import VAE, UBP, SAE
-    from snpio import GenotypeData
-    from impute import simple_imputers
-    from utils.misc import get_processor_name
-    from utils.misc import get_processor_name
     from utils.misc import isnotebook
     from utils.misc import timer
     from data_processing.transformers import (
-        ImputePhyloTransformer,
-        ImputeAlleleFreqTransformer,
-        ImputeNMFTransformer,
         SimGenotypeDataTransformer,
     )
 
@@ -87,27 +64,11 @@ if is_notebook:
 else:
     from tqdm import tqdm as progressbar
 
-# Requires scikit-learn-intellex package
-if get_processor_name().strip().startswith("Intel"):
-    try:
-        from sklearnex import patch_sklearn
-
-        patch_sklearn()
-        intelex = True
-    except (ImportError, TypeError):
-        print(
-            "Warning: Intel CPU detected but scikit-learn-intelex is not "
-            "installed. We recommend installing it to speed up computation."
-        )
-        intelex = False
-else:
-    intelex = False
-
 
 class Impute:
     """Class to impute missing data from the provided classifier.
 
-    The Impute class will either run a variational autoencoder or IterativeImputer with the provided estimator. The settings for the provided estimator should be provided as the ``kwargs`` argument as a dictionary object with the estimator's keyword arguments as the keys and the corresponding values. E.g., ``kwargs={"n_jobs", 4, "initial_strategy": "populations"}``\. ``clf_type`` just specifies either "classifier" or "regressor". "regressor" is primarily just for quick and dirty testing.
+    The Impute class will either run a variational autoencoder or IterativeImputer with the provided estimator. The settings for the provided estimator should be provided as the ``kwargs`` argument as a dictionary object with the estimator's keyword arguments as the keys and the corresponding values. E.g., ``kwargs={"n_jobs", 4, "initial_strategy": "populations"}``\. ``clf_type`` just specifies either "classifier" or "regressor". "regressor" is primarily just for quick and dirty testing and is intended for internal use only.
 
     Once the Impute class is initialized, the imputation should be performed with ``fit_predict()``\.
 
@@ -131,10 +92,10 @@ class Impute:
         >>>self.imputed, self.best_params = imputer.fit_predict(df)
         >>>imputer.write_imputed(self.imputed)
         >>>print(self.imputed)
-        [[0, 1, 1, 2],
-        [0, 1, 1, 2],
-        [0, 2, 2, 2],
-        [2, 2, 2, 2]]
+        [[0, 0, 0, 0],
+        [0, 0, 0, 0],
+        [0, 1, 1, 0],
+        [2, 1, 2, 2]]
     """
 
     def __init__(
@@ -334,12 +295,12 @@ class Impute:
 
         if (
             "initial_strategy" in self.imp_kwargs
-            and self.imp_kwargs["initial_strategy"] == "nmf"
+            and self.imp_kwargs["initial_strategy"] == "mf"
             and chunk_size != 1.0
         ):
             print(
                 "WARNING: Chunking is not supported with initial_strategy == "
-                "'nmf'; Setting chunk_size to 1.0 and imputing entire "
+                "'mf'; Setting chunk_size to 1.0 and imputing entire "
                 "dataset"
             )
 
@@ -405,13 +366,6 @@ class Impute:
         Returns:
             GenotypeData: GenotypeData object with imputed data.
         """
-        # imputed_filename = genotype_data.decode_012(
-        #     imp012,
-        #     write_output=True,
-        #     prefix=self.prefix,
-        #     is_nuc=self.using_basecat,
-        # )
-
         imputed_gd = deepcopy(genotype_data)
 
         if self.clf == VAE:
@@ -722,7 +676,7 @@ class Impute:
                 cols_to_keep = None
 
             Xt, params_list, score_list = imputer.fit_transform(
-                df_subset, cols_to_keep
+                df, cols_to_keep
             )
 
         if self.verbose > 0:

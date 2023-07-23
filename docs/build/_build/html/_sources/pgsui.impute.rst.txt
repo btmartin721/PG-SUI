@@ -1,15 +1,41 @@
-impute
-=====================
+pgsui.impute package
+====================
+
+Subpackages
+-----------
 
 .. toctree::
-   :maxdepth: 4
+   :maxdepth: 2
 
-   pgsui.impute.estimators
-   pgsui.impute.impute
-   pgsui.impute.iterative_imputer_fixedparams
-   pgsui.impute.iterative_imputer_gridsearch
-   pgsui.impute.neural_network_imputers
-   pgsui.impute.simple_imputers
+   pgsui.impute.supervised
+   pgsui.impute.unsupervised
+
+Submodules
+----------
+
+pgsui.impute.estimators module
+------------------------------
+
+.. automodule:: pgsui.impute.estimators
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+pgsui.impute.impute module
+--------------------------
+
+.. automodule:: pgsui.impute.impute
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+pgsui.impute.simple\_imputers module
+------------------------------------
+
+.. automodule:: pgsui.impute.simple_imputers
+   :members:
+   :undoc-members:
+   :show-inheritance:
 
 Module contents
 ---------------
@@ -18,4 +44,3 @@ Module contents
    :members:
    :undoc-members:
    :show-inheritance:
-   :private-members:

@@ -38,7 +38,6 @@ from tensorflow.keras.layers import (
     Dense,
     Reshape,
     Activation,
-    BatchNormalization,
     LeakyReLU,
     PReLU,
 )
@@ -54,13 +53,14 @@ except (ModuleNotFoundError, ValueError, ImportError):
 
 
 class Sampling(tf.keras.layers.Layer):
-    """Layer to calculate Z."""
+    """Layer to calculate Z to sample from latent dimension."""
 
     def __init__(self, *args, **kwargs):
         self.is_placeholder = True
         super(Sampling, self).__init__(*args, **kwargs)
 
     def call(self, inputs):
+        """Sampling during forward pass."""
         z_mean, z_log_var = inputs
         z_sigma = tf.math.exp(0.5 * z_log_var)
         batch = tf.shape(z_mean)[0]
@@ -70,7 +70,30 @@ class Sampling(tf.keras.layers.Layer):
 
 
 class Encoder(tf.keras.layers.Layer):
-    """VAE encoder to Encode genotypes to (z_mean, z_log_var, z)."""
+    """VAE encoder to Encode genotypes to (z_mean, z_log_var, z).
+
+    Args:
+        n_features (int): Number of featuresi in input dataset.
+
+        num_classes (int): Number of classes in target data.
+
+        latent_dim (int): Number of latent dimensions to use.
+
+        hidden_layer_sizes (list of int): List of hidden layer sizes to use.
+
+        dropout_rate (float): Dropout rate for Dropout layer.
+
+        activation (str): Hidden activation function to use.
+
+        kernel_initializer (str): Initializer to use for weights.
+
+        kernel_regularizer (tf.keras.regularizers): L1 and/ or L2 objects.
+
+        beta (float, optional): KL divergence beta to use. Defualts to 1.0.
+
+        name (str): Name of model. Defaults to Encoder.
+
+    """
 
     def __init__(
         self,
@@ -166,33 +189,23 @@ class Encoder(tf.keras.layers.Layer):
 
         self.dropout_layer = Dropout(dropout_rate)
 
-        # self.batch_norm_layer1 = BatchNormalization(center=False, scale=False)
-        # self.batch_norm_layer2 = BatchNormalization(center=False, scale=False)
-        # self.batch_norm_layer3 = BatchNormalization(center=False, scale=False)
-        # self.batch_norm_layer4 = BatchNormalization(center=False, scale=False)
-        # self.batch_norm_layer5 = BatchNormalization(center=False, scale=False)
-
     def call(self, inputs, training=None):
+        """Forward pass for model."""
         x = self.flatten(inputs)
         x = self.dense1(x)
         x = self.dropout_layer(x, training=training)
-        # x = self.batch_norm_layer1(x, training=training)
         if self.dense2 is not None:
             x = self.dense2(x)
             x = self.dropout_layer(x, training=training)
-            # x = self.batch_norm_layer2(x, training=training)
         if self.dense3 is not None:
             x = self.dense3(x)
             x = self.dropout_layer(x, training=training)
-            # x = self.batch_norm_layer3(x, training=training)
         if self.dense4 is not None:
             x = self.dense4(x)
             x = self.dropout_layer(x, training=training)
-            # x = self.batch_norm_layer4(x, training=training)
         if self.dense5 is not None:
             x = self.dense5(x)
             x = self.dropout_layer(x, training=training)
-            # x = self.batch_norm_layer5(x, training=training)
 
         x = self.dense_latent(x)
         z_mean = self.dense_z_mean(x)
@@ -211,7 +224,27 @@ class Encoder(tf.keras.layers.Layer):
 
 
 class Decoder(tf.keras.layers.Layer):
-    """Converts z, the encoded vector, back into the reconstructed output"""
+    """Converts z, the encoded vector, back into the reconstructed output.
+
+    Args:
+        n_features (int): Number of features in input dataset.
+
+        num_classes (int): Number of classes in input dataset.
+
+        latent_dim (int): Number of latent dimensions to use.
+
+        hidden_layer_sizes (list of int): List of hidden layer sizes to use.
+
+        dropout_rate (float): Dropout rate for Dropout layer.
+
+        activation (str): Hidden activation function to use.
+
+        kernel initializer (str): Function for initilizing weights.
+
+        kernel_regularizer (tf.keras.regularizer): Initialized L1 and/ or L2 regularizer.
+
+        name (str): Name of model. Defaults to "Decoder".
+    """
 
     def __init__(
         self,
@@ -290,40 +323,65 @@ class Decoder(tf.keras.layers.Layer):
 
         self.dropout_layer = Dropout(dropout_rate)
 
-        # self.batch_norm_layer1 = BatchNormalization(center=False, scale=False)
-        # self.batch_norm_layer2 = BatchNormalization(center=False, scale=False)
-        # self.batch_norm_layer3 = BatchNormalization(center=False, scale=False)
-        # self.batch_norm_layer4 = BatchNormalization(center=False, scale=False)
-        # self.batch_norm_layer5 = BatchNormalization(center=False, scale=False)
-
     def call(self, inputs, training=None):
-        # x = self.flatten(inputs)
+        """Forward pass for model."""
         x = self.dense1(inputs)
         x = self.dropout_layer(x, training=training)
-        # x = self.batch_norm_layer1(x, training=training)
         if self.dense2 is not None:
             x = self.dense2(x)
             x = self.dropout_layer(x, training=training)
-            # x = self.batch_norm_layer2(x, training=training)
         if self.dense3 is not None:
             x = self.dense3(x)
             x = self.dropout_layer(x, training=training)
-            # x = self.batch_norm_layer3(x, training=training)
         if self.dense4 is not None:
             x = self.dense4(x)
             x = self.dropout_layer(x, training=training)
-            # x = self.batch_norm_layer4(x, training=training)
         if self.dense5 is not None:
             x = self.dense5(x)
             x = self.dropout_layer(x, training=training)
-            # x = self.batch_norm_layer5(x, training=training)
 
         x = self.dense_output(x)
         return self.rshp(x)
-        # return self.dense_output(x)
 
 
 class VAEModel(tf.keras.Model):
+    """Variational Autoencoder model. Runs the encdoer and decoder and outputs the reconsruction.
+
+    Args:
+        output_shape (tuple): Shape of output. Defaults to None.
+
+        n_components (int): Number of latent dimensions to use. Defaults to 3.
+
+        weights_initializer (str, optional): kernel initializer to use. Defaults to "glorot_normal".
+
+        hidden_layer_sizes (str or list, optional): List of hidden layer sizes to use, or can use "midpoint", "log2", or "sqrt". Defaults to "midpoint".
+
+        num_hidden_layers (int, optional): Number of hidden layers to use. Defaults to 1.
+
+        hidden_activation (str, optional): Hidden activation function to use. Defaults to "elu".
+
+        l1_penalty (float, optional): L1 regularization penalty to use. Defaults to 1e-06.
+
+        l2_penalty (float, optional): L2 regularization penalty. Defaults to 1e-06.
+
+        dropout_rate (float, optional): Dropout rate to use for Dropout layers.
+
+        kl_beta (float, optional): Beta to use for KL divergence loss. The KL divergence gets multiplied by this value. Defaults to 1.0 (no scaling).
+
+        num_classes (int, optional): Number of classes in input data. Defaults to 10.
+
+        sample_weight (list of float, optional): sample weights to use. Defaults to None.
+
+        missing_mask (np.ndarray, optional): Missing mask to use in model for masking missing values. Defaults to None.
+
+        batch_size (int, optional): Batch size to use for training. Defaults to 32.
+
+        final_activation (str, optional): Final activation function to use. Should be either "sigmoid" (if doing multilabel classification) or "softmax" (if doing multiclass). If left None, then activation is not performed. Defaults to None.
+
+        y (np.ndarray, optional): Input dataset y. Should be the full dataset. It will get subset by a callback to get batch_size samples. Default to None.
+
+    """
+
     def __init__(
         self,
         output_shape=None,
@@ -353,6 +411,7 @@ class VAEModel(tf.keras.Model):
         self._batch_idx = 0
         self._batch_size = batch_size
         self._y = y
+
         self._final_activation = final_activation
         if num_classes == 10 or num_classes == 3:
             self.acc_func = tf.keras.metrics.categorical_accuracy
@@ -448,32 +507,31 @@ class VAEModel(tf.keras.Model):
             self.act = Activation(final_activation)
 
     def call(self, inputs, training=None):
-        """Call the model on a particular input.
-
-        Args:
-            input (tf.Tensor): Input tensor. Must be one-hot encoded.
-
-        Returns:
-            tf.Tensor: Output predictions. Will be one-hot encoded.
-        """
+        """Forward pass for model."""
         z_mean, z_log_var, z = self.encoder(inputs)
         reconstruction = self.decoder(z)
         if self._final_activation is not None:
             reconstruction = self.act(reconstruction)
-        return reconstruction, z_mean, z_log_var, z
+        return reconstruction
 
     def model(self):
-        """Here so that mymodel.model().summary() can be called for debugging."""
+        """Here so that mymodel.model().summary() can be called for debugging.
+        :noindex:
+        """
         x = tf.keras.Input(shape=(self.n_features, self.num_classes))
         return tf.keras.Model(inputs=[x], outputs=self.call(x))
 
     def set_model_outputs(self):
+        """Set model output dimensions for building model.
+        :noindex:
+        """
         x = tf.keras.Input(shape=(self.n_features, self.num_classes))
         model = tf.keras.Model(inputs=[x], outputs=self.call(x))
         self.outputs = model.outputs
 
     @property
     def metrics(self):
+        """Set metric trackers."""
         return [
             self.total_loss_tracker,
             self.reconstruction_loss_tracker,
@@ -510,14 +568,15 @@ class VAEModel(tf.keras.Model):
 
         y_true_masked = tf.boolean_mask(
             tf.convert_to_tensor(y_true, dtype=tf.float32),
-            tf.reduce_any(tf.not_equal(y_true, -1), axis=2),
+            tf.reduce_any(tf.not_equal(y_true, -1), axis=-1),
         )
 
         with tf.GradientTape() as tape:
-            reconstruction, z_mean, z_log_var, z = self(y_true, training=True)
+            reconstruction = self(y_true, training=True)
 
             y_pred_masked = tf.boolean_mask(
-                reconstruction, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
+                reconstruction,
+                tf.reduce_any(tf.not_equal(y_true, -1), axis=-1),
             )
 
             # Returns binary crossentropy loss.
@@ -526,17 +585,6 @@ class VAEModel(tf.keras.Model):
                 y_pred_masked,
                 sample_weight=sample_weight_masked,
             )
-
-            # kl_loss = self.kl_beta * tf.reduce_mean(
-            #     -0.5
-            #     * tf.reduce_sum(
-            #         z_log_var
-            #         - tf.math.square(z_mean)
-            #         - tf.math.exp(z_log_var)
-            #         + 1,
-            #         axis=-1,
-            #     )
-            # )
 
             # Doesn't include KL Divergence Loss.
             regularization_loss = sum(self.losses)
@@ -558,14 +606,10 @@ class VAEModel(tf.keras.Model):
 
         self.total_loss_tracker.update_state(total_loss)
         self.reconstruction_loss_tracker.update_state(reconstruction_loss)
-        # self.kl_loss_tracker.update_state(kl_loss)
-
-        # return {m.name: m.result() for m in self.metrics}
 
         return {
             "loss": self.total_loss_tracker.result(),
             "reconstruction_loss": self.reconstruction_loss_tracker.result(),
-            # "kl_loss": self.kl_loss_tracker.result(),
             "accuracy": self.accuracy_tracker.result(),
         }
 

@@ -12,23 +12,17 @@ import scipy.linalg
 import toyplot.pdf
 import toyplot as tp
 import toytree as tt
+from decimal import Decimal
 
-from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.impute import SimpleImputer
 
 # Custom imports
 try:
     from snpio import GenotypeData
-    from ..utils import misc
-    from ..utils.misc import get_processor_name
     from ..utils.misc import isnotebook
-    from ..utils.misc import timer
 except (ModuleNotFoundError, ValueError, ImportError):
     from snpio import GenotypeData
-    from utils import misc
-    from utils.misc import get_processor_name
     from utils.misc import isnotebook
-    from utils.misc import timer
 
 is_notebook = isnotebook()
 
@@ -36,21 +30,6 @@ if is_notebook:
     from tqdm.notebook import tqdm as progressbar
 else:
     from tqdm import tqdm as progressbar
-
-# Requires scikit-learn-intellex package
-if get_processor_name().strip().startswith("Intel"):
-    try:
-        from sklearnex import patch_sklearn
-
-        patch_sklearn()
-        intelex = True
-    except (ImportError, TypeError):
-        print(
-            "Warning: Intel CPU detected but scikit-learn-intelex is not installed. We recommend installing it to speed up computation."
-        )
-        intelex = False
-else:
-    intelex = False
 
 # Pandas on pip gives a performance warning when doing the below code.
 # Apparently it's a bug that exists in the pandas version I used here.
@@ -63,6 +42,8 @@ class ImputePhylo:
 
     Args:
         genotype_data (GenotypeData instance): GenotypeData instance. Must have the q, tree, and optionally site_rates attributes defined.
+
+        minbr (float or None, optional): Minimum branch length. Defaults to 0.0000000001
 
         str_encodings (Dict[str, int], optional): Integer encodings used in STRUCTURE-formatted file. Should be a dictionary with keys=nucleotides and values=integer encodings. The missing data encoding should also be included. Argument is ignored if using a PHYLIP-formatted file. Defaults to {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}
 
@@ -100,6 +81,7 @@ class ImputePhylo:
     def __init__(
         self,
         genotype_data: Optional[Any],
+        minbr: Optional[float] = 0.0000000001,
         *,
         str_encodings: Dict[str, int] = {
             "A": 1,
@@ -119,6 +101,7 @@ class ImputePhylo:
         self.popmap = genotype_data.popmap
         self.str_encodings = str_encodings
         self.prefix = prefix
+        self.minbr = minbr
         self.save_plots = save_plots
         self.disable_progressbar = disable_progressbar
         self.column_subset = kwargs.get("column_subset", None)
@@ -156,6 +139,7 @@ class ImputePhylo:
         genotypes: Dict[str, List[Union[str, int]]],
         Q: pd.DataFrame,
         site_rates=None,
+        minbr=0.0000000001,
     ) -> pd.DataFrame:
         """Imputes genotype values with a guide tree.
 
@@ -181,6 +165,8 @@ class ImputePhylo:
             Q (pandas.DataFrame): Rate Matrix Q from .iqtree or separate file.
 
             site_rates (List): Site-specific substitution rates (used to weight per-site Q)
+
+            minbr (float) : Minimum branch length (those below this value will be treated as == minbr)
 
         Returns:
             pandas.DataFrame: Imputed genotypes.
@@ -221,53 +207,65 @@ class ImputePhylo:
             leave=True,
             disable=self.disable_progressbar,
         ):
-            node_lik = dict()
-
-            # LATER: Need to get site rates
             rate = 1.0
             if site_rates is not None:
                 rate = site_rates[snp_index]
 
             site_Q = Q.copy(deep=True) * rate
-            # print(site_Q)
 
-            # calculate state likelihoods for internal nodes
+            bads = list()
+            for samp in genotypes.keys():
+                if genotypes[samp][snp_index].upper() == "N":
+                    bads.append(samp)
+
+            # postorder traversal to compute likelihood at root
+            node_lik = dict()
             for node in tree.treenode.traverse("postorder"):
                 if node.is_leaf():
                     continue
 
                 if node.idx not in node_lik:
-                    node_lik[node.idx] = None
+                    node_lik[node.idx] = [1.0, 1.0, 1.0, 1.0]
 
-                for child in node.get_leaves():
+                for child in node.get_children():
                     # get branch length to child
                     # bl = child.edge.length
                     # get transition probs
-                    pt = self._transition_probs(site_Q, child.dist)
+                    d = child.dist
+                    if d < minbr:
+                        d = minbr
+                    pt = self._transition_probs(site_Q, d)
                     if child.is_leaf():
                         if child.name in genotypes:
-                            # get genotype
-                            sum = None
+                            if child.name in bads:
+                                sum = [1.0, 1.0, 1.0, 1.0]
+                            else:
+                                # get genotype data
+                                sum = None
+                                for allele in self._get_iupac_full(
+                                    genotypes[child.name][snp_index]
+                                ):
+                                    if sum is None:
+                                        sum = [
+                                            Decimal(x)
+                                            for x in list(pt[allele])
+                                        ]
+                                    else:
+                                        sum = [
+                                            Decimal(sum[i]) + Decimal(val)
+                                            for i, val in enumerate(
+                                                list(pt[allele])
+                                            )
+                                        ]
+                            node_lik[child.idx] = [Decimal(x) for x in sum]
 
-                            for allele in self._get_iupac_full(
-                                genotypes[child.name][snp_index]
-                            ):
-                                if sum is None:
-                                    sum = list(pt[allele])
-                                else:
-                                    sum = [
-                                        sum[i] + val
-                                        for i, val in enumerate(
-                                            list(pt[allele])
-                                        )
-                                    ]
-
+                            # add to likelihood for parent node
                             if node_lik[node.idx] is None:
-                                node_lik[node.idx] = sum
-
+                                node_lik[node.idx] = node_lik[child.idx]
                             else:
                                 node_lik[node.idx] = [
-                                    sum[i] * val
+                                    Decimal(node_lik[child.idx][i])
+                                    * Decimal(val)
                                     for i, val in enumerate(node_lik[node.idx])
                                 ]
                         else:
@@ -276,61 +274,159 @@ class ImputePhylo:
                                 f"Error: Taxon {child.name} not found in "
                                 f"genotypes"
                             )
-
                     else:
                         l = self._get_internal_lik(pt, node_lik[child.idx])
                         if node_lik[node.idx] is None:
-                            node_lik[node.idx] = l
+                            node_lik[node.idx] = [Decimal(x) for x in l]
 
                         else:
                             node_lik[node.idx] = [
-                                l[i] * val
+                                Decimal(l[i]) * Decimal(val)
                                 for i, val in enumerate(node_lik[node.idx])
                             ]
 
-            # infer most likely states for tips with missing data
-            # for each child node:
-            bads = list()
-            for samp in genotypes.keys():
-                if genotypes[samp][snp_index].upper() == "N":
-                    bads.append(samp)
-                    # go backwards into tree until a node informed by
-                    # actual data
-                    # is found
-                    # node = tree.search_nodes(name=samp)[0]
-                    node = tree.idx_dict[
-                        tree.get_mrca_idx_from_tip_labels(names=samp)
-                    ]
-                    dist = node.dist
-                    node = node.up
-                    imputed = None
+            # preorder traversal to get marginal reconstructions at internal 
+            # nodes
+            marg = node_lik.copy()
+            for node in tree.treenode.traverse("preorder"):
+                if node.is_root():
+                    continue
+                elif node.is_leaf():
+                    continue
+                lik_arr = marg[node.idx]
+                parent_arr = marg[node.up.idx]
+                marg[node.idx] = [
+                    Decimal(lik) * (Decimal(parent_arr[i]) / Decimal(lik))
+                    for i, lik in enumerate(lik_arr)
+                ]
 
-                    while node and imputed is None:
-                        if self._all_missing(
-                            tree, node.idx, snp_index, genotypes
-                        ):
-                            dist += node.dist
-                            node = node.up
+            # get marginal reconstructions for bad bois
+            two_pass = dict()
+            for samp in bads:
+                # get most likely state for focal tip
+                node = tree.idx_dict[
+                    tree.get_mrca_idx_from_tip_labels(names=samp)
+                ]
+                dist = node.dist
+                parent = node.up
+                imputed = None
+                pt = self._transition_probs(site_Q, dist)
+                lik = self._get_internal_lik(pt, marg[parent.idx])
 
-                        else:
-                            pt = self._transition_probs(site_Q, dist)
-                            lik = self._get_internal_lik(
-                                pt, node_lik[node.idx]
-                            )
-                            maxpos = lik.index(max(lik))
-                            if maxpos == 0:
-                                imputed = "A"
+                tol = 0.001
+                imputed = self._get_imputed_nuc(lik)
 
-                            elif maxpos == 1:
-                                imputed = "C"
+                # two_pass[samp] = [imputed, lik]
+                genotypes[samp][snp_index] = imputed
 
-                            elif maxpos == 2:
-                                imputed = "G"
-
-                            else:
-                                imputed = "T"
-
-                    genotypes[samp][snp_index] = imputed
+            # DEPRECATED: RE-ROOTING METHOD OF YANG ET AL
+            # NEW METHOD (ABOVE) IS LINEAR
+            # reroot=dict()
+            # for samp in bads:
+            #     #focaltree = tree.drop_tips(names=[x for x in bads if x != samp])
+            #     focaltree = tree.root(names=[samp])
+            #
+            #     mystyle = {
+            #         "edge_type": "p",
+            #         "edge_style": {
+            #             "stroke-width": 1,
+            #         },
+            #         "tip_labels_align": True,
+            #         "tip_labels_style": {"font-size": "5px"},
+            #         "node_labels": False,
+            #     }
+            #
+            #     canvas, axes, mark = focaltree.draw()
+            #     toyplot.pdf.render(canvas, "test.pdf")
+            #
+            #     #postorder traversal to compute likelihood
+            #     node_lik = dict()
+            #     for node in focaltree.treenode.traverse("postorder"):
+            #         if node.is_leaf():
+            #             continue
+            #
+            #         if node.idx not in node_lik:
+            #             node_lik[node.idx] = None
+            #
+            #         for child in node.get_children():
+            #             # get branch length to child
+            #             # bl = child.edge.length
+            #             # get transition probs
+            #             pt = self._transition_probs(site_Q, child.dist)
+            #             if child.is_leaf():
+            #                 if child.name in genotypes:
+            #                     if child.name in bads:
+            #                         sum = [1.0, 1.0, 1.0, 1.0]
+            #                     else:
+            #                         # get genotype data
+            #                         sum = None
+            #                         for allele in self._get_iupac_full(
+            #                             genotypes[child.name][snp_index]
+            #                         ):
+            #                             if sum is None:
+            #                                 sum = [Decimal(x) for x in list(pt[allele])]
+            #                             else:
+            #                                 sum = [
+            #                                     Decimal(sum[i]) + Decimal(val)
+            #                                     for i, val in enumerate(
+            #                                         list(pt[allele])
+            #                                     )
+            #                                     ]
+            #
+            #                     node_lik[child.idx] = [Decimal(x) for x in sum]
+            #
+            #                     #add to likelihood for parent node
+            #                     if node_lik[node.idx] is None:
+            #                         node_lik[node.idx] = node_lik[child.idx]
+            #                     else:
+            #                         node_lik[node.idx] = [
+            #                             Decimal(node_lik[child.idx][i]) * Decimal(val)
+            #                             for i, val in enumerate(node_lik[node.idx])
+            #                         ]
+            #                 else:
+            #                     # raise error
+            #                     sys.exit(
+            #                         f"Error: Taxon {child.name} not found in "
+            #                         f"genotypes"
+            #                     )
+            #             else:
+            #                 l = self._get_internal_lik(pt, node_lik[child.idx])
+            #                 if node_lik[node.idx] is None:
+            #                     node_lik[node.idx] = [Decimal(x) for x in l]
+            #
+            #                 else:
+            #                     node_lik[node.idx] = [
+            #                         Decimal(l[i]) * Decimal(val)
+            #                         for i, val in enumerate(node_lik[node.idx])
+            #                     ]
+            #
+            #     # get most likely state for focal tip
+            #     node = focaltree.idx_dict[
+            #         focaltree.get_mrca_idx_from_tip_labels(names=samp)
+            #     ]
+            #     dist = node.dist
+            #     parent = node.up
+            #     imputed = None
+            #     pt = self._transition_probs(site_Q, dist)
+            #     lik = self._get_internal_lik(pt, node_lik[parent.idx])
+            #     maxpos = lik.index(max(lik))
+            #     if maxpos == 0:
+            #         imputed = "A"
+            #
+            #     elif maxpos == 1:
+            #         imputed = "C"
+            #
+            #     elif maxpos == 2:
+            #         imputed = "G"
+            #
+            #     else:
+            #         imputed = "T"
+            #     reroot[samp] = [imputed, lik]
+            # check if two methods give same results
+            # for key in two_pass:
+            #     if two_pass[key][0] != reroot[key][0]:
+            #         print("Two-pass:", two_pass[key][0], "-", two_pass[key][1])
+            #         print("Reroot:", reroot[key][0], "-", reroot[key][1])
 
             if self.save_plots:
                 self._draw_imputed_position(
@@ -358,8 +454,6 @@ class ImputePhylo:
 
         df_imp = pd.DataFrame.from_records(imp_snps)
 
-        if self.validation_mode:
-            return df_imp.to_numpy()
         return df_imp
 
     def nbiallelic(self) -> int:
@@ -369,6 +463,26 @@ class ImputePhylo:
             int: Number of bi-allelic sites remaining after imputation.
         """
         return len(self.imputed.columns)
+
+    def _get_imputed_nuc(self, lik_arr):
+        nucmap = {0: "A", 1: "C", 2: "G", 3: "T"}
+        maxpos = lik_arr.index(max(lik_arr))
+        picks = set([maxpos])
+        # NOT USED:
+        # Experimenting with ways to impute heterozygotes.
+        # Note that LRT isn't appropriate (as I used here) because
+        # the models are not nested & LRTS isn't necessarily expected
+        # to be chisq distributed.
+        # Check out Vuong test and read Lewis et al 2011 (doi: 10.1111/j.2041-210X.2010.00063.x)
+        #
+        # for index, alt in enumerate(lik_arr):
+        #     if index == maxpos:
+        #         continue
+        #     else:
+        #         lr = lrt(lik_arr[maxpos], alt, loglik=False)
+        #         p = chi2.sf(lr)
+        #         print(nucmap[maxpos], ":", str(lrt(lik_arr[maxpos], alt, loglik=False)), p)
+        return nucmap[maxpos]
 
     def _parse_arguments(
         self, genotype_data: Any
@@ -597,9 +711,9 @@ class ImputePhylo:
         ret = list()
         for i, val in enumerate(lik_arr):
             col = list(pt.iloc[:, i])
-            sum = 0.0
+            sum = Decimal(0.0)
             for v in col:
-                sum += v * val
+                sum += Decimal(v) * Decimal(val)
             ret.append(sum)
         return ret
 
@@ -832,47 +946,61 @@ class ImputeAlleleFreq:
         df = df.astype(int)
         df.replace(self.missing, np.nan, inplace=True)
 
-        data = pd.DataFrame()
+        # Initialize an empty list to hold the columns
+        columns = []
         valid_cols = list()
         bad_cnt = 0
+
         if self.pops is not None:
+            df = df.copy()
+
             # Impute per-population mode.
-            # Loop method is faster (by 2X) than no-loop transform.
             df["pops"] = self.pops
             groups = df.groupby(["pops"], sort=False)
 
             for col in df.columns:
                 try:
-                    data[col] = groups[col].transform(
-                        lambda x: x.fillna(x.mode().iloc[0])
+                    # Instead of appending to the DataFrame, append to the list
+                    columns.append(
+                        groups[col].transform(
+                            lambda x: x.fillna(x.mode().iloc[0])
+                        )
                     )
 
-                    # If all populations contained at least one non-NaN value.
                     if col != "pops":
                         valid_cols.append(col)
 
                 except IndexError as e:
                     if str(e).lower().startswith("single positional indexer"):
                         bad_cnt += 1
-                        # Impute with global mode
-                        data[col] = df[col].fillna(df[col].mode().iloc[0])
+                        # Impute with global mode, unless globally missing in which case call as 0.0
+                        if df[col].isna().all():
+                            columns.append(df[col].fillna(0.0, inplace=False))
+                        else:
+                            columns.append(
+                                df[col].fillna(df[col].mode().iloc[0])
+                            )
                     else:
                         raise
 
-            if bad_cnt > 0:
-                print(
-                    f"Warning: {bad_cnt} columns were imputed with the global "
-                    f"mode because some of the populations "
+            data = pd.concat(columns, axis=1)
+
+            if bad_cnt > 0 and not self.validation_mode:
+                UserWarning(
+                    f"\n{bad_cnt} columns were imputed with the "
+                    f"global mode because some of the populations "
                     f"contained only missing data"
                 )
 
             data.drop("pops", axis=1, inplace=True)
         else:
             # Impute global mode.
-            # No-loop method was faster for global.
             imp = SimpleImputer(strategy="most_frequent")
+
+            # replace any columns that are fully missing
+            df.loc[:, df.isna().all()] = df.loc[:, df.isna().all()].fillna(0.0)
+
             data = pd.DataFrame(imp.fit_transform(df))
-            # data = df.apply(lambda x: x.fillna(x.mode().iloc[0]), axis=1)
 
         if self.iterative_mode:
             data = data.astype(dtype="float32")
@@ -883,7 +1011,7 @@ class ImputeAlleleFreq:
             print("Done!")
 
         if not self.validation_mode:
-            return data.values.tolist()
+            return data.values.tolist(), valid_cols
         return data.values, valid_cols
 
     def write2file(
@@ -921,7 +1049,7 @@ class ImputeAlleleFreq:
         df.to_csv(outfile, header=False, index=False)
 
 
-class ImputeNMF:
+class ImputeMF:
     """Impute missing data using matrix factorization. If ``by_populations=False`` then imputation is by global allele frequency. If ``by_populations=True`` then imputation is by population-wise allele frequency.
 
     Args:
@@ -951,7 +1079,7 @@ class ImputeNMF:
         >>>    popmapfile="test.popmap",
         >>>)
         >>>
-        >>>nmf = ImputeNMF(
+        >>>nmf = ImputeMF(
         >>>    genotype_data=data,
         >>>    by_populations=True,
         >>>)
@@ -1023,7 +1151,7 @@ class ImputeNMF:
     def fit_predict(self, X):
         # imputation
         if self.verbose:
-            print(f"Doing NMF imputation without grid search...")
+            print(f"Doing MF imputation...")
         R = X
         R = R.astype(int)
         R[R == self.missing] = -9
@@ -1124,7 +1252,166 @@ class ImputeNMF:
             f"{self.prefix}_output",
             "alignments",
             "Unsupervised",
-            "ImputeNMF",
+            "ImputeMF",
+        )
+
+        Path(outfile).mkdir(parents=True, exist_ok=True)
+
+        outfile = os.path.join(outfile, "imputed_012.csv")
+
+        if isinstance(X, pd.DataFrame):
+            df = X
+        elif isinstance(X, (np.ndarray, list)):
+            df = pd.DataFrame(X)
+        else:
+            raise TypeError(
+                f"Could not write imputed data because it is of incorrect "
+                f"type. Got {type(X)}"
+            )
+
+        df.to_csv(outfile, header=False, index=False)
+
+
+class ImputeRefAllele:
+    """Impute missing data by reference allele.
+
+    Args:
+        genotype_data (GenotypeData object): GenotypeData instance.
+
+        missing (int, optional): Missing data value. Defaults to -9.
+
+        verbose (bool, optional): Whether to print status updates. Set to False for no status updates. Defaults to True.
+
+        kwargs (Dict[str, Any]): Additional keyword arguments to supply. Primarily for internal purposes. Options include: {"iterative_mode": bool, validation_mode: bool, gt: List[List[int]]}. "iterative_mode" determines whether ``ImputeRefAllele`` is being used as the initial imputer in ``IterativeImputer``\. ``gt`` is used internally for the simple imputers during grid searches and validation. If ``genotype_data is None`` then ``gt`` cannot also be None, and vice versa. Only one of ``gt`` or ``genotype_data`` can be set.
+
+    Raises:
+        TypeError: genotype_data cannot be NoneType.
+
+    Attributes:
+        imputed (GenotypeData): New GenotypeData instance with imputed data.
+
+    Example:
+        >>>data = GenotypeData(
+        >>>    filename="test.str",
+        >>>    filetype="structure2rowPopID",
+        >>>    popmapfile="test.popmap",
+        >>>)
+        >>>
+        >>>refallele = ImputeRefAllele(
+        >>>     genotype_data=data
+        >>>)
+        >>>
+        >>>gd_refallele = refallele.imputed
+    """
+
+    def __init__(
+        self,
+        genotype_data: GenotypeData,
+        *,
+        missing: int = -9,
+        verbose: bool = True,
+        **kwargs: Dict[str, Any],
+    ) -> None:
+        if genotype_data is None:
+            raise TypeError("GenotypeData instance must be provided.")
+
+        gt = kwargs.get("gt", None)
+
+        if gt is None:
+            gt_list = genotype_data.genotypes_012(fmt="list")
+        else:
+            gt_list = gt
+
+        self.missing = missing
+        self.verbose = verbose
+        self.iterative_mode = kwargs.get("iterative_mode", False)
+        self.validation_mode = kwargs.get("validation_mode", False)
+
+        # Get reference alleles from GenotypeData object
+        self.ref_alleles = genotype_data.ref
+
+        if not self.validation_mode:
+            imputed012 = self.fit_predict(gt_list)
+            genotype_data = deepcopy(genotype_data)
+            genotype_data.genotypes_012 = imputed012
+            self.imputed = genotype_data
+        else:
+            self.imputed = self.fit_predict(gt_list)
+
+    @property
+    def genotypes_012(self):
+        return self.imputed.genotypes_012
+
+    @property
+    def snp_data(self):
+        return self.imputed.snp_data
+
+    @property
+    def alignment(self):
+        return self.imputed.alignment
+
+    def fit_predict(
+        self, X: List[List[Union[int, str]]]
+    ) -> Union[pd.DataFrame, np.ndarray, List[List[Union[int, str]]]]:
+        """Impute missing genotypes using reference alleles.
+
+        Impute using reference alleles. Missing alleles are primarily coded as negative; usually -9.
+
+        Args:
+            X (List[List[Union[int, str]]], numpy.ndarray, or pandas.DataFrame): Genotypes obtained from the GenotypeData object.
+
+        Returns:
+            pandas.DataFrame, numpy.ndarray, or List[List[Union[int, str]]]: Imputed genotypes of same shape as data.
+
+        Raises:
+            TypeError: X must be of type list(list(int or str)), numpy.ndarray,
+            or pandas.DataFrame, but got {type(X)}
+        """
+        if self.verbose:
+            print("\nImputing missing data with reference alleles...")
+
+        if isinstance(X, (list, np.ndarray)):
+            df = pd.DataFrame(X)
+        elif isinstance(X, pd.DataFrame):
+            df = X.copy()
+        else:
+            raise TypeError(
+                f"X must be of type list(list(int or str)), numpy.ndarray, "
+                f"or pandas.DataFrame, but got {type(X)}"
+            )
+
+        df = df.astype(df.dtypes)
+        df.replace(self.missing, np.nan, inplace=True)
+
+        if df.dtypes[0] == int:
+            df.fillna(0, inplace=True)
+        else:
+            for i, ref in enumerate(self.ref_alleles):
+                df[i].fillna(ref, inplace=True)
+
+        if self.verbose:
+            print("Done!")
+
+        if not self.validation_mode:
+            return df.values.tolist()
+        return df.values
+
+    def write2file(
+        self, X: Union[pd.DataFrame, np.ndarray, List[List[Union[int, float]]]]
+    ) -> None:
+        """Write imputed data to file on disk.
+
+        Args:
+            X (pandas.DataFrame, numpy.ndarray, List[List[Union[int, float]]]): Imputed data to write to file.
+
+        Raises:
+            TypeError: If X is of unsupported type.
+        """
+        outfile = os.path.join(
+            f"{self.prefix}_output",
+            "alignments",
+            "Unsupervised",
+            "ImputeRefAllele",
         )
 
         Path(outfile).mkdir(parents=True, exist_ok=True)

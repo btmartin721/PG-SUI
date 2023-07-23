@@ -59,7 +59,7 @@ class UBPPhase1(tf.keras.Model):
 
     This model is subclassed from the tensorflow/ Keras framework.
 
-    UBPPhase1 subclasses the tf.keras.Model and overrides the train_step() and test_step() functions, which do training and evalutation for each batch in each epoch.
+    UBPPhase1 subclasses the tf.keras.Model and overrides the train_step function, which does training and evalutation for each batch in each epoch.
 
     UBPPhase1 is a single-layer perceptron model used to initially refine V. After Phase 1 the Phase 1 weights are discarded.
 
@@ -95,22 +95,6 @@ class UBPPhase1(tf.keras.Model):
         phase (int, optional): Current phase if doing UBP model. Defaults to 1.
 
         sample_weight (numpy.ndarray, optional): 2D sample weights of shape (n_samples, n_features). Should have values for each class weighted. Defaults to None.
-
-    Methods:
-        call: Does forward pass for model.
-        train_step: Does training for one batch in a single epoch.
-        test_step: Does evaluation for one batch in a single epoch.
-
-    Attributes:
-        V_latent_ (numpy.ndarray(float)): Randomly initialized input that gets refined during training to better predict the targets.
-
-        hidden_layer_sizes (List[Union[int, str]]): Output units for each hidden layer. Length should be the same as the number of hidden layers.
-
-        n_components (int): Number of principal components to use with _V.
-
-        _batch_size (int): Batch size to use per epoch.
-
-        _batch_idx (int): Index of current batch.
 
     Example:
         >>>model = UBPPhase1(V=V, y=y, batch_size=32, missing_mask=missing_mask, output_shape=y_train.shape[1], n_components=3, weights_initializer="glorot_normal", hidden_layer_sizes="midpoint", num_hidden_layers=1, hidden_activation="elu", l1_penalty=1e-6, l2_penalty=1e-6, num_classes=3, phase=3)
@@ -172,10 +156,10 @@ class UBPPhase1(tf.keras.Model):
 
         ### NOTE: I tried using just _V as the input to be refined, but it
         # wasn't getting updated. So I copy it here and it works.
-        # V_latent is refined during train_step().
+        # V_latent is refined during train_step.
         self.V_latent_ = self._V.copy()
 
-        # Initialize parameters used during train_step() and test_step().
+        # Initialize parameters used during train_step() and test_step.
         # input_with_mask_ is set during the UBPCallbacks() execution.
         self._batch_idx = 0
         self._batch_size = batch_size
@@ -201,19 +185,10 @@ class UBPPhase1(tf.keras.Model):
         self.rshp = Reshape((output_shape, num_classes))
 
     def call(self, inputs):
-        """Forward propagates inputs through the model defined in __init__().
-
-        Args:
-            inputs (tf.keras.Input): Input tensor to forward propagate through the model.
-
-        Returns:
-            tf.keras.Model: Output tensor from forward propagation.
-        """
         x = self.dense1(inputs)
         return self.rshp(x)
 
     def model(self):
-        """Here so that mymodel.model().summary() can be called for debugging"""
         x = tf.keras.Input(shape=(self.n_components,))
         return tf.keras.Model(inputs=[x], outputs=self.call(x))
 
@@ -223,22 +198,7 @@ class UBPPhase1(tf.keras.Model):
         self.outputs = model.outputs
 
     def train_step(self, data):
-        """Custom training loop for one step (=batch) in a single epoch.
-
-        GradientTape records the weights and watched variables (usually tf.Variable objects), which in this case are the weights and the input (x), during the forward pass. This allows us to run gradient descent during backpropagation to refine the watched variables.
-
-        This function will train on a batch of samples (rows), which can be adjusted with the ``batch_size`` parameter from the estimator.
-
-        Args:
-            data (Tuple[tf.EagerTensor, tf.EagerTensor]): Tuple of input tensors of shape (batch_size, n_components) and (batch_size, n_features, num_classes).
-
-        Returns:
-            Dict[str, float]: History object that gets returned from fit(). Contains the loss and any metrics specified in compile().
-
-        ToDo:
-            Obtain batch_size without using run_eagerly option in compile(). This will allow the step to be run in graph mode, thereby speeding up computation.
-        """
-        # Set in the UBPCallbacks() callback.
+        """Train step function. Parameters are set in the UBPCallbacks callback"""
         y = self._y
 
         (
@@ -326,65 +286,93 @@ class UBPPhase1(tf.keras.Model):
 
     @property
     def V_latent(self):
-        """Randomly initialized input that gets refined during training."""
+        """Randomly initialized input that gets refined during training.
+        :noindex:
+        """
         return self.V_latent_
 
     @property
     def batch_size(self):
-        """Batch (=step) size per epoch."""
+        """Batch (=step) size per epoch.
+        :noindex:
+        """
         return self._batch_size
 
     @property
     def batch_idx(self):
-        """Current batch (=step) index."""
+        """Current batch (=step) index.
+        :noindex:
+        """
         return self._batch_idx
 
     @property
     def y(self):
+        """Input dataset.
+        :noindex:
+        """
         return self._y
 
     @property
     def missing_mask(self):
+        """Missing mask of shape (y.shape[0], y.shape[1])
+        :noindex:
+        """
         return self._missing_mask
 
     @property
     def sample_weight(self):
+        """Sample weights of shape (y.shape[0], y.shape[1])
+        :noindex:
+        """
         return self._sample_weight
 
     @V_latent.setter
     def V_latent(self, value):
-        """Set randomly initialized input. Gets refined during training."""
+        """Set randomly initialized input. Gets refined during training.
+        :noindex:
+        """
         self.V_latent_ = value
 
     @batch_size.setter
     def batch_size(self, value):
-        """Set batch_size parameter."""
+        """Set batch_size parameter.
+        :noindex:
+        """
         self._batch_size = int(value)
 
     @batch_idx.setter
     def batch_idx(self, value):
-        """Set current batch (=step) index."""
+        """Set current batch (=step) index.
+        :noindex:
+        """
         self._batch_idx = int(value)
 
     @y.setter
     def y(self, value):
-        """Set y after each epoch."""
+        """Set y after each epoch.
+        :noindex:
+        """
         self._y = value
 
     @missing_mask.setter
     def missing_mask(self, value):
-        """Set y after each epoch."""
+        """Set missing_mask after each epoch.
+        :noindex:
+        """
         self._missing_mask = value
 
     @sample_weight.setter
     def sample_weight(self, value):
+        """Set sample_weight after each epoch.
+        :noindex:
+        """
         self._sample_weight = value
 
 
 class UBPPhase2(tf.keras.Model):
     """UBP Phase 2 model to train and use to predict imputations.
 
-    UBPPhase2 subclasses the tf.keras.Model and overrides the train_step() and test_step() functions, which do training for each batch in each epoch.
+    UBPPhase2 subclasses the tf.keras.Model and overrides the train_step function, which does training for each batch in each epoch.
 
     Phase 2 does not refine V, it just refines the weights.
 
@@ -421,25 +409,11 @@ class UBPPhase2(tf.keras.Model):
 
         sample_weight (numpy.ndarray, optional): 2D sample weights of shape (n_samples, n_features). Should have values for each class weighted. Defaults to None.
 
-    Methods:
-        call: Does forward pass for model.
-        train_step: Does training for one batch in a single epoch.
-        test_step: Does evaluation for one batch in a single epoch.
-
-    Attributes:
-        V_latent_ (numpy.ndarray(float)): Randomly initialized input that gets refined during training to better predict the targets.
-
-        hidden_layer_sizes (List[Union[int, str]]): Output units for each hidden layer. Length should be the same as the number of hidden layers.
-
-        n_components (int): Number of principal components to use with _V.
-
-        _batch_size (int): Batch size to use per epoch.
-
-        _batch_idx (int): Index of current batch.
-
     Example:
         >>>model = UBPPhase2(V=V, y=y, batch_size=32, missing_mask=missing_mask, output_shape=y_train.shape[1], n_components=3, weights_initializer="glorot_normal", hidden_layer_sizes="midpoint", num_hidden_layers=1, hidden_activation="elu", l1_penalty=1e-6, l2_penalty=1e-6, num_classes=3, phase=3)
+        >>>
         >>>model.compile(optimizer=optimizer, loss=loss_func, metrics=[my_metrics], run_eagerly=True)
+        >>>
         >>>history = model.fit(X, y, batch_size=batch_size, epochs=epochs, callbacks=[MyCallback()], validation_split=validation_split, shuffle=False)
 
     Raises:
@@ -498,10 +472,10 @@ class UBPPhase2(tf.keras.Model):
 
         ### NOTE: I tried using just _V as the input to be refined, but it
         # wasn't getting updated. So I copy it here and it works.
-        # V_latent is refined during train_step().
+        # V_latent is refined during train_step.
         self.V_latent_ = self._V.copy()
 
-        # Initialize parameters used during train_step().
+        # Initialize parameters used during train_step.
         self._batch_idx = 0
         self._batch_size = batch_size
         self.n_components = n_components
@@ -591,43 +565,25 @@ class UBPPhase2(tf.keras.Model):
         self.dropout_layer = Dropout(rate=dropout_rate)
 
     def call(self, inputs, training=None):
-        """Forward propagates inputs through the model defined in __init__().
-
-        Args:
-            inputs (tf.keras.Input): Input tensor to forward propagate through the model.
-
-            training (bool or None): Whether in training mode or not. Affects whether dropout is used.
-
-        Returns:
-            tf.keras.Model: Output tensor from forward propagation.
-        """
-        if self.dropout_rate == 0.0:
-            training = False
         x = self.dense1(inputs)
-        if training:
-            x = self.dropout_layer(x, training=training)
+        x = self.dropout_layer(x, training=training)
         if self.dense2 is not None:
             x = self.dense2(x)
-            if training:
-                x = self.dropout_layer(x, training=training)
+            x = self.dropout_layer(x, training=training)
         if self.dense3 is not None:
             x = self.dense3(x)
-            if training:
-                x = self.dropout_layer(x, training=training)
+            x = self.dropout_layer(x, training=training)
         if self.dense4 is not None:
             x = self.dense4(x)
-            if training:
-                x = self.dropout_layer(x, training=training)
+            x = self.dropout_layer(x, training=training)
         if self.dense5 is not None:
             x = self.dense5(x)
-            if training:
-                x = self.dropout_layer(x, training=training)
+            x = self.dropout_layer(x, training=training)
 
         x = self.output1(x)
         return self.rshp(x)
 
     def model(self):
-        """Here so that mymodel.model().summary() can be called for debugging"""
         x = tf.keras.Input(shape=(self.n_components,))
         return tf.keras.Model(inputs=[x], outputs=self.call(x))
 
@@ -637,27 +593,7 @@ class UBPPhase2(tf.keras.Model):
         self.outputs = model.outputs
 
     def train_step(self, data):
-        """Custom training loop for one step (=batch) in a single epoch.
-
-        GradientTape records the weights and watched
-        variables (usually tf.Variable objects), which
-        in this case are the weights, during the forward pass.
-        This allows us to run gradient descent during
-        backpropagation to refine the watched variables.
-
-        This function will train on a batch of samples (rows), which can be adjusted with the ``batch_size`` parameter from the estimator.
-
-        Args:
-            data (Tuple[tf.EagerTensor, tf.EagerTensor]): Input tensorflow tensors of shape (batch_size, n_components) and (batch_size, n_features, num_classes).
-
-        Returns:
-            Dict[str, float]: History object that gets returned from fit(). Contains the loss and any metrics specified in compile().
-
-        ToDo:
-            Obtain batch_size without using run_eagerly option in compile(). This will allow the step to be run in graph mode, thereby speeding up computation.
-        """
-
-        # Set in the UBPCallbacks() callback.
+        """Train step function. Parameters are set in the UBPCallbacks callback"""
         y = self._y
 
         (
@@ -728,65 +664,93 @@ class UBPPhase2(tf.keras.Model):
 
     @property
     def V_latent(self):
-        """Randomly initialized input variable that gets refined during training."""
+        """Randomly initialized input variable that gets refined during training.
+        :noindex:
+        """
         return self.V_latent_
 
     @property
     def batch_size(self):
-        """Batch (=step) size per epoch."""
+        """Batch (=step) size per epoch.
+        :noindex:
+        """
         return self._batch_size
 
     @property
     def batch_idx(self):
-        """Current batch (=step) index."""
+        """Current batch (=step) index.
+        :noindex:
+        """
         return self._batch_idx
 
     @property
     def y(self):
+        """Full input dataset.
+        :noindex:
+        """
         return self._y
 
     @property
     def missing_mask(self):
+        """Get missing_mask for current epoch.
+        :noindex:
+        """
         return self._missing_mask
 
     @property
     def sample_weight(self):
+        """Get sample_weight for current epoch.
+        :noindex:
+        """
         return self._sample_weight
 
     @V_latent.setter
     def V_latent(self, value):
-        """Set randomly initialized input variable. Gets refined during training."""
+        """Set randomly initialized input variable. Gets refined during training.
+        :noindex:
+        """
         self.V_latent_ = value
 
     @batch_size.setter
     def batch_size(self, value):
-        """Set batch_size parameter."""
+        """Set batch_size parameter.
+        :noindex:
+        """
         self._batch_size = int(value)
 
     @batch_idx.setter
     def batch_idx(self, value):
-        """Set current batch (=step) index."""
+        """Set current batch (=step) index.
+        :noindex:
+        """
         self._batch_idx = int(value)
 
     @y.setter
     def y(self, value):
-        """Set y after each epoch."""
+        """Set y after each epoch.
+        :noindex:
+        """
         self._y = value
 
     @missing_mask.setter
     def missing_mask(self, value):
-        """Set y after each epoch."""
+        """Set missing_mask after each epoch.
+        :noindex:
+        """
         self._missing_mask = value
 
     @sample_weight.setter
     def sample_weight(self, value):
+        """Set sample_weight after each epoch.
+        :noindex:
+        """
         self._sample_weight = value
 
 
 class UBPPhase3(tf.keras.Model):
     """UBP Phase 3 model to train and use to predict imputations.
 
-    UBPPhase3 subclasses the tf.keras.Model and overrides the train_step() and test_step() functions, which do training and evaluation for each batch in each single epoch.
+    UBPPhase3 subclasses the tf.keras.Model and overrides the train_step function, which does training and evaluation for each batch in each single epoch.
 
     Phase 3 Refines both the weights and V.
 
@@ -823,25 +787,11 @@ class UBPPhase3(tf.keras.Model):
 
         sample_weight (numpy.ndarray, optional): 2D sample weights of shape (n_samples, n_features). Should have values for each class weighted. Defaults to None.
 
-    Methods:
-        call: Does forward pass for model.
-        train_step: Does training for one batch in a single epoch.
-        test_step: Does evaluation for one batch in a single epoch.
-
-    Attributes:
-        V_latent_ (numpy.ndarray(float)): Randomly initialized input that gets refined during training to better predict the targets.
-
-        hidden_layer_sizes (List[Union[int, str]]): Output units for each hidden layer. Length should be the same as the number of hidden layers.
-
-        n_components (int): Number of principal components to use with _V.
-
-        _batch_size (int): Batch size to use per epoch.
-
-        _batch_idx (int): Index of current batch.
-
     Example:
         >>>model = UBPPhase3(V=V, y=y, batch_size=32, missing_mask=missing_mask, output_shape=y_train.shape[1], n_components=3, weights_initializer="glorot_normal", hidden_layer_sizes="midpoint", num_hidden_layers=1, hidden_activation="elu", l1_penalty=1e-6, l2_penalty=1e-6, num_classes=3, phase=3)
+        >>>
         >>>model.compile(optimizer=optimizer, loss=loss_func, metrics=[my_metrics], run_eagerly=True)
+        >>>
         >>>history = model.fit(X, y, batch_size=batch_size, epochs=epochs, callbacks=[MyCallback()], validation_split=validation_split, shuffle=False)
 
     Raises:
@@ -898,10 +848,10 @@ class UBPPhase3(tf.keras.Model):
 
         ### NOTE: I tried using just _V as the input to be refined, but it
         # wasn't getting updated. So I copy it here and it works.
-        # V_latent is refined during train_step().
+        # V_latent is refined during train_step.
         self.V_latent_ = self._V.copy()
 
-        # Initialize parameters used during train_step().
+        # Initialize parameters used during train_step.
         self._batch_idx = 0
         self._batch_size = batch_size
         self.n_components = n_components
@@ -982,18 +932,6 @@ class UBPPhase3(tf.keras.Model):
         self.dropout_layer = Dropout(rate=dropout_rate)
 
     def call(self, inputs, training=None):
-        """Forward propagates inputs through the model defined in __init__().
-
-        Model varies depending on which phase UBP is in.
-
-        Args:
-            inputs (tf.keras.Input): Input tensor to forward propagate through the model.
-
-            training (bool or None): Whether in training mode or not. Affects whether dropout is used.
-
-        Returns:
-            tf.keras.Model: Output tensor from forward propagation.
-        """
         x = self.dense1(inputs)
         if self.dense2 is not None:
             x = self.dense2(x)
@@ -1008,7 +946,6 @@ class UBPPhase3(tf.keras.Model):
         return self.rshp(x)
 
     def model(self):
-        """Here so that mymodel.model().summary() can be called for debugging"""
         x = tf.keras.Input(shape=(self.n_components,))
         return tf.keras.Model(inputs=[x], outputs=self.call(x))
 
@@ -1018,27 +955,7 @@ class UBPPhase3(tf.keras.Model):
         self.outputs = model.outputs
 
     def train_step(self, data):
-        """Custom training loop for one step (=batch) in a single epoch.
-
-        GradientTape records the weights and watched
-        variables (usually tf.Variable objects), which
-        in this case are the weights and the input (y_true), during the forward pass.
-        This allows us to run gradient descent during
-        backpropagation to refine the watched variables.
-
-        This function will train on a batch of samples (rows), which can be adjusted with the ``batch_size`` parameter from the estimator.
-
-        Args:
-            data (Tuple[tf.EagerTensor, tf.EagerTensor]): Input tensors of shape (batch_size, n_components) and (batch_size, n_features, num_classes).
-
-        Returns:
-            Dict[str, float]: History object that gets returned from fit(). Contains the loss and any metrics specified in compile().
-
-        ToDo:
-            Obtain batch_size without using run_eagerly option in compile(). This will allow the step to be run in graph mode, thereby speeding up computation.
-        """
-        # Set in the UBPCallbacks() callback.
-        # Set in the UBPCallbacks() callback.
+        """Train step function. Parameters are set in the UBPCallbacks callback"""
         y = self._y
 
         (
@@ -1126,56 +1043,84 @@ class UBPPhase3(tf.keras.Model):
 
     @property
     def V_latent(self):
-        """Randomly initialized input variable that gets refined during training."""
+        """Randomly initialized input variable that gets refined during training.
+        :noindex:
+        """
         return self.V_latent_
 
     @property
     def batch_size(self):
-        """Batch (=step) size per epoch."""
+        """Batch (=step) size per epoch.
+        :noindex:
+        """
         return self._batch_size
 
     @property
     def batch_idx(self):
-        """Current batch (=step) index."""
+        """Current batch (=step) index.
+        :noindex:
+        """
         return self._batch_idx
 
     @property
     def y(self):
+        """Full input dataset y.
+        :noindex:
+        """
         return self._y
 
     @property
     def missing_mask(self):
+        """Missing mask of shape (y.shape[0], y.shape[1])
+        :noindex:
+        """
         return self._missing_mask
 
     @property
     def sample_weight(self):
+        """Sample weights of shpe (y.shape[0], y.shape[1])
+        :noindex:
+        """
         return self._sample_weight
 
     @V_latent.setter
     def V_latent(self, value):
-        """Set randomly initialized input variable. Gets refined during training."""
+        """Set randomly initialized input variable. Refined during training.
+        :noindex:
+        """
         self.V_latent_ = value
 
     @batch_size.setter
     def batch_size(self, value):
-        """Set batch_size parameter."""
+        """Set batch_size parameter.
+        :noindex:
+        """
         self._batch_size = int(value)
 
     @batch_idx.setter
     def batch_idx(self, value):
-        """Set current batch (=step) index."""
+        """Set current batch (=step) index.
+        :noindex:
+        """
         self._batch_idx = int(value)
 
     @y.setter
     def y(self, value):
-        """Set y after each epoch."""
+        """Set y after each epoch.
+        :noindex:
+        """
         self._y = value
 
     @missing_mask.setter
     def missing_mask(self, value):
-        """Set y after each epoch."""
+        """Set missing_mask after each epoch.
+        :noindex:
+        """
         self._missing_mask = value
 
     @sample_weight.setter
     def sample_weight(self, value):
+        """Set sample_weight after each epoch.
+        :noindex:
+        """
         self._sample_weight = value

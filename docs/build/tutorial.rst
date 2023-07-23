@@ -1,101 +1,67 @@
 Tutorial
 ========
 
+PG-SUI Overview
+________________
+
+PG-SUI (Population Genomic Supervised and Unsupervised Imputation) performs missing data imputation on SNP datasets. We have included seven machine and deep learning algorithms with which to impute, including both supervised and unsupervised training methods. The currently supported algorithms include:
+
++ Supervised
+    + XGBoost
+    + RandomForest
+    + K-Nearest Neighbors
+
++ The supervised algorithms work by using the N nearest features, based on absolute correlations between loci, to supervise the imputation. The algorithm is based on the MICE (Multivariate Imputation by Chained Equations) algorithm implemented in scikit-learn's IterativeImputer [1]_. The unsupervised deep learning models each have distinct architectures that perform the imputation in different ways. For training the deep learning algorithms, missing values are simulated and the model is trained on the simulated missing values. The real missing values are then predicted by the trained model. The strategy for simulating missing values can be set with the ``sim_strategy`` argument.
+
++ Unsupervised Neural networks
+    + Variational AutoEncoder (VAE) [2]_
+    + Standard AutoEncoder (SAE) [3]_
+    + Non-linear Principal Component Analysis (NLPCA) [4]_
+    + Unsupervised backpropagation (UBP) [5]_
+
++ NLPCA
+    + NLPCA trains randomly generated, reduced-dimensionality input to predict the correct output. The input is then refined at each backpropagation step until it accurately predict the output.
++ UBP
+    + UBP is an extension of NLPCA with the input being randomly generated and of reduced dimensionality that gets trained to predict the supplied output based on only known values. It then uses the trained model to predict missing values. However, in contrast to NLPCA, UBP trains the model over three phases. The first is a single layer perceptron used to refine the randomly generated input. The second phase is a multi-layer perceptron that uses the refined reduced-dimension data from the first phase as input. In the second phase, the model weights are refined but not the input. In the third phase, the model weights and the inputs are then refined.
+
+
++ Standard AutoEncoder
+    + The SAE model reduces (i.e., encodes) the input, which is the full dataset, to a reduced-dimensional layer, and then trains itself to reconstruct the input (i.e., decodes) from the reduced-dimensional layer. 
+
++ VAE
+    + The VAE model is similar to SAE, except the reduced-dimensional layer (latent dimension) represents a sampling distribution with a mean and variance that gets sampled from, and the model trains itself by trying to reconstruct the input (i.e., decodes).
+
+
+Installing PG-SUI
+------------------
+
+The easiest way to install PG-SUI is with pip. If you would rather manually install the dependencies, see the :doc:`Installation <install>` page. 
+
+.. code-block:: bash
+
+    pip install pg-sui
+
 Input Data
-----------
+-----------
 
-To use PG-SUI, you need to load your data into the API using the GenotypeData class. GenotypeData takes a STRUCTURE or PHYLIP file, the file type, a population map (popmap) file, and optionally phylogenetic tree and rate matrix files as input.
+To use PG-SUI, you need to load your data into the API using the GenotypeData class from the `SNPio package <https://github.com/btmartin721/SNPio>`_, which is automatically installed as a dependency through pip. GenotypeData takes a STRUCTURE, VCF, or PHYLIP file, a population map (popmap) file, and optionally phylogenetic tree and rate matrix files as input. See the `SNPio documentation <https://snpio.readthedocs.io>`_ for more information.
 
-Popmap File
-^^^^^^^^^^^
-
-The population map is a two-column, tab-separated file in the format:
-
-.. code-block:: text
-
-    sample1    population1
-    sample2    population1
-    sample3    population2
-    sample4    population2
-    ...        ...
-
-PHYLIP Input
-^^^^^^^^^^^^
-
-If you choose to load a PHYLIP file, you also need to specify a population map.
-
-To load the PHYLIP file, instantiate the GenotypeData class.
+Here is a basic usage for SNPio:
 
 .. code-block:: python
+
+    from snpio import GenotypeData
 
     data = GenotypeData(
-        filename="test.phy", 
-        filetype="phylip", 
-        popmapfile="test.popmap"
+        filename="pgsui/example_data/phylip_files/test_n100.phy",
+        popmapfile="pgsui/example_data/popmaps/test.popmap",
+        guidetree="pgsui/example_data/trees/test.tre",
+        qmatrix="pgsui/example_data/trees/test.qmat",
+        siterates="pgsui/example_data/trees/test_siterates_n100.txt",
+        prefix="test_imputer",
+        force_popmap=True,
+        plot_format="png",
     )
-
-STRUCTURE File
-^^^^^^^^^^^^^^
-
-To load a STRUCTURE file, there are a few options you can choose from. The file can be in either the 1-row or 2-row per individual format by setting ``filetype=structure1row`` or ``filetype=structure2row``, and the population IDs can either be included as the second column or specified with the popmap file.
-
-
-.. code-block:: python
-
-    # Popmap file used
-    # Structure file in 2-row per individual format
-    data = GenotypeData(
-        filename="test.nopops.str",
-        filetype="structure2row",
-        popmapfile="test.popmap"
-    )
-
-Load a Phylogeny
-^^^^^^^^^^^^^^^^
-
-Some of the analyses require you to input a Newick-formatted phylogenetic tree and a substitution rate matrix Q.
-
-To initialize the GenotypeData object with a phylogeny, which is required if using the ``initial_strategy="phylogeny`` argument or ``ImputePhylo()`` method, you need to specify paths to the Newick-formatted tree file and the rate matrix Q file.
-
-The rate matrix Q file can be obtained from the IQ-TREE standard output, and in fact you can just input the whole .iqtree file and PG-SUI will pull the rate matrix from it. Or you can provide a file that only has the rate matrix table.
-
-.. code-block:: python
-
-    # Popmap file used
-    # Structure file in 2-row per individual format
-    data = GenotypeData(
-        filename="test.nopops.str",
-        filetype="structure2row",
-        popmapfile="test.popmap",
-        guidetree="test.tre",
-        qmatrix_iqtree="test.iqtree",
-        # qmatrix="test.Q" # Instead of IQ-TREE file
-    )
-
-GenotypeData Attributes
-^^^^^^^^^^^^^^^^^^^^^^^
-
-The data can be retrieved from the GenotypeData object as a pandas DataFrame, a 2D numpy array, or a 2D list, each with shape (n_samples, n_SNPs):
-
-.. code-block:: python
-
-    df = data.genotypes012_df # pandas DataFrame
-    arr = data.genotypes012_array # numpy array
-    l = data.genotypes012_list # python list
-
-You can also retrieve the number of individuals and SNP sites:
-
-.. code-block:: python
-
-    num_inds = data.indcount
-    num_snps = data.snpcount
-
-And to retrieve a list of sample IDs or population IDs:
-
-.. code-block:: python
-
-    inds = data.individuals
-    pops = data.populations
 
 
 Supported Imputation Methods
@@ -105,6 +71,8 @@ There are numerous supported algorithms to impute missing data. Each one can be 
 
 .. code-block:: python
 
+    from pgsui import *
+
     # Various imputation methods are supported
 
     ############################################
@@ -113,9 +81,7 @@ There are numerous supported algorithms to impute missing data. Each one can be 
 
     knn = ImputeKNN(genotype_data=data) # K-Nearest Neighbors
     rf = ImputeRandomForest(genotype_data=data) # Random Forest or Extra Trees
-    gb = ImputeGradientBoosting(genotype_data=data) # Gradient Boosting
     xgb = ImputeXGBoost(genotype_data=data) # XGBoost
-    lgbm = ImputeLightGBM(genotype_data=data) # LightGBM
 
     ########################################
     # Non-machine learning methods
@@ -128,50 +94,59 @@ There are numerous supported algorithms to impute missing data. Each one can be 
     pop_af = ImputeAlleleFreq(genotype_data=data, by_populations=True)
     global_af = ImputeAlleleFreq(genotype_data=data, by_populations=False)
 
-    mf = ImputeMF(genotype_data=data) # Matrix factorization
+    # Matrix factorization imputation
+    mf = ImputeMF(genotype_data=data)
 
     ########################################
     # Unsupervised neural network models
     ########################################
 
     vae = ImputeVAE(genotype_data=data) # Variational autoencoder
+    sae = ImputeStandardAutoEncoder(genotype_data=data) # Standard AutoEncoder
     nlpca = ImputeNLPCA(genotype_data=data) # Nonlinear PCA
     ubp = ImputeUBP(genotype_data=data) # Unsupervised backpropagation
 
-In each of the above class instantiations, the analysis will automatically run. Each method has its own unique arguments, so look over the :doc:`API documentation <pgsui.impute.estimators>` to see what each of the parameters do.
+In each of the above class instantiations, the analysis will automatically run. Each method has its own unique arguments, so look over :doc:`API documentation <pgsui.impute>` to see what each of the parameters do.
 
-The imputed data will be written to a file on disk with the prefix designated by the ``prefix`` parameter, or you can access the imputed data from the instantiated object. Some of the imputers have options to turn off writing to disk.
+The imputed data will be saved as a GenotypeData object that can be accessed from the ``imputed`` property of the class instance. For example:
+
+.. code-block:: python
+
+    vae = ImputeVAE(genotype_data=data)
+
+    # Get the new GentoypeData instance.
+    imputed_genotype_data = vae.imputed
+
 
 Initial Strategy
 ----------------
 
-For the IterativeImputer method, the ``initial_strategy`` argument determines the initial method for imputing the nearest neighbors that are used to inform the column currently being imputed. There are several options you can choose from for ``initial_strategy``. "populations" uses the popmap file to inform the imputation. "most_frequent" uses the global mode per column, and "phylogeny" uses an input phylogeny. "mf" uses matrix factorization to do the initial imputation. 
+For the supervised IterativeImputer method, the ``initial_strategy`` argument determines the initial method for imputing the nearest neighbors that are used to inform the column currently being imputed. There are several options you can choose from for ``initial_strategy``. "populations" uses the popmap file to inform the imputation. "most_frequent" uses the global mode per column, and "phylogeny" uses an input phylogeny. "mf" uses matrix factorization to do the initial imputation. 
 
-Both the IterativeImputer and the neural network methods use the ``initial_strategy`` argument for doing the validation.
-
-Different options might be better or worse, depending on the dataset. It helps to know some biological context of your study system in this case.
+Different options might be better or worse, depending on the dataset. It helps to know some biological context of your study system in this case. For example, you can use a phylogenetic tree to do the initial imputation in the supervised models and to inform the missing data simulations in the neural network models.
 
 .. code-block:: python
 
-    ImputeXGBoost(genotype_data=data, initial_strategy="phylogeny")
+    xgb_data = ImputeXGBoost(genotype_data=data, initial_strategy="phylogeny")
+    nlpca_data = ImputeNLPCA(genotype_data=data, sim_strategy="nonrandom")
 
 .. note::
 
     If using ``initial_strategy="phylogeny"``, then you must input a phylogeny when initializing the ``GenotypeData`` object. 
     
-    Likewise, if using ``initial_strategy="populations"``, then a popmap file must be supplied to ``GenotypeData``.
+    Likewise, if using ``initial_strategy="populations"``, then a popmap file must be supplied to ``GenotypeData``.  
 
 Nearest Neighbors, Iterations, and Estimators
 ---------------------------------------------
 
-N Nearest Neighbors
+N-Nearest Neighbors
 ^^^^^^^^^^^^^^^^^^^
 
-IterativeImputer uses the N nearest neighbors (columns) based on a correlation matrix. The number of nearest neighbors can be tuned by changing the ``n_nearest_features`` parameter.
+IterativeImputer uses the N-nearest neighbors (columns) based on a correlation matrix. The number of nearest neighbors can be tuned by changing the ``n_nearest_features`` parameter.
 
 .. code-block:: python
 
-    lgbm = ImputeLGBM(genotype_data=data, n_nearest_features=50)
+    lgbm = ImputeXGBoost(genotype_data=data, n_nearest_features=50)
 
 Maximum Iterations
 ^^^^^^^^^^^^^^^^^^
@@ -198,7 +173,7 @@ The decision tree classifiers also have an ``n_estimators`` parameter that can b
 Chunk size
 ----------
 
-Both the IterativeImputer and neural network algorithms support dataset chunking. If you find yourself running out of RAM, try breaking the imputation into chunks.
+The IterativeImputer algorithms support dataset chunking. If you find yourself running out of RAM, try breaking the imputation into chunks.
 
 .. code-block:: python
 
@@ -236,9 +211,9 @@ If you disable the progress bar and want to change how often it prints status up
 Iterative Imputer
 -----------------
 
-IterativeImputer is a `scikit-learn <https://scikit-learn.org>`_ imputation method that we have extended herein. It iterates over each feature (i.e., SNP column) and uses the N nearest neighbors to inform the imputation at the current feature. The number of nearest neighbors (i.e., features) can be adjusted by users, and neighbors are determined using a correlation matrix between features.
+IterativeImputer is a `scikit-learn <https://scikit-learn.org>`_ imputation method that we have extended herein. It iterates over each feature (i.e., SNP column) and uses the N-nearest neighbors to inform the imputation at the current feature. The number of nearest neighbors (i.e., columns) can be adjusted by users, and neighbors are determined using a correlation matrix between features.
 
-IterativeImputer can use any of scikit-learn's estimators, but currently PG-SUI supports Random Forest (or Extra Trees), Gradient Boosting, K-Nearest Neighbors, XGBoost, LightGBM, 
+IterativeImputer can use any of scikit-learn's estimators, but currently PG-SUI supports Random Forest (or Extra Trees), XGBoost, and K-Nearest Neighbors.
 
 Our modifications have added grid searches and some other customizations to scikit-learn's `IterativeImputer class <https://scikit-learn.org/stable/modules/generated/sklearn.impute.IterativeImputer.html>`_.
 
@@ -246,7 +221,9 @@ Our modifications have added grid searches and some other customizations to scik
 Parallel Processing
 -------------------
 
-Many of the IterativeImputer classifiers have an ``n_jobs`` parameter that tell it to paralellize the estimator. If ``gridparams`` is not None, ``n_jobs`` is used for the grid search. Otherwise it is used for the classifier. -1 means using all available processors.
+The IterativeImputer classifiers have an ``n_jobs`` parameter that tell it to parallelize the estimator. If ``gridparams`` is not None, ``n_jobs`` is used for the grid search. Otherwise it is used for the classifier. -1 means using all available processors.
+
+The neural network classifiers use all processors by default, but if ``gridparams`` is not None, then it uses n_jobs to parallelize parameter sweeps in the grid search.
 
 .. code-block:: python
 
@@ -260,26 +237,40 @@ Many of the IterativeImputer classifiers have an ``n_jobs`` parameter that tell 
 Imputer validation
 ------------------
 
-Both IterativeImputer and the neural networks calculate a suite of validation metrics to assess the efficacy of the model and facilitate cross-comparison. For IterativeImputer, there are two ways to validate: Parameter grid searches and cross-validation replicates. For the neural network models, just the cross-validation replicates are performed. The validation runs on a random subset of the SNP columns, the proportion of which can be changed with the ``column_subset`` (for grid searches) and ``validation_only`` (for cross-validation) arguments.
+Both IterativeImputer and the neural networks calculate a suite of validation metrics to assess the efficacy of the model and facilitate cross-comparison. For IterativeImputer, there are two ways to validate: Parameter grid searches and cross-validation replicates. The validation runs on a random subset of the SNP columns, the proportion of which can be changed with the ``column_subset`` argument. If you want to do the validation, set ``do_validation=True``.
 
 E.g.,:
 
 .. code-block:: python
 
-    rf = ImputeRandomForest(genotype_data=data, validation_only=0.25)
+    # Do validation on a random subset of 25% of the columns.
+    rf = ImputeRandomForest(genotype_data=data, do_validation=True, column_subset=0.25)
 
 
 Grid searches
 ^^^^^^^^^^^^^
 
-The IterativeImputer methods can perform several types of grid searches by providing the ``gridparams`` argument. Grid searches try to find the best combinations of settings by maximizing the accuracy across a distribution of parameter values. If ``gridparams == None``, the grid search will not be performed and just a cross-validation will be performed by running a user-specified number of imputation replicates and calculating validation metrics. If ``gridparams != None:``, the grid search will run. If ``gridparams == None`` and ``validation_only == None``, then no validation will be performed.
+The IterativeImputer methods can perform several types of grid searches by providing the ``gridparams`` argument. Grid searches try to find the best combinations of parameters by maximizing the accuracy across a distribution of parameter values. If ``gridparams=None``, the grid search will not be performed. If ``gridparams != None:``, the grid search will run.
 
-Two types of grid searches can be run:
+Three types of grid searches can be run:
+    1. GridSearchCV: Tests all provided parameter combinations supplied in ``gridparams``.
+    2. RandomizedSearchCV: Generates random parameters from a distribution or a list/ array of provided values. The number of parameter combinations to test can be set with the ``grid_iter`` parameter.
+    3. Genetic Algorithm: Use a genetic algorithm to refine the grid search. It tries to optimize the search space with the genetic algorithm. Will also generate several informative plots.
 
-    1. RandomizedSearchCV: Generates random parameters from a distribution or a list/ array of provided values.
-    2. Genetic Algorithm: Use a genetic algorithm to refine the grid search. Will generate several informative plots.
+    The type of grid search can be set with the ``gridsearch_method`` argument to the estimator, which supports the following options: ``gridsearch``, ``randomized_gridsearch``, and ``genetic_algorithm``.
 
-The genetic algorithm has a suite of parameters that can be adjusted. See the :doc:`documentation <pgsui.impute.estimators>` and `the sklearn-genetic-opt documentation <https://sklearn-genetic-opt.readthedocs.io/en/stable/api/space.html>`_ for more information.
+
+.. warning::
+
+    GridSearchCV tests every possible combination of model parameters. So, if you supply a lot of parameter possibilities it will take a really long time to run. The number of parameters combinations contains ``C = L1 x L2 x L3 x ... x Ln`` possible combinations, where each ``L`` is the length of the list for a given parameter.
+
+.. note::
+    RandomizedSearchCV tests ``grid_iter * cv`` random parameter combinations. So, if you are doing 5-fold cross-validation and you have 1000 parameter combinations, it will test 5000 total folds.
+
+.. note::
+    See the scikit-learn `model selection documentation <https://scikit-learn.org/stable/model_selection.html>`_ for more information on GridSearchCV and RandomizedSearchCV.
+
+The genetic algorithm has a suite of parameters that can be adjusted. See the :doc:`documentation <pgsui.impute>` and `the sklearn-genetic-opt documentation <https://sklearn-genetic-opt.readthedocs.io/en/stable/api/space.html>`_ for more information.
 
 
 gridparams
@@ -322,7 +313,7 @@ Then you would run the analysis by providing the gridparams argument.
         genotype_data=data, 
         gridparams=grid_params, 
         column_subset=0.25, 
-        ga=False
+        gridsearch_method="gridsearch",
     )
 
 To run the genetic algorithm grid search, the parameter distributions need to be set up using the sklearn-genetic-opt API instead of lists/ arrays. You can use the ``Categorical``, ``Integer``, and ``Continuous`` classes to set up the distributions (see the `sklearn-genetic-opt documentation <https://sklearn-genetic-opt.readthedocs.io/en/stable/api/space.html>`_)
@@ -337,7 +328,7 @@ To run the genetic algorithm grid search, the parameter distributions need to be
         "max_depth": Integer(2, 110),
     }
 
-Then you can run the grid search in the same way, except set ``ga=True``.
+Then you can run the grid search in the same way, except set ``gridsearch_method=genetic_algorithm``.
 
 .. code-block:: python
 
@@ -346,7 +337,7 @@ Then you can run the grid search in the same way, except set ``ga=True``.
         genotype_data=data, 
         gridparams=grid_params, 
         column_subset=0.25, 
-        ga=True
+        gridsearch_method="genetic_algorithm",
     )
 
 You can change how many cross-validation folds the grid search uses by setting the ``cv`` parameter.
@@ -358,14 +349,15 @@ You can change how many cross-validation folds the grid search uses by setting t
 Cross-validation
 ^^^^^^^^^^^^^^^^
 
-If you don't want to do a grid search and just want to do cross-validation, then you can just leave the default ``gridparams=None``.
+If you don't want to do a grid search and just want to do cross-validation, then you can just leave the default ``gridparams=None`` and set ``do_validation`` to True. 
 
 .. code-block:: python
 
     # Use 25% of columns to do cross-validation without grid search.
     rf = ImputeRandomForest(
         genotype_data=data, 
-        validation_only=0.25
+        column_subset=0.25,
+        do_validation=True
     )
 
 Or you can do the imputation without any validation metrics.
@@ -375,7 +367,7 @@ Or you can do the imputation without any validation metrics.
     # No validation
     rf = ImputeRandomForest(
         genotype_data=data, 
-        validation_only=None
+        do_validation=False, # default
     )
 
 You can change the number of replicates that it does by setting the ``cv`` parameter.
@@ -400,7 +392,7 @@ The neural network imputers can be run in the same way with cross-validation.
 
     nlpca = ImputeNLPCA(genotype_data=data)
 
-This will run it with the default arguments. You might want to adjust some of the parameters. See the relevant :doc:`documentation <pgsui.impute.estimators>` for more information.
+This will run it with the default arguments. You might want to adjust some of the parameters. See the relevant :doc:`documentation <pgsui.impute>` for more information.
 
 The neural network methods print out the current mean squared error with each epoch (cycle through the data). The VAE model will run for a fixed number of epochs, but the NLPCA and UBP models have an early stopping criterion that will checkpoint the model at the first occurrence of the lowest error and stop training after a lack of improvement for a user-defined number of epochs. This is intended to reduce overfitting.
 
@@ -433,13 +425,15 @@ Finally, for NLPCA and UBP you can experiment with the number of reduced-dimensi
 
     ubp = ImputeUBP(genotype_data=data, n_components=2)
 
-Our recommendation for the neural networks is to try to maximize the accuracy and other metrics. So you will likely need to run it several times and adjust the parameters.
+.. tip:: Recommended Usage
+
+Our recommendation for the neural networks is to start with the grid searches and to maximize the roc_auc scores or other any other metrics of your choice (see the `scikit-learn metrics documentation <https://scikit-learn.org/stable/modules/model_evaluation.html>`_).
 
 
 Non-ML Imputers
 ---------------
 
-We also have classes to impute using non-machine learning methods. You can impute by the global or by-population mode per column, using an input phylogeny to inform the imputation, and by matrix factorization. These methods can be used both as the ``initial_strategy`` with IterativeImputer and the neural networks and as standalone imputation methods.
+We also have classes to impute using non-machine learning methods. You can impute by the global or by-population mode per column, using an input phylogeny to inform the imputation, and by matrix factorization. We also have the ``ImputeRefAllele`` imputer that will always just set missing values to the reference allele. These methods can be used both as the ``initial_strategy`` with IterativeImputer and the neural networks and as standalone imputation methods.
 
 Impute by Allele Frequency
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -452,7 +446,6 @@ Here we impute by global allele frequency:
     global_af = ImputeAlleleFreq(
         genotype_data=data, 
         by_populations=False,
-        write_output=True
     )
 
 And we can impute with the by-population mode like this:
@@ -462,9 +455,13 @@ And we can impute with the by-population mode like this:
     pop_af = ImputeAlleleFreq(
         genotype_data=data, 
         by_populations=True,
-        pops=data.populations, 
-        write_output=True
     )
+
+Alternatively, we can just have it impute by the reference allele in all cases:
+
+.. code-block:: python
+
+    ref_af = ImputeRefAllele(genotype_data=data)
 
 Impute with Phylogeny
 ^^^^^^^^^^^^^^^^^^^^^
@@ -476,13 +473,15 @@ We can also use a phylogeny to inform the imputation. In this case, we would hav
     # Popmap file used
     # Structure file in 2-row per individual format
     data = GenotypeData(
-        filename="test.nopops.str",
-        filetype="structure2row",
-        popmapfile="test.popmap",
-        guidetree="test.tre",
-        qmatrix_iqtree="test.iqtree",
-        # qmatrix="test.Q" # Instead of IQ-TREE file
-    )
+        filename="pgsui/example_data/phylip_files/test_n100.phy",
+        popmapfile="pgsui/example_data/popmaps/test.popmap",
+        guidetree="pgsui/example_data/trees/test.tre",
+        qmatrix="pgsui/example_data/trees/test.qmat",
+        siterates="pgsui/example_data/trees/test_siterates_n100.txt",
+        prefix="test_imputer",
+        force_popmap=True,
+        plot_format="png",
+     )
 
     phy = ImputePhylo(genotype_data=data, write_output=True)
 
@@ -505,3 +504,16 @@ Finally, you can impute using matrix factorization:
 
     ImputeMF(genotype_data=data)
 
+
+References
+-----------
+
+.. [1] Stef van Buuren, Karin Groothuis-Oudshoorn (2011). mice: Multivariate Imputation by Chained Equations in R. Journal of Statistical Software 45: 1-67.
+
+.. [2] Kingma, D. P., & Welling, M. (2013). Auto-Encoding Variational Bayes. arXiv preprint arXiv:1312.6114.
+
+.. [3] Hinton, G.E., & Salakhutdinov, R.R. (2006). Reducing the dimensionality of data with neural networks. Science, 313(5786), 504-507.
+
+.. [4] Scholz, M., Kaplan, F., Guy, C. L., Kopka, J., & Selbig, J. (2005). Non-linear PCA: a missing data approach. Bioinformatics, 21(20), 3887-3895.
+
+.. [5] Gashler, M. S., Smith, M. R., Morris, R., & Martinez, T. (2016). Missing value imputation with unsupervised backpropagation. Computational Intelligence, 32(2), 196-215.

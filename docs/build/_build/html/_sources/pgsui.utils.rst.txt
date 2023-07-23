@@ -1,12 +1,40 @@
-utils
+pgsui.utils package
 ===================
 
+Submodules
+----------
 
-.. toctree::
-   :maxdepth: 4
+pgsui.utils.misc module
+-----------------------
 
-   pgsui.utils.misc
-   pgsui.utils.sequence_tools
+.. automodule:: pgsui.utils.misc
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+pgsui.utils.plotting module
+---------------------------
+
+.. automodule:: pgsui.utils.plotting
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+pgsui.utils.scorers module
+--------------------------
+
+.. automodule:: pgsui.utils.scorers
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+pgsui.utils.sequence\_tools module
+----------------------------------
+
+.. automodule:: pgsui.utils.sequence_tools
+   :members:
+   :undoc-members:
+   :show-inheritance:
 
 Module contents
 ---------------
@@ -15,4 +43,3 @@ Module contents
    :members:
    :undoc-members:
    :show-inheritance:
-   :private-members:

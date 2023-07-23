@@ -40,10 +40,10 @@ try:
     from ...utils.misc import HiddenPrints
     from ...utils.misc import isnotebook
 except (ModuleNotFoundError, ValueError, ImportError):
-    from impute import simple_imputers
-    from utils.misc import get_processor_name
-    from utils.misc import HiddenPrints
-    from utils.misc import isnotebook
+    from pgsui.impute import simple_imputers
+    from pgsui.utils.misc import get_processor_name
+    from pgsui.utils.misc import HiddenPrints
+    from pgsui.utils.misc import isnotebook
 
 # Uses scikit-learn-intellex package if CPU is Intel
 if get_processor_name().strip().startswith("Intel"):
@@ -82,7 +82,7 @@ class IterativeImputerFixedParams(IterativeImputer):
 
     Herein, progress status updates, optimizations to save RAM, and several other improvements have been added. IterativeImputer is a multivariate imputer that estimates each feature from all the others. A strategy for imputing missing values by modeling each feature with missing values as a function of other features in a round-robin fashion.Read more in the scikit-learn User Guide for IterativeImputer. scikit-learn versionadded: 0.21. NOTE: This estimator is still **experimental** for now: the predictions and the API might change without any deprecation cycle. To use it, you need to explicitly import ``enable_iterative_imputer``\.
 
-        IterativeImputer is based on the R MICE (Multivariate Imputation by Chained Equationspackage) [1]_. See [2]_ for more information about multiple versus single imputations.
+        IterativeImputer is based on the R MICE (Multivariate Imputation by Chained Equationspackage) [3]_. See [4]_ for more information about multiple versus single imputations.
 
         >>> # explicitly require this experimental feature
         >>> from sklearn.experimental import enable_iterative_imputer
@@ -117,7 +117,7 @@ class IterativeImputerFixedParams(IterativeImputer):
 
         n_nearest_features (int, optional): Number of other features to use to estimate the missing values of each feature column. Nearness between features is measured using the absolute correlation coefficient between each feature pair (after initial imputation). To ensure coverage of features throughout the imputation process, the neighbor features are not necessarily nearest,	but are drawn with probability proportional to correlation for each	imputed target feature. Can provide significant speed-up when the number of features is huge. If ``None``\, all features will be used. Defaults to None.
 
-        initial_strategy (str, optional): Which strategy to use to initialize the missing values. Same as the ``strategy`` parameter in :class:`~sklearn.impute.SimpleImputer`	Valid values: "mean", "median", "most_frequent", "populations", "phylogeny", "nmf", or "constant". Defaults to "mean".
+        initial_strategy (str, optional): Which strategy to use to initialize the missing values. Same as the ``strategy`` parameter in :class:`~sklearn.impute.SimpleImputer`	Valid values: "mean", "median", "most_frequent", "populations", "phylogeny", "mf", or "constant". Defaults to "mean".
 
         imputation_order (str, optional): The order in which the features will be imputed. Possible values: "ascending" (From features with fewest missing values to most), "descending" (From features with most missing values to fewest, "roman" (Left to right), "arabic" (Right to left),  random" (A random order for each round). Defaults to "ascending".
 
@@ -211,9 +211,9 @@ class IterativeImputerFixedParams(IterativeImputer):
         NOTE: Inductive mode support was removed herein.
 
     References:
-        .. [1] Stef van Buuren, Karin Groothuis-Oudshoorn (2011). mice: Multivariate Imputation by Chained Equations in R. Journal of Statistical Software 45: 1-67.
+        .. [3] Stef van Buuren, Karin Groothuis-Oudshoorn (2011). mice: Multivariate Imputation by Chained Equations in R. Journal of Statistical Software 45: 1-67.
 
-        .. [2] S. F. Buck, (1960). A Method of Estimation of Missing Values in	Multivariate Data Suitable for use with an Electronic Computer. Journal of the Royal Statistical Society 22(2): 302-306.
+        .. [4] S. F. Buck, (1960). A Method of Estimation of Missing Values in	Multivariate Data Suitable for use with an Electronic Computer. Journal of the Royal Statistical Society 22(2): 302-306.
     """
 
     def __init__(
@@ -378,8 +378,8 @@ class IterativeImputerFixedParams(IterativeImputer):
                 Xt = X[:, valid_mask]
                 mask_missing_values = mask_missing_values[:, valid_mask]
 
-        elif self.initial_strategy == "nmf":
-            self.initial_imputer_ = simple_imputers.ImputeNMF(
+        elif self.initial_strategy == "mf":
+            self.initial_imputer_ = simple_imputers.ImputeMF(
                 self.genotype_data,
                 gt=np.nan_to_num(X, nan=-9),
                 missing=-9,

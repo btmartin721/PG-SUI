@@ -11,15 +11,7 @@ from sklearn_genetic.space import Continuous, Categorical, Integer
 
 from snpio import GenotypeData
 from snpio import Plotting
-from pgsui.impute.estimators import (
-    ImputeNLPCA,
-    ImputeUBP,
-    ImputeRandomForest,
-    ImputeStandardAutoEncoder,
-    ImputeVAE,
-    ImputeXGBoost,
-)
-from pgsui.impute.simple_imputers import ImputePhylo, ImputeAlleleFreq
+from pgsui import *
 
 
 def main():
@@ -118,9 +110,9 @@ def main():
 
     imp = ImputeXGBoost(
         data,
-        max_iter=10,
+        max_iter=3,
         gridparams={"n_estimators": [100, 200]},
-        n_nearest_features=15,
+        n_nearest_features=5,
         # disable_progressbar=False,
         # epochs=100,
         # cv=3,

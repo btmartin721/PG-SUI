@@ -8,6 +8,7 @@ try:
     from .models.autoencoder_model import AutoEncoderModel
     from .models.nlpca_model import NLPCAModel
     from .models.ubp_model import UBPPhase1, UBPPhase2, UBPPhase3
+    from .models.vae_model import VAEModel
     from ...data_processing.transformers import (
         MLPTargetTransformer,
         UBPInputTransformer,
@@ -75,6 +76,7 @@ class SAEClassifier(KerasClassifier):
         sample_weight=None,
         missing_mask=None,
         num_classes=3,
+        activate="softmax",
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -92,6 +94,10 @@ class SAEClassifier(KerasClassifier):
         self.sample_weight = sample_weight
         self.missing_mask = missing_mask
         self.num_classes = num_classes
+        self.activate = activate
+
+        self.classes_ = np.arange(self.num_classes)
+        self.n_classes_ = self.num_classes
 
     def _keras_build_fn(self, compile_kwargs):
         """Build model with custom parameters.
@@ -102,6 +108,10 @@ class SAEClassifier(KerasClassifier):
         Returns:
             tf.keras.Model: Model instance. The chosen model depends on which phase is passed to the class constructor.
         """
+
+        ######### REMOVING THIS LINE WILL BREAK THE MODEL!!!!! ########
+        self.classes_ = np.arange(self.num_classes)
+
         model = AutoEncoderModel(
             self.y,
             output_shape=self.output_shape,
@@ -141,9 +151,10 @@ class SAEClassifier(KerasClassifier):
         Returns:
             float: Calculated score.
         """
-        missing_mask = kwargs.get(
-            "missing_mask", np.ones(y_true.shape, dtype=bool)
-        )
+        n_classes_ = kwargs.get("num_classes", 3)
+        classes_ = np.arange(n_classes_)
+        missing_mask = kwargs.get("missing_mask")
+
         num_classes = kwargs.get("num_classes", 3)
         testing = kwargs.get("testing", False)
 
@@ -173,14 +184,16 @@ class SAEClassifier(KerasClassifier):
         Returns:
             NNOutputTransformer: NNOutputTransformer object that includes fit(), transform(), and inverse_transform() methods.
         """
-        return AutoEncoderFeatureTransformer(num_classes=self.num_classes)
+        return AutoEncoderFeatureTransformer(
+            num_classes=self.num_classes, activate=self.activate
+        )
 
     def predict(self, X, **kwargs):
         """Returns predictions for the given test data.
 
         Args:
             X (Union[array-like, sparse matrix, dataframe] of shape (n_samples, n_features)): Training samples where n_samples is the number of samples and n_features is the number of features.
-        **kwargs (Dict[str, Any]): Extra arguments to route to ``Model.predict``\.
+        kwargs (Dict[str, Any]): Extra arguments to route to ``Model.predict``\.
 
         Warnings:
             Passing estimator parameters as keyword arguments (aka as ``**kwargs``) to ``predict`` is not supported by the Scikit-Learn API, and will be removed in a future version of SciKeras. These parameters can also be specified by prefixing ``predict__`` to a parameter at initialization (``BaseWrapper(..., fit__batch_size=32, predict__batch_size=1000)``) or by using ``set_params`` (``est.set_params(fit__batch_size=32, predict__batch_size=1000)``\).
@@ -191,9 +204,24 @@ class SAEClassifier(KerasClassifier):
         Notes:
             Had to override predict() here in order to do the __call__ with the refined input, V_latent.
         """
-        X_train = self.feature_encoder_.transform(X)
+        X_train = self.target_encoder_.transform(X)
         y_pred = self.model_(X_train, training=False)
-        return y_pred.numpy()
+        return self.target_encoder_.inverse_transform(y_pred)
+
+    def get_metadata(self):
+        """Returns a dictionary of meta-parameters generated when this transformer was fitted.
+
+        Used by SciKeras to bind these parameters to the SciKeras estimator itself and make them available as inputs to the Keras model.
+
+        Returns:
+            Dict[str, Any]: Dictionary of meta-parameters generated when this transfromer was fitted.
+        """
+        return {
+            "classes_": self.classes_,
+            "n_classes_": self.n_classes_,
+            "n_outputs_": self.n_outputs_,
+            "n_outputs_expected_": self.n_outputs_expected_,
+        }
 
 
 class VAEClassifier(KerasClassifier):
@@ -276,6 +304,9 @@ class VAEClassifier(KerasClassifier):
             tf.keras.Model: Model instance. The chosen model depends on which phase is passed to the class constructor.
         """
 
+        ######### REMOVING THIS LINE WILL BREAK THE MODEL!!!!! ########
+        self.classes_ = np.arange(self.num_classes)
+
         model = VAEModel(
             output_shape=self.output_shape,
             n_components=self.n_components,
@@ -331,7 +362,7 @@ class VAEClassifier(KerasClassifier):
 
         Args:
             X (Union[array-like, sparse matrix, dataframe] of shape (n_samples, n_features)): Training samples where n_samples is the number of samples and n_features is the number of features.
-        **kwargs (Dict[str, Any]): Extra arguments to route to ``Model.predict``\.
+        kwargs (Dict[str, Any]): Extra arguments to route to ``Model.predict``\.
 
         Warnings:
             Passing estimator parameters as keyword arguments (aka as ``**kwargs``) to ``predict`` is not supported by the Scikit-Learn API, and will be removed in a future version of SciKeras. These parameters can also be specified by prefixing ``predict__`` to a parameter at initialization (``BaseWrapper(..., fit__batch_size=32, predict__batch_size=1000)``) or by using ``set_params`` (``est.set_params(fit__batch_size=32, predict__batch_size=1000)``\).
@@ -343,8 +374,23 @@ class VAEClassifier(KerasClassifier):
             Had to override predict() here in order to do the __call__ with the refined input, V_latent.
         """
         X_train = self.target_encoder_.transform(X)
-        y_pred, _, __, ___ = self.model_(X_train, training=False)
+        y_pred = self.model_(X_train, training=False)
         return self.target_encoder_.inverse_transform(y_pred)
+
+    def get_metadata(self):
+        """Returns a dictionary of meta-parameters generated when this transformer was fitted.
+
+        Used by SciKeras to bind these parameters to the SciKeras estimator itself and make them available as inputs to the Keras model.
+
+        Returns:
+            Dict[str, Any]: Dictionary of meta-parameters generated when this transfromer was fitted.
+        """
+        return {
+            "classes_": self.classes_,
+            "n_classes_": self.n_classes_,
+            "n_outputs_": self.n_outputs_,
+            "n_outputs_expected_": self.n_outputs_expected_,
+        }
 
     @staticmethod
     def scorer(y_true, y_pred, **kwargs):
@@ -362,11 +408,15 @@ class VAEClassifier(KerasClassifier):
         Returns:
             float: Calculated score.
         """
-        missing_mask = kwargs.get(
-            "missing_mask", np.ones(y_true.shape, dtype=bool)
-        )
+
+        n_classes_ = kwargs.get("num_classes", 3)
+        classes_ = np.arange(n_classes_)
+        missing_mask = kwargs.get("missing_mask")
+
         num_classes = kwargs.get("num_classes", 3)
         testing = kwargs.get("testing", False)
+
+        y_pred = y_pred.reshape(y_pred.shape[0], -1, num_classes)
 
         scorers = Scorers()
 
@@ -469,6 +519,9 @@ class MLPClassifier(KerasClassifier):
         Returns:
             tf.keras.Model: Model instance. The chosen model depends on which phase is passed to the class constructor.
         """
+        ######### REMOVING THIS LINE WILL BREAK THE MODEL!!!!! ########
+        self.classes_ = np.arange(self.num_classes)
+
         if self.phase is None:
             model = NLPCAModel(
                 V=self.V,
@@ -614,7 +667,7 @@ class MLPClassifier(KerasClassifier):
 
         Args:
             X (Union[array-like, sparse matrix, dataframe] of shape (n_samples, n_features)): Training samples where n_samples is the number of samples and n_features is the number of features.
-        **kwargs (Dict[str, Any]): Extra arguments to route to ``Model.predict``\.
+        kwargs (Dict[str, Any]): Extra arguments to route to ``Model.predict``\.
 
         Warnings:
             Passing estimator parameters as keyword arguments (aka as ``**kwargs``) to ``predict`` is not supported by the Scikit-Learn API, and will be removed in a future version of SciKeras. These parameters can also be specified by prefixing ``predict__`` to a parameter at initialization (``BaseWrapper(..., fit__batch_size=32, predict__batch_size=1000)``) or by using ``set_params`` (``est.set_params(fit__batch_size=32, predict__batch_size=1000)``\).
@@ -627,3 +680,18 @@ class MLPClassifier(KerasClassifier):
         """
         y_pred_proba = self.model_(self.model_.V_latent, training=False)
         return self.target_encoder_.inverse_transform(y_pred_proba)
+
+    def get_metadata(self):
+        """Returns a dictionary of meta-parameters generated when this transformer was fitted.
+
+        Used by SciKeras to bind these parameters to the SciKeras estimator itself and make them available as inputs to the Keras model.
+
+        Returns:
+            Dict[str, Any]: Dictionary of meta-parameters generated when this transfromer was fitted.
+        """
+        return {
+            "classes_": self.classes_,
+            "n_classes_": self.n_classes_,
+            "n_outputs_": self.n_outputs_,
+            "n_outputs_expected_": self.n_outputs_expected_,
+        }

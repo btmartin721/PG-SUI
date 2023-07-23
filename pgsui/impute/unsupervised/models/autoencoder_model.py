@@ -137,6 +137,7 @@ class Encoder(tf.keras.layers.Layer):
         self.dropout_layer = Dropout(dropout_rate)
 
     def call(self, inputs, training=None):
+        """Forward pass through model."""
         x = self.flatten(inputs)
         x = self.dense1(x)
         x = self.dropout_layer(x, training=training)
@@ -237,6 +238,7 @@ class Decoder(tf.keras.layers.Layer):
         self.dropout_layer = Dropout(dropout_rate)
 
     def call(self, inputs, training=None):
+        """Forward pass through model."""
         x = self.dense1(inputs)
         x = self.dropout_layer(x, training=training)
         if self.dense2 is not None:
@@ -260,6 +262,8 @@ class AutoEncoderModel(tf.keras.Model):
     """Standard AutoEncoder model to impute missing data.
 
     Args:
+        y (np.ndarray): Full input data.
+
         batch_size (int, optional): Batch size to use with model. Defaults to 32.
 
         output_shape (int, optional): Number of features in output. Defaults to None.
@@ -400,23 +404,17 @@ class AutoEncoderModel(tf.keras.Model):
         )
 
     def call(self, inputs, training=None):
-        """Call the model on a particular input.
-
-        Args:
-            input (tf.Tensor): Input tensor. Must be one-hot encoded.
-
-        Returns:
-            tf.Tensor: Output predictions. Will be one-hot encoded.
-        """
+        """Forward pass through model."""
         x = self.encoder(inputs)
         return self.decoder(x)
 
     def model(self):
-        """Here so that mymodel.model().summary() can be called for debugging."""
+        """To allow model.summary().summar() to be called."""
         x = tf.keras.Input(shape=(self.n_features, self.num_classes))
         return tf.keras.Model(inputs=[x], outputs=self.call(x))
 
     def set_model_outputs(self):
+        """Set expected model outputs."""
         x = tf.keras.Input(shape=(self.n_features, self.num_classes))
         model = tf.keras.Model(inputs=[x], outputs=self.call(x))
         self.outputs = model.outputs
@@ -503,6 +501,16 @@ class AutoEncoderModel(tf.keras.Model):
 
     @tf.function
     def test_step(self, data):
+        """Custom evaluation loop for one step (=batch) in a single epoch.
+
+        This function will evaluate on a batch of samples (rows), which can be adjusted with the ``batch_size`` parameter from the estimator.
+
+        Args:
+            data (Tuple[tf.EagerTensor, tf.EagerTensor]): Input tensorflow tensors of shape (batch_size, n_components) and (batch_size, n_features, num_classes).
+
+        Returns:
+            Dict[str, float]: History object that gets returned from fit(). Contains the loss and any metrics specified in compile().
+        """
         y = self._y
 
         (
@@ -568,46 +576,70 @@ class AutoEncoderModel(tf.keras.Model):
 
     @property
     def batch_size(self):
-        """Batch (=step) size per epoch."""
+        """Batch (=step) size per epoch.
+        :noindex:
+        """
         return self._batch_size
 
     @property
     def batch_idx(self):
-        """Current batch (=step) index."""
+        """Current batch (=step) index.
+        :noindex:
+        """
         return self._batch_idx
 
     @property
     def y(self):
+        """Full input dataset.
+        :noindex:
+        """
         return self._y
 
     @property
     def missing_mask(self):
+        """Missing mask of shape (y.shape[0], y.shape[1])
+        :noindex:
+        """
         return self._missing_mask
 
     @property
     def sample_weight(self):
+        """Sample weights of shape (y.shape[0], y.shape[1])
+        :noindex:
+        """
         return self._sample_weight
 
     @batch_size.setter
     def batch_size(self, value):
-        """Set batch_size parameter."""
+        """Set batch_size parameter.
+        :noindex:
+        """
         self._batch_size = int(value)
 
     @batch_idx.setter
     def batch_idx(self, value):
-        """Set current batch (=step) index."""
+        """Set current batch (=step) index.
+        :noindex:
+        """
         self._batch_idx = int(value)
 
     @y.setter
     def y(self, value):
-        """Set y after each epoch."""
+        """Set y after each epoch.
+        :noindex:
+        """
         self._y = value
 
     @missing_mask.setter
     def missing_mask(self, value):
-        """Set y after each epoch."""
+        """Set missing_mask after each epoch.
+        :noindex:
+        """
         self._missing_mask = value
 
     @sample_weight.setter
     def sample_weight(self, value):
+        """Set sample_weight after each epoch.
+        :noindex:
+        """
         self._sample_weight = value

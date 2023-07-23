@@ -10,9 +10,12 @@ Welcome to PG-SUI's documentation!
    :maxdepth: 2
    :caption: Contents:
 
+   about
    install
    tutorial
    pgsui
+   modules
+   
 
 Indices and tables
 ==================

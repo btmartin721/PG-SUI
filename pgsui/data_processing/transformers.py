@@ -3,8 +3,6 @@ import os
 import logging
 import sys
 import warnings
-from pathlib import Path
-from typing import Optional, Union, List, Dict, Tuple, Any
 
 import numpy as np
 import pandas as pd
@@ -12,12 +10,15 @@ import pandas as pd
 # Third-party imports
 import numpy as np
 import pandas as pd
-import scipy.linalg
-import toyplot.pdf
-import toytree as tt
 
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.impute import SimpleImputer
+from sklearn.metrics import (
+    roc_auc_score,
+    precision_recall_fscore_support,
+    average_precision_score,
+)
+from sklearn.preprocessing import label_binarize
 
 # Import tensorflow with reduced warnings.
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
@@ -52,37 +53,11 @@ deprecation.deprecated = deprecated
 
 # Custom Modules
 try:
-    from snpio import GenotypeData
     from ..utils import misc
-    from ..utils.misc import get_processor_name
-    from ..utils.misc import isnotebook
+
 except (ModuleNotFoundError, ValueError, ImportError):
-    from snpio import GenotypeData
-    from utils import misc
-    from utils.misc import get_processor_name
-    from utils.misc import isnotebook
+    from pgsui.utils import misc
 
-is_notebook = isnotebook()
-
-if is_notebook:
-    from tqdm.notebook import tqdm as progressbar
-else:
-    from tqdm import tqdm as progressbar
-
-# Requires scikit-learn-intellex package
-if get_processor_name().strip().startswith("Intel"):
-    try:
-        from sklearnex import patch_sklearn
-
-        patch_sklearn()
-        intelex = True
-    except (ImportError, TypeError):
-        print(
-            "Warning: Intel CPU detected but scikit-learn-intelex is not installed. We recommend installing it to speed up computation."
-        )
-        intelex = False
-else:
-    intelex = False
 
 # Pandas on pip gives a performance warning when doing the below code.
 # Apparently it's a bug that exists in the pandas version I used here.
@@ -167,7 +142,7 @@ class UBPInputTransformer(BaseEstimator, TransformerMixin):
 
 
 class AutoEncoderFeatureTransformer(BaseEstimator, TransformerMixin):
-    """Transformer to format autoencoder features before model fitting.
+    """Transformer to format autoencoder features and targets before model fitting.
 
     The input data, X, is encoded to one-hot format, and then missing values are filled to [-1] * num_classes.
 
@@ -186,11 +161,13 @@ class AutoEncoderFeatureTransformer(BaseEstimator, TransformerMixin):
         self.return_int = return_int
         self.activate = activate
 
-    def fit(self, X):
+    def fit(self, X, y=None):
         """set attributes used to transform X (input features).
 
         Args:
             X (numpy.ndarray): Input integer-encoded numpy array.
+
+            y (None): Just for compatibility with sklearn API.
         """
         X = misc.validate_input_type(X, return_type="array")
 
@@ -205,17 +182,23 @@ class AutoEncoderFeatureTransformer(BaseEstimator, TransformerMixin):
             enc_func = self.encode_multiclass
         else:
             raise ValueError(
-                f"Invalid value passed to num_classes in AutoEncoderFeatureTransformer. Only 3 or 4 are supported, but got {self.num_classes}."
+                f"Invalid value passed to num_classes in "
+                f"AutoEncoderFeatureTransformer. Only 3 or 4 are supported, "
+                f"but got {self.num_classes}."
             )
 
         # Encode the data.
         self.X_train = enc_func(X)
+        self.classes_ = np.arange(self.num_classes)
+        self.n_classes_ = self.num_classes
 
         # Get missing and observed data boolean masks.
         self.missing_mask_, self.observed_mask_ = self._get_masks(self.X_train)
 
         # To accomodate multiclass-multioutput.
         self.n_outputs_expected_ = 1
+
+        self.n_outputs_ = self.X_train.shape[1]
 
         return self
 
@@ -225,7 +208,7 @@ class AutoEncoderFeatureTransformer(BaseEstimator, TransformerMixin):
         Accomodates multiclass targets with a 3D shape.
 
         Args:
-            y (numpy.ndarray): One-hot encoded target data of shape (n_samples, n_features, num_classes).
+            X (numpy.ndarray): One-hot encoded target data of shape (n_samples, n_features, num_classes).
 
         Returns:
             numpy.ndarray: Transformed target data in one-hot format of shape (n_samples, n_features, num_classes).
@@ -233,38 +216,45 @@ class AutoEncoderFeatureTransformer(BaseEstimator, TransformerMixin):
         if self.return_int:
             return X
         else:
-            X = misc.validate_input_type(X, return_type="array")
+            # X = misc.validate_input_type(X, return_type="array")
             return self._fill(self.X_train, self.missing_mask_)
 
-    def inverse_transform(self, y):
+    def inverse_transform(self, y, return_proba=False):
         """Transform target to output format.
 
         Args:
             y (numpy.ndarray): Array to inverse transform.
+
+            return_proba (bool): Just for compatibility with scikeras API.
         """
         try:
             if self.activate is None:
-                return y.numpy()
+                y = y.numpy()
             elif self.activate == "softmax":
-                return tf.nn.softmax(y).numpy()
+                y = tf.nn.softmax(y).numpy()
             elif self.activate == "sigmoid":
-                return tf.nn.sigmoid(y).numpy()
+                y = tf.nn.sigmoid(y).numpy()
             else:
                 raise ValueError(
-                    f"Invalid value passed to keyword argument activate. Valid options include: None, 'softmax', or 'sigmoid', but got {self.activate}"
+                    f"Invalid value passed to keyword argument activate. Valid "
+                    f"options include: None, 'softmax', or 'sigmoid', but got "
+                    f"{self.activate}"
                 )
         except AttributeError:
             # If numpy array already.
             if self.activate is None:
-                return y
+                y = y.copy()
             elif self.activate == "softmax":
-                return tf.nn.softmax(tf.convert_to_tensor(y)).numpy()
+                y = tf.nn.softmax(tf.convert_to_tensor(y)).numpy()
             elif self.activate == "sigmoid":
-                return tf.nn.sigmoid(tf.convert_to_tensor(y)).numpy()
+                y = tf.nn.sigmoid(tf.convert_to_tensor(y)).numpy()
             else:
                 raise ValueError(
-                    f"Invalid value passed to keyword argument activate. Valid options include: None, 'softmax', or 'sigmoid', but got {self.activate}"
+                    f"Invalid value passed to keyword argument activate. Valid "
+                    f"options include: None, 'softmax', or 'sigmoid', but got "
+                    f"{self.activate}"
                 )
+        return y
 
     def encode_012(self, X):
         """Convert 012-encoded data to one-hot encodings.
@@ -309,6 +299,35 @@ class AutoEncoderFeatureTransformer(BaseEstimator, TransformerMixin):
         }
         for row in np.arange(X.shape[0]):
             Xt[row] = [mappings[enc] for enc in X[row]]
+        return Xt
+
+    def decode_multilab(self, X, multilab_value=1.0):
+        """Decode one-hot format data back to 0-9 integer data.
+
+        Args:
+            X (numpy.ndarray): Input array with one-hot-encoded data.
+
+            multilab_value (float): Value to use for multilabel target encodings. Defaults to 0.5.
+
+        Returns:
+            pandas.DataFrame: Decoded data, with multi-label categories decoded to their original integer representation.
+        """
+        Xt = np.zeros(shape=(X.shape[0], X.shape[1]))
+        mappings = {
+            tuple([1.0, 0.0, 0.0, 0.0]): 0,
+            tuple([0.0, 1.0, 0.0, 0.0]): 1,
+            tuple([0.0, 0.0, 1.0, 0.0]): 2,
+            tuple([0.0, 0.0, 0.0, 1.0]): 3,
+            tuple([multilab_value, multilab_value, 0.0, 0.0]): 4,
+            tuple([multilab_value, 0.0, multilab_value, 0.0]): 5,
+            tuple([multilab_value, 0.0, 0.0, multilab_value]): 6,
+            tuple([0.0, multilab_value, multilab_value, 0.0]): 7,
+            tuple([0.0, multilab_value, 0.0, multilab_value]): 8,
+            tuple([0.0, 0.0, multilab_value, multilab_value]): 9,
+            tuple([np.nan, np.nan, np.nan, np.nan]): -9,
+        }
+        for row in np.arange(X.shape[0]):
+            Xt[row] = [mappings[tuple(enc)] for enc in X[row]]
         return Xt
 
     def encode_multiclass(self, X, num_classes=10, missing_value=-9):
@@ -374,12 +393,7 @@ class AutoEncoderFeatureTransformer(BaseEstimator, TransformerMixin):
 
 
 class MLPTargetTransformer(BaseEstimator, TransformerMixin):
-    """Transformer to format target data both before and after model fitting.
-
-    Args:
-        y_decoded (numpy.ndarray): Original input data that is 012-encoded.
-        model (tf.keras.model.Model): model to use for predicting y.
-    """
+    """Transformer to format UBP / NLPCA target data both before and after model fitting."""
 
     def fit(self, y):
         """Fit 012-encoded target data.
@@ -439,14 +453,16 @@ class MLPTargetTransformer(BaseEstimator, TransformerMixin):
         return tf.nn.softmax(y).numpy()
 
     def _fill(self, data, missing_mask, missing_value=-1, num_classes=3):
-        """Mask missing data as ``missing_value``.
+        """Mask missing data as ``missing_value``\.
 
         Args:
             data (numpy.ndarray): Input with missing values of shape (n_samples, n_features, num_classes).
 
             missing_mask (np.ndarray(bool)): Missing data mask with True corresponding to a missing value.
 
-            missing_value (int): Value to set missing data to. If a list is provided, then its length should equal the number of one-hot classes.
+            missing_value (int): Value to set missing data to. If a list is provided, then its length should equal the number of one-hot classes. Defaults to -1.
+
+            num_classes (int): Number of classes in dataset. Defaults to 3.
         """
         if num_classes > 1:
             missing_value = [missing_value] * num_classes
@@ -457,7 +473,7 @@ class MLPTargetTransformer(BaseEstimator, TransformerMixin):
         """Format the provided target data for use with UBP/NLPCA.
 
         Args:
-            y (numpy.ndarray(float)): Input data that will be used as the target.
+            X (numpy.ndarray(float)): Input data that will be used as the target.
 
         Returns:
             numpy.ndarray(float): Missing data mask, with missing values encoded as 1's and non-missing as 0's.
@@ -478,7 +494,7 @@ class MLPTargetTransformer(BaseEstimator, TransformerMixin):
         return np.isnan(data).all(axis=2)
 
     def _decode(self, y):
-        """Evaluate VAE predictions by calculating the highest predicted value.
+        """Evaluate UBP / NLPCA predictions by calculating the highest predicted value.
 
         Calucalates highest predicted value for each row vector and each class, setting the most likely class to 1.0.
 
@@ -487,8 +503,6 @@ class MLPTargetTransformer(BaseEstimator, TransformerMixin):
 
         Returns:
             numpy.ndarray: Imputed one-hot encoded values.
-
-            pandas.DataFrame: One-hot encoded pandas DataFrame with no missing values.
         """
         Xprob = y
         Xt = np.apply_along_axis(mle, axis=2, arr=Xprob)
@@ -504,7 +518,7 @@ class MLPTargetTransformer(BaseEstimator, TransformerMixin):
 
 
 class UBPTargetTransformer(BaseEstimator, TransformerMixin):
-    """Transformer to format UBP target data both before model fitting.
+    """Transformer to format UBP / NLPCA target data both before model fitting.
 
     Examples:
         >>>ubp_tt = UBPTargetTransformer()
@@ -619,8 +633,6 @@ class UBPTargetTransformer(BaseEstimator, TransformerMixin):
 
         Returns:
             numpy.ndarray: Imputed one-hot encoded values.
-
-            pandas.DataFrame: One-hot encoded pandas DataFrame with no missing values.
         """
         Xprob = y
         Xt = np.apply_along_axis(mle, axis=2, arr=Xprob)
@@ -635,1191 +647,27 @@ class UBPTargetTransformer(BaseEstimator, TransformerMixin):
         return Xdecoded.astype("int8")
 
 
-class ImputePhyloTransformer(GenotypeData, BaseEstimator, TransformerMixin):
-    """Impute missing data using a phylogenetic tree to inform the imputation.
-
-    Args:
-        alnfile (str or None, optional): Path to PHYLIP or STRUCTURE-formatted file to impute. Defaults to None.
-
-        filetype (str or None, optional): Filetype for the input alignment. Valid options include: "phylip", "structure1row", "structure1rowPopID", "structure2row", "structure2rowPopId". Not required if ``genotype_data`` is defined. Defaults to "phylip".
-
-        popmapfile (str or None, optional): Path to population map file. Required if filetype is "phylip", "structure1row", or "structure2row". If filetype is "structure1rowPopID" or "structure2rowPopID", then the population IDs must be the second column of the STRUCTURE file. Not required if ``genotype_data`` is defined. Defaults to None.
-
-        treefile (str or None, optional): Path to Newick-formatted phylogenetic tree file. Not required if ``genotype_data`` is defined with the ``guidetree`` option. Defaults to None.
-
-        siterates (str or None, optional): Path to file containing per-site rates, with 1 rate per line corresponding to 1 site. Not required if ``genotype_data`` is defined with the siterates or siterates_iqtree option. Defaults to None.
-
-        siterates_iqtree (str or None, optional): Path to *.rates file output from IQ-TREE, containing a per-site rate table. If specified, ``ImputePhylo`` will read the site-rates from the IQ-TREE output file. Cannot be used in conjunction with ``siterates`` argument. Not required if the ``siterates`` or ``siterates_iqtree`` options were used with the ``GenotypeData`` object. Defaults to None.
-
-        qmatrix (str or None, optional): Path to file containing only a Rate Matrix Q table. Not required if ``genotype_data`` is defined with the qmatrix or qmatrix_iqtree option. Defaults to None.
-
-        str_encodings (Dict[str, int], optional): Integer encodings used in STRUCTURE-formatted file. Should be a dictionary with keys=nucleotides and values=integer encodings. The missing data encoding should also be included. Argument is ignored if using a PHYLIP-formatted file. Defaults to {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}
-
-        prefix (str, optional): Prefix to use with output files.
-
-        output_format (str, optional): Format of transformed imputed matrix. Possible values include: "df" for a pandas.DataFrame object, "array" for a numpy.ndarray object, and "list" for a 2D list. Defaults to "df".
-
-        save_plots (bool, optional): Whether to save PDF files with genotype imputations for each site to disk. It makes one PDF file per locus, so if you have a lot of loci it will make a lot of PDF files. Defaults to False.
-
-        write_output (bool, optional): Whether to save the imputed data to disk. Defaults to True.
-
-        disable_progressbar (bool, optional): Whether to disable the progress bar during the imputation. Defaults to False.
-
-        kwargs (Dict[str, Any] or None, optional): Additional keyword arguments intended for internal purposes only. Possible arguments: {"column_subset": List[int] or numpy.ndarray[int]}; Subset SNPs by a list of indices. Defauls to None.
-
-    Attributes:
-        imputed_ (pandas.DataFrame): Imputed data.
-
-    Example:
-        >>>data = GenotypeData(
-        >>>    filename="test.str",
-        >>>    filetype="structure2rowPopID",
-        >>>    guidetree="test.tre",
-        >>>    qmatrix_iqtree="test.iqtree"
-        >>>)
-        >>>
-        >>>phylo = ImputePhyloTransformer()
-        >>>phylo_gtdata = phylo.fit_transform(data)
-    """
-
-    def __init__(
-        self,
-        *,
-        alnfile: Optional[str] = None,
-        filetype: Optional[str] = None,
-        popmapfile: Optional[str] = None,
-        treefile: Optional[str] = None,
-        qmatrix_iqtree: Optional[str] = None,
-        qmatrix: Optional[str] = None,
-        siterates: Optional[str] = None,
-        siterates_iqtree: Optional[str] = None,
-        str_encodings: Dict[str, int] = {
-            "A": 1,
-            "C": 2,
-            "G": 3,
-            "T": 4,
-            "N": -9,
-        },
-        prefix: str = "output",
-        output_format: str = "df",
-        save_plots: bool = False,
-        disable_progressbar: bool = False,
-        **kwargs: Optional[Any],
-    ) -> None:
-        GenotypeData.__init__(self)
-
-        self.alnfile = alnfile
-        self.filetype = filetype
-        self.popmapfile = popmapfile
-        self.treefile = treefile
-        self.qmatrix_iqtree = qmatrix_iqtree
-        self.qmatrix = qmatrix
-        self.siterates = siterates
-        self.siterates_iqtree = siterates_iqtree
-        self.str_encodings = str_encodings
-        self.prefix = prefix
-        self.output_format = output_format
-        self.save_plots = save_plots
-        self.disable_progressbar = disable_progressbar
-        self.kwargs = kwargs
-
-        self.valid_sites = None
-        self.valid_sites_count = None
-
-    def fit(self, X):
-        """Fit to input data.
-
-        Args:
-            X (GenotypeData): Instantiated GenotypeData object with data to impute of shape ``(n_samples, n_features)``\.
-        """
-        self._validate_arguments(X)
-
-        self.column_subset_ = self.kwargs.get("column_subset", None)
-
-        (
-            data,
-            tree,
-            q,
-            site_rates,
-        ) = self._parse_arguments(X)
-
-        self.imputed_ = self.impute_phylo(tree, data, q, site_rates)
-
-        return self
-
-    def transform(self, X):
-        """Transform imputed data and return desired output format.
-
-        X (GenotypeData): Initialized GenotypeData object with tree, q, and (optionally) site_rates data.
-
-        Returns:
-            pandas.DataFrame, numpy.ndarray, or List[List[int]]: Imputed 012-encoded data.
-        """
-        if self.output_format == "df":
-            return self.imputed_
-        elif self.output_format == "array":
-            return self.imputed_.to_numpy()
-        elif self.output_format == "list":
-            return self.imputed_.values.tolist()
-        else:
-            raise ValueError(
-                f"Unsupported output_format provided. Valid options include "
-                f"'df', 'array', or 'list', but got {self.output_format}"
-            )
-
-    def impute_phylo(
-        self,
-        tree: tt.tree,
-        genotypes: Dict[str, List[Union[str, int]]],
-        Q: pd.DataFrame,
-        site_rates=None,
-    ) -> pd.DataFrame:
-        """Imputes genotype values with a guide tree.
-
-        Imputes genotype values by using a provided guide
-        tree to inform the imputation, assuming maximum parsimony.
-
-        Process Outline:
-            For each SNP:
-            1) if site_rates, get site-transformated Q matrix.
-
-            2) Postorder traversal of tree to compute ancestral
-            state likelihoods for internal nodes (tips -> root).
-            If exclude_N==True, then ignore N tips for this step.
-
-            3) Preorder traversal of tree to populate missing genotypes
-            with the maximum likelihood state (root -> tips).
-
-        Args:
-            tree (toytree.tree object): Input tree.
-
-            genotypes (Dict[str, List[Union[str, int]]]): Dictionary with key=sampleids, value=sequences.
-
-            Q (pandas.DataFrame): Rate Matrix Q from .iqtree or separate file.
-
-            site_rates (List): Site-specific substitution rates (used to weight per-site Q)
-
-        Returns:
-            pandas.DataFrame: Imputed genotypes.
-
-        Raises:
-            IndexError: If index does not exist when trying to read genotypes.
-            AssertionError: Sites must have same lengths.
-            AssertionError: Missing data still found after imputation.
-        """
-        try:
-            if list(genotypes.values())[0][0][1] == "/":
-                genotypes = self._str2iupac(genotypes, self.str_encodings)
-        except IndexError:
-            if self._is_int(list(genotypes.values())[0][0][0]):
-                raise
-
-        if self.column_subset_ is not None:
-            if isinstance(self.column_subset_, np.ndarray):
-                self.column_subset_ = self.column_subset_.tolist()
-
-            genotypes = {
-                k: [v[i] for i in self.column_subset_]
-                for k, v in genotypes.items()
-            }
-
-        # For each SNP:
-        nsites = list(set([len(v) for v in genotypes.values()]))
-        assert len(nsites) == 1, "Some sites have different lengths!"
-
-        outdir = f"{self.prefix}_imputation_plots"
-
-        if self.save_plots:
-            Path(outdir).mkdir(parents=True, exist_ok=True)
-
-        for snp_index in progressbar(
-            range(nsites[0]),
-            desc="Feature Progress: ",
-            leave=True,
-            disable=self.disable_progressbar,
-        ):
-            node_lik = dict()
-
-            # LATER: Need to get site rates
-            rate = 1.0
-            if site_rates is not None:
-                rate = site_rates[snp_index]
-
-            site_Q = Q.copy(deep=True) * rate
-            # print(site_Q)
-
-            # calculate state likelihoods for internal nodes
-            for node in tree.treenode.traverse("postorder"):
-                if node.is_leaf():
-                    continue
-
-                if node.idx not in node_lik:
-                    node_lik[node.idx] = None
-
-                for child in node.get_leaves():
-                    # get branch length to child
-                    # bl = child.edge.length
-                    # get transition probs
-                    pt = self._transition_probs(site_Q, child.dist)
-                    if child.is_leaf():
-                        if child.name in genotypes:
-                            # get genotype
-                            sum = None
-
-                            for allele in self._get_iupac_full(
-                                genotypes[child.name][snp_index]
-                            ):
-                                if sum is None:
-                                    sum = list(pt[allele])
-                                else:
-                                    sum = [
-                                        sum[i] + val
-                                        for i, val in enumerate(
-                                            list(pt[allele])
-                                        )
-                                    ]
-
-                            if node_lik[node.idx] is None:
-                                node_lik[node.idx] = sum
-
-                            else:
-                                node_lik[node.idx] = [
-                                    sum[i] * val
-                                    for i, val in enumerate(node_lik[node.idx])
-                                ]
-                        else:
-                            # raise error
-                            sys.exit(
-                                f"Error: Taxon {child.name} not found in "
-                                f"genotypes"
-                            )
-
-                    else:
-                        l = self._get_internal_lik(pt, node_lik[child.idx])
-                        if node_lik[node.idx] is None:
-                            node_lik[node.idx] = l
-
-                        else:
-                            node_lik[node.idx] = [
-                                l[i] * val
-                                for i, val in enumerate(node_lik[node.idx])
-                            ]
-
-            # infer most likely states for tips with missing data
-            # for each child node:
-            bads = list()
-            for samp in genotypes.keys():
-                if genotypes[samp][snp_index].upper() == "N":
-                    bads.append(samp)
-                    # go backwards into tree until a node informed by
-                    # actual data
-                    # is found
-                    # node = tree.search_nodes(name=samp)[0]
-                    node = tree.idx_dict[
-                        tree.get_mrca_idx_from_tip_labels(names=samp)
-                    ]
-                    dist = node.dist
-                    node = node.up
-                    imputed = None
-
-                    while node and imputed is None:
-                        if self._all_missing(
-                            tree, node.idx, snp_index, genotypes
-                        ):
-                            dist += node.dist
-                            node = node.up
-
-                        else:
-                            pt = self._transition_probs(site_Q, dist)
-                            lik = self._get_internal_lik(
-                                pt, node_lik[node.idx]
-                            )
-                            maxpos = lik.index(max(lik))
-                            if maxpos == 0:
-                                imputed = "A"
-
-                            elif maxpos == 1:
-                                imputed = "C"
-
-                            elif maxpos == 2:
-                                imputed = "G"
-
-                            else:
-                                imputed = "T"
-
-                    genotypes[samp][snp_index] = imputed
-
-            if self.save_plots:
-                self._draw_imputed_position(
-                    tree,
-                    bads,
-                    genotypes,
-                    snp_index,
-                    f"{outdir}/{self.prefix}_pos{snp_index}.pdf",
-                )
-
-        df = pd.DataFrame.from_dict(genotypes, orient="index")
-
-        # Make sure no missing data remains in the dataset
-        assert (
-            not df.isin([-9]).any().any()
-        ), "Imputation failed...Missing values found in the imputed dataset"
-
-        imp_snps, self.valid_sites, self.valid_sites_count = self.convert_012(
-            df.to_numpy().tolist(), impute_mode=True
-        )
-
-        df_imp = pd.DataFrame.from_records(imp_snps)
-
-        return df_imp
-
-    def _parse_arguments(
-        self, genotype_data: Any
-    ) -> Tuple[Dict[str, List[Union[int, str]]], tt.tree, pd.DataFrame]:
-        """Determine which arguments were specified and set appropriate values.
-
-        Args:
-            genotype_data (GenotypeData): Initialized GenotypeData object.
-
-        Returns:
-            Dict[str, List[Union[int, str]]]: GenotypeData.snpsdict object. If genotype_data is not None, then this value gets set from the GenotypeData.snpsdict object. If alnfile is not None, then the alignment file gets read and the snpsdict object gets set from the alnfile.
-
-            toytree.tree: Input phylogeny, either read from GenotypeData object or supplied with treefile.
-
-            pandas.DataFrame: Q Rate Matrix, either from IQ-TREE file or from its own supplied file.
-        """
-        if genotype_data is not None:
-            data = genotype_data.snpsdict
-            filetype = genotype_data.filetype
-
-        elif self.alnfile is not None:
-            self.parse_filetype(filetype, genotype_data.popmapfile)
-
-        if genotype_data.tree is not None and self.treefile is None:
-            tree = genotype_data.tree
-
-        elif genotype_data.tree is not None and self.treefile is not None:
-            print(
-                "WARNING: Both genotype_data.tree and treefile are defined; using local definition"
-            )
-            tree = self.read_tree(self.treefile)
-
-        elif genotype_data.tree is None and self.treefile is not None:
-            tree = self.read_tree(self.treefile)
-
-        # read (optional) Q-matrix
-        if (
-            genotype_data.q is not None
-            and self.qmatrix is None
-            and self.qmatrix_iqtree is None
-        ):
-            q = genotype_data.q
-
-        elif genotype_data.q is None:
-            if self.qmatrix is not None:
-                q = self.q_from_file(self.qmatrix)
-            elif self.qmatrix_iqtree is not None:
-                q = self.q_from_iqtree(self.qmatrix_iqtree)
-
-        elif genotype_data.q is not None:
-            if self.qmatrix is not None:
-                print(
-                    "WARNING: Both genotype_data.q and qmatrix are defined; "
-                    "using local definition"
-                )
-                q = self.q_from_file(self.qmatrix)
-            if self.qmatrix_iqtree is not None:
-                print(
-                    "WARNING: Both genotype_data.q and qmatrix are defined; "
-                    "using local definition"
-                )
-                q = self.q_from_iqtree(self.qmatrix_iqtree)
-
-        # read (optional) site-specific substitution rates
-        site_rates = None
-        if (
-            genotype_data.site_rates is not None
-            and self.siterates is None
-            and self.siterates_iqtree is None
-        ):
-            site_rates = genotype_data.site_rates
-        elif genotype_data.site_rates is None:
-            if self.siterates is not None:
-                site_rates = self.siterates_from_file(self.siterates)
-            elif self.siterates_iqtree is not None:
-                site_rates = self.siterates_from_iqtree(self.siterates_iqtree)
-
-        elif genotype_data.site_rates is not None:
-            if self.siterates is not None:
-                print(
-                    "WARNING: Both genotype_data.site_rates and siterates are defined; "
-                    "using local definition"
-                )
-                site_rates = self.siterates_from_file(self.siterates)
-            if self.siterates_iqtree is not None:
-                print(
-                    "WARNING: Both genotype_data.site_rates and siterates are defined; "
-                    "using local definition"
-                )
-                site_rates = self.siterates_from_iqtree(self.siterates_iqtree)
-        return (data, tree, q, site_rates)
-
-    def _validate_arguments(self, genotype_data: Any) -> None:
-        """Validate that the correct arguments were supplied.
-
-        Args:
-            genotype_data (GenotypeData object): Input GenotypeData object.
-
-        Raises:
-            TypeError: Cannot define both genotype_data and alnfile.
-            TypeError: Must define either genotype_data or phylipfile.
-            TypeError: Must define either genotype_data.tree or treefile.
-            TypeError: filetype must be defined if genotype_data is None.
-            TypeError: Q rate matrix must be defined.
-            TypeError: qmatrix and qmatrix_iqtree cannot both be defined.
-        """
-        if genotype_data is not None and self.alnfile is not None:
-            raise TypeError("genotype_data and alnfile cannot both be defined")
-
-        if genotype_data is None and self.alnfile is None:
-            raise TypeError(
-                "Either genotype_data or phylipfle must be defined"
-            )
-
-        if genotype_data.tree is None and self.treefile is None:
-            raise TypeError(
-                "Either genotype_data.tree or treefile must be defined"
-            )
-
-        if genotype_data is None and self.filetype_ is None:
-            raise TypeError(
-                "filetype must be defined if genotype_data is None"
-            )
-
-        if (
-            genotype_data is None
-            and self.qmatrix is None
-            and self.qmatrix_iqtree is None
-        ):
-            raise TypeError(
-                "q matrix must be defined in either genotype_data, "
-                "qmatrix_iqtree, or qmatrix"
-            )
-
-        if self.qmatrix is not None and self.qmatrix_iqtree is not None:
-            raise TypeError(
-                "qmatrix and qmatrix_iqtree cannot both be defined"
-            )
-
-    def _print_q(self, q: pd.DataFrame) -> None:
-        """Print Rate Matrix Q.
-
-        Args:
-            q (pandas.DataFrame): Rate Matrix Q.
-        """
-        print("Rate matrix Q:")
-        print("\tA\tC\tG\tT\t")
-        for nuc1 in ["A", "C", "G", "T"]:
-            print(nuc1, end="\t")
-            for nuc2 in ["A", "C", "G", "T"]:
-                print(q[nuc1][nuc2], end="\t")
-            print("")
-
-    def _is_int(self, val: Union[str, int]) -> bool:
-        """Check if value is integer.
-
-        Args:
-            val (int or str): Value to check.
-
-        Returns:
-            bool: True if integer, False if string.
-        """
-        try:
-            num = int(val)
-        except ValueError:
-            return False
-        return True
-
-    def _get_nuc_colors(self, nucs: List[str]) -> List[str]:
-        """Get colors for each nucleotide when plotting.
-
-        Args:
-            nucs (List[str]): Nucleotides at current site.
-
-        Returns:
-            List[str]: Hex-code color values for each IUPAC nucleotide.
-        """
-        ret = list()
-        for nuc in nucs:
-            nuc = nuc.upper()
-            if nuc == "A":
-                ret.append("#0000FF")  # blue
-            elif nuc == "C":
-                ret.append("#FF0000")  # red
-            elif nuc == "G":
-                ret.append("#00FF00")  # green
-            elif nuc == "T":
-                ret.append("#FFFF00")  # yellow
-            elif nuc == "R":
-                ret.append("#0dbaa9")  # blue-green
-            elif nuc == "Y":
-                ret.append("#FFA500")  # orange
-            elif nuc == "K":
-                ret.append("#9acd32")  # yellow-green
-            elif nuc == "M":
-                ret.append("#800080")  # purple
-            elif nuc == "S":
-                ret.append("#964B00")
-            elif nuc == "W":
-                ret.append("#C0C0C0")
-            else:
-                ret.append("#000000")
-        return ret
-
-    def _label_bads(
-        self, tips: List[str], labels: List[str], bads: List[str]
-    ) -> List[str]:
-        """Insert asterisks around bad nucleotides.
-
-        Args:
-            tips (List[str]): Tip labels (sample IDs).
-            labels (List[str]): List of nucleotides at current site.
-            bads (List[str]): List of tips that have missing data at current site.
-
-        Returns:
-            List[str]: IUPAC Nucleotides with "*" inserted around tips that had missing data.
-        """
-        for i, t in enumerate(tips):
-            if t in bads:
-                labels[i] = "*" + str(labels[i]) + "*"
-        return labels
-
-    def _draw_imputed_position(
-        self,
-        tree: tt.tree,
-        bads: List[str],
-        genotypes: Dict[str, List[str]],
-        pos: int,
-        out: str = "tree.pdf",
-    ) -> None:
-        """Draw nucleotides at phylogeny tip and saves to file on disk.
-
-        Draws nucleotides as tip labels for the current SNP site. Imputed values have asterisk surrounding the nucleotide label. The tree is converted to a toyplot object and saved to file.
-
-        Args:
-            tree (toytree.tree): Input tree object.
-            bads (List[str]): List of sampleIDs that have missing data at the current SNP site.
-            genotypes (Dict[str, List[str]]): Genotypes at all SNP sites.
-            pos (int): Current SNP index.
-            out (str, optional): Output filename for toyplot object.
-        """
-
-        # print(tree.get_tip_labels())
-        colors = [genotypes[i][pos] for i in tree.get_tip_labels()]
-        labels = colors
-
-        labels = self._label_bads(tree.get_tip_labels(), labels, bads)
-
-        colors = self._get_nuc_colors(colors)
-
-        mystyle = {
-            "edge_type": "p",
-            "edge_style": {
-                "stroke": tt.colors[0],
-                "stroke-width": 1,
-            },
-            "tip_labels_align": True,
-            "tip_labels_style": {"font-size": "5px"},
-            "node_labels": False,
-        }
-
-        canvas, _, __ = tree.draw(
-            tip_labels_colors=colors,
-            tip_labels=labels,
-            width=400,
-            height=600,
-            **mystyle,
-        )
-
-        toyplot.pdf.render(canvas, out)
-
-    def _all_missing(
-        self,
-        tree: tt.tree,
-        node_index: int,
-        snp_index: int,
-        genotypes: Dict[str, List[str]],
-    ) -> bool:
-        """Check if all descendants of a clade have missing data at SNP site.
-
-        Args:
-            tree (toytree.tree): Input guide tree object.
-
-            node_index (int): Parent node to determine if all descendants have missing data.
-
-            snp_index (int): Index of current SNP site.
-
-            genotypes (Dict[str, List[str]]): Genotypes at all SNP sites.
-
-        Returns:
-            bool: True if all descendants have missing data, otherwise False.
-        """
-        for des in tree.get_tip_labels(idx=node_index):
-            if genotypes[des][snp_index].upper() not in ["N", "-"]:
-                return False
-        return True
-
-    def _get_internal_lik(
-        self, pt: pd.DataFrame, lik_arr: List[float]
-    ) -> List[float]:
-        """Get ancestral state likelihoods for internal nodes of the tree.
-
-        Postorder traversal to calculate internal ancestral state likelihoods (tips -> root).
-
-        Args:
-            pt (pandas.DataFrame): Transition probabilities calculated from Rate Matrix Q.
-            lik_arr (List[float]): Likelihoods for nodes or leaves.
-
-        Returns:
-            List[float]: Internal likelihoods.
-        """
-        ret = list()
-        for i, val in enumerate(lik_arr):
-            col = list(pt.iloc[:, i])
-            sum = 0.0
-            for v in col:
-                sum += v * val
-            ret.append(sum)
-        return ret
-
-    def _transition_probs(self, Q: pd.DataFrame, t: float) -> pd.DataFrame:
-        """Get transition probabilities for tree.
-
-        Args:
-            Q (pd.DataFrame): Rate Matrix Q.
-            t (float): Tree distance of child.
-
-        Returns:
-            pd.DataFrame: Transition probabilities.
-        """
-        ret = Q.copy(deep=True)
-        m = Q.to_numpy()
-        pt = scipy.linalg.expm(m * t)
-        ret[:] = pt
-        return ret
-
-    def _str2iupac(
-        self, genotypes: Dict[str, List[str]], str_encodings: Dict[str, int]
-    ) -> Dict[str, List[str]]:
-        """Convert STRUCTURE-format encodings to IUPAC bases.
-
-        Args:
-            genotypes (Dict[str, List[str]]): Genotypes at all sites.
-            str_encodings (Dict[str, int]): Dictionary that maps IUPAC bases (keys) to integer encodings (values).
-
-        Returns:
-            Dict[str, List[str]]: Genotypes converted to IUPAC format.
-        """
-        a = str_encodings["A"]
-        c = str_encodings["C"]
-        g = str_encodings["G"]
-        t = str_encodings["T"]
-        n = str_encodings["N"]
-        nuc = {
-            f"{a}/{a}": "A",
-            f"{c}/{c}": "C",
-            f"{g}/{g}": "G",
-            f"{t}/{t}": "T",
-            f"{n}/{n}": "N",
-            f"{a}/{c}": "M",
-            f"{c}/{a}": "M",
-            f"{a}/{g}": "R",
-            f"{g}/{a}": "R",
-            f"{a}/{t}": "W",
-            f"{t}/{a}": "W",
-            f"{c}/{g}": "S",
-            f"{g}/{c}": "S",
-            f"{c}/{t}": "Y",
-            f"{t}/{c}": "Y",
-            f"{g}/{t}": "K",
-            f"{t}/{g}": "K",
-        }
-
-        for k, v in genotypes.items():
-            for i, gt in enumerate(v):
-                v[i] = nuc[gt]
-
-        return genotypes
-
-    def _get_iupac_full(self, char: str) -> List[str]:
-        """Map nucleotide to list of expanded IUPAC encodings.
-
-        Args:
-            char (str): Current nucleotide.
-
-        Returns:
-            List[str]: List of nucleotides in ``char`` expanded IUPAC.
-        """
-        char = char.upper()
-        iupac = {
-            "A": ["A"],
-            "G": ["G"],
-            "C": ["C"],
-            "T": ["T"],
-            "N": ["A", "C", "T", "G"],
-            "-": ["A", "C", "T", "G"],
-            "R": ["A", "G"],
-            "Y": ["C", "T"],
-            "S": ["G", "C"],
-            "W": ["A", "T"],
-            "K": ["G", "T"],
-            "M": ["A", "C"],
-            "B": ["C", "G", "T"],
-            "D": ["A", "G", "T"],
-            "H": ["A", "C", "T"],
-            "V": ["A", "C", "G"],
-        }
-
-        ret = iupac[char]
-        return ret
-
-
-class ImputeAlleleFreqTransformer(
-    GenotypeData, BaseEstimator, TransformerMixin
-):
-    """Impute missing data by global or by-population allele frequency. Population IDs can be sepcified with the pops argument. if pops is None, then imputation is by global allele frequency. If pops is not None, then imputation is by population-wise allele frequency. A list of population IDs in the appropriate format can be obtained from the GenotypeData object as GenotypeData.populations.
-
-    Args:
-        by_populations (bool, optional): Whether or not to impute by population or globally. Defaults to False (global allele frequency).
-
-        diploid (bool, optional): When diploid=True, function assumes 0=homozygous ref; 1=heterozygous; 2=homozygous alt. 0-1-2 genotypes are decomposed to compute p (=frequency of ref) and q (=frequency of alt). In this case, p and q alleles are sampled to generate either 0 (hom-p), 1 (het), or 2 (hom-q) genotypes. When diploid=FALSE, 0-1-2 are sampled according to their observed frequency. Defaults to True.
-
-        default (int, optional): Value to set if no alleles sampled at a locus. Defaults to 0.
-
-        missing (int, optional): Missing data value. Defaults to -9.
-
-        prefix (str, optional): Prefix for writing output files. Defaults to "output".
-
-        output_format (str, optional): Format of transformed imputed matrix. Possible values include: "df" for a pandas.DataFrame object, "array" for a numpy.ndarray object, and "list" for a 2D list. Defaults to "df".
-
-        verbose (bool, optional): Whether to print status updates. Set to False for no status updates. Defaults to True.
-
-    Attributes:
-        pops_ (List[Union[str, int]]): List of population IDs from GenotypeData object.
-
-        iterative_mode_ (bool): True if using IterativeImputer, False otherwise. Determines whether output dtype is "float32" or "Int8". Fetched from kwargs.
-
-        imputed_ (GenotypeData): Imputed 012-encoded data.
-
-    Example:
-        >>>data = GenotypeData(
-        >>>    filename="test.str",
-        >>>    filetype="structure2rowPopID",
-        >>>    guidetree="test.tre",
-        >>>    qmatrix_iqtree="test.iqtree"
-        >>>)
-        >>>
-        >>>afpop = ImputeAlleleFreqTransformer(
-        >>>     genotype_data=data,
-        >>>     by_populations=True,
-        >>>)
-        >>>
-        >>>afpop_gtdata = afpop.fit_transform(data)
-    """
-
-    def __init__(
-        self,
-        *,
-        by_populations: bool = False,
-        diploid: bool = True,
-        default: int = 0,
-        missing: int = -9,
-        prefix: str = "output",
-        output_format: str = "df",
-        verbose: bool = True,
-        **kwargs: Dict[str, Any],
-    ) -> None:
-        GenotypeData.__init__(self)
-
-        self.by_populations = by_populations
-        self.diploid = diploid
-        self.default = default
-        self.missing = missing
-        self.prefix = prefix
-        self.output_format = output_format
-        self.verbose = verbose
-        self.kwargs = kwargs
-
-    def fit(self, X):
-        """Fit imputer to input data X.
-
-        Args:
-            X (GenotypeData): Input GenotypeData instance.
-        """
-        gt_list = X.genotypes012_list
-        self.pops_ = X.populations
-        self.iterative_mode_ = self.kwargs.get("iterative_mode", False)
-        if self.pops_ is None:
-            self.imputed_ = self._global_impute(gt_list)
-        else:
-            self.imputed_ = self._impute(gt_list)
-        return self
-
-    def transform(self, X):
-        """Transform imputed data and return desired output format.
-
-        Args:
-            X (GenotypeData): Instantiated GenotypeData object.
-
-        Returns:
-            pandas.DataFrame, numpy.ndarray, or List[List[int]]: Imputed 012-encoded data.
-        """
-        return self.imputed_
-
-    def _global_impute(
-        self, X: List[List[int]]
-    ) -> Union[pd.DataFrame, np.ndarray, List[List[Union[int, float]]]]:
-        if self.verbose:
-            print("\nImputing by global allele frequency...")
-
-        df = misc.validate_input_type(X, return_type="df")
-        df.replace(self.missing, np.nan, inplace=True)
-        imp = SimpleImputer(strategy="most_frequent")
-        imp_arr = imp.fit_transform(df)
-
-        if self.iterative_mode_:
-            data = data.astype(dtype="float32")
-        else:
-            data = data.astype(dtype="Int8")
-
-        if self.verbose:
-            print("Done!")
-
-        if self.output_format == "df":
-            return data
-
-        elif self.output_format == "array":
-            return data.to_numpy()
-
-        elif self.output_format == "list":
-            return data.values.tolist()
-        else:
-            raise ValueError(
-                f"Unsupported output_format provided. Valid options include "
-                f"'df', 'array', or 'list', but got {self.output_format}"
-            )
-
-    def _impute(
-        self, X: List[List[int]]
-    ) -> Union[pd.DataFrame, np.ndarray, List[List[Union[int, float]]]]:
-        """Impute missing genotypes using allele frequencies.
-
-        Impute using global or by_population allele frequencies. Missing alleles are primarily coded as negative; usually -9.
-
-        Args:
-            X (List[List[int]], numpy.ndarray, or pandas.DataFrame): 012-encoded genotypes obtained from the GenotypeData object.
-
-        Returns:
-            pandas.DataFrame, numpy.ndarray, or List[List[Union[int, float]]]: Imputed genotypes of same shape as data.
-
-            List[int]: Column indexes that were retained.
-
-        Raises:
-            TypeError: X must be either 2D list, numpy.ndarray, or pandas.DataFrame.
-
-            ValueError: Unknown output_format type specified.
-        """
-        if self.pops_ is not None and self.verbose:
-            print("\nImputing by population allele frequencies...")
-        elif self.pops_ is None and self.verbose:
-            print("\nImputing by global allele frequency...")
-
-        if isinstance(X, (list, np.ndarray)):
-            df = pd.DataFrame(X)
-        elif isinstance(X, pd.DataFrame):
-            df = X.copy()
-        else:
-            raise TypeError(
-                f"X must be of type list(list(int)), numpy.ndarray, "
-                f"or pandas.DataFrame, but got {type(X)}"
-            )
-
-        df.replace(self.missing, np.nan, inplace=True)
-
-        data = pd.DataFrame()
-        bad_cnt = 0
-        if self.pops_ is not None:
-            # Impute per-population mode.
-            # Loop method is faster (by 2X) than no-loop transform.
-            df["pops"] = self.pops_
-            groups = df.groupby(["pops"], sort=False)
-            mode_func = lambda x: x.fillna(x.mode().iloc[0])
-
-            for col in df.columns:
-                try:
-                    data[col] = groups[col].transform(mode_func)
-
-                except IndexError as e:
-                    if str(e).lower().startswith("single positional indexer"):
-                        # One or more populations had all missing values, so
-                        # impute with global mode at the offending site.
-                        bad_cnt += 1
-                        # Impute with global mode
-                        data[col] = df[col].fillna(df[col].mode().iloc[0])
-                    else:
-                        raise
-
-            if bad_cnt > 0:
-                print(
-                    f"Warning: {bad_cnt} columns were imputed with the global "
-                    f"mode because at least one of the populations "
-                    f"contained only missing values."
-                )
-
-            data.drop("pops", axis=1, inplace=True)
-
-        else:
-            # Impute global mode.
-            # No-loop method was faster for global.
-            data = df.apply(lambda x: x.fillna(x.mode().iloc[0]), axis=1)
-
-        if self.iterative_mode_:
-            data = data.astype(dtype="float32")
-        else:
-            data = data.astype(dtype="Int8")
-
-        if self.verbose:
-            print("Done!")
-
-        if self.output_format == "df":
-            return data
-
-        elif self.output_format == "array":
-            return data.to_numpy()
-
-        elif self.output_format == "list":
-            return data.values.tolist()
-        else:
-            raise ValueError(
-                f"Unsupported output_format provided. Valid options include "
-                f"'df', 'array', or 'list', but got {self.output_format}"
-            )
-
-
-class ImputeNMFTransformer(BaseEstimator, TransformerMixin):
-    """Impute missing data using matrix factorization. Population IDs can be sepcified with the pops argument. if pops is None, then imputation is by global allele frequency. If pops is not None, then imputation is by population-wise allele frequency. A list of population IDs in the appropriate format can be obtained from the GenotypeData object as GenotypeData.populations.
-
-    Args:
-        latent_features (float, optional): The number of latent variables used to reduce dimensionality of the data. Defaults to 2.
-
-        learning_rate (float, optional): The learning rate for the optimizers. Adjust if the loss is learning too slowly. Defaults to 0.1.
-
-        tol (float, optional): Tolerance of the stopping condition. Defaults to 1e-3.
-
-        missing (int, optional): Missing data value. Defaults to -9.
-
-        prefix (str, optional): Prefix for writing output files. Defaults to "output".
-
-        output_format (str, optional): Format of output imputed matrix. Possible values include: "df" for a pandas.DataFrame object, "array" for a numpy.ndarray object, and "list" for a 2D list. Defaults to "df".
-
-        verbose (bool, optional): Whether to print status updates. Set to False for no status updates. Defaults to True.
-
-        **kwargs (Dict[str, Any]): Additional keyword arguments to supply. Primarily for internal purposes. Options include: {"iterative_mode": bool}. "iterative_mode" determines whether ``ImputeNMF`` is being used as the initial imputer in ``IterativeImputer``.
-
-    Attributes:
-        imputed_ (pandas.DataFrame, numpy.ndarray, or List[List[int]]): Imputed 012-encoded data.
-
-        accuracy_ (float): Accuracy of predicted imputations for known genotypes.
-
-    Example:
-        >>>data = GenotypeData(
-        >>>    filename="test.str",
-        >>>    filetype="structure2rowPopID"
-        >>>)
-        >>>
-        >>>nmf = ImputeNMF(
-        >>>     genotype_data=data,
-        >>>     learning_rate=0.1,
-        >>>)
-        >>>
-        >>>nmf_gtdata = nmf.fit_transform(data)
-    """
-
-    def __init__(
-        self,
-        *,
-        latent_features: int = 2,
-        max_iter: int = 100,
-        learning_rate: float = 0.0002,
-        regularization_param: float = 0.02,
-        tol: float = 0.1,
-        n_fail: int = 20,
-        missing: int = -9,
-        prefix: str = "output",
-        output_format="df",
-        verbose: bool = True,
-        **kwargs: Dict[str, Any],
-    ) -> None:
-        self.latent_features = latent_features
-        self.max_iter = max_iter
-        self.learning_rate = learning_rate
-        self.regularization_param = regularization_param
-        self.tol = tol
-        self.n_fail = n_fail
-        self.missing = missing
-        self.prefix = prefix
-        self.output_format = output_format
-        self.verbose = verbose
-        self.kwargs = kwargs
-
-    def fit(self, X):
-        """Fit imputer to input data X.
-
-        Args:
-            X (GenotypeData): Input GenotypeData instance.
-        """
-        self.iterative_mode_ = self.kwargs.get("iterative_mode", False)
-        self.imputed_, self.accuracy_ = self._impute(X.genotypes012_array)
-
-        if self.verbose:
-            print(f"NMF imputation accuracy: {round(self.accuracy_, 2)}")
-
-        return self
-
-    def transform(self, X):
-        """Transform imputed data and return desired output format.
-
-        Args:
-            X (GenotypeData): Instantiated GenotypeData object.
-
-        Returns:
-            pandas.DataFrame, numpy.ndarray, or List[List[int]]: Imputed 012-encoded data.
-        """
-        if self.output_format == "df":
-            return self.imputed_
-        elif self.output_format == "array":
-            return self.imputed_.to_numpy()
-        elif self.output_format == "list":
-            return self.imputed_.values.tolist()
-        else:
-            raise ValueError(
-                f"Unsupported output_format provided. Valid options include "
-                f"'df', 'array', or 'list', but got {self.output_format}"
-            )
-
-    def _impute(self, X):
-        """Do the imputation."""
-        if self.verbose:
-            print(f"Doing NMF imputation...")
-        R = X.copy()
-        R[R == self.missing] = -9
-        R = R + 1
-        R[R < 0] = 0
-        n_row = len(R)
-        n_col = len(R[0])
-        p = np.random.rand(n_row, self.latent_features)
-        q = np.random.rand(n_col, self.latent_features)
-        q_t = q.T
-        fails = 0
-        e_current = None
-        for step in range(self.max_iter):
-            for i in range(n_row):
-                for j in range(n_col):
-                    if R[i][j] > 0:
-                        eij = R[i][j] - np.dot(p[i, :], q_t[:, j])
-                        for k in range(self.latent_features):
-                            p[i][k] = p[i][k] + self.learning_rate * (
-                                2 * eij * q_t[k][j]
-                                - self.regularization_param * p[i][k]
-                            )
-                            q_t[k][j] = q_t[k][j] + self.learning_rate * (
-                                2 * eij * p[i][k]
-                                - self.regularization_param * q_t[k][j]
-                            )
-            e = 0
-            for i in range(n_row):
-                for j in range(len(R[i])):
-                    if R[i][j] > 0:
-                        e = e + pow(R[i][j] - np.dot(p[i, :], q_t[:, j]), 2)
-                        for k in range(self.latent_features):
-                            e = e + (self.regularization_param / 2) * (
-                                pow(p[i][k], 2) + pow(q_t[k][j], 2)
-                            )
-            if e_current is None:
-                e_current = e
-            else:
-                if abs(e_current - e) < self.tol:
-                    fails += 1
-                else:
-                    fails = 0
-                e_current = e
-            if fails >= self.n_fail:
-                break
-        nR = np.dot(p, q_t)
-
-        # transform values per-column
-        # (i.e., only allowing values found in original)
-        tR = self._fill(R, nR)
-
-        # get accuracy of re-constructing non-missing genotypes
-        acc = self.accuracy(X, tR)
-
-        # insert imputed values for missing genotypes
-        fR = X.copy()
-        fR[X < 0] = tR[X < 0]
-
-        if self.verbose:
-            print("Done!")
-
-        return pd.DataFrame(fR), acc
-
-    def _fill(self, original, predicted):
-        """Fill missing values values per-column, only allowing values found in original."""
-        n_row = len(original)
-        n_col = len(original[0])
-        tR = predicted
-        for j in range(n_col):
-            observed = predicted[:, j]
-            expected = original[:, j]
-            options = np.unique(expected[expected != 0])
-            for i in range(n_row):
-                transform = min(
-                    options, key=lambda x: abs(x - predicted[i, j])
-                )
-                tR[i, j] = transform
-        tR = tR - 1
-        tR[tR < 0] = -9
-        return tR
-
-    def accuracy(self, expected, predicted):
-        """get accuracy of re-constructing non-missing genotypes."""
-
-        prop_same = np.sum(expected[expected >= 0] == predicted[expected >= 0])
-        tot = expected[expected >= 0].size
-        return prop_same / tot
-
-
 class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
     """Simulate missing data on genotypes read/ encoded in a GenotypeData object.
 
     Copies metadata from a GenotypeData object and simulates user-specified proportion of missing data
 
     Args:
-            genotype_data (GenotypeData): GenotypeData object. Assumes no missing data already present. Defaults to None.
+        genotype_data (GenotypeData object): GenotypeData instance.
 
-            prop_missing (float, optional): Proportion of missing data desired in output. Defaults to 0.10
+        prop_missing (float, optional): Proportion of missing data desired in output. Defaults to 0.1
 
-            strategy (str, optional): Strategy for simulating missing data. May be one of: \"nonrandom\", \"nonrandom_weighted\", or \"random\". When set to \"nonrandom\", branches from GenotypeData.guidetree will be randomly sampled to generate missing data on descendant nodes. For \"nonrandom_weighted\", missing data will be placed on nodes proportionally to their branch lengths (e.g., to generate data distributed as might be the case with mutation-disruption of RAD sites). Defaults to \"random\"
+        strategy (str, optional): Strategy for simulating missing data. May be one of: "nonrandom", "nonrandom_weighted", "random_weighted", "random_weighted_inv", or "random". When set to "nonrandom", branches from GenotypeData.guidetree will be randomly sampled to generate missing data on descendant nodes. For "nonrandom_weighted", missing data will be placed on nodes proportionally to their branch lengths (e.g., to generate data distributed as might be the case with mutation-disruption of RAD sites). Defaults to "random"
 
-            missing_val (int, optional): Value that represents missing data. Defaults to -9.
+        missing_val (int, optional): Value that represents missing data. Defaults to -9.
 
-            mask_missing (bool, optional): True if you want to skip original missing values when simulating new missing data, False otherwise. Defaults to True.
+        mask_missing (bool, optional): True if you want to skip original missing values when simulating new missing data, False otherwise. Defaults to True.
 
-            verbose (bool, optional): Verbosity level. Defaults to 0.
+        verbose (bool, optional): Verbosity level. Defaults to 0.
 
-            tol (float): Tolerance to reach proportion specified in self.prop_missing. Defaults to 1/num_snps*num_inds
+        tol (float): Tolerance to reach proportion specified in self.prop_missing. Defaults to 1/num_snps*num_inds
 
-            max_tries (int): Maximum number of tries to reach targeted missing data proportion within specified tol. Defaults to num_inds.
+        max_tries (int): Maximum number of tries to reach targeted missing data proportion within specified tol. If None, num_inds will be used. Defaults to None.
 
     Attributes:
 
@@ -1916,6 +764,12 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
 
             # Make sure no entirely missing columns were simulated.
             self._validate_mask()
+
+        elif self.strategy == "random_weighted":
+            self.mask_ = self.random_weighted_missing_data(X, inv=False)
+
+        elif self.strategy == "random_weighted_inv":
+            self.mask_ = self.random_weighted_missing_data(X, inv=True)
 
         elif (
             self.strategy == "nonrandom"
@@ -2041,9 +895,129 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
         return self._mask_snps(X)
 
     def accuracy(self, X_true, X_pred):
-        masked_sites = np.sum(self.mask_)
-        num_correct = np.sum(X_true[self.mask_] == X_pred[self.mask_])
+        """Calculate imputation accuracy of the simulated genotypes.
+
+        Args:
+            X_true (np.ndarray): True values.
+
+            X_pred (np.ndarray): Imputed values.
+
+        Returns:
+            float: Accuracy score between X_true and X_pred.
+        '"""
+        masked_sites = np.sum(self.sim_missing_mask_)
+        num_correct = np.sum(
+            X_true[self.sim_missing_mask_] == X_pred[self.sim_missing_mask_]
+        )
         return num_correct / masked_sites
+
+    def auc_roc_pr_ap(self, X_true, X_pred):
+        """Calcuate AUC-ROC, Precision-Recall, and Average Precision (AP).
+
+        Args:
+            X_true (np.ndarray): True values.
+
+            X_pred (np.ndarray): Imputed values.
+
+        Returns:
+            List[float]: List of AUC-ROC scores in order of: 0,1,2.
+            List[float]: List of precision scores in order of: 0,1,2.
+            List[float]: List of recall scores in order of: 0,1,2.
+            List[float]: List of average precision scores in order of 0,1,2.
+
+        """
+        y_true = X_true[self.sim_missing_mask_]
+        y_pred = X_pred[self.sim_missing_mask_]
+
+        # Binarize the output
+        y_true_bin = label_binarize(y_true, classes=[0, 1, 2])
+        y_pred_bin = label_binarize(y_pred, classes=[0, 1, 2])
+
+        # Initialize lists to hold the scores for each class
+        auc_roc_scores = []
+        precision_scores = []
+        recall_scores = []
+        avg_precision_scores = []
+
+        for i in range(y_true_bin.shape[1]):
+            # AUC-ROC score
+            auc_roc = roc_auc_score(
+                y_true_bin[:, i], y_pred_bin[:, i], average="weighted"
+            )
+            auc_roc_scores.append(auc_roc)
+
+            # Precision-recall score
+            precision, recall, _, _ = precision_recall_fscore_support(
+                y_true_bin[:, i], y_pred_bin[:, i], average="weighted"
+            )
+            precision_scores.append(precision)
+            recall_scores.append(recall)
+
+            # Average precision score
+            avg_precision = average_precision_score(
+                y_true_bin[:, i], y_pred_bin[:, i], average="weighted"
+            )
+            avg_precision_scores.append(avg_precision)
+
+        return (
+            auc_roc_scores,
+            precision_scores,
+            recall_scores,
+            avg_precision_scores,
+        )
+
+    def random_weighted_missing_data(self, X, inv=False):
+        """Choose values for which to simulate missing data by biasing towards the minority or majority alleles, depending on whether inv is True or False.
+
+        Args:
+            X (np.ndarray): True values.
+
+            inv (bool, optional): If True, then biases towards choosing majority alleles. If False, then biases towards choosing minority alleles. Defaults to False.
+
+        Returns:
+            np.ndarray: X with simulated missing values.
+
+        """
+        # Get unique classes and their counts
+        classes, counts = np.unique(X, return_counts=True)
+        # Compute class weights
+        if inv:
+            class_weights = 1 / counts
+        else:
+            class_weights = counts
+        # Normalize class weights
+        class_weights = class_weights / sum(class_weights)
+
+        # Compute mask
+        if self.mask_missing:
+            # Get indexes where non-missing (Xobs) and missing (Xmiss)
+            Xobs = np.where(~self.original_missing_mask_.ravel())[0]
+            Xmiss = np.where(self.original_missing_mask_.ravel())[0]
+
+            # Generate mask of 0's (non-missing) and 1's (missing)
+            obs_mask = np.random.choice(
+                classes, size=Xobs.size, p=class_weights
+            )
+            obs_mask = (obs_mask == classes[:, None]).argmax(axis=0)
+
+            # Make missing data mask
+            mask = np.zeros(X.size, dtype=bool)
+            mask[Xobs] = obs_mask
+            mask[Xmiss] = 1
+
+            # Reshape from raveled to 2D
+            mask = mask.reshape(X.shape)
+        else:
+            # Generate mask of 0's (non-missing) and 1's (missing)
+            mask = np.random.choice(classes, size=X.size, p=class_weights)
+            mask = (mask == classes[:, None]).argmax(axis=0).reshape(X.shape)
+
+        # Assign mask to self before validation
+        self.mask_ = mask
+
+        self._validate_mask()
+
+        return mask
 
     def _sample_tree(
         self,
@@ -2056,8 +1030,11 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
 
         Args:
             internal_only (bool): Only sample from NON-TIPS. Defaults to False.
+
             tips_only (bool): Only sample from tips. Defaults to False.
+
             skip_root (bool): Exclude sampling of root node. Defaults to True.
+
             weighted (bool): Weight sampling by branch length. Defaults to False.
 
         Returns:
@@ -2105,17 +1082,17 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
 
     def _validate_mask(self, mask=False):
         """Make sure no entirely missing columns are simulated."""
+        if mask is None:
+            mask = self.mask_
         for i, column in enumerate(self.mask_.T):
             if mask:
                 miss_mask = self.original_missing_mask_[:, i]
                 col = column[~miss_mask]
                 obs_idx = np.where(~miss_mask)
                 idx = obs_idx[np.random.choice(np.arange(len(obs_idx)))]
-                mask_subset = self.mask_[~self.original_missing_mask_[:, i], i]
             else:
                 col = column
                 idx = np.random.choice(np.arange(col.shape[0]))
-                mask_subset = self.mask_[:, i]
             if np.sum(col) == col.size:
                 self.mask_[idx, i] = False
 
@@ -2131,9 +1108,8 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
             raise ValueError(f"Invalid shape of input X: {X.shape}")
 
         Xt = X.copy()
-        for i, row in enumerate(self.mask_):
-            for j in row.nonzero()[0]:
-                Xt[i][j] = mask_val
+        mask_boolean = self.mask_ != 0
+        Xt[mask_boolean] = mask_val
         return Xt
 
     @property
