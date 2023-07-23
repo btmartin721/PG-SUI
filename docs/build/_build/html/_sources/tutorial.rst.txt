@@ -39,7 +39,7 @@ Use pip to install PG-SUI:
 
 .. code-block:: bash
 
-    pip install pgsui
+    pip install pg-sui
 
 Input Data
 -----------

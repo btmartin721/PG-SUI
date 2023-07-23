@@ -75,9 +75,9 @@ class ImputeKNN(Impute):
 
         elitism (bool, optional): For genetic algorithm grid search:     If True takes the tournament_size best solution to the next generation. See GASearchCV documentation. Defaults to True.
 
-        crossover_probability (float, optional): For genetic algorithm grid search: Probability of crossover operation between two individuals. See GASearchCV documentation. Defaults to 0.8.
+        crossover_probability (float, optional): For genetic algorithm grid search: Probability of crossover operation between two individuals. See GASearchCV documentation. Defaults to 0.2.
 
-        mutation_probability (float, optional): For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation. Defaults to 0.2.
+        mutation_probability (float, optional): For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation. Defaults to 0.8.
 
         ga_algorithm (str, optional): For genetic algorithm grid search: Evolutionary algorithm to use. Supported options include: {"eaMuPlusLambda", "eaMuCommaLambda", "eaSimple"}. If you need to speed up the genetic algorithm grid search, try setting ``algorithm`` to "euSimple", at the expense of evolutionary model robustness. See more details in the DEAP algorithms documentation (https://deap.readthedocs.io). Defaults to "eaMuPlusLambda".
 
@@ -161,8 +161,8 @@ class ImputeKNN(Impute):
         population_size: Union[int, str] = "auto",
         tournament_size: int = 3,
         elitism: bool = True,
-        crossover_probability: float = 0.8,
-        mutation_probability: float = 0.2,
+        crossover_probability: float = 0.2,
+        mutation_probability: float = 0.8,
         ga_algorithm: str = "eaMuPlusLambda",
         early_stop_gen: int = 5,
         scoring_metric: str = "f1_weighted",
@@ -257,9 +257,9 @@ class ImputeRandomForest(Impute):
 
         elitism (bool, optional): For genetic algorithm grid search:     If True takes the tournament_size best solution to the next generation. See GASearchCV documentation. Defaults to True.
 
-        crossover_probability (float, optional): For genetic algorithm grid search: Probability of crossover operation between two individuals. See GASearchCV documentation. Defaults to 0.8.
+        crossover_probability (float, optional): For genetic algorithm grid search: Probability of crossover operation between two individuals. See GASearchCV documentation. Defaults to 0.2.
 
-        mutation_probability (float, optional): For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation. Defaults to 0.2.
+        mutation_probability (float, optional): For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation. Defaults to 0.8.
 
         ga_algorithm (str, optional): For genetic algorithm grid search: Evolutionary algorithm to use. Supported options include: {"eaMuPlusLambda", "eaMuCommaLambda", "eaSimple"}. If you need to speed up the genetic algorithm grid search, try setting ``algorithm`` to "euSimple", at the expense of evolutionary model robustness. See more details in the DEAP algorithms documentation (https://deap.readthedocs.io). Defaults to "eaMuPlusLambda".
 
@@ -353,8 +353,8 @@ class ImputeRandomForest(Impute):
         population_size: Union[int, str] = "auto",
         tournament_size: int = 3,
         elitism: bool = True,
-        crossover_probability: float = 0.8,
-        mutation_probability: float = 0.2,
+        crossover_probability: float = 0.2,
+        mutation_probability: float = 0.8,
         ga_algorithm: str = "eaMuPlusLambda",
         early_stop_gen: int = 5,
         scoring_metric: str = "f1_weighted",
@@ -400,7 +400,7 @@ class ImputeRandomForest(Impute):
 
     @property
     def genotypes_012(self):
-        return self.imputed.genotypes_012
+        return self.imputed.genotypes_
 
     @property
     def snp_data(self):
@@ -489,9 +489,9 @@ class ImputeXGBoost(Impute):
 
         elitism (bool, optional): For genetic algorithm grid search: If True takes the tournament_size best solution to the next generation. See GASearchCV documentation. Defaults to True.
 
-        crossover_probability (float, optional): For genetic algorithm grid search: Probability of crossover operation between two individuals. See GASearchCV documentation. Defaults to 0.8.
+        crossover_probability (float, optional): For genetic algorithm grid search: Probability of crossover operation between two individuals. See GASearchCV documentation. Defaults to 0.2.
 
-        mutation_probability (float, optional): For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation. Defaults to 0.2.
+        mutation_probability (float, optional): For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation. Defaults to 0.8.
 
         ga_algorithm (str, optional): For genetic algorithm grid search: Evolutionary algorithm to use. Supported options include: {"eaMuPlusLambda", "eaMuCommaLambda", "eaSimple"}. If you need to speed up the genetic algorithm grid search, try setting ``algorithm`` to "euSimple", at the expense of evolutionary model robustness. See more details in the DEAP algorithms documentation (https://deap.readthedocs.io). Defaults to "eaMuPlusLambda".
 
@@ -581,8 +581,8 @@ class ImputeXGBoost(Impute):
         population_size: Union[int, str] = "auto",
         tournament_size: int = 3,
         elitism: bool = True,
-        crossover_probability: float = 0.8,
-        mutation_probability: float = 0.2,
+        crossover_probability: float = 0.2,
+        mutation_probability: float = 0.8,
         ga_algorithm: str = "eaMuPlusLambda",
         early_stop_gen: int = 5,
         scoring_metric: str = "f1_weighted",
@@ -656,7 +656,7 @@ class ImputeVAE(Impute):
 
         grid_iter (int, optional): Number of iterations to use for randomized and genetic algorithm grid searches. For randomized grid search, ``grid_iter`` parameter combinations will be randomly sampled. For the genetic algorithm, this determines how many generations the genetic algorithm will run. Defaults to 80.
 
-        scoring_metric (str, optional): Scoring metric to use for grid searches. See the classification metrics in the scikit-learn documentation (https://scikit-learn.org/stable/modules/model_evaluation.html) for supported options. Defaults to "f1_weighted".
+        scoring_metric (str, optional): Scoring metric to use for grid searches. The neural network imputers use a multimetric scorer and use different string values for the grid searches. Supported options include: {"accuracy", "hamming", "auc_macro", "auc_micro", "precision_recall_macro", "precision_recall_micro", "precision_recall_samples", "f1_score", and "f1_score_weighted"}. All of the above metrics are calculated during the grid search, but the provided string just sets the metric that the grid search refits to (i.e., which one is used in the best estimator). "accuracy" is just the ``number of correct calls / total calls``\. "hamming" calculates the Hamming distance. "auc_macro" does roc_auc_score with macro averaging. "auc_micro" does roc_auc_score with micro averaging. "precision_recall_macro" calculates precision and recall scores with macro averaging. "precision_recall_micro" similarly uses micro averaging. "precision_recall_samples" calculates the precision/ recall scores per samples instead of per label. "f1_score" calculates F1 scores with macro averaging, which is the harmonic mean of precision and recall and does not account for class imbalance. "f1_score_weighted" is simular to "f1_score" but accounts for class imbalance with weighting. Defaults to "f1_score_weighted".
 
         population_size (int or str, optional): Only used for the genetic algorithm grid search. Size of the initial population to sample randomly generated individuals. If set to "auto", then ``population_size`` is calculated as ``15 * n_parameters``\. If set to an integer, then uses the integer value as ``population_size``\. If you need to speed up the genetic algorithm grid search, try decreasing this parameter. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to "auto".
 
@@ -664,9 +664,9 @@ class ImputeVAE(Impute):
 
         elitism (bool, optional): For genetic algorithm grid search only. If set to True, takes the ``tournament_size`` best solution to the next generation. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to True.
 
-        crossover_probability (float, optional): For genetic algorithm grid search only. Probability of crossover operation between two individuals. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to 0.8.
+        crossover_probability (float, optional): For genetic algorithm grid search only. Probability of crossover operation between two individuals. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to 0.2.
 
-        mutation_probability (float, optional): For genetic algorithm grid search only. Probability of child mutation. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to 0.2.
+        mutation_probability (float, optional): For genetic algorithm grid search only. Probability of child mutation. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to 0.8.
 
         ga_algorithm (str, optional): For genetic algorithm grid search only. Evolutionary algorithm to use. Supported options include: {"eaMuPlusLambda", "eaMuCommaLambda", "eaSimple"}. If you need to speed up the genetic algorithm grid search, try setting ``algorithm`` to "euSimple", at the expense of evolutionary model robustness. See more details in the DEAP algorithms documentation (https://deap.readthedocs.io). Defaults to "eaMuPlusLambda".
 
@@ -729,12 +729,12 @@ class ImputeVAE(Impute):
         sample_weights="auto",
         gridsearch_method="gridsearch",
         grid_iter=80,
-        scoring_metric="f1_weighted",
+        scoring_metric="f1_score_weighted",
         population_size="auto",
         tournament_size=3,
         elitism=True,
-        crossover_probability=0.8,
-        mutation_probability=0.2,
+        crossover_probability=0.2,
+        mutation_probability=0.8,
         ga_algorithm="eaMuPlusLambda",
         sim_strategy="random_weighted",
         sim_prop_missing=0.2,
@@ -819,7 +819,7 @@ class ImputeStandardAutoEncoder(Impute):
 
         grid_iter (int, optional): Number of iterations to use for randomized and genetic algorithm grid searches. For randomized grid search, ``grid_iter`` parameter combinations will be randomly sampled. For the genetic algorithm, this determines how many generations the genetic algorithm will run. Defaults to 80.
 
-        scoring_metric (str, optional): Scoring metric to use for grid searches. See the classification metrics in the scikit-learn documentation (https://scikit-learn.org/stable/modules/model_evaluation.html) for supported options. Defaults to "f1_weighted".
+        scoring_metric (str, optional): Scoring metric to use for grid searches. The neural network imputers use a multimetric scorer and use different string values for the grid searches. Supported options include: {"accuracy", "hamming", "auc_macro", "auc_micro", "precision_recall_macro", "precision_recall_micro", "precision_recall_samples", "f1_score", and "f1_score_weighted"}. All of the above metrics are calculated during the grid search, but the provided string just sets the metric that the grid search refits to (i.e., which one is used in the best estimator). "accuracy" is just the ``number of correct calls / total calls``\. "hamming" calculates the Hamming distance. "auc_macro" does roc_auc_score with macro averaging. "auc_micro" does roc_auc_score with micro averaging. "precision_recall_macro" calculates precision and recall scores with macro averaging. "precision_recall_micro" similarly uses micro averaging. "precision_recall_samples" calculates the precision/ recall scores per samples instead of per label. "f1_score" calculates F1 scores with macro averaging, which is the harmonic mean of precision and recall and does not account for class imbalance. "f1_score_weighted" is simular to "f1_score" but accounts for class imbalance with weighting. Defaults to "f1_score_weighted".
 
         population_size (int or str, optional): Only used for the genetic algorithm grid search. Size of the initial population to sample randomly generated individuals. If set to "auto", then ``population_size`` is calculated as ``15 * n_parameters``\. If set to an integer, then uses the integer value as ``population_size``\. If you need to speed up the genetic algorithm grid search, try decreasing this parameter. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to "auto".
 
@@ -827,9 +827,9 @@ class ImputeStandardAutoEncoder(Impute):
 
         elitism (bool, optional): For genetic algorithm grid search only. If set to True, takes the ``tournament_size`` best solution to the next generation. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to True.
 
-        crossover_probability (float, optional): For genetic algorithm grid search only. Probability of crossover operation between two individuals. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to 0.8.
+        crossover_probability (float, optional): For genetic algorithm grid search only. Probability of crossover operation between two individuals. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to 0.2.
 
-        mutation_probability (float, optional): For genetic algorithm grid search only. Probability of child mutation. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to 0.2.
+        mutation_probability (float, optional): For genetic algorithm grid search only. Probability of child mutation. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to 0.8.
 
         ga_algorithm (str, optional): For genetic algorithm grid search only. Evolutionary algorithm to use. Supported options include: {"eaMuPlusLambda", "eaMuCommaLambda", "eaSimple"}. If you need to speed up the genetic algorithm grid search, try setting ``algorithm`` to "euSimple", at the expense of evolutionary model robustness. See more details in the DEAP algorithms documentation (https://deap.readthedocs.io). Defaults to "eaMuPlusLambda".
 
@@ -892,12 +892,12 @@ class ImputeStandardAutoEncoder(Impute):
         sample_weights="auto",
         gridsearch_method="gridsearch",
         grid_iter=80,
-        scoring_metric="f1_weighted",
+        scoring_metric="f1_score_weighted",
         population_size="auto",
         tournament_size=3,
         elitism=True,
-        crossover_probability=0.8,
-        mutation_probability=0.2,
+        crossover_probability=0.2,
+        mutation_probability=0.8,
         ga_algorithm="eaMuPlusLambda",
         sim_strategy="random_weighted",
         sim_prop_missing=0.2,
@@ -1012,7 +1012,7 @@ class ImputeUBP(Impute):
 
         grid_iter (int, optional): Number of iterations to use for randomized and genetic algorithm grid searches. For randomized grid search, ``grid_iter`` parameter combinations will be randomly sampled. For the genetic algorithm, this determines how many generations the genetic algorithm will run. Defaults to 80.
 
-        scoring_metric (str, optional): Scoring metric to use for grid searches. See the classification metrics in the scikit-learn documentation (https://scikit-learn.org/stable/modules/model_evaluation.html) for supported options. Defaults to "f1_weighted".
+        scoring_metric (str, optional): Scoring metric to use for grid searches. The neural network imputers use a multimetric scorer and use different string values for the grid searches. Supported options include: {"accuracy", "hamming", "auc_macro", "auc_micro", "precision_recall_macro", "precision_recall_micro", "precision_recall_samples", "f1_score", and "f1_score_weighted"}. All of the above metrics are calculated during the grid search, but the provided string just sets the metric that the grid search refits to (i.e., which one is used in the best estimator). "accuracy" is just the ``number of correct calls / total calls``\. "hamming" calculates the Hamming distance. "auc_macro" does roc_auc_score with macro averaging. "auc_micro" does roc_auc_score with micro averaging. "precision_recall_macro" calculates precision and recall scores with macro averaging. "precision_recall_micro" similarly uses micro averaging. "precision_recall_samples" calculates the precision/ recall scores per samples instead of per label. "f1_score" calculates F1 scores with macro averaging, which is the harmonic mean of precision and recall and does not account for class imbalance. "f1_score_weighted" is simular to "f1_score" but accounts for class imbalance with weighting. Defaults to "f1_score_weighted".
 
         population_size (int or str, optional): Only used for the genetic algorithm grid search. Size of the initial population to sample randomly generated individuals. If set to "auto", then ``population_size`` is calculated as ``15 * n_parameters``\. If set to an integer, then uses the integer value as ``population_size``\. If you need to speed up the genetic algorithm grid search, try decreasing this parameter. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to "auto".
 
@@ -1020,9 +1020,9 @@ class ImputeUBP(Impute):
 
         elitism (bool, optional): For genetic algorithm grid search only. If set to True, takes the ``tournament_size`` best solution to the next generation. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to True.
 
-        crossover_probability (float, optional): For genetic algorithm grid search only. Probability of crossover operation between two individuals. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to 0.8.
+        crossover_probability (float, optional): For genetic algorithm grid search only. Probability of crossover operation between two individuals. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to 0.2.
 
-        mutation_probability (float, optional): For genetic algorithm grid search only. Probability of child mutation. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to 0.2.
+        mutation_probability (float, optional): For genetic algorithm grid search only. Probability of child mutation. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to 0.8.
 
         ga_algorithm (str, optional): For genetic algorithm grid search only. Evolutionary algorithm to use. Supported options include: {"eaMuPlusLambda", "eaMuCommaLambda", "eaSimple"}. If you need to speed up the genetic algorithm grid search, try setting ``algorithm`` to "euSimple", at the expense of evolutionary model robustness. See more details in the DEAP algorithms documentation (https://deap.readthedocs.io). Defaults to "eaMuPlusLambda".
 
@@ -1090,12 +1090,12 @@ class ImputeUBP(Impute):
         sample_weights="auto",
         gridsearch_method="gridsearch",
         grid_iter=80,
-        scoring_metric="f1_weighted",
+        scoring_metric="f1_score_weighted",
         population_size="auto",
         tournament_size=3,
         elitism=True,
-        crossover_probability=0.8,
-        mutation_probability=0.2,
+        crossover_probability=0.2,
+        mutation_probability=0.8,
         ga_algorithm="eaMuPlusLambda",
         sim_strategy="random_weighted",
         sim_prop_missing=0.2,
@@ -1213,7 +1213,7 @@ class ImputeNLPCA(ImputeUBP):
 
         grid_iter (int, optional): Number of iterations to use for randomized and genetic algorithm grid searches. For randomized grid search, ``grid_iter`` parameter combinations will be randomly sampled. For the genetic algorithm, this determines how many generations the genetic algorithm will run. Defaults to 80.
 
-        scoring_metric (str, optional): Scoring metric to use for grid searches. See the classification metrics in the scikit-learn documentation (https://scikit-learn.org/stable/modules/model_evaluation.html) for supported options. Defaults to "f1_weighted".
+        scoring_metric (str, optional): Scoring metric to use for grid searches. The neural network imputers use a multimetric scorer and use different string values for the grid searches. Supported options include: {"accuracy", "hamming", "auc_macro", "auc_micro", "precision_recall_macro", "precision_recall_micro", "precision_recall_samples", "f1_score", and "f1_score_weighted"}. All of the above metrics are calculated during the grid search, but the provided string just sets the metric that the grid search refits to (i.e., which one is used in the best estimator). "accuracy" is just the ``number of correct calls / total calls``\. "hamming" calculates the Hamming distance. "auc_macro" does roc_auc_score with macro averaging. "auc_micro" does roc_auc_score with micro averaging. "precision_recall_macro" calculates precision and recall scores with macro averaging. "precision_recall_micro" similarly uses micro averaging. "precision_recall_samples" calculates the precision/ recall scores per samples instead of per label. "f1_score" calculates F1 scores with macro averaging, which is the harmonic mean of precision and recall and does not account for class imbalance. "f1_score_weighted" is simular to "f1_score" but accounts for class imbalance with weighting. Defaults to "f1_score_weighted".
 
         population_size (int or str, optional): Only used for the genetic algorithm grid search. Size of the initial population to sample randomly generated individuals. If set to "auto", then ``population_size`` is calculated as ``15 * n_parameters``\. If set to an integer, then uses the integer value as ``population_size``\. If you need to speed up the genetic algorithm grid search, try decreasing this parameter. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to "auto".
 
@@ -1221,9 +1221,9 @@ class ImputeNLPCA(ImputeUBP):
 
         elitism (bool, optional): For genetic algorithm grid search only. If set to True, takes the ``tournament_size`` best solution to the next generation. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to True.
 
-        crossover_probability (float, optional): For genetic algorithm grid search only. Probability of crossover operation between two individuals. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to 0.8.
+        crossover_probability (float, optional): For genetic algorithm grid search only. Probability of crossover operation between two individuals. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to 0.2.
 
-        mutation_probability (float, optional): For genetic algorithm grid search only. Probability of child mutation. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to 0.2.
+        mutation_probability (float, optional): For genetic algorithm grid search only. Probability of child mutation. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to 0.8.
 
         ga_algorithm (str, optional): For genetic algorithm grid search only. Evolutionary algorithm to use. Supported options include: {"eaMuPlusLambda", "eaMuCommaLambda", "eaSimple"}. If you need to speed up the genetic algorithm grid search, try setting ``algorithm`` to "euSimple", at the expense of evolutionary model robustness. See more details in the DEAP algorithms documentation (https://deap.readthedocs.io). Defaults to "eaMuPlusLambda".
 
