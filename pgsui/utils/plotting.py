@@ -716,33 +716,18 @@ class Plotting:
                 "histplot.pdf",
             )
 
-            if nn_method == "VAE":
-                fig, axes = plt.subplots(2, 2)
-                ax1 = axes[0, 0]
-                ax2 = axes[0, 1]
-                # ax3 = axes[1, 0]
-                # ax4 = axes[1, 1]
-            else:
-                fig, (ax1, ax2) = plt.subplots(1, 2)
+            # if nn_method == "VAE":
+            fig, axes = plt.subplots(1, 2)
+            ax1 = axes[0]
+            ax2 = axes[1]
+
             fig.suptitle(title)
             fig.tight_layout(h_pad=3.0, w_pad=3.0)
             history = lod[0]
 
-            acctrain = (
-                "categorical_accuracy" if nn_method == "NLPCA" else "accuracy"
-            )
-
-            # if nn_method == "VAE":
-            #     accval = "val_accuracy"
-            #     # recon_loss = "reconstruction_loss"
-            #     # kl_loss = "kl_loss"
-            #     # val_recon_loss = "val_reconstruction_loss"
-            #     # val_kl_loss = "val_kl_loss"
-            #     lossval = "val_loss"
-
-            if nn_method == "SAE":
-                accval = "val_accuracy"
-                lossval = "val_loss"
+            acctrain = "binary_accuracy"
+            accval = "val_binary_accuracy"
+            lossval = "val_loss"
 
             # Plot train accuracy
             ax1.plot(history[acctrain])
@@ -753,40 +738,16 @@ class Plotting:
             ax1.set_yticks([0.0, 0.25, 0.5, 0.75, 1.0])
 
             labels = ["Train"]
-            if nn_method == "SAE":
-                # Plot validation accuracy
-                ax1.plot(history[accval])
-                labels.append("Validation")
+
+            # Plot validation accuracy
+            ax1.plot(history[accval])
+            labels.append("Validation")
 
             ax1.legend(labels, loc="best")
 
-            # Plot model loss
-            # if nn_method == "VAE":
-            #     # Reconstruction loss only.
-            #     ax2.plot(history["loss"])
-            # ax2.plot(history[val_recon_loss])
-
-            # # KL Loss
-            # ax3.plot(history[kl_loss])
-            # ax3.plot(history[val_kl_loss])
-            # ax3.set_title("KL Divergence Loss")
-            # ax3.set_ylabel("Loss")
-            # ax3.set_xlabel("Epoch")
-            # ax3.legend(labels, loc="best")
-
-            # Total Loss (Reconstruction Loss + KL Loss)
-            # ax4.plot(history["loss"])
-            # ax4.plot(history[lossval])
-            # ax4.set_title("Total Loss (Recon. + KL)")
-            # ax4.set_ylabel("Loss")
-            # ax4.set_xlabel("Epoch")
-            # ax4.legend(labels, loc="best")
-
             # else:
             ax2.plot(history["loss"])
-
-            if nn_method == "SAE":
-                ax2.plot(history[lossval])
+            ax2.plot(history[lossval])
 
             ax2.set_title("Total Loss")
             ax2.set_ylabel("Loss")
@@ -817,12 +778,15 @@ class Plotting:
 
                 # Plot model accuracy
                 ax = plt.gca()
-                ax.plot(history["categorical_accuracy"])
+                ax.plot(history["binary_accuracy"])
                 ax.set_title(f"{title} Accuracy")
                 ax.set_ylabel("Accuracy")
                 ax.set_xlabel("Epoch")
                 ax.set_yticks([0.0, 0.25, 0.5, 0.75, 1.0])
-                ax.legend(["Training"], loc="best")
+
+                # Plot validation accuracy
+                ax.plot(history["val_binary_accuracy"])
+                ax.legend(["Train", "Validation"], loc="best")
 
                 # Plot model loss
                 plt.subplot(3, 2, idx + 1)
@@ -831,7 +795,10 @@ class Plotting:
                 ax.set_title(f"{title} Loss")
                 ax.set_ylabel("Loss (MSE)")
                 ax.set_xlabel("Epoch")
-                ax.legend(["Train"], loc="best")
+
+                # Plot validation loss
+                ax.plot(history["val_loss"])
+                ax.legend(["Train", "Validation"], loc="best")
 
                 idx += 2
 
