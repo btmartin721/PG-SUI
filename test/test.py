@@ -13,6 +13,7 @@ from sklearn.metrics import (
     precision_recall_fscore_support,
     f1_score,
     average_precision_score,
+    accuracy_score,
 )
 
 from sklearn.preprocessing import label_binarize
@@ -70,8 +71,9 @@ class TestMyClasses(unittest.TestCase):
         instance = class_instance(
             self.simulated_data,
             gridparams=param_grid,
+            sample_weights=None,
         )
-        imputed_data = instance.imputed.genotypes_012(fmt="numpy")
+        imputed_data = instance.imputed.genotypes_int
 
         # Test that the imputed values are close to the original values
         # accuracy = self.transformer.accuracy(
@@ -86,11 +88,11 @@ class TestMyClasses(unittest.TestCase):
             avg_precision_scores,
             f1,
         ) = self._scoring_metrics(
-            self.genotype_data.genotypes_012(fmt="numpy"), imputed_data
+            self.genotype_data.genotypes_int, imputed_data
         )
 
         pprint.PrettyPrinter(indent=4, sort_dicts=True).pprint(
-            f"BALANCED ACCURACY: {accuracy}"
+            f"ACCURACY: {accuracy}"
         )
         pprint.PrettyPrinter(indent=4, sort_dicts=True).pprint(
             f"AUC-ROC: {auc_roc_scores}"
@@ -109,59 +111,59 @@ class TestMyClasses(unittest.TestCase):
         )
         print("\n")
 
-    # def test_ImputeKNN(self):
-    #     self._test_class(ImputeKNN)
+    def test_ImputeKNN(self):
+        self._test_class(ImputeKNN)
 
-    # def test_ImputeRandomForest(self):
-    #     self._test_class(ImputeRandomForest)
+    def test_ImputeRandomForest(self):
+        self._test_class(ImputeRandomForest)
 
-    # def test_ImputeXGBoost(self):
-    #     self._test_class(ImputeXGBoost)
+    def test_ImputeXGBoost(self):
+        self._test_class(ImputeXGBoost)
 
-    # def test_ImputeVAE(self):
-    #     self._test_class(ImputeVAE)
+    def test_ImputeVAE(self):
+        self._test_class(ImputeVAE)
 
-    # def test_ImputeStandardAutoEncoder(self):
-    #     self._test_class(ImputeStandardAutoEncoder)
+    def test_ImputeStandardAutoEncoder(self):
+        self._test_class(ImputeStandardAutoEncoder)
 
-    # def test_ImputeUBP(self):
-    #     self._test_class(ImputeUBP)
+    def test_ImputeUBP(self):
+        self._test_class(ImputeUBP)
 
-    # def test_ImputeNLPCA(self):
-    #     self._test_class(ImputeNLPCA)
+    def test_ImputeNLPCA(self):
+        self._test_class(ImputeNLPCA)
 
-    # def test_ImputeKNN_grid(self):
-    #     self._test_class(ImputeKNN, do_gridsearch=True)
+    def test_ImputeKNN_grid(self):
+        self._test_class(ImputeKNN, do_gridsearch=True)
 
-    # def test_ImputeRandomForest_grid(self):
-    #     self._test_class(ImputeRandomForest, do_gridsearch=True)
+    def test_ImputeRandomForest_grid(self):
+        self._test_class(ImputeRandomForest, do_gridsearch=True)
 
-    # def test_ImputeXGBoost_grid(self):
-    #     self._test_class(ImputeXGBoost, do_gridsearch=True)
+    def test_ImputeXGBoost_grid(self):
+        self._test_class(ImputeXGBoost, do_gridsearch=True)
 
     def test_ImputeVAE_grid(self):
         self._test_class(ImputeVAE, do_gridsearch=True)
 
-    # def test_ImputeStandardAutoEncoder_grid(self):
-    #     self._test_class(ImputeStandardAutoEncoder, do_gridsearch=True)
+    def test_ImputeStandardAutoEncoder_grid(self):
+        self._test_class(ImputeStandardAutoEncoder, do_gridsearch=True)
 
-    # def test_ImputeUBP_grid(self):
-    #     self._test_class(ImputeUBP, do_gridsearch=True)
+    def test_ImputeUBP_grid(self):
+        self._test_class(ImputeUBP, do_gridsearch=True)
 
-    # def test_ImputeNLPCA_grid(self):
-    #     self._test_class(ImputeNLPCA, do_gridsearch=True)
+    def test_ImputeNLPCA_grid(self):
+        self._test_class(ImputeNLPCA, do_gridsearch=True)
 
-    # def test_ImputePhylo(self):
-    #     self._test_class(ImputePhylo)
+    def test_ImputePhylo(self):
+        self._test_class(ImputePhylo)
 
-    # def test_ImputeAlleleFreq(self):
-    #     self._test_class(ImputeAlleleFreq)
+    def test_ImputeAlleleFreq(self):
+        self._test_class(ImputeAlleleFreq)
 
-    # def test_ImputeMF(self):
-    #     self._test_class(ImputeMF)
+    def test_ImputeMF(self):
+        self._test_class(ImputeMF)
 
-    # def test_ImputeRefAllele(self):
-    #     self._test_class(ImputeRefAllele)
+    def test_ImputeRefAllele(self):
+        self._test_class(ImputeRefAllele)
 
     def _scoring_metrics(self, y_true, y_pred):
         """Calcuate AUC-ROC, Precision-Recall, and Average Precision (AP).
@@ -185,7 +187,7 @@ class TestMyClasses(unittest.TestCase):
         y_true_bin = label_binarize(y_true, classes=[0, 1, 2])
         y_pred_bin = label_binarize(y_pred, classes=[0, 1, 2])
 
-        accuracy = balanced_accuracy_score(y_true, y_pred)
+        accuracy = accuracy_score(y_true, y_pred)
 
         # AUC-ROC score
         auc_roc = roc_auc_score(y_true_bin, y_pred_bin, average="weighted")
