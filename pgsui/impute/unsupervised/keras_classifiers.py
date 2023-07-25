@@ -75,8 +75,8 @@ class SAEClassifier(KerasClassifier):
         n_components=3,
         sample_weight=None,
         missing_mask=None,
-        num_classes=3,
-        activate="softmax",
+        num_classes=4,
+        activate="sigmoid",
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -489,6 +489,7 @@ class MLPClassifier(KerasClassifier):
         phase=None,
         sample_weight=None,
         n_components=3,
+        activate=None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -509,6 +510,7 @@ class MLPClassifier(KerasClassifier):
         self.phase = phase
         self.sample_weight = sample_weight
         self.n_components = n_components
+        self.activate = activate
 
     def _keras_build_fn(self, compile_kwargs):
         """Build model with custom parameters.
@@ -660,7 +662,10 @@ class MLPClassifier(KerasClassifier):
         Returns:
             NNOutputTransformer: NNOutputTransformer object that includes fit(), transform(), and inverse_transform() methods.
         """
-        return MLPTargetTransformer()
+        return AutoEncoderFeatureTransformer(
+            num_classes=self.num_classes,
+            activate=None,
+        )
 
     def predict(self, X, **kwargs):
         """Returns predictions for the given test data.
