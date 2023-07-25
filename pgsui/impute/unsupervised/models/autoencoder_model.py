@@ -40,6 +40,7 @@ from tensorflow.keras.layers import (
     Flatten,
     LeakyReLU,
     PReLU,
+    Activation,
 )
 
 from tensorflow.keras.regularizers import l1_l2
@@ -311,14 +312,12 @@ class AutoEncoderModel(tf.keras.Model):
     ):
         super(AutoEncoderModel, self).__init__()
 
-        self.nn_ = NeuralNetworkMethods()
-        self.categorical_accuracy = self.nn_.make_masked_categorical_accuracy()
-
-        self.total_loss_tracker = tf.keras.metrics.Mean(name="loss")
-        self.reconstruction_loss_tracker = tf.keras.metrics.Mean(
-            name="reconstruction_loss"
+        self.total_loss_tracker = tf.keras.metrics.Mean(name="total_loss")
+        self.binary_accuracy_tracker = tf.keras.metrics.Mean(
+            name="binary_accuracy"
         )
-        self.accuracy_tracker = tf.keras.metrics.Mean(name="accuracy")
+
+        self.nn_ = NeuralNetworkMethods()
 
         self._y = y
         self._batch_idx = 0
@@ -403,10 +402,13 @@ class AutoEncoderModel(tf.keras.Model):
             kernel_regularizer,
         )
 
+        self.activation = Activation("sigmoid")
+
     def call(self, inputs, training=None):
         """Forward pass through model."""
         x = self.encoder(inputs)
-        return self.decoder(x)
+        x = self.decoder(x)
+        return self.activation(x)
 
     def model(self):
         """To allow model.summary().summar() to be called."""
@@ -423,8 +425,7 @@ class AutoEncoderModel(tf.keras.Model):
     def metrics(self):
         return [
             self.total_loss_tracker,
-            self.reconstruction_loss_tracker,
-            self.accuracy_tracker,
+            self.binary_accuracy_tracker,
         ]
 
     @tf.function
@@ -479,24 +480,17 @@ class AutoEncoderModel(tf.keras.Model):
 
         grads = tape.gradient(total_loss, self.trainable_weights)
         self.optimizer.apply_gradients(zip(grads, self.trainable_weights))
-        self.total_loss_tracker.update_state(total_loss)
-        self.reconstruction_loss_tracker.update_state(reconstruction_loss)
 
         ### NOTE: If you get the error, "'tuple' object has no attribute
         ### 'rank', then convert y_true to a tensor object."
-        # self.compiled_metrics.update_state(
-        self.accuracy_tracker.update_state(
-            self.categorical_accuracy(
-                y_true_masked,
-                y_pred_masked,
-                sample_weight=sample_weight_masked,
-            )
+        self.total_loss_tracker.update_state(total_loss)
+        self.binary_accuracy_tracker.update_state(
+            tf.keras.metrics.binary_accuracy(y_true_masked, y_pred_masked)
         )
 
         return {
             "loss": self.total_loss_tracker.result(),
-            "reconstruction_loss": self.reconstruction_loss_tracker.result(),
-            "accuracy": self.accuracy_tracker.result(),
+            "binary_accuracy": self.binary_accuracy_tracker.result(),
         }
 
     @tf.function
@@ -557,21 +551,16 @@ class AutoEncoderModel(tf.keras.Model):
 
         total_loss = reconstruction_loss + regularization_loss
 
-        self.accuracy_tracker.update_state(
-            self.categorical_accuracy(
-                y_true_masked,
-                y_pred_masked,
-                sample_weight=sample_weight_masked,
-            )
-        )
-
+        ### NOTE: If you get the error, "'tuple' object has no attribute
+        ### 'rank', then convert y_true to a tensor object."
         self.total_loss_tracker.update_state(total_loss)
-        self.reconstruction_loss_tracker.update_state(reconstruction_loss)
+        self.binary_accuracy_tracker.update_state(
+            tf.keras.metrics.binary_accuracy(y_true_masked, y_pred_masked)
+        )
 
         return {
             "loss": self.total_loss_tracker.result(),
-            "reconstruction_loss": self.reconstruction_loss_tracker.result(),
-            "accuracy": self.accuracy_tracker.result(),
+            "binary_accuracy": self.binary_accuracy_tracker.result(),
         }
 
     @property
