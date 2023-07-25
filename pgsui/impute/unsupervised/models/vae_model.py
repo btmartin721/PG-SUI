@@ -403,6 +403,11 @@ class VAEModel(tf.keras.Model):
     ):
         super(VAEModel, self).__init__()
 
+        self.total_loss_tracker = tf.keras.metrics.Mean(name="total_loss")
+        self.binary_accuracy_tracker = tf.keras.metrics.Mean(
+            name="binary_accuracy"
+        )
+
         self.kl_beta = K.variable(0.0)
         self.kl_beta._trainable = False
 
@@ -419,13 +424,6 @@ class VAEModel(tf.keras.Model):
             self.acc_func = tf.keras.metrics.binary_accuracy
 
         self.nn_ = NeuralNetworkMethods()
-
-        self.total_loss_tracker = tf.keras.metrics.Mean(name="loss")
-        self.reconstruction_loss_tracker = tf.keras.metrics.Mean(
-            name="reconstruction_loss"
-        )
-        # self.kl_loss_tracker = tf.keras.metrics.Mean(name="kl_loss")
-        self.accuracy_tracker = tf.keras.metrics.Mean(name="accuracy")
 
         # y_train[1] dimension.
         self.n_features = output_shape
@@ -503,16 +501,13 @@ class VAEModel(tf.keras.Model):
             kernel_regularizer,
         )
 
-        if final_activation is not None:
-            self.act = Activation(final_activation)
+        self.activation = Activation("sigmoid")
 
     def call(self, inputs, training=None):
         """Forward pass for model."""
         z_mean, z_log_var, z = self.encoder(inputs)
         reconstruction = self.decoder(z)
-        if self._final_activation is not None:
-            reconstruction = self.act(reconstruction)
-        return reconstruction
+        return self.activation(reconstruction)
 
     def model(self):
         """Here so that mymodel.model().summary() can be called for debugging.
@@ -531,12 +526,9 @@ class VAEModel(tf.keras.Model):
 
     @property
     def metrics(self):
-        """Set metric trackers."""
         return [
             self.total_loss_tracker,
-            self.reconstruction_loss_tracker,
-            # self.kl_loss_tracker,
-            self.accuracy_tracker,
+            self.binary_accuracy_tracker,
         ]
 
     @tf.function
@@ -584,6 +576,7 @@ class VAEModel(tf.keras.Model):
                 y_true_masked,
                 y_pred_masked,
                 sample_weight=sample_weight_masked,
+                regularization_losses=self.losses,
             )
 
             # Doesn't include KL Divergence Loss.
@@ -594,74 +587,78 @@ class VAEModel(tf.keras.Model):
         grads = tape.gradient(total_loss, self.trainable_variables)
         self.optimizer.apply_gradients(zip(grads, self.trainable_variables))
 
-        ### NOTE: If you get the error, "'tuple' object has no attribute
-        ### 'rank', then convert y_true to a tensor object."
-        # self.compiled_metrics.update_state(
-        self.accuracy_tracker.update_state(
-            self.acc_func(
-                y_true_masked,
-                y_pred_masked,
-            )
-        )
-
         self.total_loss_tracker.update_state(total_loss)
-        self.reconstruction_loss_tracker.update_state(reconstruction_loss)
+        self.binary_accuracy_tracker.update_state(
+            tf.keras.metrics.binary_accuracy(y_true_masked, y_pred_masked)
+        )
 
         return {
             "loss": self.total_loss_tracker.result(),
-            "reconstruction_loss": self.reconstruction_loss_tracker.result(),
-            "accuracy": self.accuracy_tracker.result(),
+            "binary_accuracy": self.binary_accuracy_tracker.result(),
         }
 
-    # @tf.function
-    # def test_step(self, data):
-    #     if isinstance(data, tuple):
-    #         if len(data) == 2:
-    #             x, y = data
-    #             sample_weight = None
-    #         else:
-    #             x, y, sample_weight = data
-    #     else:
-    #         raise TypeError("Target y must be supplied to fit in this model.")
+    @tf.function
+    def test_step(self, data):
+        y = self._y
 
-    #     if sample_weight is not None:
-    #         sample_weight_masked = tf.boolean_mask(
-    #             tf.convert_to_tensor(sample_weight),
-    #             tf.reduce_any(tf.not_equal(y, -1), axis=2),
-    #         )
-    #     else:
-    #         sample_weight_masked = None
+        (
+            y_true,
+            sample_weight,
+            missing_mask,
+        ) = self.nn_.prepare_training_batches(
+            y,
+            y,
+            self._batch_size,
+            self._batch_idx,
+            True,
+            self.n_components,
+            self._sample_weight,
+            self._missing_mask,
+            ubp=False,
+        )
 
-    #     reconstruction, z_mean, z_log_var, z = self(x, training=False)
-    #     reconstruction_loss = self.compiled_loss(
-    #         y,
-    #         reconstruction,
-    #         sample_weight=sample_weight_masked,
-    #     )
+        if sample_weight is not None:
+            sample_weight_masked = tf.convert_to_tensor(
+                sample_weight[~missing_mask], dtype=tf.float32
+            )
+        else:
+            sample_weight_masked = None
 
-    #     # Includes KL Divergence Loss.
-    #     regularization_loss = sum(self.losses)
+        y_true_masked = tf.boolean_mask(
+            tf.convert_to_tensor(y_true, dtype=tf.float32),
+            tf.reduce_any(tf.not_equal(y_true, -1), axis=-1),
+        )
 
-    #     total_loss = reconstruction_loss + regularization_loss
+        reconstruction = self(y_true, training=False)
 
-    #     self.accuracy_tracker.update_state(
-    #         self.cateogrical_accuracy(
-    #             y,
-    #             reconstruction,
-    #             sample_weight=sample_weight_masked,
-    #         )
-    #     )
+        y_pred_masked = tf.boolean_mask(
+            reconstruction,
+            tf.reduce_any(tf.not_equal(y_true, -1), axis=-1),
+        )
 
-    #     self.total_loss_tracker.update_state(total_loss)
-    #     self.reconstruction_loss_tracker.update_state(reconstruction_loss)
-    #     self.kl_loss_tracker.update_state(regularization_loss)
+        reconstruction_loss = self.compiled_loss(
+            y_true_masked,
+            y_pred_masked,
+            sample_weight=sample_weight_masked,
+            regularization_losses=self.losses,
+        )
 
-    #     return {
-    #         "loss": self.total_loss_tracker.result(),
-    #         "reconstruction_loss": self.reconstruction_loss_tracker.result(),
-    #         "kl_loss": self.kl_loss_tracker.result(),
-    #         "accuracy": self.accuracy_tracker.result(),
-    #     }
+        # Doesn't include KL Divergence Loss.
+        regularization_loss = sum(self.losses)
+
+        total_loss = reconstruction_loss + regularization_loss
+
+        ### NOTE: If you get the error, "'tuple' object has no attribute
+        ### 'rank', then convert y_true to a tensor object."
+        self.total_loss_tracker.update_state(total_loss)
+        self.binary_accuracy_tracker.update_state(
+            tf.keras.metrics.binary_accuracy(y_true_masked, y_pred_masked)
+        )
+
+        return {
+            "loss": self.total_loss_tracker.result(),
+            "binary_accuracy": self.binary_accuracy_tracker.result(),
+        }
 
     @property
     def batch_size(self):
