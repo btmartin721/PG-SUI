@@ -296,7 +296,8 @@ class SupervisedImputer(Impute):
 
 
 class ImputeKNN(SupervisedImputer):
-    """Does K-Nearest Neighbors Iterative Imputation of missing data. Iterative imputation uses the n_nearest_features to inform the imputation at each feature (i.e., SNP site), using the N most correlated features per site. The N most correlated features are drawn with probability proportional to correlation for each imputed target feature to ensure coverage of features throughout the imputation process.
+    (
+        """Does K-Nearest Neighbors Iterative Imputation of missing data. Iterative imputation uses the n_nearest_features to inform the imputation at each feature (i.e., SNP site), using the N most correlated features per site. The N most correlated features are drawn with probability proportional to correlation for each imputed target feature to ensure coverage of features throughout the imputation process.
 
     Example:
         >>> data = GenotypeData(
@@ -338,11 +339,7 @@ class ImputeKNN(SupervisedImputer):
         p (int, optional): Power parameter for the Minkowski metric. When p=1, this is equivalent to using manhattan_distance (l1), and if p=2 it is equivalent to using euclidean distance (l2). For arbitrary p, minkowski_distance (l_p) is used. Defaults to 2.
 
         metric (str, optional): The distance metric to use for the tree. The default metric is minkowski, and with p=2 this is equivalent to the standard Euclidean metric. See the documentation of sklearn.DistanceMetric for a list of available metrics. If metric is 'precomputed', X is assumed to be a distance matrix and must be square during fit. Defaults to "minkowski".
-    """
-
-    +SupervisedImputer.__doc__
-    +"""
-    """
+    """ + SupervisedImputer.__doc__
 
     def __init__(
         self,
@@ -423,11 +420,7 @@ class ImputeRandomForest(SupervisedImputer):
         oob_score (bool, optional): Whether to use out-of-bag samples to estimate the generalization score. Only available if ``bootstrap=True``\. Defaults to False.
 
         max_samples (int or float, optional): If bootstrap is True, the number of samples to draw from X to train each base estimator. If None (default), then draws ``X.shape[0] samples``\. if int, then draws ``max_samples`` samples. If float, then draws ``int(max_samples * X.shape[0] samples)`` with ``max_samples`` in the interval (0, 1). Defaults to None.
-    """
-        + SupervisedImputer.__doc__
-        + """
-    """
-    )
+    """ + "\t" + SupervisedImputer.__doc__
 
     def __init__(
         self,
@@ -532,11 +525,7 @@ class ImputeXGBoost(SupervisedImputer):
 
         reg_alpha (float, optional): L1 regularization term on weights (xgb's alpha parameter). Defaults to 1.0.
 
-    """
-
-    +SupervisedImputer.__doc__
-    +"""
-    """
+    """ + SupervisedImputer.__doc__
 
     def __init__(
         self,
