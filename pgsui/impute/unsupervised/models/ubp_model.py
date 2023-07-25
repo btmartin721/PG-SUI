@@ -43,6 +43,7 @@ from tensorflow.keras.layers import (
     Reshape,
     LeakyReLU,
     PReLU,
+    Activation,
 )
 
 from tensorflow.keras.regularizers import l1_l2
@@ -126,6 +127,11 @@ class UBPPhase1(tf.keras.Model):
     ):
         super(UBPPhase1, self).__init__()
 
+        self.total_loss_tracker = tf.keras.metrics.Mean(name="total_loss")
+        self.binary_accuracy_tracker = tf.keras.metrics.Mean(
+            name="binary_accuracy"
+        )
+
         nn = NeuralNetworkMethods()
         self.nn = nn
 
@@ -197,6 +203,13 @@ class UBPPhase1(tf.keras.Model):
         model = tf.keras.Model(inputs=[x], outputs=self.call(x))
         self.outputs = model.outputs
 
+    @property
+    def metrics(self):
+        return [
+            self.total_loss_tracker,
+            self.binary_accuracy_tracker,
+        ]
+
     def train_step(self, data):
         """Train step function. Parameters are set in the UBPCallbacks callback"""
         y = self._y
@@ -250,7 +263,6 @@ class UBPPhase1(tf.keras.Model):
                 y_true_masked,
                 y_pred_masked,
                 sample_weight=sample_weight_masked,
-                regularization_losses=self.losses,
             )
 
         # Refine the watched variables with
@@ -266,14 +278,6 @@ class UBPPhase1(tf.keras.Model):
 
         del tape
 
-        ### NOTE: If you get the error, "'tuple' object has no attribute
-        ### 'rank', then convert y_true to a tensor object."
-        self.compiled_metrics.update_state(
-            y_true_masked,
-            y_pred_masked,
-            sample_weight=sample_weight_masked,
-        )
-
         # NOTE: run_eagerly must be set to True in the compile() method for this
         # to work. Otherwise it can't convert a Tensor object to a numpy array.
         # There is really no other way to set v back to V_latent_ in graph
@@ -281,8 +285,76 @@ class UBPPhase1(tf.keras.Model):
         # to find a way to do this without converting to numpy.
         self.V_latent_[batch_start:batch_end, :] = v.numpy()
 
+        ### NOTE: If you get the error, "'tuple' object has no attribute
+        ### 'rank', then convert y_true to a tensor object."
         # history object that gets returned from model.fit().
-        return {m.name: m.result() for m in self.metrics}
+        self.total_loss_tracker.update_state(loss)
+        self.binary_accuracy_tracker.update_state(
+            tf.keras.metrics.binary_accuracy(y_true_masked, y_pred_masked)
+        )
+
+        return {
+            "loss": self.total_loss_tracker.result(),
+            "binary_accuracy": self.binary_accuracy_tracker.result(),
+        }
+
+    def test_step(self, data):
+        """Train step function. Parameters are set in the UBPCallbacks callback"""
+        y = self._y
+
+        (
+            v,
+            y_true,
+            sample_weight,
+            missing_mask,
+            batch_start,
+            batch_end,
+        ) = self.nn.prepare_training_batches(
+            self.V_latent_,
+            y,
+            self._batch_size,
+            self._batch_idx,
+            True,
+            self.n_components,
+            self._sample_weight,
+            self._missing_mask,
+        )
+
+        if sample_weight is not None:
+            sample_weight_masked = tf.convert_to_tensor(
+                sample_weight[~missing_mask], dtype=tf.float32
+            )
+        else:
+            sample_weight_masked = None
+
+        y_true_masked = tf.boolean_mask(
+            tf.convert_to_tensor(y_true, dtype=tf.float32),
+            tf.reduce_any(tf.not_equal(y_true, -1), axis=2),
+        )
+
+        y_pred = self(v, training=False)
+        y_pred_masked = tf.boolean_mask(
+            y_pred, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
+        )
+        ### NOTE: If you get the error, "'tuple' object has no attribute
+        ### 'rank'", then convert y_true to a tensor object."
+        loss = self.compiled_loss(
+            y_true_masked,
+            y_pred_masked,
+            sample_weight=sample_weight_masked,
+        )
+
+        ### NOTE: If you get the error, "'tuple' object has no attribute
+        ### 'rank', then convert y_true to a tensor object."
+        self.total_loss_tracker.update_state(loss)
+        self.binary_accuracy_tracker.update_state(
+            tf.keras.metrics.binary_accuracy(y_true_masked, y_pred_masked)
+        )
+
+        return {
+            "loss": self.total_loss_tracker.result(),
+            "binary_accuracy": self.binary_accuracy_tracker.result(),
+        }
 
     @property
     def V_latent(self):
@@ -442,6 +514,11 @@ class UBPPhase2(tf.keras.Model):
     ):
         super(UBPPhase2, self).__init__()
 
+        self.total_loss_tracker = tf.keras.metrics.Mean(name="total_loss")
+        self.binary_accuracy_tracker = tf.keras.metrics.Mean(
+            name="binary_accuracy"
+        )
+
         nn = NeuralNetworkMethods()
         self.nn = nn
 
@@ -592,6 +669,13 @@ class UBPPhase2(tf.keras.Model):
         model = tf.keras.Model(inputs=[x], outputs=self.call(x))
         self.outputs = model.outputs
 
+    @property
+    def metrics(self):
+        return [
+            self.total_loss_tracker,
+            self.binary_accuracy_tracker,
+        ]
+
     def train_step(self, data):
         """Train step function. Parameters are set in the UBPCallbacks callback"""
         y = self._y
@@ -642,7 +726,6 @@ class UBPPhase2(tf.keras.Model):
                 y_true_masked,
                 y_pred_masked,
                 sample_weight=sample_weight_masked,
-                regularization_losses=self.losses,
             )
 
         # Refine the watched variables with backpropagation
@@ -653,14 +736,73 @@ class UBPPhase2(tf.keras.Model):
 
         ### NOTE: If you get the error, "'tuple' object has no attribute
         ### 'rank', then convert y_true to a tensor object."
-        self.compiled_metrics.update_state(
+        self.total_loss_tracker.update_state(loss)
+        self.binary_accuracy_tracker.update_state(
+            tf.keras.metrics.binary_accuracy(y_true_masked, y_pred_masked)
+        )
+
+        return {
+            "loss": self.total_loss_tracker.result(),
+            "binary_accuracy": self.binary_accuracy_tracker.result(),
+        }
+
+    def test_step(self, data):
+        """Train step function. Parameters are set in the UBPCallbacks callback"""
+        y = self._y
+
+        (
+            v,
+            y_true,
+            sample_weight,
+            missing_mask,
+            _,
+            __,
+        ) = self.nn.prepare_training_batches(
+            self.V_latent_,
+            y,
+            self._batch_size,
+            self._batch_idx,
+            True,
+            self.n_components,
+            self._sample_weight,
+            self._missing_mask,
+        )
+
+        if sample_weight is not None:
+            sample_weight_masked = tf.convert_to_tensor(
+                sample_weight[~missing_mask], dtype=tf.float32
+            )
+        else:
+            sample_weight_masked = None
+
+        y_true_masked = tf.boolean_mask(
+            tf.convert_to_tensor(y_true, dtype=tf.float32),
+            tf.reduce_any(tf.not_equal(y_true, -1), axis=2),
+        )
+
+        y_pred = self(v, training=False)
+        y_pred_masked = tf.boolean_mask(
+            y_pred, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
+        )
+        ### NOTE: If you get the error, "'tuple' object has no attribute
+        ### 'rank'", then convert y_true to a tensor object."
+        loss = self.compiled_loss(
             y_true_masked,
             y_pred_masked,
             sample_weight=sample_weight_masked,
         )
 
-        # history object that gets returned from fit().
-        return {m.name: m.result() for m in self.metrics}
+        ### NOTE: If you get the error, "'tuple' object has no attribute
+        ### 'rank', then convert y_true to a tensor object."
+        self.total_loss_tracker.update_state(loss)
+        self.binary_accuracy_tracker.update_state(
+            tf.keras.metrics.binary_accuracy(y_true_masked, y_pred_masked)
+        )
+
+        return {
+            "loss": self.total_loss_tracker.result(),
+            "binary_accuracy": self.binary_accuracy_tracker.result(),
+        }
 
     @property
     def V_latent(self):
@@ -818,6 +960,11 @@ class UBPPhase3(tf.keras.Model):
     ):
         super(UBPPhase3, self).__init__()
 
+        self.total_loss_tracker = tf.keras.metrics.Mean(name="total_loss")
+        self.binary_accuracy_tracker = tf.keras.metrics.Mean(
+            name="binary_accuracy"
+        )
+
         nn = NeuralNetworkMethods()
         self.nn = nn
 
@@ -930,6 +1077,7 @@ class UBPPhase3(tf.keras.Model):
         self.rshp = Reshape((output_shape, num_classes))
 
         self.dropout_layer = Dropout(rate=dropout_rate)
+        self.activation = Activation("sigmoid")
 
     def call(self, inputs, training=None):
         x = self.dense1(inputs)
@@ -943,7 +1091,8 @@ class UBPPhase3(tf.keras.Model):
             x = self.dense5(x)
 
         x = self.output1(x)
-        return self.rshp(x)
+        x = self.rshp(x)
+        return self.activation(x)
 
     def model(self):
         x = tf.keras.Input(shape=(self.n_components,))
@@ -953,6 +1102,13 @@ class UBPPhase3(tf.keras.Model):
         x = tf.keras.Input(shape=(self.n_components,))
         model = tf.keras.Model(inputs=[x], outputs=self.call(x))
         self.outputs = model.outputs
+
+    @property
+    def metrics(self):
+        return [
+            self.total_loss_tracker,
+            self.binary_accuracy_tracker,
+        ]
 
     def train_step(self, data):
         """Train step function. Parameters are set in the UBPCallbacks callback"""
@@ -1007,7 +1163,6 @@ class UBPPhase3(tf.keras.Model):
                 y_true_masked,
                 y_pred_masked,
                 sample_weight=sample_weight_masked,
-                regularization_losses=self.losses,
             )
 
         # Refine the watched variables with
@@ -1023,14 +1178,6 @@ class UBPPhase3(tf.keras.Model):
 
         del tape
 
-        ### NOTE: If you get the error, "'tuple' object has no attribute
-        ### 'rank', then convert y_true to a tensor object."
-        self.compiled_metrics.update_state(
-            y_true_masked,
-            y_pred_masked,
-            sample_weight=sample_weight_masked,
-        )
-
         # NOTE: run_eagerly must be set to True in the compile() method for this
         # to work. Otherwise it can't convert a Tensor object to a numpy array.
         # There is really no other way to set v back to V_latent_ in graph
@@ -1038,8 +1185,75 @@ class UBPPhase3(tf.keras.Model):
         # to find a way to do this without converting to numpy.
         self.V_latent_[batch_start:batch_end, :] = v.numpy()
 
-        # history object that gets returned from fit().
-        return {m.name: m.result() for m in self.metrics}
+        self.total_loss_tracker.update_state(loss)
+        self.binary_accuracy_tracker.update_state(
+            tf.keras.metrics.binary_accuracy(y_true_masked, y_pred_masked)
+        )
+
+        ### NOTE: If you get the error, "'tuple' object has no attribute
+        ### 'rank', then convert y_true to a tensor object."
+        return {
+            "loss": self.total_loss_tracker.result(),
+            "binary_accuracy": self.binary_accuracy_tracker.result(),
+        }
+
+    def test_step(self, data):
+        """Train step function. Parameters are set in the UBPCallbacks callback"""
+        y = self._y
+
+        (
+            v,
+            y_true,
+            sample_weight,
+            missing_mask,
+            batch_start,
+            batch_end,
+        ) = self.nn.prepare_training_batches(
+            self.V_latent_,
+            y,
+            self._batch_size,
+            self._batch_idx,
+            True,
+            self.n_components,
+            self._sample_weight,
+            self._missing_mask,
+        )
+
+        if sample_weight is not None:
+            sample_weight_masked = tf.convert_to_tensor(
+                sample_weight[~missing_mask], dtype=tf.float32
+            )
+        else:
+            sample_weight_masked = None
+
+        y_true_masked = tf.boolean_mask(
+            tf.convert_to_tensor(y_true, dtype=tf.float32),
+            tf.reduce_any(tf.not_equal(y_true, -1), axis=2),
+        )
+
+        y_pred = self(v, training=False)
+        y_pred_masked = tf.boolean_mask(
+            y_pred, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
+        )
+        ### NOTE: If you get the error, "'tuple' object has no attribute
+        ### 'rank'", then convert y_true to a tensor object."
+        loss = self.compiled_loss(
+            y_true_masked,
+            y_pred_masked,
+            sample_weight=sample_weight_masked,
+        )
+
+        ### NOTE: If you get the error, "'tuple' object has no attribute
+        ### 'rank', then convert y_true to a tensor object."
+        self.total_loss_tracker.update_state(loss)
+        self.binary_accuracy_tracker.update_state(
+            tf.keras.metrics.binary_accuracy(y_true_masked, y_pred_masked)
+        )
+
+        return {
+            "loss": self.total_loss_tracker.result(),
+            "binary_accuracy": self.binary_accuracy_tracker.result(),
+        }
 
     @property
     def V_latent(self):
