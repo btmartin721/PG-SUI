@@ -212,7 +212,7 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
         n_jobs=1,
         verbose=0,
         kl_beta=tf.Variable(1.0, trainable=False),
-        validation_split=0.0,
+        validation_split=0.2,
         nlpca=False,
         testing=False,
     ):
@@ -315,12 +315,15 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
 
         if self.gridparams is not None:
             self.scoring_metrics_ = [
-                "precision_recall_macro",
-                "precision_recall_micro",
-                "f1_score",
-                "f1_score_weighted",
-                "auc_macro",
-                "auc_micro",
+                "average_precision_macro",
+                "average_precision_micro",
+                "average_precision_weighted",
+                "f1_micro",
+                "f1_macro",
+                "f1_weighted",
+                "roc_auc_macro",
+                "roc_auc_micro",
+                "roc_auc_weighted",
                 "accuracy",
                 "hamming",
             ]
@@ -502,7 +505,6 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
         fit_params,
         ubp_weights=None,
         phase=None,
-        scoring=None,
         testing=False,
         **kwargs,
     ):
@@ -518,8 +520,6 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
             compile_params (Dict[str, Any]): Dictionary with params to be passed to Keras model.compile() in KerasClassifier.
 
             fit_params (Dict[str, Any]): Dictionary with parameters to be passed to fit in KerasClassifier.
-
-            scoring (Dict[str, Callable], optional): Multimetric scorer made using sklearn.metrics.make_scorer. To be used with grid search.
 
         Returns:
             List[tf.keras.Model]: List of keras model objects. One for each phase (len=1 if NLPCA, len=3 if UBP).
@@ -610,6 +610,7 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
                 callbacks=fit_params["callbacks"],
                 validation_split=fit_params["validation_split"],
                 verbose=0,
+                activate=self.act_func_,
                 score__missing_mask=self.sim_missing_mask_,
                 score__scoring_metric=self.scoring_metric,
             )
@@ -622,6 +623,13 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
             # Thus, we disable cross-validation for the grid searches.
             cross_val = DisabledCV()
             verbose = False if self.verbose == 0 else True
+
+            scorers = Scorers()
+            scoring = scorers.make_multimetric_scorer(
+                self.scoring_metrics_,
+                self.sim_missing_mask_,
+                num_classes=self.num_classes,
+            )
 
             if self.ga_:
                 # Stop searching if GA sees no improvement.
@@ -835,9 +843,6 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
 
         if self.nn_method_ in ["UBP", "NLPCA"]:
             vinput = self._initV(y_train, search_mode)
-            compile_params = self.nn_.set_compile_params(self.optimizer)
-        else:
-            vae = True if self.nn_method_ in ["VAE", "SAE"] else False
 
         if self.sample_weights == "auto" or self.sample_weights == "logsmooth":
             # Get class weights for each column.
@@ -861,13 +866,11 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
         else:
             sample_weights = None
 
-        vae = True if self.nn_method_ == "VAE" else False
-
         compile_params = self.nn_.set_compile_params(
             self.optimizer,
             sample_weights,
-            vae=vae,
-            act_func=self.act_func_,
+            vae=False,
+            act_func="sigmoid",
         )
 
         compile_params["learning_rate"] = self.learning_rate
@@ -917,19 +920,16 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
             "batch_size": self.batch_size,
             "epochs": self.epochs,
             "callbacks": callbacks,
-            "shuffle": True,
             "verbose": fit_verbose,
             "sample_weight": sample_weights,
         }
 
         if self.nn_method_ in ["VAE", "SAE"]:
-            shuffle = True
             fit_params["validation_split"] = self.validation_split
         else:
-            shuffle = False
-            fit_params["validation_split"] = 0.0
+            fit_params["validation_split"] = self.validation_split
 
-        fit_params["shuffle"] = shuffle
+        fit_params["shuffle"] = False
 
         if self.run_gridsearch_ and "learning_rate" in self.gridparams:
             self.gridparams["optimizer__learning_rate"] = self.gridparams[
@@ -966,12 +966,7 @@ class VAE(BaseNNImputer):
         self.testing = kwargs.get("testing", False)
         self.do_act_in_model_ = True if self.activate is None else False
 
-        if self.do_act_in_model_ and self.is_multiclass_:
-            self.act_func_ = "softmax"
-        elif self.do_act_in_model_ and not self.is_multiclass_:
-            self.act_func_ = "sigmoid"
-        else:
-            self.act_func_ = None
+        self.act_func_ = None
 
         super().__init__(
             self.activate,
@@ -1025,13 +1020,6 @@ class VAE(BaseNNImputer):
         histories = list()
         models = list()
 
-        if self.run_gridsearch_:
-            scoring = scorers.make_multimetric_scorer(
-                self.scoring_metrics_,
-                self.sim_missing_mask_,
-                num_classes=self.num_classes,
-            )
-
         (
             model,
             best_history,
@@ -1046,7 +1034,6 @@ class VAE(BaseNNImputer):
             model_params,
             compile_params,
             fit_params,
-            scoring=scoring,
         )
 
         histories.append(best_history)
@@ -1069,10 +1056,11 @@ class SAE(BaseNNImputer):
         self,
         **kwargs,
     ):
-        self.num_classes = 3
-        self.activate = "softmax"
+        self.num_classes = 4
+        self.is_multiclass_ = True if self.num_classes != 4 else False
+        self.activate = None
         self.nn_method_ = "SAE"
-        self.act_func_ = "softmax"
+        self.act_func_ = None
         self.testing = kwargs.get("testing", False)
 
         super().__init__(
@@ -1125,11 +1113,6 @@ class SAE(BaseNNImputer):
         histories = list()
         models = list()
 
-        if self.run_gridsearch_:
-            scoring = scorers.make_multimetric_scorer(
-                self.scoring_metrics_, self.sim_missing_mask_
-            )
-
         (
             model,
             best_history,
@@ -1144,7 +1127,6 @@ class SAE(BaseNNImputer):
             model_params,
             compile_params,
             fit_params,
-            scoring=scoring,
             testing=False,
         )
 
@@ -1174,10 +1156,11 @@ class UBP(BaseNNImputer):
         # E.g., with morphological data.
         self.nlpca = nlpca
         self.nn_method_ = "NLPCA" if self.nlpca else "UBP"
-        self.num_classes = 3
+        self.num_classes = 4
+        self.is_multiclass_ = True if self.num_classes != 4 else False
         self.testing = kwargs.get("testing", False)
         self.activate = None
-        self.act_func_ = "softmax"
+        self.act_func_ = None
 
         super().__init__(
             self.activate,
@@ -1231,12 +1214,6 @@ class UBP(BaseNNImputer):
         y_train = model_params.pop("y_train")
         ubp_weights = None
         phase = None
-        scoring = None
-
-        if self.run_gridsearch_:
-            scoring = scorers.make_multimetric_scorer(
-                self.scoring_metrics_, self.sim_missing_mask_
-            )
 
         (
             V,
@@ -1255,7 +1232,6 @@ class UBP(BaseNNImputer):
             fit_params,
             ubp_weights=ubp_weights,
             phase=phase,
-            scoring=scoring,
             testing=False,
         )
 
@@ -1324,7 +1300,9 @@ class UBP(BaseNNImputer):
             # would not accurately represent the model.
             # Thus, we disable cross-validation for the grid searches.
             scoring = scorers.make_multimetric_scorer(
-                self.scoring_metrics_, self.sim_missing_mask_
+                self.scoring_metrics_,
+                self.sim_missing_mask_,
+                num_classes=self.num_classes,
             )
 
             if "n_components" in self.gridparams:
@@ -1353,7 +1331,6 @@ class UBP(BaseNNImputer):
                 fit_params,
                 ubp_weights=ubp_weights,
                 phase=phase,
-                scoring=scoring,
                 testing=False,
             )
 
