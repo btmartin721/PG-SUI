@@ -155,7 +155,7 @@ class NeuralNetworkMethods:
         return_multilab=False,
         return_int=True,
         predict_still_missing=True,
-        threshold_increment=0.01,
+        threshold_increment=0.1,
         multilabel_averaging="macro",
         missing_mask=None,
     ):
@@ -863,8 +863,8 @@ class NeuralNetworkMethods:
 
         else:
             # Doing grid search. Params are callables.
-            loss = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
-            metrics = [tf.keras.metrics.CategoricalAccuracy()]
+            loss = tf.keras.losses.BinaryCrossentropy(from_logits=False)
+            metrics = [tf.keras.metrics.BinaryAccuracy()]
 
         return {
             "optimizer": opt,
