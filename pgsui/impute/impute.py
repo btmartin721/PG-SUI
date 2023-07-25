@@ -368,26 +368,26 @@ class Impute:
         """
         imputed_gd = deepcopy(genotype_data)
 
-        if self.clf == VAE:
-            if len(imp012.shape) == 3:
-                if imp012.shape[-1] == 4:
-                    imputed_gd.genotypes_onehot = imp012
-                else:
-                    raise ValueError("Invalid shape for imputed output.")
-            elif len(imp012.shape) == 2:
-                if isinstance(imp012, pd.DataFrame):
-                    imp012 = imp012.to_numpy()
-                imp012 = imp012.astype(int)
-                if np.max(imp012) > 2:
-                    imputed_gd.genotypes_int = imp012
-                else:
-                    imputed_gd.genotypes_012 = imp012
+        # if self.clf == VAE:
+        if len(imp012.shape) == 3:
+            if imp012.shape[-1] == 4:
+                imputed_gd.genotypes_onehot = imp012
             else:
-                raise ValueError(
-                    f"Invalid shape for imputed output: {imp012.shape}"
-                )
+                raise ValueError("Invalid shape for imputed output.")
+        elif len(imp012.shape) == 2:
+            if isinstance(imp012, pd.DataFrame):
+                imp012 = imp012.to_numpy()
+            imp012 = imp012.astype(int)
+            if np.max(imp012) > 2:
+                imputed_gd.genotypes_int = imp012
+            else:
+                imputed_gd.genotypes_012 = imp012
         else:
-            imputed_gd.genotypes_012 = imp012
+            raise ValueError(
+                f"Invalid shape for imputed output: {imp012.shape}"
+            )
+        # else:
+        #     imputed_gd.genotypes_012 = imp012
 
         return imputed_gd
 
