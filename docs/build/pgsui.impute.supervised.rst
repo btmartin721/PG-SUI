@@ -10,7 +10,6 @@ pgsui.impute.supervised.iterative\_imputer\_fixedparams module
 .. automodule:: pgsui.impute.supervised.iterative_imputer_fixedparams
    :members:
    :undoc-members:
-   :show-inheritance:
 
 pgsui.impute.supervised.iterative\_imputer\_gridsearch module
 -------------------------------------------------------------
@@ -18,7 +17,6 @@ pgsui.impute.supervised.iterative\_imputer\_gridsearch module
 .. automodule:: pgsui.impute.supervised.iterative_imputer_gridsearch
    :members:
    :undoc-members:
-   :show-inheritance:
 
 Module contents
 ---------------
@@ -26,4 +24,3 @@ Module contents
 .. automodule:: pgsui.impute.supervised
    :members:
    :undoc-members:
-   :show-inheritance:
