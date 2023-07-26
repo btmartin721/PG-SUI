@@ -17,6 +17,7 @@ Welcome to PG-SUI's documentation!
    unsupervised_imputers
    non_ml_imputers
    modules
+   changelog
    
 
 Indices and tables
