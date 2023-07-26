@@ -11,6 +11,9 @@ The best way to install PG-SUI is to just use pip:
     pip install pg-sui
 
 
+It will take care of the dependencies for you.
+
+
 Manual Installation
 --------------------
 

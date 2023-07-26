@@ -10,7 +10,6 @@ pgsui.data\_processing.transformers module
 .. automodule:: pgsui.data_processing.transformers
    :members:
    :undoc-members:
-   :show-inheritance:
 
 Module contents
 ---------------
@@ -18,4 +17,3 @@ Module contents
 .. automodule:: pgsui.data_processing
    :members:
    :undoc-members:
-   :show-inheritance:

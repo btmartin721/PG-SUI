@@ -22,9 +22,15 @@ except (ModuleNotFoundError, ValueError, ImportError):
 
 
 class UnsupervisedImputer(Impute):
-    """prefix (str): Prefix for output directory. Defaults to "imputer".
+    """Parent class for unsupervised imputers. Contains all common arguments and code between unsupervised imputers.
 
-        gridparams (Dict[str, Any] or None, optional): Dictionary with keys=keyword arguments for the specified estimator and values=lists of parameter values or distributions. If ``gridparams=None``\, a grid search is not performed, otherwise ``gridparams`` will be used to specify parameter ranges or distributions for the grid search. If using ``gridsearch_method="gridsearch"``\, then the ``gridparams`` values can be lists or numpy arrays. If using ``gridsearch_method="randomized_gridsearch"``\, distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). If using the genetic algorithm grid search by setting ``gridsearch_method="genetic_algorithm"``\, the parameters can be specified as ``sklearn_genetic.space`` objects. The grid search will determine the optimal parameters as those that maximize the scoring metrics. If it takes a long time, run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. Defaults to None (no gridsearch performed).
+    Args:
+
+        genotype_data (GenotypeData object): GenotypeData instance that was used to read in the sequence data.
+
+        prefix (str): Prefix for output directory. Defaults to "imputer".
+
+        gridparams (Dict[str, Any] or None, optional): Dictionary with keys=keyword arguments for the specified estimator and values=lists of parameter values or distributions. If ``gridparams=None``\, a grid search is not performed, otherwise ``gridparams`` will be used to specify parameter ranges or distributions for the grid search. If using ``gridsearch_method="gridsearch"``\, then the ``gridparams`` values can be lists or numpy arrays. If using ``gridsearch_method="randomized_gridsearch"``\, distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). If using the genetic algorithm grid search by setting ``gridsearch_method="genetic_algorithm"``\, the parameters can be specified as ``sklearn_genetic.space`` objects. The grid search will determine the optimal parameters as those that maximize the scoring metrics. If it takes a long time, run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. Defaults to None (no gridsearch).
 
         validation_split (float, optional): Proportion of training dataset to set aside for loss validation during model training. Defaults to 0.2.
 
@@ -58,7 +64,7 @@ class UnsupervisedImputer(Impute):
 
         dropout_rate (float, optional): Neuron dropout rate during training. Dropout randomly disables ``dropout_rate`` proportion of neurons during training, which can reduce overfitting. E.g., if dropout_rate is set to 0.2, then 20% of the neurons are randomly dropped out per epoch. Adjust if the model is over or underfitting. Must be a float in the range [0, 1]. Defaults to 0.2.
 
-        sample_weights (str, Dict[int, float], or None, optional): Weights for the 012-encoded classes during training. If None, then does not weight classes. If set to "auto", then class weights are automatically calculated for each column to balance classes (reference, heterozygous, and alternate alleles). If a dictionary is passed, it must contain 0, 1, and 2 as the keys and the class weights as the values. E.g., {0: 1.0, 1: 1.0, 2: 1.0}. The dictionary is then used as the overall class weights. If you wanted to prevent the model from learning to predict heterozygotes, for example, you could set the class weights to {0: 1.0, 1: 0.0, 2: 1.0}. Defaults to None (no weighting).
+        sample_weights (str, Dict[int, float], or None, optional): Weights for the ACTG-encoded classes during training. If None, then does not weight classes. If set to "auto", then class weights are automatically calculated for each column to balance classes. If a dictionary is passed, it must contain "A", "C", "G", and "T" as the keys and the class weights as the values. E.g., {"A": 1.0, "C": 1.0, "G": 1.0, "T": 1.0}. The dictionary is then used as the overall class weights. Defaults to None (no weighting).
 
         gridsearch_method (str, optional): Grid search method to use. Supported options include: {"gridsearch", "randomized_gridsearch", "genetic_algorithm"}. "gridsearch" uses GridSearchCV to test every possible parameter combination. "randomized_gridsearch" picks ``grid_iter`` random combinations of parameters to test. "genetic_algorithm" uses a genetic algorithm via the sklearn-genetic-opt GASearchCV module to do the grid search. If doing a grid search, "randomized_search" takes the least amount of time because it does not have to test all parameters. "genetic_algorithm" takes the longest. See the scikit-learn GridSearchCV and RandomizedSearchCV documentation for the "gridsearch" and "randomized_gridsearch" options, and the sklearn-genetic-opt GASearchCV documentation for the "genetic_algorithm" option. Defaults to "gridsearch".
 
@@ -94,11 +100,6 @@ class UnsupervisedImputer(Impute):
         imputed (GenotypeData): New GenotypeData instance with imputed data.
 
         best_params (Dict[str, Any]): Best found parameters from grid search.
-
-    References:
-        .. [1] Gashler, M. S., Smith, M. R., Morris, R., & Martinez, T. (2016). Missing value imputation with unsupervised backpropagation. Computational Intelligence, 32(2), 196-215.
-
-        .. [2] Scholz, M., Kaplan, F., Guy, C. L., Kopka, J., & Selbig, J. (2005). Non-linear PCA: a missing data approach. Bioinformatics, 21(20), 3887-3895.
     """
 
     def __init__(
@@ -171,61 +172,68 @@ class UnsupervisedImputer(Impute):
 
 
 class SupervisedImputer(Impute):
-    """prefix (str): Prefix for imputed data's output directory.
+    """Parent class for the supervised imputers. Contains all common arguments and code between supervised imputers.
 
-    gridparams (Dict[str, Any] or None or None, optional): Dictionary with keys=keyword arguments for the specified estimator and values=lists of parameter values or distributions. If ``gridparams=None``\, a grid search is not performed, otherwise ``gridparams`` will be used to specify parameter ranges or distributions for the grid search. If using ``gridsearch_method="gridsearch"``\, then the ``gridparams`` values can be lists or numpy arrays. If using ``gridsearch_method="randomized_gridsearch"``\, distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). If using the genetic algorithm grid search by setting ``gridsearch_method="genetic_algorithm"``\, the parameters can be specified as ``sklearn_genetic.space`` objects. The grid search will determine the optimal parameters as those that maximize the scoring_methods. NOTE: Takes a long time, so you can run it with a small subset of the data using the ``column_subset`` argument just to find the optimal parameters for the classifier, then it will automatically run a full imputation using the optimal parameters. Defaults to None.
 
-    do_validation (bool, optional): Whether to validate the imputation if not doing a grid search. This validation method randomly replaces between 15% and 50% of the known, non-missing genotypes in ``n_features * column_subset`` of the features. It then imputes the newly missing genotypes for which we know the true values and calculates validation scores. This procedure is replicated ``cv`` times and a mean, median, minimum, maximum, lower 95% confidence interval (CI) of the mean, and the upper 95% CI are calculated and saved to a CSV file. ``gridparams`` must be set to None for ``do_validation`` to work. Calculating a validation score can be turned off altogether by setting ``do_validation`` to False. Defaults to False.
+    Args:
 
-    column_subset (int or float, optional): If float, proportion of the dataset to randomly subset for the grid search or validation. Should be between 0 and 1, and should also be small, because the grid search or validation takes a long time. If int, subset ``column_subset`` columns. If float, subset ``int(n_features * column_subset)`` columns. Defaults to 0.1.
+        genotype_data (GenotypeData object): GenotypeData instance that was used to read in the sequence data.
 
-    cv (int, optional): Number of folds for cross-validation during grid search. Defaults to 5.
+        prefix (str): Prefix for imputed data's output directory.
 
-    max_iter (int, optional): Maximum number of imputation rounds to perform before returning the imputations computed during the final round. A round is a single imputation of each feature with missing values. Defaults to 10.
+        gridparams (Dict[str, Any] or None, optional): Dictionary with keys=keyword arguments for the specified estimator and values=lists of parameter values or distributions. If ``gridparams=None``\, a grid search is not performed, otherwise ``gridparams`` will be used to specify parameter ranges or distributions for the grid search. If using ``gridsearch_method="gridsearch"``\, then the ``gridparams`` values can be lists or numpy arrays. If using ``gridsearch_method="randomized_gridsearch"``\, distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). If using the genetic algorithm grid search by setting ``gridsearch_method="genetic_algorithm"``\, the parameters can be specified as ``sklearn_genetic.space`` objects. The grid search will determine the optimal parameters as those that maximize the scoring_methods. NOTE: Takes a long time, so you can run it with a small subset of the data using the ``column_subset`` argument just to find the optimal parameters for the classifier, then it will automatically run a full imputation using the optimal parameters. Defaults to None (no gridsearch).
 
-    tol (float, optional): Tolerance of the stopping condition for the iterations. Defaults to 1e-3.
+        do_validation (bool, optional): Whether to validate the imputation if not doing a grid search. This validation method randomly replaces between 15% and 50% of the known, non-missing genotypes in ``n_features * column_subset`` of the features. It then imputes the newly missing genotypes for which we know the true values and calculates validation scores. This procedure is replicated ``cv`` times and a mean, median, minimum, maximum, lower 95% confidence interval (CI) of the mean, and the upper 95% CI are calculated and saved to a CSV file. ``gridparams`` must be set to None for ``do_validation`` to work. Calculating a validation score can be turned off altogether by setting ``do_validation`` to False. Defaults to False.
 
-    n_nearest_features (int, optional): Number of other features to use to estimate the missing values of eacah feature column. If None, then all features will be used, but this can consume an  intractable amount of computing resources. Nearness between features is measured using the absolute correlation coefficient between each feature pair (after initial imputation). To ensure coverage of features throughout the imputation process, the neighbor features are not necessarily nearest, but are drawn with probability proportional to correlation for each imputed target feature. Can provide significant speed-up when the number of features is huge. Defaults to 10.
+        column_subset (int or float, optional): If float, proportion of the dataset to randomly subset for the grid search or validation. Should be between 0 and 1, and should also be small, because the grid search or validation takes a long time. If int, subset ``column_subset`` columns. If float, subset ``int(n_features * column_subset)`` columns. Defaults to 0.1.
 
-    initial_strategy (str, optional): Which strategy to use for initializing the missing values in the training data (neighbor columns). IterativeImputer must initially impute the training data (neighbor columns) using a simple, quick imputation in order to predict the missing values for each target column. The ``initial_strategy`` argument specifies which method to use for this initial imputation. Valid options include: “most_frequent”, "populations", "phylogeny", or "nmf". "most_frequent" uses the overall mode of each column. "populations" uses the mode per population/ per column via a population map file and the ``ImputeAlleleFreq`` class. "phylogeny" uses an input phylogenetic tree and a rate matrix with the ``ImputePhylo`` class. "nmf" performs the imputaton via matrix factorization via the ``ImputeMF`` class. Note that the "mean" and "median" options from the original IterativeImputer are not supported because they are not sensible settings for the type of input data used here. Defaults to "populations".
+        cv (int, optional): Number of folds for cross-validation during grid search. Defaults to 5.
 
-    str_encodings (dict(str: int), optional): Integer encodings for nucleotides if input file was in STRUCTURE format. Only used if ``initial_strategy="phylogeny"``\. Defaults to {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}.
+        max_iter (int, optional): Maximum number of imputation rounds to perform before returning the imputations computed during the final round. A round is a single imputation of each feature with missing values. Defaults to 10.
 
-    imputation_order (str, optional): The order in which the features will be imputed. Possible values: "ascending" (from features with fewest missing values to most), "descending" (from features with most missing values to fewest), "roman" (left to right), "arabic" (right to left), "random" (a random order for each round). Defaults to "ascending".
+        tol (float, optional): Tolerance of the stopping condition for the iterations. Defaults to 1e-3.
 
-    skip_complete (bool, optional): If True, then features with missing values during transform that did not have any missing values during fit will be imputed with the initial imputation method only. Set to True if you have many features with no missing values at both fit and transform time to save compute time. Defaults to False.
+        n_nearest_features (int, optional): Number of other features to use to estimate the missing values of eacah feature column. If None, then all features will be used, but this can consume an  intractable amount of computing resources. Nearness between features is measured using the absolute correlation coefficient between each feature pair (after initial imputation). To ensure coverage of features throughout the imputation process, the neighbor features are not necessarily nearest, but are drawn with probability proportional to correlation for each imputed target feature. Reducing this can provide significant speed-up when the number of features is large. Defaults to 10.
 
-    random_state (int or None, optional): The seed of the pseudo random number generator to use for the iterative imputer. Randomizes selection of etimator features if n_nearest_features is not None or the imputation_order is "random". Use an integer for determinism. If None, then uses a different random seed each time. Defaults to None.
+        initial_strategy (str, optional): Which strategy to use for initializing the missing values in the training data (neighbor columns). IterativeImputer must initially impute the training data (neighbor columns) using a simple, quick imputation in order to predict the missing values for each target column. The ``initial_strategy`` argument specifies which method to use for this initial imputation. Valid options include: “most_frequent”, "populations", "phylogeny", or "mf". "most_frequent" uses the overall mode of each column. "populations" uses the mode per population/ per column via a population map file and the ``ImputeAlleleFreq`` class. "phylogeny" uses an input phylogenetic tree and a rate matrix with the ``ImputePhylo`` class. "mf" performs the imputaton via matrix factorization with the ``ImputeMF`` class. Note that the "mean" and "median" options from the original IterativeImputer are not supported because they are not sensible settings for the type of input data used here. Defaults to "populations".
 
-    gridsearch_method (str, optional): Grid search method to use. Supported options include: {"gridsearch", "randomized_gridsearch", and "genetic_algorithm"}. "gridsearch" uses GridSearchCV to test every possible parameter combination. "randomized_gridsearch" picks ``grid_iter`` random combinations of parameters to test. "genetic_algorithm" uses a genetic algorithm via sklearn-genetic-opt GASearchCV to do the grid search. If doing a grid search, "randomized_search" takes the least amount of time because it does not have to test all parameters. "genetic_algorithm" takes the longest. See the scikit-learn GridSearchCV and RandomizedSearchCV documentation for the "gridsearch" and "randomized_gridsearch" options, and the sklearn-genetic-opt GASearchCV documentation for the "genetic_algorithm" option. Defaults to "gridsearch".
+        str_encodings (dict(str: int), optional): Integer encodings for nucleotides if input file was in STRUCTURE format. Only used if ``initial_strategy="phylogeny"``\. Defaults to {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}.
 
-    grid_iter (int, optional): Number of iterations for randomized and genetic algorithm grid searches. Defaults to 80.
+        imputation_order (str, optional): The order in which the features will be imputed. Possible values: "ascending" (from features with fewest missing values to most), "descending" (from features with most missing values to fewest), "roman" (left to right), "arabic" (right to left), "random" (a random order for each round). Defaults to "ascending".
 
-    population_size (int or str, optional): For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. If set to "auto", then ``population_size`` is calculated as ``15 * n_parameters``\. If set to an integer, then uses the integer value as ``population_size``\. If you need to speed up the genetic algorithm grid search, try decreasing this parameter. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io). Defaults to "auto".
+        skip_complete (bool, optional): If True, then features with missing values during transform that did not have any missing values during fit will be imputed with the initial imputation method only. Set to True if you have many features with no missing values at both fit and transform time to save compute time. Defaults to False.
 
-    tournament_size (int, optional): For genetic algorithm grid search: Number of individuals to perform tournament selection. See GASearchCV documentation. Defaults to 3.
+        random_state (int or None, optional): The seed of the pseudo random number generator to use for the iterative imputer. Randomizes selection of etimator features if n_nearest_features is not None or the imputation_order is "random". Use an integer for determinism. If None, then uses a different random seed each time. Defaults to None.
 
-    elitism (bool, optional): For genetic algorithm grid search:     If True takes the tournament_size best solution to the next generation. See GASearchCV documentation. Defaults to True.
+        gridsearch_method (str, optional): Grid search method to use. Supported options include: {"gridsearch", "randomized_gridsearch", and "genetic_algorithm"}. "gridsearch" uses GridSearchCV to test every possible parameter combination. "randomized_gridsearch" picks ``grid_iter`` random combinations of parameters to test. "genetic_algorithm" uses a genetic algorithm via sklearn-genetic-opt GASearchCV to do the grid search. If doing a grid search, "randomized_search" takes the least amount of time because it does not have to test all parameters. "genetic_algorithm" takes the longest. See the scikit-learn GridSearchCV and RandomizedSearchCV documentation for the "gridsearch" and "randomized_gridsearch" options, and the sklearn-genetic-opt GASearchCV documentation (https://sklearn-genetic-opt.readthedocs.io) for the "genetic_algorithm" option. Defaults to "gridsearch".
 
-    crossover_probability (float, optional): For genetic algorithm grid search: Probability of crossover operation between two individuals. See GASearchCV documentation. Defaults to 0.2.
+        grid_iter (int, optional): Number of iterations for randomized and genetic algorithm grid searches. Defaults to 80.
 
-    mutation_probability (float, optional): For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation. Defaults to 0.8.
+        population_size (int or str, optional): For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. If set to "auto", then ``population_size`` is calculated as ``15 * n_parameters``\. If set to an integer, then uses the integer value as ``population_size``\. If you need to speed up the genetic algorithm grid search, try decreasing this parameter. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io). Defaults to "auto".
 
-    ga_algorithm (str, optional): For genetic algorithm grid search: Evolutionary algorithm to use. Supported options include: {"eaMuPlusLambda", "eaMuCommaLambda", "eaSimple"}. If you need to speed up the genetic algorithm grid search, try setting ``algorithm`` to "euSimple", at the expense of evolutionary model robustness. See more details in the DEAP algorithms documentation (https://deap.readthedocs.io). Defaults to "eaMuPlusLambda".
+        tournament_size (int, optional): For genetic algorithm grid search: Number of individuals to perform tournament selection. See GASearchCV documentation. Defaults to 3.
 
-    early_stop_gen (int, optional): If the genetic algorithm sees ``early_stop_gen`` consecutive generations without improvement in the scoring metric, an early stopping callback is implemented. This saves time by reducing the number of generations the genetic algorithm has to perform. Defaults to 5.
+        elitism (bool, optional): For genetic algorithm grid search: If True takes the tournament_size best solution to the next generation. See GASearchCV documentation. Defaults to True.
 
-    scoring_metric (str, optional): Scoring metric to use for grid searches. See the classification metrics in the scikit-learn documentation (https://scikit-learn.org/stable/modules/model_evaluation.html) for supported options. Defaults to "f1_weighted".
+        crossover_probability (float, optional): For genetic algorithm grid search: Probability of crossover operation between two individuals. See GASearchCV documentation. Defaults to 0.2.
 
-    chunk_size (int or float, optional): Number of loci for which to perform IterativeImputer at one time. Useful for reducing the memory usage if you are running out of RAM. If integer is specified, selects ``chunk_size`` loci at a time. If a float is specified, selects ``math.ceil(total_loci * chunk_size)`` loci at a time]. Defaults to 1.0 (all features).
+        mutation_probability (float, optional): For genetic algorithm grid search: Probability of child mutation. See GASearchCV documentation. Defaults to 0.8.
 
-    disable_progressbar (bool, optional): Whether or not to disable the tqdm progress bar when doing the imputation. If True, progress bar is disabled, which is useful when running the imputation on e.g. an HPC cluster. If the bar is disabled, a status update will be printed to standard output for each iteration and feature instead. If False, the tqdm progress bar will be used. Defaults to False.
+        ga_algorithm (str, optional): For genetic algorithm grid search: Evolutionary algorithm to use. Supported options include: {"eaMuPlusLambda", "eaMuCommaLambda", "eaSimple"}. If you need to speed up the genetic algorithm grid search, try setting ``algorithm`` to "euSimple", at the expense of evolutionary model robustness. See more details in the DEAP algorithms documentation (https://deap.readthedocs.io). Defaults to "eaMuPlusLambda".
 
-    progress_update_percent (int or None, optional): Print status updates for features every ``progress_update_percent``\%. IterativeImputer iterations will always be printed, but ``progress_update_percent`` involves iteration progress through the features of each IterativeImputer iteration. If None, then does not print progress through features. Defaults to None.
+        early_stop_gen (int, optional): If the genetic algorithm sees ``early_stop_gen`` consecutive generations without improvement in the scoring metric, an early stopping callback is implemented. This saves time by reducing the number of generations the genetic algorithm has to perform. Defaults to 5.
 
-    n_jobs (int, optional): Number of parallel jobs to use. If ``gridparams`` is not None, n_jobs is used for the grid search. Otherwise it is used for the classifier. -1 means using all available processors. Defaults to -1 (all CPUs).
+        scoring_metric (str, optional): Scoring metric to use for grid searches. See the classification metrics in the scikit-learn documentation (https://scikit-learn.org/stable/modules/model_evaluation.html) for supported options. Defaults to "f1_weighted".
 
-    verbose (int, optional): Verbosity flag, controls the debug messages that are issues as functions are evaluated. The higher, the more verbose. Possible values are 0, 1, or 2. Defaults to 0.
+        chunk_size (int or float, optional): Number of loci for which to perform IterativeImputer at one time. Useful for reducing the memory usage if you are running out of RAM. If integer is specified, selects ``chunk_size`` loci at a time. If a float is specified, selects ``math.ceil(total_loci * chunk_size)`` loci at a time]. Defaults to 1.0 (all features).
+
+        disable_progressbar (bool, optional): Whether or not to disable the tqdm progress bar when doing the imputation. If True, progress bar is disabled, which is useful when running the imputation on e.g. an HPC cluster. If the bar is disabled, a status update will be printed to standard output for each iteration and feature instead. If False, the tqdm progress bar will be used. Defaults to False.
+
+        progress_update_percent (int or None, optional): Print status updates for features every ``progress_update_percent``\%. IterativeImputer iterations will always be printed, but ``progress_update_percent`` involves iteration progress through the features of each IterativeImputer iteration. If None, then does not print progress through features. Defaults to None.
+
+        n_jobs (int, optional): Number of parallel jobs to use. If ``gridparams`` is not None, n_jobs is used for the grid search. Otherwise it is used for the classifier. -1 means using all available processors. Defaults to -1 (all CPUs).
+
+        verbose (int, optional): Verbosity flag, controls the debug messages that are issues as functions are evaluated. The higher, the more verbose. Possible values are 0, 1, or 2. Defaults to 0.
 
     Attributes:
         imputed (GenotypeData): New GenotypeData instance with imputed data.
@@ -296,6 +304,21 @@ class SupervisedImputer(Impute):
 class ImputeKNN(SupervisedImputer):
     """Does K-Nearest Neighbors Iterative Imputation of missing data. Iterative imputation uses the n_nearest_features to inform the imputation at each feature (i.e., SNP site), using the N most correlated features per site. The N most correlated features are drawn with probability proportional to correlation for each imputed target feature to ensure coverage of features throughout the imputation process.
 
+    Args:
+        genotype_data (GenotypeData object): GenotypeData instance that was used to read in the sequence data.
+
+        n_neighbors (int, optional): Number of neighbors to use for K-Nearest Neighbors queries. Defaults to 5.
+
+        weights (str, optional): Weight function used in prediction. Possible values: 'Uniform': Uniform weights with all points in each neighborhood weighted equally; 'distance': Weight points by the inverse of their distance, in this case closer neighbors of a query point will have  a greater influence than neighbors that are further away; 'callable': A user-defined function that accepts an array of distances and returns an array of the same shape containing the weights. Defaults to "distance".
+
+        algorithm (str, optional): Algorithm used to compute the nearest neighbors. Possible values: 'ball_tree', 'kd_tree', 'brute', 'auto'. Defaults to "auto".
+
+        leaf_size (int, optional): Leaf size passed to BallTree or KDTree. This can affect the speed of the construction and query, as well as the memory required to store the tree. The optimal value depends on the nature of the problem. Defaults to 30.
+
+        p (int, optional): Power parameter for the Minkowski metric. When p=1, this is equivalent to using manhattan_distance (l1), and if p=2 it is equivalent to using euclidean distance (l2). For arbitrary p, minkowski_distance (l_p) is used. Defaults to 2.
+
+        metric (str, optional): The distance metric to use for the tree. The default metric is minkowski, and with p=2 this is equivalent to the standard Euclidean metric. See the documentation of sklearn.DistanceMetric for a list of available metrics. If metric is 'precomputed', X is assumed to be a distance matrix and must be square during fit. Defaults to "minkowski".
+
     Example:
         >>> data = GenotypeData(
         >>>     filename="test.str",
@@ -321,24 +344,7 @@ class ImputeKNN(SupervisedImputer):
         >>> )
         >>>
         >>> knn_gtdata = knn.imputed
-
-    Args:
-        genotype_data (GenotypeData object): GenotypeData instance that was used to read in the sequence data.
-
-        n_neighbors (int, optional): Number of neighbors to use for K-Nearest Neighbors queries. Defaults to 5.
-
-        weights (str, optional): Weight function used in prediction. Possible values: 'Uniform': Uniform weights with all points in each neighborhood weighted equally; 'distance': Weight points by the inverse of their distance, in this case closer neighbors of a query point will have  a greater influence than neighbors that are further away; 'callable': A user-defined function that accepts an array of distances and returns an array of the same shape containing the weights. Defaults to "distance".
-
-        algorithm (str, optional): Algorithm used to compute the nearest neighbors. Possible values: 'ball_tree', 'kd_tree', 'brute', 'auto'. Defaults to "auto".
-
-        leaf_size (int, optional): Leaf size passed to BallTree or KDTree. This can affect the speed of the construction and query, as well as the memory required to store the tree. The optimal value depends on the nature of the problem. Defaults to 30.
-
-        p (int, optional): Power parameter for the Minkowski metric. When p=1, this is equivalent to using manhattan_distance (l1), and if p=2 it is equivalent to using euclidean distance (l2). For arbitrary p, minkowski_distance (l_p) is used. Defaults to 2.
-
-        metric (str, optional): The distance metric to use for the tree. The default metric is minkowski, and with p=2 this is equivalent to the standard Euclidean metric. See the documentation of sklearn.DistanceMetric for a list of available metrics. If metric is 'precomputed', X is assumed to be a distance matrix and must be square during fit. Defaults to "minkowski".
     """
-
-    __doc__ += SupervisedImputer.__doc__
 
     def __init__(
         self,
@@ -363,32 +369,6 @@ class ImputeKNN(SupervisedImputer):
 
 class ImputeRandomForest(SupervisedImputer):
     """Does Random Forest or Extra Trees Iterative imputation of missing data. Iterative imputation uses the n_nearest_features to inform the imputation at each feature (i.e., SNP site), using the N most correlated features per site. The N most correlated features are drawn with probability proportional to correlation for each imputed target feature to ensure coverage of features throughout the imputation process.
-
-    Example:
-        >>> data = GenotypeData(
-        >>>     filename="test.str",
-        >>>     filetype="auto",
-        >>>     guidetree="test.tre",
-        >>>     qmatrix_iqtree="test.iqtree"
-        >>> )
-        >>>
-        >>> # Genetic Algorithm grid_params
-        >>> grid_params = {
-        >>>     "min_samples_leaf": Integer(1, 10),
-        >>>     "max_depth": Integer(2, 110),
-        >>> }
-        >>>
-        >>> rf = ImputeRandomForest(
-        >>>     genotype_data=data,
-        >>>     gridparams=grid_params,
-        >>>     cv=5,
-        >>>     gridsearch_method="genetic_algorithm",
-        >>>     n_nearest_features=10,
-        >>>     n_estimators=100,
-        >>>     initial_strategy="phylogeny",
-        >>> )
-        >>>
-        >>> rf_gtdata = rf.imputed
 
     Args:
         genotype_data (GenotypeData object): GenotypeData instance that was used to read in the sequence data.
@@ -418,9 +398,34 @@ class ImputeRandomForest(SupervisedImputer):
         oob_score (bool, optional): Whether to use out-of-bag samples to estimate the generalization score. Only available if ``bootstrap=True``\. Defaults to False.
 
         max_samples (int or float, optional): If bootstrap is True, the number of samples to draw from X to train each base estimator. If None (default), then draws ``X.shape[0] samples``\. if int, then draws ``max_samples`` samples. If float, then draws ``int(max_samples * X.shape[0] samples)`` with ``max_samples`` in the interval (0, 1). Defaults to None.
-    """
 
-    __doc__ += SupervisedImputer.__doc__
+
+    Example:
+        >>> data = GenotypeData(
+        >>>     filename="test.str",
+        >>>     filetype="auto",
+        >>>     guidetree="test.tre",
+        >>>     qmatrix_iqtree="test.iqtree"
+        >>> )
+        >>>
+        >>> # Genetic Algorithm grid_params
+        >>> grid_params = {
+        >>>     "min_samples_leaf": Integer(1, 10),
+        >>>     "max_depth": Integer(2, 110),
+        >>> }
+        >>>
+        >>> rf = ImputeRandomForest(
+        >>>     genotype_data=data,
+        >>>     gridparams=grid_params,
+        >>>     cv=5,
+        >>>     gridsearch_method="genetic_algorithm",
+        >>>     n_nearest_features=10,
+        >>>     n_estimators=100,
+        >>>     initial_strategy="phylogeny",
+        >>> )
+        >>>
+        >>> rf_gtdata = rf.imputed
+    """
 
     def __init__(
         self,
@@ -474,32 +479,6 @@ class ImputeRandomForest(SupervisedImputer):
 class ImputeXGBoost(SupervisedImputer):
     """Does XGBoost (Extreme Gradient Boosting) Iterative imputation of missing data. Iterative imputation uses the n_nearest_features to inform the imputation at each feature (i.e., SNP site), using the N most correlated features per site. The N most correlated features are drawn with probability proportional to correlation for each imputed target feature to ensure coverage of features throughout the imputation process.
 
-    Example:
-        >>> data = GenotypeData(
-        >>>     filename="test.str",
-        >>>     filetype="auto",
-        >>>     guidetree="test.tre",
-        >>>     qmatrix_iqtree="test.iqtree"
-        >>> )
-        >>>
-        >>> # Genetic Algorithm grid_params
-        >>> grid_params = {
-        >>>     "learning_rate": Continuous(lower=0.01, upper=0.1),
-        >>>     "max_depth": Integer(2, 110),
-        >>> }
-        >>>
-        >>> xgb = ImputeXGBoost(
-        >>>     genotype_data=data,
-        >>>     gridparams=grid_params,
-        >>>     cv=5,
-        >>>     gridsearch_method="genetic_algorithm",
-        >>>     n_nearest_features=10,
-        >>>     n_estimators=100,
-        >>>     initial_strategy="phylogeny",
-        >>> )
-        >>>
-        >>> xgb_gtdata = xgb.imputed
-
     Args:
         genotype_data (GenotypeData object): GenotypeData instance that was used to read in the sequence data.
 
@@ -525,9 +504,32 @@ class ImputeXGBoost(SupervisedImputer):
 
         reg_alpha (float, optional): L1 regularization term on weights (xgb's alpha parameter). Defaults to 1.0.
 
+    Example:
+        >>> data = GenotypeData(
+        >>>     filename="test.str",
+        >>>     filetype="auto",
+        >>>     guidetree="test.tre",
+        >>>     qmatrix_iqtree="test.iqtree"
+        >>> )
+        >>>
+        >>> # Genetic Algorithm grid_params
+        >>> grid_params = {
+        >>>     "learning_rate": Continuous(lower=0.01, upper=0.1),
+        >>>     "max_depth": Integer(2, 110),
+        >>> }
+        >>>
+        >>> xgb = ImputeXGBoost(
+        >>>     genotype_data=data,
+        >>>     gridparams=grid_params,
+        >>>     cv=5,
+        >>>     gridsearch_method="genetic_algorithm",
+        >>>     n_nearest_features=10,
+        >>>     n_estimators=100,
+        >>>     initial_strategy="phylogeny",
+        >>> )
+        >>>
+        >>> xgb_gtdata = xgb.imputed
     """
-
-    __doc__ += SupervisedImputer.__doc__
 
     def __init__(
         self,
@@ -560,6 +562,11 @@ class ImputeXGBoost(SupervisedImputer):
 class ImputeVAE(UnsupervisedImputer):
     """Class to impute missing data using a Variational Autoencoder neural network model. For training, missing values are simulated and the model is trained on the simulated missing values. The real missing values are then predicted by the trained model. The strategy for simulating missing values can be set with the ``sim_strategy`` argument.
 
+    Args:
+        genotype_data (GenotypeData object): Input data initialized as GenotypeData object. Required positional argument.
+
+        kl_beta (float, optional): Weight to apply to Kullback-Liebler divergence loss. If the latent distribution is not learned well, this weight can be adjusted to adjust how much KL divergence affects the total loss. Should be in the range [0, 1]. If set to 1.0, the KL loss is unweighted. If set to 0.0, the KL loss is negated entirely and does not affect the total loss. Defaults to 1.0.
+
     Example:
         >>> data = GenotypeData(
         >>>    filename="test.str",
@@ -576,13 +583,7 @@ class ImputeVAE(UnsupervisedImputer):
         >>>
         >>> vae_gtdata = vae.imputed
 
-    Args:
-        genotype_data (GenotypeData object): Input data initialized as GenotypeData object. Required positional argument.
-
-        kl_beta (float, optional): Weight to apply to Kullback-Liebler divergence loss. If the latent distribution is not learned well, this weight can be adjusted to adjust how much KL divergence affects the total loss. Should be in the range [0, 1]. If set to 1.0, the KL loss is unweighted. If set to 0.0, the KL loss is negated entirely and does not affect the total loss. Defaults to 1.0.
     """
-
-    __doc__ += UnsupervisedImputer.__doc__
 
     def __init__(
         self,
@@ -596,6 +597,9 @@ class ImputeVAE(UnsupervisedImputer):
 
 class ImputeStandardAutoEncoder(UnsupervisedImputer):
     """Class to impute missing data using a standard Autoencoder (SAE) neural network model. For training, missing values are simulated and the model is trained on the simulated missing values. The real missing values are then predicted by the trained model. The strategy for simulating missing values can be set with the ``sim_strategy`` argument.
+
+    Args:
+        genotype_data (GenotypeData object): Input data initialized as GenotypeData object. Required positional argument.
 
     Example:
         >>> data = GenotypeData(
@@ -614,12 +618,7 @@ class ImputeStandardAutoEncoder(UnsupervisedImputer):
         >>>
         >>> # Get the imputed data.
         >>> sae_gtdata = sae.imputed
-
-    Args:
-        genotype_data (GenotypeData object): Input data initialized as GenotypeData object. Required positional argument.
     """
-
-    __doc__ += UnsupervisedImputer.__doc__
 
     def __init__(
         self,
@@ -636,7 +635,10 @@ class ImputeStandardAutoEncoder(UnsupervisedImputer):
 class ImputeUBP(UnsupervisedImputer):
     """Class to impute missing data using an unsupervised backpropagation (UBP) neural network model. For training, missing values are simulated and the model is trained on the simulated missing values. The real missing values are then predicted by the trained model. The strategy for simulating missing values can be set with the ``sim_strategy`` argument.
 
-    UBP [1]_ is an extension of NLPCA [2]_ with the input being randomly generated and of reduced dimensionality that gets trained to predict the supplied output based on only known values. It then uses the trained model to predict missing values. However, in contrast to NLPCA, UBP trains the model over three phases. The first is a single layer perceptron used to refine the randomly generated input. The second phase is a multi-layer perceptron that uses the refined reduced-dimension data from the first phase as input. In the second phase, the model weights are refined but not the input. In the third phase, the model weights and the inputs are then refined.
+    UBP [1]_ is an extension of NLPCA with the input being randomly generated and of reduced dimensionality that gets trained to predict the supplied output based on only known values. It then uses the trained model to predict missing values. However, in contrast to NLPCA, UBP trains the model over three phases. The first is a single layer perceptron used to refine the randomly generated input. The second phase is a multi-layer perceptron that uses the refined reduced-dimension data from the first phase as input. In the second phase, the model weights are refined but not the input. In the third phase, the model weights and the inputs are then refined.
+
+    Args:
+        genotype_data (GenotypeData object): Input data initialized as GenotypeData object. Required positional argument.
 
     Example:
         >>> data = GenotypeData(
@@ -655,11 +657,9 @@ class ImputeUBP(UnsupervisedImputer):
         >>> # Get the imputed data.
         >>> ubp_gtdata = ubp.imputed
 
-    Args:
-        genotype_data (GenotypeData object): Input data initialized as GenotypeData object. Required positional argument.
+    References:
+        .. [1] Gashler, M. S., Smith, M. R., Morris, R., & Martinez, T. (2016). Missing value imputation with unsupervised backpropagation. Computational Intelligence, 32(2), 196-215.
     """
-
-    __doc__ += UnsupervisedImputer.__doc__
 
     nlpca = False
 
@@ -681,6 +681,9 @@ class ImputeNLPCA(ImputeUBP):
 
     NLPCA [2]_ trains randomly generated, reduced-dimensionality input to predict the correct output. In the case of imputation, the model is trained only on known values, and the trained model is then used to predict the missing values.
 
+    Args:
+        genotype_data (GenotypeData object): Input data initialized as GenotypeData object. Required positional argument.
+
     Example:
         >>> data = GenotypeData(
         >>>    filename="test.str",
@@ -697,11 +700,10 @@ class ImputeNLPCA(ImputeUBP):
         >>>
         >>> nlpca_gtdata = nlpca.imputed
 
-    Args:
-        genotype_data (GenotypeData object): Input data initialized as GenotypeData object. Required positional argument.
-    """
+    References:
 
-    __doc__ += UnsupervisedImputer.__doc__
+        .. [2] Scholz, M., Kaplan, F., Guy, C. L., Kopka, J., & Selbig, J. (2005). Non-linear PCA: a missing data approach. Bioinformatics, 21(20), 3887-3895.
+    """
 
     nlpca = True
 

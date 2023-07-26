@@ -1,5 +1,5 @@
-pgsui package
-=============
+pg-sui package
+==============
 
 Subpackages
 -----------
@@ -7,25 +7,6 @@ Subpackages
 .. toctree::
    :maxdepth: 2
 
-   pgsui.data_processing
    pgsui.impute
+   pgsui.data_processing
    pgsui.utils
-
-Submodules
-----------
-
-pgsui.pg\_sui module
---------------------
-
-.. automodule:: pgsui.pg_sui
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Module contents
----------------
-
-.. automodule:: pgsui
-   :members:
-   :undoc-members:
-   :show-inheritance:

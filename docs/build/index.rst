@@ -13,7 +13,9 @@ Welcome to PG-SUI's documentation!
    about
    install
    tutorial
-   pgsui
+   supervised_imputers
+   unsupervised_imputers
+   non_ml_imputers
    modules
    
 
