@@ -24,10 +24,10 @@ copyright = "2021, Bradley T. Martin and Tyler K. Chafin"
 author = "Bradley T. Martin and Tyler K. Chafin"
 
 # The short X.Y version
-version = "0.2"
+version = "0.3"
 
 # The full version, including alpha/beta/rc tags
-release = "0.2 (beta)"
+release = "0.3.0 (beta)"
 
 
 # -- General configuration ---------------------------------------------------
@@ -85,7 +85,11 @@ github_url = "https://github.com/btmartin721/PG-SUI"
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
-# html_static_path = ["_static"]
+html_static_path = ["_static"]
+
+html_css_files = [
+    "custom.css",
+]
 
 
 # -- Extension configuration -------------------------------------------------

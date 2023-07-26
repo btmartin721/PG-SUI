@@ -40,7 +40,8 @@ NLPCA initializes random, reduced-dimensional input, then trains itself by using
 
 UBP is an extension of NLPCA that runs over three phases. Phase 1 refines the randomly generated, reduced-dimensional input in a single layer perceptron neural network to obtain good initial input values. Phase 2 uses the refined reduced-dimensional input from phase 1 as input into a multi-layer perceptron (MLP), but in Phase 2 only the neural network weights are refined. Phase three uses an MLP to refine both the weights and the reduced-dimensional input.
 
-### Non-Machine Learning Methods
+Non-Machine Learning Methods
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 We also include several non-machine learning options for imputing missing data, including:
 

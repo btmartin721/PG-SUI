@@ -18,7 +18,6 @@ pgsui.impute.unsupervised.callbacks module
 .. automodule:: pgsui.impute.unsupervised.callbacks
    :members:
    :undoc-members:
-   :show-inheritance:
 
 pgsui.impute.unsupervised.keras\_classifiers module
 ---------------------------------------------------
@@ -26,7 +25,6 @@ pgsui.impute.unsupervised.keras\_classifiers module
 .. automodule:: pgsui.impute.unsupervised.keras_classifiers
    :members:
    :undoc-members:
-   :show-inheritance:
 
 pgsui.impute.unsupervised.neural\_network\_imputers module
 ----------------------------------------------------------
@@ -34,7 +32,6 @@ pgsui.impute.unsupervised.neural\_network\_imputers module
 .. automodule:: pgsui.impute.unsupervised.neural_network_imputers
    :members:
    :undoc-members:
-   :show-inheritance:
 
 pgsui.impute.unsupervised.neural\_network\_methods module
 ---------------------------------------------------------
@@ -42,7 +39,6 @@ pgsui.impute.unsupervised.neural\_network\_methods module
 .. automodule:: pgsui.impute.unsupervised.neural_network_methods
    :members:
    :undoc-members:
-   :show-inheritance:
 
 Module contents
 ---------------
@@ -50,4 +46,3 @@ Module contents
 .. automodule:: pgsui.impute.unsupervised
    :members:
    :undoc-members:
-   :show-inheritance:

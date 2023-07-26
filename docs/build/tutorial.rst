@@ -73,19 +73,39 @@ There are numerous supported algorithms to impute missing data. Each one can be 
 
     from pgsui import *
 
-    # Various imputation methods are supported
+Various imputation methods are supported
 
-    ############################################
-    # Supervised IterativeImputer classifiers
-    ############################################
+Supervised IterativeImputer classifiers
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+We have included three supervised estimators: K-Nearest Neighbors (KNN), Random Forest (or Extra Trees), and XGBoost.
+
+.. code-block:: python
 
     knn = ImputeKNN(genotype_data=data) # K-Nearest Neighbors
     rf = ImputeRandomForest(genotype_data=data) # Random Forest or Extra Trees
     xgb = ImputeXGBoost(genotype_data=data) # XGBoost
 
-    ########################################
-    # Non-machine learning methods
-    ########################################
+Unsupervised neural network models
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The unsupervised models include a variational autoencoder (VAE), a standard autoencoder, non-linear PCA, and unsupervised backpropagation.
+
+.. code-block:: python
+
+    vae = ImputeVAE(genotype_data=data) # Variational autoencoder
+    sae = ImputeStandardAutoEncoder(genotype_data=data) # Standard AutoEncoder
+    nlpca = ImputeNLPCA(genotype_data=data) # Nonlinear PCA
+    ubp = ImputeUBP(genotype_data=data) # Unsupervised backpropagation
+
+
+Non-machine learning methods
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+We have also included four non-machine learning algorithms for imputations: Impute using a phylogeny to supervise the imputation, by allele frequency per column, by allele frequency per column, per population, and by reference allele.
+
+
+.. code-block:: python
 
     # Use phylogeny to inform imputation
     phylo = ImputePhylo(genotype_data=data)
@@ -97,14 +117,6 @@ There are numerous supported algorithms to impute missing data. Each one can be 
     # Matrix factorization imputation
     mf = ImputeMF(genotype_data=data)
 
-    ########################################
-    # Unsupervised neural network models
-    ########################################
-
-    vae = ImputeVAE(genotype_data=data) # Variational autoencoder
-    sae = ImputeStandardAutoEncoder(genotype_data=data) # Standard AutoEncoder
-    nlpca = ImputeNLPCA(genotype_data=data) # Nonlinear PCA
-    ubp = ImputeUBP(genotype_data=data) # Unsupervised backpropagation
 
 In each of the above class instantiations, the analysis will automatically run. Each method has its own unique arguments, so look over :doc:`API documentation <pgsui.impute>` to see what each of the parameters do.
 
@@ -171,7 +183,7 @@ The decision tree classifiers also have an ``n_estimators`` parameter that can b
     Setting n_nearest_features and n_estimators too high can lead to extremely high resource usage and long run times.
 
 Chunk size
-----------
+-----------
 
 The IterativeImputer algorithms support dataset chunking. If you find yourself running out of RAM, try breaking the imputation into chunks.
 
@@ -234,7 +246,7 @@ The neural network classifiers use all processors by default, but if ``gridparam
     rf = ImputeRandomForest(genotype_data=data, n_jobs=4)
 
 
-Imputer validation
+Imputer Validation
 ------------------
 
 Both IterativeImputer and the neural networks calculate a suite of validation metrics to assess the efficacy of the model and facilitate cross-comparison. For IterativeImputer, there are two ways to validate: Parameter grid searches and cross-validation replicates. The validation runs on a random subset of the SNP columns, the proportion of which can be changed with the ``column_subset`` argument. If you want to do the validation, set ``do_validation=True``.
@@ -247,7 +259,7 @@ E.g.,:
     rf = ImputeRandomForest(genotype_data=data, do_validation=True, column_subset=0.25)
 
 
-Grid searches
+Grid Searches
 ^^^^^^^^^^^^^
 
 The IterativeImputer methods can perform several types of grid searches by providing the ``gridparams`` argument. Grid searches try to find the best combinations of parameters by maximizing the accuracy across a distribution of parameter values. If ``gridparams=None``, the grid search will not be performed. If ``gridparams != None:``, the grid search will run.
