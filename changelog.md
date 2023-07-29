@@ -2,11 +2,15 @@
 
 This document provides a high-level view of the changes made to PG-SUI for each release.  
 
-> **Note**: This project is in beta stages, and therefore might change quickly with little to no deprecation cycle.  
-
 ## Unreleased
 
-- Make HTML report with all plots and logs.  
+- Make HTML report with all plots and logs.
+
+## Version 1.0 - 2023-07-29
+
+### Changed
+
+- No longer in beta stages. Full release.
 
 ## Version 0.3.0 - 2023-07-26
 
