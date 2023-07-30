@@ -4,8 +4,6 @@ Changelog
 
 This document provides a high-level view of the changes made to PG-SUI for each release.
 
-.. note:: This project is in beta stages, and therefore might change quickly with little to no deprecation cycle.
-
 Unreleased
 ----------
 - Make HTML report with all plots and logs.
