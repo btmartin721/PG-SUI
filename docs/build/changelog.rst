@@ -4,12 +4,21 @@ Changelog
 
 This document provides a high-level view of the changes made to PG-SUI for each release.
 
+
 Unreleased
 ----------
 - Make HTML report with all plots and logs.
 
+Version 1.0 - 2023-07-29
+--------------------------
+
+Changed
+^^^^^^^^
+- No longer in beta stages. Full release v1.0.
+
 Version 0.3.0 - 2023-07-26
 --------------------------
+
 Features
 ^^^^^^^^
 - Unsupervised models now impute on nucleotide-encoded multilabel data instead of 012 data.
