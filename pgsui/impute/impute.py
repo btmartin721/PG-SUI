@@ -1174,7 +1174,6 @@ class Impute:
             "crossover_probability",
             "mutation_probability",
             "ga_algorithm",
-            "early_stop_gen",
         ]
 
         to_remove = ["self", "__class__"]
