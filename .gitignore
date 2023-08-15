@@ -57,3 +57,4 @@ bias_INDV20_popmap2.txt
 biasINDV20_popmap.txt
 .pg-sui-pypi
 /build/
+runvae.sh
