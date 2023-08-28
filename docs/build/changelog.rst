@@ -9,6 +9,13 @@ Unreleased
 ----------
 - Make HTML report with all plots and logs.
 
+Version 1.0.2 - 2023-08-28
+---------------------------
+
+Bug Fix
+
+- Use GenotypeData copy method internally due to Cython pysam VariantHeader.
+
 Version 1.0 - 2023-07-29
 --------------------------
 
