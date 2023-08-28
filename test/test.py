@@ -43,7 +43,7 @@ class TestMyClasses(unittest.TestCase):
                 strategy="random",
             )
             self.transformer.fit(self.genotype_data.genotypes_012(fmt="numpy"))
-            self.simulated_data = copy.deepcopy(self.genotype_data)
+            self.simulated_data = self.genotype_data.copy()
 
             self.simulated_data.genotypes_012 = self.transformer.transform(
                 self.genotype_data.genotypes_012(fmt="numpy")
@@ -87,13 +87,9 @@ class TestMyClasses(unittest.TestCase):
             recall_scores,
             avg_precision_scores,
             f1,
-        ) = self._scoring_metrics(
-            self.genotype_data.genotypes_int, imputed_data
-        )
+        ) = self._scoring_metrics(self.genotype_data.genotypes_int, imputed_data)
 
-        pprint.PrettyPrinter(indent=4, sort_dicts=True).pprint(
-            f"ACCURACY: {accuracy}"
-        )
+        pprint.PrettyPrinter(indent=4, sort_dicts=True).pprint(f"ACCURACY: {accuracy}")
         pprint.PrettyPrinter(indent=4, sort_dicts=True).pprint(
             f"AUC-ROC: {auc_roc_scores}"
         )
@@ -106,9 +102,7 @@ class TestMyClasses(unittest.TestCase):
         pprint.PrettyPrinter(indent=4, sort_dicts=True).pprint(
             f"AVERAGE PRECISION: {avg_precision_scores}"
         )
-        pprint.PrettyPrinter(indent=4, sort_dicts=True).pprint(
-            f"F1 SCORE: {f1}"
-        )
+        pprint.PrettyPrinter(indent=4, sort_dicts=True).pprint(f"F1 SCORE: {f1}")
         print("\n")
 
     def test_ImputeKNN(self):
