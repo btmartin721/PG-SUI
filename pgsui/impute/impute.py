@@ -12,8 +12,6 @@ from pathlib import Path
 from statistics import mean, median
 from contextlib import redirect_stdout
 from typing import Optional, Union, List, Dict, Tuple, Any, Callable
-from copy import deepcopy
-
 
 # Third party imports
 import numpy as np
@@ -146,8 +144,7 @@ class Impute:
             for v in kwargs["gridparams"].values():
                 if (
                     isinstance(v, (Categorical, Integer, Continuous))
-                    and kwargs["gridsearch_method"].lower()
-                    != "genetic_algorithm"
+                    and kwargs["gridsearch_method"].lower() != "genetic_algorithm"
                 ):
                     raise TypeError(
                         "gridsearch_method argument must equal 'genetic_algorithm' if gridparams values are of type sklearn_genetic.space"
@@ -203,9 +200,7 @@ class Impute:
         ).mkdir(parents=True, exist_ok=True)
 
     @timer
-    def fit_predict(
-        self, X: pd.DataFrame
-    ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    def fit_predict(self, X: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
         """Fit and predict imputations with IterativeImputer(estimator).
 
         Fits and predicts imputed 012-encoded genotypes using IterativeImputer with any of the supported estimator objects. If ``gridparams=None``\, then a grid search is not performed. If ``gridparams!=None``\, then a RandomizedSearchCV is performed on a subset of the data and a final imputation is done on the whole dataset using the best found parameters.
@@ -347,9 +342,7 @@ class Impute:
         chunk_len = ",".join([str(x) for x in chunk_len_list])
 
         if self.verbose > 1:
-            print(
-                f"Data split into {num_chunks} chunks with {chunk_len} features"
-            )
+            print(f"Data split into {num_chunks} chunks with {chunk_len} features")
 
         return chunks
 
@@ -366,7 +359,7 @@ class Impute:
         Returns:
             GenotypeData: GenotypeData object with imputed data.
         """
-        imputed_gd = deepcopy(genotype_data)
+        imputed_gd = genotype_data.copy()
 
         # if self.clf == VAE:
         if len(imp012.shape) == 3:
@@ -383,9 +376,7 @@ class Impute:
             else:
                 imputed_gd.genotypes_012 = imp012
         else:
-            raise ValueError(
-                f"Invalid shape for imputed output: {imp012.shape}"
-            )
+            raise ValueError(f"Invalid shape for imputed output: {imp012.shape}")
         # else:
         #     imputed_gd.genotypes_012 = imp012
 
@@ -515,9 +506,7 @@ class Impute:
             NoneType: Only used with _impute_gridsearch. Set to None here for compatibility.
         """
         if self.verbose > 0:
-            print(
-                f"\nDoing {self.clf.__name__} imputation without grid search..."
-            )
+            print(f"\nDoing {self.clf.__name__} imputation without grid search...")
 
         if self.algorithm == "nn":
             clf = None
@@ -554,9 +543,7 @@ class Impute:
                     with open(self.logfilepath, "a") as fout:
                         # Redirect to progress logfile
                         with redirect_stdout(fout):
-                            print(
-                                f"\nDone with {self.clf.__name__} validation!\n"
-                            )
+                            print(f"\nDone with {self.clf.__name__} validation!\n")
 
         else:
             df_scores = None
@@ -675,9 +662,7 @@ class Impute:
             if len(cols_to_keep) == original_num_cols:
                 cols_to_keep = None
 
-            Xt, params_list, score_list = imputer.fit_transform(
-                df, cols_to_keep
-            )
+            Xt, params_list, score_list = imputer.fit_transform(df, cols_to_keep)
 
         if self.verbose > 0:
             print(f"\nDone with {self.clf.__name__} grid search!")
@@ -687,9 +672,7 @@ class Impute:
                     with open(self.logfilepath, "a") as fout:
                         # Redirect to progress logfile
                         with redirect_stdout(fout):
-                            print(
-                                f"\nDone with {self.clf.__name__} grid search!"
-                            )
+                            print(f"\nDone with {self.clf.__name__} grid search!")
 
         if self.algorithm == "ii":
             # Iterative Imputer.
@@ -834,9 +817,7 @@ class Impute:
                     with open(self.logfilepath, "a") as fout:
                         # Redirect to progress logfile
                         with redirect_stdout(fout):
-                            print(
-                                f"Validation replicate {cnt}/{self.cv} ({perc}%)"
-                            )
+                            print(f"Validation replicate {cnt}/{self.cv} ({perc}%)")
 
             scores = self._impute_eval(df, clf)
 
@@ -969,18 +950,14 @@ class Impute:
                     df_imp = df_imp.astype("Int8")
 
                 else:
-                    imp, _, __ = imputer.fit_transform(
-                        Xchunk, valid_cols=cols_to_keep
-                    )
+                    imp, _, __ = imputer.fit_transform(Xchunk, valid_cols=cols_to_keep)
                     df_imp = pd.DataFrame(imp)
 
                 imputed_chunks.append(df_imp)
 
             else:
                 # Regressor. Needs to be rounded to integer first.
-                imp, _, __ = imputer.fit_transform(
-                    Xchunk, valid_cols=cols_to_keep
-                )
+                imp, _, __ = imputer.fit_transform(Xchunk, valid_cols=cols_to_keep)
                 df_imp = pd.DataFrame(imp)
                 df_imp = df_imp.round(0).astype("Int8")
 
@@ -1006,9 +983,7 @@ class Impute:
             not df.isnull().values.any()
         ), "Imputation failed...Missing values found in the imputed dataset"
 
-    def _get_best_params(
-        self, params_list: List[Dict[str, Any]]
-    ) -> Dict[str, Any]:
+    def _get_best_params(self, params_list: List[Dict[str, Any]]) -> Dict[str, Any]:
         """[Gets the best parameters from the grid search. Determines the parameter types and either gets the mean or mode if the type is numeric or string/ boolean]
 
         Args:
@@ -1024,18 +999,14 @@ class Impute:
         params_list = list(filter(lambda i: i[first_key] != -9, params_list))
 
         for k in keys:
-            if all(
-                isinstance(x[k], (int, float)) for x in params_list if x[k]
-            ):
+            if all(isinstance(x[k], (int, float)) for x in params_list if x[k]):
                 if all(isinstance(y[k], int) for y in params_list):
                     best_params[k] = self._average_list_of_dicts(
                         params_list, k, is_int=True
                     )
 
                 elif all(isinstance(z[k], float) for z in params_list):
-                    best_params[k] = self._average_list_of_dicts(
-                        params_list, k
-                    )
+                    best_params[k] = self._average_list_of_dicts(params_list, k)
 
             elif all(isinstance(x[k], (str, bool)) for x in params_list):
                 best_params[k] = self._mode_list_of_dicts(params_list, k)
@@ -1045,9 +1016,7 @@ class Impute:
 
         return best_params
 
-    def _mode_list_of_dicts(
-        self, l: List[Dict[str, Union[str, bool]]], k: str
-    ) -> str:
+    def _mode_list_of_dicts(self, l: List[Dict[str, Union[str, bool]]], k: str) -> str:
         """Get mode for key k in a list of dictionaries.
 
         Args:
@@ -1276,9 +1245,7 @@ class Impute:
                 df_stg[col] = df_stg[col].replace({pd.NA: np.nan})
             # df_stg.fillna(-9, inplace=True)
 
-            imputer = self.clf(
-                prefix=self.prefix, **self.clf_kwargs, **self.imp_kwargs
-            )
+            imputer = self.clf(prefix=self.prefix, **self.clf_kwargs, **self.imp_kwargs)
 
             df_imp = pd.DataFrame(
                 imputer.fit_transform(df_stg.to_numpy()),
@@ -1288,9 +1255,7 @@ class Impute:
             df_unknown_slice = pd.DataFrame(imputer.y_simulated_, columns=cols)
             df_known_slice = pd.DataFrame(imputer.y_original_, columns=cols)
 
-            df_missing_mask = pd.DataFrame(
-                imputer.sim_missing_mask_, columns=cols
-            )
+            df_missing_mask = pd.DataFrame(imputer.sim_missing_mask_, columns=cols)
 
             df_imp = df_imp.astype("float")
             df_imp = df_imp.astype("int64")
@@ -1349,9 +1314,7 @@ class Impute:
                 if y_pred.dtypes != "int64":
                     y_pred = y_pred.astype("int64")
 
-                scores["accuracy"].append(
-                    metrics.accuracy_score(y_true, y_pred)
-                )
+                scores["accuracy"].append(metrics.accuracy_score(y_true, y_pred))
 
                 scores["precision"].append(
                     metrics.precision_score(
@@ -1360,9 +1323,7 @@ class Impute:
                 )
 
                 scores["f1"].append(
-                    metrics.f1_score(
-                        y_true, y_pred, average="macro", zero_division=0
-                    )
+                    metrics.f1_score(y_true, y_pred, average="macro", zero_division=0)
                 )
 
                 scores["recall"].append(
