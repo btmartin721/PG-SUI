@@ -56,7 +56,7 @@ class TestMyClasses(unittest.TestCase):
                 strategy="random_weighted",
             )
             self.transformer.fit(self.genotype_data.genotypes_012(fmt="numpy"))
-            self.simulated_data = copy.deepcopy(self.genotype_data)
+            self.simulated_data = self.genotype_data.copy()
 
             self.simulated_data.genotypes_012 = self.transformer.transform(
                 self.genotype_data.genotypes_012(fmt="numpy")
