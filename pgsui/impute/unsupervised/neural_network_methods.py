@@ -5,10 +5,20 @@ import sys
 import random
 import warnings
 
+warnings.simplefilter(action="ignore", category=FutureWarning)
+
+
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
+
+# Create a custom legend
+import matplotlib.patches as mpatches
+import matplotlib.colors as mcolors
+from matplotlib.colors import ListedColormap
 
 from sklearn.utils.class_weight import (
     compute_class_weight,
@@ -1236,6 +1246,21 @@ class NeuralNetworkMethods:
         original_missing_mask,
         prefix="imputer",
     ):
+        """
+        Process genotype state probabilities and generate a DataFrame.
+
+        Args:
+            y_pred (numpy.ndarray): 2D array of predicted probabilities.
+            y_pred_1d (numpy.ndarray): 1D array of predicted classes.
+            y_true (numpy.ndarray): 2D array of true labels.
+            y_true_1d (numpy.ndarray): 1D array of true classes.
+            sim_missing_mask (numpy.ndarray): Mask for simulated missing values.
+            original_missing_mask (numpy.ndarray): Mask for original missing values.
+
+        Returns:
+            pd.DataFrame: DataFrame containing processed data.
+            list: List of row colors for plotting.
+        """
         bin_mapping = np.array(
             [np.array2string(x) for row in y_pred for x in row]
         )
@@ -1243,113 +1268,242 @@ class NeuralNetworkMethods:
         bin_mapping = np.reshape(bin_mapping, y_pred_1d.shape)
 
         y_true_2d = np.reshape(y_true_1d, y_true.shape)
+
         bin_mapping_2d = np.reshape(bin_mapping, y_true.shape)
+
         y_pred_2d = np.reshape(y_pred_1d, y_true.shape)
 
         include = np.logical_and(sim_missing_mask, ~original_missing_mask)
 
         gt_dist = list()
+
         colors = []
+
         for yt, yp, ypd, mask in zip(
-            y_true_2d,
-            bin_mapping_2d,
-            y_pred_2d,
-            include,
+            y_true_2d, bin_mapping_2d, y_pred_2d, include
         ):
             sites = dict()
+
             row_colors = []
+
             for i, (yt_site, mask_site) in enumerate(zip(yt, mask)):
                 if mask_site:
                     sites[
                         f"Site Index {i},Probability Vector,Imputed Genotype,Expected Genotype"
                     ] = f"{i},{yp[i]},{ypd[i]},{yt_site}"
+
                     if ypd[i] == yt_site:
                         row_colors.append("blue")
+
                     else:
-                        sites[
-                            f"Site Index {i},Probability Vector,Imputed Genotype,Expected Genotype"
-                        ] = f"{i},{yp[i]},{ypd[i]},{yt_site}"
-                        row_colors.append("orange")
+                        row_colors.append("red")
+
                 else:
                     sites[
                         f"Site Index {i},Probability Vector,Imputed Genotype,Expected Genotype"
                     ] = f"{i},{np.array2string(np.array([0.0, 0.0, 0.0]))},0,0"
+
                     row_colors.append("gray")
+
             gt_dist.append(sites)
+
             colors.append(row_colors)
 
         gt_df = pd.DataFrame.from_records(gt_dist)
-        gt_df.to_csv(
-            os.path.join(
-                f"{prefix}_output",
-                "logs",
-                "Unsupervised",
-                nn_method,
-                "genotype_state_proba.csv",
-            ),
-            index=False,
-            header=False,
+
+        # Create a DataFrame of binary values based on whether imputed and expected genotypes match
+        # imputedGT_data = gt_df.applymap(lambda x: int(x.split(",")[2]))
+        # expectedGT_data = gt_df.applymap(lambda x: int(x.split(",")[3]))
+        # mask = imputedGT_data == expectedGT_data
+
+        outdir = os.path.join(
+            f"{prefix}_output", "plots", "Unsupervised", f"{nn_method}"
         )
 
-        # Reload the data
+        Path(outdir).mkdir(parents=True, exist_ok=True)
 
-        data = pd.read_csv(
-            os.path.join(
-                f"{prefix}_output",
-                "logs",
-                "Unsupervised",
-                nn_method,
-                "genotype_state_proba.csv",
-            ),
-            header=None,
+        output_path = os.path.join(outdir, "simulated_heatmap.png")
+
+        NeuralNetworkMethods.plot_heatmap(
+            gt_df,
+            colors,
+            "Expected Genotypes for Simulated Missing Values",
+            "Column Index",
+            "Row Index",
+            output_path,
         )
 
-        # Parse the original data into separate dataframes for imputedGT and expectedGT
+        return gt_df, colors
+
+    @staticmethod
+    def plot_heatmap(data, colors, title, xlabel, ylabel, output_path):
+        """
+        Plot heatmap based on the provided data and colors.
+
+        Args:
+            data (pd.DataFrame): DataFrame containing binary mask data.
+            colors (list): List of row colors for plotting.
+            title (str): Title of the plot.
+            xlabel (str): Label for x-axis.
+            ylabel (str): Label for y-axis.
+            output_path (str): Path to save the output plot.
+
+        Returns:
+            None
+        """
         imputedGT_data = data.applymap(lambda x: int(x.split(",")[2]))
-        expectedGT_data = data.applymap(lambda x: int(x.split(",")[3]))
 
-        # Determine the binary mask based on whether imputedGT and expectedGT are the same
+        expectedGT_data = data.applymap(lambda x: int(x.split(",")[3]))
 
         mask = imputedGT_data == expectedGT_data
 
-        # Create a new figure and set its size
-        plt.figure(figsize=(12, 6))
+        colors = []
 
-        from matplotlib.colors import ListedColormap
+        for i, row in mask.iterrows():
+            row_colors = []
 
-        rgb_colors = sns.color_palette(
-            [color for sublist in colors for color in sublist]
-        )
-        cmap = ListedColormap(rgb_colors)
+            for j, val in enumerate(row):
+                if (
+                    imputedGT_data.iloc[i, j] == 0
+                    and expectedGT_data.iloc[i, j] == 0
+                ):
+                    row_colors.append("gray")
 
-        # Create a heatmap
-        sns.heatmap(mask, cmap=cmap, cbar=False)
+                elif val:
+                    row_colors.append("blue")
 
-        # Set the title and labels
-        plt.title("Expected Genotypes for Simulated Genotypes")
-        plt.xlabel("Column Index")
-        plt.ylabel("Row Index")
+                else:
+                    row_colors.append("red")
 
-        # Create a custom legend
-        import matplotlib.patches as mpatches
+            colors.append(row_colors)
 
-        green_patch = mpatches.Patch(color="blue", label="Agreement")
-        orange_patch = mpatches.Patch(color="orange", label="Disagreement")
-        gray_patch = mpatches.Patch(color="gray", label="Not Simulated")
+        return mask, colors
 
-        plt.legend(
-            handles=[green_patch, orange_patch, gray_patch], loc="lower right"
-        )
+    # @staticmethod
+    # def write_gt_state_probs(
+    #     y_pred,
+    #     y_pred_1d,
+    #     y_true,
+    #     y_true_1d,
+    #     nn_method,
+    #     sim_missing_mask,
+    #     original_missing_mask,
+    #     prefix="imputer",
+    # ):
+    #     bin_mapping = np.array(
+    #         [np.array2string(x) for row in y_pred for x in row]
+    #     )
 
-        outfile = os.path.join(
-            f"{prefix}_output",
-            "plots",
-            "Unsupervised",
-            nn_method,
-            "gt_state_proba.png",
-        )
+    #     bin_mapping = np.reshape(bin_mapping, y_pred_1d.shape)
 
-        plt.savefig(outfile, bbox_inches="tight", facecolor="white")
+    #     y_true_2d = np.reshape(y_true_1d, y_true.shape)
+    #     bin_mapping_2d = np.reshape(bin_mapping, y_true.shape)
+    #     y_pred_2d = np.reshape(y_pred_1d, y_true.shape)
+
+    #     include = np.logical_and(sim_missing_mask, ~original_missing_mask)
+
+    #     gt_dist = list()
+    #     colors = []
+    #     for yt, yp, ypd, mask in zip(
+    #         y_true_2d,
+    #         bin_mapping_2d,
+    #         y_pred_2d,
+    #         include,
+    #     ):
+    #         sites = dict()
+    #         row_colors = []
+    #         for i, (yt_site, mask_site) in enumerate(zip(yt, mask)):
+    #             if mask_site:
+    #                 sites[
+    #                     f"Site Index {i},Probability Vector,Imputed Genotype,Expected Genotype"
+    #                 ] = f"{i},{yp[i]},{ypd[i]},{yt_site}"
+    #                 if ypd[i] == yt_site:
+    #                     row_colors.append("blue")
+    #                 else:
+    #                     sites[
+    #                         f"Site Index {i},Probability Vector,Imputed Genotype,Expected Genotype"
+    #                     ] = f"{i},{yp[i]},{ypd[i]},{yt_site}"
+    #                     row_colors.append("orange")
+    #             else:
+    #                 sites[
+    #                     f"Site Index {i},Probability Vector,Imputed Genotype,Expected Genotype"
+    #                 ] = f"{i},{np.array2string(np.array([0.0, 0.0, 0.0]))},0,0"
+    #                 row_colors.append("gray")
+    #         gt_dist.append(sites)
+    #         colors.append(row_colors)
+
+    #     gt_df = pd.DataFrame.from_records(gt_dist)
+    #     gt_df.to_csv(
+    #         os.path.join(
+    #             f"{prefix}_output",
+    #             "logs",
+    #             "Unsupervised",
+    #             nn_method,
+    #             "genotype_state_proba.csv",
+    #         ),
+    #         index=False,
+    #         header=False,
+    #     )
+
+    #     # Reload the data
+
+    #     data = pd.read_csv(
+    #         os.path.join(
+    #             f"{prefix}_output",
+    #             "logs",
+    #             "Unsupervised",
+    #             nn_method,
+    #             "genotype_state_proba.csv",
+    #         ),
+    #         header=None,
+    #     )
+
+    #     # Parse the original data into separate dataframes for imputedGT and expectedGT
+    #     imputedGT_data = data.applymap(lambda x: int(x.split(",")[2]))
+    #     expectedGT_data = data.applymap(lambda x: int(x.split(",")[3]))
+
+    #     # Determine the binary mask based on whether imputedGT and expectedGT are the same
+
+    #     mask = imputedGT_data == expectedGT_data
+
+    #     # Create a new figure and set its size
+    #     plt.figure(figsize=(12, 6))
+
+    #     from matplotlib.colors import ListedColormap
+
+    #     rgb_colors = sns.color_palette(
+    #         [color for sublist in colors for color in sublist]
+    #     )
+    #     cmap = ListedColormap(rgb_colors)
+
+    #     # Create a heatmap
+    #     sns.heatmap(mask, cmap=cmap, cbar=False)
+
+    #     # Set the title and labels
+    #     plt.title("Expected Genotypes for Simulated Genotypes")
+    #     plt.xlabel("Column Index")
+    #     plt.ylabel("Row Index")
+
+    #     # Create a custom legend
+    #     import matplotlib.patches as mpatches
+
+    #     green_patch = mpatches.Patch(color="blue", label="Agreement")
+    #     orange_patch = mpatches.Patch(color="orange", label="Disagreement")
+    #     gray_patch = mpatches.Patch(color="gray", label="Not Simulated")
+
+    #     plt.legend(
+    #         handles=[green_patch, orange_patch, gray_patch], loc="lower right"
+    #     )
+
+    #     outfile = os.path.join(
+    #         f"{prefix}_output",
+    #         "plots",
+    #         "Unsupervised",
+    #         nn_method,
+    #         "gt_state_proba.png",
+    #     )
+
+    #     plt.savefig(outfile, bbox_inches="tight", facecolor="white")
 
     # @staticmethod
     # def write_gt_state_probs(
