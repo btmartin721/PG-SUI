@@ -5,6 +5,10 @@ import pprint
 import sys
 import warnings
 
+warnings.simplefilter(action="ignore", category=FutureWarning)
+
+from pathlib import Path
+
 # Third-party Imports
 import numpy as np
 import pandas as pd
@@ -807,13 +811,15 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
         # For CSVLogger() callback.
 
         append = True if self.nn_method_ == "UBP" else False
-        logfile = os.path.join(
+        logdir = os.path.join(
             f"{self.prefix}_output",
             "logs",
             "Unsupervised",
             self.nn_method_,
-            "training_log.csv",
         )
+
+        Path(logdir).mkdir(parents=True, exist_ok=True)
+        logfile = os.path.join(logdir, "training_log.csv")
 
         callbacks = [
             CSVLogger(filename=logfile, append=append),
