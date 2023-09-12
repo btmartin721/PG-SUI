@@ -3,7 +3,6 @@ import sys
 from pathlib import Path
 import warnings
 from typing import Optional, Union, List, Dict, Tuple, Any, Callable
-from copy import deepcopy
 
 # Third-party imports
 import numpy as np
@@ -47,11 +46,9 @@ class ImputePhylo:
 
         str_encodings (Dict[str, int], optional): Integer encodings used in STRUCTURE-formatted file. Should be a dictionary with keys=nucleotides and values=integer encodings. The missing data encoding should also be included. Argument is ignored if using a PHYLIP-formatted file. Defaults to {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}
 
-        prefix (str, optional): Prefix to use with output files.
+        prefix (str, optional): Prefix to use with output files. Defaults to "imputer".
 
         save_plots (bool, optional): Whether to save PDF files with genotype imputations for each site to disk. It makes one PDF file per locus, so if you have a lot of loci it will make a lot of PDF files. Defaults to False.
-
-        write_output (bool, optional): Whether to save the imputed data to disk. Defaults to True.
 
         disable_progressbar (bool, optional): Whether to disable the progress bar during the imputation. Defaults to False.
 
@@ -90,7 +87,7 @@ class ImputePhylo:
             "T": 4,
             "N": -9,
         },
-        prefix: str = "output",
+        prefix: str = "imputer",
         save_plots: bool = False,
         disable_progressbar: bool = False,
         **kwargs: Optional[Dict[str, Any]],
@@ -116,7 +113,9 @@ class ImputePhylo:
         if not self.validation_mode:
             imputed012 = self.impute_phylo(tree, data, q, site_rates)
             genotype_data = genotype_data.copy()
-            genotype_data.genotypes_012 = imputed012
+            genotype_data.snp_data = genotype_data.decode_012(
+                imputed012, prefix=prefix, write_output=False
+            )
             self.imputed = genotype_data
         else:
             self.imputed = self.impute_phylo(tree, data, q, site_rates)
@@ -188,7 +187,8 @@ class ImputePhylo:
                 self.column_subset = self.column_subset.tolist()
 
             genotypes = {
-                k: [v[i] for i in self.column_subset] for k, v in genotypes.items()
+                k: [v[i] for i in self.column_subset]
+                for k, v in genotypes.items()
             }
 
         # For each SNP:
@@ -245,11 +245,16 @@ class ImputePhylo:
                                     genotypes[child.name][snp_index]
                                 ):
                                     if sum is None:
-                                        sum = [Decimal(x) for x in list(pt[allele])]
+                                        sum = [
+                                            Decimal(x)
+                                            for x in list(pt[allele])
+                                        ]
                                     else:
                                         sum = [
                                             Decimal(sum[i]) + Decimal(val)
-                                            for i, val in enumerate(list(pt[allele]))
+                                            for i, val in enumerate(
+                                                list(pt[allele])
+                                            )
                                         ]
                             node_lik[child.idx] = [Decimal(x) for x in sum]
 
@@ -258,13 +263,15 @@ class ImputePhylo:
                                 node_lik[node.idx] = node_lik[child.idx]
                             else:
                                 node_lik[node.idx] = [
-                                    Decimal(node_lik[child.idx][i]) * Decimal(val)
+                                    Decimal(node_lik[child.idx][i])
+                                    * Decimal(val)
                                     for i, val in enumerate(node_lik[node.idx])
                                 ]
                         else:
                             # raise error
                             sys.exit(
-                                f"Error: Taxon {child.name} not found in " f"genotypes"
+                                f"Error: Taxon {child.name} not found in "
+                                f"genotypes"
                             )
                     else:
                         l = self._get_internal_lik(pt, node_lik[child.idx])
@@ -296,7 +303,9 @@ class ImputePhylo:
             two_pass = dict()
             for samp in bads:
                 # get most likely state for focal tip
-                node = tree.idx_dict[tree.get_mrca_idx_from_tip_labels(names=samp)]
+                node = tree.idx_dict[
+                    tree.get_mrca_idx_from_tip_labels(names=samp)
+                ]
                 dist = node.dist
                 parent = node.up
                 imputed = None
@@ -438,7 +447,9 @@ class ImputePhylo:
             imp_snps,
             self.valid_sites,
             self.valid_sites_count,
-        ) = self.genotype_data.convert_012(df.to_numpy().tolist(), impute_mode=True)
+        ) = self.genotype_data.convert_012(
+            df.to_numpy().tolist(), impute_mode=True
+        )
 
         df_imp = pd.DataFrame.from_records(imp_snps)
 
@@ -500,7 +511,9 @@ class ImputePhylo:
         if genotype_data.site_rates is not None:
             site_rates = genotype_data.site_rates
         else:
-            raise TypeError("site rates must be defined in GenotypeData instance.")
+            raise TypeError(
+                "site rates must be defined in GenotypeData instance."
+            )
 
         return data, tree, q, site_rates
 
@@ -680,7 +693,9 @@ class ImputePhylo:
                 return False
         return True
 
-    def _get_internal_lik(self, pt: pd.DataFrame, lik_arr: List[float]) -> List[float]:
+    def _get_internal_lik(
+        self, pt: pd.DataFrame, lik_arr: List[float]
+    ) -> List[float]:
         """Get ancestral state likelihoods for internal nodes of the tree.
 
         Postorder traversal to calculate internal ancestral state likelihoods (tips -> root).
@@ -841,6 +856,7 @@ class ImputeAlleleFreq:
         default: int = 0,
         missing: int = -9,
         verbose: bool = True,
+        prefix="imputer",
         **kwargs: Dict[str, Any],
     ) -> None:
         if genotype_data is None and gt is None:
@@ -874,6 +890,9 @@ class ImputeAlleleFreq:
         if not self.validation_mode:
             imputed012, self.valid_cols = self.fit_predict(gt_list)
             genotype_data = genotype_data.copy()
+            genotype_data.snp_data = genotype_data.decode_012(
+                imputed012, prefix=prefix, write_output=False
+            )
             genotype_data.genotypes_012 = imputed012
             self.imputed = genotype_data
         else:
@@ -946,7 +965,9 @@ class ImputeAlleleFreq:
                 try:
                     # Instead of appending to the DataFrame, append to the list
                     columns.append(
-                        groups[col].transform(lambda x: x.fillna(x.mode().iloc[0]))
+                        groups[col].transform(
+                            lambda x: x.fillna(x.mode().iloc[0])
+                        )
                     )
 
                     if col != "pops":
@@ -959,7 +980,9 @@ class ImputeAlleleFreq:
                         if df[col].isna().all():
                             columns.append(df[col].fillna(0.0, inplace=False))
                         else:
-                            columns.append(df[col].fillna(df[col].mode().iloc[0]))
+                            columns.append(
+                                df[col].fillna(df[col].mode().iloc[0])
+                            )
                     else:
                         raise
 
@@ -1082,7 +1105,7 @@ class ImputeMF:
         tol: float = 0.1,
         n_fail: int = 20,
         missing: int = -9,
-        prefix: str = "output",
+        prefix: str = "imputer",
         verbose: bool = True,
         **kwargs: Dict[str, Any],
     ) -> None:
@@ -1109,7 +1132,9 @@ class ImputeMF:
             X = gt.copy()
         imputed012 = pd.DataFrame(self.fit_predict(X))
         genotype_data = genotype_data.copy()
-        genotype_data.genotypes_012 = imputed012
+        genotype_data.snp_data = genotype_data.decode_012(
+            imputed012, prefix=prefix, write_output=False
+        )
 
         if self.validation_mode:
             self.imputed = imputed012.to_numpy()
@@ -1203,7 +1228,9 @@ class ImputeMF:
             expected = original[:, j]
             options = np.unique(expected[expected != 0])
             for i in range(n_row):
-                transform = min(options, key=lambda x: abs(x - predicted[i, j]))
+                transform = min(
+                    options, key=lambda x: abs(x - predicted[i, j])
+                )
                 tR[i, j] = transform
         tR = tR - 1
         tR[tR < 0] = -9
@@ -1287,6 +1314,7 @@ class ImputeRefAllele:
         genotype_data: GenotypeData,
         *,
         missing: int = -9,
+        prefix="imputer",
         verbose: bool = True,
         **kwargs: Dict[str, Any],
     ) -> None:
@@ -1311,7 +1339,9 @@ class ImputeRefAllele:
         if not self.validation_mode:
             imputed012 = self.fit_predict(gt_list)
             genotype_data = genotype_data.copy()
-            genotype_data.genotypes_012 = imputed012
+            genotype_data.snp_data = genotype_data.decode_012(
+                imputed012, prefix=prefix, write_output=False
+            )
             self.imputed = genotype_data
         else:
             self.imputed = self.fit_predict(gt_list)
