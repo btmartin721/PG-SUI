@@ -1,14 +1,12 @@
-import sys
-import os
-import copy
 import unittest
 import pprint
 from snpio import GenotypeData
 from pgsui import *
 from pgsui.utils.misc import HiddenPrints
+import matplotlib.pyplot as plt
+import numpy as np
 
 from sklearn.metrics import (
-    balanced_accuracy_score,
     roc_auc_score,
     precision_recall_fscore_support,
     f1_score,
@@ -19,6 +17,85 @@ from sklearn.metrics import (
 from sklearn.preprocessing import label_binarize
 
 from sklearn.utils.class_weight import compute_class_weight
+
+
+# Initialize dictionaries to store metrics for all methods
+all_accuracies = {}
+all_auc_rocs = {}
+all_precisions = {}
+all_recalls = {}
+all_avg_precisions = {}
+all_f1s = {}
+
+
+def plot_scoring_metrics():
+    """
+    Plot the accumulated scoring metrics for all test methods in separate subplots.
+
+    Args:
+        None
+
+    Returns:
+        None: The function generates a grouped bar chart displaying the scoring metrics.
+    """
+
+    metrics = [
+        "Accuracy",
+        "AUC-ROC",
+        "Precision",
+        "Recall",
+        "Average Precision",
+        "F1 Score",
+    ]
+    metric_dicts = [
+        all_accuracies,
+        all_auc_rocs,
+        all_precisions,
+        all_recalls,
+        all_avg_precisions,
+        all_f1s,
+    ]
+
+    num_metrics = len(metrics)
+    fig, axes = plt.subplots(2, num_metrics // 2, figsize=(20, 20))
+
+    # Loop through each metric and its corresponding dictionary
+    colcount = 0
+    rowcount = 0
+
+    for i, (metric, metric_dict) in enumerate(zip(metrics, metric_dicts)):
+        if i > 0 and i % num_metrics // 2 == 0:
+            rowcount += 1
+            colcount = 0
+
+        methods = list(metric_dict.keys())
+        values = list(metric_dict.values())
+
+        # Find the index of the highest bar
+        highest_bar_idx = np.argmax(values)
+
+        # Create the bar plot on the i-th subplot
+        bars = axes[rowcount, colcount].bar(methods, values, color="gray")
+
+        # Color the highest bar in orange
+        bars[highest_bar_idx].set_color("orange")
+
+        # Rotate x-axis labels
+        axes[rowcount, colcount].tick_params(axis="x", rotation=90)
+
+        # Annotate the bars with the actual values
+        for j, v in enumerate(values):
+            axes[rowcount, colcount].text(
+                j, v, f"{v:.2f}", ha="center", va="bottom"
+            )
+
+        axes[rowcount, colcount].set_title(metric)
+        axes[rowcount, colcount].set_ylabel("Score")
+        colcount += 1
+
+    plt.suptitle("Scoring Metrics for All Methods")
+
+    fig.savefig("scores.png", facecolor="white", bbox_inches="tight")
 
 
 class TestMyClasses(unittest.TestCase):
@@ -87,9 +164,13 @@ class TestMyClasses(unittest.TestCase):
             recall_scores,
             avg_precision_scores,
             f1,
-        ) = self._scoring_metrics(self.genotype_data.genotypes_int, imputed_data)
+        ) = self._scoring_metrics(
+            self.genotype_data.genotypes_int, imputed_data
+        )
 
-        pprint.PrettyPrinter(indent=4, sort_dicts=True).pprint(f"ACCURACY: {accuracy}")
+        pprint.PrettyPrinter(indent=4, sort_dicts=True).pprint(
+            f"ACCURACY: {accuracy}"
+        )
         pprint.PrettyPrinter(indent=4, sort_dicts=True).pprint(
             f"AUC-ROC: {auc_roc_scores}"
         )
@@ -102,8 +183,19 @@ class TestMyClasses(unittest.TestCase):
         pprint.PrettyPrinter(indent=4, sort_dicts=True).pprint(
             f"AVERAGE PRECISION: {avg_precision_scores}"
         )
-        pprint.PrettyPrinter(indent=4, sort_dicts=True).pprint(f"F1 SCORE: {f1}")
+        pprint.PrettyPrinter(indent=4, sort_dicts=True).pprint(
+            f"F1 SCORE: {f1}"
+        )
         print("\n")
+
+        # Store metrics
+        all_accuracies[class_instance.__name__] = accuracy
+        all_auc_rocs[class_instance.__name__] = auc_roc_scores
+        all_precisions[class_instance.__name__] = precision_scores
+        all_recalls[class_instance.__name__] = recall_scores
+        all_avg_precisions[class_instance.__name__] = avg_precision_scores
+        all_f1s[class_instance.__name__] = f1
+        plot_scoring_metrics()
 
     def test_ImputeKNN(self):
         self._test_class(ImputeKNN)
