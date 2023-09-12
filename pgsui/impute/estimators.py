@@ -1,6 +1,10 @@
 # Standard library imports
 import os
+import warnings
 from typing import Optional, Union, Dict, Any
+
+warnings.simplefilter(action="ignore", category=FutureWarning)
+
 
 # Third-party imports
 import numpy as np
@@ -33,7 +37,7 @@ class UnsupervisedImputer(Impute):
         gridparams (Dict[str, Any] or None, optional): Dictionary with keys=keyword arguments for the specified estimator and values=lists of parameter values or distributions. If ``gridparams=None``\, a grid search is not performed, otherwise ``gridparams`` will be used to specify parameter ranges or distributions for the grid search. If using ``gridsearch_method="gridsearch"``\, then the ``gridparams`` values can be lists or numpy arrays. If using ``gridsearch_method="randomized_gridsearch"``\, distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). If using the genetic algorithm grid search by setting ``gridsearch_method="genetic_algorithm"``\, the parameters can be specified as ``sklearn_genetic.space`` objects. The grid search will determine the optimal parameters as those that maximize the scoring metrics. If it takes a long time, run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. Defaults to None (no gridsearch).
 
         cv (int, optional): Number of cross-validation folds to use with grid search. Defaults to 5.
-        
+
         validation_split (float, optional): Proportion of training dataset to set aside for loss validation during model training. Defaults to 0.2.
 
         column_subset (int or float, optional): If float is provided, gets the proportion of the dataset to randomly subset for the grid search or validation. Subsets ``int(n_features * column_subset)`` columns and Should be in the range [0, 1]. It can be small if the grid search or validation takes a long time. If int is provided, subset ``column_subset`` columns. Defaults to 1.0.
@@ -112,7 +116,7 @@ class UnsupervisedImputer(Impute):
         *,
         prefix="imputer",
         gridparams=None,
-        cv: int=5,
+        cv: int = 5,
         validation_split=0.2,
         column_subset=1.0,
         epochs=100,
@@ -251,7 +255,7 @@ class SupervisedImputer(Impute):
         clf,
         clf_type,
         *,
-        prefix: str = "output",
+        prefix: str = "imputer",
         gridparams: Optional[Dict[str, Any]] = None,
         do_validation: bool = False,
         column_subset: Union[int, float] = 0.1,
@@ -367,6 +371,13 @@ class ImputeKNN(SupervisedImputer):
         self.clf_type = "classifier"
         self.clf = KNeighborsClassifier
 
+        if "self" in kwargs:
+            kwargs.pop("self")
+        if "genotype_data" in kwargs:
+            kwargs.pop("genotype_data")
+        if "early_stop_gen" in kwargs:
+            kwargs.pop("early_stop_gen")
+
         super().__init__(genotype_data, self.clf, self.clf_type, **kwargs)
 
 
@@ -476,6 +487,13 @@ class ImputeRandomForest(SupervisedImputer):
 
         self.clf_type = "classifier"
 
+        if "self" in kwargs:
+            kwargs.pop("self")
+        if "genotype_data" in kwargs:
+            kwargs.pop("genotype_data")
+        if "early_stop_gen" in kwargs:
+            kwargs.pop("early_stop_gen")
+
         super().__init__(genotype_data, self.clf, self.clf_type, **kwargs)
 
 
@@ -557,7 +575,12 @@ class ImputeXGBoost(SupervisedImputer):
 
         self.clf_type = "classifier"
         self.clf = xgb.XGBClassifier
-        kwargs["verbosity"] = kwargs["verbose"]
+        kwargs["verbosity"] = int(kwargs.get("verbose", False))
+
+        if "self" in kwargs:
+            kwargs.pop("self")
+        if "genotype_data" in kwargs:
+            kwargs.pop("genotype_data")
 
         super().__init__(genotype_data, self.clf, self.clf_type, **kwargs)
 
@@ -664,17 +687,16 @@ class ImputeUBP(UnsupervisedImputer):
         .. [1] Gashler, M. S., Smith, M. R., Morris, R., & Martinez, T. (2016). Missing value imputation with unsupervised backpropagation. Computational Intelligence, 32(2), 196-215.
     """
 
-    nlpca = False
-
     def __init__(
         self,
         genotype_data,
         **kwargs,
     ):
+        self.nlpca = kwargs.get("nlpca", False)
         self.clf = UBP
+        self.clf.__name__ = "NLPCA" if self.nlpca else "UBP"
+        kwargs["nlpca"] = self.nlpca
         self.clf_type = "classifier"
-        if self.nlpca:
-            self.clf.__name__ = "NLPCA"
 
         super().__init__(genotype_data, self.clf, self.clf_type, **kwargs)
 
@@ -708,7 +730,6 @@ class ImputeNLPCA(ImputeUBP):
         .. [2] Scholz, M., Kaplan, F., Guy, C. L., Kopka, J., & Selbig, J. (2005). Non-linear PCA: a missing data approach. Bioinformatics, 21(20), 3887-3895.
     """
 
-    nlpca = True
-
     def __init__(self, *args, **kwargs):
+        kwargs["nlpca"] = True
         super().__init__(*args, **kwargs)
