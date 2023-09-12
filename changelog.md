@@ -6,6 +6,25 @@ This document provides a high-level view of the changes made to PG-SUI for each 
 
 - Make HTML report with all plots and logs.
 
+## Version 1.0.2.1 - 2023-09-11
+
+### Bug Fixes
+
+- Fixed bug where supervised imputers would fail due to duplicated `self` argument.
+- Fixed bug where `ImputeNLPCA` would run `ImputeUBP` instead.
+- Fixed gt_probability heatmap plot. It works correctly now.
+- Fixed issues where plot directories were not being created.
+- Fixed bugs where non-ML imputers would not decode the integer genotypes.
+- Renamed gt probability plot to `simulated_genotypes`.
+- Fixed default `prefix` argument for supervised imputers. It now aligns with the unsupervised imputers as `imputer`.
+- Fixed bugs where `ImputeKNN` and `ImputeRandomForest` would not run.
+- Set max pandas version to prevent future warnings.
+- Added `warnings.simplefilter` to each module to catch `FutureWarning`.
+
+### Changed
+
+- Implemented new plotting for test.py
+
 ## Version 1.0.2 - 2023-08-28
 
 ### Bug Fix
