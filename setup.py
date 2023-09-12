@@ -7,7 +7,7 @@ def read(fname):
 
 
 NAME = "pg-sui"
-VERSION = "1.0.2"
+VERSION = "1.0.2.1"
 AUTHORS = "Bradley T. Martin and Tyler K. Chafin"
 AUTHOR_EMAIL = "evobio721@gmail.com"
 MAINTAINER = "Bradley T. Martin"
@@ -72,7 +72,7 @@ setup(
         "jupyterlab",
         "scikit-learn>=1.0",
         "tqdm",
-        "pandas",
+        "pandas<2.1.0",
         "numpy==1.24.3",
         "scipy",
         "xgboost",
