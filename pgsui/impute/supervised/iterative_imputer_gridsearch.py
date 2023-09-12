@@ -6,6 +6,9 @@ import shutil
 import sys
 import warnings
 
+warnings.simplefilter(action="ignore", category=FutureWarning)
+
+
 # from collections import namedtuple
 from contextlib import redirect_stdout
 from time import time
