@@ -2,6 +2,10 @@ import os
 import sys
 from itertools import cycle
 from pathlib import Path
+import warnings
+
+warnings.simplefilter(action="ignore", category=FutureWarning)
+
 
 import numpy as np
 import pandas as pd
