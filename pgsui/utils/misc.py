@@ -17,6 +17,26 @@ from tqdm.utils import disp_len, _unicode  # for overriding status_print
 # from skopt import BayesSearchCV
 
 
+def get_int_iupac_dict():
+    int_iupac_dict = {
+        "A": 0,
+        "T": 1,
+        "G": 2,
+        "C": 3,
+        "W": 4,
+        "R": 5,
+        "M": 6,
+        "K": 7,
+        "Y": 8,
+        "S": 9,
+        "N": -9,
+        "-": -9,
+        ".": -9,
+        "?": -9,
+    }
+    return int_iupac_dict
+
+
 def validate_input_type(X, return_type="array"):
     """Validate input type and return as numpy array.
 
