@@ -1,0 +1,28 @@
+description: Two populations with size changes and two migration events.
+time_units: years
+generation_time: 1
+demes:
+- name: ancestral
+  epochs:
+  - {end_time: 72423.7005261697, start_size: 75788.09319045978}
+- name: ON_T1
+  ancestors: [ancestral]
+  epochs:
+  - {end_time: 9142.026712595463, start_size: 67776.30325330954}
+- name: DS_T1
+  ancestors: [ancestral]
+  epochs:
+  - {end_time: 9142.026712595463, start_size: 33436.73899524902}
+- name: ON_T2
+  ancestors: [ON_T1]
+  epochs:
+  - {end_time: 0, start_size: 67776.30325330954, end_size: 56167.68294325258}
+- name: DS_T2
+  ancestors: [DS_T1]
+  epochs:
+  - {end_time: 0, start_size: 44798.728918534, end_size: 33436.73899524902}
+migrations:
+- demes: [ON_T1, DS_T1]
+  rate: 0.07286428420645961
+- demes: [ON_T2, DS_T2]
+  rate: 0.09898234999043753

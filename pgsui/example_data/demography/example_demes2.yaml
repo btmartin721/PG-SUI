@@ -1,0 +1,15 @@
+description: Two populations with no migration.
+time_units: years
+generation_time: 1
+demes:
+- name: ancestral
+  epochs:
+  - {end_time: 61460.62356988131, start_size: 59077.889543240875}
+- name: pop1
+  ancestors: [ancestral]
+  epochs:
+  - {end_time: 0, start_size: 59217.54554000124}
+- name: pop2
+  ancestors: [ancestral]
+  epochs:
+  - {end_time: 0, start_size: 68305.40125128976}
