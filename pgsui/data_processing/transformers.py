@@ -10,6 +10,8 @@ import pandas as pd
 # Third-party imports
 import numpy as np
 import pandas as pd
+from scipy.stats import mode
+
 
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.impute import SimpleImputer
@@ -966,56 +968,94 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
             avg_precision_scores,
         )
 
-    def random_weighted_missing_data(self, X, inv=False):
-        """Choose values for which to simulate missing data by biasing towards the minority or majority alleles, depending on whether inv is True or False.
+    def sqrt_transform(self, proportions):
+        """
+        Apply the square root transformation to an array of proportions.
 
         Args:
-            X (np.ndarray): True values.
-
-            inv (bool, optional): If True, then biases towards choosing majority alleles. If False, then biases towards choosing minority alleles. Defaults to False.
+            proportions (np.ndarray): An array of proportions.
 
         Returns:
-            np.ndarray: X with simulated missing values.
-
+            np.ndarray: The transformed proportions.
         """
-        # Get unique classes and their counts
-        classes, counts = np.unique(X, return_counts=True)
-        # Compute class weights
-        if inv:
-            class_weights = 1 / counts
+        return np.sqrt(proportions)
+
+    def inverse_transform(self, proportions):
+        """
+        Apply the inverse transformation to an array of proportions.
+
+        Args:
+            proportions (np.ndarray): An array of proportions.
+
+        Returns:
+            np.ndarray: The transformed proportions.
+        """
+        return 1 / proportions
+
+    def exponential_decay_transform(self, proportions):
+        """
+        Apply the exponential decay transformation to an array of proportions.
+
+        Args:
+            proportions (np.ndarray): An array of proportions.
+
+        Returns:
+            np.ndarray: The transformed proportions.
+        """
+        return np.exp(-proportions)
+
+    def random_weighted_missing_data(
+        self, X, transform_fn="sqrt", missing_val=-9, power=0.5, **kwargs
+    ):
+        if transform_fn.lower() == "sqrt":
+            transform_fn = self.sqrt_transform
+        elif transform_fn.lower() == "exp":
+            transform_fn = self.exponential_decay_transform
+        elif transform_fn.lower() == "inverse":
+            transform_fn = self.inverse_transform
         else:
-            class_weights = counts
-        # Normalize class weights
-        class_weights = class_weights / sum(class_weights)
-
-        # Compute mask
-        if self.mask_missing:
-            # Get indexes where non-missing (Xobs) and missing (Xmiss)
-            Xobs = np.where(~self.original_missing_mask_.ravel())[0]
-            Xmiss = np.where(self.original_missing_mask_.ravel())[0]
-
-            # Generate mask of 0's (non-missing) and 1's (missing)
-            obs_mask = np.random.choice(
-                classes, size=Xobs.size, p=class_weights
+            raise ValueError(
+                f"Invalid transform_fn provided: {transform_fn}. Supported "
+                f"options include 'sqrt', 'exp', or 'inverse'"
             )
-            obs_mask = (obs_mask == classes[:, None]).argmax(axis=0)
 
-            # Make missing data mask
-            mask = np.zeros(X.size, dtype=bool)
-            mask[Xobs] = obs_mask
-            mask[Xmiss] = 1
+        n_samples, n_snps = X.shape
+        mask = np.zeros((n_samples, n_snps), dtype=bool)
 
-            # Reshape from raveled to 2D
-            mask = mask.reshape(X.shape)
-        else:
-            # Generate mask of 0's (non-missing) and 1's (missing)
-            mask = np.random.choice(classes, size=X.size, p=class_weights)
-            mask = (mask == classes[:, None]).argmax(axis=0).reshape(X.shape)
+        for snp_idx in range(n_snps):
+            col = X[:, snp_idx]
+            col_masked = col[col != missing_val]
 
-        # Assign mask to self before validation
-        self.mask_ = mask
+            if len(col_masked) == 0:
+                continue
 
-        self._validate_mask()
+            unique_elements, counts_elements = np.unique(
+                col_masked, return_counts=True
+            )
+            class_proportions = counts_elements / np.sum(counts_elements)
+
+            # Apply the transformation function to the proportions
+            modified_proportions = transform_fn(class_proportions)
+
+            # Amplify the transformation for rarer classes and dampen it for frequent classes
+            for elem_idx, elem in enumerate(unique_elements):
+                if elem in [4, 5, 6, 7, 8, 9]:  # rarer classes
+                    modified_proportions[elem_idx] **= power
+                else:  # frequent classes
+                    modified_proportions[elem_idx] **= 1 / power
+
+            # Normalize the modified proportions
+            modified_proportions /= np.sum(modified_proportions)
+
+            # Generate a probability mask based on the modified proportions
+            prob_mask = np.zeros_like(col, dtype=float)
+            for elem, prob in zip(unique_elements, modified_proportions):
+                prob_mask[col == elem] = prob
+
+            # Generate missing values based on the probability mask directly
+            missing_mask = np.random.rand(n_samples) < prob_mask
+
+            mask[:, snp_idx] = missing_mask
 
         return mask
 
@@ -1111,6 +1151,52 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
         mask_boolean = self.mask_ != 0
         Xt[mask_boolean] = mask_val
         return Xt
+
+    def write_mask(self, filename_prefix):
+        """Write mask to file.
+
+        Args:
+            filename_prefix (str): Prefix for the filenames to write to.
+        """
+        np.save(filename_prefix + "_mask.npy", self.mask_)
+        np.save(
+            filename_prefix + "_original_missing_mask.npy",
+            self.original_missing_mask_,
+        )
+
+    def read_mask(self, filename_prefix):
+        """Read mask from file.
+
+        Args:
+            filename_prefix (str): Prefix for the filenames to read from.
+
+        Returns:
+            tuple of np.ndarray: The read masks.
+        """
+        # Check if files exist
+        if not os.path.isfile(filename_prefix + "_mask.npy"):
+            raise FileNotFoundError(
+                filename_prefix + "_mask.npy" + " does not exist."
+            )
+        if not os.path.isfile(filename_prefix + "_original_missing_mask.npy"):
+            raise FileNotFoundError(
+                filename_prefix
+                + "_original_missing_mask.npy"
+                + " does not exist."
+            )
+
+        # Load mask from file
+        self.mask_ = np.load(filename_prefix + "_mask.npy")
+        self.original_missing_mask_ = np.load(
+            filename_prefix + "_original_missing_mask.npy"
+        )
+
+        # Recalculate all_missing_mask_ from mask_ and original_missing_mask_
+        self.all_missing_mask_ = np.logical_or(
+            self.mask_, self.original_missing_mask_
+        )
+
+        return self.mask_, self.original_missing_mask_, self.all_missing_mask_
 
     @property
     def missing_count(self) -> int:
