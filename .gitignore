@@ -58,3 +58,12 @@ biasINDV20_popmap.txt
 .pg-sui-pypi
 /build/
 runvae.sh
+.pgsui-pip
+.pgsui-dev
+pgsui-dev
+.pgsui-dev-mac
+
+nmt_ingroup_filt.*
+.DS_Store
+pgsui/example_data/phylip_files/PhyloAnalysis.meg
+pgsui/example_data/phylip_files/snpulator_test.mas
