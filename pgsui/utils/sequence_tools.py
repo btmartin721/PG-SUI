@@ -4,6 +4,61 @@ from itertools import product
 from collections import Counter
 
 
+def get_iupac_codes():
+    # Define the IUPAC genotype codes
+    iupac_codes = {
+        ("A", "A"): "A",
+        ("C", "C"): "C",
+        ("G", "G"): "G",
+        ("T", "T"): "T",
+        ("A", "G"): "R",
+        ("G", "A"): "R",
+        ("C", "T"): "Y",
+        ("T", "C"): "Y",
+        ("G", "C"): "S",
+        ("C", "G"): "S",
+        ("A", "T"): "W",
+        ("T", "A"): "W",
+        ("G", "T"): "K",
+        ("T", "G"): "K",
+        ("A", "C"): "M",
+        ("C", "A"): "M",
+        ("G", "G"): "G",
+        ("T", "T"): "T",
+        ("A", "N"): "N",
+        ("C", "N"): "N",
+        ("G", "N"): "N",
+        ("T", "N"): "N",
+        ("N", "A"): "N",
+        ("N", "C"): "N",
+        ("N", "G"): "N",
+        ("N", "T"): "N",
+    }
+
+    return iupac_codes
+
+
+def convert_diploid_to_iupac(genotype):
+    iupac_dict = {
+        ("A", "A"): "A",
+        ("C", "C"): "C",
+        ("G", "G"): "G",
+        ("T", "T"): "T",
+        ("A",): "A",
+        ("C",): "C",
+        ("G",): "G",
+        ("T",): "T",
+        ("A", "C"): "M",
+        ("A", "G"): "R",
+        ("A", "T"): "W",
+        ("C", "G"): "S",
+        ("C", "T"): "Y",
+        ("G", "T"): "K",
+        ("A", "C", "G", "T"): "N",
+    }
+    return iupac_dict[tuple(sorted(genotype))]
+
+
 def blacklist_missing(loci, threshold, iupac=False):
     blacklist = list()
     for i in range(0, len(loci)):
