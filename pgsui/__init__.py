@@ -46,6 +46,7 @@ from pgsui.impute.simple_imputers import (
 )
 
 from pgsui.data_processing.transformers import SimGenotypeDataTransformer
+from pgsui.simulators.simulate import SNPulator
 
 __all__ = [
     "ImputeUBP",
