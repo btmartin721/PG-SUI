@@ -2,14 +2,10 @@
 ## E-mail: evobio721@gmail.com
 ## Version 0.1, completed 13-Dec-2021
 
-# Suppresses tensorflow GPU warnings.
 import os
 import warnings
 
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
-
 from pgsui.utils.misc import get_processor_name
-
 
 # Requires scikit-learn-intellex package
 if get_processor_name().strip().startswith("Intel"):
@@ -28,16 +24,15 @@ else:
 
 os.environ["intelex"] = str(intelex)
 
+from pgsui.impute.unsupervised.neural_network_imputers import ImputeVAE
 from pgsui.impute.estimators import (
     ImputeKNN,
     ImputeNLPCA,
     ImputeRandomForest,
     ImputeStandardAutoEncoder,
     ImputeUBP,
-    ImputeVAE,
     ImputeXGBoost,
 )
-
 from pgsui.impute.simple_imputers import (
     ImputePhylo,
     ImputeMF,
