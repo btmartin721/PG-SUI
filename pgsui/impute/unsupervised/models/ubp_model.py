@@ -1,61 +1,10 @@
-import logging
-import os
-import sys
-import warnings
-
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # or any {'0', '1', '2', '3'}
-logging.getLogger("tensorflow").disabled = True
-
-# Import tensorflow with reduced warnings.
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-logging.getLogger("tensorflow").disabled = True
-warnings.filterwarnings("ignore", category=UserWarning)
-
-# noinspection PyPackageRequirements
-import tensorflow as tf
-
-# Disable can't find cuda .dll errors. Also turns of GPU support.
-tf.config.set_visible_devices([], "GPU")
-
-from tensorflow.python.util import deprecation
-
-# Disable warnings and info logs.
-tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
-tf.get_logger().setLevel(logging.ERROR)
-
-
-# Monkey patching deprecation utils to supress warnings.
-# noinspection PyUnusedLocal
-def deprecated(
-    date, instructions, warn_once=True
-):  # pylint: disable=unused-argument
-    def deprecated_wrapper(func):
-        return func
-
-    return deprecated_wrapper
-
-
-deprecation.deprecated = deprecated
-
-from tensorflow.keras.layers import (
-    Dropout,
-    Dense,
-    Reshape,
-    LeakyReLU,
-    PReLU,
-    Activation,
-)
-
-from tensorflow.keras.regularizers import l1_l2
+from torch import nn
 
 # Custom Modules
-try:
-    from ..neural_network_methods import NeuralNetworkMethods
-except (ModuleNotFoundError, ValueError, ImportError):
-    from impute.unsupervised.neural_network_methods import NeuralNetworkMethods
+from pgsui.impute.unsupervised.neural_network_methods import NeuralNetworkMethods
 
 
-class UBPPhase1(tf.keras.Model):
+class UBPPhase1(nn.Module):
     """UBP Phase 1 single layer perceptron model to train predict imputations.
 
     This model is subclassed from the tensorflow/ Keras framework.
@@ -128,9 +77,7 @@ class UBPPhase1(tf.keras.Model):
         super(UBPPhase1, self).__init__()
 
         self.total_loss_tracker = tf.keras.metrics.Mean(name="total_loss")
-        self.binary_accuracy_tracker = tf.keras.metrics.Mean(
-            name="binary_accuracy"
-        )
+        self.binary_accuracy_tracker = tf.keras.metrics.Mean(name="binary_accuracy")
 
         nn = NeuralNetworkMethods()
         self.nn = nn
@@ -268,9 +215,7 @@ class UBPPhase1(tf.keras.Model):
         # Refine the watched variables with
         # gradient descent backpropagation
         gradients = tape.gradient(loss, self.trainable_variables)
-        self.optimizer.apply_gradients(
-            zip(gradients, self.trainable_variables)
-        )
+        self.optimizer.apply_gradients(zip(gradients, self.trainable_variables))
 
         # Apply separate gradients to v.
         vgrad = tape.gradient(loss, src)
@@ -441,7 +386,7 @@ class UBPPhase1(tf.keras.Model):
         self._sample_weight = value
 
 
-class UBPPhase2(tf.keras.Model):
+class UBPPhase2(nn.Module):
     """UBP Phase 2 model to train and use to predict imputations.
 
     UBPPhase2 subclasses the tf.keras.Model and overrides the train_step function, which does training for each batch in each epoch.
@@ -515,9 +460,7 @@ class UBPPhase2(tf.keras.Model):
         super(UBPPhase2, self).__init__()
 
         self.total_loss_tracker = tf.keras.metrics.Mean(name="total_loss")
-        self.binary_accuracy_tracker = tf.keras.metrics.Mean(
-            name="binary_accuracy"
-        )
+        self.binary_accuracy_tracker = tf.keras.metrics.Mean(name="binary_accuracy")
 
         nn = NeuralNetworkMethods()
         self.nn = nn
@@ -730,9 +673,7 @@ class UBPPhase2(tf.keras.Model):
 
         # Refine the watched variables with backpropagation
         gradients = tape.gradient(loss, self.trainable_variables)
-        self.optimizer.apply_gradients(
-            zip(gradients, self.trainable_variables)
-        )
+        self.optimizer.apply_gradients(zip(gradients, self.trainable_variables))
 
         ### NOTE: If you get the error, "'tuple' object has no attribute
         ### 'rank', then convert y_true to a tensor object."
@@ -889,7 +830,7 @@ class UBPPhase2(tf.keras.Model):
         self._sample_weight = value
 
 
-class UBPPhase3(tf.keras.Model):
+class UBPPhase3(nn.Module):
     """UBP Phase 3 model to train and use to predict imputations.
 
     UBPPhase3 subclasses the tf.keras.Model and overrides the train_step function, which does training and evaluation for each batch in each single epoch.
@@ -961,9 +902,7 @@ class UBPPhase3(tf.keras.Model):
         super(UBPPhase3, self).__init__()
 
         self.total_loss_tracker = tf.keras.metrics.Mean(name="total_loss")
-        self.binary_accuracy_tracker = tf.keras.metrics.Mean(
-            name="binary_accuracy"
-        )
+        self.binary_accuracy_tracker = tf.keras.metrics.Mean(name="binary_accuracy")
 
         nn = NeuralNetworkMethods()
         self.nn = nn
@@ -1168,9 +1107,7 @@ class UBPPhase3(tf.keras.Model):
         # Refine the watched variables with
         # gradient descent backpropagation
         gradients = tape.gradient(loss, self.trainable_variables)
-        self.optimizer.apply_gradients(
-            zip(gradients, self.trainable_variables)
-        )
+        self.optimizer.apply_gradients(zip(gradients, self.trainable_variables))
 
         # Apply separate gradients to v.
         vgrad = tape.gradient(loss, src)
