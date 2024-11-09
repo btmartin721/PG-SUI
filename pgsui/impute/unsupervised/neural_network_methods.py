@@ -1,60 +1,14 @@
-import logging
+# Standard library imports
 import math
 import os
-import sys
 import random
-import warnings
-
-warnings.simplefilter(action="ignore", category=FutureWarning)
-
-
 from pathlib import Path
 
+# Third-party imports
 import numpy as np
 import pandas as pd
-import seaborn as sns
-import matplotlib.pyplot as plt
-
-# Create a custom legend
-import matplotlib.patches as mpatches
-import matplotlib.colors as mcolors
-from matplotlib.colors import ListedColormap
-
-from sklearn.utils.class_weight import (
-    compute_class_weight,
-)
-
 from sklearn.metrics import f1_score
-
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-logging.getLogger("tensorflow").disabled = True
-warnings.filterwarnings("ignore", category=UserWarning)
-
-# noinspection PyPackageRequirements
-import tensorflow as tf
-
-# Disable can't find cuda .dll errors. Also turns of GPU support.
-tf.config.set_visible_devices([], "GPU")
-
-from tensorflow.python.util import deprecation
-
-# Disable warnings and info logs.
-tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
-tf.get_logger().setLevel(logging.ERROR)
-
-
-# Monkey patching deprecation utils to supress warnings.
-# noinspection PyUnusedLocal
-def deprecated(
-    date, instructions, warn_once=True
-):  # pylint: disable=unused-argument
-    def deprecated_wrapper(func):
-        return func
-
-    return deprecated_wrapper
-
-
-deprecation.deprecated = deprecated
+from sklearn.utils.class_weight import compute_class_weight
 
 
 class DisabledCV:
@@ -66,14 +20,6 @@ class DisabledCV:
 
     def get_n_splits(self, X, y, groups=None):
         return self.n_splits
-
-
-# For VAE.
-# Necessary to initialize outside of class for use with tf.function decorator.
-cce = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
-cca = tf.keras.metrics.CategoricalAccuracy()
-ba = tf.keras.metrics.BinaryAccuracy()
-bce = tf.keras.losses.BinaryCrossentropy()
 
 
 class NeuralNetworkMethods:
@@ -131,7 +77,7 @@ class NeuralNetworkMethods:
 
             num_classes (int, optional): Number of classes to use. Defaults to 10.
 
-            missing_value (int, optional): Missing data value to replace with ``[np.nan] * num_classes``\. Defaults to -9.
+            missing_value (int, optional): Missing data value to replace with ``[np.nan] * num_classes. Defaults to -9.
         Returns:
             pandas.DataFrame: Multi-class one-hot encoded data, ignoring missing values (np.nan).
         """
@@ -205,9 +151,7 @@ class NeuralNetworkMethods:
         """
 
         if return_int and return_multilab:
-            raise ValueError(
-                "return_int and return_multilab cannot both be True."
-            )
+            raise ValueError("return_int and return_multilab cannot both be True.")
 
         y_unresolved_certainty = None
         if is_multiclass or y_true_bin.shape[-1] == 10:
@@ -223,7 +167,7 @@ class NeuralNetworkMethods:
                 else:
                     y_true_bin = cls.encode_multiclass(y_true_bin)
 
-            pred_multilab = cls.zero_extra_categories(y_pred_proba)
+            pred_multilab = cls.zero_extra_categories(y_pred_proba, threshold=0.5)
 
             # Binary multilabel predictions.
             threshold = cls.get_optimal_threshold(
@@ -253,21 +197,15 @@ class NeuralNetworkMethods:
                     # Get the argmax with the highest probability if
                     # all classes are below threshold.
                     y_multi = cls.decode_multiclass(y_pred_proba)
-                    y_multi_bin = cls.decode_multiclass(
-                        y_pred_proba, reduce_dim=False
-                    )
+                    y_multi_bin = cls.decode_multiclass(y_pred_proba, reduce_dim=False)
 
                     try:
-                        y_pred = np.where(
-                            still_missing, y_multi, pred_multilab_decoded
-                        )
+                        y_pred = np.where(still_missing, y_multi, pred_multilab_decoded)
                     except ValueError:
                         y_pred = np.where(
                             still_missing,
                             y_multi,
-                            np.reshape(
-                                pred_multilab_decoded, still_missing.shape
-                            ),
+                            np.reshape(pred_multilab_decoded, still_missing.shape),
                         )
 
                     if return_multilab:
@@ -305,13 +243,7 @@ class NeuralNetworkMethods:
             return y_pred
 
     @classmethod
-    def get_optimal_threshold(
-        cls,
-        y_true_bin,
-        y_pred_proba,
-        increment=0.01,
-        average_method="macro",
-    ):
+    def get_optimal_threshold(cls, y_true_bin, y_pred_proba, increment=0.05):
         """Increment to find the optimal decoding threshold.
 
         Args:
@@ -319,9 +251,7 @@ class NeuralNetworkMethods:
 
             y_pred_proba (numpy.ndarray): Multilabel prediction probabilities of shape (n_features * n_samples, num_classes).
 
-            increment (float, optional): How much to increment when searching for optimal threshold. Should be > 0 and < 1. Defaults to 0.1.
-
-            average_method (str, optional): Method to use for averaging the F1 score across multilabel classes. Possible options include {"macro", "micro", "weighted", "samples"}. Defaults to "macro".
+            increment (float): How much to increment when searching for optimal threshold. Should be between 0 and 1. Defaults to 0.05.
 
         Returns:
             float: Optimal decoding threshold.
@@ -332,35 +262,25 @@ class NeuralNetworkMethods:
         thresholds = np.arange(increment, 1, increment)
 
         nonmissing_mask = np.where(y_true_bin != -1)
-        num_classes = y_true_bin.shape[-1]
 
         # This is only supposed to get applied during the final transform,
         # when the original missing data is replaced with predictions.
         # If this isn't done here, it ends up having -1 values in it,
         # which causes the f1_score function to throw an error.
 
-        try:
-            y_true = y_true[nonmissing_mask]
-            y_pred = y_pred[nonmissing_mask]
-        except IndexError:
-            pass
+        y_true = y_true[nonmissing_mask]
+        y_pred = y_pred[nonmissing_mask]
 
         # Call 0s and 1s based on threshold.
-
         scores = list()
         for t in thresholds:
             pred_multilab = np.where(y_pred >= t, 1.0, 0.0)
             pred_multilab_decoded = cls.decode_binary_multilab(pred_multilab)
             true_multilab_decoded = cls.decode_binary_multilab(y_true)
 
-            # Had to cast them as integers to get rid of a type error during the
-            # final transform() function.
-
             scores.append(
                 f1_score(
-                    true_multilab_decoded,
-                    pred_multilab_decoded,
-                    average="weighted",
+                    true_multilab_decoded, pred_multilab_decoded, average="weighted"
                 )
             )
 
@@ -392,25 +312,22 @@ class NeuralNetworkMethods:
 
         Args:
             y_pred_proba (numpy.ndarray): Prediction probabilities (sigmoid activation) of shape (n_samples, n_features, num_classes) or (n_samples * n_features, num_classes).
+            threshold (float): The probability threshold to check against. Defaults to 0.5.
 
-            pred_multilab (numpy.ndarray): Multi-label decodings. Inner arrays should have only 0s and 1s. Should be of shape (n_samples, n_features, num_classes) or (n_samples * n_features, num_classes).
-
-            threshold (float, optional): Threshold to use to set decoded multilabel values to 0s (< threshold) or 1s (>= threshold). Defaults to 0.5.
+        Returns:
+            numpy.ndarray: Prediction probabilities with two lowest probabilities set to 0.0, if >2 probabilities exceed the threshold.
         """
         N = 2
-        y_pred_proba[y_pred_proba.argsort().argsort() < N] = 0.0
+        # Apply threshold check
+        above_threshold = y_pred_proba > threshold
+
+        # Only apply if more than two probabilities exceed the threshold
+        for idx in range(y_pred_proba.shape[0]):
+            if above_threshold[idx].sum() > N:
+                # Get the indices of the two lowest probabilities and set to 0.0
+                y_pred_proba[idx][y_pred_proba[idx].argsort()[:N]] = 0.0
+
         return y_pred_proba
-        # idx = np.argpartition(y_pred_proba.ravel(), k)
-        # indices = tuple(
-        #     np.array(np.unravel_index(idx, y_pred_proba.shape))[
-        #         :, range(min(k, 0), max(k, 0))
-        #     ]
-        # )
-
-        # y_pred_proba[indices] = 0.0
-        # return y_pred_proba
-
-        # return np.where(y_pred_proba >= threshold, 1.0, 0.0)
 
     @classmethod
     def decode_multiclass(cls, y_pred_proba, reduce_dim=True):
@@ -419,7 +336,7 @@ class NeuralNetworkMethods:
         Args:
             y_pred_proba (numpy.ndarray): Probabilities to decode.
 
-            reduce_dim (bool, optional): If True, returns integer encodings of one fewer dimension than ``y_pred_proba``\. Otherwise, returns one-hot encodings where the class with the maximum probability is a 1 and every other class is 0. Defaults to True.
+            reduce_dim (bool, optional): If True, returns integer encodings of one fewer dimension than ``y_pred_proba. Otherwise, returns one-hot encodings where the class with the maximum probability is a 1 and every other class is 0. Defaults to True.
 
         Returns:
             numpy.ndarray: Integer or one-hot-encoded predictions.
@@ -554,9 +471,7 @@ class NeuralNetworkMethods:
         for i, cnt in enumerate(col_classes):
             start_idx = int(sum(col_classes[0:i]))
             col_completed = complete_encoded[:, start_idx : start_idx + cnt]
-            mle_completed = np.apply_along_axis(
-                cls.mle, axis=1, arr=col_completed
-            )
+            mle_completed = np.apply_along_axis(cls.mle, axis=1, arr=col_completed)
 
             if mle_complete is None:
                 mle_complete = mle_completed
@@ -581,9 +496,7 @@ class NeuralNetworkMethods:
 
         # If not all integers
         elif isinstance(hidden_layer_sizes, list):
-            if not all(
-                [isinstance(x, (str, int)) for x in hidden_layer_sizes]
-            ):
+            if not all([isinstance(x, (str, int)) for x in hidden_layer_sizes]):
                 ls = list(set([type(item) for item in hidden_layer_sizes]))
                 raise TypeError(
                     f"Variable hidden_layer_sizes must either be None, "
@@ -599,8 +512,7 @@ class NeuralNetworkMethods:
             )
 
         assert (
-            num_hidden_layers == len(hidden_layer_sizes)
-            and num_hidden_layers > 0
+            num_hidden_layers == len(hidden_layer_sizes) and num_hidden_layers > 0
         ), "num_hidden_layers must be the length of hidden_layer_sizes."
 
         return hidden_layer_sizes
@@ -625,9 +537,7 @@ class NeuralNetworkMethods:
         """
         layers = list()
         if not isinstance(hl_func, list):
-            raise TypeError(
-                f"hl_func must be of type list, but got {type(hl_func)}."
-            )
+            raise TypeError(f"hl_func must be of type list, but got {type(hl_func)}.")
 
         units = n_dims
         for func in hl_func:
@@ -856,13 +766,9 @@ class NeuralNetworkMethods:
 
         if vae:
             if act_func == "softmax":
-                loss_func = (
-                    NeuralNetworkMethods.make_masked_categorical_crossentropy
-                )
+                loss_func = NeuralNetworkMethods.make_masked_categorical_crossentropy
             elif act_func == "sigmoid":
-                loss_func = (
-                    NeuralNetworkMethods.make_masked_binary_crossentropy
-                )
+                loss_func = NeuralNetworkMethods.make_masked_binary_crossentropy
             else:
                 raise ValueError(
                     f"act_func must be either 'softmax' or 'sigmoid', but got {act_func}"
@@ -938,7 +844,6 @@ class NeuralNetworkMethods:
             callable: Function that calculates categorical crossentropy loss.
         """
 
-        @tf.function
         def masked_binary_accuracy(y_true, y_pred, sample_weight=None):
             """Custom neural network metric function with missing mask.
 
@@ -973,7 +878,6 @@ class NeuralNetworkMethods:
             callable: Function that calculates categorical crossentropy loss.
         """
 
-        @tf.function
         def masked_binary_crossentropy(y_true, y_pred, sample_weight=None):
             """Custom loss function for with missing mask applied.
 
@@ -1009,7 +913,6 @@ class NeuralNetworkMethods:
             callable: Function that calculates categorical crossentropy loss.
         """
 
-        @tf.function
         def masked_categorical_accuracy(y_true, y_pred, sample_weight=None):
             """Custom loss function for neural network model with missing mask.
             Ignores missing data in the calculation of the loss function.
@@ -1048,10 +951,7 @@ class NeuralNetworkMethods:
             callable: Function that calculates categorical crossentropy loss.
         """
 
-        @tf.function
-        def masked_categorical_crossentropy(
-            y_true, y_pred, sample_weight=None
-        ):
+        def masked_categorical_crossentropy(y_true, y_pred, sample_weight=None):
             """Custom loss function for neural network model with missing mask.
             Ignores missing data in the calculation of the loss function.
 
@@ -1084,9 +984,7 @@ class NeuralNetworkMethods:
 
     @staticmethod
     def kl_divergence(z_mean, z_log_var, kl_weight=0.5):
-        kl_loss = -0.5 * (
-            1 + z_log_var - tf.square(z_mean) - tf.exp(z_log_var)
-        )
+        kl_loss = -0.5 * (1 + z_log_var - tf.square(z_mean) - tf.exp(z_log_var))
         return tf.reduce_mean(tf.reduce_sum(kl_loss, axis=-1))
 
         # Another way of doing it.
@@ -1261,9 +1159,7 @@ class NeuralNetworkMethods:
             pd.DataFrame: DataFrame containing processed data.
             list: List of row colors for plotting.
         """
-        bin_mapping = np.array(
-            [np.array2string(x) for row in y_pred for x in row]
-        )
+        bin_mapping = np.array([np.array2string(x) for row in y_pred for x in row])
 
         bin_mapping = np.reshape(bin_mapping, y_pred_1d.shape)
 
@@ -1279,9 +1175,7 @@ class NeuralNetworkMethods:
 
         colors = []
 
-        for yt, yp, ypd, mask in zip(
-            y_true_2d, bin_mapping_2d, y_pred_2d, include
-        ):
+        for yt, yp, ypd, mask in zip(y_true_2d, bin_mapping_2d, y_pred_2d, include):
             sites = dict()
 
             row_colors = []
@@ -1363,10 +1257,7 @@ class NeuralNetworkMethods:
             row_colors = []
 
             for j, val in enumerate(row):
-                if (
-                    imputedGT_data.iloc[i, j] == 0
-                    and expectedGT_data.iloc[i, j] == 0
-                ):
+                if imputedGT_data.iloc[i, j] == 0 and expectedGT_data.iloc[i, j] == 0:
                     row_colors.append("gray")
 
                 elif val:
