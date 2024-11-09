@@ -1,16 +1,11 @@
-#!/usr/bin/env python
-
 # Standard library imports
 import argparse
 import sys
 
 import numpy as np
 import pandas as pd
+from snpio import GenotypeData, Plotting
 
-from sklearn_genetic.space import Continuous, Categorical, Integer
-
-from snpio import GenotypeData
-from snpio import Plotting
 from pgsui import *
 
 
@@ -22,8 +17,8 @@ def main():
     if args.str and args.phylip:
         sys.exit("Error: Only one file type can be specified")
 
-        # If VCF file is specified.
     if args.str:
+        # If VCF file is specified.
         if not args.pop_ids and args.popmap is None:
             raise TypeError("Either --pop_ids or --popmap must be specified\n")
 
@@ -172,9 +167,7 @@ def get_arguments():
     )
 
     required_args = parser.add_argument_group("Required arguments")
-    filetype_args = parser.add_argument_group(
-        "File type arguments (choose only one)"
-    )
+    filetype_args = parser.add_argument_group("File type arguments (choose only one)")
     structure_args = parser.add_argument_group("Structure file arguments")
     optional_args = parser.add_argument_group("Optional arguments")
 
