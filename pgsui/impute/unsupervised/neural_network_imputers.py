@@ -1,1060 +1,545 @@
-# Standard Library Imports
+import json
 import logging
-import os
-import pprint
-import sys
-import warnings
-
-warnings.simplefilter(action="ignore", category=FutureWarning)
-
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
 
-# Third-party Imports
 import numpy as np
 import pandas as pd
-from matplotlib import pyplot as plt
+import optuna
+import torch
+import torch.optim as optim
+from snpio.utils.logging import LoggerManager
+from torch import optim
 
-# Grid search imports
-from sklearn.model_selection import GridSearchCV, RandomizedSearchCV
-
-# Scikit-learn imports
-from sklearn.base import BaseEstimator, TransformerMixin
-
-# Genetic algorithm grid search imports
-from sklearn_genetic import GASearchCV
-from sklearn_genetic.callbacks import ConsecutiveStopping, ProgressBar
-from sklearn_genetic.plots import plot_fitness_evolution
-
-# Import tensorflow with reduced warnings.
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-logging.getLogger("tensorflow").disabled = True
-warnings.filterwarnings("ignore", category=UserWarning)
-
-# noinspection PyPackageRequirements
-import tensorflow as tf
-
-# Disable can't find cuda .dll errors. Also turns of GPU support.
-tf.config.set_visible_devices([], "GPU")
-
-from tensorflow.python.util import deprecation
-
-# Disable warnings and info logs.
-tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
-tf.get_logger().setLevel(logging.ERROR)
-
-
-# Monkey patching deprecation utils to supress warnings.
-# noinspection PyUnusedLocal
-def deprecated(
-    date, instructions, warn_once=True
-):  # pylint: disable=unused-argument
-    def deprecated_wrapper(func):
-        return func
-
-    return deprecated_wrapper
-
-
-deprecation.deprecated = deprecated
-
-from tensorflow.keras.callbacks import (
-    ReduceLROnPlateau,
-    CSVLogger,
+from pgsui.data_processing.transformers import (
+    AutoEncoderFeatureTransformer,
+    SimGenotypeDataTransformer,
 )
-
-# For development purposes
-# from memory_profiler import memory_usage
-
-# Custom module imports
-try:
-    from ...utils.misc import timer
-    from ...utils.misc import isnotebook
-    from ...utils.misc import validate_input_type
-    from .neural_network_methods import NeuralNetworkMethods, DisabledCV
-    from ...utils.scorers import Scorers
-    from ...utils.plotting import Plotting
-    from .callbacks import (
-        UBPCallbacks,
-        VAECallbacks,
-        CyclicalAnnealingCallback,
-    )
-    from .keras_classifiers import VAEClassifier, MLPClassifier, SAEClassifier
-    from ...data_processing.transformers import (
-        SimGenotypeDataTransformer,
-        AutoEncoderFeatureTransformer,
-    )
-except (ModuleNotFoundError, ValueError, ImportError):
-    from utils.misc import timer
-    from utils.misc import isnotebook
-    from utils.misc import validate_input_type
-    from impute.unsupervised.neural_network_methods import (
-        NeuralNetworkMethods,
-        DisabledCV,
-    )
-    from utils.scorers import Scorers
-    from utils.plotting import Plotting
-    from impute.unsupervised.callbacks import (
-        UBPCallbacks,
-        VAECallbacks,
-        CyclicalAnnealingCallback,
-    )
-    from impute.unsupervised.keras_classifiers import (
-        VAEClassifier,
-        MLPClassifier,
-        SAEClassifier,
-    )
-    from data_processing.transformers import (
-        SimGenotypeDataTransformer,
-        AutoEncoderFeatureTransformer,
-    )
-
-is_notebook = isnotebook()
-
-if is_notebook:
-    from tqdm.notebook import tqdm as progressbar
-else:
-    from tqdm import tqdm as progressbar
-
-from tqdm.keras import TqdmCallback
+from pgsui.impute.unsupervised.base import BaseNNImputer
+from pgsui.impute.unsupervised.models.vae_model import VAEModel
+from pgsui.impute.unsupervised.nn_scorers import Scorer
+from pgsui.utils.misc import validate_input_type
+from pgsui.utils.plotting import Plotting
 
 
-class BaseNNImputer(BaseEstimator, TransformerMixin):
-    """Base transformer class for neural network imputers.
+class ImputeVAE(BaseNNImputer):
+    """VAE imputer class.
 
-    Args:
-        genotype_data (GenotypeData): Input GenotypeData instance.
+    This class implements a variational autoencoder (VAE) imputer for imputing missing values in genotype data. It uses a PyTorch-based VAE model to predict the missing values in the input data. The class provides methods for training the model, predicting the missing values, and optimizing hyperparameters using Optuna.
 
-        prefix (str, optional): Prefix for output files. Defaults to "output".
+    Example:
+        >>> from snpio import VCFReader, GenotypeEncoder
+        >>> from pgsui.impute.unsupervised.neural_network_imputers import ImputeVAE
+        >>> genotype_data = VCFReader(filename="example.vcf.gz", popmapfile="example.popmap", verbose=1)
+        >>> ge = GenotypeEncoder(genotype_data)
+        >>> vae_imputer = ImputeVAE(genotype_data, num_classes=3, tune=True, n_trials=10, n_jobs=2, verbose=1)
+        >>> vae_imputer.fit(ge.genotypes_012)
+        >>> X_imputed = vae_imputer.transform(ge.genoypes_012)
 
-        gridparams (Dict[str, Any] or None, optional): Dictionary with keys=keyword arguments for the specified estimator and values=lists of parameter values or distributions. If using GridSearchCV, distributions can be specified by using scipy.stats.uniform(low, high) (for a uniform distribution) or scipy.stats.loguniform(low, high) (useful if range of values spans orders of magnitude). ``gridparams`` will be used for a randomized grid search with cross-validation. If using the genetic algorithm grid search (GASearchCV) by setting ``ga=True``\, the parameters can be specified as ``sklearn_genetic.space`` objects. The grid search will determine the optimal parameters as those that maximize accuracy (or minimize root mean squared error for BayesianRidge regressor). NOTE: Takes a long time, so run it with a small subset of the data just to find the optimal parameters for the classifier, then run a full imputation using the optimal parameters. If ``gridparams=None``\, a grid search is not performed. Defaults to None.
-
-        disable_progressbar (bool, optional): Whether to disable the tqdm progress bar. Useful if you are doing the imputation on e.g. a high-performance computing cluster, where sometimes tqdm does not work correctly. If False, uses tqdm progress bar. If True, does not use tqdm. Defaults to False.
-
-        batch_size (int, optional): Batch size per epoch to train the model with.
-
-        n_components (int, optional): Number of components to use as the input data. Defaults to 3.
-
-        early_stop_gen (int, optional): Early stopping criterion for epochs. Training will stop if the loss (error) does not decrease past the tolerance level for ``early_stop_gen`` epochs. Will save the optimal model and reload it once ``early_stop_gen`` has been reached. Defaults to 25.
-
-        num_hidden_layers (int, optional): Number of hidden layers to use in the model. Adjust if overfitting occurs. Defaults to 3.
-
-        hidden_layer_sizes (str, List[int], List[str], or int, optional): Number of neurons to use in hidden layers. If string or a list of strings is supplied, the strings must be either "midpoint", "sqrt", or "log2". "midpoint" will calculate the midpoint as ``(n_features + n_components) / 2``. If "sqrt" is supplied, the square root of the number of features will be used to calculate the output units. If "log2" is supplied, the units will be calculated as ``log2(n_features)``. hidden_layer_sizes will calculate and set the number of output units for each hidden layer. If one string or integer is supplied, the model will use the same number of output units for each hidden layer. If a list of integers or strings is supplied, the model will use the values supplied in the list, which can differ. The list length must be equal to the ``num_hidden_layers``. Defaults to "midpoint".
-
-        optimizer (str, optional): The optimizer to use with gradient descent. Possible value include: "adam", "sgd", "adagrad", "adadelta", "adamax", "ftrl", "nadam", and "rmsprop" are supported. See tf.keras.optimizers for more info. Defaults to "adam".
-
-        hidden_activation (str, optional): The activation function to use for the hidden layers. See tf.keras.activations for more info. Commonly used activation functions include "elu", "relu", and "sigmoid". Defaults to "elu".
-
-        learning_rate (float, optional): The learning rate for the optimizers. Adjust if the loss is learning too slowly. Defaults to 0.1.
-
-        lr_patience (int, optional): Number of epochs with no loss improvement to wait before reducing the learning rate.
-
-        epochs (int, optional): Maximum number of epochs to run if the ``early_stop_gen`` criterion is not met.
-
-        weights_initializer (str, optional): Initializer to use for the model weights. See tf.keras.initializers for more info. Defaults to "glorot_normal".
-
-        l1_penalty (float, optional): L1 regularization penalty to apply to reduce overfitting. Defaults to 0.01.
-
-        l2_penalty (float, optional): L2 regularization penalty to apply to reduce overfitting. Defaults to 0.01.
-
-        dropout_rate (float, optional): Dropout rate during training to reduce overfitting. Must be a float between 0 and 1. Defaults to 0.2.
-
-        recurrent_weight (float, optional): Recurrent weight to calculate predictions. Defaults to 0.5.
-
-        sample_weights (str or Dict[int, float], optional): Whether to weight each genotype by its class frequency. If ``sample_weights='auto'`` then it automatically calculates sample weights based on genotype class frequencies per locus; for example, if there are a lot more 0s and fewer 2s, then it will balance out the classes by weighting each genotype accordingly. ``sample_weights`` can also be a dictionary with the genotypes (0, 1, and 2) as the keys and the weights as the keys. If ``sample_weights`` is anything else, then they are not calculated. Defaults to False.
-
-        grid_iter (int, optional): Number of iterations for grid search. Defaults to 50.
-
-        gridsearch_method (str, optional): Grid search method to use. Possible options include: 'gridsearch', 'randomized_gridsearch', and 'genetic_algorithm'. 'gridsearch' runs all possible permutations of parameters, 'randomized_gridsearch' runs a random subset of parameters, and 'genetic_algorithm' uses a genetic algorithm gridsearch (via GASearchCV). Defaults to 'gridsearch'.
-
-        ga_kwargs (Dict[str, Any] or None): Keyword arguments to be passed to a Genetic Algorithm grid search. Only used if ``ga==True``\.
-
-        scoring_metric (str, optional): Scoring metric to use for randomized or genetic algorithm grid searches. See https://scikit-learn.org/stable/modules/model_evaluation.html for supported options. Defaults to "accuracy".
-
-        sim_strategy (str, optional): Strategy to use for simulating missing data. Only used to validate the accuracy of the imputation. The final model will be trained with the non-simulated dataset. Supported options include: "random", "nonrandom", and "nonrandom_weighted". "random" randomly simulates missing data. When set to "nonrandom", branches from ``GenotypeData.guidetree`` will be randomly sampled to generate missing data on descendant nodes. For "nonrandom_weighted", missing data will be placed on nodes proportionally to their branch lengths (e.g., to generate data distributed as might be the case with mutation-disruption of RAD sites). Defaults to "random".
-
-        sim_prop_missing (float, optional): Proportion of missing data to simulate with the SimGenotypeDataTransformer. Defaults to 0.1.
-
-        n_jobs (int, optional): Number of parallel jobs to use in the grid search if ``gridparams`` is not None. -1 means use all available processors. Defaults to 1.
-
-        verbose (int, optional): Verbosity setting. Can be 0, 1, or 2. 0 is the least and 2 is the most verbose. Defaults to 0.
-
-        ToDo:
-            Fix sample_weight for multi-label encodings.
+    Attributes:
+        genotype_data (Any): Genotype data object.
+        num_classes (int): Number of classes.
+        model_name (str): Name of the model.
+        prefix (str): Prefix for the output directory.
+        output_dir (str): Output directory for saving model output.
+        latent_dim (int): Latent dimension of the VAE model.
+        dropout_rate (float): Dropout rate for the model.
+        num_hidden_layers (int): Number of hidden layers in the model.
+        hidden_layer_sizes (List[int]): List of hidden layer sizes.
+        hidden_activation (str): Activation function for hidden layers.
+        batch_size (int): Batch size for training.
+        learning_rate (float): Learning rate for the optimizer.
+        early_stop_gen (int): Number of generations for early stopping.
+        lr_patience (int): Patience for learning rate scheduler.
+        epochs (int): Number of epochs for training.
+        l1_penalty (float): L1 regularization penalty.
+        l2_penalty (float): L2 regularization penalty.
+        optimizer (str): Optimizer for training.
+        scoring_averaging (str): Averaging method for scoring metrics.
+        sim_strategy (str): Strategy for simulating missing data.
+        sim_prop_missing (float): Proportion of missing data to simulate.
+        validation_split (float): Validation split for training.
+        tune (bool): Whether to tune hyperparameters.
+        n_trials (int): Number of trials for hyperparameter optimization.
+        n_jobs (int): Number of parallel jobs for hyperparameter optimization.
+        seed (int): Random seed for reproducibility.
+        verbose (int): Verbosity level.
+        debug (bool): Whether to enable debug mode.
+        device (torch.device): Device (GPU or CPU) for training.
+        logger (LoggerManager): Logger instance.
+        sim (SimGenotypeDataTransformer): Genotype data transformer for simulating missing data.
+        tt_ (AutoEncoderFeatureTransformer): Feature transformer for encoding features.
+        model_ (nn.Module): Model instance.
+        output_dir (Path): Output directory for saving model output.
+        best_params_ (Dict[str, Any]): Best hyperparameters found during optimization.
+        best_tuned_loss_ (float): Best loss after hyperparameter optimization.
+        train_loader_ (DataLoader): DataLoader for training data.
+        val_loader_ (DataLoader): DataLoader for validation data.
+        optimizer_ (optim.Optimizer): Optimizer instance.
+        history_ (Dict[str, List[float]]): Training and validation history.
+        best_loss_ (float): Best loss after training.
+        scorer_ (Scorer): Scorer instance for evaluating the model.
+        plotter_ (Plotting): Plotting instance for plotting metrics.
+        dataset_ (GenotypeDataset): Genotype dataset instance.
+        test_dataset_ (GenotypeDataset): Test dataset instance.
+        test_loader_ (DataLoader): DataLoader for test data.
+        lr_ (float): Learning rate.
+        l1_penalty_ (float): L1 regularization penalty.
+        l2_penalty_ (float): L2 regularization penalty.
+        lr_patience_ (int): Patience for learning rate scheduler.
+        model_params (Dict[str, Any]): Model hyperparameters.
+        sim_missing_mask_ (np.ndarray): Missing mask for simulated data.
+        original_missing_mask_ (np.ndarray): Missing mask for original data.
+        all_missing_mask_ (np.ndarray): Missing mask for all data.
     """
 
     def __init__(
         self,
-        activate,
-        nn_method,
-        num_classes,
-        act_func,
-        *,
-        genotype_data=None,
-        prefix="imputer",
-        gridparams=None,
-        disable_progressbar=False,
-        batch_size=32,
-        n_components=3,
-        early_stop_gen=25,
-        num_hidden_layers=3,
-        hidden_layer_sizes="midpoint",
-        optimizer="adam",
-        hidden_activation="elu",
-        learning_rate=0.01,
-        lr_patience=1,
-        epochs=100,
-        weights_initializer="glorot_normal",
-        l1_penalty=0.0001,
-        l2_penalty=0.0001,
-        dropout_rate=0.2,
-        sample_weights=False,
-        grid_iter=80,
-        gridsearch_method="gridsearch",
-        ga_kwargs=None,
-        scoring_metric="auc_macro",
-        sim_strategy="random",
-        sim_prop_missing=0.2,
-        n_jobs=1,
-        verbose=0,
-        kl_beta=tf.Variable(1.0, trainable=False),
-        validation_split=0.2,
-        nlpca=False,
-        testing=False,
+        genotype_data: Any,
+        num_classes: int = 3,
+        latent_dim: int = 2,
+        dropout_rate: float = 0.2,
+        num_hidden_layers: int = 2,
+        hidden_layer_sizes: List[int] = [128, 64],
+        batch_size: int = 32,
+        learning_rate: float = 0.001,
+        tune: bool = False,
+        n_trials: int = 100,
+        early_stop_gen: int = 25,
+        optimizer: str = "adam",
+        hidden_activation: str = "elu",
+        lr_patience: int = 10,
+        epochs: int = 100,
+        l1_penalty: float = 0.0001,
+        l2_penalty: float = 0.0001,
+        scoring_averaging: str = "weighted",
+        sim_strategy: str = "random",
+        n_jobs: int = 1,
+        seed: Optional[int] = None,
+        sim_prop_missing: float = 0.2,
+        validation_split: float = 0.2,
+        prefix: Union[str, Path] = "pgsui",
+        output_dir: Union[str, Path] = "output",
+        plot_format: str = "pdf",
+        plot_fontsize: int = 18,
+        plot_dpi: int = 300,
+        title_fontsize: int = 20,
+        despine: bool = True,
+        show_plots: bool = False,
+        verbose: int = 0,
+        debug: bool = False,
+        **kwargs: Dict[str, Any],
     ):
-        self.activate = activate
-        self.act_func_ = act_func
-        self.num_classes = num_classes
-        self.testing = testing
-        self.nn_method_ = nn_method
+        """Initialize the VAE imputer.
 
-        self.genotype_data = genotype_data
-        self.prefix = prefix
-        self.gridparams = gridparams
-        self.disable_progressbar = disable_progressbar
-        self.batch_size = batch_size
-        self.n_components = n_components
-
-        self.early_stop_gen = early_stop_gen
-        self.num_hidden_layers = num_hidden_layers
-        self.hidden_layer_sizes = hidden_layer_sizes
-        self.optimizer = optimizer
-        self.hidden_activation = hidden_activation
-        self.learning_rate = learning_rate
-        self.lr_patience = lr_patience
-        self.epochs = epochs
-        self.weights_initializer = weights_initializer
-        self.l1_penalty = l1_penalty
-        self.l2_penalty = l2_penalty
-        self.dropout_rate = dropout_rate
-        self.sample_weights = sample_weights
-        self.grid_iter = grid_iter
-        self.gridsearch_method = gridsearch_method
-        self.ga_kwargs = ga_kwargs
-        self.scoring_metric = scoring_metric
-        self.sim_strategy = sim_strategy
-        self.sim_prop_missing = sim_prop_missing
-        self.n_jobs = n_jobs
-        self.verbose = verbose
-
-        self.kl_beta = kl_beta
-        self.validation_split = validation_split
-        self.nlpca = nlpca
-
-        self.run_gridsearch_ = False if self.gridparams is None else True
-        self.is_multiclass_ = True if self.num_classes != 4 else False
-
-        # Simulate missing data and get missing masks.
-        self.sim = SimGenotypeDataTransformer(
-            self.genotype_data,
-            prop_missing=self.sim_prop_missing,
-            strategy=self.sim_strategy,
-            mask_missing=True,
-        )
-
-        # Binary encode y to get y_train.
-        self.tt_ = AutoEncoderFeatureTransformer(
-            num_classes=self.num_classes, activate=self.activate
-        )
-
-    @timer
-    def fit(self, X):
-        """Train the VAE model on input data X.
+        This method initializes the VAE imputer with the specified hyperparameters and settings. It sets up the logger and the device (GPU or CPU) for training the model. It also initializes the genotype data transformer for simulating missing data and the feature transformer for encoding features.
 
         Args:
-            X (pandas.DataFrame, numpy.ndarray, or List[List[int]]): Input 012-encoded genotypes.
+            genotype_data (Any): Genotype data object.
+            num_classes (int): Number of classes. Defaults to 3.
+            latent_dim (int): Latent dimension of the VAE model. Defaults to 2.
+            dropout_rate (float): Dropout rate for the model. Defaults to 0.2.
+            num_hidden_layers (int): Number of hidden layers in the model. Defaults to 2.
+            hidden_layer_sizes (List[int]): List of hidden layer sizes. Defaults to [128, 64].
+            batch_size (int): Batch size for training. Defaults to 32.
+            learning_rate (float): Learning rate for the optimizer. Defaults to 0.001.
+            tune (bool): Whether to tune hyperparameters. Defaults to False.
+            n_trials (int): Number of trials for hyperparameter optimization. Defaults to 100.
+            early_stop_gen (int): Number of generations for early stopping. Defaults to 25.
+            optimizer (str): Optimizer for training. Defaults to "adam".
+            hidden_activation (str): Activation function for hidden layers. Defaults to "elu".
+            lr_patience (int): Patience for learning rate scheduler. Defaults to 10.
+            epochs (int): Number of epochs for training. Defaults to 100.
+            l1_penalty (float): L1 regularization penalty. Defaults to 0.0001.
+            l2_penalty (float): L2 regularization penalty. Defaults to 0.0001.
+            scoring_averaging (str): Averaging method for scoring metrics. Valid options are 'micro', 'macro', and 'weighted'. Defaults to 'weighted'.
+            sim_strategy (str): Strategy for simulating missing data. Defaults to "random".
+            n_jobs (int): Number of parallel jobs for hyperparameter optimization. Defaults to 1.
+            seed (int, optional): Random seed for reproducibility. If left as None, the seed will be set randomly and be non-deterministic. Defaults to None.
+            sim_prop_missing (float): Proportion of missing data to simulate. Defaults to 0.2.
+            validation_split (float): Validation split for training. Defaults to 0.2.
+            prefix (Union[str, Path]): Prefix for the output directory. Defaults to "pgsui".
+            output_dir (Union[str, Path]): Output directory for saving model output. Defaults to "output".
+            plot_format (str): Plot format for saving plots. Defaults to "pdf".
+            plot_fontsize (int): Font size for plots. Defaults to 18.
+            plot_dpi (int): DPI for plots. Defaults to 300.
+            title_fontsize (int): Font size for plot titles. Defaults to 20.
+            despine (bool): Whether to remove spines from plots. Defaults to True.
+            show_plots (bool): Whether to show plots. Defaults to False.
+            verbose (int): Verbosity level. Defaults to 0.
+            debug (bool): Whether to enable debug mode. Defaults to False.
+            **kwargs (Dict[str, Any]): Additional keyword arguments.
+        """
+
+        self.model_name = "ImputeVAE"
+
+        super().__init__(
+            genotype_data,
+            num_classes=num_classes,
+            model_name=self.model_name,
+            latent_dim=latent_dim,
+            dropout_rate=dropout_rate,
+            num_hidden_layers=num_hidden_layers,
+            hidden_layer_sizes=hidden_layer_sizes,
+            activation=hidden_activation,
+            batch_size=batch_size,
+            learning_rate=learning_rate,
+            tune=tune,
+            n_trials=n_trials,
+            early_stop_gen=early_stop_gen,
+            optimizer=optimizer,
+            lr_patience=lr_patience,
+            epochs=epochs,
+            l1_penalty=l1_penalty,
+            l2_penalty=l2_penalty,
+            scoring_averaging=scoring_averaging,
+            sim_strategy=sim_strategy,
+            n_jobs=n_jobs,
+            seed=seed,
+            sim_prop_missing=sim_prop_missing,
+            validation_split=validation_split,
+            prefix=prefix,
+            output_dir=output_dir,
+            verbose=verbose,
+            debug=debug,
+            **kwargs,
+        )
+
+        logman = LoggerManager(
+            name=__name__,
+            prefix=self.prefix,
+            level=logging.DEBUG if debug else logging.INFO,
+            verbose=verbose >= 1,
+            debug=debug,
+        )
+
+        self.logger = logman.get_logger()
+
+        self.Model = VAEModel
+
+        if not hasattr(self, "genotype_data"):
+            self.genotype_data = genotype_data
+
+        self.genotype_data = genotype_data
+        self.num_classes = num_classes
+        self.latent_dim = latent_dim
+        self.dropout_rate = dropout_rate
+        self.num_hidden_layers = num_hidden_layers
+        self.hidden_layer_sizes = hidden_layer_sizes
+        self.activation = hidden_activation
+        self.hidden_activation = hidden_activation
+        self.batch_size = batch_size
+        self.learning_rate = learning_rate
+        self.tune = tune
+        self.n_trials = n_trials
+        self.early_stop_gen = early_stop_gen
+        self.optimizer = optimizer
+        self.lr_patience = lr_patience
+        self.epochs = epochs
+        self.l1_penalty = l1_penalty
+        self.l2_penalty = l2_penalty
+        self.scoring_averaging = scoring_averaging
+        self.sim_strategy = sim_strategy
+        self.n_jobs = n_jobs
+        self.sim_prop_missing = sim_prop_missing
+        self.validation_split = validation_split
+        self.prefix = prefix
+        self.output_dir = output_dir
+        self.plot_format = plot_format
+        self.plot_fontsize = plot_fontsize
+        self.plot_dpi = plot_dpi
+        self.title_fontsize = title_fontsize
+        self.despine = despine
+        self.show_plots = show_plots
+        self.verbose = verbose
+        self.debug = debug
+
+        self.genotype_data.snp_data
+        self.num_features = self.genotype_data.num_snps
+
+        self.model_params = {
+            "n_features": self.num_features,
+            "num_classes": self.num_classes,
+            "latent_dim": self.latent_dim,
+            "hidden_layer_sizes": self.hidden_layer_sizes,
+            "dropout_rate": self.dropout_rate,
+            "activation": self.activation,
+        }
+
+        if not isinstance(self.output_dir, Path):
+            self.output_dir = Path(self.output_dir)
+
+    def fit(
+        self,
+        X: Union[np.ndarray, pd.DataFrame, List[List[int]], torch.Tensor],
+        y: Optional[np.ndarray] = None,
+    ) -> Any:
+        """Run Optuna to optimize hyperparameters and train the model.
+
+        This method runs Optuna to optimize the hyperparameters of the VAE model and trains the model using the best hyperparameters found during the optimization. It saves the best hyperparameters and the training history in the output directory. The method also plots the training and validation loss curves.
+
+        Args:
+            X (numpy.ndarray): The input data with missing values. The input data should be in the same format as the training data.
+            y (None): Ignored. For compatibility with the scikit-learn API. Defaults to None.
 
         Returns:
-            self: Current instance; allows method chaining.
-
-        Raises:
-            TypeError: Must be either pandas.DataFrame, numpy.ndarray, or List[List[int]].
+            self: The fitted ImputeVAE instance. The instance contains the trained model and the best hyperparameters found during optimization if `tune=True`.
         """
-        # Treating y as X here for compatibility with UBP/NLPCA.
-        # With VAE, y=X anyways.
-        y = X
-        y = validate_input_type(y, return_type="array")
+        # Ensure that the input data is in the correct format.
+        X = validate_input_type(X, return_type="array")
+        X[X == -9] = -1
+        X = X.astype(float)
 
-        self.nn_ = NeuralNetworkMethods()
-        plotting = Plotting()
+        self.best_params_ = self.model_params
 
-        if self.gridsearch_method == "genetic_algorithm":
-            self.ga_ = True
+        activate = "sigmoid" if self.num_classes == 4 else "softmax"
+
+        # Feature transformation for autoencoder.
+        # One-hot encodes the data.
+        self.tt_ = AutoEncoderFeatureTransformer(
+            num_classes=self.num_classes,
+            return_int=False if self.num_classes in {3, 4} else True,
+            activate=activate,
+            logger=self.logger,
+            verbose=self.verbose,
+            debug=self.debug,
+        )
+
+        # Simulate missing data.
+        self.sim_ = SimGenotypeDataTransformer(
+            genotype_data=self.genotype_data,
+            prop_missing=self.sim_prop_missing,
+            strategy=self.sim_strategy,
+            missing_val=-1,
+            mask_missing=True,
+            seed=self.seed,
+            verbose=self.verbose,
+            logger=self.logger,
+            debug=self.debug,
+        )
+
+        Xsim = self.sim_.fit_transform(X)
+        self.sim_missing_mask_ = self.sim_.sim_missing_mask_
+        self.original_missing_mask_ = self.sim_.original_missing_mask_
+        self.all_missing_mask_ = self.sim_.all_missing_mask_
+
+        Xenc = self.tt_.fit_transform(Xsim)
+
+        # X undergoes missing data simulation. Y does not, and has ground truth.
+        loaders = self.get_data_loaders(Xenc)
+        self.train_loader_, self.val_loader_, self.test_loader_ = loaders
+
+        if self.tune:
+            self._tune_hyperparameters()
         else:
-            self.ga_ = False
+            self.lr_ = self.learning_rate
+            self.lr_patience_ = self.lr_patience
+            self.l1_penalty_ = self.l1_penalty
+            self.l2_penalty_ = self.l2_penalty
 
-        self.y_original_ = y.copy()
-        self.y_simulated_ = self.sim.fit_transform(self.y_original_)
+        self._train_final_model()
 
-        # Get values where original value was not missing but missing data
-        # was simulated.
-        self.sim_missing_mask_ = self.sim.sim_missing_mask_
+        loss_type = "Best" if self.tune else "Final"
+        self.logger.info(f"{loss_type} loss: {self.best_loss_}")
 
-        # Original missing data.
-        self.original_missing_mask_ = self.sim.original_missing_mask_
+        # Get the hold-out dataset for evvaluation.
+        self._evaluate_model()
 
-        # Both simulated and original missing data.
-        self.all_missing_ = self.sim.all_missing_mask_
-
-        # Just y_original with missing values encoded as -1.
-        y_train = self.tt_.fit_transform(self.y_original_)
-
-        if self.gridparams is not None:
-            self.scoring_metrics_ = [
-                "average_precision_macro",
-                "average_precision_micro",
-                "average_precision_weighted",
-                "f1_micro",
-                "f1_macro",
-                "f1_weighted",
-                "roc_auc_macro",
-                "roc_auc_micro",
-                "roc_auc_weighted",
-                "accuracy",
-                "hamming",
-            ]
-
-        (
-            logfile,
-            callbacks,
-            compile_params,
-            model_params,
-            fit_params,
-        ) = self._initialize_parameters(y_train)
-
-        if self.nn_method_ == "VAE":
-            func = self.run_vae
-        elif self.nn_method_ == "SAE":
-            func = self.run_sae
-        elif self.nn_method_ == "NLPCA":
-            func = self.run_nlpca
-        elif self.nn_method_ == "UBP":
-            func = self.run_ubp
-        else:
-            raise ValueError(f"Invalid nn_method specified: {self.nn_method_}")
-
-        (
-            self.models_,
-            self.histories_,
-            self.best_params_,
-            self.best_score_,
-            self.best_estimator_,
-            self.search_,
-            self.metrics_,
-        ) = func(
-            self.y_original_,
-            y_train,
-            model_params,
-            compile_params,
-            fit_params,
-        )
-
-        if (
-            self.best_params_ is not None
-            and "optimizer__learning_rate" in self.best_params_
-        ):
-            self.best_params_["learning_rate"] = self.best_params_.pop(
-                "optimizer__learning_rate"
-            )
-
-        if self.gridparams is not None:
-            if self.verbose > 0:
-                print("\nBest found parameters:")
-                pprint.pprint(self.best_params_)
-                print(f"\nBest score: {self.best_score_}")
-            plotting.plot_grid_search(
-                self.search_.cv_results_, self.nn_method_, self.prefix
-            )
-
-        plotting.plot_history(
-            self.histories_, self.nn_method_, prefix=self.prefix
-        )
-        plotting.plot_metrics(
-            self.metrics_, self.num_classes, self.prefix, self.nn_method_
-        )
-
-        if self.ga_:
-            plot_fitness_evolution(self.search_)
-            plt.savefig(
-                os.path.join(
-                    f"{self.prefix}_output",
-                    "plots",
-                    "Unsupervised",
-                    self.nn_method_,
-                    "fitness_evolution.pdf",
-                ),
-                bbox_inches="tight",
-                facecolor="white",
-            )
-            plt.cla()
-            plt.clf()
-            plt.close()
-
-            g = plotting.plot_search_space(self.search_)
-            plt.savefig(
-                os.path.join(
-                    f"{self.prefix}_output",
-                    "plots",
-                    "Unsupervised",
-                    self.nn_method_,
-                    "search_space.pdf",
-                ),
-                bbox_inches="tight",
-                facecolor="white",
-            )
-            plt.cla()
-            plt.clf()
-            plt.close()
+        self.plotter_.plot_history(self.history_)
 
         return self
 
-    def transform(self, X):
-        """Predict and decode imputations and return transformed array.
+    def _evaluate_model(self) -> None:
+        """Evaluate the model on the hold-out dataset.
 
-        Args:
-            X (pandas.DataFrame, numpy.ndarray, or List[List[int]]): Input data to transform.
-
-        Returns:
-            numpy.ndarray: Imputed data.
+        This method evaluates the model on the hold-out dataset using the ground truth labels. It calculates various metrics, such as accuracy, F1 score, precision, recall, average precision, and ROC AUC. It also plots the confusion matrix and the metrics.
         """
-        y = X
-        y = validate_input_type(y, return_type="array")
+        self.dataset_.indices = self.test_dataset_.indices
+        X_test, y_test_ohe = self.dataset_.get_data_from_subset(self.test_dataset_)
+        y_test_ohe = y_test_ohe.cpu().detach().numpy()
 
-        if self.nn_method_ not in ["UBP", "NLPCA"]:
-            model = self.models_[0]
-        else:
-            if len(self.models_) == 1:
-                model = self.models_[0]
-            else:
-                model = self.models_[-1]
+        y_pred, y_pred_proba = self.predict(X_test, return_proba=True)
+        y_test = self.tt_.inverse_transform(y_test_ohe)
+        X_test = X_test.cpu().detach().numpy()
 
-        y_true = y.copy()
-        y_train = self.tt_.transform(y_true)
-        y_true_1d = y_true.ravel()
-        y_size = y_true.size
-        y_missing_idx = np.flatnonzero(self.original_missing_mask_)
+        missing_mask = self.sim_missing_mask_[self.test_dataset_.indices]
 
-        if self.nn_method_ == "VAE":
-            y_pred = model(
-                tf.convert_to_tensor(y_train),
-                training=False,
-            )
-        elif self.nn_method_ == "SAE":
-            y_pred = model(y_train, training=False)
-        else:
-            y_pred = model(model.V_latent, training=False)
-        y_pred = self.tt_.inverse_transform(y_pred)
-
-        y_pred_decoded = self.nn_.decode_masked(
-            y_train,
+        # Evaluate the model.
+        self.scorer_ = Scorer(
+            self.model_,
+            X_test,
+            y_test,
             y_pred,
-            is_multiclass=self.is_multiclass_,
+            y_test_ohe,
+            y_pred_proba,
+            mask=missing_mask,
+            average=self.scoring_averaging,
+            logger=self.logger,
+            verbose=self.verbose,
+            debug=self.debug,
         )
-        # y_pred_decoded, y_pred_certainty = self.nn_.decode_masked(
-        #     y_train, y_pred, return_proba=True
-        # )
 
-        y_pred_1d = y_pred_decoded.ravel()
-
-        # Only replace originally missing values at missing indexes.
-        for i in np.arange(y_size):
-            if i in y_missing_idx:
-                y_true_1d[i] = y_pred_1d[i]
-
-        self.nn_.write_gt_state_probs(
-            y_pred,
-            y_pred_1d,
-            y_true,
-            y_true_1d,
-            self.nn_method_,
-            self.sim_missing_mask_,
-            self.original_missing_mask_,
+        self.plotter_ = Plotting(
+            self.model_name,
             prefix=self.prefix,
+            plot_format=self.plot_format,
+            plot_fontsize=self.plot_fontsize,
+            plot_dpi=self.plot_dpi,
+            title_fontsize=self.title_fontsize,
+            despine=self.despine,
+            show_plots=self.show_plots,
+            verbose=self.verbose,
+            debug=self.debug,
         )
 
-        Plotting.plot_confusion_matrix(
-            y_true_1d, y_pred_1d, self.nn_method_, prefix=self.prefix
+        if self.debug:
+            self._debug_evaluation_results(
+                X_test, y_test_ohe, y_pred, y_pred_proba, y_test, missing_mask
+            )
+
+        self.metrics_ = self.scorer_.evaluate()
+        self.logger.debug(self.metrics_)
+
+        self.plotter_.plot_confusion_matrix(y_test[missing_mask], y_pred[missing_mask])
+
+        self.plotter_.plot_metrics(
+            y_test[missing_mask], y_pred_proba[missing_mask], self.metrics_
         )
 
-        # if self.nn_method_ == "VAE":
-        # Plotting.plot_label_clusters(z_mean, y_true_1d)
+        self._export_metrics()
 
-        # Return to original shape.
-        return np.reshape(y_true_1d, y_true.shape)
+    def _export_metrics(self) -> None:
+        """Export the evaluation metrics to a JSON file.
 
-    def run_clf(
-        self,
-        y_train,
-        y_true,
-        model_params,
-        compile_params,
-        fit_params,
-        ubp_weights=None,
-        phase=None,
-        testing=False,
-        **kwargs,
+        This method exports the evaluation metrics to a JSON file in the output directory. The metrics include accuracy, F1 score, precision, recall, average precision, and ROC AUC.
+        """
+        od = Path(f"{self.prefix}_{self.output_dir}")
+        od = od / "metrics" / "Unsupervised" / self.model_name
+        fn = od / "test_metrics.json"
+
+        with open(fn, "w") as fp:
+            json.dump(self.metrics_, fp, indent=4)
+
+    def _debug_evaluation_results(
+        self, X_test, y_test_ohe, y_pred, y_pred_proba, y_test, missing_mask
     ):
-        """Run KerasClassifier with neural network model and grid search.
+        self.logger.debug(f"{y_test=}")
+        self.logger.debug(f"{y_pred=}")
+        self.logger.debug(f"{y_test_ohe=}")
+        self.logger.debug(f"{y_pred_proba=}")
+        self.logger.debug(f"{y_test.shape=}")
+        self.logger.debug(f"{y_pred.shape=}")
+        self.logger.debug(f"{missing_mask=}")
+        self.logger.debug(f"{y_test_ohe.shape=}")
+        self.logger.debug(f"{y_pred_proba.shape=}")
+        self.logger.debug(f"{missing_mask.shape=}")
+        self.logger.debug(f"{y_test_ohe[missing_mask].shape=}")
+        self.logger.debug(f"{y_pred_proba[missing_mask].shape=}")
+        self.logger.debug(f"{y_pred[missing_mask].shape=}")
+        self.logger.debug(f"{y_test[missing_mask].shape=}")
+        self.logger.debug(f"{y_test[missing_mask]=}")
+        self.logger.debug(f"{X_test[missing_mask]=}")
 
-        Args:
-            y_train (numpy.ndarray): Onehot-encoded training input data of shape (n_samples, n_features, num_classes).
+    def _train_final_model(self) -> None:
+        """Train the final model using the best hyperparameters.
 
-            y_true (numpy.ndarray): Original 012-encoded input data of shape (n_samples, n_features).
-
-            model_params (Dict[str, Any]): Dictionary with model parameters to be passed to KerasClassifier model.
-
-            compile_params (Dict[str, Any]): Dictionary with params to be passed to Keras model.compile() in KerasClassifier.
-
-            fit_params (Dict[str, Any]): Dictionary with parameters to be passed to fit in KerasClassifier.
-
-        Returns:
-            List[tf.keras.Model]: List of keras model objects. One for each phase (len=1 if NLPCA, len=3 if UBP).
-
-            List[Dict[str, float]]: List of dictionaries with best neural network model history.
-
-            Dict[str, Any] or None: Best parameters found during a grid search, or None if a grid search was not run.
-
-            float: Best score obtained during grid search.
-
-            tf.keras.Model: Best model found during grid search.
-
-            sklearn.model_selection object (GridSearchCV, RandomizedSearchCV) or GASearchCV object.
-
-            Dict[str, Any]: Per-class, micro, and macro-averaged metrics including accuracy, ROC-AUC, and Precision-Recall with Average Precision scores.
+        This method trains the final model using the best hyperparameters found during hyperparameter optimization. It uses the training and validation data to train the model and calculates the loss during training. If hyperparameter optimization was not performed, the model is trained using the default or user-provided hyperparameters specified in the constructor.
         """
-        # This reduces memory usage.
-        # tensorflow builds graphs that
-        # will stack if not cleared before
-        # building a new model.
-        tf.keras.backend.clear_session()
-        self.nn_.reset_seeds()
+        self.model_ = self.build_model(self.Model, self.model_params)
+        self.optimizer_ = optim.Adam(self.model_.parameters(), lr=self.lr_)
 
-        model = None
-        if self.nn_method_ in ["UBP", "NLPCA"]:
-            V = model_params.pop("V")
-            if phase is not None:
-                desc = f"Epoch (Phase {phase}): "
-            else:
-                desc = "Epoch: "
-
-        else:
-            desc = "Epoch: "
-
-        if not self.disable_progressbar and not self.run_gridsearch_:
-            fit_params["callbacks"][-1] = TqdmCallback(
-                epochs=self.epochs, verbose=self.verbose, desc=desc
-            )
-
-        if self.nn_method_ == "VAE":
-            clf = VAEClassifier(
-                **model_params,
-                optimizer=compile_params["optimizer"],
-                optimizer__learning_rate=compile_params["learning_rate"],
-                loss=compile_params["loss"],
-                metrics=compile_params["metrics"],
-                run_eagerly=compile_params["run_eagerly"],
-                callbacks=fit_params["callbacks"],
-                epochs=fit_params["epochs"],
-                verbose=0,
-                num_classes=self.num_classes,
-                activate=self.act_func_,
-                fit__validation_split=fit_params["validation_split"],
-                score__missing_mask=self.sim_missing_mask_,
-                score__scoring_metric=self.scoring_metric,
-                score__num_classes=self.num_classes,
-                score__n_classes=self.num_classes,
-            )
-        elif self.nn_method_ == "SAE":
-            clf = SAEClassifier(
-                **model_params,
-                optimizer=compile_params["optimizer"],
-                optimizer__learning_rate=compile_params["learning_rate"],
-                loss=compile_params["loss"],
-                metrics=compile_params["metrics"],
-                callbacks=fit_params["callbacks"],
-                epochs=fit_params["epochs"],
-                verbose=0,
-                activate=self.act_func_,
-                fit__validation_split=fit_params["validation_split"],
-                score__missing_mask=self.sim_missing_mask_,
-                score__scoring_metric=self.scoring_metric,
-                score__num_classes=self.num_classes,
-                score__n_classes=self.num_classes,
-            )
-        else:
-            clf = MLPClassifier(
-                V,
-                y_train,
-                **model_params,
-                ubp_weights=ubp_weights,
-                optimizer=compile_params["optimizer"],
-                optimizer__learning_rate=compile_params["learning_rate"],
-                loss=compile_params["loss"],
-                metrics=compile_params["metrics"],
-                epochs=fit_params["epochs"],
-                phase=phase,
-                callbacks=fit_params["callbacks"],
-                validation_split=fit_params["validation_split"],
-                verbose=0,
-                activate=self.act_func_,
-                score__missing_mask=self.sim_missing_mask_,
-                score__scoring_metric=self.scoring_metric,
-            )
-
-        if self.run_gridsearch_:
-            # Cannot do CV because there is no way to use test splits
-            # given that the input gets refined. If using a test split,
-            # then it would just be the randomly initialized values and
-            # would not accurately represent the model.
-            # Thus, we disable cross-validation for the grid searches.
-            cross_val = DisabledCV()
-            verbose = False if self.verbose == 0 else True
-
-            scorers = Scorers()
-            scoring = scorers.make_multimetric_scorer(
-                self.scoring_metrics_,
-                self.sim_missing_mask_,
-                num_classes=self.num_classes,
-            )
-
-            if self.ga_:
-                # Stop searching if GA sees no improvement.
-                callback = [
-                    ConsecutiveStopping(
-                        generations=self.early_stop_gen, metric="fitness"
-                    )
-                ]
-
-                if not self.disable_progressbar:
-                    callback.append(ProgressBar())
-
-                # Do genetic algorithm
-                # with HiddenPrints():
-                search = GASearchCV(
-                    estimator=clf,
-                    cv=cross_val,
-                    scoring=scoring,
-                    generations=self.grid_iter,
-                    param_grid=self.gridparams,
-                    n_jobs=self.n_jobs,
-                    refit=self.scoring_metric,
-                    verbose=verbose,
-                    **self.ga_kwargs,
-                    error_score="raise",
-                )
-
-                if self.nn_method_ in ["UBP", "NLPCA"]:
-                    search.fit(V[self.n_components], y=y_true)
-                else:
-                    search.fit(y_true, y_true, callbacks=callback)
-
-            else:
-                # Write GridSearchCV to log file instead of STDOUT.
-                if self.verbose >= 10:
-                    old_stdout = sys.stdout
-                    log_file = open(
-                        os.path.join(
-                            f"{self.prefix}_output",
-                            "logs",
-                            "Unsupervised",
-                            self.nn_method_,
-                            "gridsearch_progress_log.txt",
-                        ),
-                        "w",
-                    )
-                    sys.stdout = log_file
-
-                if self.gridsearch_method.lower() == "gridsearch":
-                    # Do GridSearchCV
-                    search = GridSearchCV(
-                        clf,
-                        param_grid=self.gridparams,
-                        n_jobs=self.n_jobs,
-                        cv=cross_val,
-                        scoring=scoring,
-                        refit=self.scoring_metric,
-                        verbose=self.verbose * 4,
-                        error_score="raise",
-                    )
-
-                elif self.gridsearch_method.lower() == "randomized_gridsearch":
-                    search = RandomizedSearchCV(
-                        clf,
-                        param_distributions=self.gridparams,
-                        n_iter=self.grid_iter,
-                        n_jobs=self.n_jobs,
-                        cv=cross_val,
-                        scoring=scoring,
-                        refit=self.scoring_metric,
-                        verbose=verbose * 4,
-                        error_score="raise",
-                    )
-
-                else:
-                    raise ValueError(
-                        f"Invalid gridsearch_method specified: "
-                        f"{self.gridsearch_method}"
-                    )
-
-                if self.nn_method_ in ["UBP", "NLPCA"]:
-                    search.fit(V[self.n_components], y=y_true)
-                else:
-                    search.fit(y_true, y=y_true)
-
-                if self.verbose >= 10:
-                    # Make sure to revert STDOUT back to original.
-                    sys.stdout = old_stdout
-                    log_file.close()
-
-            best_params = search.best_params_
-            best_score = search.best_score_
-            best_clf = search.best_estimator_
-
-            fp = os.path.join(
-                f"{self.prefix}_output",
-                "reports",
-                "Unsupervised",
-                self.nn_method_,
-                f"cvresults_{self.nn_method_}.csv",
-            )
-
-            cv_results = pd.DataFrame(search.cv_results_)
-            cv_results.to_csv(fp, index=False)
-
-        else:
-            if self.nn_method_ in ["UBP", "NLPCA"]:
-                clf.fit(V[self.n_components], y=y_true)
-            else:
-                clf.fit(y_true, y=y_true)
-            best_params = None
-            best_score = None
-            search = None
-            best_clf = clf
-
-        model = best_clf.model_
-        best_history = best_clf.history_
-
-        if self.nn_method_ == "VAE":
-            y_pred = model(
-                tf.convert_to_tensor(y_train),
-                training=False,
-            )
-            y_pred = self.tt_.inverse_transform(y_pred)
-        elif self.nn_method_ == "SAE":
-            y_pred = model(y_train, training=False)
-            y_pred = self.tt_.inverse_transform(y_pred)
-        elif self.nn_method_ in ["UBP", "NLPCA"]:
-            # Third run_clf function
-            y_pred_proba = model(model.V_latent, training=False)
-            y_pred = self.tt_.inverse_transform(y_pred_proba)
-
-        # Get metric scores.
-        metrics = Scorers.scorer(
-            y_true,
-            y_pred,
-            missing_mask=self.sim_missing_mask_,
-            num_classes=self.num_classes,
-            testing=self.testing,
+        self.logger.info(
+            f"Training the model with the following parameters: {self.best_params_}"
         )
 
-        if self.nn_method_ in ["UBP", "NLPCA"]:
-            return (
-                V,
-                model,
-                best_history,
-                best_params,
-                best_score,
-                best_clf,
-                search,
-                metrics,
-            )
-        else:
-            return (
-                model,
-                best_history,
-                best_params,
-                best_score,
-                best_clf,
-                search,
-                metrics,
-            )
-
-    def _initialize_parameters(self, y_train):
-        """Initialize important parameters.
-
-        Args:
-            y_train (numpy.ndarray): Training subset of original input data.
-
-        Returns:
-            Dict[str, Any]: Parameters to use for model.compile().
-            Dict[str, Any]: Other parameters to pass to KerasClassifier().
-            Dict[str, Any]: Parameters to pass to fit_params() in grid search.
-        """
-        # For CSVLogger() callback.
-
-        append = True if self.nn_method_ == "UBP" else False
-        logdir = os.path.join(
-            f"{self.prefix}_output",
-            "logs",
-            "Unsupervised",
-            self.nn_method_,
+        self.best_loss_, self.history_ = self.train_and_validate_model(
+            self.train_loader_,
+            self.val_loader_,
+            self.optimizer_,
+            lr_patience=self.lr_patience_,
+            l1_penalty=self.l1_penalty_,
+            l2_penalty=self.l2_penalty_,
         )
 
-        Path(logdir).mkdir(parents=True, exist_ok=True)
-        logfile = os.path.join(logdir, "training_log.csv")
+        od = Path(f"{self.prefix}_{self.output_dir}")
+        od = od / "models" / "Unsupervised" / self.model_name / "final_model.pt"
+        torch.save(self.model_, od)
 
-        callbacks = [
-            CSVLogger(filename=logfile, append=append),
-            ReduceLROnPlateau(
-                patience=self.lr_patience, min_lr=1e-6, min_delta=1e-6
-            ),
+    def _tune_hyperparameters(self) -> None:
+        """Tune hyperparameters using Optuna.
+
+        This method tunes the hyperparameters of the model using Optuna. It optimizes the latent dimension, dropout rate, number of hidden layers, hidden layer sizes, activation function, L1 and L2 regularization penalties, learning rate patience, and learning rate. It uses the training and validation data to optimize the hyperparameters and minimize the loss function.
+        """
+        study = optuna.create_study(
+            direction="minimize", study_name=f"{self.prefix}_VAE"
+        )
+        study.optimize(
+            lambda trial: self.objective(trial, self.Model),
+            n_trials=self.n_trials,
+            n_jobs=self.n_jobs,
+        )
+
+        self.latent_dim_ = study.best_params["latent_dim"]
+        self.dropout_rate_ = study.best_params["dropout_rate"]
+        self.num_hidden_layers_ = study.best_params["num_hidden_layers"]
+
+        self.hidden_layer_sizes_ = [
+            study.best_params[f"n_units_l{i}"] for i in range(self.num_hidden_layers_)
         ]
 
-        if self.nn_method_ in ["VAE", "SAE"]:
-            callbacks.append(VAECallbacks())
+        self.activation_ = study.best_params["activation"]
+        self.l1_penalty_ = study.best_params["l1_penalty"]
+        self.l2_penalty_ = study.best_params["l2_penalty"]
+        self.lr_patience_ = study.best_params["lr_patience"]
+        self.lr_ = study.best_params["learning_rate"]
 
-            if self.nn_method_ == "VAE":
-                callbacks.append(
-                    CyclicalAnnealingCallback(
-                        self.epochs, schedule_type="sigmoid"
-                    )
-                )
-        else:
-            callbacks.append(UBPCallbacks())
-
-        search_mode = True if self.run_gridsearch_ else False
-
-        if not self.disable_progressbar and not search_mode:
-            callbacks.append(
-                TqdmCallback(epochs=self.epochs, verbose=0, desc="Epoch: ")
-            )
-
-        if self.nn_method_ in ["UBP", "NLPCA"]:
-            vinput = self._initV(y_train, search_mode)
-
-        if self.sample_weights == "auto" or self.sample_weights == "logsmooth":
-            # Get class weights for each column.
-            sample_weights = self.nn_.get_class_weights(
-                self.y_original_,
-                self.original_missing_mask_,
-                return_1d=False,
-                method=self.sample_weights,
-            )
-            sample_weights = self.nn_.normalize_data(sample_weights)
-
-        elif isinstance(self.sample_weights, dict):
-            for i in range(self.num_classes):
-                if self.sample_weights[i] == 0.0:
-                    self.sim_missing_mask_[self.y_original_ == i] = False
-
-            sample_weights = self.nn_.get_class_weights(
-                self.y_original_, user_weights=self.sample_weights
-            )
-
-        else:
-            sample_weights = None
-
-        compile_params = self.nn_.set_compile_params(
-            self.optimizer,
-            sample_weights,
-            vae=False,
-            act_func="sigmoid",
-        )
-
-        compile_params["learning_rate"] = self.learning_rate
-
-        if self.nn_method_ in ["VAE", "SAE"]:
-            model_params = {
-                "y": y_train,
-                "batch_size": self.batch_size,
-                "sample_weight": sample_weights,
-                "missing_mask": self.original_missing_mask_,
-                "output_shape": y_train.shape[1],
-                "weights_initializer": self.weights_initializer,
-                "n_components": self.n_components,
-                "hidden_layer_sizes": self.hidden_layer_sizes,
-                "num_hidden_layers": self.num_hidden_layers,
-                "hidden_activation": self.hidden_activation,
-                "l1_penalty": self.l1_penalty,
-                "l2_penalty": self.l2_penalty,
-                "dropout_rate": self.dropout_rate,
-            }
-
-            if self.nn_method_ == "VAE":
-                model_params["kl_beta"] = (1.0 / y_train.shape[0],)
-        else:
-            model_params = {
-                "V": vinput,
-                "y_train": y_train,
-                "batch_size": self.batch_size,
-                "missing_mask": self.original_missing_mask_,
-                "output_shape": y_train.shape[1],
-                "weights_initializer": self.weights_initializer,
-                "n_components": self.n_components,
-                "hidden_layer_sizes": self.hidden_layer_sizes,
-                "num_hidden_layers": self.num_hidden_layers,
-                "hidden_activation": self.hidden_activation,
-                "l1_penalty": self.l1_penalty,
-                "l2_penalty": self.l2_penalty,
-                "dropout_rate": self.dropout_rate,
-                "num_classes": self.num_classes,
-            }
-
-        model_params["sample_weight"] = sample_weights
-
-        fit_verbose = 1 if self.verbose == 2 else 0
-
-        fit_params = {
-            "batch_size": self.batch_size,
-            "epochs": self.epochs,
-            "callbacks": callbacks,
-            "verbose": fit_verbose,
-            "sample_weight": sample_weights,
+        self.best_params_ = {
+            "n_features": self.num_features,
+            "num_classes": self.num_classes,
+            "latent_dim": self.latent_dim_,
+            "dropout_rate": self.dropout_rate_,
+            "hidden_layer_sizes": self.hidden_layer_sizes_,
+            "activation": self.activation_,
         }
 
-        if self.nn_method_ in ["VAE", "SAE"]:
-            fit_params["validation_split"] = self.validation_split
-        else:
-            fit_params["validation_split"] = self.validation_split
+        self.model_params.update(self.best_params_)
+        self.best_tuned_loss_ = study.best_value
 
-        fit_params["shuffle"] = False
+        self.all_tuned_params_ = study.best_params
 
-        if self.run_gridsearch_ and "learning_rate" in self.gridparams:
-            self.gridparams["optimizer__learning_rate"] = self.gridparams[
-                "learning_rate"
-            ]
+        od = Path(f"{self.prefix}_{self.output_dir}")
+        fn = od / "optimize" / "Unsupervised" / self.model_name
+        fn = fn / "best_params.json"
 
-            self.gridparams.pop("learning_rate")
+        with open(fn, "w") as fp:
+            json.dump(self.all_tuned_params_, fp, indent=4)
 
-        return (
-            logfile,
-            callbacks,
-            compile_params,
-            model_params,
-            fit_params,
-        )
-
-
-class VAE(BaseNNImputer):
-    """Class to impute missing data using a Variational Autoencoder neural network."""
-
-    def __init__(
+    def transform(
         self,
-        kl_beta=tf.Variable(1.0, trainable=False),
-        validation_split=0.2,
-        **kwargs,
-    ):
-        self.kl_beta = kl_beta
-        self.validation_split = validation_split
+        X: Union[np.ndarray, pd.DataFrame, List[List[int]], torch.Tensor],
+        y: Any = None,
+    ) -> np.ndarray:
+        """Predict the missing values using the trained VAE model.
 
-        self.nn_method_ = "VAE"
-        self.num_classes = 4
-        self.activate = None
-        self.is_multiclass_ = True if self.num_classes != 4 else False
-        self.testing = kwargs.get("testing", False)
-        self.do_act_in_model_ = True if self.activate is None else False
-
-        self.act_func_ = None
-
-        super().__init__(
-            self.activate,
-            self.nn_method_,
-            self.num_classes,
-            self.act_func_,
-            **kwargs,
-            kl_beta=self.kl_beta,
-            validation_split=self.validation_split,
-        )
-
-    def run_vae(
-        self,
-        y_true,
-        y_train,
-        model_params,
-        compile_params,
-        fit_params,
-    ):
-        """Run VAE using custom subclassed model.
+        This method predicts the missing values in the input data using the trained VAE model. It returns the input data with the imputed values. The imputed values replace the missing values in the input data. The input data should be in the same format as the training data.
 
         Args:
-            y_true (numpy.ndarray): Original genotypes (training dataset) with known and missing values, of shape (n_samples, n_features).
-
-            y_train (numpy.ndarray): Onehot encoded genotypes (training dataset) with known and missing values, of shape (n_samples, n_features, num_classes).
-
-            model_params (Dict[str, Any]): Dictionary with parameters to pass to the classifier model.
-
-            compile_params (Dict[str, Any]): Dictionary with parameters to pass to the tensorflow compile function.
-
-            fit_params (Dict[str, Any]): Dictionary with parameters to pass to the fit() function.
+            X (numpy.ndarray): The input data with missing values. The input data should be in the same format as the training data.
+            y (None): Ignored. For compatibility with the scikit-learn API. Defaults to None.
 
         Returns:
-            List[tf.keras.Model]: List of keras model objects. One for each phase (len=1 if NLPCA, len=3 if UBP).
-
-            List[Dict[str, float]]: List of dictionaries with best neural network model history.
-
-            Dict[str, Any] or None: Best parameters found during a grid search, or None if a grid search was not run.
-
-            float: Best score obtained during grid search.
-
-            tf.keras.Model: Best model found during grid search.
-
-            sklearn.model_selection object (GridSearchCV, RandomizedSearchCV) or GASearchCV object.
-
-            Dict[str, Any]: Per-class, micro, and macro-averaged metrics including accuracy, ROC-AUC, and Precision-Recall with Average Precision scores.
+            numpy.ndarray: The input data with imputed values replacing the missing values. The imputed values are in the same format as the input data.
         """
-        scorers = Scorers()
-        scoring = None
+        # Ensure that the input data is in the correct format.
+        X = validate_input_type(X, return_type="array")
 
-        histories = list()
-        models = list()
+        self.plotter_.plot_gt_distribution(X)
 
-        (
-            model,
-            best_history,
-            best_params,
-            best_score,
-            best_clf,
-            search,
-            metrics,
-        ) = self.run_clf(
-            y_train,
-            y_true,
-            model_params,
-            compile_params,
-            fit_params,
-        )
+        X_imputed = self.predict(X)
 
-        histories.append(best_history)
-        models.append(model)
-        del model
+        self.plotter_.plot_gt_distribution(X_imputed, is_imputed=True)
 
-        return (
-            models,
-            histories,
-            best_params,
-            best_score,
-            best_clf,
-            search,
-            metrics,
-        )
+        return X_imputed
 
 
 class SAE(BaseNNImputer):
@@ -1346,9 +831,7 @@ class UBP(BaseNNImputer):
                 # So the n_components search has to happen in phase 1.
                 if best_params is not None and search_n_components:
                     n_components_searched = best_params["n_components"]
-                    model_params["V"] = {
-                        n_components_searched: model.V_latent.copy()
-                    }
+                    model_params["V"] = {n_components_searched: model.V_latent.copy()}
                     model_params["n_components"] = n_components_searched
                     self.n_components = n_components_searched
                     self.gridparams.pop("n_components")
