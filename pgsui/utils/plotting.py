@@ -1,782 +1,328 @@
-import os
-import sys
-from itertools import cycle
 from pathlib import Path
-import warnings
+from typing import Dict, List, Union
 
-warnings.simplefilter(action="ignore", category=FutureWarning)
+import matplotlib as mpl
 
+mpl.use("Agg")
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 import seaborn as sns
-import plotly.express as px
+import torch
+from sklearn.metrics import (
+    ConfusionMatrixDisplay,
+    average_precision_score,
+    precision_recall_curve,
+    roc_curve,
+    auc,
+)
+from sklearn.preprocessing import label_binarize
+from snpio.utils.logging import LoggerManager
 
-from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler
-from sklearn_genetic.utils import logbook_to_pandas
-from sklearn.metrics import ConfusionMatrixDisplay
-
-try:
-    from . import misc
-except (ModuleNotFoundError, ValueError, ImportError):
-    from utils import misc
+from pgsui.utils import misc
 
 
 class Plotting:
-    """Functions for plotting imputer scoring and results."""
+    """Class for plotting imputer scoring and results.
 
-    @staticmethod
-    def plot_grid_search(cv_results, nn_method, prefix):
-        """Plot cv_results\_ from a grid search for each parameter.
+    This class is used to plot the performance metrics of imputation models. It can plot ROC and Precision-Recall curves, model history, and the distribution of genotypes in the dataset.
 
-        Saves a figure to disk.
+    Example:
+        >>> from pgsui import Plotting
+        >>> plotter = Plotting(model_name="ImputeVAE")
+        >>> plotter.plot_metrics(metrics, num_classes)
+        >>> plotter.plot_history(history)
+        >>> plotter.plot_certainty_heatmap(y_certainty)
+        >>> plotter.plot_confusion_matrix(y_true_1d, y_pred_1d)
+        >>> plotter.plot_gt_distribution(df)
+        >>> plotter.plot_label_clusters(z_mean, z_log_var)
 
-        Args:
-            cv_results (np.ndarray): the cv_results\_ attribute from a trained grid search object.
+    Attributes:
+        model_name (str): Name of the model.
+        prefix (str): Prefix for the output directory.
+        plot_format (str): Format for the plots (e.g., 'pdf', 'png', 'jpeg').
+        plot_fontsize (int): Font size for the plots.
+        plot_dpi (int): Dots per inch for the plots.
+        title_fontsize (int): Font size for the plot titles.
+        show_plots (bool): Whether to display the plots.
+        output_dir (Path): Output directory for the plots.
+        logger (LoggerManager): Logger object for logging messages.
+    """
 
-            nn_method (str): Neural network algorithm name.
+    def __init__(
+        self,
+        model_name: str,
+        *,
+        prefix: str = "pgsui",
+        plot_format: str = "pdf",
+        plot_fontsize: int = 18,
+        plot_dpi: int = 300,
+        title_fontsize: int = 20,
+        despine: bool = True,
+        show_plots: bool = False,
+        verbose: int = 0,
+        debug: bool = False,
+    ) -> None:
+        """Initialize the Plotting object.
 
-            prefix (str): Prefix to use for saving the plot to file.
-        """
-        ## Results from grid search
-        results = pd.DataFrame(cv_results)
-        means_test = [col for col in results if col.startswith("mean_test_")]
-        filter_col = [col for col in results if col.startswith("param_")]
-        params_df = results[filter_col].astype(str)
-        for i, col in enumerate(means_test):
-            params_df[col] = results[means_test[i]]
-
-        # Get number of needed subplot rows.
-        tot = len(filter_col)
-        cols = 4
-        rows = int(np.ceil(tot / cols))
-
-        fig = plt.figure(1, figsize=(20, 10))
-        fig.tight_layout(pad=3.0)
-
-        # Set font properties.
-        font = {"size": 12}
-        plt.rc("font", **font)
-
-        for i, p in enumerate(filter_col, start=1):
-            ax = fig.add_subplot(rows, cols, i)
-
-            # Plot each metric.
-            for col in means_test:
-                # Get maximum score for each parameter setting.
-                df_plot = params_df.groupby(p)[col].agg("max")
-
-                # Convert to float if not supposed to be string.
-                try:
-                    df_plot.index = df_plot.index.astype(float)
-                except TypeError:
-                    pass
-
-                # Sort by index (numerically if possible).
-                df_plot = df_plot.sort_index()
-
-                # Remove prefix from score name.
-                col_new_name = col[len("mean_test_") :]
-
-                ax.plot(
-                    df_plot.index.astype(str),
-                    df_plot.values,
-                    "-o",
-                    label=col_new_name,
-                )
-
-                ax.legend(loc="best")
-
-            param_new_name = p[len("param_") :]
-            ax.set_xlabel(param_new_name.lower())
-            ax.set_ylabel("Max Score")
-            ax.set_ylim([0, 1])
-
-        fig.savefig(
-            os.path.join(
-                f"{prefix}_output",
-                "plots",
-                "Unsupervised",
-                nn_method,
-                "gridsearch_metrics.pdf",
-            ),
-            bbox_inches="tight",
-            facecolor="white",
-        )
-
-    @staticmethod
-    def plot_metrics(metrics, num_classes, prefix, nn_method):
-        """Plot AUC-ROC and Precision-Recall performance metrics for neural network classifier.
-
-        Saves plot to PDF file on disk.
+        This class is used to plot the performance metrics of imputation models. It can plot ROC and Precision-Recall curves, model history, and the distribution of genotypes in the dataset.
 
         Args:
-            metrics (Dict[str, Any]): Per-class, micro, and macro-averaged metrics including accuracy, ROC-AUC, and Precision-Recall with Average Precision scores.
-
-            num_classes (int): Number of classes evaluated.
-
-            prefix (str): Prefix to use for output plot.
-
-            nn_method (str): Neural network algorithm being used.
+            model_name (str): Name of the model.
+            prefix (str, optional): Prefix for the output directory. Defaults to 'pgsui'.
+            plot_format (str, optional): Format for the plots (e.g., 'pdf', 'png', 'jpeg'). Defaults to 'pdf'.
+            plot_fontsize (int, optional): Font size for the plots. Defaults to 18.
+            plot_dpi (int, optional): Dots per inch for the plots. Defaults to 300.
+            title_fontsize (int, optional): Font size for the plot titles. Defaults to 20.
+            despine (bool, optional): Whether to remove the top and right spines from the plots. Defaults to True.
+            show_plots (bool, optional): Whether to display the plots. Defaults to False.
+            verbose (int, optional): Verbosity level for logging. Defaults to 0.
+            debug (bool, optional): Whether to enable debug mode. Defaults to False.
         """
-        # Set font properties.
-        font = {"size": 12}
-        plt.rc("font", **font)
-
-        fn = os.path.join(
-            f"{prefix}_output",
-            "plots",
-            "Unsupervised",
-            nn_method,
-            f"auc_pr_curves.pdf",
-        )
-        fig = plt.figure(figsize=(20, 10))
-
-        acc = round(metrics["accuracy"] * 100, 2)
-        ham = round(metrics["hamming"], 2)
-
-        fig.suptitle(
-            f"Performance Metrics\nAccuracy: {acc}\nHamming Loss: {ham}"
-        )
-        axs = fig.subplots(nrows=1, ncols=2)
-        plt.subplots_adjust(hspace=0.5)
-
-        # Line weight
-        lw = 2
-
-        roc_auc = metrics["roc_auc"]
-        pr_ap = metrics["precision_recall"]
-
-        metric_list = [roc_auc, pr_ap]
-
-        for metric, ax in zip(metric_list, axs):
-            if "fpr_micro" in metric:
-                prefix1 = "fpr"
-                prefix2 = "tpr"
-                lab1 = "ROC"
-                lab2 = "AUC"
-                xlab = "False Positive Rate"
-                ylab = "True Positive Rate"
-                title = "Receiver Operating Characteristic (ROC)"
-                baseline = [0, 1]
-
-            elif "recall_micro" in metric:
-                prefix1 = "recall"
-                prefix2 = "precision"
-                lab1 = "Precision-Recall"
-                lab2 = "AP"
-                xlab = "Recall"
-                ylab = "Precision"
-                title = "Precision-Recall"
-                baseline = [metric["baseline"], metric["baseline"]]
-
-                # Plot iso-f1 curves.
-                f_scores = np.linspace(0.2, 0.8, num=4)
-                for i, f_score in enumerate(f_scores):
-                    x = np.linspace(0.01, 1)
-                    y = f_score * x / (2 * x - f_score)
-                    ax.plot(
-                        x[y >= 0],
-                        y[y >= 0],
-                        color="gray",
-                        alpha=0.2,
-                        linewidth=lw,
-                        label="Iso-F1 Curves" if i == 0 else "",
-                    )
-                    ax.annotate(f"F1={f_score:0.1f}", xy=(0.9, y[45] + 0.02))
-
-            # Plot ROC curves.
-            ax.plot(
-                metric[f"{prefix1}_micro"],
-                metric[f"{prefix2}_micro"],
-                label=f"Micro-averaged {lab1} Curve ({lab2} = {metric['micro']:.2f})",
-                color="deeppink",
-                linestyle=":",
-                linewidth=4,
-            )
-
-            ax.plot(
-                metric[f"{prefix1}_macro"],
-                metric[f"{prefix2}_macro"],
-                label=f"Macro-averaged {lab1} Curve ({lab2} = {metric['macro']:.2f})",
-                color="navy",
-                linestyle=":",
-                linewidth=4,
-            )
-
-            colors = cycle(["aqua", "darkorange", "cornflowerblue"])
-            for i, color in zip(range(num_classes), colors):
-                if f"{prefix1}_{i}" in metric:
-                    ax.plot(
-                        metric[f"{prefix1}_{i}"],
-                        metric[f"{prefix2}_{i}"],
-                        color=color,
-                        lw=lw,
-                        label=f"{lab1} Curve of class {i} ({lab2} = {metric[i]:.2f})",
-                    )
-
-            if "fpr_micro" in metric:
-                # Make center baseline
-                ax.plot(
-                    baseline,
-                    baseline,
-                    "k--",
-                    linewidth=lw,
-                    label="No Classification Skill",
-                )
-            else:
-                ax.plot(
-                    [0, 1],
-                    baseline,
-                    "k--",
-                    linewidth=lw,
-                    label="No Classification Skill",
-                )
-
-            ax.set_xlim(0.0, 1.0)
-            ax.set_ylim(0.0, 1.05)
-            ax.set_xlabel(f"{xlab}")
-            ax.set_ylabel(f"{ylab}")
-            ax.set_title(f"{title}")
-            ax.legend(loc="best")
-
-        fig.savefig(fn, bbox_inches="tight", facecolor="white")
-        plt.close()
-        plt.clf()
-        plt.cla()
-
-    @staticmethod
-    def plot_search_space(
-        estimator,
-        height=2,
-        s=25,
-        features=None,
-    ):
-        """Make density and contour plots for showing search space during grid search.
-
-        Modified from sklearn-genetic-opt function to implement exception handling.
-
-        Args:
-            estimator (sklearn estimator object): A fitted estimator from :class:`~sklearn_genetic.GASearchCV`.
-
-            height (float, optional): Height of each facet. Defaults to 2.
-
-            s (float, optional): Size of the markers in scatter plot. Defaults to 5.
-
-            features (list, optional): Subset of features to plot, if ``None`` it plots all the features by default. Defaults to None.
-
-        Returns:
-            g (seaborn.PairGrid): Pair plot of the used hyperparameters during the search.
-        """
-        sns.set_style("white")
-
-        df = logbook_to_pandas(estimator.logbook)
-        if features:
-            _stats = df[features]
-        else:
-            variables = [*estimator.space.parameters, "score"]
-            _stats = df[variables]
-
-        g = sns.PairGrid(_stats, diag_sharey=False, height=height)
-
-        g = g.map_upper(sns.scatterplot, s=s, color="r", alpha=0.2)
-
-        try:
-            g = g.map_lower(
-                sns.kdeplot,
-                shade=True,
-                cmap=sns.color_palette("ch:s=.25,rot=-.25", as_cmap=True),
-            )
-        except np.linalg.LinAlgError as err:
-            if "singular matrix" in str(err).lower():
-                g = g.map_lower(sns.scatterplot, s=s, color="b", alpha=1.0)
-            else:
-                raise
-
-        try:
-            g = g.map_diag(
-                sns.kdeplot,
-                shade=True,
-                palette="crest",
-                alpha=0.2,
-                color="red",
-            )
-        except np.linalg.LinAlgError as err:
-            if "singular matrix" in str(err).lower():
-                g = g.map_diag(sns.histplot, color="red", alpha=1.0, kde=False)
-
-        return g
-
-    @staticmethod
-    def visualize_missingness(
-        genotype_data,
-        df,
-        zoom=True,
-        prefix="imputer",
-        horizontal_space=0.6,
-        vertical_space=0.6,
-        bar_color="gray",
-        heatmap_palette="magma",
-        plot_format="pdf",
-        dpi=300,
-    ):
-        """Make multiple plots to visualize missing data.
-
-        Args:
-            genotype_data (GenotypeData): Initialized GentoypeData object.
-
-            df (pandas.DataFrame): DataFrame with snps to visualize.
-
-            zoom (bool, optional): If True, zooms in to the missing proportion range on some of the plots. If False, the plot range is fixed at [0, 1]. Defaults to True.
-
-            prefix (str, optional): Prefix for output directory and files. Plots and files will be written to a directory called <prefix>_reports. The report directory will be created if it does not already exist. If prefix is None, then the reports directory will not have a prefix. Defaults to 'imputer'.
-
-            horizontal_space (float, optional): Set width spacing between subplots. If your plot are overlapping horizontally, increase horizontal_space. If your plots are too far apart, decrease it. Defaults to 0.6.
-
-            vertical_space (float, optioanl): Set height spacing between subplots. If your plots are overlapping vertically, increase vertical_space. If your plots are too far apart, decrease it. Defaults to 0.6.
-
-            bar_color (str, optional): Color of the bars on the non-stacked barplots. Can be any color supported by matplotlib. See matplotlib.pyplot.colors documentation. Defaults to 'gray'.
-
-            heatmap_palette (str, optional): Palette to use for heatmap plot. Can be any palette supported by seaborn. See seaborn documentation. Defaults to 'magma'.
-
-            plot_format (str, optional): Format to save plots. Can be any of the following: "pdf", "png", "svg", "ps", "eps". Defaults to "pdf".
-
-            dpi (int): The resolution in dots per inch. Defaults to 300.
-
-        Returns:
-            pandas.DataFrame: Per-locus missing data proportions.
-            pandas.DataFrame: Per-individual missing data proportions.
-            pandas.DataFrame: Per-population + per-locus missing data proportions.
-            pandas.DataFrame: Per-population missing data proportions.
-            pandas.DataFrame: Per-individual and per-population missing data proportions.
-        """
-
-        loc, ind, poploc, poptotal, indpop = genotype_data.calc_missing(df)
-
-        ncol = 3
-        nrow = 1 if genotype_data.pops is None else 2
-
-        fig, axes = plt.subplots(nrow, ncol, figsize=(8, 11))
-        plt.subplots_adjust(wspace=horizontal_space, hspace=vertical_space)
-        fig.suptitle("Missingness Report")
-
-        ax = axes[0, 0]
-
-        ax.set_title("Per-Individual")
-        ax.barh(genotype_data.samples, ind, color=bar_color, height=1.0)
-        if not zoom:
-            ax.set_xlim([0, 1])
-        ax.set_ylabel("Sample")
-        ax.set_xlabel("Missing Prop.")
-        ax.tick_params(
-            axis="y",
-            which="both",
-            left=False,
-            right=False,
-            labelleft=False,
+        logman = LoggerManager(
+            name=__name__, prefix=prefix, verbose=verbose, debug=debug
         )
 
-        ax = axes[0, 1]
+        self.logger = logman.get_logger()
 
-        ax.set_title("Per-Locus")
-        ax.barh(
-            range(genotype_data.num_snps), loc, color=bar_color, height=1.0
-        )
-        if not zoom:
-            ax.set_xlim([0, 1])
-        ax.set_ylabel("Locus")
-        ax.set_xlabel("Missing Prop.")
-        ax.tick_params(
-            axis="y",
-            which="both",
-            left=False,
-            right=False,
-            labelleft=False,
-        )
+        self.model_name = model_name
+        self.prefix = prefix
+        self.plot_format = plot_format
+        self.plot_fontsize = plot_fontsize
+        self.plot_dpi = plot_dpi
+        self.title_fontsize = title_fontsize
+        self.show_plots = show_plots
 
-        id_vars = ["SampleID"]
-        if poptotal is not None:
-            ax = axes[0, 2]
-
-            ax.set_title("Per-Population Total")
-            ax.barh(poptotal.index, poptotal, color=bar_color, height=1.0)
-            if not zoom:
-                ax.set_xlim([0, 1])
-            ax.set_xlabel("Missing Prop.")
-            ax.set_ylabel("Population")
-
-            ax = axes[1, 0]
-
-            ax.set_title("Per-Population + Per-Locus")
-            npops = len(poploc.columns)
-
-            vmax = None if zoom else 1.0
-
-            sns.heatmap(
-                poploc,
-                vmin=0.0,
-                vmax=vmax,
-                cmap=sns.color_palette(heatmap_palette, as_cmap=True),
-                yticklabels=False,
-                cbar_kws={"label": "Missing Prop."},
-                ax=ax,
-            )
-            ax.set_xlabel("Population")
-            ax.set_ylabel("Locus")
-
-            id_vars.append("Population")
-
-        melt_df = indpop.isna()
-        melt_df["SampleID"] = genotype_data.samples
-        indpop["SampleID"] = genotype_data.samples
-
-        if poptotal is not None:
-            melt_df["Population"] = genotype_data.pops
-            indpop["Population"] = genotype_data.pops
-
-        melt_df = melt_df.melt(value_name="Missing", id_vars=id_vars)
-        melt_df.sort_values(by=id_vars[::-1], inplace=True)
-        melt_df["Missing"].replace(False, "Present", inplace=True)
-        melt_df["Missing"].replace(True, "Missing", inplace=True)
-
-        ax = axes[0, 2] if poptotal is None else axes[1, 1]
-
-        ax.set_title("Per-Individual")
-        g = sns.histplot(
-            data=melt_df,
-            y="variable",
-            hue="Missing",
-            multiple="fill",
-            ax=ax,
-        )
-        ax.tick_params(
-            axis="y",
-            which="both",
-            left=False,
-            right=False,
-            labelleft=False,
-        )
-        g.get_legend().set_title(None)
-
-        if poptotal is not None:
-            ax = axes[1, 2]
-
-            ax.set_title("Per-Population")
-            g = sns.histplot(
-                data=melt_df,
-                y="Population",
-                hue="Missing",
-                multiple="fill",
-                ax=ax,
-            )
-            g.get_legend().set_title(None)
-
-        fig.savefig(
-            os.path.join(
-                f"{prefix}_output", "plots", f"missingness.{plot_format}"
-            ),
-            bbox_inches="tight",
-            facecolor="white",
-        )
-        plt.cla()
-        plt.clf()
-        plt.close()
-
-        return loc, ind, poploc, poptotal, indpop
-
-    @staticmethod
-    def run_and_plot_pca(
-        original_genotype_data,
-        imputer_object,
-        prefix="imputer",
-        n_components=3,
-        center=True,
-        scale=False,
-        n_axes=2,
-        point_size=15,
-        font_size=15,
-        plot_format="pdf",
-        bottom_margin=0,
-        top_margin=0,
-        left_margin=0,
-        right_margin=0,
-        width=1088,
-        height=700,
-    ):
-        """Runs PCA and makes scatterplot with colors showing missingness.
-
-        Genotypes are plotted as separate shapes per population and colored according to missingness per individual.
-
-        This function is run at the end of each imputation method, but can be run independently to change plot and PCA parameters such as ``n_axes=3`` or ``scale=True``.
-
-        The imputed and original GenotypeData objects need to be passed to the function as positional arguments.
-
-        PCA (principal component analysis) scatterplot can have either two or three axes, set with the n_axes parameter.
-
-        The plot is saved as both an interactive HTML file and as a static image. Each population is represented by point shapes. The interactive plot has associated metadata when hovering over the points.
-
-        Files are saved to a reports directory as <prefix>_output/imputed_pca.<plot_format|html>. Supported image formats include: "pdf", "svg", "png", and "jpeg" (or "jpg").
-
-        Args:
-            original_genotype_data (GenotypeData): Original GenotypeData object that was input into the imputer.
-
-            imputer_object (Any imputer instance): Imputer object created when imputing. Can be any of the imputers, such as: ``ImputePhylo()``, ``ImputeUBP()``, and ``ImputeRandomForest()``.
-
-            original_012 (pandas.DataFrame, numpy.ndarray, or List[List[int]], optional): Original 012-encoded genotypes (before imputing). Missing values are encoded as -9. This object can be obtained as ``df = GenotypeData.genotypes012_df``.
-
-            prefix (str, optional): Prefix for report directory. Plots will be save to a directory called <prefix>_output/imputed_pca<html|plot_format>. Report directory will be created if it does not already exist. Defaults to "imputer".
-
-            n_components (int, optional): Number of principal components to include in the PCA. Defaults to 3.
-
-            center (bool, optional): If True, centers the genotypes to the mean before doing the PCA. If False, no centering is done. Defaults to True.
-
-            scale (bool, optional): If True, scales the genotypes to unit variance before doing the PCA. If False, no scaling is done. Defaults to False.
-
-            n_axes (int, optional): Number of principal component axes to plot. Must be set to either 2 or 3. If set to 3, a 3-dimensional plot will be made. Defaults to 2.
-
-            point_size (int, optional): Point size for scatterplot points. Defaults to 15.
-
-            plot_format (str, optional): Plot file format to use. Supported formats include: "pdf", "svg", "png", and "jpeg" (or "jpg"). An interactive HTML file is also created regardless of this setting. Defaults to "pdf".
-
-            bottom_margin (int, optional): Adjust bottom margin. If whitespace cuts off some of your plot, lower the corresponding margins. The default corresponds to that of plotly update_layout(). Defaults to 0.
-
-            top (int, optional): Adjust top margin. If whitespace cuts off some of your plot, lower the corresponding margins. The default corresponds to that of plotly update_layout(). Defaults to 0.
-
-            left_margin (int, optional): Adjust left margin. If whitespace cuts off some of your plot, lower the corresponding margins. The default corresponds to that of plotly update_layout(). Defaults to 0.
-
-            right_margin (int, optional): Adjust right margin. If whitespace cuts off some of your plot, lower the corresponding margins. The default corresponds to that of plotly update_layout(). Defaults to 0.
-
-            width (int, optional): Width of plot space. If your plot is cut off at the edges, even after adjusting the margins, increase the width and height. Try to keep the aspect ratio similar. Defaults to 1088.
-
-            height (int, optional): Height of plot space. If your plot is cut off at the edges, even after adjusting the margins, increase the width and height. Try to keep the aspect ratio similar. Defaults to 700.
-
-        Returns:
-            numpy.ndarray: PCA data as a numpy array with shape (n_samples, n_components).
-
-            sklearn.decomposision.PCA: Scikit-learn PCA object from sklearn.decomposision.PCA. Any of the sklearn.decomposition.PCA attributes can be accessed from this object. See sklearn documentation.
-
-        Examples:
-            >>>data = GenotypeData(
-            >>>    filename="snps.str",
-            >>>    filetype="structure2row",
-            >>>    popmapfile="popmap.txt",
-            >>>)
-            >>>
-            >>>ubp = ImputeUBP(genotype_data=data)
-            >>>
-            >>>components, pca = run_and_plot_pca(
-            >>>    data,
-            >>>    ubp,
-            >>>    scale=True,
-            >>>    center=True,
-            >>>    plot_format="png"
-            >>>)
-            >>>
-            >>>explvar = pca.explained_variance_ratio\_
-        """
-        report_path = os.path.join(f"{prefix}_output", "plots")
-        Path(report_path).mkdir(parents=True, exist_ok=True)
-
-        if n_axes > 3:
-            raise ValueError(
-                ">3 axes is not supported; n_axes must be either 2 or 3."
-            )
-        if n_axes < 2:
-            raise ValueError(
-                "<2 axes is not supported; n_axes must be either 2 or 3."
-            )
-
-        imputer = imputer_object.imputed
-
-        df = misc.validate_input_type(
-            imputer.genotypes012_df, return_type="df"
-        )
-
-        original_df = misc.validate_input_type(
-            original_genotype_data.genotypes_012(fmt="pandas"),
-            return_type="df",
-        )
-
-        original_df.replace(-9, np.nan, inplace=True)
-
-        if center or scale:
-            # Center data to mean. Scaling to unit variance is off.
-            scaler = StandardScaler(with_mean=center, with_std=scale)
-            pca_df = scaler.fit_transform(df)
-        else:
-            pca_df = df.copy()
-
-        # Run PCA.
-        model = PCA(n_components=n_components)
-        components = model.fit_transform(pca_df)
-
-        df_pca = pd.DataFrame(
-            components[:, [0, 1, 2]], columns=["Axis1", "Axis2", "Axis3"]
-        )
-
-        df_pca["SampleID"] = original_genotype_data.samples
-        df_pca["Population"] = original_genotype_data.pops
-        df_pca["Size"] = point_size
-
-        _, ind, _, _, _ = imputer.calc_missing(original_df, use_pops=False)
-        df_pca["missPerc"] = ind
-
-        my_scale = [("rgb(19, 43, 67)"), ("rgb(86,177,247)")]  # ggplot default
-
-        z = "Axis3" if n_axes == 3 else None
-        labs = {
-            "Axis1": f"PC1 ({round(model.explained_variance_ratio_[0] * 100, 2)}%)",
-            "Axis2": f"PC2 ({round(model.explained_variance_ratio_[1] * 100, 2)}%)",
-            "missPerc": "Missing Prop.",
-            "Population": "Population",
+        param_dict = {
+            "axes.labelsize": self.plot_fontsize,
+            "axes.titlesize": self.title_fontsize,
+            "axes.spines.top": despine,
+            "axes.spines.right": despine,
+            "xtick.labelsize": self.plot_fontsize,
+            "ytick.labelsize": self.plot_fontsize,
+            "legend.fontsize": self.plot_fontsize,
+            "legend.facecolor": "white",
+            "figure.titlesize": self.title_fontsize,
+            "figure.dpi": self.plot_dpi,
+            "figure.facecolor": "white",
+            "axes.linewidth": 2.0,
+            "lines.linewidth": 2.0,
+            "font.size": self.plot_fontsize,
+            "savefig.bbox": "tight",
+            "savefig.facecolor": "white",
+            "savefig.dpi": self.plot_dpi,
         }
 
-        if z is not None:
-            labs[
-                "Axis3"
-            ] = f"PC3 ({round(model.explained_variance_ratio_[2] * 100, 2)}%)"
-            fig = px.scatter_3d(
-                df_pca,
-                x="Axis1",
-                y="Axis2",
-                z="Axis3",
-                color="missPerc",
-                symbol="Population",
-                color_continuous_scale=my_scale,
-                custom_data=["Axis3", "SampleID", "Population", "missPerc"],
-                size="Size",
-                size_max=point_size,
-                labels=labs,
-            )
+        mpl.rcParams.update(param_dict)
+
+        if model_name in {"ImputeVAE", "ImputeNLPCA", "ImputeStandardAE"}:
+            plot_dir = "Unsupervised"
         else:
-            fig = px.scatter(
-                df_pca,
-                x="Axis1",
-                y="Axis2",
-                color="missPerc",
-                symbol="Population",
-                color_continuous_scale=my_scale,
-                custom_data=["Axis3", "SampleID", "Population", "missPerc"],
-                size="Size",
-                size_max=point_size,
-                labels=labs,
-            )
-        fig.update_traces(
-            hovertemplate="<br>".join(
-                [
-                    "Axis 1: %{x}",
-                    "Axis 2: %{y}",
-                    "Axis 3: %{customdata[0]}",
-                    "Sample ID: %{customdata[1]}",
-                    "Population: %{customdata[2]}",
-                    "Missing Prop.: %{customdata[3]}",
-                ]
-            ),
-        )
-        fig.update_layout(
-            showlegend=True,
-            margin=dict(
-                b=bottom_margin,
-                t=top_margin,
-                l=left_margin,
-                r=right_margin,
-            ),
-            width=width,
-            height=height,
-            legend_orientation="h",
-            legend_title="Population",
-            legend_title_font=dict(size=font_size),
-            legend_title_side="top",
-            font=dict(size=font_size),
-        )
-        fig.write_html(os.path.join(report_path, "imputed_pca.html"))
-        fig.write_image(
-            os.path.join(report_path, f"imputed_pca.{plot_format}"),
+            plot_dir = "Supervised"
+
+        self.output_dir = (
+            Path(f"{self.prefix}_output") / "plots" / plot_dir / model_name
         )
 
-        return components, model
+        self.output_dir.mkdir(parents=True, exist_ok=True)
 
-    @staticmethod
-    def plot_history(lod, nn_method, prefix="imputer"):
-        """Plot model history traces. Will be saved to file.
+    def plot_metrics(
+        self,
+        y_true: np.ndarray,
+        y_pred_proba: np.ndarray,
+        metrics: Dict[str, float],
+    ) -> None:
+        """Plot multi-class ROC-AUC and Precision-Recall curves.
 
         Args:
-            lod (List[tf.keras.callbacks.History]): List of history objects.
-            nn_method (str): Neural network method to plot. Possible options include: 'NLPCA', 'UBP', or 'VAE'. NLPCA and VAE get plotted the same, but UBP does it differently due to its three phases.
-            prefix (str, optional): Prefix to use for output directory. Defaults to 'imputer'.
+            y_true (np.ndarray): Array of true labels (class indices).
+            y_pred_proba (np.ndarray): Array of predicted probabilities for each class.
+            metrics (Dict[str, float]): Dictionary of performance metrics.
+        """
+        # Binarize the labels if they are not already one-hot encoded
+        if y_true.ndim == 1 or y_true.shape[1] == 1:
+            num_classes = y_pred_proba.shape[1]
+            y_true = label_binarize(y_true, classes=range(num_classes))
+        else:
+            num_classes = y_true.shape[1]
+
+        yt = np.reshape(y_true, (-1, num_classes))
+        yp = np.reshape(y_pred_proba, (-1, num_classes))
+
+        # Initialize dictionaries to hold per-class metrics
+        fpr = {}
+        tpr = {}
+        roc_auc = {}
+        precision = {}
+        recall = {}
+        average_precision = {}
+
+        # Compute per-class ROC and PR curves
+        for i in range(num_classes):
+            fpr[i], tpr[i], _ = roc_curve(yt[:, i], yp[:, i])
+            roc_auc[i] = auc(fpr[i], tpr[i])
+            precision[i], recall[i], _ = precision_recall_curve(yt[:, i], yp[:, i])
+            average_precision[i] = average_precision_score(yt[:, i], yp[:, i])
+
+        # Compute micro-average ROC curve and ROC area
+        fpr["micro"], tpr["micro"], _ = roc_curve(yt.ravel(), yp.ravel())
+        roc_auc["micro"] = auc(fpr["micro"], tpr["micro"])
+
+        # Compute macro-average ROC curve and ROC area
+        # First aggregate all false positive rates
+        all_fpr = np.unique(np.concatenate([fpr[i] for i in range(num_classes)]))
+
+        # Then interpolate all ROC curves at this points
+        mean_tpr = np.zeros_like(all_fpr)
+        for i in range(num_classes):
+            mean_tpr += np.interp(all_fpr, fpr[i], tpr[i])
+
+        # Finally average it and compute AUC
+        mean_tpr /= num_classes
+
+        fpr["macro"] = all_fpr
+        tpr["macro"] = mean_tpr
+        roc_auc["macro"] = auc(fpr["macro"], tpr["macro"])
+
+        # Compute micro-average PR curve and PR area
+        precision["micro"], recall["micro"], _ = precision_recall_curve(
+            yt.ravel(), yp.ravel()
+        )
+        average_precision["micro"] = average_precision_score(yt, yp, average="micro")
+
+        # Compute macro-average PR curve and PR area
+        average_precision["macro"] = average_precision_score(yt, yp, average="macro")
+
+        # Create a figure with subplots for ROC and Precision-Recall curves
+        fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+        # Plot all ROC curves
+        axes[0].plot(
+            fpr["micro"],
+            tpr["micro"],
+            label=f"Micro-average ROC curve (area = {roc_auc['micro']:.2f})",
+            linestyle=":",
+            linewidth=4,
+        )
+        axes[0].plot(
+            fpr["macro"],
+            tpr["macro"],
+            label=f"Macro-average ROC curve (area = {roc_auc['macro']:.2f})",
+            linestyle="--",
+            linewidth=4,
+        )
+
+        for i in range(num_classes):
+            axes[0].plot(
+                fpr[i],
+                tpr[i],
+                label=f"Class {i} ROC curve (area = {roc_auc[i]:.2f})",
+            )
+
+        axes[0].set_xlabel("False Positive Rate")
+        axes[0].set_ylabel("True Positive Rate")
+        axes[0].set_title("Multi-class ROC-AUC Curve")
+        axes[0].plot([0, 1], [0, 1], color="black", linestyle="--", label="Random")
+        axes[0].legend(bbox_to_anchor=(0.5, -0.05), loc="upper center")
+
+        # Plot all Precision-Recall curves
+        axes[1].plot(
+            recall["micro"],
+            precision["micro"],
+            label=f"Micro-average PR curve (AP = {average_precision['micro']:.2f})",
+            linestyle=":",
+            linewidth=4,
+        )
+
+        for i in range(num_classes):
+            axes[1].plot(
+                recall[i],
+                precision[i],
+                label=f"Class {i} PR curve (AP = {average_precision[i]:.2f})",
+            )
+
+        axes[1].set_xlabel("Recall")
+        axes[1].set_ylabel("Precision")
+        axes[1].set_title("Multi-class Precision-Recall Curve")
+        axes[1].plot([0, 1], [1, 0], color="black", linestyle="--", label="Random")
+        axes[1].legend(bbox_to_anchor=(0.5, -0.05), loc="upper center")
+
+        # Add summary metrics (accuracy, F1 score, precision, recall, etc.) in
+        # the figure's title
+        summary_metrics = "\n".join([f"{k}: {v:.2f}" for k, v in metrics.items()])
+
+        # Adding the summary metrics as the figure title or below the plot
+        fig.suptitle(summary_metrics, y=1.3)
+
+        fn = f"{self.model_name.lower()}_metrics_plot.{self.plot_format}"
+        fn = self.output_dir / fn
+        fig.savefig(fn)
+
+        if self.show_plots:
+            plt.show()
+
+        plt.close()
+
+    def plot_history(self, history: Dict[str, List[float]]) -> None:
+        """Plot model history traces. Will be saved to file.
+
+        This method plots the model history traces. The plot is saved to disk as a ``<plot_format>`` file.
+
+        Args:
+            history (Dict[str, List[float]]): Dictionary with lists of history objects. Keys should be "Train" and "Val".
 
         Raises:
-            ValueError: nn_method must be either 'NLPCA', 'UBP', or 'VAE'.
+            ValueError: nn_method must be either 'ImputeNLPCA', 'ImputeUBP', 'ImputeStandardAE', or 'ImputeVAE'.
         """
-        if nn_method == "NLPCA" or nn_method == "VAE" or nn_method == "SAE":
-            title = nn_method
-            fn = os.path.join(
-                f"{prefix}_output",
-                "plots",
-                "Unsupervised",
-                nn_method,
-                "histplot.pdf",
-            )
+        if self.model_name not in {
+            "ImputeNLPCA",
+            "ImputeVAE",
+            "ImputeStandardAE",
+            "ImputeUBP",
+        }:
+            msg = "nn_method must be either 'ImputeNLPCA', 'ImputeVAE', 'ImputeStandardAE', or 'ImputeUBP'."
+            self.logger.error(msg)
+            raise ValueError()
 
-            # if nn_method == "VAE":
-            fig, axes = plt.subplots(1, 2)
-            ax1 = axes[0]
-            ax2 = axes[1]
+        if self.model_name in {"ImputeNLPCA", "ImputeVAE", "ImputeStandardAE"}:
+            fig, ax = plt.subplots(1, 1, figsize=(12, 8))
 
-            fig.suptitle(title)
-            fig.tight_layout(h_pad=3.0, w_pad=3.0)
-            history = lod[0]
-
-            acctrain = "binary_accuracy"
-            accval = "val_binary_accuracy"
-            lossval = "val_loss"
+            df = pd.DataFrame(history)
 
             # Plot train accuracy
-            ax1.plot(history[acctrain])
-            ax1.set_title("Model Accuracy")
-            ax1.set_ylabel("Accuracy")
-            ax1.set_xlabel("Epoch")
-            ax1.set_ylim(bottom=0.0, top=1.0)
-            ax1.set_yticks([0.0, 0.25, 0.5, 0.75, 1.0])
-
-            labels = ["Train"]
-
-            # Plot validation accuracy
-            ax1.plot(history[accval])
-            labels.append("Validation")
-
-            ax1.legend(labels, loc="best")
-
-            # else:
-            ax2.plot(history["loss"])
-            ax2.plot(history[lossval])
-
-            ax2.set_title("Total Loss")
-            ax2.set_ylabel("Loss")
-            ax2.set_xlabel("Epoch")
-            ax2.legend(labels, loc="best")
-
-            fig.savefig(fn, bbox_inches="tight", facecolor="white")
-
-            plt.close()
-            plt.clf()
-
-        elif nn_method == "UBP":
-            fig = plt.figure(figsize=(12, 16))
-            fig.suptitle(nn_method)
-            fig.tight_layout(h_pad=2.0, w_pad=2.0)
-            fn = os.path.join(
-                f"{prefix}_output",
-                "plots",
-                "Unsupervised",
-                nn_method,
-                "histplot.pdf",
+            ax = sns.lineplot(
+                data=df,
+                x=np.arange(len(df)),
+                y="Train",
+                color="blue",
+                linewidth=3,
+                ax=ax,
             )
+            ax = sns.lineplot(
+                data=df,
+                x=np.arange(len(df)),
+                y="Val",
+                color="orange",
+                linewidth=3,
+                ax=ax,
+            )
+            ax.set_title("Model Loss per Epoch")
+            ax.set_ylabel("Loss")
+            ax.set_xlabel("Epoch")
+
+            ymax = max(1.0, df["Train"].max(), df["Val"].max())
+            ax.set_ylim(bottom=0.0, top=ymax)
+            ax.set_yticks(np.linspace(0, ymax, num=int(ymax / 4), endpoint=True))
+            ax.legend(["Train", "Val"], labels=["Train", "Validation"], loc="best")
+
+        elif self.model_name == "ImputeUBP":
+            fig = plt.figure(figsize=(12, 16))
+            fig.suptitle(self.model_name)
+            fig.tight_layout(h_pad=2.0, w_pad=2.0)
 
             idx = 1
-            for i, history in enumerate(lod, start=1):
+            for i, history in enumerate(history, start=1):
                 plt.subplot(3, 2, idx)
                 title = f"Phase {i}"
 
@@ -806,20 +352,23 @@ class Plotting:
 
                 idx += 2
 
-            plt.savefig(fn, bbox_inches="tight", facecolor="white")
+        fn = f"{self.model_name.lower()}_history_plot.{self.plot_format}"
+        fn = self.output_dir / fn
+        plt.savefig(fn)
 
-            plt.close()
-            plt.clf()
+        if self.show_plots:
+            plt.show()
 
-        else:
-            raise ValueError(
-                f"nn_method must be either 'NLPCA', 'UBP', or 'VAE', but got {nn_method}"
-            )
+        plt.close()
 
-    @staticmethod
-    def plot_certainty_heatmap(
-        y_certainty, sample_ids=None, nn_method="VAE", prefix="imputer"
-    ):
+    def plot_certainty_heatmap(self, y_certainty: np.ndarray) -> None:
+        """Plot a heatmap of the probabilities of uncertain sites.
+
+        This method plots a heatmap of the probabilities of uncertain sites. The plot is saved to disk as a ``<plot_format>`` file.
+
+        Args:
+            y_certainty (np.ndarray): Array of probabilities of uncertain sites.
+        """
         fig = plt.figure()
         hm = sns.heatmap(
             data=y_certainty,
@@ -832,55 +381,74 @@ class Plotting:
         hm.set_ylabel("Sample")
         hm.set_title("Probabilities of Uncertain Sites")
         fig.tight_layout()
-        fig.savefig(
-            os.path.join(
-                f"{prefix}_output",
-                "plots",
-                "Unsupervised",
-                nn_method,
-                "uncertainty_plot.png",
-            ),
-            bbox_inches="tight",
-            facecolor="white",
-        )
 
-    @staticmethod
+        fn = f"{self.model_name.lower()}_certainty_heatmap.{self.plot_format}"
+        fn = self.output_dir / fn
+        fig.savefig(fn)
+
+        if self.show_plots:
+            plt.show()
+
+        plt.close()
+
     def plot_confusion_matrix(
-        y_true_1d, y_pred_1d, nn_method, prefix="imputer"
-    ):
+        self, y_true_1d: np.ndarray, y_pred_1d: np.ndarray
+    ) -> None:
+        """Plot a confusion matrix.
+
+        This method plots a confusion matrix. The plot is saved to disk as a ``<plot_format>`` file.
+
+        Args:
+            y_true_1d (np.ndarray): Array of true labels. The array should be 1D. If the array is multi-dimensional, it will be flattened.
+            y_pred_1d (np.ndarray): Array of predicted labels. The array should be 1D. If the array is multi-dimensional, it will be flattened.
+        """
+        y_true_1d = misc.validate_input_type(y_true_1d, return_type="array")
+        y_pred_1d = misc.validate_input_type(y_pred_1d, return_type="array")
+
+        if y_true_1d.ndim > 1:
+            y_true_1d = y_true_1d.flatten()
+
+        if y_pred_1d.ndim > 1:
+            y_pred_1d = y_pred_1d.flatten()
+
         fig, ax = plt.subplots(1, 1, figsize=(15, 15))
         ConfusionMatrixDisplay.from_predictions(
             y_true=y_true_1d, y_pred=y_pred_1d, ax=ax
         )
 
-        outfile = os.path.join(
-            f"{prefix}_output",
-            "plots",
-            "Unsupervised",
-            nn_method,
-            f"confusion_matrix_{nn_method}.png",
-        )
+        fn = f"{self.model_name.lower()}_confusion_matrix.{self.plot_format}"
+        fn = self.output_dir / fn
+        fig.savefig(fn)
 
-        if os.path.isfile(outfile):
-            os.remove(outfile)
+        if self.show_plots:
+            plt.show()
 
-        fig.savefig(outfile, facecolor="white")
+        plt.close()
 
-    @staticmethod
-    def plot_gt_distribution(df, plot_path):
-        df = misc.validate_input_type(df, return_type="df")
-        df_melt = pd.melt(df, value_name="Count")
-        cnts = df_melt["Count"].value_counts()
-        cnts.index.names = ["Genotype"]
-        cnts = pd.DataFrame(cnts).reset_index()
-        cnts.sort_values(by="Genotype", inplace=True)
-        cnts["Genotype"] = cnts["Genotype"].astype(str)
+    def plot_gt_distribution(
+        self,
+        X: Union[np.ndarray, pd.DataFrame, List[List[int]], torch.Tensor],
+        is_imputed: bool = False,
+    ) -> None:
+        """Plot the distribution of genotypes in the dataset.
+
+        This method plots the distribution of genotypes in the dataset. The plot is saved to disk as a ``<plot_format>`` file.
+
+        Args:
+            X (pd.DataFrame): DataFrame containing genotype data. Columns should be samples and rows should be genotypes.
+            is_imputed (bool): Whether the data has been imputed. Defaults to False.
+        """
+        arr = misc.validate_input_type(X, return_type="array")
+        values, counts = np.unique(arr, return_counts=True, axis=None)
+        df = pd.DataFrame({"Genotype": values, "Count": counts})
+        df = df.sort_values(by="Genotype", ascending=True)
+        title = "Imputed Genotype Counts" if is_imputed else "Genotype Counts"
 
         fig, ax = plt.subplots(1, 1, figsize=(15, 15))
-        g = sns.barplot(x="Genotype", y="Count", data=cnts, ax=ax)
+        g = sns.barplot(x="Genotype", y="Count", data=df, ax=ax)
         g.set_xlabel("Integer-encoded Genotype")
         g.set_ylabel("Count")
-        g.set_title("Genotype Counts")
+        g.set_title(title)
         for p in g.patches:
             g.annotate(
                 f"{p.get_height():.1f}",
@@ -890,31 +458,104 @@ class Plotting:
                 va="bottom",
             )
 
-        fig.savefig(
-            os.path.join(plot_path, "genotype_distributions.png"),
-            bbox_inches="tight",
-            facecolor="white",
-        )
+        fn = f"{self.model_name.lower()}_gt_distributions.{self.plot_format}"
+        fn = self.output_dir / fn
+
+        fig.savefig(fn)
+
+        if self.show_plots:
+            plt.show()
+
         plt.close()
 
-    @staticmethod
-    def plot_label_clusters(z_mean, labels, prefix="imputer"):
-        """Display a 2D plot of the classes in the latent space."""
+    def plot_label_clusters(
+        self, z_mean: np.ndarray | torch.Tensor, z_log_var: np.ndarray | torch.Tensor
+    ) -> None:
+        """Display a 2D plot of the classes in the latent space.
+
+        This method displays a 2D plot of the classes in the latent space. The plot is saved to disk as a ``<plot_format>`` file.
+
+        Args:
+            z_mean (Union[np.ndarray, torch.Tensor]): Array or torch.Tensor of latent means.
+            z_log_var (Union[np.ndarray, torch.Tensor): Array or torch.Tensor of latent log variances.
+
+        ToDo:
+            * Add z_log_var to the plot.
+        """
+        if isinstance(z_mean, torch.Tensor):
+            z_mean = z_mean.detach().cpu().numpy()
+
+        if isinstance(z_log_var, torch.Tensor):
+            z_log_var = z_log_var.detach().cpu().numpy()
+
         fig, ax = plt.subplots(1, 1, figsize=(15, 15))
 
+        # ToDo: Add z_log_var to the plot.
         sns.scatterplot(x=z_mean[:, 0], y=z_mean[:, 1], ax=ax)
         ax.set_xlabel("Latent Dimension 1")
         ax.set_ylabel("Latent Dimension 2")
 
-        outfile = os.path.join(
-            f"{prefix}_output",
-            "plots",
-            "Unsupervised",
-            "VAE",
-            "label_clusters.png",
-        )
+        fn = f"{self.model_name.lower()}_label_clusters.{self.plot_format}"
+        fn = self.output_dir / fn
 
-        if os.path.isfile(outfile):
-            os.remove(outfile)
+        fig.savefig(fn)
 
-        fig.savefig(outfile, facecolor="white", bbox_inches="tight")
+        if self.show_plots:
+            plt.show()
+
+        plt.close()
+
+    def plot_pr_curve(
+        self, precision: np.ndarray, recall: np.ndarray, average_precision: float
+    ) -> None:
+        """Plot a Precision-Recall curve.
+
+        This method plots a Precision-Recall curve. The plot is saved to disk as a ``<plot_format>`` file.
+
+        Args:
+            precision (np.ndarray): Array of precision values.
+            recall (np.ndarray): Array of recall values.
+            average_precision (float): Average precision score.
+        """
+        fig, ax = plt.subplots(1, 1, figsize=(15, 15))
+        ax.plot(recall, precision, lw=2, label=f"AP = {average_precision:.2f}")
+        ax.set_xlabel("Recall")
+        ax.set_ylabel("Precision")
+        ax.set_title(f"{self.model_name} Precision-Recall Curve")
+        ax.legend(loc="best")
+
+        fn = f"{self.model_name.lower()}_pr_curve.{self.plot_format}"
+        fn = self.output_dir / fn
+
+        fig.savefig(fn)
+
+        if self.show_plots:
+            plt.show()
+
+        plt.close()
+
+    def plot_roc_curve(self, fpr: np.ndarray, tpr: np.ndarray, roc_auc: float) -> None:
+        """Plot a ROC curve.
+
+        This method plots a ROC curve. The plot is saved to disk as a ``<plot_format>`` file.
+
+        Args:
+            fpr (np.ndarray): Array of false positive rates.
+            tpr (np.ndarray): Array of true positive rates.
+            roc_auc (float): ROC AUC score.
+        """
+        fig, ax = plt.subplots(1, 1, figsize=(15, 15))
+        ax.plot(fpr, tpr, lw=2, label=f"ROC AUC = {roc_auc:.2f}")
+        ax.set_xlabel("False Positive Rate")
+        ax.set_ylabel("True Positive Rate")
+        ax.set_title(f"{self.model_name} ROC Curve")
+
+        fn = f"{self.model_name.lower()}_roc_curve.{self.plot_format}"
+        fn = self.output_dir / fn
+
+        fig.savefig(fn)
+
+        if self.show_plots:
+            plt.show()
+
+        plt.close()
