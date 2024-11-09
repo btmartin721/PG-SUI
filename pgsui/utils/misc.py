@@ -1,44 +1,49 @@
-import sys
-import os
-import functools
-import time
 import datetime
-import platform
-import subprocess
-import re
+import functools
 import logging
+import os
+import platform
+import re
+import subprocess
+import sys
+import time
 
 import numpy as np
 import pandas as pd
+import torch
 from tqdm import tqdm
-from tqdm.utils import disp_len, _unicode  # for overriding status_print
+from tqdm.utils import _unicode, disp_len  # for overriding status_print
 
-
-# from skopt import BayesSearchCV
+logger = logging.getLogger(__name__)
 
 
 def validate_input_type(X, return_type="array"):
     """Validate input type and return as numpy array.
 
-    Args:
-        X (pandas.DataFrame, numpy.ndarray, or List[List[int]]): Input data.
+    This method validates the input type and returns the input data as a numpy array, pandas DataFrame, 2D list, or torch.Tensor.
 
-        return_type (str): Type of returned object. Supported options include: "df", "array", and "list". Defaults to "array".
+    Args:
+        X (Union[pandas.DataFrame, numpy.ndarray, List[List[int]]]): Input data. Supported types include: pandas.DataFrame, numpy.ndarray, List[List[int]], and torch.Tensor.
+
+        return_type (str): Type of returned object. Supported options include: "df", "array", "list", and "tensor". Defaults to "array".
 
     Returns:
-        pandas.DataFrame, numpy.ndarray, or List[List[int]]: Input data desired return_type.
+        Union[pandas.DataFrame, numpy.ndarray, List[List[int]]]: Input data as the desired return_type.
 
     Raises:
-        TypeError: X must be of type pandas.DataFrame, numpy.ndarray, or List[List[int]].
-
-        ValueError: Unsupported return_type provided. Supported types are "df", "array", and "list".
+        TypeError: X must be of type pandas.DataFrame, numpy.ndarray, List[List[int]], or torch.Tensor.
+        ValueError: Unsupported return_type provided. Supported types are "df", "array", "list", and "tensor".
 
     """
-    if not isinstance(X, (pd.DataFrame, np.ndarray, list)):
-        raise TypeError(
-            f"X must be of type pandas.DataFrame, numpy.ndarray, "
-            f"or List[List[int]], but got {type(X)}"
-        )
+    if not isinstance(X, (pd.DataFrame, np.ndarray, list, torch.Tensor)):
+        msg = f"X must be of type pandas.DataFrame, numpy.ndarray, List[List[int]], or torch.Tensor, but got {type(X)}"
+        logger.error(msg)
+        raise TypeError(msg)
+
+    if return_type not in {"df", "array", "list", "tensor"}:
+        msg = f"Unsupported return type provided: {return_type}. Supported types are 'df', 'array', 'list', and 'tensor'"
+        logger.error(msg)
+        raise ValueError(msg)
 
     if return_type == "array":
         if isinstance(X, pd.DataFrame):
@@ -47,12 +52,16 @@ def validate_input_type(X, return_type="array"):
             return np.array(X)
         elif isinstance(X, np.ndarray):
             return X.copy()
+        elif isinstance(X, torch.Tensor):
+            return X.cpu().detach().numpy()
 
     elif return_type == "df":
         if isinstance(X, pd.DataFrame):
             return X.copy()
         elif isinstance(X, (np.ndarray, list)):
             return pd.DataFrame(X)
+        elif isinstance(X, torch.Tensor):
+            return pd.DataFrame(X.cpu().detach().numpy())
 
     elif return_type == "list":
         if isinstance(X, list):
@@ -61,12 +70,18 @@ def validate_input_type(X, return_type="array"):
             return X.tolist()
         elif isinstance(X, pd.DataFrame):
             return X.values.tolist()
+        elif isinstance(X, torch.Tensor):
+            return X.cpu().detach().numpy().tolist()
 
-    else:
-        raise ValueError(
-            f"Unsupported return type provided: {return_type}. Supported types "
-            f"are 'df', 'array', and 'list'"
-        )
+    elif return_type == "tensor":
+        if isinstance(X, torch.Tensor):
+            return X
+        elif isinstance(X, np.ndarray):
+            return torch.tensor(X, dtype=torch.float32)
+        elif isinstance(X, pd.DataFrame):
+            return torch.tensor(X.to_numpy(), dtype=torch.float32)
+        elif isinstance(X, list):
+            return torch.tensor(X, dtype=torch.float32)
 
 
 def generate_random_dataset(
@@ -117,14 +132,10 @@ def generate_random_dataset(
             "must be cast-able to type float"
         )
 
-    X = np.random.randint(
-        min_value, max_value + 1, size=(nrows, ncols)
-    ).astype(float)
+    X = np.random.randint(min_value, max_value + 1, size=(nrows, ncols)).astype(float)
     for i in range(X.shape[1]):
         drop_rate = int(
-            np.random.choice(
-                np.arange(min_missing_rate, max_missing_rate, 0.02), 1
-            )[0]
+            np.random.choice(np.arange(min_missing_rate, max_missing_rate, 0.02), 1)[0]
             * X.shape[0]
         )
 
@@ -203,32 +214,24 @@ def generate_012_genotypes(
     for i in range(X.shape[1]):
         het_rate = int(
             np.ceil(
-                np.random.choice(
-                    np.arange(min_het_rate, max_het_rate, 0.02), 1
-                )[0]
+                np.random.choice(np.arange(min_het_rate, max_het_rate, 0.02), 1)[0]
                 * X.shape[0]
             )
         )
 
         alt_rate = int(
             np.ceil(
-                np.random.choice(
-                    np.arange(min_alt_rate, max_alt_rate, 0.02), 1
-                )[0]
+                np.random.choice(np.arange(min_alt_rate, max_alt_rate, 0.02), 1)[0]
                 * X.shape[0]
             )
         )
 
         het = np.sort(
-            np.random.choice(
-                np.arange(0, X.shape[0]), size=het_rate, replace=False
-            )
+            np.random.choice(np.arange(0, X.shape[0]), size=het_rate, replace=False)
         )
 
         alt = np.sort(
-            np.random.choice(
-                np.arange(0, X.shape[0]), size=alt_rate, replace=False
-            )
+            np.random.choice(np.arange(0, X.shape[0]), size=alt_rate, replace=False)
         )
 
         sidx = alt.argsort()
@@ -240,8 +243,7 @@ def generate_012_genotypes(
         X[het_unique, i] = 1
 
         drop_rate = int(
-            np.random.choice(np.arange(0.15, max_missing_rate, 0.02), 1)[0]
-            * X.shape[0]
+            np.random.choice(np.arange(0.15, max_missing_rate, 0.02), 1)[0] * X.shape[0]
         )
 
         missing = np.random.choice(np.arange(0, X.shape[0]), size=drop_rate)
@@ -277,10 +279,7 @@ def _remove_nonbiallelic(df, cv=5):
     bad_cols = list()
     if pd.__version__[0] == 0:
         for col in df_cp.columns:
-            if (
-                not df_cp[col].isin([0.0]).any()
-                or not df_cp[col].isin([2.0]).any()
-            ):
+            if not df_cp[col].isin([0.0]).any() or not df_cp[col].isin([2.0]).any():
                 bad_cols.append(col)
 
             elif len(df_cp[df_cp[col] == 0.0]) < cv:
@@ -388,9 +387,7 @@ def progressbar(it, prefix="", size=60, file=sys.stdout):
 
     def show(j):
         x = int(size * j / count)
-        file.write(
-            "%s[%s%s] %i/%i\r" % (prefix, "#" * x, "." * (size - x), j, count)
-        )
+        file.write("%s[%s%s] %i/%i\r" % (prefix, "#" * x, "." * (size - x), j, count))
         file.flush()
 
     show(0)
