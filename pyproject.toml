@@ -1,0 +1,94 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pg-sui"
+version = "1.0.3"
+description = "Python machine and deep learning API to impute missing genotypes"
+readme = "README.md"
+authors = [
+    {name = "Drs. Bradley T. Martin and Tyler K. Chafin", email = "evobio721@gmail.com"},
+]
+maintainers = [
+    {name = "Dr. Bradley T. Martin", email = "evobio721@gmail.com"},
+]
+license = {text = "GNU General Public License v3 (GPLv3)"}
+keywords = [
+    "impute", "imputation", "AI", "deep learning", "machine learning",
+    "neural network", "vae", "autoencoder", "ubp", "nlpca",
+    "population genomics", "unsupervised", "supervised", "IterativeImputer"
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Operating System :: OS Independent",
+    "Natural Language :: English"
+]
+dependencies = [
+    "matplotlib",
+    "numpy",
+    "pandas",
+    "requests",
+    "scikit-learn",
+    "scipy",
+    "seaborn",
+    "snpio",
+    "tensorboard",
+    "torch",
+    "tqdm",
+    "toytree",
+    "xgboost",
+    "optuna"
+]
+
+[tool.setuptools.packages.find]
+include = ["pgsui*"]
+exclude = ["img", "workflow", "notebooks", "simulation"]
+
+
+[project.optional-dependencies]
+intel = ["scikit-learn-intelex"]
+docs = [
+    "sphinx",
+    "sphinx-rtd-theme",
+    "sphinx_autodoc_typehints",
+    "sphinxcontrib-napoleon",
+    "sphinxcontrib-programoutput"
+]
+dev = [
+    "twine",
+    "wheel",
+    "pytest",
+    "sphinx",
+    "sphinx-rtd-theme",
+    "sphinx-autodoc-typehints",
+    "sphinxcontrib-napoleon",
+    "sphinxcontrib-programoutput",
+    "scikit-learn-intelex"
+]
+
+[project.urls]
+Homepage = "https://github.com/btmartin721/PG-SUI"
+Documentation = "https://pg-sui.readthedocs.io/en/latest/"
+Source = "https://github.com/btmartin721/PG-SUI.git"
+BugTracker = "https://github.com/btmartin721/PG-SUI/issues"
+
+[tool.setuptools.package-data]
+"pgsui" = [
+    "example_data/structure_files/*.str",
+    "example_data/phylip_files/*.phy",
+    "example_data/vcf_files/*",
+    "example_data/popmaps/test.popmap",
+    "example_data/trees/*"
+]
+
+[project.scripts]
+"pg-sui" = "pg_sui2:main"
