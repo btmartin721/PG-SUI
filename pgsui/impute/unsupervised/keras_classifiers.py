@@ -193,10 +193,10 @@ class SAEClassifier(KerasClassifier):
 
         Args:
             X (Union[array-like, sparse matrix, dataframe] of shape (n_samples, n_features)): Training samples where n_samples is the number of samples and n_features is the number of features.
-        kwargs (Dict[str, Any]): Extra arguments to route to ``Model.predict``\.
+        kwargs (Dict[str, Any]): Extra arguments to route to ``Model.predict.
 
         Warnings:
-            Passing estimator parameters as keyword arguments (aka as ``**kwargs``) to ``predict`` is not supported by the Scikit-Learn API, and will be removed in a future version of SciKeras. These parameters can also be specified by prefixing ``predict__`` to a parameter at initialization (``BaseWrapper(..., fit__batch_size=32, predict__batch_size=1000)``) or by using ``set_params`` (``est.set_params(fit__batch_size=32, predict__batch_size=1000)``\).
+            Passing estimator parameters as keyword arguments (aka as ``**kwargs``) to ``predict`` is not supported by the Scikit-Learn API, and will be removed in a future version of SciKeras. These parameters can also be specified by prefixing ``predict__`` to a parameter at initialization (``BaseWrapper(..., fit__batch_size=32, predict__batch_size=1000)``) or by using ``set_params`` (``est.set_params(fit__batch_size=32, predict__batch_size=1000)``).
 
         Returns:
             array-like: Predictions, of shape shape (n_samples,) or (n_samples, n_outputs).
@@ -362,10 +362,10 @@ class VAEClassifier(KerasClassifier):
 
         Args:
             X (Union[array-like, sparse matrix, dataframe] of shape (n_samples, n_features)): Training samples where n_samples is the number of samples and n_features is the number of features.
-        kwargs (Dict[str, Any]): Extra arguments to route to ``Model.predict``\.
+        kwargs (Dict[str, Any]): Extra arguments to route to ``Model.predict.
 
         Warnings:
-            Passing estimator parameters as keyword arguments (aka as ``**kwargs``) to ``predict`` is not supported by the Scikit-Learn API, and will be removed in a future version of SciKeras. These parameters can also be specified by prefixing ``predict__`` to a parameter at initialization (``BaseWrapper(..., fit__batch_size=32, predict__batch_size=1000)``) or by using ``set_params`` (``est.set_params(fit__batch_size=32, predict__batch_size=1000)``\).
+            Passing estimator parameters as keyword arguments (aka as ``**kwargs``) to ``predict`` is not supported by the Scikit-Learn API, and will be removed in a future version of SciKeras. These parameters can also be specified by prefixing ``predict__`` to a parameter at initialization (``BaseWrapper(..., fit__batch_size=32, predict__batch_size=1000)``) or by using ``set_params`` (``est.set_params(fit__batch_size=32, predict__batch_size=1000)``).
 
         Returns:
             array-like: Predictions, of shape shape (n_samples,) or (n_samples, n_outputs).
@@ -630,9 +630,7 @@ class MLPClassifier(KerasClassifier):
         Returns:
             float: Calculated score.
         """
-        missing_mask = kwargs.get(
-            "missing_mask", np.ones(y_true.shape, dtype=bool)
-        )
+        missing_mask = kwargs.get("missing_mask", np.ones(y_true.shape, dtype=bool))
         num_classes = kwargs.get("num_classes", 3)
         testing = kwargs.get("testing", False)
 
@@ -672,10 +670,10 @@ class MLPClassifier(KerasClassifier):
 
         Args:
             X (Union[array-like, sparse matrix, dataframe] of shape (n_samples, n_features)): Training samples where n_samples is the number of samples and n_features is the number of features.
-        kwargs (Dict[str, Any]): Extra arguments to route to ``Model.predict``\.
+        kwargs (Dict[str, Any]): Extra arguments to route to ``Model.predict.
 
         Warnings:
-            Passing estimator parameters as keyword arguments (aka as ``**kwargs``) to ``predict`` is not supported by the Scikit-Learn API, and will be removed in a future version of SciKeras. These parameters can also be specified by prefixing ``predict__`` to a parameter at initialization (``BaseWrapper(..., fit__batch_size=32, predict__batch_size=1000)``) or by using ``set_params`` (``est.set_params(fit__batch_size=32, predict__batch_size=1000)``\).
+            Passing estimator parameters as keyword arguments (aka as ``**kwargs``) to ``predict`` is not supported by the Scikit-Learn API, and will be removed in a future version of SciKeras. These parameters can also be specified by prefixing ``predict__`` to a parameter at initialization (``BaseWrapper(..., fit__batch_size=32, predict__batch_size=1000)``) or by using ``set_params`` (``est.set_params(fit__batch_size=32, predict__batch_size=1000)``).
 
         Returns:
             array-like: Predictions, of shape shape (n_samples,) or (n_samples, n_outputs).
