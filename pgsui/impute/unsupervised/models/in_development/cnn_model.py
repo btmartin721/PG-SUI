@@ -1,62 +1,14 @@
-import logging
-import os
-import sys
-import warnings
+# Standard library imports
 import math
 
-# Import tensorflow with reduced warnings.
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-logging.getLogger("tensorflow").disabled = True
-warnings.filterwarnings("ignore", category=UserWarning)
-
-import numpy as np
-import pandas as pd
-import tensorflow as tf
-
-# Disable can't find cuda .dll errors. Also turns of GPU support.
-tf.config.set_visible_devices([], "GPU")
-
-from tensorflow.python.util import deprecation
-
-# Disable warnings and info logs.
-tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
-tf.get_logger().setLevel(logging.ERROR)
-
-
-# Monkey patching deprecation utils to supress warnings.
-# noinspection PyUnusedLocal
-def deprecated(
-    date, instructions, warn_once=True
-):  # pylint: disable=unused-argument
-    def deprecated_wrapper(func):
-        return func
-
-    return deprecated_wrapper
-
-
-deprecation.deprecated = deprecated
-
-from tensorflow.keras.layers import (
-    Dropout,
-    Dense,
-    Reshape,
-    Activation,
-    Flatten,
-    BatchNormalization,
-    LeakyReLU,
-    PReLU,
-)
-
-from tensorflow.keras.regularizers import l1_l2
+# Third party imports
+from torch import nn
 
 # Custom Modules
-try:
-    from ...neural_network_methods import NeuralNetworkMethods
-except (ModuleNotFoundError, ValueError, ImportError):
-    from impute.unsupervised.neural_network_methods import NeuralNetworkMethods
+from pgsui.impute.unsupervised.neural_network_methods import NeuralNetworkMethods
 
 
-class SoftOrdering1DCNN(tf.keras.Model):
+class SoftOrdering1DCNN(nn.Module):
     def __init__(
         self,
         y=None,
@@ -88,9 +40,7 @@ class SoftOrdering1DCNN(tf.keras.Model):
         self.sample_weight = sample_weight
 
         self.nn_ = NeuralNetworkMethods()
-        self.binary_accuracy = self.nn_.make_masked_binary_accuracy(
-            is_vae=True
-        )
+        self.binary_accuracy = self.nn_.make_masked_binary_accuracy(is_vae=True)
 
         self.total_loss_tracker = tf.keras.metrics.Mean(name="loss")
         self.reconstruction_loss_tracker = tf.keras.metrics.Mean(
@@ -157,9 +107,7 @@ class SoftOrdering1DCNN(tf.keras.Model):
         hidden_size = initial_hidden_size
         if self.n_features >= hidden_size:
             scaling_factor = int(math.ceil(self.n_features / hidden_size)) * 2
-            hidden_size *= num_groups * int(
-                math.ceil((scaling_factor / num_groups))
-            )
+            hidden_size *= num_groups * int(math.ceil((scaling_factor / num_groups)))
         else:
             # If hidden_size is close in number to n_features
             if abs(hidden_size - self.n_features) <= (hidden_size // 2):
@@ -197,9 +145,7 @@ class SoftOrdering1DCNN(tf.keras.Model):
             activation=hidden_activation,
         )
 
-        self.avg_po_c1 = tf.keras.layers.AveragePooling1D(
-            pool_size=4, padding="valid"
-        )
+        self.avg_po_c1 = tf.keras.layers.AveragePooling1D(pool_size=4, padding="valid")
 
         self.batch_norm_c2 = BatchNormalization()
         self.dropout_c2 = Dropout(self.dropout_rate)
@@ -237,17 +183,13 @@ class SoftOrdering1DCNN(tf.keras.Model):
 
         self.act_c4 = Activation(hidden_activation)
 
-        self.max_po_c4 = tf.keras.layers.MaxPooling1D(
-            pool_size=4, stride=2, padding=1
-        )
+        self.max_po_c4 = tf.keras.layers.MaxPooling1D(pool_size=4, stride=2, padding=1)
 
         self.flatten = Flatten()
 
         self.batch_norm2 = BatchNormalization()
         self.dropout2 = Dropout(self.dropout_rate)
-        self.dense2 = Dense(
-            self.n_features, kernel_initializer=kernel_initializer
-        )
+        self.dense2 = Dense(self.n_features, kernel_initializer=kernel_initializer)
         self.rshp2 = Reshape((output_shape, num_classes))
         self.act2 = Activation(activation)
 
@@ -310,7 +252,6 @@ class SoftOrdering1DCNN(tf.keras.Model):
             self.accuracy_tracker,
         ]
 
-    @tf.function
     def train_step(self, data):
         # if isinstance(data, tuple):
         #     if len(data) == 2:
@@ -389,7 +330,6 @@ class SoftOrdering1DCNN(tf.keras.Model):
             "accuracy": self.accuracy_tracker.result(),
         }
 
-    @tf.function
     def test_step(self, data):
         if isinstance(data, tuple):
             if len(data) == 2:
