@@ -7,7 +7,6 @@ warnings.simplefilter(action="ignore", category=FutureWarning)
 
 
 # Third-party imports
-import numpy as np
 import pandas as pd
 
 # Scikit-learn imports
