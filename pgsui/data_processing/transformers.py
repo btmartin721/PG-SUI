@@ -1,17 +1,14 @@
 # Standard library imports
-import copy
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, List, Optional, Tuple
 
 # Third-party imports
 import numpy as np
-import pandas as pd
-import torch
 from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.metrics import f1_score
 from snpio.utils.logging import LoggerManager
+from torch import Tensor
 
 # Custom imports
-from pgsui.utils import misc
+from pgsui.utils.misc import validate_input_type
 
 
 def encode_onehot(X):
@@ -91,36 +88,27 @@ class UBPInputTransformer(BaseEstimator, TransformerMixin):
 
 
 class AutoEncoderFeatureTransformer(BaseEstimator, TransformerMixin):
-    """Transformer to format autoencoder features and targets before model fitting.
+    """Formats autoencoder features and targets before model fitting.
 
-    The input data, X, is encoded to one-hot format, and then missing values are filled to [-1] * num_classes. Missing and observed boolean masks are also generated.
-
-    Example:
-        >>> autoenc = AutoEncoderFeatureTransformer(num_classes=3)
-        >>> autoenc.fit(X)
-        >>> X_train = autoenc.transform(X)
+    The input data is converted to one-hot format, and missing values are replaced with [-1] * num_classes. Missing and observed boolean masks are also generated. The transformer can also return integer-encoded SNP data. The inverse_transform method decodes the predicted outputs back to the original format. The optimal threshold for sigmoid activation can be found using the inverse_transform method. The encoding function is selected based on the number of SNP categories. The encoding functions are encode_012, encode_multilabel, and encode_multiclass.
 
     Attributes:
-        num_classes (int): Number of classes in the last axis dimention of the input array. Defaults to 3.
-        return_int (bool): Whether to return an integer-encoded array (If True) or a one-hot or multi-label encoded array (If False.). Defaults to False.
-        activate (str or None): If not None, then does the appropriate activation. Multilabel learning uses sigmoid activation, and multiclass uses softmax. If set to None, then the function assumes that the input has already been activated. Possible values include: {None, 'sigmoid', 'softmax'}. Defaults to None.
-        threshold_increment (float): The increment used to search for the best threshold. Defaults to 0.05.
-        logger (LoggerManager): LoggerManager instance. If None, then a new instance will be created. Defaults to None.
-        debug (bool): Debug mode. Defaults to False.
-        n_classes_ (int): Number of classes in the last axis dimention of the input array.
-        classes_ (numpy.ndarray): Array of classes.
-        n_outputs_ (int): Number of outputs.
-        n_outputs_expected_ (int): Number of expected outputs.
-        X_train (numpy.ndarray): One-hot encoded input data.
-        X_decoded (numpy.ndarray): Decoded input data.
-        missing_mask_ (numpy.ndarray): Missing data mask.
-        observed_mask_ (numpy.ndarray): Observed data mask.
-
+        num_classes (int): Number of SNP categories (A, T, C, G).
+        return_int (bool): Whether to return integer-encoded SNP data.
+        activate (str): Activation function used in the autoencoder.
+        threshold_increment (float): Step size for optimal threshold search.
+        logger (LoggerManager): Logger for debugging and tracking.
+        debug (bool): Enables debug mode.
+        encoding_function (function): Selected encoding function.
+        encoded_data (numpy.ndarray): One-hot encoded SNP data.
+        original_data (numpy.ndarray): Raw input SNP data.
+        missing_data_mask (numpy.ndarray): Boolean mask for missing values.
+        observed_data_mask (numpy.ndarray): Boolean mask for observed values.
     """
 
     def __init__(
         self,
-        num_classes: int = 3,
+        num_classes: int = 4,  # Adjusted for SNP categories (A, T, C, G)
         return_int: bool = False,
         activate: str = "softmax",
         threshold_increment: float = 0.05,
@@ -128,19 +116,7 @@ class AutoEncoderFeatureTransformer(BaseEstimator, TransformerMixin):
         verbose: int = 0,
         debug: bool = False,
     ) -> None:
-        """Initialize the AutoEncoderFeatureTransformer.
-
-        This class is used to transform input data to one-hot encoded format, whether it be 3 or 4 classes. It also generates missing and observed data masks. The class can also be used to transform target data back to its original format with the ``inverse_transform`` method. The class can be used with both multiclass and multilabel learning. If multiclass, then the input data should be 012-encoded. If multilabel, then the input data should be 0123456789-encoded.
-
-        Args:
-            num_classes (int): The number of classes in the last axis dimention of the input array. Defaults to 3.
-            return_int (bool): Whether to return an integer-encoded array (If True) or a one-hot or multi-label encoded array (If False.). Defaults to False.
-            activate (str): If not None, then does the appropriate activation. Multilabel learning uses sigmoid activation, and multiclass uses softmax. If set to None, then the function assumes that the input has already been activated. Possible values include: {'sigmoid', 'softmax'}. Defaults to 'softmax'.
-            threshold_increment (float): The increment used to search for the best threshold. Defaults to 0.05.
-            logger (LoggerManager, optional): LoggerManager instance. If None, then a new instance will be created. Defaults to None.
-            debug (bool): Debug mode. Defaults to False.
-
-        """
+        """Initialize the AutoEncoderFeatureTransformer."""
         self.num_classes = num_classes
         self.return_int = return_int
         self.activate = activate
@@ -153,185 +129,124 @@ class AutoEncoderFeatureTransformer(BaseEstimator, TransformerMixin):
                 debug=debug,
                 verbose=verbose >= 1,
             )
-            self.logger - logman.get_logger()
+            self.logger = logman.get_logger()
         else:
             self.logger = logger
 
-    def fit(
-        self,
-        X: Union[np.ndarray, pd.DataFrame, List[List[int]], torch.Tensor],
-        y: Optional[np.ndarray] = None,
-    ) -> Any:
-        """set attributes used to transform X (input features).
+    def fit(self, X) -> Any:
+        """Fit the transformer by encoding X.
 
         Args:
-            X (Union[numpy.ndarray, pd.DataFrame, List[List[int], torch.Tensor]]): Input integer-encoded numpy array.
-            y (None): Ignored. Just for compatibility with sklearn API.
+            X (numpy.ndarray): Input data to fit.
 
         Returns:
-            self: Class instance for method chaining.
+            self: Class instance.
 
         Raises:
-            ValueError: Invalid value passed to num_classes in AutoEncoderFeatureTransformer. Only 3 or 4 are supported.
+            ValueError: If the number of classes is invalid.
         """
-        X = misc.validate_input_type(X, return_type="array")
+        X = validate_input_type(X, "array")
 
-        self.X_decoded = X
+        # Fill missing values in X with -1
+        X = np.nan_to_num(X, nan=-1)
 
+        self.classes_ = np.arange(self.num_classes)
+
+        # Select encoding function
         if self.num_classes == 3:
-            enc_func = self.encode_012
+            encoding_function = self.encode_012
         elif self.num_classes == 4:
-            enc_func = self.encode_multilab
+            encoding_function = self.encode_multilabel
         elif self.num_classes == 10:
-            enc_func = self.encode_multiclass
+            encoding_function = self.encode_multiclass
         else:
-            msg = f"Invalid value passed to num_classes in AutoEncoderFeatureTransformer. Only 3 or 4 are supported, but got {self.num_classes}."
+            msg = f"Invalid num_classes {self.num_classes}. Only 3, 4, or 10 are supported."
             self.logger.error(msg)
             raise ValueError(msg)
 
-        self.enc_func_ = enc_func
+        self.encoding_function_ = encoding_function
 
-        # Encode the data.
-        self.X_train = enc_func(X)
-        self.classes_ = np.arange(self.num_classes)
-        self.n_classes_ = self.num_classes
+        # Encode the input data
+        Xenc = self.encoding_function_(X)
+        self.data_shape_ = Xenc.shape
 
-        # Get missing and observed data boolean masks.
-        self.missing_mask_, self.observed_mask_ = self._get_masks(self.X_train)
-
-        # To accomodate multiclass-multioutput.
-        self.n_outputs_expected_ = 1
-        self.n_outputs_ = self.X_train.shape[1]
+        # Generate missing and observed data masks
+        self.missing_mask_, self.observed_mask_ = self._get_masks(Xenc)
 
         return self
 
-    def transform(
-        self, X: Union[np.ndarray, pd.DataFrame, List[List[int]], torch.Tensor]
-    ) -> np.ndarray:
-        """Transform X to one-hot encoded format.
-
-        Accomodates multiclass targets with a 3D shape. This method fills in missing values with -1.
+    def transform(self, X):
+        """Transform input data X to the needed format.
 
         Args:
-            X (Union[numpy.ndarray, pd.DataFrame, List[List[int]], torch.Tensor]): One-hot encoded target data of shape (n_samples, n_features, num_classes), unless return_int is True, in which case it should be integer-encoded data of shape (n_samples, n_features).
+            X (numpy.ndarray): Input data to fit.
 
         Returns:
-            numpy.ndarray: Transformed target data in one-hot format of shape (n_samples, n_features, num_classes).
-        """
-        X = misc.validate_input_type(X, return_type="array")
-
-        if self.return_int:
-            self.logger.debug("Returning integer-encoded data.")
-            return X.copy()
-
-        # One-hot encode the data.
-        X_enc = self.enc_func_(X)
-
-        # Fill missing values with -1.
-        return self._fill(X_enc)
-
-    def inverse_transform(self, y, return_proba=False):
-        """Inverse transform the target data to the output format.
-
-        This method is used to transform the target data to the output format by applying the appropriate activation function (softmax for multiclass or sigmoid for multilabel) and inverse transforming to integer-encoded data. The method can also return the probability values instead of the integer-encoded values.
-
-        Args:
-            y (torch.Tensor or np.ndarray): Array to inverse transform.
-            return_proba (bool): If True, return the probability values instead of the integer-encoded values.
-
-        Returns:
-            np.ndarray: Inverse transformed data with appropriate activation function applied (softmax or sigmoid).
+            numpy.ndarray: Formatted input data with correct component.
 
         Raises:
-            ValueError: Invalid value passed to activate. Valid options: 'softmax', 'sigmoid'.
+            ValueError: If the encoding produced an unexpected shape.
         """
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        X = validate_input_type(X, return_type="array")
+        X = np.nan_to_num(X, nan=-1)
+        X_encoded = self.encoding_function_(X)
 
-        if not isinstance(y, torch.Tensor):
-            y = torch.tensor(y, dtype=torch.float32).to(device)
-
-        # Apply activation based on the type of problem
-        if self.activate == "softmax":
-            # Multiclass problem: Apply softmax and decode
-            y = torch.softmax(y, dim=-1).cpu().numpy()
-
-            if len(y.shape) != 3:
-                y = y.reshape(-1, self.n_outputs_, self.n_classes_)
-
-            if return_proba:
-                return y
-            else:
-                # Number of classes determines output type
-                if y.shape[-1] == 3:  # 0-1-2 integer encoding
-                    return np.argmax(y, axis=-1)
-                elif y.shape[-1] == 4:  # One-hot encoding
-                    return np.eye(4)[np.argmax(y, axis=-1)]
-                elif y.shape[-1] > 4:  # General integer encoding for >4 classes
-                    return np.argmax(y, axis=-1)
-
-        elif self.activate == "sigmoid":
-            # Multilabel problem: Apply sigmoid activation
-            y = torch.sigmoid(y).cpu().numpy()
-
-            if len(y.shape) != 3:
-                y = y.reshape(-1, self.n_outputs_, self.n_classes_)
-
-            if return_proba:
-                return y
-
-            # Search for optimal threshold to maximize F1 score
-            optimal_threshold = self._find_optimal_threshold(
-                self.y_true_bin, y, increment=self.threshold_increment
-            )
-
-            # Binarize predictions using the optimal threshold
-            y_binarized = np.where(y >= optimal_threshold, 1, 0)
-
-            # Return binary or integer-decoded values (multilabel)
-            return self._decode_multilabel(y_binarized)
-
-        else:
-            msg = f"Invalid value passed to activate. Valid options: 'softmax', 'sigmoid', but got {self.activate}"
+        # Ensure correct shape
+        if (
+            X_encoded.shape[1] != self.data_shape_
+            and X_encoded.shape[2] != self.data_shape_[2]
+        ):
+            msg = f"Encoding produced unexpected shape {tuple(X_encoded.shape[1:])}, expected {tuple(self.data_shape_[1:])}."
             self.logger.error(msg)
             raise ValueError(msg)
 
-        return y.cpu().numpy()  # Fallback if no activation applied
+        return X_encoded
 
-    # Helper Method to Find Optimal Threshold for Sigmoid Activation
-    def _find_optimal_threshold(self, y_true_bin, y_pred_proba, increment=0.05):
-        """Find the optimal threshold for sigmoid-activated outputs to maximize F1 score.
+    def inverse_transform(self, X) -> np.ndarray:
+        """Inverse transform predicted outputs back to original format.
 
-        This method is used to find the optimal threshold for sigmoid-activated outputs to maximize the F1 score. It searches for the best threshold value by incrementing from 0 to 1 in steps of the provided ``increment`` value.
+        This method decodes the predicted outputs from the autoencoder back to the original SNP format. If return_proba is True, then the predicted probabilities are also returned.
 
         Args:
-            y_true_bin (np.ndarray): Ground truth binary labels (0 or 1).
-            y_pred_proba (np.ndarray): Predicted probabilities from sigmoid activation.
-            increment (float): The increment used to search for the best threshold.
+            X (numpy.ndarray): Input data. Should be encoded of shape (n_samples, n_features, num_classes).
 
         Returns:
-            float: The optimal threshold value.
+            numpy.ndarray: Decoded SNP data.
+
+        Raises:
+            ValueError: If the activation function is invalid.
         """
-        thresholds = np.arange(0.0, 1.0, increment)
-        best_threshold = 0.5
-        best_f1 = 0
+        if self.activate not in {"sigmoid", "softmax"}:
+            msg = f"Invalid activation function: {self.activate}; must be 'sigmoid' or 'softmax'."
+            self.logger.error(msg)
+            raise ValueError(msg)
 
-        for threshold in thresholds:
-            # Binarize predictions with current threshold
-            y_pred_bin = np.where(y_pred_proba >= threshold, 1, 0)
+        if self.activate == "softmax":
+            Xarr = validate_input_type(X, return_type="array")
+            if not Xarr.shape[-1] == self.num_classes:
+                msg = f"Unexpected shape: {Xarr.shape}; expected (n_samples, n_features, num_classes)."
+                self.logger.error(msg)
+                raise ValueError(msg)
 
-            # Compute F1 score
-            current_f1 = f1_score(y_true_bin, y_pred_bin, average="macro")
+            return np.argmax(Xarr, axis=-1)
+        else:
+            Xarr = validate_input_type(X, return_type="array")
+            if Xarr.shape[-1] != self.num_classes:
+                msg = f"Unexpected shape: {Xarr.shape}; expected {self.data_shape_}, {self.num_classes})."
+                self.logger.error(msg)
+                raise ValueError(msg)
 
-            if current_f1 > best_f1:
-                best_f1 = current_f1
-                best_threshold = threshold
+            is_binarized = np.all(np.isin(Xarr, [0, 1, -1]))
 
-        return best_threshold
+            if not is_binarized:
+                msg = "Input X is not binarized. Please decode the predicted probabilities first."
+                self.logger.error(msg)
+                raise ValueError(msg)
 
-    # Helper Method to Decode Multilabel Encodings
-    def _decode_multilabel(self, y_binarized):
-        """
-        Decode binarized multilabel outputs into integer encodings.
+            return self.decode_multilabel(Xarr)
+
+    def decode_multilabel(self, y_binarized):
+        """Decode binarized multilabel outputs into integer encodings.
 
         Args:
             y_binarized (np.ndarray): Binarized predictions (0 or 1) after applying the optimal threshold.
@@ -339,159 +254,139 @@ class AutoEncoderFeatureTransformer(BaseEstimator, TransformerMixin):
         Returns:
             np.ndarray: Decoded integer-encoded multilabel predictions.
         """
-        # Generate integer encodings for multilabel combinations
+        y_binarized = y_binarized.reshape(-1, self.num_classes)
+
+        # Replace all-zero predictions with the most likely class.
+        # Get row indices where all values are zero
+        zero_rows = np.where(np.sum(y_binarized, axis=1) == 0)[0]
+
+        if len(zero_rows) > 0:
+            # Get the index of the maximum value in each row.
+            argmax_indices = np.argmax(y_binarized, axis=1)
+
+            # Assign argmax in only those rows where all values are zero.
+            y_binarized[zero_rows, argmax_indices[zero_rows]] = 1
+
+        # Define mapping from multi-hot encodings to integer values
         mappings = {
-            "0": 0,
-            "1": 1,
-            "2": 2,
-            "3": 3,
-            "01": 4,
-            "02": 5,
-            "03": 6,
-            "12": 7,
-            "13": 8,
-            "23": 9,
+            (1, 0, 0, 0): 0,
+            (0, 1, 0, 0): 1,
+            (0, 0, 1, 0): 2,
+            (0, 0, 0, 1): 3,
+            (1, 1, 0, 0): 4,
+            (1, 0, 1, 0): 5,
+            (1, 0, 0, 1): 6,
+            (0, 1, 1, 0): 7,
+            (0, 1, 0, 1): 8,
+            (0, 0, 1, 1): 9,
+            (0, 0, 0, 0): -1,
         }
 
-        # Create binary strings for each sample (e.g., "01" for classes 0 and 1)
-        y_pred_idx = ["".join(map(str, row.nonzero()[0])) for row in y_binarized]
-
-        # Map binary strings to integer encodings
-        decoded = np.array([mappings.get(enc, -9) for enc in y_pred_idx])
-
-        return decoded
-
-    def encode_012(self, X):
-        """Convert 012-encoded data to one-hot encodings using vectorized NumPy operations.
-
-        This method is used to encode 012-encoded data to one-hot encodings. It uses vectorized NumPy operations to achieve this. Missing values are encoded as np.nan. Encodings are as follows: 0 -> [1, 0, 0], 1 -> [0, 1, 0], 2 -> [0, 0, 1], -9 -> [np.nan, np.nan, np.nan].
-
-        Args:
-            X (numpy.ndarray): Input array with 012-encoded data and -9 as the missing data value.
-
-        Returns:
-            numpy.ndarray: One-hot encoded data, ignoring missing values (np.nan).
-        """
-        # Initialize the output array with NaNs for missing data (-9)
-        Xt = np.full((X.shape[0], X.shape[1], 3), np.nan)
-
-        # Create a mask for valid data (0, 1, 2)
-        valid_mask = (X >= 0) & (X <= 2)
-
-        # Create identity matrix for one-hot encoding: 0 -> [1, 0, 0],
-        # 1 -> [0, 1, 0], 2 -> [0, 0, 1]
-        # Perform one-hot encoding for valid values only
-        one_hot_values = np.eye(3)
-
-        # Assign one-hot encodings based on values in X
-        Xt[valid_mask] = one_hot_values[X[valid_mask].astype(int)]
-
-        return Xt
-
-    def encode_multilab(self, X, multilab_value=0.5):
-        """Encode 0-9 integer data in multi-label one-hot format using vectorized NumPy operations.
-
-        This method is used to encode 0-9 integer data in multi-label one-hot format. It uses vectorized NumPy operations to achieve this. Missing values are encoded as np.nan. Encodings are as follows: 0 -> [1, 0, 0, 0], 1 -> [0, 1, 0, 0], 2 -> [0, 0, 1, 0], 3 -> [0, 0, 0, 1], 4 -> [0.5, 0.5, 0, 0], 5 -> [0.5, 0, 0.5, 0], 6 -> [0.5, 0, 0, 0.5], 7 -> [0, 0.5, 0.5, 0], 8 -> [0, 0.5, 0, 0.5], 9 -> [0, 0, 0.5, 0.5].
-
-        Args:
-            X (numpy.ndarray): Input array with 012-encoded data and -9 as the missing data value.
-            multilab_value (float): Value to use for multi-label target encodings. Defaults to 0.5.
-
-        Returns:
-            numpy.ndarray: One-hot encoded data, ignoring missing values (np.nan). Multi-label categories will be encoded as multilab_value.
-        """
-        # Initialize the output array with NaNs for missing data (-9)
-        Xt = np.full((X.shape[0], X.shape[1], 4), np.nan)
-
-        # Define the mappings for each category
-        basic_mappings = np.array(
-            [
-                [1.0, 0.0, 0.0, 0.0],  # 0
-                [0.0, 1.0, 0.0, 0.0],  # 1
-                [0.0, 0.0, 1.0, 0.0],  # 2
-                [0.0, 0.0, 0.0, 1.0],  # 3
-                [multilab_value, multilab_value, 0.0, 0.0],  # 4
-                [multilab_value, 0.0, multilab_value, 0.0],  # 5
-                [multilab_value, 0.0, 0.0, multilab_value],  # 6
-                [0.0, multilab_value, multilab_value, 0.0],  # 7
-                [0.0, multilab_value, 0.0, multilab_value],  # 8
-                [0.0, 0.0, multilab_value, multilab_value],  # 9
-            ]
+        # Convert each row of one-hot to tuple and map to integer
+        decoded = np.array(
+            [mappings.get(tuple(row), -1) for row in y_binarized],
+            dtype=int,
         )
 
-        # Create a mask for valid data (0-9)
-        valid_mask = X >= 0
+        return decoded.reshape(self.data_shape_[0], self.data_shape_[1])
 
-        # Assign values for valid data using advanced indexing
-        Xt[valid_mask] = basic_mappings[X[valid_mask]]
-
-        return Xt
-
-    def encode_multiclass(self, X, num_classes=10, missing_value=-9):
-        """Encode 0-9 integer data in multi-class one-hot format using vectorized NumPy operations.
-
-        Missing values get encoded as ``[np.nan] * num_classes``. This method is used to encode 0-9 integer data in multi-class one-hot format. It uses vectorized NumPy operations to achieve this. Missing values are encoded as np.nan. Encodings are as follows: 0 -> [1, 0, 0, 0, 0, 0, 0, 0, 0, 0], 1 -> [0, 1, 0, 0, 0, 0, 0, 0, 0, 0], 2 -> [0, 0, 1, 0, 0, 0, 0, 0, 0, 0], 3 -> [0, 0, 0, 1, 0, 0, 0, 0, 0, 0], 4 -> [0, 0, 0, 0, 1, 0, 0, 0, 0, 0], 5 -> [0, 0, 0, 0, 0, 1, 0, 0, 0, 0], 6 -> [0, 0, 0, 0, 0, 0, 1, 0, 0, 0], 7 -> [0, 0, 0, 0, 0, 0, 0, 1, 0, 0], 8 -> [0, 0, 0, 0, 0, 0, 0, 0, 1, 0], 9 -> [0, 0, 0, 0, 0, 0, 0, 0, 0, 1].
+    def _get_masks(self, X) -> Tuple[np.ndarray, np.ndarray]:
+        """Generate missing and observed data masks.
 
         Args:
-            X (numpy.ndarray): Input array with integer-encoded data and ``missing_value`` as the missing data value.
-            num_classes (int, optional): Number of classes to use. Defaults to 10.
-            missing_value (int, optional): Missing data value to replace with ``[np.nan] * num_classes``. Defaults to -9.
+            X (np.ndarray): Input data to generate masks from.
 
         Returns:
-            numpy.ndarray: Multi-class one-hot encoded data, ignoring missing values (np.nan).
+            Tuple[np.ndarray, np.ndarray]: Missing data mask, observed data mask.
         """
-        # Initialize output array with NaNs for missing data
-        Xt = np.full((X.shape[0], X.shape[1], num_classes), np.nan)
-
-        # Create a mask for valid data (i.e., not equal to the missing value)
-        valid_mask = X != missing_value
-
-        # One-hot encoding for valid data
-        Xt[valid_mask, X[valid_mask]] = 1
-
-        return Xt
-
-    def _fill(self, data: np.ndarray, missing_value: int = -1) -> np.ndarray:
-        """Mask missing data as ``missing_value``.
-
-        This method is used to mask missing data as ``missing_value``. It sets the missing data to the provided value. If the number of classes is greater than 1, then it sets the missing data to a list of the same length as the number of classes.
-
-        Args:
-            data (numpy.ndarray): Input with missing values of shape (n_samples, n_features, num_classes).
-            missing_value (int): Value to set missing data to. If a list is provided, then its length should equal the number of one-hot classes. Defaults to -1.
-
-        Returns:
-            numpy.ndarray: Data with missing values set to ``missing_value``.
-        """
-        missing_mask = self._create_missing_mask(data)
-        if self.num_classes > 1:
-            missing_value = [missing_value] * self.num_classes
-        data[missing_mask] = missing_value
-        return data
-
-    def _get_masks(self, X: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        """Format the provided target data for use with UBP/NLPCA.
-
-        This method generates missing and observed data masks for the input data.
-
-        Args:
-            y (numpy.ndarray(float)): Input data that will be used as the target of shape (n_samples, n_features, num_classes).
-
-        Returns:
-            Tuple[numpy.ndarray, numpy.ndarray]: Missing and observed data masks.
-        """
-        missing_mask = self._create_missing_mask(X)
+        missing_mask = np.isnan(X).all(axis=2)
         observed_mask = ~missing_mask
         return missing_mask, observed_mask
 
-    def _create_missing_mask(self, data: np.ndarray) -> np.ndarray:
-        """Creates a missing data mask with boolean values.
+    def encode_012(self, X):
+        """Convert 012-encoded data to one-hot encodings.
         Args:
-            data (numpy.ndarray): Data to generate missing mask from, of shape (n_samples, n_features, n_classes).
+            X (numpy.ndarray): Input array with 012-encoded data and -9 as the missing data value.
         Returns:
-            numpy.ndarray: Boolean mask of missing values of shape (n_samples, n_features), with True corresponding to a missing data point.
+            pandas.DataFrame: One-hot encoded data, ignoring missing values (np.nan).
         """
-        return np.isnan(data).all(axis=2)
+        Xt = np.zeros(shape=(X.shape[0], X.shape[1], 3))
+        mappings = {
+            0: np.array([1, 0, 0]),
+            1: np.array([0, 1, 0]),
+            2: np.array([0, 0, 1]),
+            -9: np.array([np.nan, np.nan, np.nan]),
+            -1: np.array([np.nan, np.nan, np.nan]),
+        }
+        for row in np.arange(X.shape[0]):
+            Xt[row] = [mappings[enc] for enc in X[row]]
+        return Xt
+
+    def encode_multilabel(self, X, multilabel_value=1.0):
+        """Ensure SNP encoding remains (samples, loci, 4) without unintended expansion."""
+
+        # **Force input X to be 2D**
+        if X.ndim != 2:
+            raise ValueError(f"Unexpected X shape: {X.shape}, expected (samples, loci)")
+
+        # Initialize output matrix
+        Xt = np.full((X.shape[0], X.shape[1], 4), np.nan)  # (samples, loci, 4)
+
+        # Define encoding map
+        encoding_map = np.array(
+            [
+                [1.0, 0.0, 0.0, 0.0],  # A (0)
+                [0.0, 1.0, 0.0, 0.0],  # T (1)
+                [0.0, 0.0, 1.0, 0.0],  # C (2)
+                [0.0, 0.0, 0.0, 1.0],  # G (3)
+                [multilabel_value, multilabel_value, 0.0, 0.0],  # AT (4)
+                [multilabel_value, 0.0, multilabel_value, 0.0],  # AC (5)
+                [multilabel_value, 0.0, 0.0, multilabel_value],  # AG (6)
+                [0.0, multilabel_value, multilabel_value, 0.0],  # TC (7)
+                [0.0, multilabel_value, 0.0, multilabel_value],  # TG (8)
+                [0.0, 0.0, multilabel_value, multilabel_value],  # CG (9)
+            ]
+        )
+
+        # **Step 1: Ensure `valid_mask` is 2D**
+        valid_mask = (X >= 0) & (X <= 9)  # Boolean mask of valid SNPs
+
+        if valid_mask.ndim == 3:
+            valid_mask = valid_mask[:, :, 0]  # Force 2D selection
+
+        if valid_mask.shape != (X.shape[0], X.shape[1]):
+            raise ValueError(
+                f"Valid mask has incorrect shape: {valid_mask.shape}, expected (samples, loci)"
+            )
+
+        # **Step 2: Extract valid SNPs using the corrected mask**
+        row_indices, col_indices = np.where(valid_mask)
+
+        if len(row_indices) == 0:
+            raise ValueError("No valid SNPs found. Ensure correct input.")
+
+        # **Step 3: Get valid SNP values**
+        valid_indices = X[row_indices, col_indices].astype(int)  # (N,)
+
+        if valid_indices.ndim != 1:
+            raise ValueError(
+                f"Unexpected valid_indices shape: {valid_indices.shape}, expected (N,)"
+            )
+
+        # **Step 4: Lookup encoding (ensuring correct shape)**
+        encoding_selected = encoding_map[valid_indices]  # (N, 4)
+
+        if encoding_selected.shape != (len(valid_indices), 4):
+            raise ValueError(
+                f"Unexpected encoding_selected shape: {encoding_selected.shape}, expected (N, 4)"
+            )
+
+        # **Step 5: Assign to Xt**
+        Xt[row_indices, col_indices, :] = (
+            encoding_selected  # Assign to correct positions
+        )
+
+        return Xt  # Expected: (samples, loci, 4)
 
 
 class MLPTargetTransformer(BaseEstimator, TransformerMixin):
@@ -506,7 +401,7 @@ class MLPTargetTransformer(BaseEstimator, TransformerMixin):
         Returns:
             self: Class instance.
         """
-        y = misc.validate_input_type(y, return_type="array")
+        y = validate_input_type(y, return_type="array")
 
         # Original 012-encoded y
         self.y_decoded_ = y
@@ -532,7 +427,7 @@ class MLPTargetTransformer(BaseEstimator, TransformerMixin):
         Returns:
             numpy.ndarray: y_true target data.
         """
-        y = misc.validate_input_type(y, return_type="array")
+        y = validate_input_type(y, return_type="array")
         y_train = encode_onehot(y)
         return self._fill(y_train, self.missing_mask_)
 
@@ -636,7 +531,7 @@ class UBPTargetTransformer(BaseEstimator, TransformerMixin):
         Returns:
             self: Class instance.
         """
-        y = misc.validate_input_type(y, return_type="array")
+        y = validate_input_type(y, return_type="array")
 
         # Original 012-encoded y
         self.y_decoded_ = y
@@ -663,7 +558,7 @@ class UBPTargetTransformer(BaseEstimator, TransformerMixin):
         Returns:
             numpy.ndarray: y_true target data.
         """
-        y = misc.validate_input_type(y, return_type="array")
+        y = validate_input_type(y, return_type="array")
         y_train = encode_onehot(y)
         return self._fill(y_train, self.missing_mask_)
 
@@ -750,448 +645,591 @@ class UBPTargetTransformer(BaseEstimator, TransformerMixin):
 
 
 class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
-    """Simulate missing data on genotypes encoded with a GenotypeData object.
-
-    Copies metadata from a GenotypeData object and simulates user-specified proportion of missing data using a specified strategy. The simulated missing data can be used to train machine learning models to impute missing data.
-
-    There are five strategies available for simulating missing data:
-        - "nonrandom": Branches from GenotypeData.guidetree will be randomly sampled to generate missing data on descendant nodes.
-        - "nonrandom_weighted": Missing data will be placed on nodes proportionally to their branch lengths (e.g., to generate data distributed as might be the case with mutation-disruption of RAD sites).
-        - "random_weighted": Missing data will be placed on nodes proportionally to their branch lengths, but the missing data will be randomly distributed.
-        - "random_weighted_inv": Missing data will be placed on nodes proportionally to their branch lengths, but the missing data will be randomly distributed and inversely proportional to the branch lengths.
-        - "random": Missing data will be randomly distributed across the data.
-
-    Attributes:
-
-        original_missing_mask_ (numpy.ndarray): Array with boolean mask for original missing locations.
-
-        simulated_missing_mask_ (numpy.ndarray): Array with boolean mask for simulated missing locations, excluding the original ones.
-
-        all_missing_mask_ (numpy.ndarray): Array with boolean mask for all missing locations, including both simulated and original.
-    """
+    """Simulate missing data on genotypes, globally (rather than per-column)."""
 
     def __init__(
         self,
         genotype_data: Any,
         *,
         prop_missing: float = 0.1,
-        strategy: str = "random",
-        missing_val: Union[int, float] = -9,
+        strategy: str = "random_global",
+        missing_val: float = -1,
         mask_missing: bool = True,
-        indices: Optional[Dict[str, List[int]]] = None,
-        dataset_name: str = "train",
         seed: int = None,
+        tree: any = None,
+        logger=None,
         verbose: int = 0,
-        tol: Optional[float] = None,
-        max_tries: Optional[int] = None,
-        logger: Optional[LoggerManager] = None,
         debug: bool = False,
-    ) -> None:
-        """Initialize the SimGenotypeDataTransformer.
-
-        This transformer simulates missing data on genotypes encoded with a GenotypeData object. It copies metadata from a GenotypeData object and simulates a user-specified proportion of missing data using a specified strategy. The simulated missing data can be used to train machine learning models to impute missing data.
-
-        Args:
-            genotype_data (GenotypeData): GenotypeData instance.
-
-            prop_missing (float): Proportion of missing data desired in output. Defaults to 0.1
-
-            strategy (str): Strategy for simulating missing data. May be one of: "nonrandom", "nonrandom_weighted", "random_weighted", "random_weighted_inv", or "random". When set to "nonrandom", branches from GenotypeData.guidetree will be randomly sampled to generate missing data on descendant nodes. For "nonrandom_weighted", missing data will be placed on nodes proportionally to their branch lengths (e.g., to generate data distributed as might be the case with mutation-disruption of RAD sites). For "random_weighted", missing data will be placed on nodes proportionally to their branch lengths, but the missing data will be randomly distributed. For "random_weighted_inv", missing data will be placed on nodes proportionally to their branch lengths, but the missing data will be randomly distributed and inversely proportional to the branch lengths. For "random", missing data will be randomly distributed across the data. Defaults to "random".
-
-            missing_val (int): Value that represents missing data. Defaults to -9.
-
-            mask_missing (bool): True if you want to avoid array elements that were originally missing values when simulating new missing data, False to allow new missing data to be placed on top of original missing data. Defaults to True.
-
-            indices (Dict[str, List[int]]): Dictionary of indices for samples and features. Defaults to None.
-
-            dataset_name (str): Name of the dataset. Valid options are "train", "valid", or "test". Defaults to "train".
-
-            seed (int): Seed for random number generation. If None, the random choice selector will be initialized with a random seed and will be non-deterministic. Defaults to None.
-
-            verbose (bool, optional): Verbosity level. Defaults to 0.
-
-            tol (float): Tolerance to reach proportion specified in self.prop_missing. Defaults to 1/num_snps*num_inds
-
-            max_tries (int): Maximum number of tries to reach targeted missing data proportion within specified tol. If None, num_inds will be used. Defaults to None.
-
-            logger (LoggerManager): Logger instance. If None, a new logger will be created. Defaults to None.
-
-            debug (bool): If True, debug logging mode will be enabled. Defaults to False.
+        n_focal: int = 2,
+        class_weights: List[float] | np.ndarray | Tensor | None = None,
+    ):
         """
-
-        if logger is not None:
-            self.logger = logger
-        else:
-            logman = LoggerManager(
-                name=__name__,
-                prefix="missing_data_simulator",
-                level=verbose >= 1,
-                debug=debug,
-            )
-
-            self.logger = logman.get_logger()
-
+        Args:
+            genotype_data (np.ndarray): Genotype data to transform.
+            prop_missing (float): Proportion of data to mask as missing.
+            strategy (str): Strategy to use for missing data simulation.
+            missing_val (float): Value to use for missing data.
+            mask_missing (bool): Whether to mask existing missing data.
+            seed (int): Random seed for reproducibility.
+            tree (any): Tree object for nonrandom strategies.
+            logger (LoggerManager): Logger for debugging and tracking.
+            verbose (int): Verbosity level.
+            debug (bool): Enable debug mode.
+            n_focal (int): Number of focal individuals.
+            class_weights (List[float] | np.ndarray | Tensor, optional): Class weights for nonrandom strategies.
+        """
         self.genotype_data = genotype_data
         self.prop_missing = prop_missing
         self.strategy = strategy
         self.missing_val = missing_val
         self.mask_missing = mask_missing
-        self.dataset_name = dataset_name
         self.seed = seed
-        self.verbose = verbose
-        self.tol = tol
-        self.max_tries = max_tries
-        self.indices = indices
+        self.tree = tree
+        self.n_focal = n_focal
 
+        self.class_weights = (
+            None if class_weights is None else validate_input_type(class_weights)
+        )
+
+        self.verbose = verbose
+        self.debug = debug
         self.rng = np.random.default_rng(seed)
 
-    def fit(self, X):
-        """Fit to input data X by simulating missing data.
+        if logger is None:
+            logman = LoggerManager(
+                name=__name__,
+                prefix="sim_genotype_data_transformer",
+                debug=debug,
+                verbose=verbose >= 1,
+            )
+            self.logger = logman.get_logger()
+        else:
+            self.logger = logger
 
-        Missing data will be simulated in varying ways depending on the ``strategy`` setting.
+        self.logger.debug(
+            f"Initialized {self.__class__.__name__} with strategy={strategy}"
+        )
 
-        Args:
-            X (Union[pandas.DataFrame, numpy.ndarray, List[List[int]], torch.Tensor]): Data with which to simulate missing data. It should have already been imputed with one of the non-machine learning simple imputers, and there should be no missing data present in X.
-
-        Raises:
-            TypeError: SimGenotypeData.tree must not be NoneType when using strategy="nonrandom" or "nonrandom_weighted".
-            ValueError: Invalid ``strategy`` parameter provided.
-        """
-        X = misc.validate_input_type(X, return_type="array").astype("float32")
-
+    def fit(self, X, y=None):
+        """No-op fit. Optionally log info."""
+        X = validate_input_type(X, "array")
         self.logger.info(
-            f"Adding {self.prop_missing} missing data per column using strategy: {self.strategy}"
+            f"Global missing simulation: strategy={self.strategy}, prop={self.prop_missing:.2f}"
         )
-
-        if ~np.isnan(self.missing_val):
-            X[X == self.missing_val] = np.nan
-
-        # Store the original missing mask (before simulation)
-        self.original_missing_mask_ = np.isnan(X)
-
-        # Simulate missing data for the training set
-        self.sim_missing_mask_ = self._simulate_missing_mask(X)
-
-        # Compute all missing values (original + simulated)
-        self.all_missing_mask_ = np.logical_or(
-            self.sim_missing_mask_, self.original_missing_mask_
-        )
-
         return self
 
     def transform(self, X):
-        """Apply the missing data simulation to X.
+        """Apply global missing-data simulation to new data."""
+        X = validate_input_type(X)
+        X = X.astype(float)
 
-        This method applies the same missing data strategy to X but does not use the exact mask from the training set, so as to mitigate data leakage.
+        # Convert existing missing_val or negative placeholders to NaN
+        if not np.isnan(self.missing_val):
+            X = np.where(X == self.missing_val, np.nan, X)
+        X = np.where(X < 0, np.nan, X)
 
-        Args:
-            X (Union[numpy.ndarray, pd.DataFrame, List[List[int]], torch.Tensor]): Data to which missing data simulation should be applied.
+        original_missing_mask = np.isnan(X)
 
-        Returns:
-            numpy.ndarray: Transformed data with simulated missing values.
-        """
-        X = misc.validate_input_type(X, return_type="array")
+        # Build the simulated mask
+        sim_missing_mask = self._simulate_missing_mask(X, original_missing_mask)
 
-        # Generate a new mask for the validation or test set based on the same strategy
-        sim_missing_mask = self._simulate_missing_mask(X)
+        # Do not overwrite original missing
+        if self.mask_missing:
+            sim_missing_mask[original_missing_mask] = False
 
-        self.logger.debug(f"Simulated missing mask: {sim_missing_mask}")
+        # Validate columns or rows, if desired
+        self._validate_mask_columns(sim_missing_mask)
+        # self._validate_mask_rows(sim_missing_mask)  # Uncomment to ensure no row is fully masked
 
+        all_missing_mask = np.logical_or(original_missing_mask, sim_missing_mask)
+
+        # Apply
         Xt = X.copy()
-
-        # Apply the missing mask to generate missing values in the dataset
         Xt[sim_missing_mask] = self.missing_val
 
-        return Xt
+        masks = {
+            "original": original_missing_mask,
+            "simulated": sim_missing_mask,
+            "all": all_missing_mask,
+        }
+        return Xt, masks
 
-    def _simulate_missing_mask(self, X):
-        """Simulate missing data on the input data X.
+    def _simulate_missing_mask(self, X, original_missing_mask):
+        """Select which sites to mask, globally, depending on self.strategy."""
+        if self.strategy == "random_global":
+            return self._simulate_random_global(X, original_missing_mask)
 
-        This method simulates missing data on the input data X using the specified strategy. The missing data will be simulated in varying ways depending on the ``strategy`` setting. The simulated missing data will be returned as a boolean mask.
+        elif self.strategy == "random_balanced_global":
+            return self._simulate_random_balanced_global(
+                X, original_missing_mask, inverse=False
+            )
 
-        Args:
-            X (numpy.ndarray): Input data to simulate missing data on.
+        elif self.strategy == "random_balanced_inv_global":
+            return self._simulate_random_balanced_global(
+                X, original_missing_mask, inverse=True
+            )
 
-        Returns:
-            numpy.ndarray: Boolean mask of simulated missing data.
+        elif self.strategy == "nonrandom_global":
+            return self._simulate_tree_based_global(
+                X, original_missing_mask, weighted=False
+            )
 
-        Raises:
-            ValueError: Invalid ``strategy`` parameter provided
-        """
-        # Convert missing values to np.nan.
-        if ~np.isnan(self.missing_val):
-            X[X == self.missing_val] = np.nan
+        elif self.strategy == "nonrandom_weighted_global":
+            return self._simulate_tree_based_global(
+                X, original_missing_mask, weighted=True
+            )
 
-        mask = None
+        elif self.strategy == "nonrandom_distance_global":
+            return self._simulate_nonrandom_distance_global(X, original_missing_mask)
 
-        if self.strategy not in {
-            "random",
-            "random_weighted",
-            "random_weighted_inv",
-            "nonrandom",
-            "nonrandom_weighted",
-        }:
-            msg = f"Invalid 'strategy' provided: {self.strategy}; expected one of: 'random', 'random_weighted', 'random_weighted_inv', 'nonrandom', or 'nonrandom_weighted'."
-            self.logger.error(msg)
-            raise ValueError(msg)
-
-        if self.strategy == "random":
-            if self.mask_missing:
-                # Get indexes where non-missing (Xobs) and missing (Xmiss).
-                Xobs = np.where(~np.isnan(X).ravel())[0]
-                Xmiss = np.where(np.isnan(X).ravel())[0]
-
-                # Generate mask of 0's (non-missing) and 1's (missing).
-                obs_mask = self.rng.choice(
-                    [0, 1],
-                    size=Xobs.size,
-                    p=((1 - self.prop_missing), self.prop_missing),
-                ).astype(bool)
-
-                # Make missing data mask.
-                mask = np.zeros(X.size, dtype=bool)
-                mask[Xobs] = obs_mask
-                mask[Xmiss] = True
-
-                # Reshape from raveled to 2D.
-                # With strategy=="random", mask_ is equal to all_missing_.
-                mask = np.reshape(mask, X.shape)
-
-            else:
-                # Generate mask of 0's (non-missing) and 1's (missing).
-                mask = self.rng.choice(
-                    [0, 1], size=X.shape, p=((1 - self.prop_missing), self.prop_missing)
-                ).astype(bool)
-
-        elif self.strategy == "random_weighted":
-            mask = self.random_weighted_missing_data(X, inv=False)
-
-        elif self.strategy == "random_weighted_inv":
-            mask = self.random_weighted_missing_data(X, inv=True)
-
-        elif self.strategy in {"nonrandom", "nonrandom_weighted"}:
-            if self.genotype_data.tree is None:
-                msg = "SimGenotypeData.tree cannot be None when using strategy='nonrandom' or strategy='nonrandom_weighted'"
-                self.logger.error(msg)
-                raise TypeError(msg)
-
-            mask = np.full_like(X, 0.0, dtype=bool)
-
-            weighted = True if self.strategy == "nonrandom_weighted" else False
-
-            sample_map = {}
-            for i, sample in enumerate(self.genotype_data.samples):
-                if self.indices is not None:
-                    if i in self.indices[self.dataset_name]:
-                        sample_map[sample] = i
-                    else:
-                        continue
-                else:
-                    sample_map[sample] = i
-
-            # if no tolerance provided, set to 1 snp position
-            if self.tol is None:
-                self.tol = 1.0 / mask.size
-
-            # if no max_tries provided, set to # inds
-            if self.max_tries is None:
-                self.max_tries = mask.shape[0]
-
-            filled = False
-            while not filled:
-                # ToDO: Ensure this works with SNPio refactor.
-                # Get list of samples from tree
-                samples = self._sample_tree(
-                    internal_only=False, skip_root=True, weighted=weighted
-                )
-
-                # Convert to row indices
-                rows = [sample_map[i] for i in samples]
-
-                # Randomly sample a column
-                col_idx = self.rng.integers(low=0, high=mask.shape[1])
-                sampled_col = copy.copy(mask[:, col_idx])
-                miss_mask = copy.copy(np.isnan(X)[:, col_idx])
-
-                # Mask column
-                sampled_col[rows] = True
-
-                # If original was missing, set back to False.
-                if self.mask_missing:
-                    sampled_col[miss_mask] = False
-                if np.count_nonzero(sampled_col) == sampled_col.size:
-                    # check that column is not 100% missing now
-                    # if yes, sample again
-                    continue
-
-                # if not, set values in mask matrix
-                mask[:, col_idx] = sampled_col
-
-                # if this addition pushes missing % > self.prop_missing,
-                # check previous prop_missing, remove masked samples from
-                # this column until closest to target prop_missing
-                current_prop = np.sum(mask) / mask.size
-                if abs(current_prop - self.prop_missing) <= self.tol:
-                    filled = True
-                    break
-                elif current_prop > self.prop_missing:
-                    tries = 0
-                    while (
-                        abs(current_prop - self.prop_missing) > self.tol
-                        and tries < self.max_tries
-                    ):
-                        r = self.rng.integers(low=0, high=mask.shape[0])
-                        c = self.rng.integers(low=0, high=mask.shape[1])
-                        mask[r, c] = False
-                        tries += 1
-                        current_prop = np.sum(mask) / mask.size
-
-                    filled = True
-                else:
-                    continue
-
-        self._validate_mask(mask)
-
-        return mask.astype(bool)
-
-    def _validate_mask(self, mask):
-        """Ensure no entirely missing columns are simulated."""
-
-        for i, column in enumerate(mask.T):
-            if np.sum(column) == column.size:
-                # If all missing, set one to False.
-                mask[self.rng.integers(low=0, high=len(column)), i] = False
-
-    def random_weighted_missing_data(self, X, inv=False):
-        """Choose values for which to simulate missing data by biasing towards the minority or majority alleles, depending on whether inv is True or False.
-
-        Args:
-            X (np.ndarray): True values.
-
-            inv (bool): If True, then biases towards choosing majority alleles. If False, then generates a stratified random sample (class proportions ~= full dataset) Defaults to False.
-
-        Returns:
-            np.ndarray: X with simulated missing values.
-
-        """
-        # Get unique classes and their counts
-        classes, counts = np.unique(X, return_counts=True)
-
-        # Compute class weights
-        class_weights = 1 / counts if inv else counts
-
-        # Normalize class weights
-        class_weights = class_weights / sum(class_weights)
-
-        # Compute mask
-        if self.mask_missing:
-            # Get indexes where non-missing (Xobs) and missing (Xmiss)
-            Xobs = np.where(~self.original_missing_mask_.ravel())[0]
-            Xmiss = np.where(self.original_missing_mask_.ravel())[0]
-
-            # Generate mask of 0's (non-missing) and 1's (missing)
-            obs_mask = self.rng.choice(classes, size=Xobs.size, p=class_weights)
-            obs_mask = (obs_mask == classes[:, None]).argmax(axis=0)
-
-            # Make missing data mask
-            mask = np.zeros(X.size, dtype=bool)
-            mask[Xobs] = obs_mask
-            mask[Xmiss] = 1
-
-            # Reshape from raveled to 2D
-            mask = mask.reshape(X.shape)
         else:
-            # Generate mask of 0's (non-missing) and 1's (missing)
-            mask = self.rng.choice(classes, size=X.size, p=class_weights)
-            mask = (mask == classes[:, None]).argmax(axis=0).reshape(X.shape)
+            raise ValueError(
+                f"Invalid strategy '{self.strategy}'. "
+                "Choose from ['random_global', 'random_balanced_global', 'random_balanced_inv_global', "
+                "'nonrandom_global', 'nonrandom_weighted_global', 'nonrandom_distance_global']."
+            )
 
-        self._validate_mask(mask)
+    def _simulate_random_global(self, X, original_missing_mask):
+        """Randomly mask ~prop_missing fraction of all known genotype calls."""
+        known_locs = np.where(~original_missing_mask)
+        n_known = len(known_locs[0])
+        mask = np.zeros_like(original_missing_mask, dtype=bool)
+
+        if n_known == 0:
+            return mask
+
+        n_to_mask = int(np.floor(self.prop_missing * n_known))
+        if n_to_mask == 0:
+            return mask
+
+        chosen = self.rng.choice(n_known, size=n_to_mask, replace=False)
+        chosen_rows = known_locs[0][chosen]
+        chosen_cols = known_locs[1][chosen]
+        mask[chosen_rows, chosen_cols] = True
 
         return mask
 
-    def _sample_tree(
-        self, internal_only=False, tips_only=False, skip_root=True, weighted=False
-    ):
-        """Randomly sampling clades from GenotypeData.tree objects.
+    def _simulate_random_balanced_global(self, X, original_missing_mask, inverse=False):
+        """
+        Globally subdivide missingness by genotype (0,1,2) across the entire matrix.
+        If inverse=True => classes with fewer counts get proportionally more masked.
+        """
+        nrows, ncols = X.shape
+        mask = np.zeros((nrows, ncols), dtype=bool)
+
+        # Gather all known calls
+        known_locs = np.where(~original_missing_mask)
+        n_known = len(known_locs[0])
+        if n_known == 0:
+            return mask
+
+        # Separate known calls by genotype 0,1,2
+        row_coords = known_locs[0]
+        col_coords = known_locs[1]
+        genotypes = X[row_coords, col_coords]
+
+        idx0 = np.where(genotypes == 0)[0]
+        idx1 = np.where(genotypes == 1)[0]
+        idx2 = np.where(genotypes == 2)[0]
+
+        n_to_mask = int(np.floor(self.prop_missing * n_known))
+        if n_to_mask == 0:
+            return mask
+
+        # Decide how many to remove from each genotype
+        if inverse:
+            # Inverse frequency approach
+            # freq0 = max(len(idx0), 1e-9)
+            # freq1 = max(len(idx1), 1e-9)
+            # freq2 = max(len(idx2), 1e-9)
+            # inv0, inv1, inv2 = 1 / freq0, 1 / freq1, 1 / freq2
+            inv0, inv1, inv2 = (
+                self.class_weights[0],
+                self.class_weights[1],
+                self.class_weights[2],
+            )
+            denom = inv0 + inv1 + inv2
+            frac0, frac1, frac2 = inv0 / denom, inv1 / denom, inv2 / denom
+        else:
+            # Balanced => ~1/3 each
+            frac0 = frac1 = frac2 = 1 / 3
+
+        picks0 = int(np.floor(n_to_mask * frac0))
+        picks1 = int(np.floor(n_to_mask * frac1))
+        picks2 = int(np.floor(n_to_mask * frac2))
+
+        chosen_indices = []
+
+        # Pick for genotype 0
+        if len(idx0) > 0 and picks0 > 0:
+            c0 = self.rng.choice(idx0, size=min(picks0, len(idx0)), replace=False)
+            chosen_indices.append(c0)
+
+        # Pick for genotype 1
+        if len(idx1) > 0 and picks1 > 0:
+            c1 = self.rng.choice(idx1, size=min(picks1, len(idx1)), replace=False)
+            chosen_indices.append(c1)
+
+        # Pick for genotype 2
+        if len(idx2) > 0 and picks2 > 0:
+            c2 = self.rng.choice(idx2, size=min(picks2, len(idx2)), replace=False)
+            chosen_indices.append(c2)
+
+        remainder = n_to_mask - sum(len(arr) for arr in chosen_indices)
+        if remainder > 0:
+            # Fill remainder from the sets that still have capacity
+            # We'll just cycle through 0,1,2 sets
+            genotype_sets = [idx0, idx1, idx2]
+            self.rng.shuffle(genotype_sets)
+            pass_ctr = 0
+            while remainder > 0 and pass_ctr < 10:
+                for g_set in genotype_sets:
+                    if remainder <= 0:
+                        break
+                    # Already chosen so far
+                    already = (
+                        set(np.concatenate(chosen_indices)) if chosen_indices else set()
+                    )
+                    available = np.setdiff1d(g_set, list(already))
+                    if len(available) > 0:
+                        pick = self.rng.choice(available, size=1, replace=False)
+                        chosen_indices.append(pick)
+                        remainder -= 1
+                pass_ctr += 1
+
+        if chosen_indices:
+            chosen_indices = np.concatenate(chosen_indices)
+            chosen_rows = row_coords[chosen_indices]
+            chosen_cols = col_coords[chosen_indices]
+            mask[chosen_rows, chosen_cols] = True
+
+        return mask
+
+    def _simulate_tree_based_global(self, X, original_missing_mask, weighted=False):
+        """
+        Global approach that uses subclades from a phylogenetic tree, but
+        picks missing calls across the entire matrix.
+
+        For each row, identify which subclade it belongs to. Then we:
+            - group all known calls by subclade
+            - for subclade i with K_i known calls, we pick ~prop_missing*K_i calls
+            - if weighted=True, we do a genotype-based weighting inside each subclade
+        """
+        nrows, ncols = X.shape
+        mask = np.zeros((nrows, ncols), dtype=bool)
+
+        if self.tree is None:
+            # If no tree is provided, can't do subclade-based
+            return mask
+
+        tip_labels = self.tree.get_tip_labels()
+        if len(tip_labels) != nrows:
+            raise ValueError("Tree tip count does not match the number of rows in X.")
+
+        # Identify subclades => map each tip row to a subclade index
+        internodes = self.tree.idx_dict["internodes"]
+        # subclade_rows_list[i] = list of row indices in subclade i
+        subclade_rows_list = []
+        for node_idx in internodes:
+            node_obj = self.tree.idx_dict["node_obj"][node_idx]
+            desc_tips = node_obj.get_tip_labels()
+            subclade_rows = []
+            for label in desc_tips:
+                row_i = tip_labels.index(label)
+                subclade_rows.append(row_i)
+            subclade_rows_list.append(subclade_rows)
+
+        # NOTE: Assign each row to exactly one subclade for simplicity
+        # (Alternatively, rows can appear in multiple subclades if the tree is big.)
+        # For now, we pick the subclade with the smallest node_idx that contains that row
+        # or let each row only belong to the 'lowest' subclade in subclade_rows_list.
+        # This is simplistic, but workable for demonstration.
+        row_to_subclade = [-1] * nrows
+        for i, rows_here in enumerate(subclade_rows_list):
+            for r in rows_here:
+                # If not already assigned
+                if row_to_subclade[r] == -1:
+                    row_to_subclade[r] = i
+
+        # NOTE: For any rows not in any subclade, place them in subclade = -1
+
+        # Gather all known calls
+        known_locs = np.where(~original_missing_mask)
+        row_coords = known_locs[0]
+        col_coords = known_locs[1]
+        n_known = len(row_coords)
+        if n_known == 0:
+            return mask
+
+        # Group calls by subclade
+        subclade_dict = {}
+        for i in range(n_known):
+            r, c = row_coords[i], col_coords[i]
+            sub_idx = row_to_subclade[r]
+            if sub_idx not in subclade_dict:
+                subclade_dict[sub_idx] = []
+            subclade_dict[sub_idx].append((r, c))
+
+        # For each subclade, pick ~prop_missing fraction
+        for sub_idx, rc_list in subclade_dict.items():
+            rc_array = np.array(rc_list)  # shape (Nsub, 2)
+            Nsub = rc_array.shape[0]
+            if Nsub == 0 or sub_idx < 0:
+                continue
+
+            n_to_mask_sub = int(np.floor(self.prop_missing * Nsub))
+            if n_to_mask_sub <= 0:
+                continue
+
+            if weighted:
+                # Weighted by genotype frequency inside this subclade
+                # We'll separate calls by genotype 0,1,2
+                rvals = rc_array[:, 0]
+                cvals = rc_array[:, 1]
+                g_sub = X[rvals, cvals]
+
+                idx0 = np.where(g_sub == 0)[0]
+                idx1 = np.where(g_sub == 1)[0]
+                idx2 = np.where(g_sub == 2)[0]
+
+                freq0 = max(len(idx0), 1e-9)
+                freq1 = max(len(idx1), 1e-9)
+                freq2 = max(len(idx2), 1e-9)
+                inv0, inv1, inv2 = 1 / freq0, 1 / freq1, 1 / freq2
+                denom = inv0 + inv1 + inv2
+                frac0, frac1, frac2 = inv0 / denom, inv1 / denom, inv2 / denom
+
+                picks0 = int(np.floor(n_to_mask_sub * frac0))
+                picks1 = int(np.floor(n_to_mask_sub * frac1))
+                picks2 = int(np.floor(n_to_mask_sub * frac2))
+
+                chosen_indices = []
+                # pick from genotype 0
+                if idx0.size > 0 and picks0 > 0:
+                    c0 = self.rng.choice(
+                        idx0, size=min(picks0, len(idx0)), replace=False
+                    )
+                    chosen_indices.append(c0)
+                # pick from genotype 1
+                if idx1.size > 0 and picks1 > 0:
+                    c1 = self.rng.choice(
+                        idx1, size=min(picks1, len(idx1)), replace=False
+                    )
+                    chosen_indices.append(c1)
+                # pick from genotype 2
+                if idx2.size > 0 and picks2 > 0:
+                    c2 = self.rng.choice(
+                        idx2, size=min(picks2, len(idx2)), replace=False
+                    )
+                    chosen_indices.append(c2)
+
+                remainder = n_to_mask_sub - sum(len(arr) for arr in chosen_indices)
+                if remainder > 0:
+                    genotype_sets = [idx0, idx1, idx2]
+                    self.rng.shuffle(genotype_sets)
+                    pass_ctr = 0
+                    while remainder > 0 and pass_ctr < 10:
+                        for g_set in genotype_sets:
+                            if remainder <= 0:
+                                break
+                            already = (
+                                set(np.concatenate(chosen_indices))
+                                if chosen_indices
+                                else set()
+                            )
+                            available = np.setdiff1d(g_set, list(already))
+                            if len(available) > 0:
+                                pick = self.rng.choice(available, size=1, replace=False)
+                                chosen_indices.append(pick)
+                                remainder -= 1
+                        pass_ctr += 1
+
+                if chosen_indices:
+                    chosen_indices = np.concatenate(chosen_indices)
+                    # map to actual rows, cols
+                    chosen_rc = rc_array[chosen_indices]
+                    mask[chosen_rc[:, 0], chosen_rc[:, 1]] = True
+
+            else:
+                # Unweighted subclade => just pick a random subset
+                chosen_idx = self.rng.choice(Nsub, size=n_to_mask_sub, replace=False)
+                chosen_rc = rc_array[chosen_idx]  # shape (n_to_mask_sub, 2)
+                mask[chosen_rc[:, 0], chosen_rc[:, 1]] = True
+
+        return mask
+
+    def _simulate_nonrandom_distance_global(self, X, original_missing_mask):
+        """Simulate non-random missingness using a distance-based approach.
+
+        Uses a class-aware weighting for genotype classes 0, 1, and 2.
 
         Args:
-            internal_only (bool): Only sample from NON-TIPS. Defaults to False.
-            tips_only (bool): Only sample from tips. Defaults to False.
-            skip_root (bool): Exclude sampling of root node. Defaults to True.
-            weighted (bool): Weight sampling by branch length. Defaults to False.
+            X (np.ndarray): Genotype matrix of shape (n_rows, n_cols) with values in {0,1,2}.
+            original_missing_mask (np.ndarray): Boolean mask (same shape as X),
+                where True indicates an already-missing value in X.
 
         Returns:
-            List[str]: List of descendant tips from the sampled node.
+            np.ndarray: Boolean mask of the same shape as X, where True indicates
+                a newly-masked value.
 
-        Raises:
-            ValueError: ``tips_only`` and ``internal_only`` cannot both be True.
-
-        ToDo:
-            Ensure this method works with SNPio refactor.
+        Notes:
+            The distance-based approach is as follows:
+                1. Build a genetic distance matrix.
+                2. Randomly pick focal samples.
+                3. Identify neighbors for each focal sample.
+                4. Collect candidate calls (row, col) into a set or list.
+                5. Determine how many calls to mask in total (prop_missing * candidate calls).
+                6. Classify calls by genotype and assign weighting factors for 0, 1, 2.
+                7. Mask calls in each genotype class according to the weighting scheme.
+                8. Return the combined mask.
         """
+        nrows, ncols = X.shape
+        mask = np.zeros((nrows, ncols), dtype=bool)
 
-        if tips_only and internal_only:
-            msg = "'tips_only' and 'internal_only' cannot both be True"
-            self.logger.error(msg)
-            raise ValueError(msg)
+        # 1. Build a distance matrix
+        distmat = self.compute_genetic_distance_matrix(X)
 
-        # to only sample internal nodes add  if not i.is_leaf()
-        node_dict = {}
+        # 2. Randomly pick focal samples
+        row_indices = np.arange(nrows)
+        if len(row_indices) == 0:
+            return mask
 
-        for node in self.genotype_data.tree.treenode.traverse("preorder"):
-            ## node.idx is node indexes.
-            ## node.dist is branch lengths.
-            if skip_root:
-                if node.idx == self.genotype_data.tree.nnodes - 1:
-                    # If root node.
-                    continue
+        n_focal_used = min(self.n_focal, len(row_indices))
+        focal_samples = self.rng.choice(row_indices, size=n_focal_used, replace=False)
 
-            if tips_only:
-                if not node.is_leaf():
-                    continue
+        # 3. For each focal sample, find neighbors
+        n_neighbors = max(5, int(0.2 * nrows))  # e.g., 20% or at least 5
+        candidate_set = set()
+        for fs in focal_samples:
+            drow = distmat[fs, :]
+            sorted_idx = np.argsort(drow)
+            neighbor_rows = sorted_idx[: n_neighbors + 1]  # includes focal itself
+            for nr in neighbor_rows:
+                # Only consider columns that are currently not missing
+                known_cols = np.where(~original_missing_mask[nr, :])[0]
+                for c in known_cols:
+                    candidate_set.add((nr, c))
 
-            elif internal_only:
-                if node.is_leaf():
-                    continue
-            node_dict[node.idx] = node.dist
+        # Convert set to list
+        candidate_list = list(candidate_set)
+        n_candidate = len(candidate_list)
+        if n_candidate == 0:
+            return mask
 
-        if weighted:
-            s = sum(list(node_dict.values()))
+        # 4. Determine how many calls we want to mask in total
+        n_to_mask = int(np.floor(self.prop_missing * n_candidate))
+        if n_to_mask == 0:
+            return mask
 
-            # Node index / sum of node distances.
-            p = [i / s for i in list(node_dict.values())]
-            node_idx = self.rng.choice(list(node_dict.keys()), size=1, p=p)[0]
+        # 5. Classify candidate calls by genotype (0,1,2)
+        #    We'll store them in separate lists for easy sampling
+        gen0_indices = []
+        gen1_indices = []
+        gen2_indices = []
+
+        for r, c in candidate_list:
+            genotype_value = X[r, c]
+            if genotype_value == 0:
+                gen0_indices.append((r, c))
+            elif genotype_value == 1:
+                gen1_indices.append((r, c))
+            elif genotype_value == 2:
+                gen2_indices.append((r, c))
+            # If there are other values or missing, skip them
+
+        # 6. Define weighting for each genotype class. Example: 2 is weighted 3x more likely to be masked than 0, and 1 is weighted 2x more likely to be masked than 0. Adjust these as needed or derive from inverse frequency, e.g. 1 / global_freq.
+        if self.class_weights is None:
+            w0, w1, w2 = 1.0, 2.0, 3.0
         else:
-            # Get missing choice from random clade.
-            node_idx = self.rng.choice(list(node_dict.keys()), size=1)[0]
-        return self.genotype_data.tree.get_tip_labels(idx=node_idx)
+            w0, w1, w2 = self.class_weights
 
-    def _mask_snps(self, X):
-        """Mask positions in SimGenotypeData.snps and SimGenotypeData.onehot
+        # 7. Compute how many from each class to mask, given total n_to_mask
+        #    Weighted approach: each group will be allocated a fraction of n_to_mask based on w0, w1, w2, but not exceeding the size of that group.
+        gen0_size = len(gen0_indices)
+        gen1_size = len(gen1_indices)
+        gen2_size = len(gen2_indices)
 
-        This method will mask the positions in the input data X based on the mask generated during the fit method.
+        sum_weights = (
+            (w0 if gen0_size > 0 else 0)
+            + (w1 if gen1_size > 0 else 0)
+            + (w2 if gen2_size > 0 else 0)
+        )
 
-        Args:
-            X (numpy.ndarray): Data to mask.
+        # If the sum of active weights is 0, nothing to mask
+        if sum_weights == 0:
+            return mask
 
-        Returns:
-            numpy.ndarray: Masked data.
+        # fraction of total n_to_mask assigned to each group
+        frac0 = w0 / sum_weights if gen0_size > 0 else 0
+        frac1 = w1 / sum_weights if gen1_size > 0 else 0
+        frac2 = w2 / sum_weights if gen2_size > 0 else 0
 
-        Raises:
-            ValueError: Invalid shape of input X. Must be 2D or 3D.
+        # actual number to mask in each genotype
+        n0_to_mask = min(gen0_size, int(np.floor(n_to_mask * frac0)))
+        n1_to_mask = min(gen1_size, int(np.floor(n_to_mask * frac1)))
+        n2_to_mask = min(gen2_size, int(np.floor(n_to_mask * frac2)))
+
+        # 8. Randomly choose which calls to mask in each genotype group
+        if n0_to_mask > 0:
+            chosen_0 = self.rng.choice(gen0_indices, size=n0_to_mask, replace=False)
+        else:
+            chosen_0 = []
+
+        if n1_to_mask > 0:
+            chosen_1 = self.rng.choice(gen1_indices, size=n1_to_mask, replace=False)
+        else:
+            chosen_1 = []
+
+        if n2_to_mask > 0:
+            chosen_2 = self.rng.choice(gen2_indices, size=n2_to_mask, replace=False)
+        else:
+            chosen_2 = []
+
+        # 9. Combine chosen calls for final mask
+        for r, c in list(chosen_0) + list(chosen_1) + list(chosen_2):
+            mask[r, c] = True
+
+        return mask
+
+    def _validate_mask_columns(self, mask):
+        """Ensure no column is fully masked."""
+        nrows, ncols = mask.shape
+        for col_idx in range(ncols):
+            if np.all(mask[:, col_idx]):
+                # unmask exactly one row to avoid fully masked column
+                row_to_fix = self.rng.integers(low=0, high=nrows)
+                mask[row_to_fix, col_idx] = False
+
+    def _validate_mask_rows(self, mask):
+        """Ensure no row is fully masked."""
+        nrows, ncols = mask.shape
+        for row_idx in range(nrows):
+            if np.all(mask[row_idx, :]):
+                # unmask exactly one column to avoid fully masked row
+                col_to_fix = self.rng.integers(low=0, high=ncols)
+                mask[row_idx, col_to_fix] = False
+
+    def compute_genetic_distance_matrix(self, X, measure="hamming"):
         """
-        if len(X.shape) == 3:
-            # One-hot encoded.
-            mask_val = [0.0, 0.0, 0.0, 0.0]
-        elif len(X.shape) == 2:
-            # 012-encoded.
-            mask_val = -9
-        else:
-            msg = f"Invalid shape of input X: {X.shape}; must be 2D or 3D."
-            self.logger.error(msg)
-            raise ValueError(msg)
+        Compute pairwise distances ignoring any np.nan entries in X.
+        measure='hamming' => fraction of differing calls among non-missing sites.
+        """
+        X = validate_input_type(X, "array")
+        nrows, ncols = X.shape
+        distmat = np.zeros((nrows, nrows), dtype=float)
 
-        Xt = X.copy()
-        mask_boolean = self.sim_missing_mask_ != 0
-        Xt[mask_boolean] = mask_val
-        return Xt
+        for i in range(nrows):
+            for j in range(i + 1, nrows):
+                g1 = X[i, :]
+                g2 = X[j, :]
+                valid_mask = (~np.isnan(g1)) & (~np.isnan(g2))
+                if not np.any(valid_mask):
+                    dist = np.nan
+                else:
+                    if measure == "hamming":
+                        dist = np.mean(g1[valid_mask] != g2[valid_mask])
+                    else:
+                        dist = np.mean(np.abs(g1[valid_mask] - g2[valid_mask]))
+                distmat[i, j] = dist
+                distmat[j, i] = dist
+        return distmat
