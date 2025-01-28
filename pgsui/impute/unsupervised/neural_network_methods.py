@@ -11,17 +11,6 @@ from sklearn.metrics import f1_score
 from sklearn.utils.class_weight import compute_class_weight
 
 
-class DisabledCV:
-    def __init__(self):
-        self.n_splits = 1
-
-    def split(self, X, y, groups=None):
-        yield (np.arange(len(X)), np.arange(len(y)))
-
-    def get_n_splits(self, X, y, groups=None):
-        return self.n_splits
-
-
 class NeuralNetworkMethods:
     """Methods common to all neural network imputer classes and loss functions"""
 
@@ -1211,7 +1200,7 @@ class NeuralNetworkMethods:
         # mask = imputedGT_data == expectedGT_data
 
         outdir = os.path.join(
-            f"{prefix}_output", "plots", "Unsupervised", f"{nn_method}"
+            f"{prefix}_output", "Unsupervised", "plots", f"{nn_method}"
         )
 
         Path(outdir).mkdir(parents=True, exist_ok=True)
