@@ -24,27 +24,30 @@ else:
 
 os.environ["intelex"] = str(intelex)
 
-from pgsui.impute.unsupervised.neural_network_imputers import ImputeVAE
+from pgsui.data_processing.transformers import SimGenotypeDataTransformer
 from pgsui.impute.estimators import (
     ImputeKNN,
     ImputeNLPCA,
     ImputeRandomForest,
     ImputeStandardAutoEncoder,
-    ImputeUBP,
     ImputeXGBoost,
 )
 from pgsui.impute.simple_imputers import (
-    ImputePhylo,
-    ImputeMF,
     ImputeAlleleFreq,
+    ImputeMF,
+    ImputePhylo,
     ImputeRefAllele,
 )
-
-from pgsui.data_processing.transformers import SimGenotypeDataTransformer
+from pgsui.impute.unsupervised.imputers.cnn import ImputeCNN
+from pgsui.impute.unsupervised.imputers.vae import ImputeVAE
+from pgsui.impute.unsupervised.imputers.lstm import ImputeLSTM
+from pgsui.impute.unsupervised.imputers.ubp import ImputeUBP
 
 __all__ = [
     "ImputeUBP",
     "ImputeVAE",
+    "ImputeCNN",
+    "ImputeLSTM",
     "ImputeXGBoost",
     "ImputeStandardAutoEncoder",
     "ImputeRandomForest",
