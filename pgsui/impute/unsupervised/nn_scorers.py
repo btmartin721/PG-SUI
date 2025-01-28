@@ -1,13 +1,9 @@
-import pprint
-from typing import Any, Dict, Optional
+from typing import Dict
 
-import matplotlib.pyplot as plt
 import numpy as np
-import torch
 from sklearn.metrics import (
-    PrecisionRecallDisplay,
-    RocCurveDisplay,
     accuracy_score,
+    auc,
     average_precision_score,
     f1_score,
     precision_recall_curve,
@@ -16,13 +12,17 @@ from sklearn.metrics import (
     roc_auc_score,
     roc_curve,
 )
+from sklearn.preprocessing import label_binarize
 from snpio.utils.logging import LoggerManager
+from torch import Tensor
+
+from pgsui.utils.misc import validate_input_type
 
 
 class Scorer:
     """Class for evaluating the performance of a model using various metrics.
 
-    This class is used to evaluate the performance of a model using various metrics, such as accuracy, F1 score, precision, recall, average precision, and ROC AUC. The class can be used to evaluate the performance of a model on a dataset with ground truth labels. It also supports masking missing values in the evaluation.
+    This class is used to evaluate the performance of a model using various metrics, such as accuracy, F1 score, precision, recall, average precision, and ROC AUC. The class can be used to evaluate the performance of a model on a dataset with ground truth labels.
 
     Example:
         >>> from sklearn.datasets import make_classification
@@ -34,50 +34,23 @@ class Scorer:
         >>> model = LogisticRegression(random_state=42)
         >>> model.fit(X_train, y_train)
         >>> y_pred = model.predict(X_test)
-        >>> scorer = Scorer(model, X_test, y_test, y_pred)
-        >>> print(scorer.evaluate())
+        >>> scorer = Scorer(average="macro", verbose=1, logger=logger)
+        >>> print(scorer.evaluate(model, y_true, y_pred, y_true_ohe, y_pred_proba))
         {'accuracy': 0.95, 'f1': 0.95, 'precision': 0.95, 'recall': 0.95, 'roc_auc': 0.95, 'average_precision': 0.95}
-        >>> # scorer is also a callable object.
-        >>> print(scorer())
-
-    Attributes:
-        model (torch.nn.Module): Model to evaluate.
-        X (np.ndarray or torch.Tensor): Input data.
-        y_true (np.ndarray or torch.Tensor): Ground truth labels.
-        y_pred (np.ndarray or torch.Tensor): Predicted labels.
-        mask (np.ndarray or torch.Tensor, optional): Mask for missing values.
-        average (str, optional): Average method for metrics. Must be one of 'micro', 'macro', or 'weighted'.
-        logger (LoggerManager, optional): Logger for logging messages.
-        verbose (int, optional): Verbosity level for logging messages.
-        debug (bool, optional): Debug mode for logging messages.
     """
 
     def __init__(
         self,
-        model: torch.nn.Module,
-        X: np.ndarray | torch.Tensor,
-        y_true: np.ndarray | torch.Tensor,
-        y_pred: np.ndarray | torch.Tensor,
-        y_true_ohe: np.ndarray | torch.Tensor,
-        y_pred_proba: np.ndarray | torch.Tensor,
-        mask: np.ndarray | torch.Tensor = None,
         average: str = "weighted",
-        logger: Optional[LoggerManager] = None,
+        logger: LoggerManager | None = None,
         verbose: int = 0,
         debug: bool = False,
     ) -> None:
         """Initialize a Scorer object.
 
-        This class is used to evaluate the performance of a model using various metrics, such as accuracy, F1 score, precision, recall, average precision, and ROC AUC. The class can be used to evaluate the performance of a model on a dataset with ground truth labels. It also supports masking missing values in the evaluation.
+        This class is used to evaluate the performance of a model using various metrics, such as accuracy, F1 score, precision, recall, average precision, and ROC AUC. The class can be used to evaluate the performance of a model on a dataset with ground truth labels.
 
         Args:
-            model (torch.nn.Module): Model to evaluate.
-            X (np.ndarray or torch.Tensor): Input data.
-            y_true (np.ndarray or torch.Tensor): Ground truth labels.
-            y_pred (np.ndarray or torch.Tensor): Predicted labels.
-            y_true_ohe (np.ndarray or torch.Tensor): Ground truth labels in one-hot encoded format.
-            y_pred_proba (np.ndarray or torch.Tensor): Predicted probabilities.
-            mask (np.ndarray or torch.Tensor, optional): Mask for missing values.
             average (str, optional): Average method for metrics. Must be one of 'micro', 'macro', or 'weighted'.
             logger (LoggerManager, optional): Logger for logging messages.
             verbose (int, optional): Verbosity level for logging messages.
@@ -86,13 +59,6 @@ class Scorer:
         Raises:
             ValueError: If the average parameter is invalid.
         """
-        self.model = model
-        self.X = X
-        self.y_true = y_true
-        self.y_pred = y_pred
-        self.y_true_ohe = y_true_ohe
-        self.y_pred_proba = y_pred_proba
-        self.mask = mask
         self.average = average
 
         if logger is not None:
@@ -108,159 +74,136 @@ class Scorer:
             self.logger.error(msg)
             raise ValueError(msg)
 
-        data = (X, y_true, y_pred, y_true_ohe, y_pred_proba, mask)
-        if any(isinstance(x, torch.Tensor) for x in data):
-            if isinstance(X, torch.Tensor):
-                self.X = X.cpu().detach().numpy()
-
-            if isinstance(y_true, torch.Tensor):
-                self.y_true = y_true.cpu().detach().numpy()
-
-            if isinstance(y_pred, torch.Tensor):
-                self.y_pred = y_pred.cpu().detach().numpy()
-
-            if isinstance(y_true_ohe, torch.Tensor):
-                self.y_true_ohe = y_true_ohe.cpu().detach().numpy()
-
-            if isinstance(y_pred_proba, torch.Tensor):
-                self.y_pred_proba = y_pred_proba.cpu().detach().numpy()
-
-            if isinstance(mask, torch.Tensor):
-                self.mask = mask.cpu().detach().numpy()
-
-        if self.mask is not None:
-            self.y_true = y_true[self.mask]
-            self.y_pred = y_pred[self.mask]
-            self.y_true_ohe = self.y_true_ohe[self.mask]
-            self.y_pred_proba = self.y_pred_proba[self.mask]
-
-            self.logger.debug(
-                f"Masking missing values for evaluation. New shape: {self.y_true.shape}"
-            )
-        self.logger.debug(f"y_true: {self.y_true.shape}")
-        self.logger.debug(f"y_pred: {self.y_pred.shape}")
-        self.logger.debug(f"y_true_ohe: {self.y_true_ohe.shape}")
-        self.logger.debug(f"y_pred_proba: {self.y_pred_proba.shape}")
-
-    def accuracy(self) -> float:
+    def accuracy(self, y_true, y_pred) -> float:
         """Calculate the accuracy of the model."""
-        return accuracy_score(self.y_true, self.y_pred)
+        return accuracy_score(y_true, y_pred)
 
-    def f1(self) -> np.ndarray:
+    def f1(self, y_true, y_pred) -> np.ndarray:
         """Calculate the F1 score of the model."""
-        return f1_score(self.y_true, self.y_pred, average=self.average)
+        return f1_score(y_true, y_pred, average=self.average, zero_division=0.0)
 
-    def precision(self) -> np.ndarray:
+    def precision(self, y_true, y_pred) -> np.ndarray:
         """Calculate the precision of the model."""
-        return precision_score(self.y_true, self.y_pred, average=self.average)
+        return precision_score(y_true, y_pred, average=self.average, zero_division=0.0)
 
-    def recall(self) -> np.ndarray:
+    def recall(self, y_true, y_pred) -> np.ndarray:
         """Calculate the recall of the model."""
-        return recall_score(self.y_true, self.y_pred, average=self.average)
+        return recall_score(y_true, y_pred, average=self.average, zero_division=0.0)
 
-    def roc_auc(self) -> np.ndarray:
+    def roc_auc(self, y_true, y_pred_proba) -> np.ndarray:
         """Calculate the ROC AUC of the model."""
+        if y_pred_proba.ndim == 3:
+            y_pred_proba = y_pred_proba.reshape(-1, y_pred_proba.shape[-1])
+
+        if y_true.ndim >= 2:
+            y_true = np.argmax(y_true, axis=-1)
+
         return roc_auc_score(
-            self.y_true,
-            self.y_pred_proba,
-            average=self.average,
-            multi_class="ovo",
+            y_true, y_pred_proba, average=self.average, multi_class="ovr"
         )
 
-    def evaluate(self) -> Dict[str, float]:
-        """Evaluate the model using various metrics."""
+    def evaluate(
+        self,
+        y_true: np.ndarray | Tensor | list,
+        y_pred: np.ndarray | Tensor | list,
+        y_true_ohe: np.ndarray | Tensor | list,
+        y_pred_proba: np.ndarray | Tensor | list,
+        objective_mode: bool = False,
+        tune_metric: str = "pr_macro",
+    ) -> Dict[str, float]:
+        """Evaluate the model using various metrics.
+
+        Args:
+            y_true (np.ndarray or torch.Tensor): Ground truth labels.
+            y_pred (np.ndarray or torch.Tensor): Predicted labels.
+            y_true_ohe (np.ndarray or torch.Tensor): One-hot encoded ground truth labels.
+            y_pred_proba (np.ndarray or torch.Tensor): Predicted probabilities.
+            objective_mode (bool, optional): Whether to use objective mode for evaluation. Default is False.
+            tune_metric (str, optional): Metric to use for tuning. Ignored if `objective_mode` is False. Default is 'pr_macro'.
+
+        Returns:
+            Dict[str, float]: Dictionary of evaluation metrics.
+        """
+
+        data = [y_true, y_pred, y_true_ohe, y_pred_proba]
+        data = [validate_input_type(x) for x in data if x is not None]
+        data = [np.nan_to_num(x, nan=-1) for x in data]
+        data = [np.where(x < 0, -1, x) for x in data]
+        valid_mask = data[0] >= 0
+        data = [x[valid_mask] for x in data]
+        y_true, y_pred, y_true_ohe, y_pred_proba = data
+
+        if objective_mode:
+            if tune_metric == "pr_macro":
+                return {"pr_macro": self.pr_macro(y_true_ohe, y_pred_proba)}
+            elif tune_metric == "roc_auc":
+                return {"roc_auc": self.roc_auc(y_true, y_pred_proba)}
+            elif tune_metric == "average_precision":
+                return {
+                    "average_precision": self.average_precision(y_true, y_pred_proba)
+                }
+            elif tune_metric == "accuracy":
+                return {"accuracy": self.accuracy(y_true, y_pred)}
+            elif tune_metric == "f1":
+                return {"f1": self.f1(y_true, y_pred)}
+            elif tune_metric == "precision":
+                return {"precision": self.precision(y_true, y_pred)}
+            elif tune_metric == "recall":
+                return {"recall": self.recall(y_true, y_pred)}
+            else:
+                msg = f"Invalid tune_metric provided: '{tune_metric}'."
+                self.logger.error(msg)
+                raise ValueError(msg)
+
         return {
-            "accuracy": self.accuracy(),
-            "f1": self.f1(),
-            "precision": self.precision(),
-            "recall": self.recall(),
-            "roc_auc": self.roc_auc(),
-            "average_precision": self.average_precision(),
+            "accuracy": self.accuracy(y_true, y_pred),
+            "f1": self.f1(y_true, y_pred),
+            "precision": self.precision(y_true, y_pred),
+            "recall": self.recall(y_true, y_pred),
+            "roc_auc": self.roc_auc(y_true, y_pred_proba),
+            "average_precision": self.average_precision(y_true, y_pred_proba),
+            "pr_macro": self.pr_macro(y_true_ohe, y_pred_proba),
         }
 
-    def pr_curve(self):
-        """Calculate the precision-recall curve of the model."""
-        precision, recall, _ = precision_recall_curve(
-            self.y_true_ohe.ravel(), self.y_pred_proba.ravel()
-        )
-        return precision, recall
-
-    def roc_curve(self):
-        """Calculate the ROC curve of the model."""
-        fpr, tpr, _ = roc_curve(self.y_true_ohe.ravel(), self.y_pred_proba.ravel())
-        return fpr, tpr
-
-    def average_precision(self):
+    def average_precision(self, y_true, y_pred_proba):
         """Calculate the average precision of the model."""
-        return average_precision_score(
-            self.y_true, self.y_pred_proba, average=self.average
+        if y_pred_proba.ndim == 3:
+            y_pred_proba = y_pred_proba.reshape(-1, y_pred_proba.shape[-1])
+
+        return average_precision_score(y_true, y_pred_proba, average=self.average)
+
+    def pr_macro(self, y_true_ohe, y_pred_proba):
+        """Calculate the average precision of the model."""
+        if y_pred_proba.ndim == 3:
+            y_pred_proba = y_pred_proba.reshape(-1, y_pred_proba.shape[-1])
+
+        # Ensure y_true is properly binarized
+        num_classes = y_pred_proba.shape[1]
+        y_true = y_true_ohe
+
+        # Initialize dictionaries for metrics
+        fpr, tpr, roc_auc = {}, {}, {}
+        precision, recall, average_precision = {}, {}, {}
+
+        # Compute per-class ROC and PR metrics
+        for i in range(num_classes):
+            fpr[i], tpr[i], _ = roc_curve(y_true[:, i], y_pred_proba[:, i])
+            roc_auc[i] = auc(fpr[i], tpr[i])
+            precision[i], recall[i], _ = precision_recall_curve(
+                y_true[:, i], y_pred_proba[:, i]
+            )
+            average_precision[i] = average_precision_score(
+                y_true[:, i], y_pred_proba[:, i]
+            )
+
+        # Macro-average PR
+        all_recall = np.unique(np.concatenate([recall[i] for i in range(num_classes)]))
+        mean_precision = np.zeros_like(all_recall)
+        for i in range(num_classes):
+            mean_precision += np.interp(all_recall, recall[i][::-1], precision[i][::-1])
+        mean_precision /= num_classes
+        average_precision["macro"] = average_precision_score(
+            y_true, y_pred_proba, average="macro"
         )
 
-    def __repr__(self) -> str:
-        """Return a string representation of the object."""
-        return pprint.pformat(self.evaluate(), indent=4)
-
-    def __str__(self) -> str:
-        """Return a string representation of the object."""
-        return pprint.pprint(self.evaluate(), indent=4)
-
-    def __call__(self) -> Dict[str, float]:
-        """Evaluate the model using various metrics."""
-        return self.evaluate()
-
-    def __getitem__(self, key: str) -> float:
-        """Get the value of a metric."""
-        return self.evaluate()[key]
-
-    def __len__(self) -> int:
-        """Return the number of metrics."""
-        return len(self.evaluate())
-
-    def __iter__(self):
-        """Iterate over the metrics."""
-        for key, value in self.evaluate().items():
-            yield key, value
-
-    def __contains__(self, key: str) -> bool:
-        """Check if a metric is present."""
-        return key in self.evaluate()
-
-    def __eq__(self, other: Any) -> bool:
-        """Check if two objects are equal."""
-
-        if isinstance(other, Scorer):
-            return self.evaluate() == other.evaluate()
-        return False
-
-    def __ne__(self, other: Any) -> bool:
-        """Check if two objects are not equal."""
-        if isinstance(other, Scorer):
-            return self.evaluate() != other.evaluate()
-        return False
-
-    def __lt__(self, other: Any) -> bool:
-        """Check if the object is less than another object."""
-        if isinstance(other, Scorer):
-            return self.evaluate() < other.evaluate()
-        return False
-
-    def __le__(self, other: Any) -> bool:
-        """Check if the object is less than or equal to another object."""
-
-        if isinstance(other, Scorer):
-            return self.evaluate() <= other.evaluate()
-        return False
-
-    def __gt__(self, other: Any) -> bool:
-        """Check if the object is greater than another object."""
-
-        if isinstance(other, Scorer):
-            return self.evaluate() > other.evaluate()
-        return False
-
-    def __ge__(self, other: Any) -> bool:
-        """Check if the object is greater than or equal to another object."""
-
-        if isinstance(other, Scorer):
-            return self.evaluate() >= other.evaluate()
-        return False
+        return average_precision_score(y_true, y_pred_proba, average="macro")
