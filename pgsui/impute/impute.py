@@ -147,54 +147,54 @@ class Impute:
                         "gridsearch_method argument must equal 'genetic_algorithm' if gridparams values are of type sklearn_genetic.space"
                     )
 
-        self.logfilepath = os.path.join(
-            f"{self.prefix}_output",
-            "logs",
-            self.imp_method,
-            self.imp_name,
-            f"imputer_progress_log.txt",
-        )
+        # self.logfilepath = os.path.join(
+        #     f"{self.prefix}_output",
+        #     "logs",
+        #     self.imp_method,
+        #     self.imp_name,
+        #     f"imputer_progress_log.txt",
+        # )
 
-        self.invalid_indexes = None
+        # self.invalid_indexes = None
 
-        # Remove logfile if exists
-        try:
-            os.remove(self.logfilepath)
-        except OSError:
-            pass
+        # # Remove logfile if exists
+        # try:
+        #     os.remove(self.logfilepath)
+        # except OSError:
+        #     pass
 
-        Path(
-            os.path.join(
-                f"{self.prefix}_output",
-                "plots",
-                self.imp_method,
-                self.imp_name,
-            )
-        ).mkdir(parents=True, exist_ok=True)
+        # Path(
+        #     os.path.join(
+        #         f"{self.prefix}_output",
+        #         "plots",
+        #         self.imp_method,
+        #         self.imp_name,
+        #     )
+        # ).mkdir(parents=True, exist_ok=True)
 
-        Path(
-            os.path.join(
-                f"{self.prefix}_output", "logs", self.imp_method, self.imp_name
-            )
-        ).mkdir(parents=True, exist_ok=True)
+        # Path(
+        #     os.path.join(
+        #         f"{self.prefix}_output", "logs", self.imp_method, self.imp_name
+        #     )
+        # ).mkdir(parents=True, exist_ok=True)
 
-        Path(
-            os.path.join(
-                f"{self.prefix}_output",
-                "reports",
-                self.imp_method,
-                self.imp_name,
-            )
-        ).mkdir(parents=True, exist_ok=True)
+        # Path(
+        #     os.path.join(
+        #         f"{self.prefix}_output",
+        #         "reports",
+        #         self.imp_method,
+        #         self.imp_name,
+        #     )
+        # ).mkdir(parents=True, exist_ok=True)
 
-        Path(
-            os.path.join(
-                f"{self.prefix}_output",
-                "alignments",
-                self.imp_method,
-                self.imp_name,
-            )
-        ).mkdir(parents=True, exist_ok=True)
+        # Path(
+        #     os.path.join(
+        #         f"{self.prefix}_output",
+        #         "alignments",
+        #         self.imp_method,
+        #         self.imp_name,
+        #     )
+        # ).mkdir(parents=True, exist_ok=True)
 
     @timer
     def fit_predict(self, X: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
