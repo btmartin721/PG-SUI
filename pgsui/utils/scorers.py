@@ -114,7 +114,7 @@ class Scorers:
 
             num_classes (int, optional): How many classes to use. Defaults to 3.
 
-         Returns:
+        Returns:
             Dict[str, Any]: Dictionary with precision and recall curves per class and micro and macro averaged across classes, plus AP scores per-class and for micro and macro averages.
         """
         cats = range(num_classes)
