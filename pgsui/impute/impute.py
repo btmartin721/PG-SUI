@@ -54,9 +54,9 @@ else:
 class Impute:
     """Class to impute missing data from the provided classifier.
 
-    The Impute class will either run a variational autoencoder or IterativeImputer with the provided estimator. The settings for the provided estimator should be provided as the ``kwargs`` argument as a dictionary object with the estimator's keyword arguments as the keys and the corresponding values. E.g., ``kwargs={"n_jobs", 4, "initial_strategy": "populations"}. ``clf_type`` just specifies either "classifier" or "regressor". "regressor" is primarily just for quick and dirty testing and is intended for internal use only.
+    The Impute class will either run a variational autoencoder or IterativeImputer with the provided estimator. The settings for the provided estimator should be provided as the ``kwargs`` argument as a dictionary object with the estimator's keyword arguments as the keys and the corresponding values. E.g., ``kwargs={"n_jobs", 4, "initial_strategy": "populations"}``. ``clf_type`` just specifies either "classifier" or "regressor". "regressor" is primarily just for quick and dirty testing and is intended for internal use only.
 
-    Once the Impute class is initialized, the imputation should be performed with ``fit_predict().
+    Once the Impute class is initialized, the imputation should be performed with ``fit_predict()``.
 
     The imputed data can then be written to a file with ``write_imputed()``
 
@@ -68,7 +68,7 @@ class Impute:
         kwargs (Dict[str, Any]): Settings to use with the estimator. The keys should be the estimator's keywords, and the values should be their corresponding settings.
 
     Raises:
-        TypeError: Check whether the ``gridparams`` values are of the correct format if ``ga=True`` or ``ga=False.
+        TypeError: Check whether the ``gridparams`` values are of the correct format if ``ga=True`` or ``ga=False``.
 
     Examples:
         # Don't use parentheses after estimator object.
@@ -489,7 +489,7 @@ class Impute:
     ) -> Tuple[pd.DataFrame, pd.DataFrame, None]:
         """Run IterativeImputer without a grid search.
 
-        Will do a different type of validation if ``do_validation == True.
+        Will do a different type of validation if ``do_validation == True``.
 
         Args:
             df (pandas.DataFrame): DataFrame of 012-encoded genotypes.
@@ -919,7 +919,7 @@ class Impute:
     ) -> pd.DataFrame:
         """Impute list of pandas.DataFrame objects using custom IterativeImputer class.
 
-        The DataFrames are chunks of the whole input data, with each chunk correspoding to ``chunk_size`` features from ``_df2chunks().
+        The DataFrames are chunks of the whole input data, with each chunk correspoding to ``chunk_size`` features from ``_df2chunks()``.
 
         Args:
             df_chunks (List[pandas.DataFrame]): List of Dataframes of shape(n_samples, n_features_in_chunk).
@@ -1085,7 +1085,7 @@ class Impute:
             str or None: Prefix for output files.
             int or float: Proportion of dataset (if float) or number of columns (if int) to use for grid search.
             bool: If True, disables the tqdm progress bar and just prints status updates to a file. If False, uses tqdm progress bar.
-            int or float: Chunk sizes for doing full imputation following grid search. If int, then splits into chunks of ``chunk_size. If float, then splits into chunks of ``n_features * chunk_size.
+            int or float: Chunk sizes for doing full imputation following grid search. If int, then splits into chunks of ``chunk_size``. If float, then splits into chunks of ``n_features * chunk_size``.
             bool: Whether to do validation if ``gridparams is None``.
             bool: True if doing grid search, False otherwise.
         """
@@ -1400,9 +1400,9 @@ class Impute:
 
             ga_kwargs (dict, optional): Keyword arguments for genetic algorithm grid search. Defaults to None.
 
-            n_jobs (int, optional): Number of parallel jobs to use with the IterativeImputer grid search. Ignored if ``search_space=None. Defaults to None.
+            n_jobs (int, optional): Number of parallel jobs to use with the IterativeImputer grid search. Ignored if ``search_space=None``. Defaults to None.
 
-            clf_type (str, optional): Type of estimator. Valid options are "classifier" or "regressor". Ignored if ``search_space=None. Defaults to None.
+            clf_type (str, optional): Type of estimator. Valid options are "classifier" or "regressor". Ignored if ``search_space=None``. Defaults to None.
 
         Returns:
             sklearn.impute.IterativeImputer: IterativeImputer instance.
