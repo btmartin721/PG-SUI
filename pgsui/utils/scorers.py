@@ -258,7 +258,7 @@ class Scorers:
 
             y_pred (tensorflow.EagerTensor): Predictions from model as probabilities. They must first be decoded to use with accuracy_score.
 
-            kwargs (Any): Keyword arguments to use with scorer. Supported options include ``missing_mask`` and ``testing.
+            kwargs (Any): Keyword arguments to use with scorer. Supported options include ``missing_mask`` and ``testing``.
 
         Returns:
             float: Metric score by comparing y_true and y_pred.
@@ -288,7 +288,7 @@ class Scorers:
 
             y_pred (tensorflow.EagerTensor): Predictions from model as probabilities. They must first be decoded to use with hamming_scorer.
 
-            kwargs (Any): Keyword arguments to use with scorer. Supported options include ``missing_mask`` and ``testing.
+            kwargs (Any): Keyword arguments to use with scorer. Supported options include ``missing_mask`` and ``testing``.
 
         Returns:
             float: Metric score by comparing y_true and y_pred.
