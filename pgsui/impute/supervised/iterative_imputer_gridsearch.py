@@ -83,7 +83,7 @@ else:
 class IterativeImputerGridSearch(IterativeImputer):
     """Overridden IterativeImputer methods.
 
-    Herein, two types of grid searches (RandomizedSearchCV and GASearchCV), progress status updates, and several other improvements have been added. IterativeImputer is a multivariate imputer that estimates each feature from all the others. A strategy for imputing missing values by modeling each feature with missing values as a function of other features in a round-robin fashion.Read more in the scikit-learn User Guide for IterativeImputer. scikit-learn version added: 0.21. NOTE: This estimator is still **experimental** for now: the predictions and the API might change without any deprecation cycle. To use it, you need to explicitly import ``enable_iterative_imputer.
+    Herein, two types of grid searches (RandomizedSearchCV and GASearchCV), progress status updates, and several other improvements have been added. IterativeImputer is a multivariate imputer that estimates each feature from all the others. A strategy for imputing missing values by modeling each feature with missing values as a function of other features in a round-robin fashion.Read more in the scikit-learn User Guide for IterativeImputer. scikit-learn version added: 0.21. NOTE: This estimator is still **experimental** for now: the predictions and the API might change without any deprecation cycle. To use it, you need to explicitly import ``enable_iterative_imputer``.
 
     IterativeImputer is based on the R MICE (Multivariate Imputation by Chained Equationspackage) [van Buuren & Groothuis-Oudshoorn, 2011]_. See [Buck, 1960]_ for more information about multiple versus single imputations.
 
@@ -126,11 +126,11 @@ class IterativeImputerGridSearch(IterativeImputer):
 
         early_stop_gen (int, optional): Number of consecutive generations lacking improvement for which to implement the early stopping callback. Defaults to 5.
 
-        missing_values (int or np.nan, optional): The placeholder for the missing values. All occurrences of ``missing_values`` will be imputed. For pandas dataframes with	nullable integer dtypes with missing values, ``missing_values`` should be set to ``np.nan``, since ``pd.NA`` will be converted to ``np.nan. Defaults to np.nan.
+        missing_values (int or np.nan, optional): The placeholder for the missing values. All occurrences of ``missing_values`` will be imputed. For pandas dataframes with	nullable integer dtypes with missing values, ``missing_values`` should be set to ``np.nan``, since ``pd.NA`` will be converted to ``np.nan``. Defaults to np.nan.
 
-        Sample_posterior (bool, optional): CURRENTLY NOT SUPPORTED. Whether to sample from the (Gaussian) predictive posterior of the fitted estimator for each imputation. Estimator must support ``return_std`` in its ``predict`` method if set to ``True. Set to ``True`` if using ``IterativeImputer`` for multiple imputations. Defaults to False.
+        Sample_posterior (bool, optional): CURRENTLY NOT SUPPORTED. Whether to sample from the (Gaussian) predictive posterior of the fitted estimator for each imputation. Estimator must support ``return_std`` in its ``predict`` method if set to ``True``. Set to ``True`` if using ``IterativeImputer`` for multiple imputations. Defaults to False.
 
-        max_iter (int, optional): Maximum number of imputation rounds to perform before returning the imputations computed during the final round. A round is a single	imputation of each feature with missing values. The stopping criterion is met once ``max(abs(X_t - X_{t-1}))/max(abs(X[known_vals])) < tol``,	where ``X_t`` is ``X`` at iteration `t`. Note that early stopping is only applied if ``sample_posterior=False. Defaults to 10.
+        max_iter (int, optional): Maximum number of imputation rounds to perform before returning the imputations computed during the final round. A round is a single	imputation of each feature with missing values. The stopping criterion is met once ``max(abs(X_t - X_{t-1}))/max(abs(X[known_vals])) < tol``,	where ``X_t`` is ``X`` at iteration `t`. Note that early stopping is only applied if ``sample_posterior=False``. Defaults to 10.
 
         tol (float, optional): Tolerance of the stopping condition. Defaults to 1e-3.
 
@@ -159,7 +159,7 @@ class IterativeImputerGridSearch(IterativeImputer):
     Attributes:
         initial_imputer_: (:class:`~sklearn.impute.SimpleImputer`):  Imputer used to initialize the missing values.
 
-        imputation_sequence_ (List[Tuple[numpy.ndarray]]): Each tuple has ``(feat_idx, neighbor_feat_idx, estimator)``, where ``feat_idx`` is the current feature to be imputed, ``neighbor_feat_idx`` is the array of other features used to impute the current feature, and ``estimator`` is the trained estimator used for the imputation. Length is ``self.n_features_with_missing_ *	self.n_iter_.
+        imputation_sequence_ (List[Tuple[numpy.ndarray]]): Each tuple has ``(feat_idx, neighbor_feat_idx, estimator)``, where ``feat_idx`` is the current feature to be imputed, ``neighbor_feat_idx`` is the array of other features used to impute the current feature, and ``estimator`` is the trained estimator used for the imputation. Length is ``self.n_features_with_missing_ * self.n_iter_``.
 
         n_iter_ (int): Number of iteration rounds that occurred. Will be less than ``self.max_iter`` if early stopping criterion was reached.
 
@@ -167,7 +167,7 @@ class IterativeImputerGridSearch(IterativeImputer):
 
         indicator_ (:class:`~sklearn.impute.MissingIndicator`): Indicator used to add binary indicators for missing values ``None`` if add_indicator is False.
 
-        random_state_ (RandomState instance): RandomState instance that is generated either from a seed, the random number generator or by ``np.random.
+        random_state_ (RandomState instance): RandomState instance that is generated either from a seed, the random number generator or by ``np.random``.
 
         genotype_data (GenotypeData object): GenotypeData object.
 
@@ -189,7 +189,7 @@ class IterativeImputerGridSearch(IterativeImputer):
                         [10.       ,  4.9999...,  9.        ]])
 
     Notes:
-        To support imputation in inductive mode we store each feature's estimator during the ``fit`` phase, and predict without refitting (in order) during	the ``transform`` phase. Features which contain all missing values at ``fit`` are discarded upon ``transform.
+        To support imputation in inductive mode we store each feature's estimator during the ``fit`` phase, and predict without refitting (in order) during	the ``transform`` phase. Features which contain all missing values at ``fit`` are discarded upon ``transform``.
 
     References:
         .. [van Buuren & Groothuis-Oudshoorn, 2011] Stef van Buuren, Karin Groothuis-Oudshoorn (2011). mice: Multivariate Imputation by Chained Equations in R. Journal of Statistical Software 45: 1-67.
@@ -326,7 +326,7 @@ class IterativeImputerGridSearch(IterativeImputer):
         Args:
             X (numpy.ndarray, shape (n_samples, n_features)): Input data, where ``n_samples`` is the number of samples and ``n_features`` is the number of features.
 
-            cols_to_keep (numpy.ndarray, shape (n_features,)): Column indices to keep. Only used if ``initial_strategy="phylogeny".
+            cols_to_keep (numpy.ndarray, shape (n_features,)): Column indices to keep. Only used if ``initial_strategy="phylogeny"``.
 
             in_fit (bool, optional): Whether function is called in fit. Defaults to False.
 
@@ -455,7 +455,7 @@ class IterativeImputerGridSearch(IterativeImputer):
 
             feat_idx (int): Index of the feature currently being imputed.
 
-            neighbor_feat_idx (numpy.ndarray): Indices of the features to be used in imputing ``feat_idx.
+            neighbor_feat_idx (numpy.ndarray): Indices of the features to be used in imputing ``feat_idx``.
 
             estimator (sklearn estimator object, optional): The estimator to use at this step of the round-robin imputation If ``sample_posterior`` is True, the estimator must support ``return_std`` in its ``predict`` method. If None, it will be cloned from self._estimator. Defaults to None.
 
@@ -464,7 +464,7 @@ class IterativeImputerGridSearch(IterativeImputer):
         Returns:
             X_filled (ndarray): Input data with ``X_filled[missing_row_mask, feat_idx]`` updated.
 
-            estimator (estimator with sklearn API): The fitted estimator used to impute ``X_filled[missing_row_mask, feat_idx].
+            estimator (estimator with sklearn API): The fitted estimator used to impute ``X_filled[missing_row_mask, feat_idx]``.
         """
         if estimator is None and fit_mode is False:
             raise ValueError(
