@@ -15,6 +15,7 @@ Welcome to PG-SUI's documentation!
    tutorial
    supervised_imputers
    unsupervised_imputers
+   imputer_methods
    non_ml_imputers
    modules
    changelog
