@@ -68,51 +68,20 @@ pip install pg-sui[intel]
 
 ### Dependencies
 
-+ python >= 3.8
++ python >= 3.11
 + pandas
-+ numpy==1.24.3
++ numpy
 + scipy
 + matplotlib
 + seaborn
 + plotly
 + kaleido
-+ jupyterlab
 + tqdm
 + toytree
-+ pyvolve
 + scikit-learn
-+ tensorflow >= 2.7
-+ keras >= 2.7
 + xgboost
-+ scikeras >= 0.6.0
 + snpio
-
-
-### Manual Install
-
-If you want to install everything manually, the requirements can be installed with conda and pip. sklearn-genetic-opt and scikeras are only avaiable via pip, and scikeras requires tensorflow >= 2.7 and scikit-learn >= 1.0.
-
-```
-conda create -n pg-sui python
-conda activate pg-sui
-
-conda install matplotlib seaborn jupyterlab scikit-learn tqdm pandas numpy scipy xgboost lightgbm kaleido
-
-# Only works if using Intel CPUs; speeds up processing
-conda install scikit-learn-intelex
-
-conda install -c conda-forge toytree kaleido
-
-conda install -c bioconda pyvolve
-
-conda install -c plotly plotly
-
-pip install sklearn-genetic-opt[all]
-
-pip install scikeras snpio
-
-pip install tensorflow-cpu
-```
++ optuna
 
 #### Installation troubleshooting
 

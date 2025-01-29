@@ -2,14 +2,10 @@
 ## E-mail: evobio721@gmail.com
 ## Version 0.1, completed 13-Dec-2021
 
-# Suppresses tensorflow GPU warnings.
 import os
 import warnings
 
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
-
 from pgsui.utils.misc import get_processor_name
-
 
 # Requires scikit-learn-intellex package
 if get_processor_name().strip().startswith("Intel"):
@@ -28,28 +24,30 @@ else:
 
 os.environ["intelex"] = str(intelex)
 
+from pgsui.data_processing.transformers import SimGenotypeDataTransformer
 from pgsui.impute.estimators import (
     ImputeKNN,
     ImputeNLPCA,
     ImputeRandomForest,
     ImputeStandardAutoEncoder,
-    ImputeUBP,
-    ImputeVAE,
     ImputeXGBoost,
 )
-
 from pgsui.impute.simple_imputers import (
-    ImputePhylo,
-    ImputeMF,
     ImputeAlleleFreq,
+    ImputeMF,
+    ImputePhylo,
     ImputeRefAllele,
 )
-
-from pgsui.data_processing.transformers import SimGenotypeDataTransformer
+from pgsui.impute.unsupervised.imputers.cnn import ImputeCNN
+from pgsui.impute.unsupervised.imputers.vae import ImputeVAE
+from pgsui.impute.unsupervised.imputers.lstm import ImputeLSTM
+from pgsui.impute.unsupervised.imputers.ubp import ImputeUBP
 
 __all__ = [
     "ImputeUBP",
     "ImputeVAE",
+    "ImputeCNN",
+    "ImputeLSTM",
     "ImputeXGBoost",
     "ImputeStandardAutoEncoder",
     "ImputeRandomForest",

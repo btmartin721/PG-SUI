@@ -1,44 +1,49 @@
-import sys
-import os
-import functools
-import time
 import datetime
-import platform
-import subprocess
-import re
+import functools
 import logging
+import os
+import platform
+import re
+import subprocess
+import sys
+import time
 
 import numpy as np
 import pandas as pd
+import torch
 from tqdm import tqdm
-from tqdm.utils import disp_len, _unicode  # for overriding status_print
+from tqdm.utils import _unicode, disp_len  # for overriding status_print
 
-
-# from skopt import BayesSearchCV
+logger = logging.getLogger(__name__)
 
 
 def validate_input_type(X, return_type="array"):
     """Validate input type and return as numpy array.
 
-    Args:
-        X (pandas.DataFrame, numpy.ndarray, or List[List[int]]): Input data.
+    This method validates the input type and returns the input data as a numpy array, pandas DataFrame, 2D list, or torch.Tensor.
 
-        return_type (str): Type of returned object. Supported options include: "df", "array", and "list". Defaults to "array".
+    Args:
+        X (Union[pandas.DataFrame, numpy.ndarray, List[List[int]]]): Input data. Supported types include: pandas.DataFrame, numpy.ndarray, List[List[int]], and torch.Tensor.
+
+        return_type (str): Type of returned object. Supported options include: "df", "array", "list", and "tensor". Defaults to "array".
 
     Returns:
-        pandas.DataFrame, numpy.ndarray, or List[List[int]]: Input data desired return_type.
+        Union[pandas.DataFrame, numpy.ndarray, List[List[int]]]: Input data as the desired return_type.
 
     Raises:
-        TypeError: X must be of type pandas.DataFrame, numpy.ndarray, or List[List[int]].
-
-        ValueError: Unsupported return_type provided. Supported types are "df", "array", and "list".
+        TypeError: X must be of type pandas.DataFrame, numpy.ndarray, List[List[int]], or torch.Tensor.
+        ValueError: Unsupported return_type provided. Supported types are "df", "array", "list", and "tensor".
 
     """
-    if not isinstance(X, (pd.DataFrame, np.ndarray, list)):
-        raise TypeError(
-            f"X must be of type pandas.DataFrame, numpy.ndarray, "
-            f"or List[List[int]], but got {type(X)}"
-        )
+    if not isinstance(X, (pd.DataFrame, np.ndarray, list, torch.Tensor)):
+        msg = f"X must be of type pandas.DataFrame, numpy.ndarray, List[List[int]], or torch.Tensor, but got {type(X)}"
+        logger.error(msg)
+        raise TypeError(msg)
+
+    if return_type not in {"df", "array", "list", "tensor"}:
+        msg = f"Unsupported return type provided: {return_type}. Supported types are 'df', 'array', 'list', and 'tensor'"
+        logger.error(msg)
+        raise ValueError(msg)
 
     if return_type == "array":
         if isinstance(X, pd.DataFrame):
@@ -47,12 +52,16 @@ def validate_input_type(X, return_type="array"):
             return np.array(X)
         elif isinstance(X, np.ndarray):
             return X.copy()
+        elif isinstance(X, torch.Tensor):
+            return X.cpu().detach().numpy()
 
     elif return_type == "df":
         if isinstance(X, pd.DataFrame):
             return X.copy()
         elif isinstance(X, (np.ndarray, list)):
             return pd.DataFrame(X)
+        elif isinstance(X, torch.Tensor):
+            return pd.DataFrame(X.cpu().detach().numpy())
 
     elif return_type == "list":
         if isinstance(X, list):
@@ -61,12 +70,18 @@ def validate_input_type(X, return_type="array"):
             return X.tolist()
         elif isinstance(X, pd.DataFrame):
             return X.values.tolist()
+        elif isinstance(X, torch.Tensor):
+            return X.cpu().detach().numpy().tolist()
 
-    else:
-        raise ValueError(
-            f"Unsupported return type provided: {return_type}. Supported types "
-            f"are 'df', 'array', and 'list'"
-        )
+    elif return_type == "tensor":
+        if isinstance(X, torch.Tensor):
+            return X
+        elif isinstance(X, np.ndarray):
+            return torch.tensor(X, dtype=torch.float32)
+        elif isinstance(X, pd.DataFrame):
+            return torch.tensor(X.to_numpy(), dtype=torch.float32)
+        elif isinstance(X, list):
+            return torch.tensor(X, dtype=torch.float32)
 
 
 def generate_random_dataset(
@@ -117,14 +132,10 @@ def generate_random_dataset(
             "must be cast-able to type float"
         )
 
-    X = np.random.randint(
-        min_value, max_value + 1, size=(nrows, ncols)
-    ).astype(float)
+    X = np.random.randint(min_value, max_value + 1, size=(nrows, ncols)).astype(float)
     for i in range(X.shape[1]):
         drop_rate = int(
-            np.random.choice(
-                np.arange(min_missing_rate, max_missing_rate, 0.02), 1
-            )[0]
+            np.random.choice(np.arange(min_missing_rate, max_missing_rate, 0.02), 1)[0]
             * X.shape[0]
         )
 
@@ -203,32 +214,24 @@ def generate_012_genotypes(
     for i in range(X.shape[1]):
         het_rate = int(
             np.ceil(
-                np.random.choice(
-                    np.arange(min_het_rate, max_het_rate, 0.02), 1
-                )[0]
+                np.random.choice(np.arange(min_het_rate, max_het_rate, 0.02), 1)[0]
                 * X.shape[0]
             )
         )
 
         alt_rate = int(
             np.ceil(
-                np.random.choice(
-                    np.arange(min_alt_rate, max_alt_rate, 0.02), 1
-                )[0]
+                np.random.choice(np.arange(min_alt_rate, max_alt_rate, 0.02), 1)[0]
                 * X.shape[0]
             )
         )
 
         het = np.sort(
-            np.random.choice(
-                np.arange(0, X.shape[0]), size=het_rate, replace=False
-            )
+            np.random.choice(np.arange(0, X.shape[0]), size=het_rate, replace=False)
         )
 
         alt = np.sort(
-            np.random.choice(
-                np.arange(0, X.shape[0]), size=alt_rate, replace=False
-            )
+            np.random.choice(np.arange(0, X.shape[0]), size=alt_rate, replace=False)
         )
 
         sidx = alt.argsort()
@@ -240,8 +243,7 @@ def generate_012_genotypes(
         X[het_unique, i] = 1
 
         drop_rate = int(
-            np.random.choice(np.arange(0.15, max_missing_rate, 0.02), 1)[0]
-            * X.shape[0]
+            np.random.choice(np.arange(0.15, max_missing_rate, 0.02), 1)[0] * X.shape[0]
         )
 
         missing = np.random.choice(np.arange(0, X.shape[0]), size=drop_rate)
@@ -253,152 +255,6 @@ def generate_012_genotypes(
     )
 
     return X
-
-
-def unique2D_subarray(a):
-    """Get unique subarrays for each column from numpy array."""
-    dtype1 = np.dtype((np.void, a.dtype.itemsize * np.prod(a.shape[1:])))
-    b = np.ascontiguousarray(a.reshape(a.shape[0], -1)).view(dtype1)
-    return a[np.unique(b, return_index=1, axis=-1)[1]]
-
-
-def _remove_nonbiallelic(df, cv=5):
-    """Remove non-biallelic sites from pandas.DataFrame.
-
-    Remove sites that do not have both 0 and 2 encoded values in a column and if any of the allele counts is less than the number of cross-validation folds.
-
-    Args:
-        df (pandas.DataFrame): DataFrame with 012-encoded genotypes.
-
-    Returns:
-        pandas.DataFrame: DataFrame with non-biallelic sites dropped.
-    """
-    df_cp = df.copy()
-    bad_cols = list()
-    if pd.__version__[0] == 0:
-        for col in df_cp.columns:
-            if (
-                not df_cp[col].isin([0.0]).any()
-                or not df_cp[col].isin([2.0]).any()
-            ):
-                bad_cols.append(col)
-
-            elif len(df_cp[df_cp[col] == 0.0]) < cv:
-                bad_cols.append(col)
-
-            elif df_cp[col].isin([1.0]).any():
-                if len(df_cp[df_cp[col] == 1]) < cv:
-                    bad_cols.append(col)
-
-            elif len(df_cp[df_cp[col] == 2.0]) < cv:
-                bad_cols.append(col)
-
-    # pandas 1.X.X
-    else:
-        for col in df_cp.columns:
-            if 0.0 not in df[col].unique() and 2.0 not in df[col].unique():
-                bad_cols.append(col)
-
-            elif len(df_cp[df_cp[col] == 0.0]) < cv:
-                bad_cols.append(col)
-
-            elif 1.0 in df_cp[col].unique():
-                if len(df_cp[df_cp[col] == 1.0]) < cv:
-                    bad_cols.append(col)
-
-            elif len(df_cp[df_cp[col] == 2.0]) < cv:
-                bad_cols.append(col)
-
-    if bad_cols:
-        df_cp.drop(bad_cols, axis=1, inplace=True)
-
-        print(
-            f"{len(bad_cols)} columns removed for being non-biallelic or "
-            f"having genotype counts < number of cross-validation "
-            f"folds\nSubsetting from {len(df_cp.columns)} remaining columns\n"
-        )
-
-    return df_cp
-
-
-def get_indices(l):
-    """Takes a list and returns dict giving indices matching each possible
-    list member.
-
-    Example:
-            Input [0, 1, 1, 0, 0]
-            Output {0:[0,3,4], 1:[1,2]}
-    """
-    ret = dict()
-    for member in set(l):
-        ret[member] = list()
-    i = 0
-    for el in l:
-        ret[el].append(i)
-        i += 1
-    return ret
-
-
-def all_zero(l):
-    """Check whether list consists of all zeros.
-
-    Returns TRUE if supplied list contains all zeros
-    Returns FALSE if list contains ANY non-zero values
-    Returns FALSE if list is empty.
-
-    Args:
-        l (List[int]): List to check.
-
-    Returns:
-        bool: True if all zeros, False otherwise.
-    """
-    values = set(l)
-    if len(values) > 1:
-        return False
-    elif len(values) == 1 and l[0] in [0, 0.0, "0", "0.0"]:
-        return True
-    else:
-        return False
-
-
-def weighted_draw(d, num_samples=1):
-    choices = list(d.keys())
-    weights = list(d.values())
-    return np.random.choice(choices, num_samples, p=weights)
-
-
-def timer(func):
-    """print the runtime of the decorated function in the format HH:MM:SS."""
-
-    @functools.wraps(func)
-    def wrapper_timer(*args, **kwargs):
-        start_time = time.perf_counter()
-        value = func(*args, **kwargs)
-        end_time = time.perf_counter()
-        run_time = end_time - start_time
-        final_runtime = str(datetime.timedelta(seconds=run_time))
-        print(f"Finshed {func.__name__!r} in {final_runtime}\n")
-        return value
-
-    return wrapper_timer
-
-
-def progressbar(it, prefix="", size=60, file=sys.stdout):
-    count = len(it)
-
-    def show(j):
-        x = int(size * j / count)
-        file.write(
-            "%s[%s%s] %i/%i\r" % (prefix, "#" * x, "." * (size - x), j, count)
-        )
-        file.flush()
-
-    show(0)
-    for i, item in enumerate(it):
-        yield item
-        show(i + 1)
-    file.write("\n")
-    file.flush()
 
 
 def isnotebook():
@@ -421,6 +277,22 @@ def isnotebook():
     except NameError:
         # Probably standard Python interpreter
         return False
+
+
+def timer(func):
+    """print the runtime of the decorated function in the format HH:MM:SS."""
+
+    @functools.wraps(func)
+    def wrapper_timer(*args, **kwargs):
+        start_time = time.perf_counter()
+        value = func(*args, **kwargs)
+        end_time = time.perf_counter()
+        run_time = end_time - start_time
+        final_runtime = str(datetime.timedelta(seconds=run_time))
+        print(f"Finshed {func.__name__!r} in {final_runtime}\n")
+        return value
+
+    return wrapper_timer
 
 
 def get_processor_name():
@@ -450,7 +322,7 @@ class tqdm_linux(tqdm):
     """
 
     @staticmethod
-    def status_printer(self, file):
+    def status_printer(self, f):
         """Manage the printing and in-place updating of a line of characters.
 
         NOTE: If the string is longer than a line, then in-place updating may not work (it will print a new line at each refresh).
@@ -458,10 +330,10 @@ class tqdm_linux(tqdm):
         Overridden to work with linux HPC clusters. Replaced carriage return with linux newline in fp_write function.
 
         Args:
-            file (str): Path of file to print status to.
+            f (str): Path of file to print status to.
         """
 
-        fp = file
+        fp = f
         fp_flush = getattr(fp, "flush", lambda: None)
 
         def fp_write(s):
@@ -488,31 +360,3 @@ class HiddenPrints:
     def __exit__(self, exc_type, exc_val, exc_tb):
         sys.stdout.close()
         sys.stdout = self._original_stdout
-
-
-class StreamToLogger(object):
-    """Fake file-like stream object that redirects writes to a logger instance."""
-
-    def __init__(self, logger, log_level=logging.INFO):
-        self.logger = logger
-        self.log_level = log_level
-        self.linebuf = ""
-
-    def write(self, buf):
-        temp_linebuf = self.linebuf + buf
-        self.linebuf = ""
-        for line in temp_linebuf.splitlines(True):
-            # From the io.TextIOWrapper docs:
-            #   On output, if newline is None, any '\n' characters written
-            #   are translated to the system default line separator.
-            # By default sys.stdout.write() expects '\n' newlines and then
-            # translates them so this is still cross platform.
-            if line[-1] == "\n":
-                self.logger.log(self.log_level, line.rstrip())
-            else:
-                self.linebuf += line
-
-    def flush(self):
-        if self.linebuf != "":
-            self.logger.log(self.log_level, self.linebuf.rstrip())
-        self.linebuf = ""

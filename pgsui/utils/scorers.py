@@ -1,35 +1,26 @@
-import sys
-
+# Third-party Modules
 import numpy as np
-
 from sklearn.metrics import (
-    roc_curve,
-    auc,
     accuracy_score,
+    auc,
+    average_precision_score,
+    f1_score,
     hamming_loss,
     make_scorer,
-    precision_recall_curve,
-    average_precision_score,
     multilabel_confusion_matrix,
-    f1_score,
+    precision_recall_curve,
     roc_auc_score,
+    roc_curve,
 )
-
 from sklearn.preprocessing import label_binarize
 
-try:
-    from ..impute.unsupervised.neural_network_methods import (
-        NeuralNetworkMethods,
-    )
-except (ModuleNotFoundError, ValueError, ImportError):
-    from impute.unsupervised.neural_network_methods import NeuralNetworkMethods
+# Custom Modules
+from pgsui.impute.unsupervised.neural_network_methods import NeuralNetworkMethods
 
 
 class Scorers:
     @staticmethod
-    def compute_roc_auc_micro_macro(
-        y_true, y_pred, num_classes=3, binarize_pred=True
-    ):
+    def compute_roc_auc_micro_macro(y_true, y_pred, num_classes=3, binarize_pred=True):
         """Compute ROC curve with AUC scores.
 
         ROC (Receiver Operating Characteristic) curves and AUC (area under curve) scores are computed per-class and for micro and macro averages.
@@ -123,7 +114,7 @@ class Scorers:
 
             num_classes (int, optional): How many classes to use. Defaults to 3.
 
-         Returns:
+        Returns:
             Dict[str, Any]: Dictionary with precision and recall curves per class and micro and macro averaged across classes, plus AP scores per-class and for micro and macro averages.
         """
         cats = range(num_classes)
@@ -267,7 +258,7 @@ class Scorers:
 
             y_pred (tensorflow.EagerTensor): Predictions from model as probabilities. They must first be decoded to use with accuracy_score.
 
-            kwargs (Any): Keyword arguments to use with scorer. Supported options include ``missing_mask`` and ``testing``\.
+            kwargs (Any): Keyword arguments to use with scorer. Supported options include ``missing_mask`` and ``testing``.
 
         Returns:
             float: Metric score by comparing y_true and y_pred.
@@ -297,7 +288,7 @@ class Scorers:
 
             y_pred (tensorflow.EagerTensor): Predictions from model as probabilities. They must first be decoded to use with hamming_scorer.
 
-            kwargs (Any): Keyword arguments to use with scorer. Supported options include ``missing_mask`` and ``testing``\.
+            kwargs (Any): Keyword arguments to use with scorer. Supported options include ``missing_mask`` and ``testing``.
 
         Returns:
             float: Metric score by comparing y_true and y_pred.
@@ -319,9 +310,7 @@ class Scorers:
         return hamming_loss(y_true_masked, y_pred_masked_decoded)
 
     @staticmethod
-    def compute_metric(
-        y_true, y_pred, metric_type, scoring_function, **kwargs
-    ):
+    def compute_metric(y_true, y_pred, metric_type, scoring_function, **kwargs):
         y_true = np.array(y_true)
         y_pred = np.array(y_pred)
 
@@ -349,13 +338,9 @@ class Scorers:
                 y_true_bin, y_pred_bin, average=metric_type, zero_division=0
             )
         elif scoring_function == "average_precision":
-            return average_precision_score(
-                y_true_bin, y_pred, average=metric_type
-            )
+            return average_precision_score(y_true_bin, y_pred, average=metric_type)
         else:
-            raise ValueError(
-                f"Unsupported scoring function: {scoring_function}"
-            )
+            raise ValueError(f"Unsupported scoring function: {scoring_function}")
 
     @staticmethod
     def compute_score(y_true, y_pred, metric_type, scoring_function, **kwargs):
@@ -412,13 +397,9 @@ class Scorers:
                     **params,
                 )
             elif item == "accuracy":
-                scorers[item] = make_scorer(
-                    cls.accuracy_scorer, **default_params
-                )
+                scorers[item] = make_scorer(cls.accuracy_scorer, **default_params)
             elif item == "hamming":
-                scorers[item] = make_scorer(
-                    cls.hamming_scorer, **default_params
-                )
+                scorers[item] = make_scorer(cls.hamming_scorer, **default_params)
             else:
                 raise ValueError(f"Unsupported metric: {item}")
 
@@ -488,9 +469,7 @@ class Scorers:
             bin_mapping = [np.array2string(x) for x in y_pred_masked]
 
             with open("genotype_dist.csv", "w") as fout:
-                fout.write(
-                    "site,prob_vector,imputed_genotype,expected_genotype\n"
-                )
+                fout.write("site,prob_vector,imputed_genotype,expected_genotype\n")
                 for i, (yt, yp, ypd) in enumerate(
                     zip(y_true_masked, bin_mapping, y_pred_masked_decoded)
                 ):

@@ -2,26 +2,19 @@ import os
 import sys
 from pathlib import Path
 import warnings
-from typing import Optional, Union, List, Dict, Tuple, Any, Callable
+from typing import Optional, Union, List, Dict, Tuple, Any
 
 # Third-party imports
 import numpy as np
 import pandas as pd
 import scipy.linalg
 import toyplot.pdf
-import toyplot as tp
 import toytree as tt
 from decimal import Decimal
 
 from sklearn.impute import SimpleImputer
 
-# Custom imports
-try:
-    from snpio import GenotypeData
-    from ..utils.misc import isnotebook
-except (ModuleNotFoundError, ValueError, ImportError):
-    from snpio import GenotypeData
-    from utils.misc import isnotebook
+from pgsui.utils.misc import isnotebook
 
 is_notebook = isnotebook()
 
@@ -29,11 +22,6 @@ if is_notebook:
     from tqdm.notebook import tqdm as progressbar
 else:
     from tqdm import tqdm as progressbar
-
-# Pandas on pip gives a performance warning when doing the below code.
-# Apparently it's a bug that exists in the pandas version I used here.
-# It can be safely ignored.
-warnings.simplefilter(action="ignore", category=pd.errors.PerformanceWarning)
 
 
 class ImputePhylo:
@@ -187,8 +175,7 @@ class ImputePhylo:
                 self.column_subset = self.column_subset.tolist()
 
             genotypes = {
-                k: [v[i] for i in self.column_subset]
-                for k, v in genotypes.items()
+                k: [v[i] for i in self.column_subset] for k, v in genotypes.items()
             }
 
         # For each SNP:
@@ -245,16 +232,11 @@ class ImputePhylo:
                                     genotypes[child.name][snp_index]
                                 ):
                                     if sum is None:
-                                        sum = [
-                                            Decimal(x)
-                                            for x in list(pt[allele])
-                                        ]
+                                        sum = [Decimal(x) for x in list(pt[allele])]
                                     else:
                                         sum = [
                                             Decimal(sum[i]) + Decimal(val)
-                                            for i, val in enumerate(
-                                                list(pt[allele])
-                                            )
+                                            for i, val in enumerate(list(pt[allele]))
                                         ]
                             node_lik[child.idx] = [Decimal(x) for x in sum]
 
@@ -263,15 +245,13 @@ class ImputePhylo:
                                 node_lik[node.idx] = node_lik[child.idx]
                             else:
                                 node_lik[node.idx] = [
-                                    Decimal(node_lik[child.idx][i])
-                                    * Decimal(val)
+                                    Decimal(node_lik[child.idx][i]) * Decimal(val)
                                     for i, val in enumerate(node_lik[node.idx])
                                 ]
                         else:
                             # raise error
                             sys.exit(
-                                f"Error: Taxon {child.name} not found in "
-                                f"genotypes"
+                                f"Error: Taxon {child.name} not found in " f"genotypes"
                             )
                     else:
                         l = self._get_internal_lik(pt, node_lik[child.idx])
@@ -303,9 +283,7 @@ class ImputePhylo:
             two_pass = dict()
             for samp in bads:
                 # get most likely state for focal tip
-                node = tree.idx_dict[
-                    tree.get_mrca_idx_from_tip_labels(names=samp)
-                ]
+                node = tree.idx_dict[tree.get_mrca_idx_from_tip_labels(names=samp)]
                 dist = node.dist
                 parent = node.up
                 imputed = None
@@ -447,9 +425,7 @@ class ImputePhylo:
             imp_snps,
             self.valid_sites,
             self.valid_sites_count,
-        ) = self.genotype_data.convert_012(
-            df.to_numpy().tolist(), impute_mode=True
-        )
+        ) = self.genotype_data.convert_012(df.to_numpy().tolist(), impute_mode=True)
 
         df_imp = pd.DataFrame.from_records(imp_snps)
 
@@ -511,9 +487,7 @@ class ImputePhylo:
         if genotype_data.site_rates is not None:
             site_rates = genotype_data.site_rates
         else:
-            raise TypeError(
-                "site rates must be defined in GenotypeData instance."
-            )
+            raise TypeError("site rates must be defined in GenotypeData instance.")
 
         return data, tree, q, site_rates
 
@@ -693,9 +667,7 @@ class ImputePhylo:
                 return False
         return True
 
-    def _get_internal_lik(
-        self, pt: pd.DataFrame, lik_arr: List[float]
-    ) -> List[float]:
+    def _get_internal_lik(self, pt: pd.DataFrame, lik_arr: List[float]) -> List[float]:
         """Get ancestral state likelihoods for internal nodes of the tree.
 
         Postorder traversal to calculate internal ancestral state likelihoods (tips -> root).
@@ -824,7 +796,7 @@ class ImputeAlleleFreq:
 
         verbose (bool, optional): Whether to print status updates. Set to False for no status updates. Defaults to True.
 
-        kwargs (Dict[str, Any]): Additional keyword arguments to supply. Primarily for internal purposes. Options include: {"iterative_mode": bool, validation_mode: bool, gt: List[List[int]]}. "iterative_mode" determines whether ``ImputeAlleleFreq`` is being used as the initial imputer in ``IterativeImputer``\. ``gt`` is used internally for the simple imputers during grid searches and validation. If ``genotype_data is None`` then ``gt`` cannot also be None, and vice versa. Only one of ``gt`` or ``genotype_data`` can be set.
+        kwargs (Dict[str, Any]): Additional keyword arguments to supply. Primarily for internal purposes. Options include: {"iterative_mode": bool, validation_mode: bool, gt: List[List[int]]}. "iterative_mode" determines whether ``ImputeAlleleFreq`` is being used as the initial imputer in ``IterativeImputer. ``gt`` is used internally for the simple imputers during grid searches and validation. If ``genotype_data is None`` then ``gt`` cannot also be None, and vice versa. Only one of ``gt`` or ``genotype_data`` can be set.
 
     Raises:
         TypeError: genotype_data cannot be NoneType.
@@ -849,7 +821,7 @@ class ImputeAlleleFreq:
 
     def __init__(
         self,
-        genotype_data: GenotypeData,
+        genotype_data: Any,
         *,
         by_populations: bool = False,
         diploid: bool = True,
@@ -910,9 +882,7 @@ class ImputeAlleleFreq:
     def alignment(self):
         return self.imputed.alignment
 
-    def fit_predict(
-        self, X: List[List[int]]
-    ) -> Tuple[
+    def fit_predict(self, X: List[List[int]]) -> Tuple[
         Union[pd.DataFrame, np.ndarray, List[List[Union[int, float]]]],
         List[int],
     ]:
@@ -965,9 +935,7 @@ class ImputeAlleleFreq:
                 try:
                     # Instead of appending to the DataFrame, append to the list
                     columns.append(
-                        groups[col].transform(
-                            lambda x: x.fillna(x.mode().iloc[0])
-                        )
+                        groups[col].transform(lambda x: x.fillna(x.mode().iloc[0]))
                     )
 
                     if col != "pops":
@@ -980,9 +948,7 @@ class ImputeAlleleFreq:
                         if df[col].isna().all():
                             columns.append(df[col].fillna(0.0, inplace=False))
                         else:
-                            columns.append(
-                                df[col].fillna(df[col].mode().iloc[0])
-                            )
+                            columns.append(df[col].fillna(df[col].mode().iloc[0]))
                     else:
                         raise
 
@@ -1228,9 +1194,7 @@ class ImputeMF:
             expected = original[:, j]
             options = np.unique(expected[expected != 0])
             for i in range(n_row):
-                transform = min(
-                    options, key=lambda x: abs(x - predicted[i, j])
-                )
+                transform = min(options, key=lambda x: abs(x - predicted[i, j]))
                 tR[i, j] = transform
         tR = tR - 1
         tR[tR < 0] = -9
@@ -1287,7 +1251,7 @@ class ImputeRefAllele:
 
         verbose (bool, optional): Whether to print status updates. Set to False for no status updates. Defaults to True.
 
-        kwargs (Dict[str, Any]): Additional keyword arguments to supply. Primarily for internal purposes. Options include: {"iterative_mode": bool, validation_mode: bool, gt: List[List[int]]}. "iterative_mode" determines whether ``ImputeRefAllele`` is being used as the initial imputer in ``IterativeImputer``\. ``gt`` is used internally for the simple imputers during grid searches and validation. If ``genotype_data is None`` then ``gt`` cannot also be None, and vice versa. Only one of ``gt`` or ``genotype_data`` can be set.
+        kwargs (Dict[str, Any]): Additional keyword arguments to supply. Primarily for internal purposes. Options include: {"iterative_mode": bool, validation_mode: bool, gt: List[List[int]]}. "iterative_mode" determines whether ``ImputeRefAllele`` is being used as the initial imputer in ``IterativeImputer. ``gt`` is used internally for the simple imputers during grid searches and validation. If ``genotype_data is None`` then ``gt`` cannot also be None, and vice versa. Only one of ``gt`` or ``genotype_data`` can be set.
 
     Raises:
         TypeError: genotype_data cannot be NoneType.
@@ -1311,7 +1275,7 @@ class ImputeRefAllele:
 
     def __init__(
         self,
-        genotype_data: GenotypeData,
+        genotype_data: Any,
         *,
         missing: int = -9,
         prefix="imputer",

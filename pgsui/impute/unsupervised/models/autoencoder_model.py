@@ -1,59 +1,10 @@
-import logging
-import os
-import sys
-import warnings
+from torch import nn
 
-# Import tensorflow with reduced warnings.
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-logging.getLogger("tensorflow").disabled = True
-warnings.filterwarnings("ignore", category=UserWarning)
-
-import tensorflow as tf
-
-# Disable can't find cuda .dll errors. Also turns of GPU support.
-tf.config.set_visible_devices([], "GPU")
-
-from tensorflow.python.util import deprecation
-
-# Disable warnings and info logs.
-tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
-tf.get_logger().setLevel(logging.ERROR)
+# Custom library imports
+from pgsui.impute.unsupervised.neural_network_methods import NeuralNetworkMethods
 
 
-# Monkey patching deprecation utils to supress warnings.
-# noinspection PyUnusedLocal
-def deprecated(
-    date, instructions, warn_once=True
-):  # pylint: disable=unused-argument
-    def deprecated_wrapper(func):
-        return func
-
-    return deprecated_wrapper
-
-
-deprecation.deprecated = deprecated
-
-from tensorflow.keras.layers import (
-    Dropout,
-    Dense,
-    Reshape,
-    Flatten,
-    LeakyReLU,
-    PReLU,
-    Activation,
-)
-
-from tensorflow.keras.regularizers import l1_l2
-from tensorflow.keras import backend as K
-
-# Custom Modules
-try:
-    from ..neural_network_methods import NeuralNetworkMethods
-except (ModuleNotFoundError, ValueError, ImportError):
-    from impute.unsupervised.neural_network_methods import NeuralNetworkMethods
-
-
-class Encoder(tf.keras.layers.Layer):
+class Encoder(nn.Module):
     """VAE encoder to Encode genotypes to (z_mean, z_log_var, z)."""
 
     def __init__(
@@ -66,7 +17,7 @@ class Encoder(tf.keras.layers.Layer):
         activation,
         kernel_initializer,
         kernel_regularizer,
-        beta=K.variable(0.0),
+        beta=1.0,
         name="Encoder",
         **kwargs,
     ):
@@ -158,7 +109,7 @@ class Encoder(tf.keras.layers.Layer):
         return self.dense_latent(x)
 
 
-class Decoder(tf.keras.layers.Layer):
+class Decoder(nn.Module):
     """Converts the encoded vector back into the reconstructed output"""
 
     def __init__(
@@ -259,7 +210,7 @@ class Decoder(tf.keras.layers.Layer):
         return self.rshp(x)
 
 
-class AutoEncoderModel(tf.keras.Model):
+class AutoEncoderModel(nn.Module):
     """Standard AutoEncoder model to impute missing data.
 
     Args:
@@ -313,9 +264,7 @@ class AutoEncoderModel(tf.keras.Model):
         super(AutoEncoderModel, self).__init__()
 
         self.total_loss_tracker = tf.keras.metrics.Mean(name="total_loss")
-        self.binary_accuracy_tracker = tf.keras.metrics.Mean(
-            name="binary_accuracy"
-        )
+        self.binary_accuracy_tracker = tf.keras.metrics.Mean(name="binary_accuracy")
 
         self.nn_ = NeuralNetworkMethods()
 
@@ -428,7 +377,6 @@ class AutoEncoderModel(tf.keras.Model):
             self.binary_accuracy_tracker,
         ]
 
-    @tf.function
     def train_step(self, data):
         y = self._y
 
@@ -493,7 +441,6 @@ class AutoEncoderModel(tf.keras.Model):
             "binary_accuracy": self.binary_accuracy_tracker.result(),
         }
 
-    @tf.function
     def test_step(self, data):
         """Custom evaluation loop for one step (=batch) in a single epoch.
 

@@ -25,13 +25,6 @@ pgsui.utils.scorers module
    :members:
    :undoc-members:
 
-pgsui.utils.sequence\_tools module
-----------------------------------
-
-.. automodule:: pgsui.utils.sequence_tools
-   :members:
-   :undoc-members:
-
 Module contents
 ---------------
 

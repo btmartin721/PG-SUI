@@ -1,286 +1,118 @@
-import math
-import sys
-
-import numpy as np
-import tensorflow as tf
+from snpio.utils.logging import LoggerManager
 
 
-class CyclicalAnnealingCallback(tf.keras.callbacks.Callback):
-    """Perform cyclical annealing with KL Divergence weights.
+class EarlyStopping:
+    """Class to stop the training when a monitored metric has stopped improving.
 
-    The dynamically changing weight (beta) is multiplied with the KL Divergence loss.
+    This class is used to stop the training of a model when a monitored metric has stopped improving (such as validation loss or accuracy). If the metric does not improve for `patience` epochs, and we have already passed the `min_epochs` epoch threshold, training is halted. The best model checkpoint is reloaded when early stopping is triggered.
 
-    This process is supposed to improve the latent distribution sampling for the variational autoencoder model and eliminate the KL vanishing issue.
+    Example:
+        >>> early_stopping = EarlyStopping(patience=25, verbose=1, min_epochs=100)
+        >>> for epoch in range(1, 1001):
+        >>>     val_loss = train_epoch(...)
+        >>>     early_stopping(val_loss, model)
+        >>>     if early_stopping.early_stop:
+        >>>         break
 
-    Three types of cycle curves can be used that determine how the weight increases: 'linear', 'sigmoid', and 'cosine'..
-
-    Code is adapted from: https://github.com/haofuml/cyclical_annealing
-
-    The cyclical annealing process was first described in the following paper: https://aclanthology.org/N19-1021.pdf
-
-    Args:
-        n_iter (int): Number of iterations (epochs) being used in training.
-        start (float, optional): Where to start cycles. Defaults to 0.0.
-        stop (float, optional): Where to stop cycles. Defaults to 1.0.
-        n_cycle (int, optional): How many cycles to use across all the epochs. Defaults to 4.
-        ratio (float, optional): Ratio to determine proportion used to increase beta. Defaults to 0.5.
-        schedule_type (str, optional): Type of curve to use for scheduler. Possible options include: 'linear', 'sigmoid', or 'cosine'. Defaults to 'linear'.
-
+    Attributes:
+        patience (int): Number of epochs to wait after the last improvement of the monitored metric.
+        delta (float): Minimum change in the monitored metric to qualify as improvement.
+        verbose (int): Verbosity level for logging (0 = silent, 1 = major events, 2+ = detailed).
+        mode (str): One of {"min", "max"}. Determines whether we want the metric to go lower (min) or higher (max).
+        counter (int): Counts how many epochs have passed since the last improvement.
+        epoch_count (int): Counts how many times this EarlyStopping instance has been called.
+        min_epochs (int): Minimum epoch count before early stopping can take effect.
+        best_score (float): The best metric score seen so far.
+        early_stop (bool): Flag to signal that training should be stopped.
+        best_model (torch.nn.Module): Holds the best model (in Python memory) seen so far.
+        prefix (str): Prefix for directory naming.
+        output_dir (Path): Directory where model checkpoints are saved.
+        logger (logging.Logger): Logger for messages.
     """
 
     def __init__(
         self,
-        n_iter,
-        start=0.0,
-        stop=1.0,
-        n_cycle=4,
-        ratio=0.5,
-        schedule_type="linear",
+        patience: int = 25,
+        delta: float = 0.0,
+        verbose: int = 0,
+        mode: str = "min",
+        min_epochs: int = 100,
+        prefix: str = "pgsui",
+        debug: bool = False,
     ):
-        self.n_iter = n_iter
-        self.start = start
-        self.stop = stop
-        self.n_cycle = n_cycle
-        self.ratio = ratio
-        self.schedule_type = schedule_type
-
-        self.arr = None
-
-    def on_train_begin(self, logs=None):
-        """Executes on training begin.
-
-        Here, the cycle curve is generated and stored as a class variable.
         """
-        if self.schedule_type == "linear":
-            cycle_func = self._linear_cycle_range
-        elif self.schedule_type == "sigmoid":
-            cycle_func = self._sigmoid_cycle_range
-        elif self.schedule_type == "cosine":
-            cycle_func = self._cosine_cycle_range
+        Args:
+            patience (int): Number of epochs to wait after the last time the monitored metric improved.
+            delta (float): Minimum change in the monitored metric to qualify as an improvement.
+            verbose (int): Verbosity level (0 = silent, 1 = improvement messages, 2+ = more).
+            mode (str): "min" or "max" to indicate how improvement is defined.
+            prefix (str): Prefix for directory naming.
+            output_dir (Path): Directory in which to create subfolders/checkpoints.
+            min_epochs (int): Minimum epoch count before early stopping can take effect.
+            debug (bool): Debug mode for logging messages
+        """
+        self.patience = patience
+        self.delta = delta
+        self.verbose = verbose >= 2 or debug
+        self.debug = debug
+        self.mode = mode
+        self.counter = 0
+        self.epoch_count = 0
+        self.best_score = None
+        self.early_stop = False
+        self.best_model = None
+        self.min_epochs = min_epochs
+
+        is_verbose = verbose >= 2 or debug
+        logman = LoggerManager(name=__name__, prefix=prefix, verbose=is_verbose)
+        self.logger = logman.get_logger()
+
+        # Define the comparison function for the monitored metric
+        if mode == "min":
+            self.monitor = lambda current, best: current < best - self.delta
+        elif mode == "max":
+            self.monitor = lambda current, best: current > best + self.delta
         else:
-            raise ValueError(
-                f"Invalid schedule_type value provided: {self.schedule_type}"
-            )
+            msg = f"Invalid mode provided: '{mode}'. Use 'min' or 'max'."
+            self.logger.error(msg)
+            raise ValueError(msg)
 
-        self.arr = cycle_func()
-
-    def on_epoch_begin(self, epoch, logs=None):
-        """Executes each time an epoch begins.
-
-        Here, the new kl_beta weight is set.
+    def __call__(self, score, model):
+        """Checks if early stopping condition is met and checkpoints model accordingly.
 
         Args:
-            epoch (int): Current epoch iteration.
-            logs (None, optional): For compatibility. Not used. Defaults to None.
+            score (float): The current metric value (e.g., validation loss/accuracy).
+            model (torch.nn.Module): The model being trained.
         """
-        idx = epoch - 1
-        new_weight = self.arr[idx]
+        # Increment the epoch count each time we call this function
+        self.epoch_count += 1
 
-        tf.keras.backend.set_value(self.model.kl_beta, new_weight)
+        # If this is the first epoch, initialize best_score and save model
+        if self.best_score is None:
+            self.best_score = score
+            return
 
-    def _linear_cycle_range(self):
-        """Get an array with a linear cycle curve ranging from 0 to 1 for n_iter epochs.
-
-        The amount of time cycling and spent at 1.0 is determined by the ratio variable.
-
-        Returns:
-            numpy.ndarray: Linear cycle range.
-        """
-        L = np.ones(self.n_iter) * self.stop
-        period = self.n_iter / self.n_cycle
-
-        # Linear schedule
-        step = (self.stop - self.start) / (
-            period * self.ratio
-        )  # linear schedule
-
-        for c in range(self.n_cycle):
-            v, i = self.start, 0
-            while v <= self.stop and (int(i + c * period) < self.n_iter):
-                L[int(i + c * period)] = v
-                v += step
-                i += 1
-
-        return L
-
-    def _sigmoid_cycle_range(self):
-        """Get sigmoidal curve cycle ranging from 0 to 1 for n_iter epochs.
-
-        The amount of time cycling and spent at 1.0 is determined by the ratio variable.
-
-        Returns:
-            numpy.ndarray: Sigmoidal cycle range.
-        """
-        L = np.ones(self.n_iter)
-        period = self.n_iter / self.n_cycle
-        step = (self.stop - self.start) / (
-            period * self.ratio
-        )  # step is in [0,1]
-
-        for c in range(self.n_cycle):
-            v, i = self.start, 0
-
-            while v <= self.stop:
-                L[int(i + c * period)] = 1.0 / (
-                    1.0 + np.exp(-(v * 12.0 - 6.0))
-                )
-                v += step
-                i += 1
-        return L
-
-    def _cosine_cycle_range(self):
-        """Get cosine curve cycle ranging from 0 to 1 for n_iter epochs.
-
-        The amount of time cycling and spent at 1.0 is determined by the ratio variable.
-
-        Returns:
-            numpy.ndarray: Cosine cycle range.
-        """
-        L = np.ones(self.n_iter)
-        period = self.n_iter / self.n_cycle
-        step = (self.stop - self.start) / (
-            period * self.ratio
-        )  # step is in [0,1]
-
-        for c in range(self.n_cycle):
-            v, i = self.start, 0
-
-            while v <= self.stop:
-                L[int(i + c * period)] = 0.5 - 0.5 * math.cos(v * math.pi)
-                v += step
-                i += 1
-        return L
-
-
-class VAECallbacks(tf.keras.callbacks.Callback):
-    """Custom callbacks to use with subclassed VAE Keras model.
-
-    Requires y, missing_mask, and sample_weight to be input variables to be properties with setters in the subclassed model.
-    """
-
-    def __init__(self):
-        self.indices = None
-
-    def on_epoch_begin(self, epoch, logs=None):
-        """Shuffle input and target at start of epoch."""
-        y = self.model.y.copy()
-        missing_mask = self.model.missing_mask
-        sample_weight = self.model.sample_weight
-
-        n_samples = len(y)
-        self.indices = np.arange(n_samples)
-        np.random.shuffle(self.indices)
-
-        self.model.y = y[self.indices]
-        self.model.missing_mask = missing_mask[self.indices]
-
-        if sample_weight is not None:
-            self.model.sample_weight = sample_weight[self.indices]
-
-    def on_train_batch_begin(self, batch, logs=None):
-        """Get batch index."""
-        self.model.batch_idx = batch
-
-    def on_epoch_end(self, epoch, logs=None):
-        """Unsort the row indices."""
-        unshuffled = np.argsort(self.indices)
-
-        self.model.y = self.model.y[unshuffled]
-        self.model.missing_mask = self.model.missing_mask[unshuffled]
-
-        if self.model.sample_weight is not None:
-            self.model.sample_weight = self.model.sample_weight[unshuffled]
-
-
-class UBPCallbacks(tf.keras.callbacks.Callback):
-    """Custom callbacks to use with subclassed NLPCA/ UBP Keras models.
-
-    Requires y, missing_mask, V_latent, and sample_weight to be input variables to be properties with setters in the subclassed model.
-    """
-
-    def __init__(self):
-        self.indices = None
-
-    def on_epoch_begin(self, epoch, logs=None):
-        """Shuffle input and target at start of epoch."""
-        y = self.model.y.copy()
-        missing_mask = self.model.missing_mask
-        sample_weight = self.model.sample_weight
-
-        n_samples = len(y)
-        self.indices = np.arange(n_samples)
-        np.random.shuffle(self.indices)
-
-        self.model.y = y[self.indices]
-        self.model.V_latent = self.model.V_latent[self.indices]
-        self.model.missing_mask = missing_mask[self.indices]
-
-        if sample_weight is not None:
-            self.model.sample_weight = sample_weight[self.indices]
-
-    def on_train_batch_begin(self, batch, logs=None):
-        """Get batch index."""
-        self.model.batch_idx = batch
-
-    def on_epoch_end(self, epoch, logs=None):
-        """Unsort the row indices."""
-        unshuffled = np.argsort(self.indices)
-
-        self.model.y = self.model.y[unshuffled]
-        self.model.V_latent = self.model.V_latent[unshuffled]
-        self.model.missing_mask = self.model.missing_mask[unshuffled]
-
-        if self.model.sample_weight is not None:
-            self.model.sample_weight = self.model.sample_weight[unshuffled]
-
-
-class UBPEarlyStopping(tf.keras.callbacks.Callback):
-    """Stop training when the loss is at its min, i.e. the loss stops decreasing.
-
-    Args:
-        patience (int, optional): Number of epochs to wait after min has been hit. After this
-        number of no improvement, training stops. Defaults to 0.
-
-        phase (int, optional): Current UBP Phase. Defaults to 3.
-    """
-
-    def __init__(self, patience=0, phase=3):
-        super(UBPEarlyStopping, self).__init__()
-        self.patience = patience
-        self.phase = phase
-
-        # best_weights to store the weights at which the minimum loss occurs.
-        self.best_weights = None
-
-        # In UBP, the input gets refined during training.
-        # So we have to revert it too.
-        self.best_input = None
-
-    def on_train_begin(self, logs=None):
-        # The number of epoch it has waited when loss is no longer minimum.
-        self.wait = 0
-        # The epoch the training stops at.
-        self.stopped_epoch = 0
-        # Initialize the best as infinity.
-        self.best = np.Inf
-
-    def on_epoch_end(self, epoch, logs=None):
-        current = logs.get("loss")
-        if np.less(current, self.best):
-            self.best = current
-            self.wait = 0
-            # Record the best weights if current results is better (less).
-            self.best_weights = self.model.get_weights()
-
-            if self.phase != 2:
-                # Only refine input in phase 2.
-                self.best_input = self.model.V_latent
+        # Check if there is improvement
+        if self.monitor(score, self.best_score):
+            # If improved, reset counter and update the best score/model
+            self.best_score = score
+            self.best_model = model
+            self.counter = 0
         else:
-            self.wait += 1
-            if self.wait >= self.patience:
-                self.stopped_epoch = epoch
-                self.model.stop_training = True
-                self.model.set_weights(self.best_weights)
+            # No improvement: increase counter
+            self.counter += 1
 
-                if self.phase != 2:
-                    self.model.V_latent = self.best_input
+            if self.verbose:
+                self.logger.info(
+                    f"EarlyStopping counter: {self.counter}/{self.patience}"
+                )
+
+            # Now check if we surpass patience AND have reached min_epochs
+            if self.counter >= self.patience and self.epoch_count >= self.min_epochs:
+
+                self.early_stop = True
+
+                if self.verbose:
+                    self.logger.info(
+                        f"Early stopping triggered at epoch {self.epoch_count}"
+                    )

@@ -1,58 +1,11 @@
-import logging
-import os
-import sys
-import warnings
-
-# Import tensorflow with reduced warnings.
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-logging.getLogger("tensorflow").disabled = True
-warnings.filterwarnings("ignore", category=UserWarning)
-
-# noinspection PyPackageRequirements
-import tensorflow as tf
-
-# Disable can't find cuda .dll errors. Also turns off GPU support.
-tf.config.set_visible_devices([], "GPU")
-
-from tensorflow.python.util import deprecation
-
-# Disable warnings and info logs.
-tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
-tf.get_logger().setLevel(logging.ERROR)
-
-
-# Monkey patching deprecation utils to supress warnings.
-# noinspection PyUnusedLocal
-def deprecated(
-    date, instructions, warn_once=True
-):  # pylint: disable=unused-argument
-    def deprecated_wrapper(func):
-        return func
-
-    return deprecated_wrapper
-
-
-deprecation.deprecated = deprecated
-
-from tensorflow.keras.layers import (
-    Dropout,
-    Dense,
-    Reshape,
-    LeakyReLU,
-    PReLU,
-    Activation,
-)
-
-from tensorflow.keras.regularizers import l1_l2
+# Third-party Imports
+from torch import nn
 
 # Custom Modules
-try:
-    from ..neural_network_methods import NeuralNetworkMethods
-except (ModuleNotFoundError, ValueError, ImportError):
-    from impute.unsupervised.neural_network_methods import NeuralNetworkMethods
+from pgsui.impute.unsupervised.neural_network_methods import NeuralNetworkMethods
 
 
-class NLPCAModel(tf.keras.Model):
+class NLPCAModel(nn.Module):
     """NLPCA model to train and use to predict imputations.
 
     NLPCAModel subclasses the tf.keras.Model and overrides the train_step function, which does training and evaluation for each batch in each epoch.
@@ -125,9 +78,7 @@ class NLPCAModel(tf.keras.Model):
         super(NLPCAModel, self).__init__()
 
         self.total_loss_tracker = tf.keras.metrics.Mean(name="total_loss")
-        self.binary_accuracy_tracker = tf.keras.metrics.Mean(
-            name="binary_accuracy"
-        )
+        self.binary_accuracy_tracker = tf.keras.metrics.Mean(name="binary_accuracy")
 
         nn = NeuralNetworkMethods()
         self.nn = nn
@@ -349,9 +300,7 @@ class NLPCAModel(tf.keras.Model):
         # Refine the watched variables with
         # gradient descent backpropagation
         gradients = tape.gradient(loss, self.trainable_variables)
-        self.optimizer.apply_gradients(
-            zip(gradients, self.trainable_variables)
-        )
+        self.optimizer.apply_gradients(zip(gradients, self.trainable_variables))
 
         # Apply separate gradients to v.
         vgrad = tape.gradient(loss, src)
