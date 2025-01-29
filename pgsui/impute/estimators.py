@@ -38,7 +38,7 @@ class UnsupervisedImputer(Impute):
 
         epochs (int, optional): Number of epochs (cycles through the data) to run during training. Defaults to 100.
 
-        batch_size (int, optional): Batch size to train the model with. Model training per epoch is performed over multiple subsets of samples (rows) of size ``batch_size. Defaults to 32.
+        batch_size (int, optional): Batch size to train the model with. Model training per epoch is performed over multiple subsets of samples (rows) of size ``batch_size``. Defaults to 32.
 
         n_components (int, optional): Number of components (latent dimensions) to compress the input features to. Defaults to 3.
 
@@ -46,7 +46,7 @@ class UnsupervisedImputer(Impute):
 
         num_hidden_layers (int, optional): Number of hidden layers to use in the model. Adjust if overfitting or underfitting occurs. Defaults to 1.
 
-        hidden_layer_sizes (str, List[int], List[str], or int, optional): Number of neurons to use in the hidden layers. If string or a list of strings is passed, the strings must be either "midpoint", "sqrt", or "log2". "midpoint" will calculate the midpoint as ``(n_features + n_components) / 2. If "sqrt" is supplied, the square root of the number of features will be used to calculate the output units. If "log2" is supplied, the units will be calculated as ``log2(n_features). hidden_layer_sizes will calculate and set the number of output units for each hidden layer. If multiple hidden layers are supplied, each subsequent layer's dimensions are further reduced by the "midpoint", "sqrt", or "log2". E.g., if using ``num_hidden_layers=3`` and ``n_components=2``, and there are 100 features (columns), the hidden layer sizes for ``midpoint`` will be: [51, 27, 14]. If a single string or integer is supplied, the model will use the same number of output units for each hidden layer. If a list of integers or strings is supplied, the model will use the values supplied in the list. The list length must be equal to the ``num_hidden_layers`` and all hidden layer sizes must be > n_components. Defaults to "midpoint".
+        hidden_layer_sizes (str, List[int], List[str], or int, optional): Number of neurons to use in the hidden layers. If string or a list of strings is passed, the strings must be either "midpoint", "sqrt", or "log2". "midpoint" will calculate the midpoint as ``(n_features + n_components) / 2``. If "sqrt" is supplied, the square root of the number of features will be used to calculate the output units. If "log2" is supplied, the units will be calculated as ``log2(n_features)``. hidden_layer_sizes will calculate and set the number of output units for each hidden layer. If multiple hidden layers are supplied, each subsequent layer's dimensions are further reduced by the "midpoint", "sqrt", or "log2". E.g., if using ``num_hidden_layers=3`` and ``n_components=2``, and there are 100 features (columns), the hidden layer sizes for ``midpoint`` will be: [51, 27, 14]. If a single string or integer is supplied, the model will use the same number of output units for each hidden layer. If a list of integers or strings is supplied, the model will use the values supplied in the list. The list length must be equal to the ``num_hidden_layers`` and all hidden layer sizes must be > n_components. Defaults to "midpoint".
 
         hidden_activation (str, optional): The activation function to use for the hidden layers. See tf.keras.activations for more info. Supported activation functions include: ["elu", "selu", "leaky_relu", "prelu", "relu"]. Each activation function has some advantages and disadvantages and determines the curve and non-linearity of gradient descent. Some are also faster than others. See https://towardsdatascience.com/7-popular-activation-functions-you-should-know-in-deep-learning-and-how-to-use-them-with-keras-and-27b4d838dfe6 for more information. Note that using ``hidden_activation="selu"`` will force ``weights_initializer`` to be "lecun_normal". Defaults to "elu".
 
@@ -72,7 +72,7 @@ class UnsupervisedImputer(Impute):
 
         scoring_metric (str, optional): Scoring metric to use for grid searches. The neural network imputers use a multimetric scorer and use different string values for the grid searches. Supported options include: {"accuracy", "hamming", "roc_auc_micro", "roc_auc_macro", "roc_auc_weighted", "average_precision_micro", "average_precision_macro", "average_precision_weighted", "f1_micro", "f1_macro", and "f1_weighted"}. All of the above metrics are calculated during the grid search, but the provided string just sets the metric that the grid search refits to (i.e., which one is used in the best estimator). See the scikit-learn documentation (https://scikit-learn.org/stable/modules/model_evaluation.html) for more information. Defaults to "f1_weighted".
 
-        population_size (int or str, optional): Only used for the genetic algorithm grid search. Size of the initial population to sample randomly generated individuals. If set to "auto", then ``population_size`` is calculated as ``15 * n_parameters. If set to an integer, then uses the integer value as ``population_size. If you need to speed up the genetic algorithm grid search, try decreasing this parameter. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to "auto".
+        population_size (int or str, optional): Only used for the genetic algorithm grid search. Size of the initial population to sample randomly generated individuals. If set to "auto", then ``population_size`` is calculated as ``15 * n_parameters``. If set to an integer, then uses the integer value as ``population_size``. If you need to speed up the genetic algorithm grid search, try decreasing this parameter. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to "auto".
 
         tournament_size (int, optional): For genetic algorithm grid search only. Number of individuals to perform tournament selection. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io) for more info. Defaults to 3.
 
@@ -198,7 +198,7 @@ class SupervisedImputer(Impute):
 
         initial_strategy (str, optional): Which strategy to use for initializing the missing values in the training data (neighbor columns). IterativeImputer must initially impute the training data (neighbor columns) using a simple, quick imputation in order to predict the missing values for each target column. The ``initial_strategy`` argument specifies which method to use for this initial imputation. Valid options include: “most_frequent”, "populations", "phylogeny", or "mf". "most_frequent" uses the overall mode of each column. "populations" uses the mode per population/ per column via a population map file and the ``ImputeAlleleFreq`` class. "phylogeny" uses an input phylogenetic tree and a rate matrix with the ``ImputePhylo`` class. "mf" performs the imputaton via matrix factorization with the ``ImputeMF`` class. Note that the "mean" and "median" options from the original IterativeImputer are not supported because they are not sensible settings for the type of input data used here. Defaults to "populations".
 
-        str_encodings (dict(str: int), optional): Integer encodings for nucleotides if input file was in STRUCTURE format. Only used if ``initial_strategy="phylogeny". Defaults to {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}.
+        str_encodings (dict(str: int), optional): Integer encodings for nucleotides if input file was in STRUCTURE format. Only used if ``initial_strategy="phylogeny"``. Defaults to {"A": 1, "C": 2, "G": 3, "T": 4, "N": -9}.
 
         imputation_order (str, optional): The order in which the features will be imputed. Possible values: "ascending" (from features with fewest missing values to most), "descending" (from features with most missing values to fewest), "roman" (left to right), "arabic" (right to left), "random" (a random order for each round). Defaults to "ascending".
 
@@ -210,7 +210,7 @@ class SupervisedImputer(Impute):
 
         grid_iter (int, optional): Number of iterations for randomized and genetic algorithm grid searches. Defaults to 80.
 
-        population_size (int or str, optional): For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. If set to "auto", then ``population_size`` is calculated as ``15 * n_parameters. If set to an integer, then uses the integer value as ``population_size. If you need to speed up the genetic algorithm grid search, try decreasing this parameter. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io). Defaults to "auto".
+        population_size (int or str, optional): For genetic algorithm grid search: Size of the initial population to sample randomly generated individuals. If set to "auto", then ``population_size`` is calculated as ``15 * n_parameters``. If set to an integer, then uses the integer value as ``population_size``. If you need to speed up the genetic algorithm grid search, try decreasing this parameter. See GASearchCV in the sklearn-genetic-opt documentation (https://sklearn-genetic-opt.readthedocs.io). Defaults to "auto".
 
         tournament_size (int, optional): For genetic algorithm grid search: Number of individuals to perform tournament selection. See GASearchCV documentation. Defaults to 3.
 
@@ -395,7 +395,7 @@ class ImputeRandomForest(SupervisedImputer):
 
         min_weight_fraction_leaf (float, optional): The minimum weighted fraction of the sum total of weights (of all the input samples) required to be at a leaf node. Samples have equal weight when sample_weight is not provided. Defaults to 0.0.
 
-        max_features (str, int, float, or None, optional): The number of features to consider when looking for the best split. If int, then consider "max_features" features at each split. If float, then "max_features" is a fraction and ``int(max_features * n_samples)`` features are considered at each split. If "sqrt", then ``max_features=sqrt(n_features). If "log2", then ``max_features=log2(n_features). If None, then ``max_features=n_features. Defaults to "sqrt".
+        max_features (str, int, float, or None, optional): The number of features to consider when looking for the best split. If int, then consider "max_features" features at each split. If float, then "max_features" is a fraction and ``int(max_features * n_samples)`` features are considered at each split. If "sqrt", then ``max_features=sqrt(n_features)``. If "log2", then ````max_features=log2(n_features)``. If None, then ``max_features=n_features``. Defaults to "sqrt".
 
         max_leaf_nodes (int or None, optional): Grow trees with ``max_leaf_nodes`` in best-first fashion. Best nodes are defined as relative reduction in impurity. If None then unlimited number of leaf nodes. Defaults to None.
 
@@ -403,9 +403,9 @@ class ImputeRandomForest(SupervisedImputer):
 
         bootstrap (bool, optional): Whether bootstrap samples are used when building trees. If False, the whole dataset is used to build each tree. Defaults to False.
 
-        oob_score (bool, optional): Whether to use out-of-bag samples to estimate the generalization score. Only available if ``bootstrap=True. Defaults to False.
+        oob_score (bool, optional): Whether to use out-of-bag samples to estimate the generalization score. Only available if ``bootstrap=True``. Defaults to False.
 
-        max_samples (int or float, optional): If bootstrap is True, the number of samples to draw from X to train each base estimator. If None (default), then draws ``X.shape[0] samples. if int, then draws ``max_samples`` samples. If float, then draws ``int(max_samples * X.shape[0] samples)`` with ``max_samples`` in the interval (0, 1). Defaults to None.
+        max_samples (int or float, optional): If bootstrap is True, the number of samples to draw from X to train each base estimator. If None (default), then draws ``X.shape[0]`` samples. if int, then draws ``max_samples`` samples. If float, then draws ``int(max_samples * X.shape[0] samples)`` with ``max_samples`` in the interval (0, 1). Defaults to None.
 
 
     Example:
