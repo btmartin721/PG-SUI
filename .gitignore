@@ -14,6 +14,9 @@ dist/
 *.whl
 build/lib/
 html/
+*.doctree
+doctrees/
+*_build/
 
 # Jupyter Notebook
 .ipynb_checkpoints/
@@ -122,3 +125,7 @@ BOX_concat_goodOnly_N214.nex
 box_scf.cf.tree
 partitioned_all.contree
 partitioned_all.iqtree
+docs/build/_build/doctrees/environment.pickle
+docs/build/_build/doctrees/pgsui.data_processing.doctree
+**/doctrees/
+.buildinfo
