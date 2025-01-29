@@ -2,18 +2,29 @@
 Changelog
 ================
 
-This document provides a high-level view of the changes made to PG-SUI for each release.
+Overview of the changes made to PG-SUI for each release.
 
+Version 1.5 - 2025-01-28
+------------------------
 
-Unreleased
-----------
-- Make HTML report with all plots and logs.
+Features
+^^^^^^^^
+- Added Optuna parameter optimization for all deep learning models.
+- More efficient code for all deep learning models.
+- Added new deep learning models for imputation.
+- Modularity for developing and adjusting deep learning models.
+
+Changed
+^^^^^^^^
+- Refactored the entire codebase to use the `GenotypeData` class for all data manipulation and imputation.
+- Refactored to use PyTorch instead of Tensorflow for all deep learning models.
+- GridSearchCV and GASearchCV have been replaced with Optuna for all deep learning models.
 
 Version 1.0.2.1 - 2023-09-11
 -----------------------------
 
 Bug Fixes
-~~~~~~~~~~
+^^^^^^^^^^
 
 - Fixed bug where supervised imputers would fail due to duplicated `self` argument.
 
@@ -36,7 +47,7 @@ Bug Fixes
 - Added `warnings.simplefilter` to each module to catch `FutureWarning`
 
 Changed
-~~~~~~~~~
+^^^^^^^^
 
 - Implemented new plotting for test.py
 
@@ -44,7 +55,7 @@ Version 1.0.2 - 2023-08-28
 ---------------------------
 
 Bug Fixes
-~~~~~~~~~~
+^^^^^^^^^^
 
 - Use GenotypeData copy method internally due to Cython pysam VariantHeader.
 
