@@ -17,7 +17,7 @@ class Encoder(nn.Module):
         activation,
         kernel_initializer,
         kernel_regularizer,
-        beta=K.variable(0.0),
+        beta=1.0,
         name="Encoder",
         **kwargs,
     ):
