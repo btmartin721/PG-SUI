@@ -83,7 +83,7 @@ else:
 class IterativeImputerFixedParams(IterativeImputer):
     """Overridden IterativeImputer methods.
 
-    Herein, progress status updates, optimizations to save RAM, and several other improvements have been added. IterativeImputer is a multivariate imputer that estimates each feature from all the others. A strategy for imputing missing values by modeling each feature with missing values as a function of other features in a round-robin fashion.Read more in the scikit-learn User Guide for IterativeImputer. scikit-learn versionadded: 0.21. NOTE: This estimator is still **experimental** for now: the predictions and the API might change without any deprecation cycle. To use it, you need to explicitly import ``enable_iterative_imputer.
+    Herein, progress status updates, optimizations to save RAM, and several other improvements have been added. IterativeImputer is a multivariate imputer that estimates each feature from all the others. A strategy for imputing missing values by modeling each feature with missing values as a function of other features in a round-robin fashion.Read more in the scikit-learn User Guide for IterativeImputer. scikit-learn versionadded: 0.21. NOTE: This estimator is still **experimental** for now: the predictions and the API might change without any deprecation cycle. To use it, you need to explicitly import ``enable_iterative_imputer``.
 
         IterativeImputer is based on the R MICE (Multivariate Imputation by Chained Equationspackage) [3]_. See [4]_ for more information about multiple versus single imputations.
 
@@ -102,19 +102,19 @@ class IterativeImputerFixedParams(IterativeImputer):
 
         estimator (callable estimator object, optional): The estimator to use at each step of the round-robin imputation. If ``sample_posterior`` is True, the estimator must support ``return_std`` in its ``predict`` method. Defaults to BayesianRidge().
 
-        clf_type (str, optional): Whether to run ```'classifier'``` or ``'regression'`` based imputation. Defaults to 'classifier'
+        clf_type (str, optional): Whether to run ``'classifier'`` or ``'regression'`` based imputation. Defaults to 'classifier'
 
         disable_progressbar (bool, optional): Whether or not to disable the tqdm progress bar. If True, disables the progress bar. If False, tqdm is used for the progress bar. This can be useful if you are running the imputation on an HPC cluster or are saving the standard output to a file. If True, progress updates will be printed to the screen every ``progress_update_percent`` iterations. Defaults to False.
 
         progress_update_percent (int, optional): How often to display progress updates (as a percentage) if ``disable_progressbar`` is True. If ``progress_update_frequency=10``, then it displays progress updates every 10 percent. Defaults to 10.
 
-        pops (List[Union[str, int]] or None): List of population IDs to be used with ImputeAlleleFreq if ``initial_strategy="populations".
+        pops (List[Union[str, int]] or None): List of population IDs to be used with ImputeAlleleFreq if ``initial_strategy="populations"``.
 
-        missing_values (int or np.nan, optional): The placeholder for the missing values. All occurrences of ``missing_values`` will be imputed. For pandas dataframes with	nullable integer dtypes with missing values, ``missing_values`` should be set to ``np.nan``, since ``pd.NA`` will be converted to ``np.nan. Defaults to np.nan.
+        missing_values (int or np.nan, optional): The placeholder for the missing values. All occurrences of ``missing_values`` will be imputed. For pandas dataframes with	nullable integer dtypes with missing values, ``missing_values`` should be set to ``np.nan``, since ``pd.NA`` will be converted to ``np.nan``. Defaults to np.nan.
 
         Sample_posterior (bool, optional): Whether to sample from the (Gaussian) predictive posterior of the fitted estimator for each imputation. Estimator must support ``return_std`` in its ``predict`` method if set to ``True. Set to ``True`` if using ``IterativeImputer`` for multiple imputations. Defaults to False.
 
-        max_iter (int, optional): Maximum number of imputation rounds to perform before returning the imputations computed during the final round. A round is a single	imputation of each feature with missing values. The stopping criterion is met once ``max(abs(X_t - X_{t-1}))/max(abs(X[known_vals])) < tol``,	where ``X_t`` is ``X`` at iteration ``t. Note that early stopping is only applied if ``sample_posterior=False. Defaults to 10.
+        max_iter (int, optional): Maximum number of imputation rounds to perform before returning the imputations computed during the final round. A round is a single	imputation of each feature with missing values. The stopping criterion is met once ``max(abs(X_t - X_{t-1}))/max(abs(X[known_vals])) < tol``,	where ``X_t`` is ``X`` at iteration ``t``. Note that early stopping is only applied if ``sample_posterior=False``. Defaults to 10.
 
         tol (float, optional): Tolerance of the stopping condition. Defaults to 1e-3.
 
@@ -126,7 +126,7 @@ class IterativeImputerFixedParams(IterativeImputer):
 
         skip_complete (bool, optional): If ``True`` then features with missing values during ``transform`` that did not have any missing values during ``fit`` will be imputed with the initial imputation method only. Set to ``True`` if you have	many features with no missing values at both ``fit`` and ``transform`` time to save compute. Defaults to False.
 
-        min_value (float or array-like of shape (n_features,), optional): Minimum possible imputed value. Broadcast to shape (n_features,) if scalar. If array-like, expects shape (n_features,), one min value for each feature. The default is `-np.inf`...sklearn versionchanged:: 0.23 (Added support for array-like). Defaults to -np.inf.
+        min_value (float or array-like of shape (n_features,), optional): Minimum possible imputed value. Broadcast to shape (n_features,) if scalar. If array-like, expects shape (n_features,), one min value for each feature. The default is ``-np.inf``...sklearn versionchanged:: 0.23 (Added support for array-like). Defaults to -np.inf.
 
         max_value (float or array-like of shape (n_features,), optional): Maximum possible imputed value. Broadcast to shape (n_features,) if scalar. If array-like, expects shape (n_features,), one max value for each feature..sklearn versionchanged:: 0.23 (Added support for array-like). Defaults to np.inf.
 
@@ -151,7 +151,7 @@ class IterativeImputerFixedParams(IterativeImputer):
 
         indicator_ (sklearn.impute.MissingIndicator): Indicator used to add binary indicators for missing values ``None`` if add_indicator is False.
 
-        random_state_ (RandomState instance): RandomState instance that is generated either from a seed, the random number generator or by ``np.random.
+        random_state_ (RandomState instance): RandomState instance that is generated either from a seed, the random number generator or by ``np.random``.
 
         logfilepath (str): Path to status logfile.
 
@@ -209,7 +209,7 @@ class IterativeImputerFixedParams(IterativeImputer):
                         [10.       ,  4.9999...,  9.        ]])
 
     Notes:
-        To support imputation in inductive mode we store each feature's estimator during the ``fit`` phase, and predict without refitting (in order) during	the ``transform`` phase. Features which contain all missing values at ``fit`` are discarded upon ``transform.
+        To support imputation in inductive mode we store each feature's estimator during the ``fit`` phase, and predict without refitting (in order) during	the ``transform`` phase. Features which contain all missing values at ``fit`` are discarded upon ``transform``.
 
         NOTE: Inductive mode support was removed herein.
 
@@ -297,7 +297,7 @@ class IterativeImputerFixedParams(IterativeImputer):
         Args:
             X (ndarray): Input data of shape (n_samples, n_features), where n_samples is the number of samples and n_features is the number of features.
 
-            cols_to_keep (numpy.ndarray): Column indices of shape (n_features,) to keep. Only used if ``initial_strategy=="phylogeny".
+            cols_to_keep (numpy.ndarray): Column indices of shape (n_features,) to keep. Only used if ``initial_strategy=="phylogeny"``.
 
             in_fit (bool, optional): True if function is called in fit, otherwise False. Defaults to False.
 
@@ -313,7 +313,7 @@ class IterativeImputerFixedParams(IterativeImputer):
                 number of features.
 
         Raises:
-            AttributeError: GenotypeData object must be initialized with guidetree and qmatrix if using ``initial_strategy=phylogeny.
+            AttributeError: GenotypeData object must be initialized with guidetree and qmatrix if using ``initial_strategy=phylogeny``.
         """
         force_all_finite = "allow-nan" if self.missing_values == "NaN" else True
 
@@ -453,7 +453,7 @@ class IterativeImputerFixedParams(IterativeImputer):
 
             feat_idx (int): Index of the feature currently being imputed.
 
-            neighbor_feat_idx (numpy.ndarray): Indices of the features to be used in imputing ``feat_idx.
+            neighbor_feat_idx (numpy.ndarray): Indices of the features to be used in imputing ``feat_idx``.
 
             estimator (object): The estimator to use at this step of the round-robin imputation If ``sample_posterior`` is True, the estimator must support ``return_std`` in its ``predict`` method.If None, it will be cloned from self._estimator.
 
@@ -484,7 +484,7 @@ class IterativeImputerFixedParams(IterativeImputer):
             except ValueError as e:
                 # Happens in newer versions of XGBClassifier.
                 if str(e).startswith(
-                    "Invalid classes inferred from unique values of `y`"
+                    "Invalid classes inferred from unique values of ``y``"
                 ):
                     le = LabelEncoder()
                     y_train = le.fit_transform(y_train)
