@@ -116,37 +116,9 @@ class ImputeVAE(BaseNNImputer):
         self.logger = logman.get_logger()
 
         super().__init__(
-            genotype_data,
-            model_name=self.model_name,
-            latent_dim=model_latent_dim,
-            dropout_rate=model_dropout_rate,
-            num_hidden_layers=model_num_hidden_layers,
-            hidden_layer_sizes=model_hidden_layer_sizes,
-            activation=model_hidden_activation,
-            batch_size=model_batch_size,
-            learning_rate=model_learning_rate,
-            sim_prop_missing=sim_prop_missing,
-            sim_strategy=sim_strategy,
-            tune=tune,
-            tune_metric=tune_metric,
-            tune_save_db=tune_save_db,
-            tune_resume=tune_resume,
-            n_trials=tune_n_trials,
-            early_stop_gen=model_early_stop_gen,
-            min_epochs=model_min_epochs,
-            optimizer=model_optimizer,
-            lr_patience=model_lr_patience,
-            epochs=model_epochs,
-            l1_penalty=model_l1_penalty,
-            gamma=model_gamma,
-            beta=model_beta,
-            device=model_device,
-            scoring_averaging=scoring_averaging,
-            n_jobs=n_jobs,
-            seed=seed,
-            validation_split=model_validation_split,
             prefix=prefix,
             output_dir=output_dir,
+            device=model_device,
             verbose=verbose,
             debug=debug,
         )
@@ -166,6 +138,7 @@ class ImputeVAE(BaseNNImputer):
         self.tune = tune
         self.tune_metric = tune_metric
         self.tune_resume = tune_resume
+        self.tune_save_db = tune_save_db
         self.n_trials = tune_n_trials
         self.early_stop_gen = model_early_stop_gen
         self.min_epochs = model_min_epochs
@@ -192,6 +165,7 @@ class ImputeVAE(BaseNNImputer):
         self.weights_alpha = weights_alpha
         self.weights_normalize = weights_normalize
         self.weights_temperature = weights_temperature
+        self.seed = seed
 
         _ = self.genotype_data.snp_data  # Ensure SNP data is loaded
 
