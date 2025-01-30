@@ -4,7 +4,7 @@ import pprint
 import numpy as np
 from snpio import GenotypeEncoder, VCFReader
 
-from pgsui import ImputeUBP
+from pgsui import ImputeUBP, ImputeVAE
 
 
 def main():
@@ -35,7 +35,7 @@ def main():
 
     ge = GenotypeEncoder(gd)
 
-    vae = ImputeUBP(
+    vae = ImputeVAE(
         gd,
         weights_temperature=3.0,
         weights_normalize=True,

@@ -4,7 +4,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Tuple
 
-from attr import validate
 import numpy as np
 import optuna
 import pandas as pd
@@ -30,44 +29,9 @@ from pgsui.utils.plotting import Plotting
 class BaseNNImputer(BaseEstimator, TransformerMixin):
     def __init__(
         self,
-        genotype_data: Any,
-        model_name: str,
         prefix: str = "pgsui",
         output_dir: str | Path = "output",
-        latent_dim: int = 2,
-        sim_prop_missing: float = 0.1,
-        sim_strategy: str = "random_balanced_inv_global",
-        num_conv_layers: int = 3,
-        conv_out_channels: List[int] = [32, 64, 128],
-        kernel_size: int = 3,
-        pool_size: int = 2,
-        lstm_hidden_size: int = 128,
-        num_lstm_layers: int = 2,
-        dropout_rate: float = 0.2,
-        bidirectional: bool = False,
-        num_hidden_layers: int = 2,
-        hidden_layer_sizes: List[int] = [128, 64],
-        activation: str = "elu",
-        batch_size: int = 32,
-        learning_rate: float = 0.0001,
-        early_stop_gen: int = 25,
-        min_epochs: int = 100,
-        lr_patience: int = 1,
-        epochs: int = 5000,
-        optimizer: str = "adam",
-        l1_penalty: float = 0.0001,
-        gamma: float = 2.0,
-        beta: float = 1.0,
         device: Literal["gpu"] | Literal["cpu"] = "gpu",
-        scoring_averaging: str = "weighted",
-        validation_split: float = 0.2,
-        tune: bool = False,
-        tune_metric: str = "pr_macro",
-        tune_save_db: str = False,
-        tune_resume: str = False,
-        n_trials: int = 100,
-        n_jobs: int = 1,
-        seed: int | None = None,
         verbose: int = 0,
         debug: bool = False,
     ):
@@ -76,91 +40,15 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
         This class is a base class for neural network imputers. It includes methods for training and evaluating the model, as well as for hyperparameter tuning.
 
         Args:
-            genotype_data (Any): Genotype data.
-            model_name (str): Model name.
             prefix (str, optional): Prefix for the output directory. Defaults to "pgsui".
             output_dir (str | Path, optional): Output directory name. Defaults to "output".
-            latent_dim (int, optional): Latent dimension. Defaults to 2.
-            sim_prop_missing (float, optional): Proportion of missing values for simulated data. Defaults to 0.1.
-            sim_strategy (str, optional): Simulation strategy for missing values. Defaults to "random_balanced_inv_global".
-            num_conv_layers (int, optional): Number of convolutional layers. Defaults to 3.
-            conv_out_channels (List[int], optional): Convolutional output channels. Defaults to [32, 64, 128].
-            kernel_size (int, optional): Kernel size. Defaults to 3.
-            pool_size (int, optional): Pool size. Defaults to 2.
-            lstm_hidden_size (int, optional): LSTM hidden size. Defaults to 128.
-            num_lstm_layers (int, optional): Number of LSTM layers. Defaults to 2.
-            dropout_rate (float, optional): Dropout rate. Defaults to 0.2.
-            bidirectional (bool, optional): Bidirectional LSTM. Defaults to False.
-            num_hidden_layers (int, optional): Number of hidden layers. Defaults to 2.
-            hidden_layer_sizes (List[int], optional): Hidden layer sizes. Defaults to [128, 64].
-            activation (str, optional): Activation function. Defaults to "elu".
-            batch_size (int, optional): Batch size. Defaults to 32.
-            learning_rate (float, optional): Learning rate. Defaults to 0.0001.
-            early_stop_gen (int, optional): Early stopping generation. Defaults to 25.
-            min_epochs (int, optional): Minimum stopping epoch generation. Defaults to 100.
-            lr_patience (int, optional): Learning rate patience. Defaults to 1.
-            epochs (int, optional): Number of epochs. Defaults to 5000.
-            optimizer (str, optional): Optimizer. Defaults to "adam".
-            l1_penalty (float, optional): L1 penalty. Defaults to 0.0001.
-            gamma (float, optional): Gamma. Defaults to 2.0.
-            beta (float, optional): Beta. Defaults to 1.0.
-            device (Literal["gpu"] | Literal["cpu"], optional): PyTorch Device. Will use GPU if available if "gpu" is specified. Defaults to "gpu".
-            scoring_averaging (str, optional): Scoring averaging. Defaults to "weighted".
-            validation_split (float, optional): Validation split. Defaults to 0.2.
-            tune (bool, optional): Tune hyperparameters. Defaults to False.
-            tune_metric (str, optional): Metric to optimize during tuning. Defaults to "f1".
-            tune_save_db (str, optional): Save tuning database. Defaults to False.
-            tune_resume (str, optional): Resume tuning. Defaults to False.
-            n_trials (int, optional): Number of tuning trials. Defaults to 100.
-            n_jobs (int, optional): Number of jobs for tuning. Defaults to 1.
-            seed (int | None, optional): Random seed. Defaults to None.
+            device (Literal["gpu"] | Literal["cpu"], optional): PyTorch Device. Will use GPU if "gpu" is specified and if a valid GPU device can be found. Defaults to "gpu".
             verbose (int, optional): Verbosity level. Defaults to 0.
             debug (bool, optional): Debug mode. Defaults to False.
 
         Raises:
             ValueError: If the optimizer is not supported.
         """
-
-        self.genotype_data = genotype_data
-        self.model_name = model_name
-        self.prefix = prefix
-        self.output_dir = output_dir
-        self.latent_dim = latent_dim
-        self.sim_prop_missing = sim_prop_missing
-        self.sim_strategy = sim_strategy
-        self.num_conv_layers = num_conv_layers
-        self.conv_out_channels = conv_out_channels
-        self.kernel_size = kernel_size
-        self.pool_size = pool_size
-        self.lstm_hidden_size = lstm_hidden_size
-        self.num_lstm_layers = num_lstm_layers
-        self.dropout_rate = dropout_rate
-        self.bidirectional = bidirectional
-        self.num_hidden_layers = num_hidden_layers
-        self.hidden_layer_sizes = hidden_layer_sizes
-        self.hidden_activation = activation
-        self.batch_size = batch_size
-        self.learning_rate = learning_rate
-        self.early_stop_gen = early_stop_gen
-        self.min_epochs = min_epochs
-        self.lr_patience = lr_patience
-        self.epochs = epochs
-        self.l1_penalty = l1_penalty
-        self.optimizer = optimizer
-        self.gamma = gamma
-        self.beta = beta
-        self.scoring_averaging = scoring_averaging
-        self.validation_split = validation_split
-        self.tune = tune
-        self.tune_metric = tune_metric
-        self.tune_save_db = tune_save_db
-        self.tune_resume = tune_resume
-        self.n_trials = n_trials
-        self.n_jobs = n_jobs
-        self.seed = seed
-        self.verbose = verbose
-        self.debug = debug
-
         self.device = self._select_device(device)
 
         # Prepare directory structure
@@ -338,9 +226,6 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
         phase = 1  # Start with Phase 1 for UBP
 
         for epoch in range(self.epochs):
-            if self.model_name == "ImputeUBP":
-                self.logger.debug(f"Epoch {epoch + 1}: Phase {phase} of UBP training.")
-
             train_loss = self.train_step(loader, optimizer, model, l1_penalty, phase)
             validation_loss = self.val_step(val_loader, model, l1_penalty)
 
@@ -371,9 +256,6 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
                 and epoch + 1 == (self.epochs // 3) * phase
             ):
                 phase = min(3, phase + 1)
-                self.logger.debug(
-                    f"Completed Phase {phase - 1}, transitioning to Phase {phase}."
-                )
 
         if return_history:
             histories = {"Train": train_history, "Validation": val_history}
@@ -407,19 +289,25 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
                 X_batch = X_batch.view(X_batch.size(0), -1)
                 y_batch = y_batch.view(y_batch.size(0), -1)
 
-            # Handle input refinement in Phases 1 and 3
-            if self.model_name == "ImputeUBP" and phase in {1, 3}:
-                X_batch.requires_grad = True
+                # Handle input refinement in Phases 1 and 3
+                if phase in {1, 3}:
+                    X_batch.requires_grad = True
 
             num_batches += 1
             optimizer.zero_grad()
 
             outputs = model(X_batch)
+
+            output_shape = (X_batch.size(0), self.num_features_, self.num_classes_)
+            if isinstance(outputs, tuple):
+                recon_logits = outputs[0].view(output_shape)
+                z_mean, z_log_var = outputs[1], outputs[2]
+                logits = (recon_logits, z_mean, z_log_var)
+            else:
+                logits = outputs.view(output_shape)
+
             loss = model.compute_loss(
-                y_batch,
-                outputs.view(outputs.size(0), -1),
-                mask=mask_batch,
-                class_weights=self.class_weights_,
+                y_batch, logits, mask=mask_batch, class_weights=self.class_weights_
             )
 
             if l1_penalty > 0:
@@ -433,6 +321,8 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
                 if phase in {2, 3}:  # Refine weights
                     loss.backward()
                     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    optimizer.step()
+                if phase == 1:
                     optimizer.step()
             else:  # Standard model training
                 loss.backward()
@@ -481,12 +371,17 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
                 # Forward pass
                 outputs = model(X_batch)
 
+                output_shape = (X_batch.size(0), self.num_features_, self.num_classes_)
+                if isinstance(outputs, tuple):
+                    recon_logits = outputs[0].view(output_shape)
+                    z_mean, z_log_var = outputs[1], outputs[2]
+                    logits = (recon_logits, z_mean, z_log_var)
+                else:
+                    logits = outputs.view(output_shape)
+
                 # Compute loss
                 val_loss = model.compute_loss(
-                    y_batch,
-                    outputs.view(outputs.size(0), -1),
-                    mask=mask_batch,
-                    class_weights=None,
+                    y_batch, logits, mask=mask_batch, class_weights=None
                 )
 
                 # Apply L1 penalty
