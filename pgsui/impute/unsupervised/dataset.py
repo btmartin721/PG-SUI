@@ -20,6 +20,8 @@ class CustomTensorDataset(TensorDataset):
     Attributes:
         data (torch.Tensor): The input data tensor.
         target (torch.Tensor): The target tensor.
+        mask (torch.Tensor): The mask tensor.
+        tensors (Tuple[torch.Tensor, torch.Tensor]): Tuple of data and target tensors.
     """
 
     def __init__(
@@ -33,7 +35,7 @@ class CustomTensorDataset(TensorDataset):
     ):
         """Initializes the CustomTensorDataset with data and target tensors.
 
-        This dataset class ensures that the input data are torch.Tensor objects and sets attributes for data and target. It also provides methods to retrieve the shape of the data and target tensors, as well as to split the dataset into train, validation, and test sets.
+        This dataset class ensures that the input data are torch.Tensor objects and sets attributes for data and target. It also provides methods to retrieve the shape of the data and target tensors, as well as to split the dataset into train, validation, and test sets. The mask tensor is optional and defaults to a tensor of ones (no masked values).
 
         Args:
             data (torch.Tensor): The input data tensor.
@@ -43,7 +45,7 @@ class CustomTensorDataset(TensorDataset):
             indices (List[int], optional): List of indices to use for the dataset. Defaults to None.
 
         Raises:
-            TypeError: If the input data or target are not torch.Tensor objects.
+            TypeError: If the input data, target, or mask are not torch.Tensor objects.
         """
         if logger is not None:
             self.logger = logger
@@ -87,7 +89,7 @@ class CustomTensorDataset(TensorDataset):
         return len(self.data)
 
     def __getitem__(self, idx: int):
-        """Returns a single sample of data and target from the dataset."""
+        """Returns a single batch of data and target from the dataset."""
         data_sample = self.data[idx]
         target_sample = self.target[idx]
         mask_sample = self.mask[idx]
@@ -98,7 +100,7 @@ class CustomTensorDataset(TensorDataset):
                 f"Data sample {idx} has incorrect shape: {data_sample.shape}"
             )
 
-        return data_sample, target_sample, mask_sample
+        return data_sample, target_sample, mask_sample, idx
 
     def get_data_shape(self):
         """Returns the shape of the data tensor.
