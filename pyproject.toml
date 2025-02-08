@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pg-sui"
-version = "1.5"
+version = "1.5.1"
 description = "Python machine and deep learning API to impute missing genotypes"
 readme = "README.md"
 authors = [
@@ -36,9 +36,9 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Application Frameworks",
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Operating System :: MacOS",
-    "Operating System :: POSIX",
-    "Operating System :: Unix",
     "Operating System :: MacOS :: MacOS X",
+    "Operating System :: Unix",
+    "Operating System :: POSIX",
     "Natural Language :: English"
 ]
 dependencies = [
