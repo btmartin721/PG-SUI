@@ -5,7 +5,7 @@ import numpy as np
 import optuna
 import pandas as pd
 from snpio.utils.logging import LoggerManager
-from torch import Tensor, optim
+from torch import Tensor
 
 from pgsui.impute.unsupervised.base import BaseNNImputer
 from pgsui.impute.unsupervised.models.vae_model import VAEModel
@@ -13,6 +13,11 @@ from pgsui.utils.misc import validate_input_type
 
 
 class ImputeVAE(BaseNNImputer):
+    """ImputeVAE class for imputing missing values in genotype data using a Variational Autoencoder (VAE) model.
+
+    This class is used to impute missing values in genotype data using a Variational Autoencoder (VAE) model. The class can be used to impute missing values in genotype data and evaluate the performance of the model using various metrics. The class can also be used to tune hyperparameters using Optuna. The class can be used to impute missing values in genotype data and evaluate the performance of the model using various metrics. The class can also be used to tune hyperparameters using Optuna.
+    """
+
     def __init__(
         self,
         genotype_data: Any,
@@ -28,7 +33,7 @@ class ImputeVAE(BaseNNImputer):
         weights_normalize: bool = False,
         weights_temperature: float = 1.0,
         sim_prop_missing: float = 0.1,
-        sim_strategy: str = "random_balanced_inv_global",
+        sim_strategy: str = "random_inv_multinom",
         tune: bool = False,
         tune_metric: str = "pr_macro",
         tune_save_db: bool = False,
@@ -50,7 +55,7 @@ class ImputeVAE(BaseNNImputer):
         model_l1_penalty: float = 0.0001,
         model_gamma: float = 2.0,
         model_beta: float = 1.0,
-        model_device: Literal["gpu"] | Literal["cpu"] = "gpu",
+        model_device: Literal["gpu", "cpu"] = "gpu",
         scoring_averaging: str = "weighted",
         plot_format: str = "pdf",
         plot_fontsize: int | float = 18,
@@ -62,7 +67,7 @@ class ImputeVAE(BaseNNImputer):
     ):
         """Initialize the ImputeVAE class.
 
-        This class is used to impute missing values in genotype data using a Variational Autoencoder (VAE). The VAE is trained on the genotype data and used to impute the missing values. The class inherits from the BaseNNImputer class.
+        This class is used to impute missing values in genotype data using a Variational Autoencoder (VAE) model. The class can be used to impute missing values in genotype data and evaluate the performance of the model using various metrics. The class can also be used to tune hyperparameters using Optuna. The class can be used to impute missing values in genotype data and evaluate the performance of the model using various metrics. The class can also be used to tune hyperparameters using Optuna.
 
         Args:
             genotype_data (Any): Genotype data.
@@ -77,7 +82,7 @@ class ImputeVAE(BaseNNImputer):
             weights_normalize (bool, optional): Whether to normalize class weights. Defaults to False.
             weights_temperature (float, optional): Temperature parameter for class weights. Defaults to 1.0.
             sim_prop_missing (float, optional): Proportion of missing values to simulate. Defaults to 0.1.
-            sim_strategy (str, optional): Strategy to simulate missing values. Defaults to "random_balanced_inv_global".
+            sim_strategy (str, optional): Strategy to simulate missing values. Defaults to "random_inv_multinom".
             tune (bool, optional): Whether to tune hyperparameters. Defaults to False.
             tune_metric (str, optional): Metric to use for hyperparameter tuning. Defaults to "f1".
             tune_save_db (bool, optional): Whether to save the hyperparameter tuning database. Defaults to False.
@@ -99,7 +104,7 @@ class ImputeVAE(BaseNNImputer):
             model_l1_penalty (float, optional): L1 penalty. Defaults to 0.0001.
             model_gamma (float, optional): Gamma parameter. Defaults to 2.0.
             model_beta (float, optional): Beta parameter. Defaults to 1.0.
-            model_device (Literal["gpu"] | Literal["cpu"], optional): Device to use. Will use GPU if available, otherwise defaults to CPU. Defaults to "gpu".
+            model_device (Literal["gpu", "cpu"], optional): Device to use. Will use GPU if available, otherwise defaults to CPU. Defaults to "gpu".
             scoring_averaging (str, optional): Averaging strategy for scoring. Defaults to "weighted".
             plot_format (str, optional): Plot format. Defaults to "pdf".
             plot_fontsize (int | float, optional): Plot font size. Defaults to 18.
@@ -110,6 +115,7 @@ class ImputeVAE(BaseNNImputer):
             debug (bool, optional): Whether to enable debug mode. Defaults to False.
         """
         self.model_name = "ImputeVAE"
+        self.is_backprop = self.model_name in {"ImputeUBP", "ImputeNLPCA"}
 
         kwargs = {"prefix": prefix, "debug": debug, "verbose": verbose >= 1}
         logman = LoggerManager(__name__, **kwargs)
@@ -233,18 +239,23 @@ class ImputeVAE(BaseNNImputer):
         self.all_missing_mask = missing_masks["all"]
 
         # Encode the data.
-        Xenc = self.tt_.fit_transform(Xsim)
+        Xsim_enc = self.tt_.fit_transform(Xsim)
 
-        self.num_features_ = Xenc.shape[1]
+        self.num_features_ = Xsim_enc.shape[1]
         self.model_params["n_features"] = self.num_features_
 
-        self.get_data_loaders(Xenc, X)
+        self.loader_ = self.get_data_loaders(Xsim_enc, X, self.latent_dim)
 
         if self.tune:
             self.tune_hyperparameters()
 
-        self.best_loss_, self.model_, self.history_ = self.train_final_model()
-        self.evaluate_model(objective_mode=False, trial=None, model=self.model_)
+        res = self.train_final_model(self.loader_)
+        self.best_loss_, self.model_, self.history_ = res
+
+        self.metrics_ = self.evaluate_model(
+            objective_mode=False, trial=None, model=self.model_, loader=self.loader_
+        )
+
         self.plotter_.plot_history(self.history_)
 
         return self
@@ -307,16 +318,14 @@ class ImputeVAE(BaseNNImputer):
         # Build and initialize model
         model = self.build_model(Model, model_params)
         model.apply(self.initialize_weights)
-        optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
         try:
             # Train and validate the model
             _, model = self.train_and_validate_model(
+                model,
                 self.loader_,
-                self.val_loader_,
-                optimizer,
-                model=model,
                 l1_penalty=self.l1_penalty,
+                lr=learning_rate,
                 trial=trial,
             )
 
@@ -327,10 +336,14 @@ class ImputeVAE(BaseNNImputer):
                 raise optuna.exceptions.TrialPruned()
 
             # Efficient evaluation
-            metrics = self.evaluate_model(objective_mode=True, trial=trial, model=model)
+            metrics = self.evaluate_model(
+                objective_mode=True, trial=trial, model=model, loader=self.loader_
+            )
 
             if self.tune_metric not in metrics:
-                raise KeyError(f"Invalid tuning metric: {self.tune_metric}")
+                msg = f"Invalid tuning metric: {self.tune_metric}"
+                self.logger.error(msg)
+                raise KeyError(msg)
 
             return metrics[self.tune_metric]
 
