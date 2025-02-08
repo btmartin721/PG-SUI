@@ -129,7 +129,7 @@ class Plotting:
         unsuper = {
             "ImputeVAE",
             "ImputeNLPCA",
-            "ImputeStandardAE",
+            "ImputeAutoencoder",
             "ImputeUBP",
             "ImputeCNN",
             "ImputeLSTM",
@@ -151,6 +151,7 @@ class Plotting:
 
         Args:
             study (optuna.study.Study): Optuna study object.
+            model_name (str): Name of the model.
             target_name (str, optional): Name of the target value. Defaults to 'Objective Value'.
         """
         with warnings.catch_warnings():
@@ -225,7 +226,16 @@ class Plotting:
         y_pred_proba: np.ndarray,
         metrics: Dict[str, float],
     ) -> None:
-        """Plot multi-class ROC-AUC and Precision-Recall curves."""
+        """Plot multi-class ROC-AUC and Precision-Recall curves.
+
+        Args:
+            y_true (np.ndarray): Array of true labels.
+            y_pred_proba (np.ndarray): Array of predicted probabilities.
+            metrics (Dict[str, float]): Dictionary of metrics to display in the plot.
+
+        Raises:
+            ValueError: If the model_name is not one of the following: 'ImputeNLPCA', 'ImputeUBP', 'ImputeStandardAE', 'ImputeVAE', 'ImputeCNN', or 'ImputeLSTM'.
+        """
         # Ensure y_true is properly binarized
         num_classes = y_pred_proba.shape[1]
         y_true = label_binarize(y_true, classes=np.arange(num_classes))
@@ -349,7 +359,7 @@ class Plotting:
         This method plots the model history traces. The plot is saved to disk as a ``<plot_format>`` file.
 
         Args:
-            history (Dict[str, List[float]]): Dictionary with lists of history objects. Keys should be "Train" and "Val".
+            history (Dict[str, List[float]]): Dictionary with lists of history objects. Keys should be "Train" and "Validation".
 
         Raises:
             ValueError: nn_method must be either 'ImputeNLPCA', 'ImputeUBP', 'ImputeStandardAE', 'ImputeVAE', 'ImputeCNN', or 'ImputeLSTM'.
@@ -357,7 +367,7 @@ class Plotting:
         if self.model_name not in {
             "ImputeNLPCA",
             "ImputeVAE",
-            "ImputeStandardAE",
+            "ImputeAutoencoder",
             "ImputeUBP",
             "ImputeLSTM",
             "ImputeCNN",
@@ -369,7 +379,7 @@ class Plotting:
         if self.model_name in {
             "ImputeNLPCA",
             "ImputeVAE",
-            "ImputeStandardAE",
+            "ImputeAutoencoder",
             "ImputeCNN",
             "ImputeLSTM",
         }:
@@ -379,51 +389,25 @@ class Plotting:
 
             # Plot train accuracy
             ax.plot(df["Train"], c="blue", lw=3)
-            ax.plot(df["Validation"], c="orange", lw=3)
+
             ax.set_title(f"{self.model_name} Loss per Epoch")
             ax.set_ylabel("Loss")
             ax.set_xlabel("Epoch")
-            ax.legend(["Train", "Validation"], loc="best", shadow=True, fancybox=True)
+            ax.legend(["Train"], loc="best", shadow=True, fancybox=True)
 
         elif self.model_name == "ImputeUBP":
-            fig = plt.figure(figsize=(12, 16))
-            fig.suptitle(self.model_name)
-            fig.tight_layout(h_pad=2.0, w_pad=2.0)
+            fig, ax = plt.subplots(3, 1, figsize=(12, 8))
 
-            idx = 1
-            for i, history in enumerate(history, start=1):
-                plt.subplot(3, 2, idx)
-                title = f"Phase {i}"
+            for i, phase in enumerate(range(1, 4)):
+                train = pd.Series(history["Train"][f"Phase {phase}"])
+                train = train.iloc[1:]  # ignore first epoch
 
-                # Plot model accuracy
-                ax = plt.gca()
-                ax.plot(history["binary_accuracy"])
-                ax.set_title(f"{title} Accuracy")
-                ax.set_ylabel("Accuracy")
-                ax.set_xlabel("Epoch")
-                ax.set_yticks([0.0, 0.25, 0.5, 0.75, 1.0])
-
-                # Plot validation accuracy
-                ax.plot(history["val_binary_accuracy"])
-                ax.legend(
-                    ["Train", "Validation"], loc="best", shadow=True, fancybox=True
-                )
-
-                # Plot model loss
-                plt.subplot(3, 2, idx + 1)
-                ax = plt.gca()
-                ax.plot(history["loss"])
-                ax.set_title(f"{title} Loss")
-                ax.set_ylabel("Loss (MSE)")
-                ax.set_xlabel("Epoch")
-
-                # Plot validation loss
-                ax.plot(history["val_loss"])
-                ax.legend(
-                    ["Train", "Validation"], loc="best", fancybox=True, shadow=True
-                )
-
-                idx += 2
+                # Plot train accuracy
+                ax[i].plot(train, c="blue", lw=3)
+                ax[i].set_title(f"{self.model_name}: Phase {phase} Loss per Epoch")
+                ax[i].set_ylabel("Loss")
+                ax[i].set_xlabel("Epoch")
+                ax[i].legend([f"Phase {phase}"], loc="best", shadow=True, fancybox=True)
 
         fn = f"{self.model_name.lower()}_history_plot.{self.plot_format}"
         fn = self.output_dir / fn
