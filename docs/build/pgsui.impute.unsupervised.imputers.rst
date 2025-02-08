@@ -4,26 +4,24 @@ pgsui.impute.unsupervised.imputers package
 Submodules
 ----------
 
-pgsui.impute.unsupervised.imputers.cnn module
----------------------------------------------
-
-.. automodule:: pgsui.impute.unsupervised.imputers.cnn
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-pgsui.impute.unsupervised.imputers.lstm module
-----------------------------------------------
-
-.. automodule:: pgsui.impute.unsupervised.imputers.lstm
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
 pgsui.impute.unsupervised.imputers.ubp module
 ---------------------------------------------
 
 .. automodule:: pgsui.impute.unsupervised.imputers.ubp
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+pgsui.impute.unsupervised.imputers.nlpca module
+
+.. automodule:: pgsui.impute.unsupervised.imputers.nlpca
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+pgsui.impute.unsupervised.imputers.autoencoder module
+
+.. automodule:: pgsui.impute.unsupervised.imputers.autoencoder
    :members:
    :undoc-members:
    :show-inheritance:
