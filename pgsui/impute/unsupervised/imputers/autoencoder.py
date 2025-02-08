@@ -8,14 +8,14 @@ from snpio.utils.logging import LoggerManager
 from torch import Tensor
 
 from pgsui.impute.unsupervised.base import BaseNNImputer
-from pgsui.impute.unsupervised.models.vae_model import VAEModel
+from pgsui.impute.unsupervised.models.autoencoder_model import AutoencoderModel
 from pgsui.utils.misc import validate_input_type
 
 
-class ImputeVAE(BaseNNImputer):
-    """ImputeVAE class for imputing missing values in genotype data using a Variational Autoencoder (VAE) model.
+class ImputeAutoencoder(BaseNNImputer):
+    """ImputeAutoencoder class for imputing missing values in genotype data using an Autoencoder model.
 
-    This class is used to impute missing values in genotype data using a Variational Autoencoder (VAE) model. The class can be used to impute missing values in genotype data and evaluate the performance of the model using various metrics. The class can also be used to tune hyperparameters using Optuna. The class can be used to impute missing values in genotype data and evaluate the performance of the model using various metrics. The class can also be used to tune hyperparameters using Optuna.
+    This class is used to impute missing values in genotype data using an Autoencoder model. The class can be used to impute missing values in genotype data and evaluate the performance of the model using various metrics. The class can also be used to tune hyperparameters using Optuna. The class can be used to impute missing values in genotype data and evaluate the performance of the model using various metrics. The class can also be used to tune hyperparameters using Optuna.
     """
 
     def __init__(
@@ -54,7 +54,6 @@ class ImputeVAE(BaseNNImputer):
         model_validation_split: float = 0.2,
         model_l1_penalty: float = 0.0001,
         model_gamma: float = 2.0,
-        model_beta: float = 1.0,
         model_device: Literal["gpu", "cpu"] = "gpu",
         scoring_averaging: str = "weighted",
         plot_format: str = "pdf",
@@ -65,9 +64,9 @@ class ImputeVAE(BaseNNImputer):
         plot_show_plots: bool = False,
         debug: bool = False,
     ):
-        """Initialize the ImputeVAE class.
+        """Initialize the ImputeAutoencoder class.
 
-        This class is used to impute missing values in genotype data using a Variational Autoencoder (VAE) model. The class can be used to impute missing values in genotype data and evaluate the performance of the model using various metrics. The class can also be used to tune hyperparameters using Optuna. The class can be used to impute missing values in genotype data and evaluate the performance of the model using various metrics. The class can also be used to tune hyperparameters using Optuna.
+        This class is used to impute missing values in genotype data using an Autoencoder model. The class can be used to impute missing values in genotype data and evaluate the performance of the model using various metrics. The class can also be used to tune hyperparameters using Optuna. The class can be used to impute missing values in genotype data and evaluate the performance of the model using various metrics. The class can also be used to tune hyperparameters using Optuna.
 
         Args:
             genotype_data (Any): Genotype data.
@@ -88,7 +87,7 @@ class ImputeVAE(BaseNNImputer):
             tune_save_db (bool, optional): Whether to save the hyperparameter tuning database. Defaults to False.
             tune_resume (bool, optional): Whether to resume hyperparameter tuning. Defaults to False.
             tune_n_trials (int, optional): Number of hyperparameter tuning trials. Defaults to 100.
-            model_latent_dim (int, optional): Latent dimension of the VAE. Defaults to 2.
+            model_latent_dim (int, optional): Latent dimension of the model. Defaults to 2.
             model_dropout_rate (float, optional): Dropout rate. Defaults to 0.2.
             model_num_hidden_layers (int, optional): Number of hidden layers. Defaults to 2.
             model_hidden_layer_sizes (List[int], optional): Sizes of hidden layers. Defaults to [128, 64].
@@ -103,7 +102,6 @@ class ImputeVAE(BaseNNImputer):
             model_validation_split (float, optional): Validation split. Defaults to 0.2.
             model_l1_penalty (float, optional): L1 penalty. Defaults to 0.0001.
             model_gamma (float, optional): Gamma parameter. Defaults to 2.0.
-            model_beta (float, optional): Beta parameter. Defaults to 1.0.
             model_device (Literal["gpu", "cpu"], optional): Device to use. Will use GPU if available, otherwise defaults to CPU. Defaults to "gpu".
             scoring_averaging (str, optional): Averaging strategy for scoring. Defaults to "weighted".
             plot_format (str, optional): Plot format. Defaults to "pdf".
@@ -114,7 +112,7 @@ class ImputeVAE(BaseNNImputer):
             plot_show_plots (bool, optional): Whether to show plots. Defaults to False.
             debug (bool, optional): Whether to enable debug mode. Defaults to False.
         """
-        self.model_name = "ImputeVAE"
+        self.model_name = "ImputeAutoencoder"
         self.is_backprop = self.model_name in {"ImputeUBP", "ImputeNLPCA"}
 
         kwargs = {"prefix": prefix, "debug": debug, "verbose": verbose >= 1}
@@ -128,7 +126,7 @@ class ImputeVAE(BaseNNImputer):
             verbose=verbose,
             debug=debug,
         )
-        self.Model = VAEModel
+        self.Model = AutoencoderModel
 
         self.genotype_data = genotype_data
         self.latent_dim = model_latent_dim
@@ -153,7 +151,6 @@ class ImputeVAE(BaseNNImputer):
         self.epochs = model_epochs
         self.l1_penalty = model_l1_penalty
         self.gamma = model_gamma
-        self.beta = model_beta
         self.scoring_averaging = scoring_averaging
         self.n_jobs = n_jobs
         self.validation_split = model_validation_split
@@ -181,7 +178,6 @@ class ImputeVAE(BaseNNImputer):
             "dropout_rate": self.dropout_rate,
             "activation": self.activation,
             "gamma": self.gamma,
-            "beta": self.beta,
         }
 
         # Convert output_dir to Path if not already
@@ -261,9 +257,9 @@ class ImputeVAE(BaseNNImputer):
         return self
 
     def transform(self, X: np.ndarray | pd.DataFrame | list | Tensor) -> np.ndarray:
-        """Transform and impute the data using the trained VAE.
+        """Transform and impute the data using the trained model.
 
-        This method transforms the input data and imputes the missing values using the trained VAE model.
+        This method transforms the input data and imputes the missing values using the trained model.
 
         Args:
             X (numpy.ndarray): Data to transform and impute.
@@ -298,7 +294,6 @@ class ImputeVAE(BaseNNImputer):
             int(x) for x in np.linspace(16, 256, num_hidden_layers)[::-1]
         ]
         gamma = trial.suggest_float("gamma", 0.025, 5.0, step=0.025)
-        beta = trial.suggest_float("beta", 0.025, 5.0, step=0.025)
         activation = trial.suggest_categorical(
             "activation", ["relu", "elu", "selu", "leaky_relu"]
         )
@@ -312,7 +307,6 @@ class ImputeVAE(BaseNNImputer):
             "hidden_layer_sizes": hidden_layer_sizes,
             "activation": activation,
             "gamma": gamma,
-            "beta": beta,
         }
 
         # Build and initialize model
@@ -368,7 +362,6 @@ class ImputeVAE(BaseNNImputer):
         self.dropout_rate = best_params["dropout_rate"]
         self.lr_ = best_params["learning_rate"]
         self.gamma = best_params["gamma"]
-        self.beta = best_params["beta"]
 
         best_params_ = {
             "n_features": self.num_features_,
@@ -377,7 +370,6 @@ class ImputeVAE(BaseNNImputer):
             "dropout_rate": self.dropout_rate,
             "activation": self.activation,
             "gamma": self.gamma,
-            "beta": self.beta,
         }
 
         return best_params_

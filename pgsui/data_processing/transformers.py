@@ -116,7 +116,29 @@ class AutoEncoderFeatureTransformer(BaseEstimator, TransformerMixin):
         verbose: int = 0,
         debug: bool = False,
     ) -> None:
-        """Initialize the AutoEncoderFeatureTransformer."""
+        """Initialize the AutoEncoderFeatureTransformer.
+
+        This class formats autoencoder features and targets before model fitting. The input data is converted to one-hot format, and missing values are replaced with [-1] * num_classes. Missing and observed boolean masks are also generated. The transformer can also return integer-encoded SNP data. The inverse_transform method decodes the predicted outputs back to the original format. The optimal threshold for sigmoid activation can be found using the inverse_transform method. The encoding function is selected based on the number of SNP categories. The encoding functions are encode_012, encode_multilabel, and encode_multiclass.
+
+        Args:
+            num_classes (int): Number of SNP categories (A, T, C, G).
+            return_int (bool): Whether to return integer-encoded SNP data.
+            activate (str): Activation function used in the autoencoder.
+            threshold_increment (float): Step size for optimal threshold search.
+            logger (LoggerManager): Logger for debugging and tracking.
+            verbose (int): Verbosity level.
+            debug (bool): Enable debug mode.
+
+        Raises:
+            ValueError: If the number of classes is invalid (not 3, 4, or 10).
+
+        Examples:
+            >>>from skbio.transformers import AutoEncoderFeatureTransformer
+            >>>transformer = AutoEncoderFeatureTransformer(num_classes=4, return_int=True, activate="softmax", threshold_increment=0.05, verbose=1, debug=False)
+            >>>transformer.fit(X)
+            >>>Xenc = transformer.transform(X)
+            >>>Xdec = transformer.inverse_transform(Xenc)
+        """
         self.num_classes = num_classes
         self.return_int = return_int
         self.activate = activate
@@ -652,7 +674,7 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
         genotype_data: Any,
         *,
         prop_missing: float = 0.1,
-        strategy: str = "random_global",
+        strategy: str = "random",
         missing_val: float = -1,
         mask_missing: bool = True,
         seed: int = None,
@@ -738,8 +760,7 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
             sim_missing_mask[original_missing_mask] = False
 
         # Validate columns or rows, if desired
-        self._validate_mask_columns(sim_missing_mask)
-        # self._validate_mask_rows(sim_missing_mask)  # Uncomment to ensure no row is fully masked
+        sim_missing_mask = self._validate_mask_columns(sim_missing_mask)
 
         all_missing_mask = np.logical_or(original_missing_mask, sim_missing_mask)
 
@@ -755,42 +776,60 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
         return Xt, masks
 
     def _simulate_missing_mask(self, X, original_missing_mask):
-        """Select which sites to mask, globally, depending on self.strategy."""
-        if self.strategy == "random_global":
-            return self._simulate_random_global(X, original_missing_mask)
+        """Select which sites to mask, globally, depending on self.strategy.
 
-        elif self.strategy == "random_balanced_global":
-            return self._simulate_random_balanced_global(
-                X, original_missing_mask, inverse=False
-            )
+        Args:
+            X (np.ndarray): Genotype data.
+            original_missing_mask (np.ndarray): Mask of original missing data.
 
-        elif self.strategy == "random_balanced_inv_global":
-            return self._simulate_random_balanced_global(
-                X, original_missing_mask, inverse=True
-            )
+        Returns:
+            np.ndarray: Mask of simulated missing data.
 
-        elif self.strategy == "nonrandom_global":
-            return self._simulate_tree_based_global(
-                X, original_missing_mask, weighted=False
-            )
+        Raises:
+            ValueError: If the strategy is invalid.
+        """
+        if self.strategy == "random":
+            return self._simulate_random(X, original_missing_mask)
 
-        elif self.strategy == "nonrandom_weighted_global":
-            return self._simulate_tree_based_global(
-                X, original_missing_mask, weighted=True
-            )
+        elif self.strategy == "random_balanced":
+            return self._simulate_random_weight(X, original_missing_mask, inverse=False)
 
-        elif self.strategy == "nonrandom_distance_global":
-            return self._simulate_nonrandom_distance_global(X, original_missing_mask)
+        elif self.strategy == "random_inv":
+            return self._simulate_random_weight(X, original_missing_mask, inverse=True)
+
+        elif self.strategy == "random_balanced_multinom":
+            return self._simulate_multinom(X, original_missing_mask, inverse=False)
+
+        elif self.strategy == "random_inv_multinom":
+            return self._simulate_multinom(X, original_missing_mask, inverse=True)
+
+        elif self.strategy == "nonrandom":
+            return self._simulate_tree_based(X, original_missing_mask, weighted=False)
+
+        elif self.strategy == "nonrandom_weighted":
+            return self._simulate_tree_based(X, original_missing_mask, weighted=True)
+
+        elif self.strategy == "nonrandom_distance":
+            return self._simulate_nonrandom_distance(X, original_missing_mask)
 
         else:
             raise ValueError(
                 f"Invalid strategy '{self.strategy}'. "
-                "Choose from ['random_global', 'random_balanced_global', 'random_balanced_inv_global', "
-                "'nonrandom_global', 'nonrandom_weighted_global', 'nonrandom_distance_global']."
+                "Choose from: ['random', 'random_balanced', 'random_balanced_multinom', 'random_inv', 'random_inv_multinom', 'nonrandom', 'nonrandom_weighted', 'nonrandom_distance']."
             )
 
-    def _simulate_random_global(self, X, original_missing_mask):
-        """Randomly mask ~prop_missing fraction of all known genotype calls."""
+    def _simulate_random(self, X, original_missing_mask):
+        """Randomly mask ~prop_missing fraction of all known genotype calls.
+
+        Method to simulate missing data by randomly selecting calls to mask. This method is the simplest and most straightforward, but it does not take into account the distribution of missing data.
+
+        Args:
+            X (np.ndarray): Genotype data.
+            original_missing_mask (np.ndarray): Mask of original missing data.
+
+        Returns:
+            np.ndarray: Mask of simulated missing data.
+        """
         known_locs = np.where(~original_missing_mask)
         n_known = len(known_locs[0])
         mask = np.zeros_like(original_missing_mask, dtype=bool)
@@ -809,10 +848,17 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
 
         return mask
 
-    def _simulate_random_balanced_global(self, X, original_missing_mask, inverse=False):
+    def _simulate_random_weight(self, X, original_missing_mask, inverse=False):
         """
-        Globally subdivide missingness by genotype (0,1,2) across the entire matrix.
-        If inverse=True => classes with fewer counts get proportionally more masked.
+        Globally subdivide missingness by genotype (0,1,2) across the entire matrix. If inverse=True => classes with fewer counts get proportionally more masked. If inverse=False => classes are masked equally. This method is a simple extension of the random method, but it takes into account the distribution of missing data.
+
+        Args:
+            X (np.ndarray): Genotype data.
+            original_missing_mask (np.ndarray): Mask of original missing data.
+            inverse (bool): Whether to use inverse weighting.
+
+        Returns:
+            np.ndarray: Mask of simulated missing data.
         """
         nrows, ncols = X.shape
         mask = np.zeros((nrows, ncols), dtype=bool)
@@ -838,16 +884,10 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
 
         # Decide how many to remove from each genotype
         if inverse:
-            # Inverse frequency approach
-            # freq0 = max(len(idx0), 1e-9)
-            # freq1 = max(len(idx1), 1e-9)
-            # freq2 = max(len(idx2), 1e-9)
-            # inv0, inv1, inv2 = 1 / freq0, 1 / freq1, 1 / freq2
-            inv0, inv1, inv2 = (
-                self.class_weights[0],
-                self.class_weights[1],
-                self.class_weights[2],
-            )
+            # Class weights approach
+            inv0 = self.class_weights[0]
+            inv1 = self.class_weights[1]
+            inv2 = self.class_weights[2]
             denom = inv0 + inv1 + inv2
             frac0, frac1, frac2 = inv0 / denom, inv1 / denom, inv2 / denom
         else:
@@ -905,15 +945,83 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
 
         return mask
 
-    def _simulate_tree_based_global(self, X, original_missing_mask, weighted=False):
+    def _simulate_multinom(self, X, original_missing_mask, inverse=False):
+        """Simulate missing data by randomly selecting calls to mask, with balanced genotype proportions.
+
+        Args:
+            X (np.ndarray): Genotype data.
+            original_missing_mask (np.ndarray): Mask of original missing data.
+            inverse (bool): Whether to use inverse weighting.
+
+        Returns:
+            np.ndarray: Mask of simulated missing data.
+        """
+        nrows, ncols = X.shape
+        mask = np.zeros((nrows, ncols), dtype=bool)
+
+        # Identify known (non-missing) calls
+        known_locs = np.where(~original_missing_mask)
+        n_known = len(known_locs[0])
+        if n_known == 0:
+            return mask
+
+        row_coords = known_locs[0]
+        col_coords = known_locs[1]
+        genotypes = X[row_coords, col_coords]
+
+        # Identify indices for each genotype
+        idx0 = np.where(genotypes == 0)[0]
+        idx1 = np.where(genotypes == 1)[0]
+        idx2 = np.where(genotypes == 2)[0]
+
+        n_to_mask = int(np.floor(self.prop_missing * n_known))
+        if n_to_mask == 0:
+            return mask
+
+        # Determine probabilities for each genotype class
+        if inverse:
+            inv0, inv1, inv2 = (
+                self.class_weights[0],
+                self.class_weights[1],
+                self.class_weights[2],
+            )
+            denom = inv0 + inv1 + inv2
+            p = np.array([inv0 / denom, inv1 / denom, inv2 / denom])
+        else:
+            p = np.array([1 / 3, 1 / 3, 1 / 3])
+
+        # Allocate number of picks per genotype using a multinomial draw
+        picks = np.random.multinomial(n_to_mask, p)
+
+        chosen_indices = []
+        for idx, n_picks in zip([idx0, idx1, idx2], picks):
+            if len(idx) > 0 and n_picks > 0:
+                n_picks = min(n_picks, len(idx))
+                chosen_indices.append(self.rng.choice(idx, size=n_picks, replace=False))
+
+        if chosen_indices:
+            chosen_indices = np.concatenate(chosen_indices)
+            chosen_rows = row_coords[chosen_indices]
+            chosen_cols = col_coords[chosen_indices]
+            mask[chosen_rows, chosen_cols] = True
+
+        return mask
+
+    def _simulate_tree_based(self, X, original_missing_mask, weighted=False):
         """
         Global approach that uses subclades from a phylogenetic tree, but
         picks missing calls across the entire matrix.
 
-        For each row, identify which subclade it belongs to. Then we:
-            - group all known calls by subclade
-            - for subclade i with K_i known calls, we pick ~prop_missing*K_i calls
-            - if weighted=True, we do a genotype-based weighting inside each subclade
+        Args:
+            X (np.ndarray): Genotype data.
+            original_missing_mask (np.ndarray): Mask of original missing data.
+            weighted (bool): Whether to use genotype-based weighting.
+
+        Notes:
+            For each row, identify which subclade it belongs to. Then we:
+                - group all known calls by subclade and pick ~prop_missing fraction of calls to mask.
+                - for subclade i with K_i known calls, we pick ~prop_missing*K_i calls to mask (randomly) from that subclade.
+                - if weighted=True, we do a genotype-based weighting inside each subclade based on genotype frequencies there (0,1,2) and pick accordingly from each genotype group inside the subclade (proportional to genotype frequency).
         """
         nrows, ncols = X.shape
         mask = np.zeros((nrows, ncols), dtype=bool)
@@ -1058,10 +1166,10 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
 
         return mask
 
-    def _simulate_nonrandom_distance_global(self, X, original_missing_mask):
+    def _simulate_nonrandom_distance(self, X, original_missing_mask):
         """Simulate non-random missingness using a distance-based approach.
 
-        Uses a class-aware weighting for genotype classes 0, 1, and 2.
+        Uses a class-aware weighting for genotype classes 0, 1, and 2. The weighting factors are specified in self.class_weights. If not provided, the default is 1, 2, 3 for 0, 1, 2, respectively. The weighting factors are used to determine how many calls to mask in each genotype class.
 
         Args:
             X (np.ndarray): Genotype matrix of shape (n_rows, n_cols) with values in {0,1,2}.
@@ -1081,7 +1189,7 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
                 5. Determine how many calls to mask in total (prop_missing * candidate calls).
                 6. Classify calls by genotype and assign weighting factors for 0, 1, 2.
                 7. Mask calls in each genotype class according to the weighting scheme.
-                8. Return the combined mask.
+                8. Return the combined mask. If a column is fully masked, unmask one row.
         """
         nrows, ncols = X.shape
         mask = np.zeros((nrows, ncols), dtype=bool)
@@ -1192,13 +1300,23 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
         return mask
 
     def _validate_mask_columns(self, mask):
-        """Ensure no column is fully masked."""
+        """Ensure no column is fully masked.
+
+        If a column is fully masked, unmask exactly one row to avoid fully masked columns.
+
+        Args:
+            mask (np.ndarray): Mask of missing data.
+
+        Returns:
+            np.ndarray: Updated mask with exactly one row unmasked for each fully masked column.
+        """
         nrows, ncols = mask.shape
         for col_idx in range(ncols):
             if np.all(mask[:, col_idx]):
                 # unmask exactly one row to avoid fully masked column
                 row_to_fix = self.rng.integers(low=0, high=nrows)
                 mask[row_to_fix, col_idx] = False
+        return mask
 
     def _validate_mask_rows(self, mask):
         """Ensure no row is fully masked."""

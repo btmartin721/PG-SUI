@@ -17,6 +17,8 @@ Welcome to PG-SUI's documentation!
    unsupervised_imputers
    imputer_methods
    non_ml_imputers
+   implement_new_models
+   simulation_strategies
    modules
    changelog
    

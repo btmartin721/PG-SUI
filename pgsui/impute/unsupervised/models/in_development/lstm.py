@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Any, List, Literal
+from typing import Any, Literal
 
 import numpy as np
 import optuna
@@ -8,11 +8,12 @@ from snpio.utils.logging import LoggerManager
 from torch import Tensor, optim
 
 from pgsui.impute.unsupervised.base import BaseNNImputer
-from pgsui.impute.unsupervised.models.cnn_model import CNNModel
+from pgsui.impute.unsupervised.models.in_development.lstm_model import LSTMModel
 from pgsui.utils.misc import validate_input_type
 
 
-class ImputeCNN(BaseNNImputer):
+class ImputeLSTM(BaseNNImputer):
+
     def __init__(
         self,
         genotype_data: Any,
@@ -32,11 +33,10 @@ class ImputeCNN(BaseNNImputer):
         tune_save_db: bool = False,
         tune_resume: bool = False,
         tune_n_trials: int = 100,
-        model_num_conv_layers: int = 3,
-        model_conv_out_channels: List[int] = [32, 64, 128],
-        model_kernel_size: int = 3,
-        model_pool_size: int = 2,
+        model_lstm_hidden_size: int = 128,
+        model_num_lstm_layers: int = 2,
         model_dropout_rate: float = 0.2,
+        model_bidirectional: bool = False,
         model_batch_size: int = 32,
         model_learning_rate: float = 0.001,
         model_early_stop_gen: int = 25,
@@ -48,7 +48,7 @@ class ImputeCNN(BaseNNImputer):
         model_validation_split: float = 0.2,
         model_l1_penalty: float = 0.0,
         model_gamma: float = 2.0,
-        model_device: Literal["gpu"] | Literal["cpu"] = "gpu",
+        model_device: Literal["gpu", "cpu"] = "gpu",
         scoring_averaging: str = "weighted",
         plot_format: str = "pdf",
         plot_fontsize: int | float = 18,
@@ -58,9 +58,9 @@ class ImputeCNN(BaseNNImputer):
         plot_show_plots: bool = False,
         debug: bool = False,
     ):
-        """Initialize the ImputeCNN class.
+        """Initialize the ImputeLSTM class.
 
-        This class is used to impute missing values in genotype data using a Convolutional Neural Network (CNN). The CNN is trained on the genotype data and used to impute the missing values. The class inherits from the BaseNNImputer class.
+        This class is used to impute missing values in genotype data using a Long-term Short-term Time-series Network (LSTM). The LSTM is trained on the genotype data and used to impute the missing values. The class inherits from the BaseNNImputer class.
 
         Args:
             genotype_data (Any): Genotype data.
@@ -79,10 +79,10 @@ class ImputeCNN(BaseNNImputer):
             tune_save_db (bool, optional): Whether to save the hyperparameter tuning database. Defaults to False.
             tune_resume (bool, optional): Whether to resume hyperparameter tuning. Defaults to False.
             tune_n_trials (int, optional): Number of hyperparameter tuning trials. Defaults to 100.
-            model_num_conv_layers (int, optional): Number of convolutional layers. Defaults to 3.
-            model_conv_out_channels (List[int], optional): List of output channels for each convolutional layer. Defaults to [32, 64, 128].
-            model_kernel_size (int, optional): Kernel size. Defaults to 3.
+            model_lstm_hidden_size (int, optional): Hidden size of the LSTM layer. Defaults to 128.
+            model_num_lstm_layers (int, optional): Number of stacked LSTM layers. Defaults to 2.
             model_dropout_rate (float, optional): Dropout rate. Defaults to 0.2.
+            model_bidirectional (bool, optional): Whether to use bidirectional LSTM. Defaults to False.
             model_batch_size (int, optional): Batch size. Defaults to 32.
             model_learning_rate (float, optional): Learning rate. Defaults to 0.
             model_early_stop_gen (int, optional): Number of generations to early stop. Defaults to 25.
@@ -94,7 +94,7 @@ class ImputeCNN(BaseNNImputer):
             model_validation_split (float, optional): Validation split. Defaults to 0.2.
             model_l1_penalty (float, optional): L1 penalty. Defaults to 0.0001.
             model_gamma (float, optional): Gamma parameter. Defaults to 2.0.
-            model_device (Literal["gpu"] | Literal["cpu"], optional): Device to use. Will use GPU if available, otherwise defaults to CPU. Defaults to "gpu".
+            model_device (Literal["gpu", "cpu"], optional): Device to use. Will use GPU if available, otherwise defaults to CPU. Defaults to "gpu".
             scoring_averaging (str, optional): Averaging strategy for scoring. Defaults to "weighted".
             plot_format (str, optional): Plot format. Defaults to "pdf".
             plot_fontsize (int | float, optional): Plot font size. Defaults to 18.
@@ -104,7 +104,7 @@ class ImputeCNN(BaseNNImputer):
             plot_show_plots (bool, optional): Whether to show plots. Defaults to False.
             debug (bool, optional): Whether to enable debug mode. Defaults to False.
         """
-        self.model_name = "ImputeCNN"
+        self.model_name = "ImputeLSTM"
 
         kwargs = {"prefix": prefix, "debug": debug, "verbose": verbose >= 1}
         logman = LoggerManager(__name__, **kwargs)
@@ -113,11 +113,10 @@ class ImputeCNN(BaseNNImputer):
         super().__init__(
             genotype_data,
             model_name=self.model_name,
-            num_conv_layers=model_num_conv_layers,
-            conv_out_channels=model_conv_out_channels,
-            kernel_size=model_kernel_size,
-            pool_size=model_pool_size,
+            lstm_hidden_size=model_lstm_hidden_size,
+            num_lstm_layers=model_num_lstm_layers,
             dropout_rate=model_dropout_rate,
+            bidirectional=model_bidirectional,
             activation=model_hidden_activation,
             batch_size=model_batch_size,
             learning_rate=model_learning_rate,
@@ -143,14 +142,13 @@ class ImputeCNN(BaseNNImputer):
             verbose=verbose,
             debug=debug,
         )
-        self.Model = CNNModel
+        self.Model = LSTMModel
 
         self.genotype_data = genotype_data
+        self.num_lstm_layers = model_num_lstm_layers
+        self.lstm_hidden_size = model_lstm_hidden_size
         self.dropout_rate = model_dropout_rate
-        self.num_conv_layers = model_num_conv_layers
-        self.conv_out_channels = model_conv_out_channels
-        self.kernel_size = model_kernel_size
-        self.pool_size = model_pool_size
+        self.bidirectional = model_bidirectional
         self.activation = model_hidden_activation
         self.hidden_activation = model_hidden_activation
         self.batch_size = model_batch_size
@@ -187,11 +185,10 @@ class ImputeCNN(BaseNNImputer):
         _ = self.genotype_data.snp_data  # Ensure SNP data is loaded
 
         self.model_params = {
-            "num_conv_layers": self.num_conv_layers,
-            "conv_out_channels": self.conv_out_channels,
-            "kernel_size": self.kernel_size,
-            "pool_size": self.pool_size,
+            "num_lstm_layers": self.num_lstm_layers,
+            "lstm_hidden_size": self.lstm_hidden_size,
             "dropout_rate": self.dropout_rate,
+            "bidirectional": self.bidirectional,
             "activation": self.activation,
             "gamma": self.gamma,
         }
@@ -266,9 +263,9 @@ class ImputeCNN(BaseNNImputer):
         return self
 
     def transform(self, X: np.ndarray | pd.DataFrame | list | Tensor) -> np.ndarray:
-        """Transform and impute the data using the trained CNN.
+        """Transform and impute the data using the trained model.
 
-        This method transforms the input data and imputes the missing values using the trained CNN model.
+        This method transforms the input data and imputes the missing values using the trained model.
 
         Args:
             X (numpy.ndarray): Data to transform and impute.
@@ -295,12 +292,9 @@ class ImputeCNN(BaseNNImputer):
             float: Best metric value.
         """
         # Efficient hyperparameter sampling
-        num_conv_layers = trial.suggest_int("num_conv_layers", 1, 5)
-        conv_out_channels = np.linspace(
-            16, 128, num=num_conv_layers, dtype=int
-        ).tolist()
-        kernel_size = trial.suggest_int("kernel_size", 1, 5)
-        pool_size = trial.suggest_int("pool_size", 1, 5)
+        num_lstm_layers = trial.suggest_int("num_lstm_layers", 1, 3)
+        lstm_hidden_size = trial.suggest_int("lstm_hidden_size", 64, 256, step=32)
+        bidirectional = trial.suggest_categorical("bidirectional", [True, False])
         dropout_rate = trial.suggest_float("dropout_rate", 0.0, 0.5, step=0.05)
         learning_rate = trial.suggest_float("learning_rate", 1e-5, 1e-3, log=True)
         gamma = trial.suggest_float("gamma", 0.025, 5.0, step=0.025)
@@ -311,11 +305,10 @@ class ImputeCNN(BaseNNImputer):
         # Model parameters
         model_params = {
             "n_features": self.num_features_,
-            "num_conv_layers": num_conv_layers,
-            "conv_out_channels": conv_out_channels,
-            "kernel_size": kernel_size,
-            "pool_size": pool_size,
+            "num_lstm_layers": num_lstm_layers,
+            "lstm_hidden_size": lstm_hidden_size,
             "dropout_rate": dropout_rate,
+            "bidirectional": bidirectional,
             "activation": activation,
             "gamma": gamma,
         }
@@ -323,6 +316,10 @@ class ImputeCNN(BaseNNImputer):
         # Build and initialize model
         model = self.build_model(Model, model_params)
         model.apply(self.initialize_weights)
+
+        for param in model.parameters():
+            param.requires_grad = True
+
         optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
         try:

@@ -14,11 +14,11 @@ Unsupervised Deep Learning Methods (Fully/Partially Functional)
 PG-SUI offers several **unsupervised deep learning** approaches for SNP genotype imputation. These methods do not require labeled training data, making them well-suited for genomic datasets with missing values.
 
 + Variational AutoEncoder (VAE) [1]_  *(Fully Functional)*
-+ Unsupervised Backpropagation (UBP) [2]_ *(Coming Soon)*
-+ Standard AutoEncoder (SAE) [3]_
-+ Non-linear Principal Component Analysis (NLPCA) [4]_
++ Unsupervised Backpropagation (UBP) [2]_ *(Fully Functional)*
++ Standard AutoEncoder [3]_ *(Fully Functional)*
++ Non-linear Principal Component Analysis (NLPCA) [4]_ *(Fully Functional)*
 
-**Variational AutoEncoder (VAE) – Fully Functional**
+**Variational AutoEncoder (VAE)**
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 - The **ImputeVAE** model is currently the most robust and optimized deep learning approach available in PG-SUI.
 - The model encodes the SNP dataset into a **low-dimensional latent space**, where each encoded sample is drawn from a probability distribution (mean and variance).
@@ -26,33 +26,37 @@ PG-SUI offers several **unsupervised deep learning** approaches for SNP genotype
 
 .. code-block:: python
 
+        from pgsui.impute.unsupervised.imputers.vae import ImputeVAE
+
         vae = ImputeVAE(
-        genotype_data=data, 
-        tune=True, # Tune model parameters with Optuna.
-        tune_n_trials=100, # Recommended: 100-1000.
-        tune_metric="pr_macro", # Deals well with class imbalance.
-        weights_temperature=3.0, # For adjusting class weights.
-        weights_alpha=1.0,
-        weights_normalize=True,
-        model_early_stop_gen=20, # Model parameters.
-        model_min_epochs=20,
-        model_validation_split=0.21, # Split into train/ val/ test sets.
-        model_learning_rate=0.0001, # Tunable parameters from here to model_beta.
-        model_latent_dim=2, 
-        model_num_hidden_layers=2, 
-        model_hidden_layer_sizes=[128, 64], 
-        model_gamma=2.0, # For focal loss. 
-        model_beta=1.0, # For KL divergence.
-        device="cpu", 
-        n_jobs=8, # Number of CPUs to use with Optuna parameter tuning.
-        verbose=1, 
-        seed=42, # For reproducibility.
-    )
+            genotype_data=data, 
+            tune=True, # Tune model parameters with Optuna.
+            tune_n_trials=100, # Recommended: 100-1000.
+            tune_metric="pr_macro", # Deals well with class imbalance.
+            weights_temperature=3.0, # For adjusting class weights.
+            weights_alpha=1.0,
+            weights_normalize=True,
+            model_early_stop_gen=20, # Model parameters.
+            model_min_epochs=20,
+            model_validation_split=0.21, # Split into train/ val/ test sets.
+            model_learning_rate=0.0001, # Tunable parameters from here to model_beta.
+            model_latent_dim=2, 
+            model_num_hidden_layers=2, 
+            model_hidden_layer_sizes=[128, 64], 
+            model_gamma=2.0, # For focal loss. 
+            model_beta=1.0, # For KL divergence.
+            device="cpu", 
+            n_jobs=8, # Number of CPUs to use with Optuna parameter tuning.
+            verbose=1, 
+            seed=42, # For reproducibility.
+        )
 
 There are also other arguments. Please see the API documentation for more details.
 
-**Unsupervised Backpropagation (UBP) – Coming Soon**
+**Unsupervised Backpropagation (UBP)**
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+- The **ImputeUBP** model is a novel unsupervised deep learning approach that uses **backpropagation** to impute missing genotypes.
 - UBP is an **enhanced version of NLPCA**, introducing a **three-phase training process**:
   1. **Phase 1:** A single-layer perceptron learns an initial mapping from a randomly generated latent space.
   2. **Phase 2:** A multi-layer perceptron (MLP) refines the learned representations.
@@ -61,52 +65,52 @@ There are also other arguments. Please see the API documentation for more detail
 
 .. code-block:: python
 
+    from pgsui.impute.unsupervised.imputers.ubp import ImputeUBP
+
     ubp = ImputeUBP(genotype_data=data)  # Feature in development
 
-**Standard AutoEncoder (SAE)**
+**Standard AutoEncoder**
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. note::
-
-    The SAE model is currently under active development and optimization. It might not be fully functional in the current release.
-
+- The **ImputeAutoencoder** model is a simple autoencoder that compresses the SNP matrix into a **low-dimensional latent space** and then reconstructs the original data.
 - SAE reduces the dataset into a **compressed latent representation** and then reconstructs the original SNP matrix.
 - Unlike VAE, SAE does not model a probability distribution; it simply learns a **deterministic encoding-decoding function**.
 
 .. code-block:: python
 
-        sae = ImputeStandardAutoEncoder(
-        genotype_data=data, 
-        tune=True, # Tune parameters with Optuna.
-        tune_n_trials=100, # Recommended: 100-1000.
-        tune_metric="pr_macro", # Deals well with class imbalance.
-        weights_temperature=3.0, # For adjusting class weights.
-        weights_alpha=1.0,
-        weights_normalize=True,
-        model_early_stop_gen=20, # Model parameters.
-        model_min_epochs=20,
-        model_validation_split=0.21, # Split into train/ val/ test sets.
-        model_learning_rate=0.0001, # Tunable parameters from here to model_beta.
-        model_latent_dim=2, 
-        model_num_hidden_layers=2, 
-        model_hidden_layer_sizes=[128, 64], 
-        model_gamma=2.0, # For focal loss. 
-        device="cpu", 
-        n_jobs=8, # Number of CPUs to use with Optuna parameter tuning.
-        verbose=1, 
-        seed=42, # For reproducibility.
-    )
+        from pgsui.impute.unsupervised.imputers.autoencoder import ImputeAutoencoder
+
+        sae = ImputeAutoencoder(
+            genotype_data=data, 
+            tune=True, # Tune parameters with Optuna.
+            tune_n_trials=100, # Recommended: 100-1000.
+            tune_metric="pr_macro", # Deals well with class imbalance.
+            weights_temperature=3.0, # For adjusting class weights.
+            weights_alpha=1.0,
+            weights_normalize=True,
+            model_early_stop_gen=20, # Model parameters.
+            model_min_epochs=20,
+            model_validation_split=0.21, # Split into train/ val/ test sets.
+            model_learning_rate=0.0001, # Tunable parameters from here to model_beta.
+            model_latent_dim=2, 
+            model_num_hidden_layers=2, 
+            model_hidden_layer_sizes=[128, 64], 
+            model_gamma=2.0, # For focal loss. 
+            device="cpu", 
+            n_jobs=8, # Number of CPUs to use with Optuna parameter tuning.
+            verbose=1, 
+            seed=42, # For reproducibility.
+        )
 
 **Non-Linear Principal Component Analysis (NLPCA)**
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
 - NLPCA initializes a randomly generated **low-dimensional representation** of the dataset.
 - This reduced-dimensional input is refined over multiple backpropagation iterations until it **accurately reconstructs the original data**.
 
-.. note::
-    
-    NLPCA is currently under active development and optimization. It might not be fully functional in the current release.
-
 .. code-block:: python
+
+    from pgsui.impute.unsupervised.imputers.nlpca import ImputeNLPCA
 
     nlpca = ImputeNLPCA(
         genotype_data=data, 
@@ -147,6 +151,8 @@ Supervised methods work by identifying the **N-nearest informative loci** based 
 
 .. code-block:: python
 
+    from pgsui.impute.estimators import ImputeKNN, ImputeRandomForest, ImputeXGBoost
+
     knn = ImputeKNN(genotype_data=data)  # K-Nearest Neighbors
     rf = ImputeRandomForest(genotype_data=data)  # Random Forest
     xgb = ImputeXGBoost(genotype_data=data)  # XGBoost
@@ -183,21 +189,48 @@ A population map (popmap) file is required, and **phylogenetic tree and rate mat
 
 .. code-block:: python
 
-    from snpio import VCFReader
+    from snpio import GenotypeEncoder, VCFReader
+
+    from pgsui.impute.unsupervised.imputers.vae import ImputeVAE
+    from pgsui.impute.unsupervised.imputers.ubp import ImputeUBP
 
     gd = VCFReader(
-        filename="pgsui/example_data/phylip_files/test_n100.phy",
+        filename="pgsui/example_data/vcf_files/phylogen_nomx.vcf.gz",
         popmapfile="pgsui/example_data/popmaps/test.popmap",
-        guidetree="pgsui/example_data/trees/test.tre",
-        qmatrix="pgsui/example_data/trees/test.qmat",
-        siterates="pgsui/example_data/trees/test_siterates_n100.txt",
         prefix="test_imputer",
         force_popmap=True,
         plot_format="pdf",
     )
 
+    ge = GenotypeEncoder(gd)
+
+    kwargs = {
+        "tune": True,
+        "tune_n_trials": 100,
+        "tune_metric": "pr_macro",
+        "weights_temperature": 3.0,
+        "weights_alpha": 1.0,
+        "weights_normalize": True,
+        "model_early_stop_gen": 20,
+        "model_min_epochs": 20,
+        "model_validation_split": 0.21,
+        "model_learning_rate": 0.0001,
+        "model_latent_dim": 2,
+        "model_num_hidden_layers": 2,
+        "model_hidden_layer_sizes": [128, 64],
+        "model_gamma": 2.0,
+        "model_beta": 1.0,
+        "device": "cpu",
+        "n_jobs": 8,
+        "verbose": 1,
+        "seed": 42,
+    }
+
     vae = ImputeVAE(genotype_data=gd, **kwargs)
     ubp = ImputeUBP(genotype_data=gd, **kwargs)
+
+    vae_imputed = vae.fit_transform(ge.genotypes_012)
+    ubp_imputed = ubp.fit_transform(ge.genotypes_012)
 
 ---
 
@@ -214,6 +247,8 @@ For comparison and baseline performance assessment, PG-SUI also includes **non-m
 - **Matrix factorization-based imputation**
 
 .. code-block:: python
+
+    from pgsui.impute.simple_imputers import ImputePhylo, ImputeAlleleFreq, ImputeMF
 
     # Phylogeny-based imputation
     phylo = ImputePhylo(genotype_data=data, **kwargs)

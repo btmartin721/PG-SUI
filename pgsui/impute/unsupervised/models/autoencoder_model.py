@@ -1,581 +1,303 @@
-from torch import nn
+import logging
+from typing import List
 
-# Custom library imports
-from pgsui.impute.unsupervised.neural_network_methods import NeuralNetworkMethods
+import torch
+import torch.nn as nn
+from snpio.utils.logging import LoggerManager
+
+from pgsui.impute.unsupervised.loss_functions import MaskedFocalLoss
+
+
+def get_activation(activation: str | nn.Module) -> nn.Module:
+    """Resolve activation function by name.
+
+    This method resolves the activation function by name and returns the corresponding module.
+
+    Args:
+        activation (str | nn.Module): Name of the activation function or the activation function module itself.
+
+    Returns:
+        nn.Module: Activation function module.
+
+    Raises:
+        ValueError: If the activation function is not supported
+    """
+
+    if isinstance(activation, str):
+        act = activation.lower().strip()
+
+        if act in {"leaky_relu", "leakyrelu"}:
+            act = "leaky_relu"
+
+        if act == "relu":
+            return nn.ReLU()
+        elif act == "elu":
+            return nn.ELU()
+        elif act == "selu":
+            return nn.SELU()
+        elif act == "leaky_relu":
+            return nn.LeakyReLU()
+        else:
+            raise ValueError(f"Unsupported activation: {activation}")
+    elif isinstance(activation, nn.Module):
+        return activation
+    else:
+        raise ValueError("activation must be a string or nn.Module")
 
 
 class Encoder(nn.Module):
-    """VAE encoder to Encode genotypes to (z_mean, z_log_var, z)."""
+    """Encoder network for the autoencoder model.
 
-    def __init__(
-        self,
-        n_features,
-        num_classes,
-        latent_dim,
-        hidden_layer_sizes,
-        dropout_rate,
-        activation,
-        kernel_initializer,
-        kernel_regularizer,
-        beta=1.0,
-        name="Encoder",
-        **kwargs,
-    ):
-        super(Encoder, self).__init__(name=name, **kwargs)
-
-        self.beta = beta
-
-        self.dense2 = None
-        self.dense3 = None
-        self.dense4 = None
-        self.dense5 = None
-
-        # n_features * num_classes.
-        self.flatten = Flatten()
-
-        self.dense1 = Dense(
-            hidden_layer_sizes[0],
-            input_shape=(n_features * num_classes,),
-            activation=activation,
-            kernel_initializer=kernel_initializer,
-            kernel_regularizer=kernel_regularizer,
-            name="Encoder1",
-        )
-
-        if len(hidden_layer_sizes) >= 2:
-            self.dense2 = Dense(
-                hidden_layer_sizes[1],
-                activation=activation,
-                kernel_initializer=kernel_initializer,
-                kernel_regularizer=kernel_regularizer,
-                name="Encoder2",
-            )
-
-        if len(hidden_layer_sizes) >= 3:
-            self.dense3 = Dense(
-                hidden_layer_sizes[2],
-                activation=activation,
-                kernel_initializer=kernel_initializer,
-                kernel_regularizer=kernel_regularizer,
-                name="Encoder3",
-            )
-
-        if len(hidden_layer_sizes) >= 4:
-            self.dense4 = Dense(
-                hidden_layer_sizes[3],
-                activation=activation,
-                kernel_initializer=kernel_initializer,
-                kernel_regularizer=kernel_regularizer,
-                name="Encoder4",
-            )
-
-        if len(hidden_layer_sizes) == 5:
-            self.dense5 = Dense(
-                hidden_layer_sizes[4],
-                activation=activation,
-                kernel_initializer=kernel_initializer,
-                kernel_regularizer=kernel_regularizer,
-                name="Encoder5",
-            )
-
-        self.dense_latent = Dense(
-            latent_dim,
-            activation=activation,
-            kernel_initializer=kernel_initializer,
-            kernel_regularizer=kernel_regularizer,
-            name="Encoder5",
-        )
-
-        self.dropout_layer = Dropout(dropout_rate)
-
-    def call(self, inputs, training=None):
-        """Forward pass through model."""
-        x = self.flatten(inputs)
-        x = self.dense1(x)
-        x = self.dropout_layer(x, training=training)
-        if self.dense2 is not None:
-            x = self.dense2(x)
-            x = self.dropout_layer(x, training=training)
-        if self.dense3 is not None:
-            x = self.dense3(x)
-            x = self.dropout_layer(x, training=training)
-        if self.dense4 is not None:
-            x = self.dense4(x)
-            x = self.dropout_layer(x, training=training)
-        if self.dense5 is not None:
-            x = self.dense5(x)
-            x = self.dropout_layer(x, training=training)
-
-        return self.dense_latent(x)
-
-
-class Decoder(nn.Module):
-    """Converts the encoded vector back into the reconstructed output"""
-
-    def __init__(
-        self,
-        n_features,
-        num_classes,
-        latent_dim,
-        hidden_layer_sizes,
-        dropout_rate,
-        activation,
-        kernel_initializer,
-        kernel_regularizer,
-        name="Decoder",
-        **kwargs,
-    ):
-        super(Decoder, self).__init__(name=name, **kwargs)
-
-        self.dense2 = None
-        self.dense3 = None
-        self.dense4 = None
-        self.dense5 = None
-
-        self.dense1 = Dense(
-            hidden_layer_sizes[0],
-            input_shape=(latent_dim,),
-            activation=activation,
-            kernel_initializer=kernel_initializer,
-            kernel_regularizer=kernel_regularizer,
-            name="Decoder1",
-        )
-
-        if len(hidden_layer_sizes) >= 2:
-            self.dense2 = Dense(
-                hidden_layer_sizes[1],
-                activation=activation,
-                kernel_initializer=kernel_initializer,
-                kernel_regularizer=kernel_regularizer,
-                name="Decoder2",
-            )
-
-        if len(hidden_layer_sizes) >= 3:
-            self.dense3 = Dense(
-                hidden_layer_sizes[2],
-                activation=activation,
-                kernel_initializer=kernel_initializer,
-                kernel_regularizer=kernel_regularizer,
-                name="Decoder3",
-            )
-
-        if len(hidden_layer_sizes) >= 4:
-            self.dense4 = Dense(
-                hidden_layer_sizes[3],
-                activation=activation,
-                kernel_initializer=kernel_initializer,
-                kernel_regularizer=kernel_regularizer,
-                name="Decoder4",
-            )
-
-        if len(hidden_layer_sizes) == 5:
-            self.dense5 = Dense(
-                hidden_layer_sizes[4],
-                activation=activation,
-                kernel_initializer=kernel_initializer,
-                kernel_regularizer=kernel_regularizer,
-                name="Decoder5",
-            )
-
-        # No activation for final layer.
-        self.dense_output = Dense(
-            n_features * num_classes,
-            kernel_initializer=kernel_initializer,
-            kernel_regularizer=kernel_regularizer,
-            activation=None,
-            name="Decoder6",
-        )
-
-        self.rshp = Reshape((n_features, num_classes))
-        self.dropout_layer = Dropout(dropout_rate)
-
-    def call(self, inputs, training=None):
-        """Forward pass through model."""
-        x = self.dense1(inputs)
-        x = self.dropout_layer(x, training=training)
-        if self.dense2 is not None:
-            x = self.dense2(x)
-            x = self.dropout_layer(x, training=training)
-        if self.dense3 is not None:
-            x = self.dense3(x)
-            x = self.dropout_layer(x, training=training)
-        if self.dense4 is not None:
-            x = self.dense4(x)
-            x = self.dropout_layer(x, training=training)
-        if self.dense5 is not None:
-            x = self.dense5(x)
-            x = self.dropout_layer(x, training=training)
-
-        x = self.dense_output(x)
-        return self.rshp(x)
-
-
-class AutoEncoderModel(nn.Module):
-    """Standard AutoEncoder model to impute missing data.
-
-    Args:
-        y (np.ndarray): Full input data.
-
-        batch_size (int, optional): Batch size to use with model. Defaults to 32.
-
-        output_shape (int, optional): Number of features in output. Defaults to None.
-
-        n_components (int, optional): Number of principal components to encode. Defaults to 3.
-
-        weights_initializer (str, optional): tf.keras function to use with initial weights. Defaults to 'glorot_normal'.
-
-        hidden_layer_sizes (str, List[int], or int, optional): Number of nodes to use in hidden layers. If List[int] is provided, must be equal in length to the number of hidden layers. If a string is provided, a calculation will be performed to automatically estimate the hidden layer sizes, with possible options including {'midpoint' or 'sqrt'}. If an integer is provided, then the provided integer will be used for all hidden layers. Defaults to 'midpoint'.
-
-        num_hidden_layers (int, optional): Number of hidden layers to use in model construction. Maximum number of layers is 5. Defaults to 1.
-
-        hidden_activation (str, optional): Hidden activation function to use in hidden layers. Possible options include: {"elu", "relu", "selu", "leaky_relu", and "prelu"}. Defaults to "elu".
-
-        l1_penalty (float, optional): l1_penalty to use for regularization. Defaults to 1e-6.
-
-        l2_penalty (float, optional): l2_penalty to use fo regularization. Defaults to 1e-6.
-
-        dropout_rate (float, optional): Dropout rate to use for Dropout() layer. Defaults to 0.2.
-
-        sample_weight (numpy.ndarray, optional): Sample weight matrix for weighting class imbalance. Should be of shape (n_samples, n_features). Defaults to None.
-
-        num_classes (int, optional): Number of classes in multiclass predictions. Defaults to 3.
-
-    Raises:
-        ValueError: Maximum number of hidden layers (5) was exceeded.
+    Encodes an input of shape (batch_size, n_features, num_classes) into a latent representation. This is the first part of the autoencoder. The encoder is a feedforward neural network with hidden layers and an output layer. The output layer is the latent representation. The encoder is used to compress the input data into a lower-dimensional latent space. The latent representation is then used by the decoder to reconstruct the input data. The encoder is trained to minimize the reconstruction error between the input and the output of the decoder. The encoder is used to learn a compact representation of the input data that captures the most important features. The encoder is used in unsupervised learning to learn a representation of the input data that can be used for other tasks, such as clustering or classification.
     """
 
     def __init__(
         self,
-        y,
-        batch_size=32,
-        output_shape=None,
-        n_components=3,
-        weights_initializer="glorot_normal",
-        hidden_layer_sizes="midpoint",
-        num_hidden_layers=1,
-        hidden_activation="elu",
-        l1_penalty=1e-6,
-        l2_penalty=1e-6,
-        dropout_rate=0.2,
-        sample_weight=None,
-        missing_mask=None,
-        num_classes=3,
+        n_features: int,
+        num_classes: int = 3,
+        hidden_layer_sizes: list[int] = [128, 64],
+        latent_dim: int = 2,
+        dropout_rate: float = 0.2,
+        activation: str = "relu",
+        gamma: float = 2.0,
     ):
-        super(AutoEncoderModel, self).__init__()
+        """Initialize the Encoder network.
 
-        self.total_loss_tracker = tf.keras.metrics.Mean(name="total_loss")
-        self.binary_accuracy_tracker = tf.keras.metrics.Mean(name="binary_accuracy")
-
-        self.nn_ = NeuralNetworkMethods()
-
-        self._y = y
-        self._batch_idx = 0
-        self._batch_size = batch_size
-        self._sample_weight = sample_weight
-        self._missing_mask = missing_mask
-
-        # y_train[1] dimension.
-        self.n_features = output_shape
-        n_features = self.n_features
-
-        self.n_components = n_components
-        self.weights_initializer = weights_initializer
-        self.hidden_layer_sizes = hidden_layer_sizes
-        self.num_hidden_layers = num_hidden_layers
-        self.hidden_activation = hidden_activation
-        self.l1_penalty = l1_penalty
-        self.l2_penalty = l2_penalty
-        self.dropout_rate = dropout_rate
-        self.sample_weight = sample_weight
-        self.num_classes = num_classes
-
-        nn = NeuralNetworkMethods()
-
-        hidden_layer_sizes = nn.validate_hidden_layers(
-            self.hidden_layer_sizes, self.num_hidden_layers
-        )
-
-        hidden_layer_sizes = nn.get_hidden_layer_sizes(
-            n_features, self.n_components, hidden_layer_sizes, vae=True
-        )
-
-        hidden_layer_sizes = [h * self.num_classes for h in hidden_layer_sizes]
-
-        if self.l1_penalty == 0.0 and self.l2_penalty == 0.0:
-            kernel_regularizer = None
-        else:
-            kernel_regularizer = l1_l2(self.l1_penalty, self.l2_penalty)
-
-        kernel_initializer = self.weights_initializer
-
-        if self.hidden_activation.lower() == "leaky_relu":
-            activation = LeakyReLU(alpha=0.01)
-
-        elif self.hidden_activation.lower() == "prelu":
-            activation = PReLU()
-
-        elif self.hidden_activation.lower() == "selu":
-            activation = "selu"
-            kernel_initializer = "lecun_normal"
-
-        else:
-            activation = self.hidden_activation
-
-        if num_hidden_layers > 5:
-            raise ValueError(
-                f"The maximum number of hidden layers is 5, but got "
-                f"{num_hidden_layers}"
-            )
-
-        self.encoder = Encoder(
-            n_features,
-            self.num_classes,
-            self.n_components,
-            hidden_layer_sizes,
-            self.dropout_rate,
-            activation,
-            kernel_initializer,
-            kernel_regularizer,
-        )
-
-        hidden_layer_sizes.reverse()
-
-        self.decoder = Decoder(
-            n_features,
-            self.num_classes,
-            self.n_components,
-            hidden_layer_sizes,
-            self.dropout_rate,
-            activation,
-            kernel_initializer,
-            kernel_regularizer,
-        )
-
-        self.activation = Activation("sigmoid")
-
-    def call(self, inputs, training=None):
-        """Forward pass through model."""
-        x = self.encoder(inputs)
-        x = self.decoder(x)
-        return self.activation(x)
-
-    def model(self):
-        """To allow model.summary().summar() to be called."""
-        x = tf.keras.Input(shape=(self.n_features, self.num_classes))
-        return tf.keras.Model(inputs=[x], outputs=self.call(x))
-
-    def set_model_outputs(self):
-        """Set expected model outputs."""
-        x = tf.keras.Input(shape=(self.n_features, self.num_classes))
-        model = tf.keras.Model(inputs=[x], outputs=self.call(x))
-        self.outputs = model.outputs
-
-    @property
-    def metrics(self):
-        return [
-            self.total_loss_tracker,
-            self.binary_accuracy_tracker,
-        ]
-
-    def train_step(self, data):
-        y = self._y
-
-        (
-            y_true,
-            sample_weight,
-            missing_mask,
-        ) = self.nn_.prepare_training_batches(
-            y,
-            y,
-            self._batch_size,
-            self._batch_idx,
-            True,
-            self.n_components,
-            self._sample_weight,
-            self._missing_mask,
-            ubp=False,
-        )
-
-        if sample_weight is not None:
-            sample_weight_masked = tf.convert_to_tensor(
-                sample_weight[~missing_mask], dtype=tf.float32
-            )
-        else:
-            sample_weight_masked = None
-
-        y_true_masked = tf.boolean_mask(
-            tf.convert_to_tensor(y_true, dtype=tf.float32),
-            tf.reduce_any(tf.not_equal(y_true, -1), axis=2),
-        )
-
-        with tf.GradientTape() as tape:
-            reconstruction = self(y_true, training=True)
-
-            y_pred_masked = tf.boolean_mask(
-                reconstruction, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
-            )
-
-            # Returns binary crossentropy loss.
-            reconstruction_loss = self.compiled_loss(
-                y_true_masked,
-                y_pred_masked,
-                sample_weight=sample_weight_masked,
-            )
-
-            regularization_loss = sum(self.losses)
-
-            total_loss = reconstruction_loss + regularization_loss
-
-        grads = tape.gradient(total_loss, self.trainable_weights)
-        self.optimizer.apply_gradients(zip(grads, self.trainable_weights))
-
-        ### NOTE: If you get the error, "'tuple' object has no attribute
-        ### 'rank', then convert y_true to a tensor object."
-        self.total_loss_tracker.update_state(total_loss)
-        self.binary_accuracy_tracker.update_state(
-            tf.keras.metrics.binary_accuracy(y_true_masked, y_pred_masked)
-        )
-
-        return {
-            "loss": self.total_loss_tracker.result(),
-            "binary_accuracy": self.binary_accuracy_tracker.result(),
-        }
-
-    def test_step(self, data):
-        """Custom evaluation loop for one step (=batch) in a single epoch.
-
-        This function will evaluate on a batch of samples (rows), which can be adjusted with the ``batch_size`` parameter from the estimator.
+        This module encodes an input tensor of shape (batch_size, n_features, num_classes) into a latent representation. The encoder is a feedforward neural network with hidden layers and an output layer. The output layer is the latent representation. The encoder is used to compress the input data into a lower-dimensional latent space. The latent representation is then used by the decoder to reconstruct the input data. The encoder is trained to minimize the reconstruction error between the input and the output of the decoder. The encoder is used to learn a compact representation of the input data that captures the most important features. The encoder is used in unsupervised learning to learn a representation of the input data that can be used for other tasks, such as clustering or classification.
 
         Args:
-            data (Tuple[tf.EagerTensor, tf.EagerTensor]): Input tensorflow tensors of shape (batch_size, n_components) and (batch_size, n_features, num_classes).
+            n_features (int): Number of features.
+            num_classes (int): Number of classes.
+            latent_dim (int): Dimension of the latent representation.
+            hidden_layer_sizes (List[int]): List of hidden layer sizes.
+            dropout_rate (float): Dropout rate.
+            activation (str or nn.Module): Activation function to use.
+            gamma (float): Focal loss gamma parameter.
+        """
+        super(Encoder, self).__init__()
+
+        self.n_features = n_features
+        self.num_classes = num_classes
+        self.latent_dim = latent_dim
+        self.dropout_rate = dropout_rate
+        self.gamma = gamma
+
+        # Calculate the input dimension (flattened input)
+        input_dim = n_features * num_classes
+
+        # Build the hidden layers dynamically.
+        layers = nn.ModuleList()
+        for size in hidden_layer_sizes:
+            layers.append(nn.Linear(input_dim, size))
+            layers.append(nn.BatchNorm1d(size))
+            layers.append(nn.Dropout(dropout_rate))
+            layers.append(get_activation(activation))
+            input_dim = size
+
+        # Final latent layer.
+        layers.append(nn.Linear(input_dim, latent_dim))
+        layers.append(get_activation(activation))
+        self.encoder = nn.Sequential(*layers)
+
+    def forward(self, x):
+        """Forward pass through the encoder.
+
+        Args:
+            x (torch.Tensor): Input tensor of shape (batch_size, n_features, num_classes).
 
         Returns:
-            Dict[str, float]: History object that gets returned from fit(). Contains the loss and any metrics specified in compile().
+            torch.Tensor: Latent representation tensor.
         """
-        y = self._y
+        x = x.view(x.size(0), self.num_classes * self.n_features)
+        return self.encoder(x)
 
-        (
-            y_true,
-            sample_weight,
-            missing_mask,
-        ) = self.nn_.prepare_training_batches(
-            y,
-            y,
-            self._batch_size,
-            self._batch_idx,
-            True,
-            self.n_components,
-            self._sample_weight,
-            self._missing_mask,
-            ubp=False,
-        )
 
-        if sample_weight is not None:
-            sample_weight_masked = tf.convert_to_tensor(
-                sample_weight[~missing_mask], dtype=tf.float32
+class Decoder(nn.Module):
+    """Decoder network for the autoencoder model.
+
+    Decodes the latent representation back to a tensor with shape (batch_size, n_features, num_classes). This is the reconstruction of the input. The decoder is the second part of the autoencoder. The decoder is a feedforward neural network with hidden layers and an output layer. The output layer is the reconstructed input. The decoder is trained to minimize the reconstruction error between the input and the output. The decoder is used to reconstruct the input data from the latent representation learned by the encoder. The decoder is used to generate new data points by sampling from the latent space. The decoder is used in unsupervised learning to generate new data points that are similar to the input data. The decoder is used in generative modeling to generate new data points that follow the same distribution as the input data.
+    """
+
+    def __init__(
+        self,
+        n_features: int,
+        num_classes: int = 3,
+        hidden_layer_sizes: list[int] = [128, 64],
+        latent_dim: int = 2,
+        dropout_rate: float = 0.2,
+        activation: str = "relu",
+        gamma: float = 2.0,
+    ):
+        """
+        Initialize the Decoder network.
+
+        This module decodes the latent representation back to a tensor with shape (batch_size, n_features, num_classes). This is the reconstruction of the input. The decoder is the second part of the autoencoder. The decoder is a feedforward neural network with hidden layers and an output layer. The output layer is the reconstructed input. The decoder is trained to minimize the reconstruction error between the input and the output. The decoder is used to reconstruct the input data from the latent representation learned by the encoder. The decoder is used to generate new data points by sampling from the latent space. The decoder is used in unsupervised learning to generate new data points that are similar to the input data. The decoder is used in generative modeling to generate new data points that follow the same distribution as the input data.
+
+        Args:
+            n_features (int): Number of features.
+            num_classes (int): Number of classes.
+            latent_dim (int): Dimension of the latent representation.
+            hidden_layer_sizes (List[int]): List of hidden layer sizes for the decoder.
+            dropout_rate (float): Dropout rate.
+            activation (str or nn.Module): Activation function to use.
+        """
+        super(Decoder, self).__init__()
+
+        self.n_features = n_features
+        self.num_classes = num_classes
+        self.hidden_layer_sizes = hidden_layer_sizes
+        self.latent_dim = latent_dim
+        self.dropout_rate = dropout_rate
+        self.gamma = gamma
+
+        output_dim = n_features * num_classes
+
+        # Build the hidden layers.
+        layers = nn.ModuleList()
+        input_dim = latent_dim
+        for size in hidden_layer_sizes:
+            layers.append(nn.Linear(input_dim, size))
+            layers.append(nn.BatchNorm1d(size))
+            layers.append(nn.Dropout(dropout_rate))
+            layers.append(get_activation(activation))
+            input_dim = size
+
+        # Final output layer
+        # No activation function here, as it gets applied later.
+        layers.append(nn.Linear(hidden_layer_sizes[-1], output_dim))
+        self.decoder = nn.Sequential(*layers)
+
+    def forward(self, x):
+        """Forward pass through the decoder.
+
+        Args:
+            x (torch.Tensor): Latent representation tensor.
+
+        Returns:
+            torch.Tensor: Reconstructed tensor of shape (batch_size, n_features, num_classes).
+        """
+        x = self.decoder(x)
+        x = x.view(-1, self.n_features, self.num_classes)
+        return x
+
+
+class AutoencoderModel(nn.Module):
+    """Autoencoder model for unsupervised learning.
+
+    This autoencoder is intended to predict three classes (0, 1, and 2) and is  designed to help address class imbalance. The model consists of an encoder  and decoder, with an optional final activation. No final activation function is applied, so outputs must be passed through an activation function, such as a softmax. The model uses a focal loss for training. The encoder and decoder are built with the specified hidden layer sizes and latent dimension. The latent dimension is the dimension of the latent representation. The dropout rate is applied to the hidden layers. The activation function is applied to the hidden layers. The gamma parameter is used in the focal loss. The model is used for unsupervised learning to learn a representation of the input data that can be used for other tasks, such as clustering or classification.
+    """
+
+    def __init__(
+        self,
+        *,
+        n_features: int,
+        prefix: str = "psgui",
+        num_classes: int = 3,
+        hidden_layer_sizes: List[int] = [128, 64],
+        latent_dim: int = 2,
+        dropout_rate: float = 0.2,
+        activation: str = "relu",
+        gamma: float = 2.0,
+        logger: logging.Logger | None = None,
+        verbose: int = 0,
+        debug: bool = False,
+    ):
+        """Initialize the Autoencoder model.
+
+        This model is designed to predict three classes (0, 1, and 2) and is intended to help address class imbalance. The model consists of an encoder and decoder. No final activation function is applied, so outputs must be passed through an activation function, such as a softmax. The model uses a focal loss for training. The encoder and decoder are built with the specified hidden layer sizes and latent dimension. The latent dimension is the dimension of the latent representation. The dropout rate is applied to the hidden layers. The activation function is applied to the hidden layers. The gamma parameter is used in the focal loss. The model is used for unsupervised learning to learn a representation of the input data that can be used for other tasks, such as clustering or classification.
+
+        Args:
+            n_features (int): Number of features.
+            num_classes (int): Number of classes. Default is 3.
+            hidden_layer_sizes (List[int]): List of hidden layer sizes. Default is [128, 64].
+            latent_dim (int): Dimension of the latent representation. Default is 2.
+            dropout_rate (float): Dropout rate. Default is 0.2.
+            activation (str): Activation function to use. Default is "relu".
+            gamma (float): Focal loss gamma parameter. Default is 2.0.
+        """
+        super(AutoencoderModel, self).__init__()
+        self.n_features = n_features
+        self.num_classes = num_classes
+        self.hidden_layer_sizes = hidden_layer_sizes
+        self.latent_dim = latent_dim
+        self.dropout_rate = dropout_rate
+        self.activation = activation
+        self.gamma = gamma
+
+        if logger is None:
+            prefix = "pgsui_output" if prefix == "pgsui" else prefix
+            logman = LoggerManager(
+                name=__name__, prefix=prefix, verbose=verbose >= 1, debug=debug
             )
+            self.logger = logman.get_logger()
         else:
-            sample_weight_masked = None
+            self.logger = logger
 
-        y_true_masked = tf.boolean_mask(
-            tf.convert_to_tensor(y_true, dtype=tf.float32),
-            tf.reduce_any(tf.not_equal(y_true, -1), axis=2),
+        # For the encoder, multiply each hidden layer size by num_classes.
+        encoder_hidden_sizes = [h * num_classes for h in hidden_layer_sizes]
+
+        # For the decoder, reverse the encoder hidden sizes.
+        decoder_hidden_sizes = list(reversed(encoder_hidden_sizes))
+
+        self.encoder = Encoder(
+            n_features=n_features,
+            num_classes=num_classes,
+            hidden_layer_sizes=encoder_hidden_sizes,
+            latent_dim=latent_dim,
+            dropout_rate=dropout_rate,
+            activation=activation,
+            gamma=gamma,
         )
 
-        reconstruction = self(y_true, training=False)
-
-        y_pred_masked = tf.boolean_mask(
-            reconstruction, tf.reduce_any(tf.not_equal(y_true, -1), axis=2)
+        self.decoder = Decoder(
+            n_features=n_features,
+            num_classes=num_classes,
+            hidden_layer_sizes=decoder_hidden_sizes,
+            latent_dim=latent_dim,
+            dropout_rate=dropout_rate,
+            activation=activation,
+            gamma=gamma,
         )
 
-        reconstruction_loss = self.compiled_loss(
-            y_true_masked,
-            y_pred_masked,
-            sample_weight=sample_weight_masked,
-        )
+    def forward(self, x):
+        """Forward pass through the autoencoder.
 
-        regularization_loss = sum(self.losses)
+        Args:
+            x (torch.Tensor): Input tensor of shape (batch_size, n_features, num_classes).
 
-        total_loss = reconstruction_loss + regularization_loss
-
-        ### NOTE: If you get the error, "'tuple' object has no attribute
-        ### 'rank', then convert y_true to a tensor object."
-        self.total_loss_tracker.update_state(total_loss)
-        self.binary_accuracy_tracker.update_state(
-            tf.keras.metrics.binary_accuracy(y_true_masked, y_pred_masked)
-        )
-
-        return {
-            "loss": self.total_loss_tracker.result(),
-            "binary_accuracy": self.binary_accuracy_tracker.result(),
-        }
-
-    @property
-    def batch_size(self):
-        """Batch (=step) size per epoch.
-        :noindex:
+        Returns:
+            torch.Tensor: Reconstructed output tensor.
         """
-        return self._batch_size
+        latent = self.encoder(x)
+        reconstruction = self.decoder(latent)
+        return reconstruction
 
-    @property
-    def batch_idx(self):
-        """Current batch (=step) index.
-        :noindex:
-        """
-        return self._batch_idx
+    def compute_loss(
+        self,
+        y: torch.Tensor,
+        outputs: torch.Tensor,
+        mask: torch.Tensor | None = None,
+        class_weights: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Compute the masked focal loss between predictions and targets.
 
-    @property
-    def y(self):
-        """Full input dataset.
-        :noindex:
-        """
-        return self._y
+        This method computes the masked focal loss between the model predictions and the ground truth labels. The mask tensor is used to ignore certain values (< 0), and class weights can be provided to balance the loss. The focal loss is a modified version of the cross-entropy loss that focuses on hard-to-classify examples. The focal loss is used to address class imbalance and improve the performance of the model.
 
-    @property
-    def missing_mask(self):
-        """Missing mask of shape (y.shape[0], y.shape[1])
-        :noindex:
-        """
-        return self._missing_mask
+        Args:
+            y (torch.Tensor): Ground truth labels of shape (batch, seq).
+            outputs (torch.Tensor): Model outputs.
+            mask (torch.Tensor, optional): Mask tensor to ignore certain values. Default is None.
+            class_weights (torch.Tensor, optional): Class weights for the loss. Default is None.
 
-    @property
-    def sample_weight(self):
-        """Sample weights of shape (y.shape[0], y.shape[1])
-        :noindex:
+        Returns:
+            torch.Tensor: Computed focal loss value.
         """
-        return self._sample_weight
+        if class_weights is None:
+            class_weights = torch.ones(self.num_classes, device=y.device)
 
-    @batch_size.setter
-    def batch_size(self, value):
-        """Set batch_size parameter.
-        :noindex:
-        """
-        self._batch_size = int(value)
+        if mask is None:
+            mask = torch.ones_like(y, dtype=torch.bool)
 
-    @batch_idx.setter
-    def batch_idx(self, value):
-        """Set current batch (=step) index.
-        :noindex:
-        """
-        self._batch_idx = int(value)
-
-    @y.setter
-    def y(self, value):
-        """Set y after each epoch.
-        :noindex:
-        """
-        self._y = value
-
-    @missing_mask.setter
-    def missing_mask(self, value):
-        """Set missing_mask after each epoch.
-        :noindex:
-        """
-        self._missing_mask = value
-
-    @sample_weight.setter
-    def sample_weight(self, value):
-        """Set sample_weight after each epoch.
-        :noindex:
-        """
-        self._sample_weight = value
+        criterion = MaskedFocalLoss(alpha=class_weights, gamma=self.gamma)
+        reconstruction_loss = criterion(outputs, y, valid_mask=mask)
+        return reconstruction_loss

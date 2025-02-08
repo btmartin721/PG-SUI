@@ -13,21 +13,6 @@ class EarlyStopping:
         >>>     early_stopping(val_loss, model)
         >>>     if early_stopping.early_stop:
         >>>         break
-
-    Attributes:
-        patience (int): Number of epochs to wait after the last improvement of the monitored metric.
-        delta (float): Minimum change in the monitored metric to qualify as improvement.
-        verbose (int): Verbosity level for logging (0 = silent, 1 = major events, 2+ = detailed).
-        mode (str): One of {"min", "max"}. Determines whether we want the metric to go lower (min) or higher (max).
-        counter (int): Counts how many epochs have passed since the last improvement.
-        epoch_count (int): Counts how many times this EarlyStopping instance has been called.
-        min_epochs (int): Minimum epoch count before early stopping can take effect.
-        best_score (float): The best metric score seen so far.
-        early_stop (bool): Flag to signal that training should be stopped.
-        best_model (torch.nn.Module): Holds the best model (in Python memory) seen so far.
-        prefix (str): Prefix for directory naming.
-        output_dir (Path): Directory where model checkpoints are saved.
-        logger (logging.Logger): Logger for messages.
     """
 
     def __init__(
@@ -37,10 +22,13 @@ class EarlyStopping:
         verbose: int = 0,
         mode: str = "min",
         min_epochs: int = 100,
-        prefix: str = "pgsui",
+        prefix: str = "pgsui_output",
         debug: bool = False,
     ):
-        """
+        """Early stopping callback for PyTorch training.
+
+        This class is used to stop the training of a model when a monitored metric has stopped improving (such as validation loss or accuracy). If the metric does not improve for `patience` epochs, and we have already passed the `min_epochs` epoch threshold, training is halted. The best model checkpoint is reloaded when early stopping is triggered. The `mode` parameter can be set to "min" or "max" to indicate whether the metric should be minimized or maximized, respectively.
+
         Args:
             patience (int): Number of epochs to wait after the last time the monitored metric improved.
             delta (float): Minimum change in the monitored metric to qualify as an improvement.
@@ -50,6 +38,9 @@ class EarlyStopping:
             output_dir (Path): Directory in which to create subfolders/checkpoints.
             min_epochs (int): Minimum epoch count before early stopping can take effect.
             debug (bool): Debug mode for logging messages
+
+        Raises:
+            ValueError: If an invalid mode is provided. Must be "min" or "max".
         """
         self.patience = patience
         self.delta = delta
