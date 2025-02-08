@@ -1,4 +1,4 @@
-import warnings
+from typing import Dict, List, Literal
 
 import torch
 import torch.nn as nn
@@ -9,12 +9,12 @@ from snpio.utils.logging import LoggerManager
 class MaskedFocalLoss(nn.Module):
     def __init__(
         self,
-        class_weights=None,
-        alpha=None,
-        gamma=2.0,
-        reduction="mean",
-        verbose=0,
-        debug=False,
+        class_weights: Dict[str, float] | None = None,
+        alpha: float | List[float] = None,
+        gamma: float = 2.0,
+        reduction: Literal["mean", "sum"] = "mean",
+        verbose: int = 0,
+        debug: bool = False,
     ):
         """Compute the masked focal loss between predictions and targets.
 
@@ -23,7 +23,7 @@ class MaskedFocalLoss(nn.Module):
         .. math::
             L(p_t) = -\\alpha_t (1 - p_t)^\\gamma \\log(p_t)
 
-        where :math:`p_t` is the predicted probability, :math:`\\alpha_t` is the class weight, and :math:`\\gamma` is the focusing parameter.
+        where :math:`p_t` is the predicted probability, :math:`\\alpha_t` is the class weight, and :math:`\\gamma` is the focusing parameter. The loss can be reduced by taking the mean or sum of the sample losses.
 
         Args:
             class_weights (list, optional): Class weights for imbalanced data. Default is None.
@@ -32,11 +32,6 @@ class MaskedFocalLoss(nn.Module):
             reduction (str, optional): Reduction method for the loss. Must be one of {"mean", "sum"}. Default is "mean".
             verbose (int, optional): Verbosity level for logging messages. Default is 0.
             debug (bool, optional): Debug mode for logging messages. Default is False.
-
-        Raises:
-            ValueError: If the targets shape is invalid.
-            ValueError: If the class weights size does not match the number of classes.
-            ValueError: If the alpha type is invalid.
 
         Example:
             >>> import torch
@@ -49,12 +44,16 @@ class MaskedFocalLoss(nn.Module):
             tensor(1.1539)
         """
         super(MaskedFocalLoss, self).__init__()
+
         if isinstance(class_weights, list):
             class_weights = torch.tensor(class_weights, dtype=torch.float)
+
         self.class_weights = class_weights
         self.alpha = alpha
+
         if isinstance(self.alpha, list):
             self.alpha = torch.tensor(self.alpha, dtype=torch.float)
+
         self.gamma = gamma
         self.reduction = reduction
 
@@ -63,8 +62,15 @@ class MaskedFocalLoss(nn.Module):
         )
         self.logger = logman.get_logger()
 
-    def forward(self, predictions, targets, valid_mask=None):
+    def forward(
+        self,
+        predictions: torch.Tensor,
+        targets: torch.Tensor,
+        valid_mask: torch.Tensor | None = None,
+    ):
         """Compute the masked focal loss between predictions and targets.
+
+        This method computes the masked focal loss between the model predictions and the ground truth labels. The mask tensor is used to ignore certain values (< 0), and class weights can be provided to balance the loss.
 
         Args:
             predictions (torch.Tensor): Model predictions of shape (batch, seq, num_classes).
@@ -76,8 +82,9 @@ class MaskedFocalLoss(nn.Module):
 
         Raises:
             ValueError: If the targets shape is invalid.
-            ValueError: If the class weights size does not match the number of classes.
             ValueError: If the alpha type is invalid.
+            ValueError: If the class weights size does not match the number of classes.
+            ValueError: If the reduction type is invalid. Must be "mean" or "sum".
         """
         num_classes = predictions.shape[-1]
 
@@ -96,19 +103,19 @@ class MaskedFocalLoss(nn.Module):
 
         # Mask invalid values
         if valid_mask.sum() == 0:
-            warnings.warn("No valid targets found. Returning zero loss.")
+            self.logger.warning("No valid targets found. Returning zero loss.")
             return predictions_2d.new_tensor(0.0)
 
         valid_preds = predictions_2d[valid_mask]
         valid_tgts = targets_1d[valid_mask]
         valid_tgts = valid_tgts.long()
 
-        # Compute probabilities
+        # Compute probabilities and log probabilities.
         gathered_probs = F.softmax(valid_preds, dim=-1)[
             torch.arange(valid_tgts.size(0)), valid_tgts
         ]
 
-        # Clamp probabilities to avoid log(0).
+        # Clamp probabilities to avoid log(0) for numerical stability.
         eps = 1e-6
         gathered_probs = gathered_probs.clamp(min=eps, max=1 - eps)
         gathered_log_probs = torch.log(gathered_probs)
@@ -119,31 +126,37 @@ class MaskedFocalLoss(nn.Module):
         # Compute alpha factor
         if self.alpha is None:
             alpha_factor = 1.0
+
         elif isinstance(self.alpha, float):
             alpha_factor = self.alpha
+
         elif isinstance(self.alpha, torch.Tensor):
             alpha_factor = self.alpha[valid_tgts]
+
         else:
-            msg = f"Invalid alpha type: {type(self.alpha)}. Must be float or Tensor."
+            pstr = type(self.alpha)
+            msg = f"Invalid alpha type: {pstr}. Expected float or torch.Tensor."
             self.logger.error(msg)
             raise ValueError(msg)
 
         # Compute sample losses
         sample_losses = -gathered_log_probs * focal_factor * alpha_factor
 
-        # Apply class weights
+        # Apply class weights if provided.
         if self.class_weights is not None:
             if self.class_weights.size(0) != num_classes:
-                raise ValueError("Mismatch in class_weights size.")
+                msg = "Mismatch in class_weights size."
+                self.logger.error(msg)
+                raise ValueError(msg)
             sample_losses *= self.class_weights[valid_tgts]
 
-        # Reduce loss
+        # Reduce loss based on reduction type (mean or sum).
         if self.reduction == "sum":
             loss = sample_losses.sum()
         elif self.reduction == "mean":
             loss = sample_losses.sum() / valid_mask.sum()
         else:
-            msg = f"Unsupported reduction type: {self.reduction}"
+            msg = f"Unsupported reduction type: {self.reduction}. Use 'mean' or 'sum'."
             self.logger.error(msg)
             raise ValueError(msg)
 
