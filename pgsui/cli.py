@@ -1,10 +1,9 @@
 import importlib.resources as pkg_resources
 import pprint
 
-import numpy as np
 from snpio import GenotypeEncoder, VCFReader
 
-from pgsui import ImputeUBP, ImputeVAE
+from pgsui import ImputeAutoencoder, ImputeNLPCA, ImputeUBP, ImputeVAE
 
 
 def main():
@@ -30,41 +29,100 @@ def main():
 
     snp_data = gd.snp_data
 
-    gd.loci_indices = np.ones((len(snp_data[0])), dtype=bool)
-    gd.sample_indices = np.ones((len(snp_data)), dtype=bool)
-
     ge = GenotypeEncoder(gd)
 
-    vae = ImputeVAE(
+    # ubp = ImputeUBP(
+    #     gd,
+    #     weights_temperature=1.0,
+    #     weights_normalize=False,
+    #     weights_alpha=2.0,
+    #     weights_log_scale=True,
+    #     tune=True,
+    #     tune_metric="pr_macro",
+    #     tune_n_trials=250,
+    #     model_early_stop_gen=20,
+    #     model_min_epochs=20,
+    #     model_validation_split=0.21,
+    #     model_learning_rate=0.0008886973483648648,
+    #     model_latent_dim=4,
+    #     model_hidden_activation="leaky_relu",
+    #     model_l1_penalty=0.0,
+    #     model_lr_patience=8,
+    #     model_dropout_rate=0.0,
+    #     model_device="cpu",
+    #     model_num_hidden_layers=8,
+    #     model_batch_size=32,
+    #     model_epochs=100,
+    #     model_gamma=2.0,
+    #     n_jobs=8,
+    #     verbose=1,
+    #     seed=42,
+    #     sim_strategy="random_inv_multinom,
+    #     sim_prop_missing=0.3,
+    # )
+
+    # nlpca = ImputeNLPCA(
+    #     gd,
+    #     weights_temperature=1.0,
+    #     weights_normalize=False,
+    #     weights_alpha=2.0,
+    #     weights_log_scale=True,
+    #     tune=False,
+    #     tune_metric="pr_macro",
+    #     tune_n_trials=50,
+    #     model_early_stop_gen=20,
+    #     model_min_epochs=20,
+    #     model_validation_split=0.21,
+    #     model_learning_rate=0.00027532421267350253,
+    #     model_latent_dim=4,
+    #     model_hidden_activation="leaky_relu",
+    #     model_l1_penalty=0.0,
+    #     model_lr_patience=8,
+    #     model_dropout_rate=0.25,
+    #     model_device="cpu",
+    #     model_num_hidden_layers=1,
+    #     model_batch_size=32,
+    #     model_epochs=100,
+    #     model_gamma=2.0,
+    #     n_jobs=8,
+    #     verbose=1,
+    #     seed=42,
+    #     sim_strategy="random_inv_multinom",
+    #     sim_prop_missing=0.3,
+    # )
+
+    vae = ImputeAutoencoder(
         gd,
-        weights_temperature=3.0,
-        weights_normalize=True,
-        weights_alpha=0.1,
-        weights_log_scale=False,
+        weights_temperature=1.0,
+        weights_normalize=False,
+        weights_alpha=2.0,
+        weights_log_scale=True,
         tune=False,
         tune_metric="pr_macro",
-        tune_n_trials=100,
+        tune_n_trials=50,
         model_early_stop_gen=20,
         model_min_epochs=20,
-        model_validation_split=0.21,
-        model_learning_rate=0.0001,
-        model_latent_dim=2,
-        model_hidden_activation="elu",
+        model_learning_rate=0.00027532421267350253,
+        model_latent_dim=4,
+        model_hidden_activation="leaky_relu",
         model_l1_penalty=0.0,
         model_lr_patience=8,
+        model_dropout_rate=0.25,
         model_device="cpu",
+        model_num_hidden_layers=1,
+        model_batch_size=32,
+        model_epochs=100,
+        model_gamma=2.0,
         n_jobs=8,
         verbose=1,
         seed=42,
-        model_gamma=2.0,
-        model_batch_size=16,
-        sim_strategy="random_balanced_inv_global",
+        sim_strategy="random_inv_multinom",
         sim_prop_missing=0.3,
     )
 
-    vae_imputed = vae.fit_transform(ge.genotypes_012)
-    print(vae_imputed)
-    print(vae_imputed.shape)
+    imputed = vae.fit_transform(ge.genotypes_012)
+    print(imputed)
+    print(imputed.shape)
     print("Best found parameters:")
     pprint.pprint(vae.best_params_, indent=4)
 
