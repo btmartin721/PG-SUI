@@ -1,7 +1,9 @@
 import copy
 import json
+import warnings
 from datetime import datetime
 from pathlib import Path
+from pprint import pformat
 from typing import Any, Dict, List, Literal, Tuple
 
 import numpy as np
@@ -10,7 +12,6 @@ import pandas as pd
 import torch
 import torch.optim as optim
 from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.model_selection import train_test_split
 from snpio.utils.logging import LoggerManager
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
@@ -29,25 +30,23 @@ from pgsui.utils.plotting import Plotting
 class BaseNNImputer(BaseEstimator, TransformerMixin):
     def __init__(
         self,
+        *,
         prefix: str = "pgsui",
         output_dir: str | Path = "output",
-        device: Literal["gpu"] | Literal["cpu"] = "gpu",
+        device: Literal["gpu", "cpu"] = "gpu",
         verbose: int = 0,
         debug: bool = False,
     ):
-        """Base class for neural network imputers.
+        """Base (parent) class for neural network imputers.
 
-        This class is a base class for neural network imputers. It includes methods for training and evaluating the model, as well as for hyperparameter tuning.
+        This class is the parent class for all neural network imputers. It provides common functionality for initializing the model, training the model, tuning hyperparameters, and imputing missing values. The class also provides methods for saving and loading models, plotting optimization results, and logging messages.
 
         Args:
             prefix (str, optional): Prefix for the output directory. Defaults to "pgsui".
             output_dir (str | Path, optional): Output directory name. Defaults to "output".
-            device (Literal["gpu"] | Literal["cpu"], optional): PyTorch Device. Will use GPU if "gpu" is specified and if a valid GPU device can be found. Defaults to "gpu".
+            device (Literal["gpu", "cpu"], optional): PyTorch Device. Will use GPU if "gpu" is specified and if a valid GPU device can be found. Defaults to "gpu".
             verbose (int, optional): Verbosity level. Defaults to 0.
             debug (bool, optional): Debug mode. Defaults to False.
-
-        Raises:
-            ValueError: If the optimizer is not supported.
         """
         self.device = self._select_device(device)
 
@@ -61,13 +60,13 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
         logman = LoggerManager(__name__, **kwargs)
         self.logger = logman.get_logger()
 
-    def _select_device(self, device: Literal["gpu"] | Literal["cpu"]) -> torch.device:
+    def _select_device(self, device: Literal["gpu", "cpu"]) -> torch.device:
         """Selects the appropriate device for PyTorch.
 
-        MPS is preferred if available, otherwise CUDA, and finally CPU. MPS is only available on recent MacOS versions with the M chips. CUDA is used for Linux and Windows systems with compatible GPUs. Otherwise, CPU is used.
+        This method selects the appropriate device for PyTorch based on the input device string. It checks if a GPU device is available and selects it if the input device is "gpu". If no GPU device is available, it falls back to the CPU device. If the input device is "cpu", it selects the CPU device.
 
         Args:
-            device (Literal["gpu"] | Literal["cpu"]): Device to use.
+            device (Literal["gpu", "cpu"]): Device to use.
 
         Returns:
             torch.device: The selected PyTorch device.
@@ -100,10 +99,15 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
     ) -> None:
         """Create the necessary directories for the model outputs.
 
+        This method creates the necessary directories for the model outputs, including directories for models, plots, metrics, and optimization results.
+
         Args:
             prefix (str): Prefix for the output directory.
             output_dir (str | Path): Output directory name.
             outdirs (List[str]): List of subdirectories to create.
+
+        Raises:
+            Exception: If any of the directories cannot be created.
         """
         self.logger.debug(
             f"Creating model directories in {output_dir} with prefix {prefix}."
@@ -120,15 +124,17 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
                 self.logger.error(
                     f"Failed to create directory {getattr(self, f'{d}_dir')}: {e}"
                 )
-                raise
+                raise e
 
     def tune_hyperparameters(self) -> None:
-        """Tune hyperparameters using Optuna.
+        """Tune hyperparameters using Optuna study.
 
-        This method tunes the hyperparameters of the model using Optuna. It uses the objective function to optimize the hyperparameters and saves the best parameters to a JSON file.
+        This method tunes the hyperparameters of the model using Optuna. It creates an Optuna study and optimizes the model hyperparameters using the `objective()` method. The method saves the best hyperparameters to a JSON file and plots the optimization results.
 
         Raises:
             ValueError: If the model is not fitted yet.
+            NotImplementedError: If the `objective()` method is not implemented in the child class.
+            NotImplementedError: If the `set_best_params()` method is not implemented in the child class.
         """
         self.logger.info("Tuning hyperparameters...")
 
@@ -178,6 +184,11 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
         self.best_params_ = self.set_best_params(best_params)
         self.model_params.update(self.best_params_)
         self.logger.info(f"Best {self.tune_metric} metric: {best_metric}")
+        self.logger.info("Best parameters:")
+        best_params_tmp = copy.deepcopy(best_params)
+        best_params_tmp["learning_rate"] = self.lr_
+        best_params_fmt = pformat(best_params_tmp, indent=4).split("\n")
+        [self.logger.info(p) for p in best_params_fmt]
 
         # Save best parameters to a JSON file.
         fn = self.optimize_dir / "parameters" / "best_params.json"
@@ -190,26 +201,106 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
         tn = f"{self.tune_metric} Value"
         self.plotter_.plot_tuning(study, self.model_name, target_name=tn)
 
+    def reset_weights(self, model: torch.nn.Module):
+        """Reset the parameters of all layers that have `reset_parameters` defined.
+
+        This method resets the parameters of all layers in the model that have a `reset_parameters` method defined. It is useful for reinitializing the model weights before training. The method iterates over all modules in the model and resets the parameters of any module that has a `reset_parameters` method.
+
+        Args:
+            model (nn.Module): The model whose parameters to reset.
+        """
+        for layer in model.modules():
+            if hasattr(layer, "reset_parameters"):
+                layer.reset_parameters()
+
     def train_and_validate_model(
         self,
-        loader: torch.utils.data.DataLoader,
-        val_loader: torch.utils.data.DataLoader,
-        optimizer: torch.optim.Optimizer,
         model: torch.nn.Module,
+        loader: torch.utils.data.DataLoader,
         l1_penalty: float,
-        trial: optuna.Trial | None = None,
+        lr: float,
+        trial=None,
         return_history: bool = False,
-    ) -> Tuple[float, torch.nn.Module, dict] | Tuple[float, torch.nn.Module]:
-        """
-        Train and validate the model, with conditional handling for UBP phases.
+    ):
+        """Train the model, returning the best loss and final model.
+
+        This method trains the model using the training DataLoader and evaluates it using the validation DataLoader. It returns the best validation loss, the best model, and optionally the training and validation histories if `return_history` is True. The method initializes the model, optimizer, and scheduler, and executes the training loop. It also handles early stopping and Optuna pruning. The method returns the best validation loss, the best model, and optionally the training and validation histories if `return_history` is True. The method also returns the best model from the training loop.
+
+        Args:
+            model (nn.Module): The initialized model.
+            loader (DataLoader): Training DataLoader.
+            l1_penalty (float): L1 coefficient for regularization.
+            lr (float): Learning rate for input refinement.
+            trial: Optuna trial object (if tuning).
+            return_history (bool): Whether to return per-epoch history.
+
+        Returns:
+            (float, nn.Module, dict) or (float, nn.Module):
+                The best validation loss, trained model, and optionally the training histories if `return_history` is True.
+
+        Raises:
+            TypeError: If model or loader are not initialized.
         """
         if model is None:
-            msg = "Model is not fitted yet. Call `fit()` before training."
+            msg = "Model is not initialized."
             self.logger.error(msg)
             raise TypeError(msg)
 
+        if loader is None:
+            msg = "DataLoader is not initialized."
+            self.logger.error(msg)
+            raise TypeError(msg)
+
+        optimizer = optim.Adam(model.parameters(), lr=lr)
         scheduler = CosineAnnealingLR(optimizer, T_max=self.epochs)
+
+        (best_loss, best_model, train_hist) = self.execute_training_loop(
+            loader=loader,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            model=model,
+            l1_penalty=l1_penalty,
+            trial=trial,
+            return_history=return_history,
+        )
+
+        # Return best of Phase 3
+        if return_history:
+            return (best_loss, best_model, {"Train": train_hist})
+        else:
+            return best_loss, best_model
+
+    def execute_training_loop(
+        self,
+        loader: torch.utils.data.DataLoader,
+        optimizer: torch.optim.Optimizer,
+        scheduler: torch.optim.lr_scheduler._LRScheduler,
+        model: torch.nn.Module,
+        l1_penalty: float,
+        trial,
+        return_history: bool,
+    ):
+        """Execute the training loop.
+
+        This method executes the training loop for the model. It trains the model using the training DataLoader and evaluates it using the validation DataLoader. It returns the best validation loss, the best model, and optionally the training and validation histories if `return_history` is True.
+
+        Args:
+            loader (torch.utils.data.DataLoader): Training DataLoader.
+            optimizer (Optimizer): Optimizer for this phase.
+            scheduler (_LRScheduler): Scheduler for this phase.
+            model (nn.Module): The UBP model.
+            l1_penalty (float): L1 penalty coefficient.
+            trial: Optuna trial object if tuning.
+            return_history (bool): Whether to return history for each epoch.
+
+        Returns:
+            tuple: (best_loss, best_model, train_history) if `return_history` is True, else (best_loss, best_model).
+        """
         best_loss = float("inf")
+        best_model = None
+        train_history = []
+
+        # Early stopping or other controls
         early_stopping = EarlyStopping(
             patience=self.early_stop_gen,
             verbose=self.verbose,
@@ -218,50 +309,40 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
             debug=self.debug,
         )
 
-        if return_history:
-            train_history = []
-            val_history = []
-
-        best_model = None
-        phase = 1  # Start with Phase 1 for UBP
-
         for epoch in range(self.epochs):
-            train_loss = self.train_step(loader, optimizer, model, l1_penalty, phase)
-            validation_loss = self.val_step(val_loader, model, l1_penalty)
+            # ---- TRAIN STEP ----
+            train_loss = self.train_step(loader, optimizer, model, l1_penalty)
 
-            if self.model_name != "ImputeUBP":
-                scheduler.step()
+            scheduler.step()
 
             if return_history:
                 train_history.append(train_loss)
-                val_history.append(validation_loss)
 
+            # ---- OPTUNA PRUNING ----
             if trial is not None and self.tune:
-                trial.report(validation_loss, epoch)
-                if trial.should_prune():
-                    raise optuna.exceptions.TrialPruned()
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore", category=UserWarning)
+                    trial.report(train_loss, epoch)
+                    if trial.should_prune():
+                        self.logger.warning(
+                            f"Error encountered in trial {trial.number}. Pruning."
+                        )
+                        self.logger.warning(f"Current train loss: {train_loss}")
+                        raise optuna.exceptions.TrialPruned()
 
-            early_stopping(validation_loss, model)
-
+            # ---- EARLY STOPPING ----
+            early_stopping(train_loss, model)
             if early_stopping.early_stop:
                 best_loss = early_stopping.best_score
                 best_model = copy.deepcopy(early_stopping.best_model)
-                if best_model is None:
-                    raise RuntimeError("No valid model found during training.")
                 break
 
-            # Transition between UBP phases
-            if (
-                self.model_name == "ImputeUBP"
-                and epoch + 1 == (self.epochs // 3) * phase
-            ):
-                phase = min(3, phase + 1)
+        # If we never triggered early stopping, get the best from the end
+        if best_model is None:
+            best_loss = early_stopping.best_score
+            best_model = copy.deepcopy(early_stopping.best_model)
 
-        if return_history:
-            histories = {"Train": train_history, "Validation": val_history}
-            return best_loss, best_model, histories
-
-        return best_loss, best_model
+        return best_loss, best_model, train_history
 
     def train_step(
         self,
@@ -269,133 +350,73 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
         optimizer: torch.optim.Optimizer,
         model: torch.nn.Module,
         l1_penalty: float,
-        phase: int = 1,
-    ) -> float:
-        """
-        Train the model using the training set, with specific handling for UBP phases.
+    ):
+        """Perform one epoch of training.
+
+        This method performs one epoch of training using the training DataLoader. It computes the loss for each batch and updates the model weights. If an L1 penalty is specified, it is applied to the loss. The method returns the average training loss over the epoch. The model is set to training mode during training. The method also clips the gradients to prevent exploding gradients. The average training loss is computed as the total loss divided by the number of batches. The method returns the average training loss over the epoch.
+
+        Args:
+            loader (torch.utils.data.DataLoader): Training DataLoader.
+            optimizer (Optimizer): Current phase optimizer.
+            model (nn.Module): The model to train.
+            l1_penalty (float): L1 penalty coefficient.
+
+        Returns:
+            float: The average training loss over the epoch.
+
+        Raises:
+            ValueError: If the output shape is invalid.
         """
         model.train()
         running_loss = 0.0
         num_batches = 0
 
-        for X_batch, y_batch, mask_batch in loader:
-            X_batch, y_batch, mask_batch = (
-                X_batch.to(self.device),
-                y_batch.to(self.device),
-                mask_batch.to(self.device),
-            )
-
-            if self.model_name == "ImputeUBP":
-                X_batch = X_batch.view(X_batch.size(0), -1)
-                y_batch = y_batch.view(y_batch.size(0), -1)
-
-                # Handle input refinement in Phases 1 and 3
-                if phase in {1, 3}:
-                    X_batch.requires_grad = True
-
-            num_batches += 1
+        for X_batch, y_batch, mask_batch, _ in loader:
             optimizer.zero_grad()
 
+            # Forward pass
             outputs = model(X_batch)
 
-            output_shape = (X_batch.size(0), self.num_features_, self.num_classes_)
-            if isinstance(outputs, tuple):
-                recon_logits = outputs[0].view(output_shape)
-                z_mean, z_log_var = outputs[1], outputs[2]
-                logits = (recon_logits, z_mean, z_log_var)
-            else:
-                logits = outputs.view(output_shape)
+            logits = outputs[0] if isinstance(outputs, tuple) else outputs
 
+            if logits.dim() == 2:
+                logits = logits.view(
+                    X_batch.size(0), self.num_features_, self.num_classes_
+                )
+            elif logits.dim() != 3:
+                msg = f"Invalid output shape: {outputs.shape}. Must be 2D or 3D."
+                self.logger.error(msg)
+                raise ValueError(msg)
+
+            if isinstance(outputs, tuple):
+                z_mean, z_log_var = outputs[1], outputs[2]
+                outputs = (logits, z_mean, z_log_var)
+            else:
+                outputs = logits
+
+            # Compute loss
             loss = model.compute_loss(
-                y_batch, logits, mask=mask_batch, class_weights=self.class_weights_
+                y_batch, outputs, mask_batch, class_weights=self.class_weights_
             )
 
+            # Add L1 penalty
             if l1_penalty > 0:
-                l1_reg = sum(param.abs().sum() for param in model.parameters())
-                loss += l1_penalty * l1_reg
+                l1_reg = 0.0
+                for param in model.parameters():
+                    l1_reg += param.abs().sum()
+                loss = loss + l1_penalty * l1_reg
 
-            # Backward pass for UBP phases
-            if self.model_name == "ImputeUBP":
-                if phase in {1, 3}:  # Refine inputs
-                    loss.backward(inputs=[X_batch])
-                if phase in {2, 3}:  # Refine weights
-                    loss.backward()
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                    optimizer.step()
-                if phase == 1:
-                    optimizer.step()
-            else:  # Standard model training
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                optimizer.step()
+            loss.backward()
+
+            # First, update model weights
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            optimizer.step()
 
             running_loss += loss.item()
+            num_batches += 1
 
-        return running_loss / num_batches
-
-    def val_step(
-        self,
-        val_loader: torch.utils.data.DataLoader,
-        model: torch.nn.Module,
-        l1_penalty: float,
-    ) -> Tuple[float, torch.nn.Module]:
-        """
-        Validate the model using the validation set. For UBP, inputs are fixed and not refined.
-
-        Args:
-            val_loader (DataLoader): Validation DataLoader.
-            model (torch.nn.Module): Model to validate.
-            l1_penalty (float): L1 regularization penalty to apply.
-
-        Returns:
-            float: Validation loss.
-        """
-        model.eval()  # Set model to evaluation mode
-        running_val_loss = 0.0
-        val_batches = 0
-
-        with torch.no_grad():  # Disable gradient tracking
-            for X_batch, y_batch, mask_batch in val_loader:
-                # Move data to device
-                X_batch, y_batch, mask_batch = (
-                    X_batch.to(self.device),
-                    y_batch.to(self.device),
-                    mask_batch.to(self.device),
-                )
-
-                if self.model_name == "ImputeUBP":
-                    X_batch.requires_grad = False
-                    X_batch = X_batch.view(X_batch.size(0), -1)
-                    y_batch = y_batch.view(y_batch.size(0), -1)
-
-                # Forward pass
-                outputs = model(X_batch)
-
-                output_shape = (X_batch.size(0), self.num_features_, self.num_classes_)
-                if isinstance(outputs, tuple):
-                    recon_logits = outputs[0].view(output_shape)
-                    z_mean, z_log_var = outputs[1], outputs[2]
-                    logits = (recon_logits, z_mean, z_log_var)
-                else:
-                    logits = outputs.view(output_shape)
-
-                # Compute loss
-                val_loss = model.compute_loss(
-                    y_batch, logits, mask=mask_batch, class_weights=None
-                )
-
-                # Apply L1 penalty
-                if l1_penalty > 0:
-                    l1_reg = sum(param.abs().sum() for param in model.parameters())
-                    val_loss += l1_penalty * l1_reg
-
-                # Accumulate loss
-                running_val_loss += val_loss.item()
-                val_batches += 1
-
-        # Compute average validation loss
-        validation_loss = running_val_loss / val_batches
-        return validation_loss
+        epoch_loss = running_loss / num_batches
+        return epoch_loss
 
     def predict(
         self,
@@ -405,7 +426,7 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
     ) -> np.ndarray | Tuple[np.ndarray, np.ndarray]:
         """Predict using the trained model.
 
-        This method predicts the labels using the trained model. It returns the predicted labels and probabilities (if ``return_proba`` is True). The input data must be encoded. It decodes the predicted labels and probabilities back to the original integer encoding.
+        This method predicts the labels for the input data using the trained model. It returns the predicted labels. If ``return_proba`` is True, it also returns the predicted probabilities.
 
         Args:
             Xenc (np.ndarray): Encoded input data.
@@ -434,14 +455,24 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
 
         Xtensor = validate_input_type(Xenc, "tensor")
 
-        # Forward pass
         model.eval()
         with torch.no_grad():
-            outputs = model(Xtensor.to(self.device))
+            if self.is_backprop:
+                outputs = model.phase23_decoder(Xtensor)
+            else:
+                outputs = model(Xtensor.to(self.device))
 
         # If the model returns multiple outputs, assume first is recon logits
         recon_logits = outputs[0] if isinstance(outputs, tuple) else outputs
+
+        if recon_logits.dim() < 3:
+            recon_logits = recon_logits.view(-1, self.num_features_, self.num_classes_)
+
         y_pred_proba = torch.softmax(recon_logits, dim=-1)
+
+        # Reshape only if necessary
+        if y_pred_proba.dim() < 3:
+            y_pred_proba = y_pred_proba.view(-1, self.num_features_, self.num_classes_)
         y_pred_proba = validate_input_type(y_pred_proba)
         y_pred_labels = self.tt_.inverse_transform(y_pred_proba)
 
@@ -458,7 +489,7 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
     ) -> np.ndarray:
         """Impute the real missing values in X using the trained model.
 
-        Overwrites only the original missing entries (where X had -9 or -1).
+        This method imputes the real missing values in the input data using the trained model. It returns the imputed data. The input data must be encoded. The method overwrites only the real missing values in the input data.
 
         Args:
             X (numpy.ndarray | pd.DataFrame | list | torch.Tensor): Data to impute.
@@ -468,9 +499,9 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
             numpy.ndarray: Imputed data.
 
         Raises:
-            AttributeError: If the original missing mask is not initialized.
             TypeError: If the model is not fitted yet.
             ValueError: If the input shape is invalid.
+            ValueError: If the shape of the real missing mask and predictions do not match.
         """
         self.ensure_attribute("original_missing_mask_")
 
@@ -482,23 +513,37 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
         # Convert X to array, unify missing indicator.
         X = np.where(np.logical_or(X < 0, np.isnan(X)), -1, X)
 
-        if X.ndim == 2:
-            Xtensor = validate_input_type(self.tt_.transform(X), "tensor")
-            X_imputed = X.copy()
-        elif X.ndim == 3:
-            Xtensor = validate_input_type(X, "tensor")
-            X_imputed = self.tt_.inverse_transform(X)
+        if not self.is_backprop:
+            if X.ndim == 2:
+                Xtensor = validate_input_type(self.tt_.transform(X), "tensor")
+                X_imputed = X.copy()
+            elif X.ndim == 3:
+                Xtensor = validate_input_type(X, "tensor")
+                X_imputed = self.tt_.inverse_transform(X)
+            else:
+                msg = f"Invalid input shape: {X_imputed.shape}. Must be 2D or 3D."
+                self.logger.error(msg)
+                raise ValueError(msg)
         else:
-            msg = f"Invalid input shape: {X_imputed.shape}. Must be 2D or 3D."
-            self.logger.error(msg)
-            raise ValueError(msg)
+            Xtensor = self.loader_.dataset.data
+            if X.ndim == 2:
+                X_imputed = X.copy()
+            elif X.ndim == 3:
+                X_imputed = self.tt_.inverse_transform(X)
+            else:
+                msg = f"Invalid input shape: {X_imputed.shape}. Must be 2D or 3D."
+                self.logger.error(msg)
+                raise ValueError(msg)
 
-        # Forward pass.
         model.eval()
         with torch.no_grad():
-            outputs = model(Xtensor.to(self.device))
+            if self.model_name == "ImputeUBP":
+                outputs = model.phase23_decoder(Xtensor)
+            else:
+                outputs = model(Xtensor.to(self.device))
 
         recon_logits = outputs[0] if isinstance(outputs, tuple) else outputs
+        recon_logits = recon_logits.view(-1, self.num_features_, self.num_classes_)
         y_pred_proba = torch.softmax(recon_logits, dim=-1)
         y_pred_proba = validate_input_type(y_pred_proba)
         y_pred_labels = self.tt_.inverse_transform(y_pred_proba)
@@ -520,123 +565,98 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
         return X_imputed
 
     def get_data_loaders(
-        self, X: np.ndarray | torch.Tensor | list, y: np.ndarray | torch.Tensor | list
-    ) -> Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray], Dict[str, np.ndarray]]:
-        """Create DataLoader objects for the input data."""
-        self.logger.info("Creating DataLoader objects for inputs.")
+        self,
+        Xenc: np.ndarray | torch.Tensor | list,
+        y: np.ndarray | torch.Tensor | list,
+        latent_dim: int | None = None,
+    ) -> Tuple[
+        torch.utils.data.DataLoader,
+        torch.utils.data.DataLoader,
+        torch.utils.data.DataLoader,
+    ]:
+        """Create DataLoader objects for the input data.
 
+        This method creates DataLoader objects for the input data. It splits the data into training, validation, and test sets. It also creates a missing value mask for each set. The method returns the DataLoader objects for the training, validation, and test sets. If the model is a backpropagation model, the method initializes the latent space with random values. Otherwise, it splits the data into training, validation, and test sets and re-encodes the input data.
+
+        Args:
+            Xenc (np.ndarray | torch.Tensor | list): Encoded input data.
+            y (np.ndarray | torch.Tensor | list): Target labels.
+            latent_dim (int, optional): Latent dimension for backpropagation models. Defaults to None.
+
+        Returns:
+            Tuple[DataLoader, DataLoader, DataLoader]: Training, validation, and test DataLoader objects.
+
+        Raises:
+            ValueError: If the latent dimension is not specified for backpropagation models.
+        """
         # Decode input data
-        Xenc = validate_input_type(X)
+        Xenc = validate_input_type(Xenc)
         y_decoded = validate_input_type(y)
 
-        (
-            X_train,
-            X_val,
-            X_test,
-            y_train,
-            y_val,
-            y_test,
-            sim_mask_train,
-            sim_mask_val,
-            sim_mask_test,
-        ) = self._split_data(
-            Xenc, y_decoded, self.sim_missing_mask_, self.validation_split
-        )
+        if self.is_backprop:
+            if latent_dim is None:
+                msg = "Latent dimension must be specified for backpropagation models."
+                self.logger.error(msg)
+                raise ValueError(msg)
+            Xlatent = torch.zeros(y.shape[0], latent_dim)
+            X_train = torch.nn.init.xavier_uniform_(Xlatent)
+        else:
+            X_train = Xenc.copy()
+
+        y_train = y.copy()
+        sim_mask_train = self.sim_missing_mask_
 
         # Transform and re-encode datasets
         train_data = self._process_data_subset(X_train, y_train)
-        val_data = self._process_data_subset(X_val, y_val)
-        test_data = self._process_data_subset(X_test, y_test)
-
         sim_mask_train = torch.tensor(sim_mask_train, dtype=torch.bool)
-        sim_mask_val = torch.tensor(sim_mask_val, dtype=torch.bool)
-        sim_mask_test = torch.tensor(sim_mask_test, dtype=torch.bool)
 
         # Create DataLoader objects
-        self.loader_ = self._create_dataloader(
-            *train_data[:2], mask=sim_mask_train, shuffle=True
-        )
-        self.val_loader_ = self._create_dataloader(
-            *val_data[:2], mask=sim_mask_val, shuffle=False
-        )
-        self.test_loader_ = self._create_dataloader(
-            *test_data[:2], mask=sim_mask_test, shuffle=False
+        train_loader = self._create_dataloader(
+            *train_data, mask=sim_mask_train, shuffle=True
         )
 
-        self.logger.info("DataLoaders created successfully.")
+        return train_loader
 
-    def _split_data(self, X, y, mask, validation_split: float):
-        """
-        Splits the dataset into train, validation, and test sets based on the validation_split.
+    def _process_data_subset(self, X, y):
+        """Process a subset of the data.
+
+        This method processes a subset of the data, including missing values and creating a missing value mask.
 
         Args:
             X (np.ndarray): Input features.
             y (np.ndarray): Target labels.
-            mask (np.ndarray): Missing value mask.
-            validation_split (float): Combined size of validation and test sets, e.g., 0.2 means 80% train, 10% validation, and 10% test.
 
         Returns:
-            Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-            - X_train: Training features.
-            - X_val: Validation features.
-            - X_test: Testing features.
-            - y_train: Training labels.
-            - y_val: Validation labels.
-            - y_test: Testing labels.
-            - mask_train: Training mask.
-            - mask_val: Validation mask.
-            - mask_test: Testing mask.
+            Tuple[np.ndarray, np.ndarray, np.ndarray]:
+            - X_final: Processed input features.
+            - y_final: Processed target labels.
+            - mask: Missing value
         """
-        # Ensure the validation_split is valid
-        if not (0 < validation_split < 1):
-            msg = "Validation_split must be between 0 and 1."
-            self.logger.error(msg)
-            raise ValueError(msg)
-
-        # First split: Train vs (Validation + Test)
-        train_size = 1 - validation_split
-        X_train, X_temp, y_train, y_temp, mask_train, mask_temp = train_test_split(
-            X, y, mask, train_size=train_size, random_state=self.seed, shuffle=True
-        )
-
-        # Second split: Validation vs Test (equal sizes)
-        val_test_split = 0.5  # Validation and Test are equally sized
-        X_val, X_test, y_val, y_test, mask_val, mask_test = train_test_split(
-            X_temp,
-            y_temp,
-            mask_temp,
-            test_size=val_test_split,
-            random_state=self.seed,
-            shuffle=True,
-        )
-
-        self.logger.info(
-            f"Data split into: Train={len(X_train)}, Validation={len(X_val)}, Test={len(X_test)}"
-        )
-
-        return (
-            X_train,
-            X_val,
-            X_test,
-            y_train,
-            y_val,
-            y_test,
-            mask_train,
-            mask_val,
-            mask_test,
-        )
-
-    def _process_data_subset(self, X, y):
-        """Process a subset of the data."""
-        X_final = np.where(np.logical_or(X < 0, np.isnan(X)), -1, X)
-        y_final = np.where(np.logical_or(y < 0, np.isnan(y)), -1, y)
-        observed_mask = np.logical_and(y_final >= 0, ~np.isnan(y_final))
-        X_final = np.where(observed_mask[:, :, np.newaxis], X_final, -1)
-        y_final = np.where(observed_mask, y_final, -1)
-        return X_final, y_final, ~observed_mask
+        try:
+            X_final = np.where(np.logical_or(X < 0, np.isnan(X)), -1, X)
+            y_final = np.where(np.logical_or(y < 0, np.isnan(y)), -1, y)
+            observed_mask = np.logical_and(y_final >= 0, ~np.isnan(y_final))
+            X_final = np.where(observed_mask[:, :, np.newaxis], X_final, -1)
+            y_final = np.where(observed_mask, y_final, -1)
+            return X_final, y_final
+        except ValueError:
+            y_final = np.where(np.logical_or(y < 0, np.isnan(y)), -1, y)
+            observed_mask = np.logical_and(y_final >= 0, ~np.isnan(y_final))
+            y_final = np.where(observed_mask, y_final, -1)
+            return X, y_final
 
     def _create_dataloader(self, X, y, mask, shuffle: bool):
-        """Helper method to create a PyTorch DataLoader."""
+        """Helper method to create a PyTorch DataLoader.
+
+        Args:
+            X (torch.Tensor): Input features.
+            y (torch.Tensor): Target labels.
+            mask (torch.Tensor): Missing value mask.
+            shuffle (bool): Whether to shuffle the data.
+
+        Returns:
+            DataLoader: PyTorch DataLoader object.
+        """
         X_tensor = validate_input_type(X, "tensor")
         y_tensor = validate_input_type(y, "tensor")
         mask_tensor = validate_input_type(mask, "tensor")
@@ -651,11 +671,10 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
     def initialize_weights(module):
         """Initialize the weights of the neural network model.
 
+        This method initializes the weights of the neural network model using Xavier initialization for the weights and zero initialization for the biases.
+
         Args:
             module (torch.nn.Module): Module to initialize.
-
-        Raises:
-            AttributeError: If the module is not an instance of torch.nn.Linear.
         """
         if isinstance(module, torch.nn.Linear):
             torch.nn.init.xavier_uniform_(module.weight)
@@ -666,6 +685,8 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
     ) -> torch.nn.Module:
         """Build the neural network model.
 
+        This method builds the neural network model using the provided model class and parameters. It instantiates the model and initializes the weights. The method returns the built model.
+
         Args:
             Model (torch.nn.Module): Model class to instantiate.
             model_params (Dict[str, Any]): Model parameters.
@@ -674,23 +695,34 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
             torch.nn.Module: Built model.
 
         Raises:
-            ValueError: If model_params is empty.
+            TypeError: If model_params is not provided or is empty.
         """
-        if not model_params:
-            msg = "'model_params' must not be empty."
+        if not model_params or not isinstance(model_params, dict):
+            msg = "'model_params' must be provided and must not be empty."
             self.logger.error(msg)
-            raise ValueError(msg)
+            raise TypeError(msg)
 
-        # Pass the weight_tensor into the model
-        return Model(**model_params).to(self.device)
+        all_prms = {
+            "prefix": self.prefix,
+            "logger": self.logger,
+            "verbose": self.verbose,
+            "debug": self.debug,
+        }
+        all_prms.update(model_params)
+        return Model(**all_prms).to(self.device)
 
-    def train_final_model(self) -> Tuple[float, torch.nn.Module, dict]:
+    def train_final_model(
+        self, loader: DataLoader
+    ) -> Tuple[float, torch.nn.Module, dict]:
         """Train the final model.
 
-        This method trains the final model using the training and validation sets. It returns the loss, model, and training history.
+        This method trains the final model using the training DataLoader. It returns the loss, trained model, and training history. If the validation DataLoader is provided, it also returns the validation history. The method saves the final model to a file. The method also plots the training and validation histories.
+
+        Args:
+            loader (torch.utils.data.DataLoader): Training DataLoader.
 
         Returns:
-            Tuple[float, torch.nn.Module, dict]: Loss, model, and training history.
+            Tuple[float, torch.nn.Module, dict]: Loss, model, and training history. If validation DataLoader is provided, also returns validation history.
 
         Raises:
             AttributeError: If the DataLoader objects do not exist.
@@ -701,9 +733,12 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
         which_model = "tuned model" if self.tune else "model"
         self.logger.info(f"Training the {which_model}...")
 
-        attributes = ["loader_", "val_loader_", "Model", "model_params"]
+        attributes = ["Model", "model_params"]
         attributes += ["learning_rate", "l1_penalty", "lr_patience", "gamma"]
-        attributes += ["beta"]
+
+        if self.model_name == "ImputeVAE":
+            attributes += ["beta"]
+
         [self.ensure_attribute(attr) for attr in attributes]
 
         self.lr_ = self.learning_rate
@@ -715,11 +750,13 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
         model.apply(self.initialize_weights)
         self.optimizer_ = optim.Adam(model.parameters(), lr=self.lr_)
 
-        args = [self.loader_, self.val_loader_, self.optimizer_]
-        args += [model, self.l1_penalty_]
-
+        args = [model, loader, self.l1_penalty_, self.lr_]
         res = self.train_and_validate_model(*args, return_history=True)
-        loss, trained_model, history = res
+
+        if len(res) == 4:
+            loss, trained_model, history, self.loader_ = res
+        else:
+            loss, trained_model, history = res
 
         if trained_model is None:
             msg = "Model was not properly trained. Check the training process."
@@ -735,8 +772,10 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
     def ensure_attribute(self, attribute: str) -> None:
         """Ensure that the attribute exists in the class.
 
+        This method checks if the attribute exists in the class. If the attribute does not exist, it raises an AttributeError. If the attribute is not a string, it raises a TypeError. The method is used to ensure that the required attributes are initialized before using them.
+
         Args:
-            attribute (str): Attribute to check.
+            attribute (str): Attribute to check. Must be a string. The attribute must exist in the class.
 
         Raises:
             TypeError: If the attribute is not a string.
@@ -757,22 +796,23 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
         objective_mode: bool = False,
         trial: optuna.Trial | None = None,
         model: torch.nn.Module | None = None,
+        loader: torch.utils.data.DataLoader | None = None,
     ):
-        """Efficient evaluation of the model.
+        """Peform evaluation of the model.
 
-        This method evaluates the model using the test set. It computes the evaluation metrics, saves them to a JSON file, and plots the metrics and confusion matrix.
+        This method evaluates the model using the test set. It returns the evaluation metrics and plots the results. If in objective mode, it returns the metrics for Optuna to optimize. The model must be provided as a keyword argument. If the DataLoader is not provided, it must be an attribute of the class. If in objective mode, the trial object must be provided. The method also saves the evaluation metrics to a JSON file. The method also plots the evaluation metrics and confusion matrix.
 
         Args:
             objective_mode (bool, optional): Whether to run in objective mode. Defaults to False.
             trial (optuna.Trial, optional): Optuna trial object. Defaults to None.
             model (torch.nn.Module): Model to evaluate. Required keyword argument.
+            loader (torch.utils.data.DataLoader, optional): DataLoader for evaluation. Defaults to None.
 
         Returns:
-            dict: Evaluation metrics. Only returned in objective mode.
+            dict: Evaluation metrics. Only returned in objective mode. The dictionary contains the evaluation metrics, including: accuracy, precision, recall, average precision, f1-score, ROC-AUC, and precision-recall macro ('pr_macro') averaged scores.
 
         Raises:
             TypeError: If objective_mode is True but trial is not provided.
-            AttributeError: If test_loader_ does not exist.
             TypeError: If model is not provided.
         """
         if objective_mode and trial is None:
@@ -780,30 +820,44 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
             self.logger.error(msg)
             raise TypeError(msg)
 
-        self.ensure_attribute("test_loader_")
-
         if model is None:
             msg = "Model must be provided for evaluation, but got None."
             self.logger.error(msg)
             raise TypeError(msg)
 
-        # Efficient data preparation
-        X = validate_input_type(self.test_loader_.dataset.data)
-        y_true_labels = validate_input_type(self.test_loader_.dataset.target)
-        mask_test = validate_input_type(self.test_loader_.dataset.mask)
-        y_true_enc = self.tt_.transform(y_true_labels)
+        if loader is None:
+            msg = "Data loader must be provided for evaluation, but got None."
+            self.logger.error(msg)
+            raise TypeError(msg)
+
+        # Data preparation.
+        X = validate_input_type(loader.dataset.data)
+        y_true_labels = validate_input_type(loader.dataset.target)
+        mask_test = validate_input_type(loader.dataset.mask)
+
+        if np.all(np.logical_or(y_true_labels < 0, np.isnan(y_true_labels))):
+            msg = "No valid classes found in the target data."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        if y_true_labels.ndim == 2:
+            y_true_enc = self.tt_.transform(y_true_labels)
+        elif y_true_labels.ndim == 3:
+            y_true_enc = y_true_labels.copy()
+            y_true_labels = np.argmax(y_true_labels, axis=-1)
+        else:
+            msg = f"Invalid target shape: {y_true_labels.shape}. Must be 2D or 3D."
+            self.logger.error(msg)
+            raise ValueError(msg)
 
         # Predict and filter missing data
         pred_labels, pred_proba = self.predict(X, model, return_proba=True)
 
-        # Focus only on the simulated missing values.
-        valid_mask = mask_test
-
         y_true_labels, pred_labels, pred_proba, y_true_enc = (
-            y_true_labels[valid_mask],
-            pred_labels[valid_mask],
-            pred_proba[valid_mask],
-            y_true_enc[valid_mask],
+            y_true_labels[mask_test],
+            pred_labels[mask_test],
+            pred_proba[mask_test],
+            y_true_enc[mask_test],
         )
 
         # Efficient metric computation
@@ -821,16 +875,14 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
 
         # Save and plot metrics
         id_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-        metrics_path = self.metrics_dir / f"test_metrics_{id_str}.json"
+        metrics_path = self.metrics_dir / f"metrics_{id_str}.json"
         metrics_path.parent.mkdir(parents=True, exist_ok=True)
         with open(metrics_path, "w") as fp:
             json.dump(metrics, fp, indent=4)
 
         self.plotter_.plot_metrics(y_true_labels, pred_proba, metrics)
         self.plotter_.plot_confusion_matrix(y_true_labels, pred_labels)
-
-        if not objective_mode:
-            self.metrics_ = metrics
+        return metrics
 
     def compute_class_weights(
         self,
@@ -844,7 +896,7 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
     ) -> torch.Tensor:
         """Compute inverse class weights based on class distribution in the data.
 
-        This method computes the class weights based on the class distribution in the data. It calculates the raw inverse class weights, optionally applies a log-scale transform, and bounds the weights within a specified range.
+        This method computes the inverse class weights based on the class distribution in the data. It optionally applies a log-scale transform and normalizes the weights. The weights are bounded within a range, and a temperature parameter can be used for smoothing. The alpha parameter is used for the log-scale transform to adjust the weights.
 
         Args:
             X (numpy.ndarray): Input data.
@@ -911,7 +963,12 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
         cw = validate_input_type(weight_tensor)
         self.logger.info("Class weights:")
         [self.logger.info(f"Class {i}: {x:.3f}") for i, x in enumerate(cw)]
-        return weight_tensor.to(self.device)
+
+        return (
+            weight_tensor
+            if self.model_name == "ImputeUBP"
+            else weight_tensor.to(self.device)
+        )
 
     def init_transformers(
         self,
@@ -920,7 +977,7 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
     ]:
         """Initialize the transformers for encoding.
 
-        This method should be called in a `fit` method to initialize the transformers.
+        This method should be called in a `fit` method to initialize the transformers. It returns the transformers and utilities.
 
         Returns:
             Tuple[AutoEncoderFeatureTransformer, SimGenotypeDataTransformer, Plotting, Scorer]: Transformers and utilities.
@@ -970,3 +1027,48 @@ class BaseNNImputer(BaseEstimator, TransformerMixin):
         )
 
         return feature_transformer, sim_transformer, plotter, scorers
+
+    def objective(self, trial, model):
+        """Objective function for Optuna hyperparameter tuning.
+
+        This method is the objective function for hyperparameter tuning using Optuna. It trains the model using the given hyperparameters and returns the validation loss.
+
+        Args:
+            trial (optuna.Trial): Optuna trial object.
+            model (torch.nn.Module): The model to train.
+
+        Returns:
+            float: Validation loss.
+        """
+        raise NotImplementedError(
+            "Method `objective()` must be implemented in the child class."
+        )
+
+    def fit(
+        self,
+        X: np.ndarray | pd.DataFrame | list,
+        y: np.ndarray | pd.DataFrame | list | None = None,
+    ):
+        """Fit the model using the input data.
+
+        Args:
+            X (np.ndarray | pd.DataFrame | list): Input data.
+            y (np.ndarray | pd.DataFrame | list): Target labels.
+
+        """
+        raise NotImplementedError(
+            "Method `fit()` must be implemented in the child class."
+        )
+
+    def transform(self, X: np.ndarray | pd.DataFrame | list) -> np.ndarray:
+        """Transform the input data using the trained model.
+
+        Args:
+            X (np.ndarray | pd.DataFrame | list): Input data.
+
+        Returns:
+            np.ndarray: Transformed data.
+        """
+        raise NotImplementedError(
+            "Method `transform()` must be implemented in the child class."
+        )
