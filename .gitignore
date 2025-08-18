@@ -39,9 +39,6 @@ dmypy.log
 # PyCharm
 .idea/
 
-# VS Code
-.vscode/
-
 # PyInstaller
 *.manifest
 *.spec
