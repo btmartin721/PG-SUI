@@ -78,7 +78,11 @@ dev = [
     "sphinx-autodoc-typehints",
     "sphinxcontrib-napoleon",
     "sphinxcontrib-programoutput",
-    "requests"
+    "requests",
+    "PyObjC"
+]
+optional = [
+    "PyObjC"
 ]
 
 [project.urls]
