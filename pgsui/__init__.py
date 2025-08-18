@@ -36,6 +36,10 @@ from pgsui.impute.unsupervised.imputers.vae import ImputeVAE
 from pgsui.impute.unsupervised.imputers.ubp import ImputeUBP
 from pgsui.impute.unsupervised.imputers.autoencoder import ImputeAutoencoder
 from pgsui.impute.unsupervised.imputers.nlpca import ImputeNLPCA
+from pgsui.impute.supervised.imputers.random_forest import ImputeRandomForest
+from pgsui.impute.supervised.imputers.hist_gradient_boosting import (
+    ImputeHistGradientBoosting,
+)
 
 __all__ = [
     "ImputeAutoencoder",
@@ -44,6 +48,7 @@ __all__ = [
     "ImputeUBP",
     "ImputeXGBoost",
     "ImputeRandomForest",
+    "ImputeHistGradientBoosting",
     "ImputeKNN",
     "SimGenotypeDataTransformer",
     "ImputePhylo",
