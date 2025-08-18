@@ -126,7 +126,7 @@ docs/build/_build/doctrees/environment.pickle
 docs/build/_build/doctrees/pgsui.data_processing.doctree
 **/doctrees/
 .buildinfo
-training_data/
+./training_data/
 .training_data.nosync/
 training_data_2
 pgsui_*_output/
