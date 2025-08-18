@@ -1,5 +1,5 @@
 import logging
-from typing import List
+from typing import List, Literal
 
 import torch
 import torch.nn as nn
@@ -20,9 +20,11 @@ class NLPCAModel(nn.Module):
         dropout_rate: float = 0.2,
         activation: str = "relu",
         gamma: float = 2.0,
+        device: Literal["gpu", "cpu", "mps"] = "cpu",
         logger: logging.Logger | None = None,
         verbose: int = 0,
         debug: bool = False,
+        use_convolution: bool = False,
     ):
         """Non-linear Principal Component Analysis (NLPCA) model for imputation.
 
@@ -37,9 +39,11 @@ class NLPCAModel(nn.Module):
             dropout_rate (float): Dropout rate for regularization. Default is 0.2.
             activation (str): Activation function for hidden layers. Default is 'relu'.
             gamma (float): Focal loss gamma parameter. Default is 2.0.
+            device (str): Device to run the model on ('gpu', 'cpu', or 'mps'). Default is 'cpu'.
             logger (logging.Logger, optional): Logger instance. Default is None.
             verbose (int): Verbosity level for logging. Default is 0.
             debug (bool): Debug mode flag. Default is False.
+            use_convolution (bool): Whether to use convolutional layers. Ignored for this model. Default is False.
         """
         super(NLPCAModel, self).__init__()
 
@@ -56,6 +60,7 @@ class NLPCAModel(nn.Module):
         self.num_classes = num_classes
         self.latent_dim = latent_dim
         self.gamma = gamma
+        self.device = device
 
         if hidden_layer_sizes[0] > hidden_layer_sizes[-1]:
             hidden_layer_sizes = list(reversed(hidden_layer_sizes))
@@ -119,31 +124,30 @@ class NLPCAModel(nn.Module):
         return x.view(-1, *self.reshape)
 
     def compute_loss(
-        self,
-        y: torch.Tensor,
-        outputs: torch.Tensor,
-        mask: torch.Tensor | None = None,
-        class_weights: torch.Tensor | None = None,
+        self, y, outputs, mask=None, class_weights=None, gamma: float = 2.0
     ) -> torch.Tensor:
-        """Compute the masked focal loss between predictions and targets.
+        """Compute the loss for the UBP model.
 
-        This method computes the masked focal loss between the model predictions and the ground truth labels. The mask tensor is used to ignore certain values (< 0), and class weights can be provided to balance the loss. The focal loss is a variant of the cross-entropy loss that focuses on hard-to-classify examples. It is useful for imbalanced datasets. The loss is computed as: L = -α_t * (1 - p_t)^γ * log(p_t), where α_t is the class weight, p_t is the predicted probability, and γ is the focal loss gamma parameter.
+        This method computes the loss between the ground truth labels and the model outputs.
 
         Args:
-            y (torch.Tensor): Ground truth labels of shape (batch, seq).
+            y (torch.Tensor): Ground truth labels.
             outputs (torch.Tensor): Model outputs.
-            mask (torch.Tensor, optional): Mask tensor to ignore certain values. Default is None.
-            class_weights (torch.Tensor, optional): Class weights for the loss. Default is None.
+            mask (torch.Tensor | None): Optional mask to apply to the loss.
+            class_weights (torch.Tensor | None): Optional class weights.
+            gamma (float): Focusing parameter for the focal loss.
 
         Returns:
-            torch.Tensor: Computed focal loss value.
+            torch.Tensor: Computed loss.
         """
         if class_weights is None:
-            class_weights = torch.ones(self.num_classes, device=y.device)
+            class_weights = torch.ones(self.num_classes, device=outputs.device)
 
         if mask is None:
             mask = torch.ones_like(y, dtype=torch.bool)
 
-        criterion = MaskedFocalLoss(alpha=class_weights, gamma=self.gamma)
-        reconstruction_loss = criterion(outputs, y, valid_mask=mask)
-        return reconstruction_loss
+        # Focal loss with weights
+        criterion = MaskedFocalLoss(gamma=gamma, alpha=class_weights)
+        return criterion(
+            outputs.to(self.device), y.to(self.device), valid_mask=mask.to(self.device)
+        )
