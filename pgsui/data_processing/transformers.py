@@ -214,10 +214,7 @@ class AutoEncoderFeatureTransformer(BaseEstimator, TransformerMixin):
         X_encoded = self.encoding_function_(X)
 
         # Ensure correct shape
-        if (
-            X_encoded.shape[1] != self.data_shape_
-            and X_encoded.shape[2] != self.data_shape_[2]
-        ):
+        if X_encoded.shape[1:] != self.data_shape_[1:]:
             msg = f"Encoding produced unexpected shape {tuple(X_encoded.shape[1:])}, expected {tuple(self.data_shape_[1:])}."
             self.logger.error(msg)
             raise ValueError(msg)
@@ -709,10 +706,10 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
         self.tree = tree
         self.n_focal = n_focal
 
-        self.class_weights = (
-            None if class_weights is None else validate_input_type(class_weights)
-        )
+        if class_weights is not None:
+            class_weights = validate_input_type(class_weights)
 
+        self.class_weights = class_weights
         self.verbose = verbose
         self.debug = debug
         self.rng = np.random.default_rng(seed)
@@ -761,6 +758,7 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
 
         # Validate columns or rows, if desired
         sim_missing_mask = self._validate_mask_columns(sim_missing_mask)
+        self._validate_mask_rows(sim_missing_mask)
 
         all_missing_mask = np.logical_or(original_missing_mask, sim_missing_mask)
 
@@ -991,7 +989,7 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
             p = np.array([1 / 3, 1 / 3, 1 / 3])
 
         # Allocate number of picks per genotype using a multinomial draw
-        picks = np.random.multinomial(n_to_mask, p)
+        picks = self.rng.multinomial(n_to_mask, p)
 
         chosen_indices = []
         for idx, n_picks in zip([idx0, idx1, idx2], picks):
@@ -1210,8 +1208,9 @@ class SimGenotypeDataTransformer(BaseEstimator, TransformerMixin):
         candidate_set = set()
         for fs in focal_samples:
             drow = distmat[fs, :]
+            drow = np.where(np.isnan(drow), np.inf, drow)
             sorted_idx = np.argsort(drow)
-            neighbor_rows = sorted_idx[: n_neighbors + 1]  # includes focal itself
+            neighbor_rows = sorted_idx[: n_neighbors + 1]  # includes focal
             for nr in neighbor_rows:
                 # Only consider columns that are currently not missing
                 known_cols = np.where(~original_missing_mask[nr, :])[0]
