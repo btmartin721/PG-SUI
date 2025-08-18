@@ -285,7 +285,7 @@ class Scorer:
 
         # Compute per-class ROC and PR metrics
         for i in range(num_classes):
-            fpr[i], tpr[i], _ = roc_curve(y_true[:, i], y_pred_proba[:, i])
+            fpr[i], tpr[i], _ = roc_curve(y_true[:, i], y_pred_proba[:, i], pos_label=1)
             roc_auc[i] = auc(fpr[i], tpr[i])
             precision[i], recall[i], _ = precision_recall_curve(
                 y_true[:, i], y_pred_proba[:, i]
