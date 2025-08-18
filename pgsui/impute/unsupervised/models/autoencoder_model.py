@@ -108,7 +108,7 @@ class Encoder(nn.Module):
         Returns:
             torch.Tensor: Latent representation tensor.
         """
-        x = x.view(x.size(0), self.num_classes * self.n_features)
+        x = x.reshape(x.size(0), self.num_classes * self.n_features)
         return self.encoder(x)
 
 
