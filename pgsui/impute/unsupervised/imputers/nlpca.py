@@ -530,9 +530,6 @@ class ImputeNLPCA(BaseNNImputer):
         """
         latent_dim = int(params["latent_dim"])
         if latent_init == "pca":
-            msg = f"PCA initialization is not yet implemented."
-            self.logger.error(msg)
-            raise NotImplementedError(msg)
             # Use a copy to avoid modifying the original data
             X_pca = X.copy().astype(np.float32)
 
