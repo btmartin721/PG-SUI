@@ -1,18 +1,8 @@
 from typing import List, Literal
 
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from snpio.utils.logging import LoggerManager
-
-
-from typing import List, Literal
-
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from snpio.utils.logging import LoggerManager
 
 
 class WeightedMaskedCCELoss(nn.Module):
@@ -21,15 +11,13 @@ class WeightedMaskedCCELoss(nn.Module):
         alpha: float | List[float] | torch.Tensor | None = None,
         reduction: Literal["mean", "sum"] = "mean",
     ):
-        """
-        A weighted, masked Categorical Cross-Entropy loss function.
+        """A weighted, masked Categorical Cross-Entropy loss function.
+
+        This method computes the categorical cross-entropy loss while allowing for class weights and masking of invalid (missing) entries. It is particularly useful for sequence data where some positions may be missing or should not contribute to the loss calculation.
 
         Args:
-            alpha (float | List | Tensor, optional): A manual rescaling weight given to each class.
-                If given, has to be a Tensor of size C (number of classes).
-                Defaults to None.
-            reduction (str, optional): Specifies the reduction to apply to the
-                output: 'mean' or 'sum'. Defaults to "mean".
+            alpha (float | List | Tensor | None): A manual rescaling weight given to each class. If given, has to be a Tensor of size C (number of classes). Defaults to None.
+            reduction (str, optional): Specifies the reduction to apply to the output: 'mean' or 'sum'. Defaults to "mean".
         """
         super(WeightedMaskedCCELoss, self).__init__()
         self.reduction = reduction
@@ -92,24 +80,30 @@ class WeightedMaskedCCELoss(nn.Module):
         elif self.reduction == "sum":
             return loss.sum()
         else:
-            raise ValueError(f"Reduction mode '{self.reduction}' not supported.")
+            msg = f"Reduction mode '{self.reduction}' not supported."
+            raise ValueError(msg)
 
 
 class MaskedFocalLoss(nn.Module):
-    """Focal loss (gamma > 0) with optional class weights and a boolean valid mask."""
+    """Focal loss (gamma > 0) with optional class weights and a boolean valid mask.
+
+    This method implements the focal loss function, which is designed to address class imbalance by down-weighting easy examples and focusing training on hard negatives. It also supports masking of invalid (missing) entries, making it suitable for sequence data with missing values.
+    """
 
     def __init__(
         self,
         gamma: float = 2.0,
         alpha: torch.Tensor | None = None,
-        reduction: str = "mean",
+        reduction: Literal["mean", "sum"] = "mean",
     ):
-        """Focal loss (gamma > 0) with optional class weights and a boolean valid mask.
+        """Initialize the MaskedFocalLoss.
+
+        This class sets up the focal loss with specified focusing parameter, class weights, and reduction method. It is designed to handle missing data through a valid mask, ensuring that only relevant entries contribute to the loss calculation.
 
         Args:
-            gamma (float, optional): Focusing parameter. Defaults to 2.0.
-            alpha (torch.Tensor | None, optional): Class weights. Defaults to None.
-            reduction (str, optional): Reduction mode. Defaults to "mean".
+            gamma (float): Focusing parameter.
+            alpha (torch.Tensor | None): Class weights.
+            reduction (Literal["mean", "sum"]): Reduction mode ('mean' or 'sum').
         """
         super().__init__()
         self.gamma = gamma
@@ -118,38 +112,47 @@ class MaskedFocalLoss(nn.Module):
 
     def forward(
         self,
-        logits: torch.Tensor,  # (B, L, C)
-        targets: torch.Tensor,  # (B, L) ints in [0..C-1] or -1
-        valid_mask: torch.Tensor | None,  # (B, L) bool
+        logits: torch.Tensor,  # Expects (N, C) where N = batch*features
+        targets: torch.Tensor,  # Expects (N,)
+        valid_mask: torch.Tensor,  # Expects (N,)
     ) -> torch.Tensor:
-        device = logits.device
-        B, L, C = logits.shape
-        t = targets.to(device).long().reshape(-1)
-        logit2d = logits.reshape(-1, C)
+        """Calculates the focal loss on pre-flattened tensors.
 
-        # standard CE per-token (no reduction)
+        Args:
+            logits (torch.Tensor): Logits from the model of shape (N, C) where N is the number of samples (batch_size * seq_len) and C is the number of classes.
+            targets (torch.Tensor): Ground truth labels of shape (N,).
+            valid_mask (torch.Tensor): Boolean mask of shape (N,) where True indicates a valid (observed) value to include in the loss.
+
+        Returns:
+            torch.Tensor: The computed scalar loss value.
+        """
+        device = logits.device
+
+        # Calculate standard cross-entropy loss per-token (no reduction)
         ce = F.cross_entropy(
-            logit2d,
-            t,
+            logits,
+            targets,
             weight=(self.alpha.to(device) if self.alpha is not None else None),
             reduction="none",
             ignore_index=-1,
         )
 
-        # p_t from CE (no need to softmax explicitly)
-        pt = torch.exp(-ce)  # p_t = exp(-CE)
+        # Calculate p_t from the cross-entropy loss
+        pt = torch.exp(-ce)
         focal = ((1 - pt) ** self.gamma) * ce
 
-        if valid_mask is not None:
-            m = valid_mask.to(device).reshape(-1)
-            focal = focal[m]
+        # Apply the valid mask. We select only the elements that should contribute to the loss.
+        focal = focal[valid_mask]
 
+        # Return early if no valid elements exist to avoid NaN results
         if focal.numel() == 0:
             return torch.tensor(0.0, device=device)
 
+        # Apply reduction
         if self.reduction == "mean":
             return focal.mean()
         elif self.reduction == "sum":
             return focal.sum()
         else:
-            raise ValueError(f"Reduction mode '{self.reduction}' not supported.")
+            msg = f"Reduction mode '{self.reduction}' not supported."
+            raise ValueError(msg)
