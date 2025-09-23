@@ -1,16 +1,13 @@
-from typing import Dict
+from typing import Dict, Literal
 
 import numpy as np
 from sklearn.metrics import (
     accuracy_score,
-    auc,
     average_precision_score,
     f1_score,
-    precision_recall_curve,
     precision_score,
     recall_score,
     roc_auc_score,
-    roc_curve,
 )
 from snpio.utils.logging import LoggerManager
 from torch import Tensor
@@ -21,135 +18,128 @@ from pgsui.utils.misc import validate_input_type
 class Scorer:
     """Class for evaluating the performance of a model using various metrics.
 
-    This class is used to evaluate the performance of a model using various metrics, such as accuracy, F1 score, precision, recall, average precision, and ROC AUC. The class can be used to evaluate the performance of a model on a dataset with ground truth labels. The class can also be used to evaluate the performance of a model in objective mode for hyperparameter tuning.
-
-    Example:
-        >>> from sklearn.datasets import make_classification
-        >>> from sklearn.linear_model import LogisticRegression
-        >>> from sklearn.model_selection import train_test_split
-        >>> from pgsui.utils.scorer import Scorer
-        >>> X, y = make_classification(n_samples=1000, n_features=20, random_state=42)
-        >>> X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-        >>> model = LogisticRegression(random_state=42)
-        >>> model.fit(X_train, y_train)
-        >>> y_pred = model.predict(X_test)
-        >>> scorer = Scorer(average="macro", verbose=1, logger=logger)
-        >>> print(scorer.evaluate(model, y_true, y_pred, y_true_ohe, y_pred_proba))
-        {'accuracy': 0.95, 'f1': 0.95, 'precision': 0.95, 'recall': 0.95, 'roc_auc': 0.95, 'average_precision': 0.95, 'pr_macro': 0.95}
+    This module provides a unified interface for computing common evaluation metrics. It supports accuracy, F1 score, precision, recall, ROC AUC, average precision, and macro-average precision. The class can handle both raw and one-hot encoded labels and includes options for logging and averaging methods.
     """
 
     def __init__(
         self,
-        average: str = "weighted",
-        logger: LoggerManager | None = None,
-        verbose: int = 0,
+        prefix: str,
+        average: Literal["weighted", "macro", "micro"] = "weighted",
+        verbose: bool = False,
         debug: bool = False,
     ) -> None:
         """Initialize a Scorer object.
 
-        This class is used to evaluate the performance of a model using various metrics, such as accuracy, F1 score, precision, recall, average precision, and ROC AUC. The class can be used to evaluate the performance of a model on a dataset with ground truth labels. The class can also be used to evaluate the performance of a model in objective mode for hyperparameter tuning.
+        This class provides a unified interface for computing common evaluation metrics. It supports accuracy, F1 score, precision, recall, ROC AUC, average precision, and macro-average precision. The class can handle both raw and one-hot encoded labels and includes options for logging and averaging methods.
 
         Args:
-            average (str, optional): Average method for metrics. Must be one of 'micro', 'macro', or 'weighted'.
-            logger (LoggerManager, optional): Logger for logging messages. If None, a new logger is created. Default is None.
-            verbose (int, optional): Verbosity level for logging messages. Default is 0.
-            debug (bool, optional): Debug mode for logging messages. Default is False.
-
-        Raises:
-            ValueError: If the average parameter is invalid. Must be one of 'micro', 'macro', or 'weighted'.
+            prefix (str): The prefix to use for logging.
+            average (Literal["weighted", "macro", "micro"]): The averaging method to use for metrics. Must be one of 'micro', 'macro', or 'weighted'. Defaults to 'weighted'.
+            verbose (bool): If True, enable verbose logging. Defaults to False.
+            debug (bool): If True, enable debug logging. Defaults to False.
         """
-        self.average = average
-
-        if logger is not None:
-            self.logger = logger
-        else:
-            prefix = "pgsui_output" if prefix == "pgsui" else prefix
-            logman = LoggerManager(
-                name=__name__, prefix=prefix, debug=debug, verbose=verbose >= 1
-            )
-            self.logger = logman.get_logger()
+        logman = LoggerManager(
+            name=__name__, prefix=prefix, debug=debug, verbose=verbose
+        )
+        self.logger = logman.get_logger()
 
         if average not in {"micro", "macro", "weighted"}:
             msg = f"Invalid average parameter: {average}. Must be one of 'micro', 'macro', or 'weighted'."
             self.logger.error(msg)
             raise ValueError(msg)
 
-    def accuracy(self, y_true, y_pred) -> float:
-        """Calculate the accuracy of the model.
+        self.average = average
+
+    def accuracy(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
+        """Compute the accuracy score.
 
         Args:
-            y_true (np.ndarray or torch.Tensor): Ground truth labels.
-            y_pred (np.ndarray or torch.Tensor): Predicted labels.
+            y_true (np.ndarray): Ground truth (correct) target values.
+            y_pred (np.ndarray): Estimated target values.
 
         Returns:
-            float: Accuracy score.
+            float: The accuracy score.
         """
         return accuracy_score(y_true, y_pred)
 
-    def f1(self, y_true, y_pred) -> np.ndarray:
-        """Calculate the F1 score of the model.
+    def f1(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
+        """Compute the F1 score.
 
         Args:
-            y_true (np.ndarray or torch.Tensor): Ground truth labels.
-            y_pred (np.ndarray or torch.Tensor): Predicted labels.
+            y_true (np.ndarray): Ground truth (correct) target values.
+            y_pred (np.ndarray): Estimated target values.
 
         Returns:
-            float: F1 score.
+            float: The F1 score.
         """
         return f1_score(y_true, y_pred, average=self.average, zero_division=0.0)
 
-    def precision(self, y_true, y_pred) -> np.ndarray:
-        """Calculate the precision of the model.
+    def precision(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
+        """Compute the precision score.
 
         Args:
-            y_true (np.ndarray or torch.Tensor): Ground truth labels.
-            y_pred (np.ndarray or torch.Tensor): Predicted labels.
+            y_true (np.ndarray): Ground truth (correct) target values.
+            y_pred (np.ndarray): Estimated target values.
 
         Returns:
-            float: Precision score.
+            float: The precision score.
         """
         return precision_score(y_true, y_pred, average=self.average, zero_division=0.0)
 
-    def recall(self, y_true, y_pred) -> np.ndarray:
-        """Calculate the recall of the model.
+    def recall(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
+        """Compute the recall score.
 
         Args:
-            y_true (np.ndarray or torch.Tensor): Ground truth labels.
-            y_pred (np.ndarray or torch.Tensor): Predicted labels.
+            y_true (np.ndarray): Ground truth (correct) target values.
+            y_pred (np.ndarray): Estimated target values.
 
         Returns:
-            float: Recall score.
+            float: The recall score.
         """
         return recall_score(y_true, y_pred, average=self.average, zero_division=0.0)
 
-    def roc_auc(self, y_true, y_pred_proba) -> np.ndarray:
-        """Calculate the ROC AUC of the model.
+    def roc_auc(self, y_true: np.ndarray, y_pred_proba: np.ndarray) -> float:
+        """Compute the ROC AUC score.
 
         Args:
-            y_true (np.ndarray or torch.Tensor): Ground truth labels.
-            y_pred_proba (np.ndarray or torch.Tensor): Predicted probabilities.
+            y_true (np.ndarray): Ground truth (correct) target values.
+            y_pred_proba (np.ndarray): Predicted probabilities.
 
         Returns:
-            float: ROC AUC score.
-
-        Notes:
-            - This method uses the 'ovr' strategy for multi-class classification.
-            - The input data must be properly formatted.
-            - If all ground truth labels are 0, the ROC AUC score is 0.5.
-
+            float: The ROC AUC score.
         """
-        if y_pred_proba.ndim == 3:
-            y_pred_proba = y_pred_proba.reshape(-1, y_pred_proba.shape[-1])
-
-        if y_true.shape[-1] == y_pred_proba.shape[-1]:
-            y_true = np.argmax(y_true, axis=-1)
-
-        if np.all(y_true == 0):
+        if len(np.unique(y_true)) < 2:
             return 0.5
-
         return roc_auc_score(
             y_true, y_pred_proba, average=self.average, multi_class="ovr"
         )
+
+    # This method now correctly expects one-hot encoded true labels
+    def average_precision(
+        self, y_true_ohe: np.ndarray, y_pred_proba: np.ndarray
+    ) -> float:
+        """Compute the average precision score.
+
+        Args:
+            y_true_ohe (np.ndarray): One-hot encoded ground truth target values.
+            y_pred_proba (np.ndarray): Predicted probabilities.
+
+        Returns:
+            float: The average precision score.
+        """
+        return average_precision_score(y_true_ohe, y_pred_proba, average=self.average)
+
+    def pr_macro(self, y_true_ohe: np.ndarray, y_pred_proba: np.ndarray) -> float:
+        """Compute the macro-average precision score.
+
+        Args:
+            y_true_ohe (np.ndarray): One-hot encoded ground truth target values.
+            y_pred_proba (np.ndarray): Predicted probabilities.
+
+        Returns:
+            float: The macro-average precision score.
+        """
+        return average_precision_score(y_true_ohe, y_pred_proba, average="macro")
 
     def evaluate(
         self,
@@ -158,74 +148,60 @@ class Scorer:
         y_true_ohe: np.ndarray | Tensor | list,
         y_pred_proba: np.ndarray | Tensor | list,
         objective_mode: bool = False,
-        tune_metric: str = "pr_macro",
+        tune_metric: Literal[
+            "pr_macro",
+            "roc_auc",
+            "average_precision",
+            "accuracy",
+            "f1",
+            "precision",
+            "recall",
+        ] = "pr_macro",
     ) -> Dict[str, float]:
         """Evaluate the model using various metrics.
 
-        This method evaluates the performance of a model using various metrics, such as accuracy, F1 score, precision, recall, average precision, and ROC AUC. The method can be used to evaluate the performance of a model on a dataset with ground truth labels. The method can also be used to evaluate the performance of a model in objective mode for hyperparameter tuning.
-
         Args:
-            y_true (np.ndarray or torch.Tensor): Ground truth labels.
-            y_pred (np.ndarray or torch.Tensor): Predicted labels.
-            y_true_ohe (np.ndarray or torch.Tensor): One-hot encoded ground truth labels.
-            y_pred_proba (np.ndarray or torch.Tensor): Predicted probabilities.
-            objective_mode (bool, optional): Whether to use objective mode for evaluation. Default is False.
-            tune_metric (str, optional): Metric to use for tuning. Ignored if `objective_mode` is False. Default is 'pr_macro'.
-
-        Returns:
-            Dict[str, float]: Dictionary of evaluation metrics. Keys are 'accuracy', 'f1', 'precision', 'recall', 'roc_auc', 'average_precision', and 'pr_macro'.
-
-        Raises:
-            ValueError: If the input data is invalid.
-            ValueError: If an invalid tune_metric is provided.
+            y_true: Ground truth (correct) target values.
+            y_pred: Estimated target values.
+            y_true_ohe: One-hot encoded ground truth target values.
+            y_pred_proba: Predicted probabilities.
+            objective_mode: If True, only compute the metric specified by ``tune_metric``. Defaults to False.
+            tune_metric: The metric to optimize during tuning. Defaults to "pr_macro".
         """
-        data = [y_true, y_pred, y_true_ohe, y_pred_proba]
-        data = [validate_input_type(x) for x in data if x is not None]
-        valid_mask = np.logical_and(data[0] >= 0, ~np.isnan(data[0]))
-        data = [x[valid_mask] for x in data]
-        y_true, y_pred, y_true_ohe, y_pred_proba = data
+        y_true, y_pred, y_true_ohe, y_pred_proba = [
+            validate_input_type(x) for x in (y_true, y_pred, y_true_ohe, y_pred_proba)
+        ]
 
-        if not y_true.ndim < 3:
-            msg = "y_true must have 1 or 2 dimensions."
-            self.logger.error(msg)
-            raise ValueError(msg)
+        # NOTE: This is redundant because it's handled in the calling class
+        # TODO: Remove redundancy
+        valid_mask = np.logical_and(y_true >= 0, ~np.isnan(y_true))
 
-        if not y_pred.ndim < 3:
-            msg = "y_pred must have 1 or 2 dimensions."
-            self.logger.error(msg)
-            raise ValueError(msg)
+        if not np.any(valid_mask):
+            return {tune_metric: 0.0} if objective_mode else {}
 
-        if not y_true_ohe.ndim == 2:
-            msg = "y_true_ohe must have 2 dimensions."
-            self.logger.error(msg)
-            raise ValueError(msg)
-
-        if not y_pred_proba.ndim == 2:
-            msg = "y_pred_proba must have 2 dimensions."
-            self.logger.error(msg)
-            raise ValueError(msg)
+        y_true = y_true[valid_mask]
+        y_pred = y_pred[valid_mask]
+        y_true_ohe = y_true_ohe[valid_mask]
+        y_pred_proba = y_pred_proba[valid_mask]
 
         if objective_mode:
-            if tune_metric == "pr_macro":
-                metrics = {"pr_macro": self.pr_macro(y_true_ohe, y_pred_proba)}
-            elif tune_metric == "roc_auc":
-                metrics = {"roc_auc": self.roc_auc(y_true, y_pred_proba)}
-            elif tune_metric == "average_precision":
-                metrics = {
-                    "average_precision": self.average_precision(y_true, y_pred_proba)
-                }
-            elif tune_metric == "accuracy":
-                metrics = {"accuracy": self.accuracy(y_true, y_pred)}
-            elif tune_metric == "f1":
-                metrics = {"f1": self.f1(y_true, y_pred)}
-            elif tune_metric == "precision":
-                metrics = {"precision": self.precision(y_true, y_pred)}
-            elif tune_metric == "recall":
-                metrics = {"recall": self.recall(y_true, y_pred)}
-            else:
+            metric_calculators = {
+                "pr_macro": lambda: self.pr_macro(y_true_ohe, y_pred_proba),
+                "roc_auc": lambda: self.roc_auc(y_true, y_pred_proba),
+                "average_precision": lambda: self.average_precision(
+                    y_true_ohe, y_pred_proba
+                ),
+                "accuracy": lambda: self.accuracy(y_true, y_pred),
+                "f1": lambda: self.f1(y_true, y_pred),
+                "precision": lambda: self.precision(y_true, y_pred),
+                "recall": lambda: self.recall(y_true, y_pred),
+            }
+            if tune_metric not in metric_calculators:
                 msg = f"Invalid tune_metric provided: '{tune_metric}'."
                 self.logger.error(msg)
                 raise ValueError(msg)
+
+            metrics = {tune_metric: metric_calculators[tune_metric]()}
         else:
             metrics = {
                 "accuracy": self.accuracy(y_true, y_pred),
@@ -233,75 +209,7 @@ class Scorer:
                 "precision": self.precision(y_true, y_pred),
                 "recall": self.recall(y_true, y_pred),
                 "roc_auc": self.roc_auc(y_true, y_pred_proba),
-                "average_precision": self.average_precision(y_true, y_pred_proba),
+                "average_precision": self.average_precision(y_true_ohe, y_pred_proba),
                 "pr_macro": self.pr_macro(y_true_ohe, y_pred_proba),
             }
-
         return {k: float(v) for k, v in metrics.items()}
-
-    def average_precision(self, y_true, y_pred_proba):
-        """Calculate the average precision of the model.
-
-        Args:
-            y_true (np.ndarray or torch.Tensor): Ground truth labels.
-            y_pred_proba (np.ndarray or torch.Tensor): Predicted probabilities.
-
-        Returns:
-            float: Average precision score.
-        """
-        if y_pred_proba.ndim == 3:
-            y_pred_proba = y_pred_proba.reshape(-1, y_pred_proba.shape[-1])
-
-        if y_true.ndim >= 2 and y_true.shape[-1] == y_pred_proba.shape[-1]:
-            y_true = np.argmax(y_true, axis=-1)
-
-        try:
-            return average_precision_score(y_true, y_pred_proba, average=self.average)
-        except ValueError:
-            return average_precision_score(
-                y_true, np.argmax(y_pred_proba, axis=-1), average=self.average
-            )
-
-    def pr_macro(self, y_true_ohe, y_pred_proba):
-        """Calculate the average precision of the model.
-
-        Args:
-            y_true_ohe (np.ndarray or torch.Tensor): One-hot encoded ground truth labels.
-            y_pred_proba (np.ndarray or torch.Tensor): Predicted probabilities.
-
-        Returns:
-            float: Average precision score (macro average).
-        """
-        if y_pred_proba.ndim == 3:
-            y_pred_proba = y_pred_proba.reshape(-1, y_pred_proba.shape[-1])
-
-        # Ensure y_true is properly binarized
-        num_classes = y_pred_proba.shape[1]
-        y_true = y_true_ohe
-
-        # Initialize dictionaries for metrics
-        fpr, tpr, roc_auc = {}, {}, {}
-        precision, recall, average_precision = {}, {}, {}
-
-        # Compute per-class ROC and PR metrics
-        for i in range(num_classes):
-            fpr[i], tpr[i], _ = roc_curve(y_true[:, i], y_pred_proba[:, i], pos_label=1)
-            roc_auc[i] = auc(fpr[i], tpr[i])
-            precision[i], recall[i], _ = precision_recall_curve(
-                y_true[:, i], y_pred_proba[:, i]
-            )
-            average_precision[i] = average_precision_score(
-                y_true[:, i], y_pred_proba[:, i]
-            )
-
-        # Macro-average PR
-        all_recall = np.unique(np.concatenate([recall[i] for i in range(num_classes)]))
-        mean_precision = np.zeros_like(all_recall)
-        for i in range(num_classes):
-            mean_precision += np.interp(all_recall, recall[i][::-1], precision[i][::-1])
-        mean_precision /= num_classes
-        average_precision["macro"] = average_precision_score(
-            y_true, y_pred_proba, average="macro"
-        )
-
-        return average_precision_score(y_true, y_pred_proba, average="macro")
