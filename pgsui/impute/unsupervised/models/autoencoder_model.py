@@ -236,8 +236,7 @@ class AutoencoderModel(nn.Module):
         if class_weights is None:
             class_weights = torch.ones(self.num_classes, device=y.device)
 
-        n_classes = reconstruction.shape[-1]
-        logits_flat = reconstruction.view(-1, n_classes)
+        logits_flat = reconstruction.view(-1, self.num_classes)
         targets_flat = torch.argmax(y, dim=-1).view(-1)
 
         if mask is None:
