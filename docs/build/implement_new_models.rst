@@ -106,45 +106,35 @@ Additionally, you must define your loss function within the model class to handl
 Step 2: Implement the Model Wrapper
 -----------------------------------
 
-Create a new class that wraps the model architecture. The wrapper should inherit from `BaseNNImputer` and implement the following methods:
+Create a new class that wraps the model architecture. The wrapper should inherit from `BaseNNImputer` and at least implement the following methods:
 
 1. **`fit` method:** Fit the model using the provided data.
 2. **`transform` method:** Transform and impute the data using the trained model.
-3. **`objective` method:** Define the objective function for hyperparameter tuning (if applicable).
-4. **`set_best_params` method:** Set the best hyperparameters after tuning.
+3. **`_objective` method:** Define the objective function for hyperparameter tuning (if applicable).
+4. **`_set_best_params` method:** Set the best hyperparameters after tuning.
+5. **`__init__` method:** Initialize the model wrapper and set model-specific parameters.
 
 The model wrapper class should define the model-specific parameters, such as latent dimension, hidden layer sizes, dropout rate, and activation function. The class should also set the model name and model-specific parameters in the `__init__` method.
 
 Other than the required methods, the following class attributes should be defined in the model wrapper class:
 
-- `Model`: The model class that defines the architecture.
-- `model_name`: The string name of the model (e.g., "ImputeMyNewModel").
-- `model_params`: A dictionary containing the model-specific parameters.
-- `logger`: A logger object for logging messages during training and evaluation.
-- `sim_missing_mask_`: An attribute with simulated values in the input data for evaluation purposes.
-- `original_missing_mask_`: An attribute to store the original missing values from the input data.
-- `loader_`: A data loader object for training and validation data.
-- `best_params_`: A dictionary containing the best hyperparameters after tuning.
-- `tt_`: A transformer object for encoding the input data.
-- `sim_`: A transformer object for simulating missing values.
-- `plotter_`: A plotter object for visualizing the training process.
-- `scorers_`: A dictionary of evaluation metrics.
-- `num_features_`: The number of features in the input data.
-- `num_classes_`: The number of classes in the input data.
-- `class_weights_`: Class weights for
-- `activate_`: Activation function for the final layer. Currently, only "softmax" is supported.
-- `metrics_`: Evaluation metrics of the model.
-- `tune_metric`: The metric to optimize during hyperparameter tuning.
-- `weights_log_scale`: Whether to use a log scale for class weights.
-- `weights_alpha`: The alpha parameter for class weights.
-- `weights_normalize`: Whether to normalize class weights.
-- `weights_temperature`: The temperature parameter for class weights.
-- `l1_penalty`: The L1 penalty for regularization.
-- `lr_`: The learning rate for training.
-- `gamma`: The gamma parameter for the focal loss.
-- `tune`: Whether to enable hyperparameter tuning.
-- `tune_n_trials`: The number of trials for hyperparameter tuning.
-- `n_jobs`: The number of parallel jobs for hyperparameter tuning.
+- `self.Model`: The model class defined in Step 1.
+- `self.model_name`: A string representing the name of the model.
+- `self.model_params`: A dictionary containing the model-specific parameters.
+- `self.best_params_`: A dictionary containing the best hyperparameters after tuning.
+- `self.num_classes_`: An integer representing the number of classes in the data.
+- `self.num_features_`: An integer representing the number of features in the data.
+- `self.class_weights_`: A tensor containing the class weights for the loss function.
+- `self.activate_`: A string representing the activation function for the final layer (e.g., 'softmax' or 'sigmoid').
+- `self.best_loss_`: A float representing the best loss value after training.
+- `self.model_`: The trained model instance.
+- `self.history_`: A dictionary containing the training history (e.g., loss values over epochs).
+- `self.metrics_`: A dictionary containing the evaluation metrics after training.
+- `self.tune`: A boolean indicating whether to perform hyperparameter tuning.
+- `self.tune_n_trials`: An integer representing the number of trials for hyperparameter tuning.
+- `self.n_jobs`: An integer representing the number of parallel jobs for hyperparameter tuning.
+- `self.tune_metric`: A string representing the metric to optimize during hyperparameter tuning.
+- `self.tune_save_db`: A boolean indicating whether to save the tuning results to a database.
 
 Example:
 
@@ -285,7 +275,7 @@ Example:
 
             return X_imputed
 
-        def objective(self, trial: optuna.Trial, Model: torch.nn.Module) -> float:
+        def _objective(self, trial: optuna.Trial, Model: torch.nn.Module) -> float:
             """Optimized Objective function for Optuna.
 
             This method is used as the objective function for hyperparameter tuning using Optuna. It is used to optimize the hyperparameters of the model.
@@ -364,7 +354,7 @@ Example:
                 self.reset_weights(model.phase23_decoder)
                 self.reset_weights(model)
 
-        def set_best_params(self, best_params: dict) -> dict:
+        def _set_best_params(self, best_params: dict) -> dict:
             """Set the best hyperparameters.
 
             This method sets the best hyperparameters for the model after tuning.
@@ -395,7 +385,7 @@ Example:
 
             return best_params_
 
-The `ImputeMyNewModel` class inherits from `BaseNNImputer` and defines the model-specific parameters such as latent dimension, hidden layer sizes, dropout rate, and activation function. The `fit` method initializes and trains the model, while the `transform` method imputes the missing values in the input data. The `objective` method defines the objective function for hyperparameter tuning using Optuna. The `set_best_params` method sets the best hyperparameters after tuning.
+The `ImputeMyNewModel` class inherits from `BaseNNImputer` and defines the model-specific parameters such as latent dimension, hidden layer sizes, dropout rate, and activation function. The `fit` method initializes and trains the model, while the `transform` method imputes the missing values in the input data. The `_objective` method defines the objective function for hyperparameter tuning using Optuna. The `_set_best_params` method sets the best hyperparameters after tuning.
 
 Step 3: Configure and Train the Model
 -------------------------------------
@@ -421,11 +411,10 @@ Example:
         model_learning_rate=0.001
     )
 
-    # Encode the genotype data.
-    ge = GenotypeEncoder(genotype_data)
-
     # Train the model and impute the missing values.
-    imputed_data = model.fit_transform(ge.genotypes_012)
+    model.fit()
+    imputed_data = model.transform()
+
 
 Step 4: Optional - Hyperparameter Tuning
 ----------------------------------------
@@ -453,4 +442,4 @@ Example:
 Final Remarks
 -------------
 
-By following these steps, you can define, train, and evaluate a new model using the provided framework. Be sure to implement any custom behavior in the `objective`, `fit`, `transform`, and `set_best_params` methods to match the specific needs of your model. Additionally, you can extend the model wrapper class with additional methods for evaluation, visualization, or other tasks as needed. The provided framework is designed to be flexible and extensible, allowing you to implement and integrate new models efficiently.
+By following these steps, you can define, train, and evaluate a new model using the provided framework. Be sure to implement any custom behavior in the `_objective`, `fit`, `transform`, and `_set_best_params` methods to match the specific needs of your model. Additionally, you can extend the model wrapper class with additional methods for evaluation, visualization, or other tasks as needed. The provided framework is designed to be flexible and extensible, allowing you to implement and integrate new models efficiently.

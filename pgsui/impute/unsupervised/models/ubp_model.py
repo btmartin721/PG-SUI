@@ -1,5 +1,6 @@
-import logging
+from typing import List, Literal
 
+import numpy as np
 import torch
 import torch.nn as nn
 from snpio.utils.logging import LoggerManager
@@ -8,57 +9,98 @@ from pgsui.impute.unsupervised.loss_functions import MaskedFocalLoss
 
 
 class UBPModel(nn.Module):
+    """An Unsupervised Backpropagation (UBP) model with a multi-phase decoder.
+
+    This class implements a deep neural network that serves as the decoder component in an unsupervised imputation pipeline. It's designed to reconstruct high-dimensional genomic data from a low-dimensional latent representation. The model features a unique multi-phase architecture with two distinct decoding paths:
+
+    1.  **Phase 1 Decoder:** A simple, shallow linear network.
+    2.  **Phase 2 & 3 Decoder:** A deeper, multi-layered, fully-connected network with batch normalization and dropout for regularization.
+
+    This phased approach allows for progressive training strategies. The model is tailored for two-channel allele data, where it learns to predict allele probabilities for each of the two channels at every SNP locus.
+
+    **Model Architecture:**
+
+    The model's forward pass maps a latent vector, $z$, to a reconstructed output, $\hat{x}$, via one of two paths.
+
+    -   **Phase 1 Path (Shallow Decoder):**
+        $$
+        \hat{x}_{p1} = W_{p1} z + b_{p1}
+        $$
+
+    -   **Phase 2/3 Path (Deep Decoder):**
+        This path uses a series of hidden layers with non-linear activations, $f(\cdot)$:
+        $$
+        h_1 = f(W_1 z + b_1)
+        $$
+        $$
+        \dots
+        $$
+        $$
+        h_L = f(W_L h_{L-1} + b_L)
+        $$
+        $$
+        \hat{x}_{p23} = W_{L+1} h_L + b_{L+1}
+        $$
+
+    The final output from either path is reshaped into a tensor of shape `(batch_size, n_features, n_channels, n_classes)`. The model is optimized using a `MaskedFocalLoss` function, which effectively handles the missing data and class imbalance common in genomic datasets.
+    """
+
     def __init__(
         self,
-        *,
         n_features: int,
-        prefix: str = "pgsui",
+        prefix: str,
+        *,
         num_classes: int = 3,
-        hidden_layer_sizes: list[int] = [128, 64],
+        hidden_layer_sizes: List[int] | np.ndarray = [128, 64],
         latent_dim: int = 2,
         dropout_rate: float = 0.2,
-        activation: str = "relu",
+        activation: Literal["relu", "elu", "selu", "leaky_relu"] = "relu",
         gamma: float = 2.0,
-        logger: logging.Logger | None = None,
-        verbose: int = 0,
+        device: Literal["cpu", "gpu", "mps"] = "cpu",
+        verbose: bool = False,
         debug: bool = False,
     ):
-        """Unsupervised Backpropagation (UBP) model for imputation.
-
-        This model is used to impute missing values in genotype data using unsupervised backpropagation (UBP). The model consists of three phases: 1) a linear decoder with latent space inputs that get refined to create a decent starting point for phase 2, 2) a flexible deeper network where only the weights get refined, and 3) the same deep network as phase 2 but with both the input latent dimension and the weights getting refined.
+        """Initializes the UBPModel.
 
         Args:
-            n_features (int): Number of features (SNPs) in the input data.
-            prefix (str): Prefix for the logger. Default is 'pgsui'.
-            num_classes (int): Number of classes for each feature. Default is 3.
-            hidden_layer_sizes (list[int]): List of hidden layer sizes for phases 2 and 3.
-            latent_dim (int): Dimensionality of the latent space. Default is 64.
-            dropout_rate (float): Dropout rate for regularization. Default is 0.2.
-            activation (str): Activation function for hidden layers. Default is 'relu'.
-            gamma (float): Focal loss gamma parameter. Default is 2.0.
-            logger (logging.Logger, optional): Logger instance. Default is None.
-            verbose (int): Verbosity level for logging. Default is 0.
-            debug (bool): Debug mode flag. Default is False.
+            n_features (int): The number of features (SNPs) in the input data.
+            prefix (str): A prefix used for logging.
+            num_classes (int): The number of possible allele classes (e.g., 3 for 0, 1, 2). Defaults to 3.
+            hidden_layer_sizes (list[int] | np.ndarray): A list of integers specifying the size of each hidden layer in the deep (Phase 2/3) decoder. Defaults to [128, 64].
+            latent_dim (int): The dimensionality of the input latent space. Defaults to 2.
+            dropout_rate (float): The dropout rate for regularization in the deep decoder. Defaults to 0.2.
+            activation (str): The non-linear activation function to use in the deep decoder's hidden layers. Defaults to 'relu'.
+            gamma (float): The focusing parameter for the focal loss function. Defaults to 2.0.
+            device (Literal["cpu", "gpu", "mps"]): The PyTorch device to run the model on. Defaults to 'cpu'.
+            verbose (bool): If True, enables detailed logging. Defaults to False.
+            debug (bool): If True, enables debug mode. Defaults to False.
         """
         super(UBPModel, self).__init__()
 
-        if logger is None:
-            prefix = "pgsui_output" if prefix == "pgsui" else prefix
-            logman = LoggerManager(
-                name=__name__, prefix=prefix, verbose=verbose >= 1, debug=debug
-            )
-            self.logger = logman.get_logger()
-        else:
-            self.logger = logger
+        logman = LoggerManager(
+            name=__name__, prefix=prefix, verbose=verbose, debug=debug
+        )
+        self.logger = logman.get_logger()
 
         self.n_features = n_features
         self.num_classes = num_classes
         self.latent_dim = latent_dim
         self.gamma = gamma
+        self.device = device
 
+        if isinstance(hidden_layer_sizes, np.ndarray):
+            hidden_layer_sizes = hidden_layer_sizes.tolist()
+
+        # Final layer output size is now n_features * num_classes
+        final_output_size = n_features * num_classes
+
+        # Phase 1 decoder: Simple linear model
         self.phase1_decoder = nn.Sequential(
-            nn.Linear(latent_dim, n_features * num_classes),
+            nn.Linear(latent_dim, final_output_size, device=device),
         )
+
+        # Phase 2 & 3 uses the Convolutional Decoder
+        act_factory = self._resolve_activation_factory(activation)
 
         if hidden_layer_sizes[0] > hidden_layer_sizes[-1]:
             hidden_layer_sizes = list(reversed(hidden_layer_sizes))
@@ -70,60 +112,70 @@ class UBPModel(nn.Module):
             layers.append(nn.Linear(input_dim, size))
             layers.append(nn.BatchNorm1d(size))
             layers.append(nn.Dropout(dropout_rate))
-            layers.append(self._resolve_activation(activation))
+            layers.append(act_factory())
             input_dim = size
 
-        layers.append(nn.Linear(hidden_layer_sizes[-1], n_features * num_classes))
+        layers.append(nn.Linear(hidden_layer_sizes[-1], final_output_size))
 
         self.phase23_decoder = nn.Sequential(*layers)
-        self.reshape = (n_features, num_classes)
+        self.reshape = (self.n_features, self.num_classes)
 
-    def _resolve_activation(self, activation: str) -> nn.Module:
-        """Resolve activation function by name.
+    def _resolve_activation_factory(
+        self, activation: Literal["relu", "elu", "selu", "leaky_relu"]
+    ) -> callable:
+        """Resolves an activation function factory from a string name.
 
-        This method resolves the activation function by name and returns the corresponding module.
+        This method acts as a factory, returning a callable (lambda function) that produces the desired PyTorch activation function module when called.
 
         Args:
-            activation (str): Name of the activation function.
+            activation (Literal["relu", "elu", "selu", "leaky_relu"]): The name of the activation function.
 
         Returns:
-            nn.Module: Activation function module.
+            callable: A factory function that, when called, returns an instance of the specified activation layer.
 
         Raises:
-            ValueError: If the activation function is not supported.
+            ValueError: If the provided activation name is not supported.
         """
-        activation = activation.lower()
-        if activation == "relu":
-            return nn.ReLU()
-        elif activation == "elu":
-            return nn.ELU()
-        elif activation == "leaky_relu":
-            return nn.LeakyReLU()
-        elif activation == "selu":
-            return nn.SELU()
-        else:
-            msg = f"Activation function {activation} not supported."
-            self.logger.error(msg)
-            raise ValueError(msg)
+        a = activation.lower()
+        if a == "relu":
+            return lambda: nn.ReLU()
+        if a == "elu":
+            return lambda: nn.ELU()
+        if a == "leaky_relu":
+            return lambda: nn.LeakyReLU()
+        if a == "selu":
+            return lambda: nn.SELU()
+
+        msg = f"Activation function {activation} not supported."
+        self.logger.error(msg)
+        raise ValueError(msg)
 
     def forward(self, x: torch.Tensor, phase: int = 1) -> torch.Tensor:
-        """Forward pass through the UBP model.
+        """Performs the forward pass through the UBP model.
 
-        This method performs a forward pass through the model. The phase parameter determines which decoder to use. Phase 1 uses a linear decoder, while phases 2 and 3 use a flexible deeper network. The output tensor is reshaped to the original target shape.
+        This method routes the input tensor through the appropriate decoder based on the specified training `phase`. The final output is reshaped to match the target data structure of `(batch_size, n_features, n_channels, n_classes)`.
 
         Args:
-            x (torch.Tensor): Input tensor of shape (batch_size, n_features * num_classes).
-            phase (int): Phase of training (1, 2, or 3).
+            x (torch.Tensor): The input latent tensor of shape `(batch_size, latent_dim)`.
+            phase (int): The training phase (1, 2, or 3), which determines which decoder path to use.
 
         Returns:
-            torch.Tensor: Output tensor of the same shape as the input.
+            torch.Tensor: The reconstructed output tensor.
+
+        Raises:
+            ValueError: If an invalid phase is provided.
         """
         if phase == 1:
+            # Linear decoder for phase 1
             x = self.phase1_decoder(x)
-        else:  # Phase 2 or 3
+            return x.view(-1, *self.reshape)
+        elif phase in {2, 3}:
             x = self.phase23_decoder(x)
-
-        return x.view(-1, *self.reshape)
+            return x.view(-1, *self.reshape)
+        else:
+            msg = f"Invalid phase: {phase}. Expected 1, 2, or 3."
+            self.logger.error(msg)
+            raise ValueError(msg)
 
     def compute_loss(
         self,
@@ -131,26 +183,39 @@ class UBPModel(nn.Module):
         outputs: torch.Tensor,
         mask: torch.Tensor | None = None,
         class_weights: torch.Tensor | None = None,
+        gamma: float = 2.0,
     ) -> torch.Tensor:
-        """Compute the masked focal loss between predictions and targets.
+        """Computes the masked focal loss between model outputs and ground truth.
 
-        This method computes the masked focal loss between the model predictions and the ground truth labels. The mask tensor is used to ignore certain values (< 0), and class weights can be provided to balance the loss. The focal loss is a variant of the cross-entropy loss that focuses on hard-to-classify examples. It is useful for imbalanced datasets. The loss is computed as: L = -α_t * (1 - p_t)^γ * log(p_t), where α_t is the class weight, p_t is the predicted probability, and γ is the focal loss gamma parameter.
+        This method calculates the loss value, handling class imbalance with weights and ignoring masked (missing) values in the ground truth tensor.
 
         Args:
-            y (torch.Tensor): Ground truth labels of shape (batch, seq).
-            outputs (torch.Tensor): Model outputs.
-            mask (torch.Tensor, optional): Mask tensor to ignore certain values. If None, all values are used. Default is None.
-            class_weights (torch.Tensor, optional): Class weights for the loss. If None, all classes are weighted equally. Default is None.
+            y (torch.Tensor): The ground truth tensor of shape `(batch_size, n_features, n_channels)`.
+            outputs (torch.Tensor): The model's raw output (logits) of shape `(batch_size, n_features, n_channels, n_classes)`.
+            mask (torch.Tensor | None): An optional boolean mask indicating which elements should be included in the loss calculation.
+            class_weights (torch.Tensor | None): An optional tensor of weights for each class to address imbalance.
+            gamma (float): The focusing parameter for the focal loss.
 
         Returns:
-            torch.Tensor: Computed focal loss value.
+            torch.Tensor: The computed scalar loss value.
         """
         if class_weights is None:
-            class_weights = torch.ones(self.num_classes, device=y.device)
+            class_weights = torch.ones(self.num_classes, device=outputs.device)
 
         if mask is None:
             mask = torch.ones_like(y, dtype=torch.bool)
 
-        criterion = MaskedFocalLoss(alpha=class_weights, gamma=self.gamma)
-        reconstruction_loss = criterion(outputs, y, valid_mask=mask)
-        return reconstruction_loss
+        # Explicitly flatten all tensors to the (N, C) and (N,) format.
+        # This creates a clear contract with the new MaskedFocalLoss function.
+        n_classes = outputs.shape[-1]
+        logits_flat = outputs.reshape(-1, n_classes)
+        targets_flat = y.reshape(-1)
+        mask_flat = mask.reshape(-1)
+
+        criterion = MaskedFocalLoss(gamma=gamma, alpha=class_weights)
+
+        return criterion(
+            logits_flat.to(self.device),
+            targets_flat.to(self.device),
+            valid_mask=mask_flat.to(self.device),
+        )

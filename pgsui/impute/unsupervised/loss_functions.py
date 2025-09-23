@@ -1,163 +1,158 @@
-from typing import Dict, List, Literal
+from typing import List, Literal
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from snpio.utils.logging import LoggerManager
 
 
-class MaskedFocalLoss(nn.Module):
+class WeightedMaskedCCELoss(nn.Module):
     def __init__(
         self,
-        class_weights: Dict[str, float] | None = None,
-        alpha: float | List[float] = None,
-        gamma: float = 2.0,
+        alpha: float | List[float] | torch.Tensor | None = None,
         reduction: Literal["mean", "sum"] = "mean",
-        verbose: int = 0,
-        debug: bool = False,
     ):
-        """Compute the masked focal loss between predictions and targets.
+        """A weighted, masked Categorical Cross-Entropy loss function.
 
-        This class is used to compute the masked focal loss between model predictions and ground truth labels. The focal loss is a variant of the cross-entropy loss that focuses on hard-to-classify examples. The loss is computed as:
-
-        .. math::
-            L(p_t) = -\\alpha_t (1 - p_t)^\\gamma \\log(p_t)
-
-        where :math:`p_t` is the predicted probability, :math:`\\alpha_t` is the class weight, and :math:`\\gamma` is the focusing parameter. The loss can be reduced by taking the mean or sum of the sample losses.
+        This method computes the categorical cross-entropy loss while allowing for class weights and masking of invalid (missing) entries. It is particularly useful for sequence data where some positions may be missing or should not contribute to the loss calculation.
 
         Args:
-            class_weights (list, optional): Class weights for imbalanced data. Default is None.
-            alpha (float, list, optional): Weighting factor for the focal loss. Default is None.
-            gamma (float, optional): Focusing parameter for the focal loss. Default is 2.0.
-            reduction (str, optional): Reduction method for the loss. Must be one of {"mean", "sum"}. Default is "mean".
-            verbose (int, optional): Verbosity level for logging messages. Default is 0.
-            debug (bool, optional): Debug mode for logging messages. Default is False.
-
-        Example:
-            >>> import torch
-            >>> from pgsui.impute.unsupervised.loss_functions import MaskedFocalLoss
-            >>> predictions = torch.randn(2, 3, 5)
-            >>> targets = torch.randint(0, 5, (2, 3))
-            >>> criterion = MaskedFocalLoss(alpha=0.25, gamma=2.0)
-            >>> loss = criterion(predictions, targets)
-            >>> print(loss)
-            tensor(1.1539)
+            alpha (float | List | Tensor | None): A manual rescaling weight given to each class. If given, has to be a Tensor of size C (number of classes). Defaults to None.
+            reduction (str, optional): Specifies the reduction to apply to the output: 'mean' or 'sum'. Defaults to "mean".
         """
-        super(MaskedFocalLoss, self).__init__()
-
-        if isinstance(class_weights, list):
-            class_weights = torch.tensor(class_weights, dtype=torch.float)
-
-        self.class_weights = class_weights
-        self.alpha = alpha
-
-        if isinstance(self.alpha, list):
-            self.alpha = torch.tensor(self.alpha, dtype=torch.float)
-
-        self.gamma = gamma
+        super(WeightedMaskedCCELoss, self).__init__()
         self.reduction = reduction
-
-        logman = LoggerManager(
-            name=__name__, prefix="pgsui", debug=debug, verbose=verbose >= 1
-        )
-        self.logger = logman.get_logger()
+        self.alpha = alpha
 
     def forward(
         self,
-        predictions: torch.Tensor,
+        logits: torch.Tensor,
         targets: torch.Tensor,
         valid_mask: torch.Tensor | None = None,
-    ):
-        """Compute the masked focal loss between predictions and targets.
-
-        This method computes the masked focal loss between the model predictions and the ground truth labels. The mask tensor is used to ignore certain values (< 0), and class weights can be provided to balance the loss.
+    ) -> torch.Tensor:
+        """Compute the masked categorical cross-entropy loss.
 
         Args:
-            predictions (torch.Tensor): Model predictions of shape (batch, seq, num_classes).
-            targets (torch.Tensor): Ground truth labels of shape (batch, seq) or (batch, seq, num_classes).
-            valid_mask (torch.Tensor, optional): Mask tensor to ignore certain values. Default is None.
+            logits (torch.Tensor): Logits from the model of shape
+                (batch_size, seq_len, num_classes).
+            targets (torch.Tensor): Ground truth labels of shape (batch_size, seq_len).
+            valid_mask (torch.Tensor, optional): Boolean mask of shape (batch_size, seq_len) where True indicates a valid (observed) value to include in the loss.
+                Defaults to None, in which case all values are considered valid.
 
         Returns:
-            torch.Tensor: Computed focal loss value.
-
-        Raises:
-            ValueError: If the targets shape is invalid.
-            ValueError: If the alpha type is invalid.
-            ValueError: If the class weights size does not match the number of classes.
-            ValueError: If the reduction type is invalid. Must be "mean" or "sum".
+            torch.Tensor: The computed scalar loss value.
         """
-        num_classes = predictions.shape[-1]
+        # Automatically detect the device from the input tensor
+        device = logits.device
+        num_classes = logits.shape[-1]
 
-        # Validate targets shape
-        if targets.dim() == 3 and targets.size(-1) == num_classes:
-            targets = torch.argmax(targets, dim=-1)
-        elif targets.dim() != 2:
-            msg = "Targets must have shape (batch, seq) or (batch, seq, num_classes)."
-            self.logger.error(msg)
-            raise ValueError(msg)
+        # Ensure targets are on the correct device and are Long type
+        targets = targets.to(device).long()
 
-        # Flatten predictions and targets
-        predictions_2d = predictions.view(-1, num_classes)
-        targets_1d = targets.view(-1)
-        valid_mask = valid_mask.view(-1)
+        # Prepare weights and pass them directly to the loss function
+        class_weights = None
+        if self.alpha is not None:
+            if not isinstance(self.alpha, torch.Tensor):
+                class_weights = torch.tensor(
+                    self.alpha, dtype=torch.float, device=device
+                )
+            else:
+                class_weights = self.alpha.to(device)
 
-        # Mask invalid values
-        if valid_mask.sum() == 0:
-            self.logger.warning("No valid targets found. Returning zero loss.")
-            return predictions_2d.new_tensor(0.0)
+        loss = F.cross_entropy(
+            logits.reshape(-1, num_classes),
+            targets.reshape(-1),
+            weight=class_weights,
+            reduction="none",
+            ignore_index=-1,  # Ignore all targets with the value -1
+        )
 
-        valid_preds = predictions_2d[valid_mask]
-        valid_tgts = targets_1d[valid_mask]
-        valid_tgts = valid_tgts.long()
+        # If a mask is provided, filter the losses for the training set
+        if valid_mask is not None:
+            loss = loss[valid_mask.reshape(-1)]
 
-        # Compute probabilities and log probabilities.
-        gathered_probs = F.softmax(valid_preds, dim=-1)[
-            torch.arange(valid_tgts.size(0)), valid_tgts
-        ]
+        # If after masking no valid losses remain, return 0
+        if loss.numel() == 0:
+            return torch.tensor(0.0, device=device)
 
-        # Clamp probabilities to avoid log(0) for numerical stability.
-        eps = 1e-6
-        gathered_probs = gathered_probs.clamp(min=eps, max=1 - eps)
-        gathered_log_probs = torch.log(gathered_probs)
-
-        # Compute focal loss factor
-        focal_factor = (1.0 - gathered_probs).pow(self.gamma)
-
-        # Compute alpha factor
-        if self.alpha is None:
-            alpha_factor = 1.0
-
-        elif isinstance(self.alpha, float):
-            alpha_factor = self.alpha
-
-        elif isinstance(self.alpha, torch.Tensor):
-            alpha_factor = self.alpha[valid_tgts]
-
+        # Apply the final reduction
+        if self.reduction == "mean":
+            return loss.mean()
+        elif self.reduction == "sum":
+            return loss.sum()
         else:
-            pstr = type(self.alpha)
-            msg = f"Invalid alpha type: {pstr}. Expected float or torch.Tensor."
-            self.logger.error(msg)
+            msg = f"Reduction mode '{self.reduction}' not supported."
             raise ValueError(msg)
 
-        # Compute sample losses
-        sample_losses = -gathered_log_probs * focal_factor * alpha_factor
 
-        # Apply class weights if provided.
-        if self.class_weights is not None:
-            if self.class_weights.size(0) != num_classes:
-                msg = "Mismatch in class_weights size."
-                self.logger.error(msg)
-                raise ValueError(msg)
-            sample_losses *= self.class_weights[valid_tgts]
+class MaskedFocalLoss(nn.Module):
+    """Focal loss (gamma > 0) with optional class weights and a boolean valid mask.
 
-        # Reduce loss based on reduction type (mean or sum).
-        if self.reduction == "sum":
-            loss = sample_losses.sum()
-        elif self.reduction == "mean":
-            loss = sample_losses.sum() / valid_mask.sum()
+    This method implements the focal loss function, which is designed to address class imbalance by down-weighting easy examples and focusing training on hard negatives. It also supports masking of invalid (missing) entries, making it suitable for sequence data with missing values.
+    """
+
+    def __init__(
+        self,
+        gamma: float = 2.0,
+        alpha: torch.Tensor | None = None,
+        reduction: Literal["mean", "sum"] = "mean",
+    ):
+        """Initialize the MaskedFocalLoss.
+
+        This class sets up the focal loss with specified focusing parameter, class weights, and reduction method. It is designed to handle missing data through a valid mask, ensuring that only relevant entries contribute to the loss calculation.
+
+        Args:
+            gamma (float): Focusing parameter.
+            alpha (torch.Tensor | None): Class weights.
+            reduction (Literal["mean", "sum"]): Reduction mode ('mean' or 'sum').
+        """
+        super().__init__()
+        self.gamma = gamma
+        self.alpha = alpha
+        self.reduction = reduction
+
+    def forward(
+        self,
+        logits: torch.Tensor,  # Expects (N, C) where N = batch*features
+        targets: torch.Tensor,  # Expects (N,)
+        valid_mask: torch.Tensor,  # Expects (N,)
+    ) -> torch.Tensor:
+        """Calculates the focal loss on pre-flattened tensors.
+
+        Args:
+            logits (torch.Tensor): Logits from the model of shape (N, C) where N is the number of samples (batch_size * seq_len) and C is the number of classes.
+            targets (torch.Tensor): Ground truth labels of shape (N,).
+            valid_mask (torch.Tensor): Boolean mask of shape (N,) where True indicates a valid (observed) value to include in the loss.
+
+        Returns:
+            torch.Tensor: The computed scalar loss value.
+        """
+        device = logits.device
+
+        # Calculate standard cross-entropy loss per-token (no reduction)
+        ce = F.cross_entropy(
+            logits,
+            targets,
+            weight=(self.alpha.to(device) if self.alpha is not None else None),
+            reduction="none",
+            ignore_index=-1,
+        )
+
+        # Calculate p_t from the cross-entropy loss
+        pt = torch.exp(-ce)
+        focal = ((1 - pt) ** self.gamma) * ce
+
+        # Apply the valid mask. We select only the elements that should contribute to the loss.
+        focal = focal[valid_mask]
+
+        # Return early if no valid elements exist to avoid NaN results
+        if focal.numel() == 0:
+            return torch.tensor(0.0, device=device)
+
+        # Apply reduction
+        if self.reduction == "mean":
+            return focal.mean()
+        elif self.reduction == "sum":
+            return focal.sum()
         else:
-            msg = f"Unsupported reduction type: {self.reduction}. Use 'mean' or 'sum'."
-            self.logger.error(msg)
+            msg = f"Reduction mode '{self.reduction}' not supported."
             raise ValueError(msg)
-
-        return loss

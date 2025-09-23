@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pg-sui"
-version = "1.5.1"
+version = "1.6.0"
 description = "Python machine and deep learning API to impute missing genotypes"
 readme = "README.md"
 authors = [
@@ -78,7 +78,11 @@ dev = [
     "sphinx-autodoc-typehints",
     "sphinxcontrib-napoleon",
     "sphinxcontrib-programoutput",
-    "requests"
+    "requests",
+    "PyObjC"
+]
+optional = [
+    "PyObjC"
 ]
 
 [project.urls]

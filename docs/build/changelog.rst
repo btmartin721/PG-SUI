@@ -4,6 +4,15 @@ Changelog
 
 Overview of the changes made to PG-SUI for each release.
 
+Version 1.6.0 - 2025-09-23
+--------------------------
+
+Features
+^^^^^^^^
+
+- Fully functional models. Ready for validation
+- Models include: ``ImputeAutoencoder``, ``ImputeNLPCA``, ``ImputeUBP``, ``ImputeVAE``, ``ImputeRandomForest``, ``ImputeHistGradientBoosting``
+
 Version 1.5.1 - 2025-02-07
 --------------------------
 

@@ -1,6 +1,6 @@
-import logging
-from typing import List
+from typing import List, Literal
 
+import numpy as np
 import torch
 import torch.nn as nn
 from snpio.utils.logging import LoggerManager
@@ -8,296 +8,276 @@ from snpio.utils.logging import LoggerManager
 from pgsui.impute.unsupervised.loss_functions import MaskedFocalLoss
 
 
-def get_activation(activation: str | nn.Module) -> nn.Module:
-    """Resolve activation function by name.
-
-    This method resolves the activation function by name and returns the corresponding module.
-
-    Args:
-        activation (str | nn.Module): Name of the activation function or the activation function module itself.
-
-    Returns:
-        nn.Module: Activation function module.
-
-    Raises:
-        ValueError: If the activation function is not supported
-    """
-
-    if isinstance(activation, str):
-        act = activation.lower().strip()
-
-        if act in {"leaky_relu", "leakyrelu"}:
-            act = "leaky_relu"
-
-        if act == "relu":
-            return nn.ReLU()
-        elif act == "elu":
-            return nn.ELU()
-        elif act == "selu":
-            return nn.SELU()
-        elif act == "leaky_relu":
-            return nn.LeakyReLU()
-        else:
-            raise ValueError(f"Unsupported activation: {activation}")
-    elif isinstance(activation, nn.Module):
-        return activation
-    else:
-        raise ValueError("activation must be a string or nn.Module")
-
-
 class Encoder(nn.Module):
-    """Encoder network for the autoencoder model.
+    """The Encoder module of a standard Autoencoder.
 
-    Encodes an input of shape (batch_size, n_features, num_classes) into a latent representation. This is the first part of the autoencoder. The encoder is a feedforward neural network with hidden layers and an output layer. The output layer is the latent representation. The encoder is used to compress the input data into a lower-dimensional latent space. The latent representation is then used by the decoder to reconstruct the input data. The encoder is trained to minimize the reconstruction error between the input and the output of the decoder. The encoder is used to learn a compact representation of the input data that captures the most important features. The encoder is used in unsupervised learning to learn a representation of the input data that can be used for other tasks, such as clustering or classification.
+    This module defines the encoder network, which takes high-dimensional input data and maps it to a deterministic, low-dimensional latent representation. The architecture consists of a series of fully-connected hidden layers that progressively compress the flattened input data into a single latent vector, `z`.
     """
 
     def __init__(
         self,
         n_features: int,
-        num_classes: int = 3,
-        hidden_layer_sizes: list[int] = [128, 64],
-        latent_dim: int = 2,
-        dropout_rate: float = 0.2,
-        activation: str = "relu",
-        gamma: float = 2.0,
+        num_classes: int,
+        latent_dim: int,
+        hidden_layer_sizes: List[int],
+        dropout_rate: float,
+        activation: torch.nn.Module,
     ):
-        """Initialize the Encoder network.
+        """Initializes the Encoder module.
 
-        This module encodes an input tensor of shape (batch_size, n_features, num_classes) into a latent representation. The encoder is a feedforward neural network with hidden layers and an output layer. The output layer is the latent representation. The encoder is used to compress the input data into a lower-dimensional latent space. The latent representation is then used by the decoder to reconstruct the input data. The encoder is trained to minimize the reconstruction error between the input and the output of the decoder. The encoder is used to learn a compact representation of the input data that captures the most important features. The encoder is used in unsupervised learning to learn a representation of the input data that can be used for other tasks, such as clustering or classification.
+        This class defines the encoder network, which takes high-dimensional input data and maps it to a deterministic, low-dimensional latent representation. The architecture consists of a series of fully-connected hidden layers that progressively compress the flattened input data into a single latent vector, `z`.
 
         Args:
-            n_features (int): Number of features.
-            num_classes (int): Number of classes.
-            latent_dim (int): Dimension of the latent representation.
-            hidden_layer_sizes (List[int]): List of hidden layer sizes.
-            dropout_rate (float): Dropout rate.
-            activation (str or nn.Module): Activation function to use.
-            gamma (float): Focal loss gamma parameter.
+            n_features (int): The number of features in the input data (e.g., SNPs).
+            num_classes (int): The number of possible classes for each input element (e.g., 4 alleles).
+            latent_dim (int): The dimensionality of the output latent space.
+            hidden_layer_sizes (List[int]): A list of integers specifying the size of each hidden layer.
+            dropout_rate (float): The dropout rate for regularization in the hidden layers.
+            activation (torch.nn.Module): An instantiated activation function module (e.g., `nn.ReLU()`) for the hidden layers.
         """
         super(Encoder, self).__init__()
+        self.flatten = nn.Flatten()
 
-        self.n_features = n_features
-        self.num_classes = num_classes
-        self.latent_dim = latent_dim
-        self.dropout_rate = dropout_rate
-        self.gamma = gamma
-
-        # Calculate the input dimension (flattened input)
+        layers = []
         input_dim = n_features * num_classes
-
-        # Build the hidden layers dynamically.
-        layers = nn.ModuleList()
-        for size in hidden_layer_sizes:
-            layers.append(nn.Linear(input_dim, size))
-            layers.append(nn.BatchNorm1d(size))
+        for hidden_size in hidden_layer_sizes:
+            layers.append(nn.Linear(input_dim, hidden_size))
+            layers.append(nn.BatchNorm1d(hidden_size))
             layers.append(nn.Dropout(dropout_rate))
-            layers.append(get_activation(activation))
-            input_dim = size
+            layers.append(activation)
+            input_dim = hidden_size
 
-        # Final latent layer.
-        layers.append(nn.Linear(input_dim, latent_dim))
-        layers.append(get_activation(activation))
-        self.encoder = nn.Sequential(*layers)
+        self.hidden_layers = nn.Sequential(*layers)
+        self.dense_z = nn.Linear(input_dim, latent_dim)
 
-    def forward(self, x):
-        """Forward pass through the encoder.
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Performs the forward pass through the encoder.
 
         Args:
-            x (torch.Tensor): Input tensor of shape (batch_size, n_features, num_classes).
+            x (torch.Tensor): The input data tensor of shape `(batch_size, n_features, num_classes)`.
 
         Returns:
-            torch.Tensor: Latent representation tensor.
+            torch.Tensor: The latent representation `z` of shape `(batch_size, latent_dim)`.
         """
-        x = x.view(x.size(0), self.num_classes * self.n_features)
-        return self.encoder(x)
+        x = self.flatten(x)
+        x = self.hidden_layers(x)
+        z = self.dense_z(x)
+        return z
 
 
 class Decoder(nn.Module):
-    """Decoder network for the autoencoder model.
+    """The Decoder module of a standard Autoencoder.
 
-    Decodes the latent representation back to a tensor with shape (batch_size, n_features, num_classes). This is the reconstruction of the input. The decoder is the second part of the autoencoder. The decoder is a feedforward neural network with hidden layers and an output layer. The output layer is the reconstructed input. The decoder is trained to minimize the reconstruction error between the input and the output. The decoder is used to reconstruct the input data from the latent representation learned by the encoder. The decoder is used to generate new data points by sampling from the latent space. The decoder is used in unsupervised learning to generate new data points that are similar to the input data. The decoder is used in generative modeling to generate new data points that follow the same distribution as the input data.
+    This module defines the decoder network, which takes a deterministic latent vector and maps it back to the high-dimensional data space, aiming to reconstruct the original input. The architecture typically mirrors the encoder, consisting of a series of fully-connected hidden layers that progressively expand the representation, followed by a final linear layer to produce the reconstructed data.
     """
 
     def __init__(
         self,
         n_features: int,
-        num_classes: int = 3,
-        hidden_layer_sizes: list[int] = [128, 64],
-        latent_dim: int = 2,
-        dropout_rate: float = 0.2,
-        activation: str = "relu",
-        gamma: float = 2.0,
-    ):
-        """
-        Initialize the Decoder network.
-
-        This module decodes the latent representation back to a tensor with shape (batch_size, n_features, num_classes). This is the reconstruction of the input. The decoder is the second part of the autoencoder. The decoder is a feedforward neural network with hidden layers and an output layer. The output layer is the reconstructed input. The decoder is trained to minimize the reconstruction error between the input and the output. The decoder is used to reconstruct the input data from the latent representation learned by the encoder. The decoder is used to generate new data points by sampling from the latent space. The decoder is used in unsupervised learning to generate new data points that are similar to the input data. The decoder is used in generative modeling to generate new data points that follow the same distribution as the input data.
+        num_classes: int,
+        latent_dim: int,
+        hidden_layer_sizes: List[int],
+        dropout_rate: float,
+        activation: torch.nn.Module,
+    ) -> None:
+        """Initializes the Decoder module.
 
         Args:
-            n_features (int): Number of features.
-            num_classes (int): Number of classes.
-            latent_dim (int): Dimension of the latent representation.
-            hidden_layer_sizes (List[int]): List of hidden layer sizes for the decoder.
-            dropout_rate (float): Dropout rate.
-            activation (str or nn.Module): Activation function to use.
+            n_features (int): The number of features in the output data (e.g., SNPs).
+            num_classes (int): The number of possible classes for each output element (e.g., 4 alleles).
+            latent_dim (int): The dimensionality of the input latent space.
+            hidden_layer_sizes (List[int]): A list of integers specifying the size of each hidden layer (typically the reverse of the encoder's).
+            dropout_rate (float): The dropout rate for regularization in the hidden layers.
+            activation (torch.nn.Module): An instantiated activation function module (e.g., `nn.ReLU()`) for the hidden layers.
         """
         super(Decoder, self).__init__()
 
-        self.n_features = n_features
-        self.num_classes = num_classes
-        self.hidden_layer_sizes = hidden_layer_sizes
-        self.latent_dim = latent_dim
-        self.dropout_rate = dropout_rate
-        self.gamma = gamma
-
-        output_dim = n_features * num_classes
-
-        # Build the hidden layers.
-        layers = nn.ModuleList()
+        layers = []
         input_dim = latent_dim
-        for size in hidden_layer_sizes:
-            layers.append(nn.Linear(input_dim, size))
-            layers.append(nn.BatchNorm1d(size))
+        for hidden_size in hidden_layer_sizes:
+            layers.append(nn.Linear(input_dim, hidden_size))
+            layers.append(nn.BatchNorm1d(hidden_size))
             layers.append(nn.Dropout(dropout_rate))
-            layers.append(get_activation(activation))
-            input_dim = size
+            layers.append(activation)
+            input_dim = hidden_size
 
-        # Final output layer
-        # No activation function here, as it gets applied later.
-        layers.append(nn.Linear(hidden_layer_sizes[-1], output_dim))
-        self.decoder = nn.Sequential(*layers)
+        self.hidden_layers = nn.Sequential(*layers)
+        output_dim = n_features * num_classes
+        self.dense_output = nn.Linear(input_dim, output_dim)
+        self.reshape = (n_features, num_classes)
 
-    def forward(self, x):
-        """Forward pass through the decoder.
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Performs the forward pass through the decoder.
 
         Args:
-            x (torch.Tensor): Latent representation tensor.
+            x (torch.Tensor): The input latent tensor of shape `(batch_size, latent_dim)`.
 
         Returns:
-            torch.Tensor: Reconstructed tensor of shape (batch_size, n_features, num_classes).
+            torch.Tensor: The reconstructed output data of shape `(batch_size, n_features, num_classes)`.
         """
-        x = self.decoder(x)
-        x = x.view(-1, self.n_features, self.num_classes)
-        return x
+        x = self.hidden_layers(x)
+        x = self.dense_output(x)
+        return x.view(-1, *self.reshape)
 
 
 class AutoencoderModel(nn.Module):
-    """Autoencoder model for unsupervised learning.
+    """A standard Autoencoder (AE) model for imputation.
 
-    This autoencoder is intended to predict three classes (0, 1, and 2) and is  designed to help address class imbalance. The model consists of an encoder  and decoder, with an optional final activation. No final activation function is applied, so outputs must be passed through an activation function, such as a softmax. The model uses a focal loss for training. The encoder and decoder are built with the specified hidden layer sizes and latent dimension. The latent dimension is the dimension of the latent representation. The dropout rate is applied to the hidden layers. The activation function is applied to the hidden layers. The gamma parameter is used in the focal loss. The model is used for unsupervised learning to learn a representation of the input data that can be used for other tasks, such as clustering or classification.
+    This class combines an `Encoder` and a `Decoder` to form a standard autoencoder. The model is trained to learn a compressed, low-dimensional representation of the input data and then reconstruct it as accurately as possible. It is particularly useful for unsupervised dimensionality reduction and data imputation.
+
+    **Model Architecture and Objective:**
+    The autoencoder consists of two parts: an encoder, $f_{\theta}$, and a decoder, $g_{\phi}$.
+    1.  The **encoder** maps the input data $x$ to a latent representation $z$:
+        $$
+        z = f_{\theta}(x)
+        $$
+    2.  The **decoder** reconstructs the data $\hat{x}$ from the latent representation:
+        $$
+        \hat{x} = g_{\phi}(z)
+        $$
+
+    The model is trained by minimizing a reconstruction loss, $L(x, \hat{x})$, which measures the dissimilarity between the original input and the reconstructed output. This implementation uses a `MaskedFocalLoss` to handle missing values and class imbalance effectively.
     """
 
     def __init__(
         self,
-        *,
         n_features: int,
-        prefix: str = "psgui",
-        num_classes: int = 3,
-        hidden_layer_sizes: List[int] = [128, 64],
+        prefix: str,
+        *,
+        num_classes: int = 4,
+        hidden_layer_sizes: List[int] | np.ndarray = [128, 64],
         latent_dim: int = 2,
         dropout_rate: float = 0.2,
-        activation: str = "relu",
+        activation: Literal["relu", "elu", "selu", "leaky_relu"] = "relu",
         gamma: float = 2.0,
-        logger: logging.Logger | None = None,
-        verbose: int = 0,
+        device: Literal["cpu", "gpu", "mps"] = "cpu",
+        verbose: bool = False,
         debug: bool = False,
     ):
-        """Initialize the Autoencoder model.
-
-        This model is designed to predict three classes (0, 1, and 2) and is intended to help address class imbalance. The model consists of an encoder and decoder. No final activation function is applied, so outputs must be passed through an activation function, such as a softmax. The model uses a focal loss for training. The encoder and decoder are built with the specified hidden layer sizes and latent dimension. The latent dimension is the dimension of the latent representation. The dropout rate is applied to the hidden layers. The activation function is applied to the hidden layers. The gamma parameter is used in the focal loss. The model is used for unsupervised learning to learn a representation of the input data that can be used for other tasks, such as clustering or classification.
+        """Initializes the AutoencoderModel.
 
         Args:
-            n_features (int): Number of features.
-            num_classes (int): Number of classes. Default is 3.
-            hidden_layer_sizes (List[int]): List of hidden layer sizes. Default is [128, 64].
-            latent_dim (int): Dimension of the latent representation. Default is 2.
-            dropout_rate (float): Dropout rate. Default is 0.2.
-            activation (str): Activation function to use. Default is "relu".
-            gamma (float): Focal loss gamma parameter. Default is 2.0.
+            n_features (int): The number of features in the input data (e.g., SNPs).
+            prefix (str): A prefix used for logging.
+            num_classes (int): The number of possible classes for each input element. Defaults to 4.
+            hidden_layer_sizes (List[int] | np.ndarray): A list of integers specifying the size of each hidden layer in the encoder. The decoder will use the reverse of this structure. Defaults to [128, 64].
+            latent_dim (int): The dimensionality of the latent space (bottleneck). Defaults to 2.
+            dropout_rate (float): The dropout rate for regularization in hidden layers. Defaults to 0.2.
+            activation (Literal["relu", "elu", "selu", "leaky_relu"]): The name of the activation function for hidden layers. Defaults to "relu".
+            gamma (float): The focusing parameter for the focal loss function. Defaults to 2.0.
+            device (Literal["cpu", "gpu", "mps"]): The device to run the model on.
+            verbose (bool): If True, enables detailed logging.
+            debug (bool): If True, enables debug mode.
         """
         super(AutoencoderModel, self).__init__()
-        self.n_features = n_features
         self.num_classes = num_classes
-        self.hidden_layer_sizes = hidden_layer_sizes
-        self.latent_dim = latent_dim
-        self.dropout_rate = dropout_rate
-        self.activation = activation
         self.gamma = gamma
+        self.device = device
 
-        if logger is None:
-            prefix = "pgsui_output" if prefix == "pgsui" else prefix
-            logman = LoggerManager(
-                name=__name__, prefix=prefix, verbose=verbose >= 1, debug=debug
-            )
-            self.logger = logman.get_logger()
-        else:
-            self.logger = logger
+        logman = LoggerManager(
+            name=__name__, prefix=prefix, verbose=verbose, debug=debug
+        )
+        self.logger = logman.get_logger()
 
-        # For the encoder, multiply each hidden layer size by num_classes.
-        encoder_hidden_sizes = [h * num_classes for h in hidden_layer_sizes]
-
-        # For the decoder, reverse the encoder hidden sizes.
-        decoder_hidden_sizes = list(reversed(encoder_hidden_sizes))
+        activation_module = self._resolve_activation(activation)
 
         self.encoder = Encoder(
-            n_features=n_features,
-            num_classes=num_classes,
-            hidden_layer_sizes=encoder_hidden_sizes,
-            latent_dim=latent_dim,
-            dropout_rate=dropout_rate,
-            activation=activation,
-            gamma=gamma,
+            n_features,
+            self.num_classes,
+            latent_dim,
+            hidden_layer_sizes,
+            dropout_rate,
+            activation_module,
         )
 
+        decoder_layer_sizes = list(reversed(hidden_layer_sizes))
         self.decoder = Decoder(
-            n_features=n_features,
-            num_classes=num_classes,
-            hidden_layer_sizes=decoder_hidden_sizes,
-            latent_dim=latent_dim,
-            dropout_rate=dropout_rate,
-            activation=activation,
-            gamma=gamma,
+            n_features,
+            self.num_classes,
+            latent_dim,
+            decoder_layer_sizes,
+            dropout_rate,
+            activation_module,
         )
 
-    def forward(self, x):
-        """Forward pass through the autoencoder.
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Performs the forward pass through the full Autoencoder model.
 
         Args:
-            x (torch.Tensor): Input tensor of shape (batch_size, n_features, num_classes).
+            x (torch.Tensor): The input data tensor of shape `(batch_size, n_features, num_classes)`.
 
         Returns:
-            torch.Tensor: Reconstructed output tensor.
+            torch.Tensor: The reconstructed data tensor.
         """
-        latent = self.encoder(x)
-        reconstruction = self.decoder(latent)
+        z = self.encoder(x)
+        reconstruction = self.decoder(z)
         return reconstruction
 
     def compute_loss(
         self,
+        reconstruction: torch.Tensor,
         y: torch.Tensor,
-        outputs: torch.Tensor,
         mask: torch.Tensor | None = None,
         class_weights: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Compute the masked focal loss between predictions and targets.
+        """Computes the reconstruction loss for the Autoencoder model.
 
-        This method computes the masked focal loss between the model predictions and the ground truth labels. The mask tensor is used to ignore certain values (< 0), and class weights can be provided to balance the loss. The focal loss is a modified version of the cross-entropy loss that focuses on hard-to-classify examples. The focal loss is used to address class imbalance and improve the performance of the model.
+        This method calculates the reconstruction loss using a masked focal loss, which is suitable for categorical data with missing values and class imbalance.
 
         Args:
-            y (torch.Tensor): Ground truth labels of shape (batch, seq).
-            outputs (torch.Tensor): Model outputs.
-            mask (torch.Tensor, optional): Mask tensor to ignore certain values. Default is None.
-            class_weights (torch.Tensor, optional): Class weights for the loss. Default is None.
+            reconstruction (torch.Tensor): The reconstructed output (logits) from the model's forward pass.
+            y (torch.Tensor): The target data tensor, expected to be one-hot encoded. It is converted to class indices internally for the loss calculation.
+            mask (torch.Tensor | None): A boolean mask to exclude missing values from the loss calculation.
+            class_weights (torch.Tensor | None): Weights to apply to each class in the loss to handle imbalance.
 
         Returns:
-            torch.Tensor: Computed focal loss value.
+            torch.Tensor: The computed scalar loss value.
         """
         if class_weights is None:
             class_weights = torch.ones(self.num_classes, device=y.device)
 
+        logits_flat = reconstruction.view(-1, self.num_classes)
+        targets_flat = torch.argmax(y, dim=-1).view(-1)
+
         if mask is None:
-            mask = torch.ones_like(y, dtype=torch.bool)
+            mask_flat = torch.ones_like(targets_flat, dtype=torch.bool)
+        else:
+            mask_flat = mask.view(-1)
 
         criterion = MaskedFocalLoss(alpha=class_weights, gamma=self.gamma)
-        reconstruction_loss = criterion(outputs, y, valid_mask=mask)
+
+        reconstruction_loss = criterion(
+            logits_flat.to(self.device),
+            targets_flat.to(self.device),
+            valid_mask=mask_flat.to(self.device),
+        )
+
         return reconstruction_loss
+
+    def _resolve_activation(
+        self, activation: Literal["relu", "elu", "leaky_relu", "selu"]
+    ) -> torch.nn.Module:
+        """Resolves an activation function module from a string name.
+
+        Args:
+            activation (Literal["relu", "elu", "leaky_relu", "selu"]): The name of the activation function.
+
+        Returns:
+            torch.nn.Module: The corresponding instantiated PyTorch activation function module.
+
+        Raises:
+            ValueError: If the provided activation name is not supported.
+        """
+        activation = activation.lower()
+        if activation == "relu":
+            return nn.ReLU()
+        elif activation == "elu":
+            return nn.ELU()
+        elif activation in ("leaky_relu", "leakyrelu"):
+            return nn.LeakyReLU()
+        elif activation == "selu":
+            return nn.SELU()
+        else:
+            msg = f"Activation {activation} not supported."
+            self.logger.error(msg)
+            raise ValueError(msg)

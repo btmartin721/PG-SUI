@@ -315,7 +315,8 @@ where:
 - :math:`\sigma^{2}` is the variance.
 - :math:`f_{\mu}` and :math:`f_{\sigma}` are neural networks representing the encoder.
 
-### Latent Space Sampling
+Latent Space Sampling
+^^^^^^^^^^^^^^^^^^^^^
 
 The model samples a latent variable :math:`\mathbf{z}` using the reparameterization trick:
 
@@ -354,6 +355,7 @@ where:
     \mathcal{L}_{\text{KL}} = D_{\text{KL}}(q(\mathbf{z} | \mathbf{X}) \| p(\mathbf{z}))
 
 where:
+
 - :math:`q(\mathbf{z} | \mathbf{X})` is the approximate posterior distribution.
 - :math:`p(\mathbf{z})` is the prior distribution.
 

@@ -1,103 +1,119 @@
-import os
-import sys
-import pandas as pd
-import numpy as np
+import logging
+import pprint
 import shutil
 from pathlib import Path
 
-def main():
-	print("File Counts:\n")
-
-	path = "training_data/extracted/"
-	extension_list = [
-		".phy", 
-		".PHY",
-		".phylip",
-		".PHYLIP", 
-		".str", 
-		".STR",
-		".ustr",
-		".USTR", 
-		".structure",
-		".STRUCTURE", 
-		".loci",
-		".LOCI", 
-		".vcf",
-		".VCF",
-		".Vcf", 
-		".nex",
-		".NEX", 
-		".nexus",
-		".NEXUS"
-	]
-
-	totals, overall_totals = count_filetypes(extension_list, path)
-
-	for k, v in totals.items():
-		print("{}: {}".format(k, v))
-
-	print("Total files: {}".format(overall_totals))
-
-	# Subset CSV file to only remaining files.
-	df = pd.read_csv("training_data/metadata/metadata_genomic_data.csv")
-	ext_dirs = os.listdir(path)
-
-	df2 = df[df["DatasetID"].isin(ext_dirs)]
-
-	df2.to_csv("training_data/metadata/metadata_genomic_final_sangerRemoved.csv", header=True, index=False)
-
-	print("Datasets remaining: {}".format(len(df2)))
-
-	outpath = "training_data/collated"
-
-	extension_list2 = [
-		"phy", 
-		"str", 
-		"structure",
-		"loci",
-		"vcf",
-		"nex",
-	]
-
-	for ext in extension_list2:
-		if ext == "phy":
-			copy_files(ext, outpath, path, alt_ext="phylip")
-		elif ext == "str":
-			copy_files(ext, outpath, path, alt_ext="structure")
-		elif ext == "nex":
-			copy_files(ext, outpath, path, alt_ext="nexus")
-		else:
-			copy_files(ext, outpath, path, alt_ext=None)
-		
-def count_filetypes(extension_list, mypath):
-	totals = dict()
-	for ext in extension_list:
-		file_count = sum(f.endswith(ext) for _, _, files in os.walk(mypath) for f in files)
-		totals[ext] = file_count
-	
-	# Get overall totals among all file types
-	overall_totals = 0
-	for k, v in totals.items():
-		overall_totals += v
-	
-	return totals, overall_totals
 
 def copy_files(ext, dest, srcdir, alt_ext=None):
+    """Copy files with a specific extension (or alternative extension) from a source directory to a destination directory, renaming the files to include the original subdirectory name.
 
-	outdir = "{}/{}".format(dest, ext)
-	Path(outdir).mkdir(parents=True, exist_ok=True)
+    Args:
+        ext (str): The primary file extension to match (e.g., ".txt").
+        dest (str or Path): Destination directory where files will be copied.
+        srcdir (str or Path): Source directory to recursively search for matching files.
+        alt_ext (str, optional): An alternative extension to match in addition to "ext".
+    """
+    srcdir = Path(srcdir)
+    outdir = Path(dest) / ext
+    outdir.mkdir(parents=True, exist_ok=True)
 
-	for resdir in os.listdir(srcdir):
-		for root, dirs, files in os.walk(os.path.join(srcdir, resdir)):
-			for myfile in files:
-				if alt_ext is not None:
-					if myfile.lower().endswith(ext) or \
-					myfile.lower().endswith(alt_ext):
-						shutil.copy(os.path.join(root, myfile), os.path.join(outdir, "{}_{}".format(resdir, myfile)))
-				else:
-					if myfile.lower().endswith(ext):
-						shutil.copy(os.path.join(root, myfile), os.path.join(outdir, "{}_{}".format(resdir, myfile)))
+    for resdir in srcdir.iterdir():
+        if resdir.is_dir():
+            for f in resdir.rglob("*"):
+                if f.is_file():
+                    if alt_ext:
+                        if f.name.lower().endswith(ext) or f.name.lower().endswith(
+                            alt_ext
+                        ):
+                            shutil.copy(f, outdir / f"{resdir.name}_{f.name}")
+                    else:
+                        if f.name.lower().endswith(ext):
+                            shutil.copy(f, outdir / f"{resdir.name}_{f.name}")
+
+    print(f"Copied {ext} files to {outdir}")
+
+
+from pathlib import Path
+
+
+def main():
+    """Main function to count filetypes and copy files into organized folders."""
+    logging.basicConfig(level=logging.INFO)
+    logging.info("File Counts:\n")
+
+    path = Path("training_data/extracted")
+    extension_list = [
+        ".phy",
+        ".phylip",
+        ".str",
+        ".ustr",
+        ".structure",
+        ".loci",
+        ".vcf",
+        ".vcf.gz",
+        ".nex",
+        ".nexus",
+    ]
+
+    totals, overall_totals = count_filetypes(extension_list, path)
+
+    [logging.info(f"{k}: {v}") for k, v in totals.items()]
+    logging.info(f"Total files: {overall_totals}")
+
+    outpath = Path("training_data", "collated")
+    outpath.mkdir(parents=True, exist_ok=True)
+
+    extension_list2 = [x.lstrip(".") for x in extension_list]
+
+    for ext_lower, alt_ext in get_ext(extension_list2):
+        copy_files(ext_lower, outpath, path, alt_ext=alt_ext)
+
+
+def get_ext(extension_list):
+    """Yield extension and alternative extension pairs for matching files.
+
+    Args:
+        extension_list (list of str): List of file extensions to match.
+
+    Yields:
+        tuple: (extension, alternative extension)
+    """
+    for ext in extension_list:
+        # Define extension pairing logic
+        ext_lower = ext.lower()
+        alt_ext = None
+        if ext_lower == "phy":
+            alt_ext = "phylip"
+        elif ext_lower == "str" or ext_lower == "ustr":
+            alt_ext = "structure"
+        elif ext_lower == "nex":
+            alt_ext = "nexus"
+        yield ext_lower, alt_ext
+
+
+def count_filetypes(extension_list, mypath):
+    """Count the number of files matching each extension in a directory and its subdirectories.
+
+    Args:
+        extension_list (list of str): List of file extensions to count (e.g., ['.txt', '.csv']).
+        mypath (str or Path): Path to the directory to recursively search.
+
+    Returns:
+        tuple: (dictionary with counts per extension, overall total count of all matched files)
+    """
+    mypath = Path(mypath)
+
+    totals = {}
+    for ext in extension_list:
+        file_count = sum(
+            f.suffix.lower() == ext.lower() for f in mypath.rglob("*") if f.is_file()
+        )
+        totals[ext] = file_count
+
+    overall_totals = sum(totals.values())
+
+    return totals, overall_totals
+
 
 if __name__ == "__main__":
-	main()
-
+    main()

@@ -1,487 +1,258 @@
-# Third-party Modules
+from typing import Dict, Literal
+
 import numpy as np
 from sklearn.metrics import (
     accuracy_score,
-    auc,
     average_precision_score,
     f1_score,
-    hamming_loss,
-    make_scorer,
-    multilabel_confusion_matrix,
-    precision_recall_curve,
+    precision_score,
+    recall_score,
     roc_auc_score,
-    roc_curve,
 )
 from sklearn.preprocessing import label_binarize
+from snpio.utils.logging import LoggerManager
+from torch import Tensor
 
-# Custom Modules
-from pgsui.impute.unsupervised.neural_network_methods import NeuralNetworkMethods
 
+class Scorer:
+    """Class for evaluating the performance of a model using various metrics.
 
-class Scorers:
-    @staticmethod
-    def compute_roc_auc_micro_macro(y_true, y_pred, num_classes=3, binarize_pred=True):
-        """Compute ROC curve with AUC scores.
+    This class is used to evaluate the performance of a model using various metrics, such as accuracy, F1 score, precision, recall, average precision, and ROC AUC. The class can be used to evaluate the performance of a model on a dataset with ground truth labels. The class can also be used to evaluate the performance of a model in objective mode for hyperparameter tuning.
+    """
 
-        ROC (Receiver Operating Characteristic) curves and AUC (area under curve) scores are computed per-class and for micro and macro averages.
+    def __init__(
+        self,
+        prefix: str,
+        average: Literal["micro", "macro", "weighted"] = "weighted",
+        verbose: bool = False,
+        debug: bool = False,
+    ) -> None:
+        """Initialize a Scorer object.
+
+        This class is used to evaluate the performance of a model using various metrics, such as accuracy, F1 score, precision, recall, average precision, and ROC AUC. The class can be used to evaluate the performance of a model on a dataset with ground truth labels. The class can also be used to evaluate the performance of a model in objective mode for hyperparameter tuning.
 
         Args:
-            y_true (numpy.ndarray): Ravelled numpy array of shape (n_samples * n_features,). y_true should be integer-encoded.
+            prefix (str): Prefix for logging messages.
+            average (Literal["micro", "macro", "weighted"]): Average method for metrics. Must be one of 'micro', 'macro', or 'weighted'.
+            verbose (bool): Verbosity level for logging messages. Default is False.
+            debug (bool): Debug mode for logging messages. Default is False.
 
-            y_pred (numpy.ndarray): Ravelled numpy array of shape (n_samples * n_features,). y_pred should be probabilities.
-
-            num_classes (int, optional): How many classes to use. Defaults to 3.
-
-            binarize_pred (bool, optional): Whether to binarize y_pred. If False, y_pred should be probabilities of each class. Defaults to True.
-
-        Returns:
-            Dict[str, Any]: Dictionary with true and false positive rates along probability threshold curve per class, micro and macro tpr and fpr curves averaged across classes, and AUC scores per-class and for micro and macro averages.
+        Raises:
+            ValueError: If the average parameter is invalid. Must be one of 'micro', 'macro', or 'weighted'.
         """
-        cats = range(num_classes)
-
-        # Get only classes that appear in y_true.
-        classes = [i for i in cats if i in y_true]
-
-        # Binarize the output for use with ROC-AUC.
-        y_true_bin = label_binarize(y_true, classes=cats)
-
-        if binarize_pred:
-            y_pred_bin = label_binarize(y_pred, classes=cats)
-        else:
-            y_pred_bin = y_pred
-
-        for i in range(y_true_bin.shape[1]):
-            if i not in classes:
-                y_true_bin = np.delete(y_true_bin, i, axis=-1)
-                y_pred_bin = np.delete(y_pred_bin, i, axis=-1)
-
-        n_classes = len(classes)
-
-        # Compute ROC curve and ROC area for each class.
-        fpr = dict()
-        tpr = dict()
-        roc_auc = dict()
-        for i, c in enumerate(classes):
-            fpr[c], tpr[c], _ = roc_curve(y_true_bin[:, i], y_pred_bin[:, i])
-            roc_auc[c] = auc(fpr[c], tpr[c])
-
-        # Compute micro-average ROC curve and ROC area.
-        fpr["micro"], tpr["micro"], _ = roc_curve(
-            y_true_bin.ravel(), y_pred_bin.ravel()
+        logman = LoggerManager(
+            name=__name__, prefix=prefix, debug=debug, verbose=verbose >= 1
         )
+        self.logger = logman.get_logger()
 
-        roc_auc["micro"] = auc(fpr["micro"], tpr["micro"])
+        if average not in {"micro", "macro", "weighted"}:
+            msg = f"Invalid average parameter: {average}. Must be one of 'micro', 'macro', or 'weighted'."
+            self.logger.error(msg)
+            raise ValueError(msg)
 
-        # Aggregate all false positive rates
-        all_fpr = np.unique(np.concatenate([fpr[i] for i in classes]))
+        self.average = average
 
-        # Then interpolate all ROC curves at these points.
-        mean_tpr = np.zeros_like(all_fpr)
-        for i in classes:
-            mean_tpr += np.interp(all_fpr, fpr[i], tpr[i])
-
-        # Finally, average it and compute AUC.
-        mean_tpr /= n_classes
-
-        fpr["macro"] = all_fpr
-        tpr["macro"] = mean_tpr
-
-        roc_auc["macro"] = auc(fpr["macro"], tpr["macro"])
-
-        roc_auc["fpr_macro"] = fpr["macro"]
-        roc_auc["tpr_macro"] = tpr["macro"]
-        roc_auc["fpr_micro"] = fpr["micro"]
-        roc_auc["tpr_micro"] = tpr["micro"]
-
-        for i in classes:
-            roc_auc[f"fpr_{i}"] = fpr[i]
-            roc_auc[f"tpr_{i}"] = tpr[i]
-
-        return roc_auc
-
-    @staticmethod
-    def compute_pr(y_true, y_pred, use_int_encodings=False, num_classes=4):
-        """Compute precision-recall curve with Average Precision scores.
-
-        PR and AP scores are computed per-class and for micro and macro averages.
+    def accuracy(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
+        """Calculate the accuracy of the model.
 
         Args:
-            y_true (numpy.ndarray): Ravelled numpy array of shape (n_samples * n_features,).
-
-            y_pred (numpy.ndarray): Ravelled numpy array of shape (n_samples * n_features,). y_pred should be integer-encoded.
-
-            use_int_encodings (bool, optional): Whether the imputer model is a neural network model. Defaults to False.
-
-            num_classes (int, optional): How many classes to use. Defaults to 3.
+            y_true (np.ndarray): Ground truth labels.
+            y_pred (np.ndarray): Predicted labels.
 
         Returns:
-            Dict[str, Any]: Dictionary with precision and recall curves per class and micro and macro averaged across classes, plus AP scores per-class and for micro and macro averages.
+            float: Accuracy score.
         """
-        cats = range(num_classes)
+        return accuracy_score(y_true, y_pred)
 
-        is_multiclass = True if num_classes != 4 else False
+    def f1(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
+        """Calculate the F1 score of the model.
 
-        # Get only classes that appear in y_true.
-        classes = [i for i in cats if i in y_true]
+        Args:
+            y_true (np.ndarray): Ground truth labels.
+            y_pred (np.ndarray): Predicted labels.
 
-        # Binarize the output for use with ROC-AUC.
-        y_true_bin = label_binarize(y_true, classes=cats)
-        y_pred_proba_bin = y_pred
+        Returns:
+            float: F1 score.
+        """
+        return f1_score(y_true, y_pred, average=self.average, zero_division=0.0)
 
-        if is_multiclass:
-            for i in range(y_true_bin.shape[1]):
-                if i not in classes:
-                    y_true_bin = np.delete(y_true_bin, i, axis=-1)
-                    y_pred_proba_bin = np.delete(y_pred_proba_bin, i, axis=-1)
+    def precision(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
+        """Calculate the precision of the model.
 
-        nn = NeuralNetworkMethods()
-        if len(y_true.shape) == 1 or y_true.shape[1] != num_classes:
-            y_true = label_binarize(y_true, classes=cats)
+        Args:
+            y_true (np.ndarray): Ground truth labels.
+            y_pred (np.ndarray): Predicted labels.
 
-        # Ensure y_pred_012 is in the multilabel format
-        if use_int_encodings:
-            y_pred_012 = nn.decode_masked(
+        Returns:
+            float: Precision score.
+        """
+        return precision_score(y_true, y_pred, average=self.average, zero_division=0.0)
+
+    def recall(self, y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
+        """Calculate the recall of the model.
+
+        Args:
+            y_true (np.ndarray): Ground truth labels.
+            y_pred (np.ndarray): Predicted labels.
+
+        Returns:
+            float: Recall score.
+        """
+        return recall_score(y_true, y_pred, average=self.average, zero_division=0.0)
+
+    def roc_auc(self, y_true: np.ndarray, y_pred_proba: np.ndarray) -> float:
+        """Multiclass ROC-AUC with label targets.
+
+        Args:
+            y_true: 1D integer labels (shape: [n]).
+                    If a one-hot/indicator matrix is supplied, we convert to labels.
+            y_pred_proba: 2D probabilities (shape: [n, n_classes]).
+        """
+        y_true = np.asarray(y_true)
+        y_pred_proba = np.asarray(y_pred_proba)
+
+        if y_pred_proba.ndim == 3:
+            y_pred_proba = y_pred_proba.reshape(-1, y_pred_proba.shape[-1])
+
+        # If user passed indicator/one-hot, convert to labels.
+        if y_true.ndim == 2 and y_true.shape[1] == y_pred_proba.shape[1]:
+            y_true = y_true.argmax(axis=1)
+
+        # Guard: need >1 class present for AUC
+        if np.unique(y_true).size < 2:
+            return 0.5
+
+        return float(
+            roc_auc_score(
                 y_true,
-                y_pred_proba_bin,
-                return_multilab=True,  # Ensure multilabel format is returned
+                y_pred_proba,
+                multi_class="ovr",
+                average=self.average,
             )
-        else:
-            y_pred_012 = nn.decode_masked(
-                y_true,
-                y_pred_proba_bin,
-                is_multiclass=False,
-                return_int=False,
-                return_multilab=True,
-            )
-
-        # Make confusion matrix to get true negatives and true positives.
-        mcm = multilabel_confusion_matrix(y_true, y_pred_012)
-
-        tn = np.sum(mcm[:, 0, 0])
-        tn /= num_classes
-
-        tp = np.sum(mcm[:, 1, 1])
-        tp /= num_classes
-
-        baseline = tp / (tn + tp)
-
-        precision = dict()
-        recall = dict()
-        average_precision = dict()
-
-        for i, c in enumerate(classes):
-            precision[c], recall[c], _ = precision_recall_curve(
-                y_true_bin[:, i], y_pred_proba_bin[:, i]
-            )
-            average_precision[c] = average_precision_score(
-                y_true_bin[:, i], y_pred_proba_bin[:, i]
-            )
-
-        # A "micro-average": quantifying score on all classes jointly.
-        precision["micro"], recall["micro"], _ = precision_recall_curve(
-            y_true_bin.ravel(), y_pred_proba_bin.ravel()
         )
 
-        average_precision["micro"] = average_precision_score(
-            y_true_bin, y_pred_proba_bin, average="micro"
-        )
+    def evaluate(
+        self,
+        y_true: np.ndarray | Tensor | list,
+        y_pred: np.ndarray | Tensor | list,
+        y_true_ohe: np.ndarray | Tensor | list,
+        y_pred_proba: np.ndarray | Tensor | list,
+        objective_mode: bool = False,
+        tune_metric: Literal[
+            "pr_macro",
+            "roc_auc",
+            "average_precision",
+            "accuracy",
+            "f1",
+            "precision",
+            "recall",
+        ] = "pr_macro",
+    ) -> Dict[str, float]:
+        """Evaluate the model using various metrics.
 
-        average_precision["macro"] = average_precision_score(
-            y_true_bin, y_pred_proba_bin, average="macro"
-        )
-
-        average_precision["weighted"] = average_precision_score(
-            y_true_bin, y_pred_proba_bin, average="weighted"
-        )
-
-        if use_int_encodings:
-            y_pred_012 = (
-                nn.decode_masked(
-                    y_true_bin,
-                    y_pred_proba_bin,
-                    return_multilab=True,
-                    predict_still_missing=False,
-                ),
-            )
-
-        f1 = f1_score(y_true_bin, y_pred_012, average="macro")
-        f1_weighted = f1_score(y_true_bin, y_pred_012, average="weighted")
-
-        # Aggregate all recalls
-        all_recall = np.unique(np.concatenate([recall[i] for i in classes]))
-
-        # Then interpolate all PR curves at these points.
-        mean_precision = np.zeros_like(all_recall)
-        for i in classes:
-            mean_precision += np.interp(all_recall, precision[i], recall[i])
-
-        # Finally, average it and compute AUC.
-        mean_precision /= num_classes
-
-        recall["macro"] = all_recall
-        precision["macro"] = mean_precision
-
-        results = dict()
-
-        results["micro"] = average_precision["micro"]
-        results["macro"] = average_precision["macro"]
-        results["f1_score"] = f1
-        results["f1_score_weighted"] = f1_weighted
-        results["recall_macro"] = all_recall
-        results["precision_macro"] = mean_precision
-        results["recall_micro"] = recall["micro"]
-        results["precision_micro"] = precision["micro"]
-
-        for i in classes:
-            results[f"recall_{i}"] = recall[i]
-            results[f"precision_{i}"] = precision[i]
-            results[i] = average_precision[i]
-        results["baseline"] = baseline
-
-        return results
-
-    @staticmethod
-    def check_if_tuple(y_pred):
-        """Checks if y_pred is a tuple and if so, returns the first element of the tuple."""
-        if isinstance(y_pred, tuple):
-            y_pred = y_pred[0]
-        return y_pred
-
-    @staticmethod
-    def accuracy_scorer(y_true, y_pred, **kwargs):
-        """Get accuracy score for grid search.
-
-        If provided, only calculates score where missing_mask is True (i.e., data were missing). This is so that users can simulate missing data for known values, and then the predictions for only those known values can be evaluated.
+        This method evaluates the performance of a model using various metrics, such as accuracy, F1 score, precision, recall, average precision, and ROC AUC. The method can be used to evaluate the performance of a model on a dataset with ground truth labels. The method can also be used to evaluate the performance of a model in objective mode for hyperparameter tuning.
 
         Args:
-            y_true (numpy.ndarray): 012-encoded true target values.
-
-            y_pred (tensorflow.EagerTensor): Predictions from model as probabilities. They must first be decoded to use with accuracy_score.
-
-            kwargs (Any): Keyword arguments to use with scorer. Supported options include ``missing_mask`` and ``testing``.
-
-        Returns:
-            float: Metric score by comparing y_true and y_pred.
-        """
-        missing_mask = kwargs.get("missing_mask")
-
-        y_pred = Scorers.check_if_tuple(y_pred)
-
-        y_true_masked = y_true[missing_mask]
-        y_pred_masked = y_pred[missing_mask]
-
-        nn = NeuralNetworkMethods()
-        y_pred_masked_decoded = nn.decode_masked(
-            y_true_masked, y_pred_masked, predict_still_missing=False
-        )
-
-        return accuracy_score(y_true_masked, y_pred_masked_decoded)
-
-    @staticmethod
-    def hamming_scorer(y_true, y_pred, **kwargs):
-        """Get Hamming score for grid search.
-
-        If provided, only calculates score where missing_mask is True (i.e., data were missing). This is so that users can simulate missing data for known values, and then the predictions for only those known values can be evaluated.
-
-        Args:
-            y_true (numpy.ndarray): 012-encoded true target values.
-
-            y_pred (tensorflow.EagerTensor): Predictions from model as probabilities. They must first be decoded to use with hamming_scorer.
-
-            kwargs (Any): Keyword arguments to use with scorer. Supported options include ``missing_mask`` and ``testing``.
+            y_true (np.ndarray | torch.Tensor): Ground truth labels.
+            y_pred (np.ndarray | torch.Tensor): Predicted labels.
+            y_true_ohe (np.ndarray | torch.Tensor): One-hot encoded ground truth labels.
+            y_pred_proba (np.ndarray | torch.Tensor): Predicted probabilities.
+            objective_mode (bool): Whether to use objective mode for evaluation. Default is False.
+            tune_metric (Literal["pr_macro", "roc_auc", "average_precision", "accuracy", "f1", "precision", "recall"]): Metric to use for tuning. Ignored if `objective_mode` is False. Default is 'pr_macro'.
 
         Returns:
-            float: Metric score by comparing y_true and y_pred.
+            Dict[str, float]: Dictionary of evaluation metrics. Keys are 'accuracy', 'f1', 'precision', 'recall', 'roc_auc', 'average_precision', and 'pr_macro'.
+
+        Raises:
+            ValueError: If the input data is invalid.
+            ValueError: If an invalid tune_metric is provided.
         """
-        missing_mask = kwargs.get("missing_mask")
+        if not y_true.ndim < 3:
+            msg = "y_true must have 1 or 2 dimensions."
+            self.logger.error(msg)
+            raise ValueError(msg)
 
-        y_pred = Scorers.check_if_tuple(y_pred)
+        if not y_pred.ndim < 3:
+            msg = "y_pred must have 1 or 2 dimensions."
+            self.logger.error(msg)
+            raise ValueError(msg)
 
-        y_true_masked = y_true[missing_mask]
-        y_pred_masked = y_pred[missing_mask]
+        if not y_true_ohe.ndim == 2:
+            msg = "y_true_ohe must have 2 dimensions."
+            self.logger.error(msg)
+            raise ValueError(msg)
 
-        nn = NeuralNetworkMethods()
-        y_pred_masked_decoded = nn.decode_masked(
-            y_true_masked,
-            y_pred_masked,
-            predict_still_missing=False,
-        )
+        if y_pred_proba.ndim != 2:
+            y_pred_proba = y_pred_proba.reshape(-1, y_true_ohe.shape[-1])
+            self.logger.debug(f"Reshaped y_pred_proba to {y_pred_proba.shape}")
 
-        return hamming_loss(y_true_masked, y_pred_masked_decoded)
-
-    @staticmethod
-    def compute_metric(y_true, y_pred, metric_type, scoring_function, **kwargs):
-        y_true = np.array(y_true)
-        y_pred = np.array(y_pred)
-
-        num_classes = kwargs.get("num_classes", 4)
-        cats = range(num_classes)
-
-        y_true_bin = label_binarize(y_true, classes=cats)
-
-        if scoring_function == "roc_auc":
-            return roc_auc_score(
-                y_true_bin, y_pred, multi_class="ovr", average=metric_type
-            )
-        elif scoring_function == "f1":
-            is_multiclass = num_classes != 4
-            y_pred_proba_bin = y_pred
-            nn = NeuralNetworkMethods()
-            y_pred_bin = nn.decode_masked(
-                y_true_bin,
-                y_pred_proba_bin,
-                is_multiclass=is_multiclass,
-                return_int=False,
-                return_multilab=True,
-            )
-            return f1_score(
-                y_true_bin, y_pred_bin, average=metric_type, zero_division=0
-            )
-        elif scoring_function == "average_precision":
-            return average_precision_score(y_true_bin, y_pred, average=metric_type)
-        else:
-            raise ValueError(f"Unsupported scoring function: {scoring_function}")
-
-    @staticmethod
-    def compute_score(y_true, y_pred, metric_type, scoring_function, **kwargs):
-        missing_mask = kwargs.get("missing_mask")
-        y_pred = Scorers.check_if_tuple(y_pred)
-
-        y_true_masked = y_true[missing_mask]
-        y_pred_masked = y_pred[missing_mask]
-
-        return Scorers.compute_metric(
-            y_true_masked,
-            y_pred_masked,
-            metric_type=metric_type,
-            scoring_function=scoring_function,
-            **kwargs,
-        )
-
-    @classmethod
-    def make_multimetric_scorer(
-        cls, metrics, missing_mask, num_classes=4, testing=False
-    ):
-        if isinstance(metrics, str):
-            metrics = [metrics]
-
-        metric_map = {
-            "roc_auc_macro": ("macro", "roc_auc"),
-            "roc_auc_micro": ("micro", "roc_auc"),
-            "roc_auc_weighted": ("weighted", "roc_auc"),
-            "f1_micro": ("micro", "f1"),
-            "f1_macro": ("macro", "f1"),
-            "f1_weighted": ("weighted", "f1"),
-            "average_precision_macro": ("macro", "average_precision"),
-            "average_precision_micro": ("micro", "average_precision"),
-            "average_precision_weighted": ("weighted", "average_precision"),
-        }
-
-        default_params = {
-            "missing_mask": missing_mask,
-            "num_classes": num_classes,
-            "testing": testing,
-        }
-
-        scorers = dict()
-        for item in metrics:
-            item = item.lower()
-
-            if item in metric_map:
-                metric_type, scoring_function = metric_map[item]
-                params = default_params.copy()
-                scorers[item] = make_scorer(
-                    Scorers.compute_score,
-                    metric_type=metric_type,
-                    scoring_function=scoring_function,
-                    **params,
-                )
-            elif item == "accuracy":
-                scorers[item] = make_scorer(cls.accuracy_scorer, **default_params)
-            elif item == "hamming":
-                scorers[item] = make_scorer(cls.hamming_scorer, **default_params)
+        if objective_mode:
+            if tune_metric == "pr_macro":
+                metrics = {"pr_macro": self.pr_macro(y_true_ohe, y_pred_proba)}
+            elif tune_metric == "roc_auc":
+                metrics = {"roc_auc": self.roc_auc(y_true, y_pred_proba)}
+            elif tune_metric == "average_precision":
+                metrics = {
+                    "average_precision": self.average_precision(y_true, y_pred_proba)
+                }
+            elif tune_metric == "accuracy":
+                metrics = {"accuracy": self.accuracy(y_true, y_pred)}
+            elif tune_metric == "f1":
+                metrics = {"f1": self.f1(y_true, y_pred)}
+            elif tune_metric == "precision":
+                metrics = {"precision": self.precision(y_true, y_pred)}
+            elif tune_metric == "recall":
+                metrics = {"recall": self.recall(y_true, y_pred)}
             else:
-                raise ValueError(f"Unsupported metric: {item}")
+                msg = f"Invalid tune_metric provided: '{tune_metric}'."
+                self.logger.error(msg)
+                raise ValueError(msg)
+        else:
+            metrics = {
+                "accuracy": self.accuracy(y_true, y_pred),
+                "f1": self.f1(y_true, y_pred),
+                "precision": self.precision(y_true, y_pred),
+                "recall": self.recall(y_true, y_pred),
+                "roc_auc": self.roc_auc(y_true, y_pred_proba),
+                "average_precision": self.average_precision(y_true, y_pred_proba),
+                "pr_macro": self.pr_macro(y_true_ohe, y_pred_proba),
+            }
 
-        return scorers
+        return {k: float(v) for k, v in metrics.items()}
 
-    @staticmethod
-    def scorer(y_true, y_pred, **kwargs):
-        # Get missing mask if provided.
-        # Otherwise default is all missing values (array all True).
-        missing_mask = kwargs.get("missing_mask")
-        nn_model = kwargs.get("nn_model", True)
-        num_classes = kwargs.get("num_classes", 3)
-        testing = kwargs.get("testing", False)
+    def average_precision(self, y_true: np.ndarray, y_pred_proba: np.ndarray) -> float:
+        """Average precision with safe multiclass handling.
 
-        is_multiclass = True if num_classes != 4 else False
+        If y_true is 1D of class indices, it is binarized against the number of columns in y_pred_proba.
+        If y_true is already one-hot or indicator, it is used as-is.
+        """
+        y_true_arr = np.asarray(y_true)
+        y_proba_arr = np.asarray(y_pred_proba)
 
-        if nn_model:
-            nn = NeuralNetworkMethods()
+        if y_proba_arr.ndim == 3:
+            y_proba_arr = y_proba_arr.reshape(-1, y_proba_arr.shape[-1])
 
-        # VAE has tuple output.
-        if isinstance(y_pred, tuple):
-            y_pred = y_pred[0]
+        # If y_true already matches proba columns (one-hot / indicator)
+        if y_true_arr.ndim == 2 and y_true_arr.shape[1] == y_proba_arr.shape[1]:
+            y_bin = y_true_arr
+        else:
+            # Interpret y_true as class indices
+            n_classes = y_proba_arr.shape[1]
+            y_bin = label_binarize(y_true_arr.ravel(), classes=np.arange(n_classes))
 
-        y_true_masked = y_true[missing_mask]
-        y_pred_masked = y_pred[missing_mask]
+        return float(average_precision_score(y_bin, y_proba_arr, average=self.average))
 
-        roc_auc = Scorers.compute_roc_auc_micro_macro(
-            y_true_masked,
-            y_pred_masked,
-            num_classes=num_classes,
-            binarize_pred=False,
-        )
+    def pr_macro(self, y_true_ohe: np.ndarray, y_pred_proba: np.ndarray) -> float:
+        """Macro-averaged average precision (precision-recall AUC) across classes."""
+        y_true_arr = np.asarray(y_true_ohe)
+        y_proba_arr = np.asarray(y_pred_proba)
 
-        pr_ap = Scorers.compute_pr(
-            y_true_masked,
-            y_pred_masked,
-            num_classes=num_classes,
-        )
+        if y_proba_arr.ndim == 3:
+            y_proba_arr = y_proba_arr.reshape(-1, y_proba_arr.shape[-1])
 
-        acc = accuracy_score(
-            y_true_masked,
-            nn.decode_masked(
-                y_true_masked,
-                y_pred_masked,
-                is_multiclass=is_multiclass,
-                return_int=True,
-            ),
-        )
-        ham = hamming_loss(
-            y_true_masked,
-            nn.decode_masked(
-                y_true_masked,
-                y_pred_masked,
-                is_multiclass=is_multiclass,
-                return_int=True,
-            ),
-        )
+        # Ensure 2D indicator truth
+        if y_true_arr.ndim == 1:
+            n_classes = y_proba_arr.shape[1]
+            y_true_arr = label_binarize(y_true_arr, classes=np.arange(n_classes))
 
-        if testing:
-            y_pred_masked_decoded = nn.decode_masked(
-                y_true_masked,
-                y_pred_masked,
-                is_multiclass=is_multiclass,
-                return_int=True,
-            )
-
-            bin_mapping = [np.array2string(x) for x in y_pred_masked]
-
-            with open("genotype_dist.csv", "w") as fout:
-                fout.write("site,prob_vector,imputed_genotype,expected_genotype\n")
-                for i, (yt, yp, ypd) in enumerate(
-                    zip(y_true_masked, bin_mapping, y_pred_masked_decoded)
-                ):
-                    fout.write(f"{i},{yp},{ypd},{yt}\n")
-            # np.set_printoptions(threshold=np.inf)
-            # print(y_true_masked)
-            # print(y_pred_masked_decoded)
-
-        metrics = dict()
-        metrics["accuracy"] = acc
-        metrics["roc_auc"] = roc_auc
-        metrics["precision_recall"] = pr_ap
-        metrics["hamming"] = ham
-
-        return metrics
+        return float(average_precision_score(y_true_arr, y_proba_arr, average="macro"))

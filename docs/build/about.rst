@@ -43,17 +43,15 @@ Supervised Imputation Methods
 
 Supervised methods utilize state-of-the-art machine learning approaches to perform imputation. The centerpiece is scikit-learn's IterativeImputer, which applies the MICE (Multivariate Imputation by Chained Equations) algorithm [1]_ to iteratively impute each SNP feature based on the relationships with other features. PG-SUI extends this functionality by allowing the use of the following classifiers to inform imputation:
 
-	- K-Nearest Neighbors
 	- Random Forest
-	- Extra Trees
-	- XGBoost
+	- Histogram-based Gradient Boosting
 
 Users can customize the number of nearest features (neighbors) considered during imputation. The flexibility of these models allows researchers to tailor their approach to the specific properties of their genomic data.
 
 See the scikit-learn documentation <https://scikit-learn.org>_ for additional details on IterativeImputer and the classifiers supported.
 
-Non-Machine Learning Methods
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Non-Machine Learning (Deterministic) Methods
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 PG-SUI also incorporates several non-machine learning approaches to provide robust and interpretable baseline solutions for imputation:
 
