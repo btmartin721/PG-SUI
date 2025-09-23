@@ -11,6 +11,13 @@ pgsui.data\_processing.transformers module
    :members:
    :undoc-members:
 
+pgsui.data\_processing.containers module
+----------------------------------------
+
+.. automodule:: pgsui.data_processing.containers
+   :members:
+   :undoc-members:
+
 Module contents
 ---------------
 
