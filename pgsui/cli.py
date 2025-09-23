@@ -1,13 +1,12 @@
 import importlib.resources as pkg_resources
-import pprint
 
-from snpio import GenotypeEncoder, VCFReader, NRemover2
+from snpio import VCFReader
 
 from pgsui import (
     ImputeAutoencoder,
-    ImputeHistGradientBoosting,
+    ImputeMostFrequent,
     ImputeNLPCA,
-    ImputeRandomForest,
+    ImputeRefAllele,
     ImputeUBP,
     ImputeVAE,
 )
@@ -35,61 +34,97 @@ def main():
         include_pops=["EA", "GU", "TT", "ON"],
     )
 
-    nrm = NRemover2(gd)
-
-    gd_filt = (
-        nrm.filter_missing_sample(0.8)
-        .filter_missing(0.5)
-        .filter_missing_pop(0.5)
-        .filter_monomorphic(exclude_heterozygous=True)
-        .filter_singletons(exclude_heterozygous=True)
-        .filter_biallelic(exclude_heterozygous=True)
-        .filter_mac(3)
-        .resolve()
+    ubp = ImputeUBP(
+        gd,
+        prefix="pgsui_test",
+        n_jobs=8,
+        tune=False,
+        tune_n_trials=100,
+        model_batch_size=64,
+        verbose=True,
     )
 
-    # ubp = ImputeUBP(
-    #     gd_filt,
-    #     n_jobs=8,
-    #     verbose=1,
-    #     sim_prop_missing=0.5,
-    #     sim_strategy="random_inv_multinom",
-    #     model_device="cpu",
-    #     model_dropout_rate=0.45,
-    #     model_hidden_activation="elu",
-    #     model_latent_dim=25,
-    #     model_learning_rate=0.001,
-    #     model_lr_input_factor=2.0,
-    #     model_gamma=1.0,
-    #     model_num_hidden_layers=4,
-    #     tune=True,
-    #     prefix="pgsui_ubp_test_noconv_2",
-    #     tune_n_trials=100,
-    #     model_batch_size=64,
-    #     weights_temperature=1.0,
-    #     weights_alpha=1.0,
-    #     weights_log_scale=False,
-    #     model_use_convolution=False,  # Set to True to use convolutional UBP
-    # )
+    ubp.fit()
+    X_imputed = ubp.transform()
+    print(X_imputed)
+    print(X_imputed.shape)
 
-    nlpca = ImputeNLPCA(
-        gd_filt,
+    vae = ImputeVAE(
+        gd,
         n_jobs=1,
         verbose=1,
-        sim_prop_missing=0.1,
-        sim_strategy="random_balanced_multinom",
         model_device="cpu",
-        tune=True,
-        prefix="pgsui_nlpca_test",
-        tune_n_trials=500,
+        tune=False,
+        prefix="pgsui_test",
+        tune_n_trials=50,
+        model_batch_size=64,
+        model_learning_rate=0.0008020404122071253,
+        model_latent_dim=28,
+        model_l1_penalty=1.682421969883547e-06,
+        model_gamma=4.5,
+        model_dropout_rate=0.01,
+        weights_beta=0.99,
+        weights_max_ratio=2.0,
+        model_hidden_activation="leaky_relu",
+        model_early_stop_gen=25,
+        model_num_hidden_layers=13,
+        plot_format="png",
+    )
+
+    vae.fit()
+    X_imputed = vae.transform()
+    print(X_imputed)
+    print(X_imputed.shape)
+
+    ae = ImputeAutoencoder(
+        gd,
+        n_jobs=1,
+        verbose=1,
+        model_device="cpu",
+        tune=False,
+        prefix="pgsui_test",
+        tune_n_trials=10,
+        model_batch_size=64,
+        tune_metric="f1",
+        plot_format="png",
+    )
+
+    ae.fit()
+    X_imputed = ae.transform()
+    print(X_imputed)
+    print(X_imputed.shape)
+
+    nlpca = ImputeNLPCA(
+        gd,
+        verbose=1,
+        model_device="cpu",
+        tune=False,
+        prefix="pgsui_test",
+        tune_n_trials=20,
         model_batch_size=64,
     )
 
-    ge = GenotypeEncoder(gd_filt)
-    X = ge.genotypes_012
+    nlpca.fit()
+    X_imputed = nlpca.transform()
+    print(X_imputed)
+    print(X_imputed.shape)
 
-    # ubp.fit_transform(X)
-    nlpca.fit_transform(X)
+    mode = ImputeMostFrequent(gd, prefix="pgsui_test", verbose=True, seed=42)
+    mode.fit()
+    X_imputed = mode.transform()
+    print(X_imputed)
+    print(X_imputed.shape)
+
+    mode.fit()
+    X_imputed = mode.transform()
+    print(X_imputed)
+    print(X_imputed.shape)
+
+    ref = ImputeRefAllele(gd, prefix="pgsui_test", verbose=True, seed=42)
+    ref.fit()
+    X_imputed = ref.transform()
+    print(X_imputed)
+    print(X_imputed.shape)
 
 
 if __name__ == "__main__":
