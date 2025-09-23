@@ -1,6 +1,6 @@
 import warnings
 from pathlib import Path
-from typing import Dict, List, Union
+from typing import Dict, List, Literal, Optional, Sequence
 
 import matplotlib as mpl
 
@@ -45,12 +45,12 @@ class Plotting:
     Attributes:
         model_name (str): Name of the model.
         prefix (str): Prefix for the output directory.
-        plot_format (str): Format for the plots (e.g., 'pdf', 'png', 'jpeg').
+        output_dir (Path): Output directory for the plots.
+        plot_format (Literal["pdf", "png", "jpeg", "jpg"]): Format for the plots ('pdf', 'png', 'jpeg', 'jpg').
         plot_fontsize (int): Font size for the plots.
         plot_dpi (int): Dots per inch for the plots.
         title_fontsize (int): Font size for the plot titles.
         show_plots (bool): Whether to display the plots.
-        output_dir (Path): Output directory for the plots.
         logger (LoggerManager): Logger object for logging messages.
     """
 
@@ -59,8 +59,7 @@ class Plotting:
         model_name: str,
         *,
         prefix: str = "pgsui",
-        output_dir: str = "output",
-        plot_format: str = "pdf",
+        plot_format: Literal["pdf", "png", "jpeg", "jpg"] = "pdf",
         plot_fontsize: int = 18,
         plot_dpi: int = 300,
         title_fontsize: int = 20,
@@ -76,25 +75,22 @@ class Plotting:
         Args:
             model_name (str): Name of the model.
             prefix (str, optional): Prefix for the output directory. Defaults to 'pgsui'.
-            output_dir (str, optional): Output directory for the plots. Defaults to 'output'.
-            plot_format (str, optional): Format for the plots (e.g., 'pdf', 'png', 'jpeg'). Defaults to 'pdf'.
-            plot_fontsize (int, optional): Font size for the plots. Defaults to 18.
-            plot_dpi (int, optional): Dots per inch for the plots. Defaults to 300.
-            title_fontsize (int, optional): Font size for the plot titles. Defaults to 20.
-            despine (bool, optional): Whether to remove the top and right spines from the plots. Defaults to True.
-            show_plots (bool, optional): Whether to display the plots. Defaults to False.
-            verbose (int, optional): Verbosity level for logging. Defaults to 0.
-            debug (bool, optional): Whether to enable debug mode. Defaults to False.
+            plot_format (Literal["pdf", "png", "jpeg", "jpg"]): Format for the plots ('pdf', 'png', 'jpeg', 'jpg'). Defaults to 'pdf'.
+            plot_fontsize (int): Font size for the plots. Defaults to 18.
+            plot_dpi (int): Dots per inch for the plots. Defaults to 300.
+            title_fontsize (int): Font size for the plot titles. Defaults to 20.
+            despine (bool): Whether to remove the top and right spines from the plots. Defaults to True.
+            show_plots (bool): Whether to display the plots. Defaults to False.
+            verbose (int): Verbosity level for logging. Defaults to 0.
+            debug (bool): Whether to enable debug mode. Defaults to False.
         """
         logman = LoggerManager(
             name=__name__, prefix=prefix, verbose=verbose, debug=debug
         )
-
         self.logger = logman.get_logger()
 
         self.model_name = model_name
         self.prefix = prefix
-        self.output_dir = output_dir
         self.plot_format = plot_format
         self.plot_fontsize = plot_fontsize
         self.plot_dpi = plot_dpi
@@ -126,16 +122,27 @@ class Plotting:
 
         mpl.rcParams.update(self.param_dict)
 
-        unsuper = {
-            "ImputeVAE",
-            "ImputeNLPCA",
-            "ImputeAutoencoder",
-            "ImputeUBP",
-            "ImputeCNN",
-            "ImputeLSTM",
+        unsuper = {"ImputeVAE", "ImputeNLPCA", "ImputeAutoencoder", "ImputeUBP"}
+        det = {
+            "ImputeRefAllele",
+            "ImputeMostFrequent",
+            "ImputeMostFrequentPerPop",
+            "ImputePhylo",
         }
-        plot_dir = "Unsupervised" if model_name in unsuper else "Supervised"
-        self.output_dir = Path(f"{self.prefix}_{self.output_dir}", plot_dir)
+        sup = {"ImputeRandomForest", "ImputeHistGradientBoosting"}
+
+        if model_name in unsuper:
+            plot_dir = "Unsupervised"
+        elif model_name in det:
+            plot_dir = "Deterministic"
+        elif model_name in sup:
+            plot_dir = "Supervised"
+        else:
+            msg = f"model_name '{model_name}' not recognized."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        self.output_dir = Path(f"{self.prefix}_output", plot_dir)
         self.output_dir = self.output_dir / "plots" / model_name
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -225,44 +232,64 @@ class Plotting:
         y_true: np.ndarray,
         y_pred_proba: np.ndarray,
         metrics: Dict[str, float],
+        label_names: Optional[Sequence[str]] = None,
+        prefix: str = "",
     ) -> None:
         """Plot multi-class ROC-AUC and Precision-Recall curves.
 
+        This method plots the multi-class ROC-AUC and Precision-Recall curves. The plot is saved to disk as a ``<plot_format>`` file.
+
         Args:
-            y_true (np.ndarray): Array of true labels.
-            y_pred_proba (np.ndarray): Array of predicted probabilities.
-            metrics (Dict[str, float]): Dictionary of metrics to display in the plot.
+            y_true (np.ndarray): 1D array of true integer labels in [0, n_classes-1].
+            y_pred_proba (np.ndarray): (n_samples, n_classes) array of predicted probabilities.
+            metrics (Dict[str, float]): Dict of summary metrics to annotate the figure.
+            label_names (Optional[Sequence[str]]): Optional sequence of class names (length must equal n_classes).
+                If provided, legends will use these names instead of 'Class i'.
+            prefix (str): Optional prefix for the output filename.
 
         Raises:
-            ValueError: If the model_name is not one of the following: 'ImputeNLPCA', 'ImputeUBP', 'ImputeStandardAE', 'ImputeVAE', 'ImputeCNN', or 'ImputeLSTM'.
+            ValueError: If model_name is not recognized (legacy guard).
         """
-        # Ensure y_true is properly binarized
         num_classes = y_pred_proba.shape[1]
-        y_true = label_binarize(y_true, classes=np.arange(num_classes))
 
-        # Initialize dictionaries for metrics
+        # Validate/normalize label names
+        if label_names is not None and len(label_names) != num_classes:
+            self.logger.warning(
+                f"plot_metrics: len(label_names)={len(label_names)} "
+                f"!= n_classes={num_classes}. Ignoring label_names."
+            )
+            label_names = None
+        if label_names is None:
+            label_names = [f"Class {i}" for i in range(num_classes)]
+
+        # Binarize y_true for one-vs-rest curves
+        y_true_bin = label_binarize(y_true, classes=np.arange(num_classes))
+
+        # Containers
         fpr, tpr, roc_auc = {}, {}, {}
         precision, recall, average_precision = {}, {}, {}
 
-        # Compute per-class ROC and PR metrics
+        # Per-class ROC & PR
         for i in range(num_classes):
-            fpr[i], tpr[i], _ = roc_curve(y_true[:, i], y_pred_proba[:, i])
+            fpr[i], tpr[i], _ = roc_curve(y_true_bin[:, i], y_pred_proba[:, i])
             roc_auc[i] = auc(fpr[i], tpr[i])
             precision[i], recall[i], _ = precision_recall_curve(
-                y_true[:, i], y_pred_proba[:, i]
+                y_true_bin[:, i], y_pred_proba[:, i]
             )
             average_precision[i] = average_precision_score(
-                y_true[:, i], y_pred_proba[:, i]
+                y_true_bin[:, i], y_pred_proba[:, i]
             )
 
-        # Micro-average metrics
-        fpr["micro"], tpr["micro"], _ = roc_curve(y_true.ravel(), y_pred_proba.ravel())
+        # Micro-averages
+        fpr["micro"], tpr["micro"], _ = roc_curve(
+            y_true_bin.ravel(), y_pred_proba.ravel()
+        )
         roc_auc["micro"] = auc(fpr["micro"], tpr["micro"])
         precision["micro"], recall["micro"], _ = precision_recall_curve(
-            y_true.ravel(), y_pred_proba.ravel()
+            y_true_bin.ravel(), y_pred_proba.ravel()
         )
         average_precision["micro"] = average_precision_score(
-            y_true, y_pred_proba, average="micro"
+            y_true_bin, y_pred_proba, average="micro"
         )
 
         # Macro-average ROC
@@ -278,16 +305,17 @@ class Plotting:
         all_recall = np.unique(np.concatenate([recall[i] for i in range(num_classes)]))
         mean_precision = np.zeros_like(all_recall)
         for i in range(num_classes):
+            # recall[i] increases, but precision[i] is given over decreasing thresholds
             mean_precision += np.interp(all_recall, recall[i][::-1], precision[i][::-1])
         mean_precision /= num_classes
         average_precision["macro"] = average_precision_score(
-            y_true, y_pred_proba, average="macro"
+            y_true_bin, y_pred_proba, average="macro"
         )
 
-        # Plot ROC and PR curves
+        # Plot
         fig, axes = plt.subplots(1, 2, figsize=(14, 6))
 
-        # ROC curves
+        # ROC
         axes[0].plot(
             fpr["micro"],
             tpr["micro"],
@@ -304,17 +332,21 @@ class Plotting:
         )
         for i in range(num_classes):
             axes[0].plot(
-                fpr[i], tpr[i], label=f"Class {i} ROC (AUC = {roc_auc[i]:.2f})"
+                fpr[i], tpr[i], label=f"{label_names[i]} ROC (AUC = {roc_auc[i]:.2f})"
             )
         axes[0].plot([0, 1], [0, 1], linestyle="--", color="black", label="Random")
         axes[0].set_xlabel("False Positive Rate")
         axes[0].set_ylabel("True Positive Rate")
         axes[0].set_title("Multi-class ROC-AUC Curve")
         axes[0].legend(
-            loc="upper center", bbox_to_anchor=(0.5, -0.15), fancybox=True, shadow=True
+            loc="upper center",
+            bbox_to_anchor=(0.5, -0.15),
+            fancybox=True,
+            shadow=True,
+            ncol=2,
         )
 
-        # PR curves
+        # PR
         axes[1].plot(
             recall["micro"],
             precision["micro"],
@@ -333,56 +365,54 @@ class Plotting:
             axes[1].plot(
                 recall[i],
                 precision[i],
-                label=f"Class {i} PR (AP = {average_precision[i]:.2f})",
+                label=f"{label_names[i]} PR (AP = {average_precision[i]:.2f})",
             )
         axes[1].plot([0, 1], [1, 0], linestyle="--", color="black", label="Random")
         axes[1].set_xlabel("Recall")
         axes[1].set_ylabel("Precision")
         axes[1].set_title("Multi-class Precision-Recall Curve")
         axes[1].legend(
-            loc="upper center", bbox_to_anchor=(0.5, -0.15), fancybox=True, shadow=True
+            loc="upper center",
+            bbox_to_anchor=(0.5, -0.15),
+            fancybox=True,
+            shadow=True,
+            ncol=2,
         )
 
-        # Save and display
+        # Title & save
         fig.suptitle("\n".join([f"{k}: {v:.2f}" for k, v in metrics.items()]), y=1.35)
 
+        if prefix != "":
+            prefix = f"{prefix}_"
+
+        out_name = f"{self.model_name}_{prefix}roc_pr_curves.{self.plot_format}"
+        fig.savefig(self.output_dir / out_name, bbox_inches="tight")
         if self.show_plots:
             plt.show()
-
-        od = f"{self.model_name}_roc_pr_curves.{self.plot_format}"
-        fn = self.output_dir / od
-        fig.savefig(fn)
+        plt.close(fig)
 
     def plot_history(self, history: Dict[str, List[float]]) -> None:
         """Plot model history traces. Will be saved to file.
 
-        This method plots the model history traces. The plot is saved to disk as a ``<plot_format>`` file.
+        This method plots the deep learning model history traces. The plot is saved to disk as a ``<plot_format>`` file.
 
         Args:
             history (Dict[str, List[float]]): Dictionary with lists of history objects. Keys should be "Train" and "Validation".
 
         Raises:
-            ValueError: nn_method must be either 'ImputeNLPCA', 'ImputeUBP', 'ImputeStandardAE', 'ImputeVAE', 'ImputeCNN', or 'ImputeLSTM'.
+            ValueError: nn_method must be either 'ImputeNLPCA', 'ImputeUBP', 'ImputeAutoencoder', 'ImputeVAE'.
         """
         if self.model_name not in {
             "ImputeNLPCA",
             "ImputeVAE",
             "ImputeAutoencoder",
             "ImputeUBP",
-            "ImputeLSTM",
-            "ImputeCNN",
         }:
-            msg = "nn_method must be either 'ImputeNLPCA', 'ImputeVAE', 'ImputeStandardAE', 'ImputeCNN', 'ImputeLSTM', or 'ImputeUBP'."
+            msg = "nn_method must be either 'ImputeNLPCA', 'ImputeVAE', 'ImputeAutoencoder', 'ImputeUBP'."
             self.logger.error(msg)
             raise ValueError(msg)
 
-        if self.model_name in {
-            "ImputeNLPCA",
-            "ImputeVAE",
-            "ImputeAutoencoder",
-            "ImputeCNN",
-            "ImputeLSTM",
-        }:
+        if self.model_name != "ImputeUBP":
             fig, ax = plt.subplots(1, 1, figsize=(12, 8))
             df = pd.DataFrame(history)
             df = df.iloc[1:]
@@ -395,7 +425,7 @@ class Plotting:
             ax.set_xlabel("Epoch")
             ax.legend(["Train"], loc="best", shadow=True, fancybox=True)
 
-        elif self.model_name == "ImputeUBP":
+        else:
             fig, ax = plt.subplots(3, 1, figsize=(12, 8))
 
             for i, phase in enumerate(range(1, 4)):
@@ -415,81 +445,150 @@ class Plotting:
 
         if self.show_plots:
             plt.show()
-
-        plt.close()
+        plt.close(fig)
 
     def plot_confusion_matrix(
-        self, y_true_1d: np.ndarray, y_pred_1d: np.ndarray
+        self,
+        y_true_1d: np.ndarray,
+        y_pred_1d: np.ndarray,
+        label_names: Sequence[str] | None = None,
+        prefix: str = "",
     ) -> None:
-        """Plot a confusion matrix.
+        """Plot a confusion matrix with optional class labels.
 
-        This method plots a confusion matrix. The plot is saved to disk as a ``<plot_format>`` file.
+        This method plots a confusion matrix using true and predicted labels. The plot is saved to disk as a ``<plot_format>`` file.
 
         Args:
-            y_true_1d (np.ndarray): Array of true labels. The array should be 1D. If the array is multi-dimensional, it will be flattened.
-            y_pred_1d (np.ndarray): Array of predicted labels. The array should be 1D. If the array is multi-dimensional, it will be flattened.
+            y_true_1d (np.ndarray): 1D array of true integer labels in [0, n_classes-1].
+            y_pred_1d (np.ndarray): 1D array of predicted integer labels in [0, n_classes-1].
+            label_names (Sequence[str] | None): Optional sequence of class names (length must equal n_classes). If provided, both the internal label order and displayed tick labels will respect this order (assumed to be 0..n-1).
+            prefix (str): Optional prefix for the output filename.
+
+        Notes:
+            - If `label_names` is None, the display labels default to the numeric class indices inferred from `y_true_1d ∪ y_pred_1d`.
         """
         y_true_1d = misc.validate_input_type(y_true_1d, return_type="array")
         y_pred_1d = misc.validate_input_type(y_pred_1d, return_type="array")
-
         if y_true_1d.ndim > 1:
             y_true_1d = y_true_1d.flatten()
-
         if y_pred_1d.ndim > 1:
             y_pred_1d = y_pred_1d.flatten()
 
+        # Determine class count/order
+        if label_names is not None:
+            n_classes = len(label_names)
+            labels = np.arange(n_classes)  # our y_* are ints 0..n-1
+            display_labels = list(map(str, label_names))
+        else:
+            # Infer labels from data to keep matrix tight
+            labels = np.unique(np.concatenate([y_true_1d, y_pred_1d]))
+            display_labels = labels  # sklearn will convert to strings
+
         fig, ax = plt.subplots(1, 1, figsize=(15, 15))
         ConfusionMatrixDisplay.from_predictions(
-            y_true=y_true_1d, y_pred=y_pred_1d, ax=ax, cmap="viridis"
+            y_true=y_true_1d,
+            y_pred=y_pred_1d,
+            labels=labels,
+            display_labels=display_labels,
+            ax=ax,
+            cmap="viridis",
+            colorbar=True,
         )
 
-        fn = f"{self.model_name.lower()}_confusion_matrix.{self.plot_format}"
-        fn = self.output_dir / fn
-        fig.savefig(fn)
+        if prefix != "":
+            prefix = f"{prefix}_"
 
+        out_name = (
+            f"{self.model_name.lower()}_{prefix}confusion_matrix.{self.plot_format}"
+        )
+        fig.savefig(self.output_dir / out_name, bbox_inches="tight")
         if self.show_plots:
             plt.show()
-
-        plt.close()
+        plt.close(fig)
 
     def plot_gt_distribution(
         self,
-        X: Union[np.ndarray, pd.DataFrame, List[List[int]], torch.Tensor],
+        X: np.ndarray | pd.DataFrame | list | torch.Tensor,
         is_imputed: bool = False,
     ) -> None:
-        """Plot the distribution of genotypes in the dataset.
+        """Plot genotype distribution (IUPAC or integer-encoded).
 
-        This method plots the distribution of genotypes in the dataset. The plot is saved to disk as a ``<plot_format>`` file.
+        This plots counts for all genotypes present in X. It supports IUPAC single-letter genotypes and integer encodings. Missing markers '-', '.', '?' are normalized to 'N'. Bars are annotated with counts and percentages.
 
         Args:
-            X (pd.DataFrame): DataFrame containing genotype data. Columns should be samples and rows should be genotypes.
-            is_imputed (bool): Whether the data has been imputed. Defaults to False.
+            X: Array-like genotype matrix. Rows=loci, cols=samples (any orientation is OK). Elements are IUPAC one-letter genotypes (e.g., 'A','C','G','T','N','R',...) or integers (e.g., 0/1/2[/3]).
+            is_imputed: Whether these genotypes are imputed. Affects the title only. Defaults to False.
         """
-        arr = misc.validate_input_type(X, "array")
-        values, counts = np.unique(arr, return_counts=True, axis=None)
-        df = pd.DataFrame({"Genotype": values, "Count": counts})
-        df = df.sort_values(by="Genotype", ascending=True)
+        # --- Flatten X to a 1D Series ---
+        if isinstance(X, pd.DataFrame):
+            arr = X.values
+        elif torch.is_tensor(X):
+            arr = X.detach().cpu().numpy()
+        else:
+            arr = np.asarray(X)
+
+        s = pd.Series(arr.ravel())
+
+        # Detect string vs numeric encodings and normalize
+        if s.dtype.kind in ("O", "U", "S"):  # string-like → IUPAC path
+            s = s.astype(str).str.upper().replace({"-": "N", ".": "N", "?": "N"})
+            x_label = "Genotype (IUPAC)"
+            # Define canonical order: N, A/C/T/G, then IUPAC ambiguity codes.
+            canonical = ["A", "C", "T", "G"]
+            iupac_ambiguity = sorted(["M", "R", "W", "S", "Y", "K", "V", "H", "D", "B"])
+            base_order = ["N"] + canonical + iupac_ambiguity
+        else:  # numeric path (e.g., 0/1/2/[3], -1 for missing)
+            # Map common missing sentinels to 'N', keep others as strings for
+            # labeling
+            s = s.astype(float)  # allow NaN comparisons
+            s = s.where(~np.isin(s, [-1, np.nan]), other=np.nan)
+            s = s.fillna("N").astype(int, errors="ignore").astype(str)
+
+            x_label = "Genotype (Integer-encoded)"
+
+            # Support both ternary and quaternary encodings; keep a stable order
+            base_order = ["N", "0", "1", "2", "3"]
+
+        # Include any unexpected symbols at the end (sorted) so nothing is
+        # dropped
+        extras = sorted(set(s.unique()) - set(base_order))
+        full_order = base_order + [e for e in extras if e not in base_order]
+
+        # Count and reindex to show zero-count categories
+        counts = s.value_counts().reindex(full_order, fill_value=0)
+        df = counts.rename_axis("Genotype").reset_index(name="Count")
+        df["Percent"] = df["Count"] / df["Count"].sum() * 100
+
         title = "Imputed Genotype Counts" if is_imputed else "Genotype Counts"
 
-        fig, ax = plt.subplots(1, 1, figsize=(8, 12))
-        g = sns.barplot(x="Genotype", y="Count", data=df, ax=ax, palette="Set1")
-        g.set_xlabel("Integer Encoded Genotype")
-        g.set_ylabel("Count")
-        g.set_title(title)
-        for p in g.patches:
-            g.annotate(
-                f"{p.get_height():.1f}",
-                (p.get_x() + 0.25, p.get_height() + 0.01),
-                xytext=(0, 1),
-                textcoords="offset points",
-                va="bottom",
-            )
+        # --- Plot ---
+        fig, ax = plt.subplots(figsize=(8, 5))
+        sns.despine(fig=fig)
+
+        ax = sns.barplot(
+            data=df,
+            x="Genotype",
+            y="Percent",
+            hue="Genotype",
+            order=full_order,
+            errorbar=None,
+            ax=ax,
+            palette="Set1",
+            legend=False,
+            fill=True,
+        )
+
+        ax.set_xlabel(x_label)
+        ax.set_ylabel("Percent")
+        ax.set_title(title)
+        ax.set_ylim([0, 50])
+
+        fig.tight_layout()
 
         suffix = "imputed" if is_imputed else "original"
         fn = self.output_dir / f"gt_distributions_{suffix}.{self.plot_format}"
-        fig.savefig(fn)
+        fig.savefig(fn, dpi=300)
 
         if self.show_plots:
             plt.show()
-
-        plt.close()
+        plt.close(fig)
