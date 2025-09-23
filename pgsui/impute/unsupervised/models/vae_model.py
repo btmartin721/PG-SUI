@@ -1,6 +1,6 @@
-import logging
-from typing import List, Tuple, Union
+from typing import List, Literal, Tuple
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -11,20 +11,20 @@ from pgsui.impute.unsupervised.loss_functions import MaskedFocalLoss
 
 
 class Sampling(nn.Module):
-    """Sampling layer for the reparameterization trick.
+    """A layer that samples from a latent distribution using the reparameterization trick.
 
-    This layer is used to sample from the latent space using the reparameterization trick. The reparameterization trick is used to sample from a normal distribution with a given mean and variance. The trick is used to make the model differentiable and to allow for backpropagation through the sampling layer. The sampling layer is used in the VAE model to sample from the latent space.
+    This layer is a core component of a Variational Autoencoder (VAE). It takes the mean and log-variance of a latent distribution as input and generates a sample from that distribution. By using the reparameterization trick ($z = \mu + \sigma \cdot \epsilon$), it allows gradients to be backpropagated through the random sampling process, making the VAE trainable.
     """
 
     def forward(self, z_mean: torch.Tensor, z_log_var: torch.Tensor) -> torch.Tensor:
-        """Forward pass through the sampling layer.
+        """Performs the forward pass to generate a latent sample.
 
         Args:
-            z_mean (torch.Tensor): Mean of the latent space.
-            z_log_var (torch.Tensor): Log variance of the latent space.
+            z_mean (torch.Tensor): The mean of the latent normal distribution.
+            z_log_var (torch.Tensor): The log of the variance of the latent normal distribution.
 
         Returns:
-            torch.Tensor: Sampled latent space.
+            torch.Tensor: A sampled vector from the latent space.
         """
         z_sigma = torch.exp(0.5 * z_log_var)  # Precompute outside
 
@@ -36,9 +36,9 @@ class Sampling(nn.Module):
 
 
 class Encoder(nn.Module):
-    """Encoder module for the VAE model.
+    """The Encoder module of a Variational Autoencoder (VAE).
 
-    This module is used to encode the input data into the latent space. The encoder consists of a series of hidden layers followed by a dense layer to compute the mean and log variance of the latent space. The encoder is used to encode the input data into the latent space for the VAE model.
+    This module defines the encoder network, which takes high-dimensional input data and maps it to the parameters of a lower-dimensional latent distribution. The architecture consists of a series of fully-connected hidden layers that process the flattened input. The network culminates in two separate linear layers that output the mean (`z_mean`) and log-variance (`z_log_var`) of the approximate posterior distribution, $q(z|x)$.
     """
 
     def __init__(
@@ -48,17 +48,17 @@ class Encoder(nn.Module):
         latent_dim: int,
         hidden_layer_sizes: List[int],
         dropout_rate: float,
-        activation: Union[str, torch.nn.Module],
+        activation: torch.nn.Module,
     ):
-        """Encoder module for the VAE model.
+        """Initializes the Encoder module.
 
         Args:
-            n_features (int): Number of features in the input data.
-            num_classes (int): Number of classes in the input data.
-            latent_dim (int): Dimensionality of the latent space.
-            hidden_layer_sizes (List[int]): List of hidden layer sizes.
-            dropout_rate (float): Dropout rate for hidden layers.
-            activation (Union[str, torch.nn.Module]): Activation function for hidden layers.
+            n_features (int): The number of features in the input data (e.g., SNPs).
+            num_classes (int): The number of possible classes for each input element (e.g., 4 alleles).
+            latent_dim (int): The dimensionality of the latent space.
+            hidden_layer_sizes (List[int]): A list of integers specifying the size of each hidden layer.
+            dropout_rate (float): The dropout rate for regularization in the hidden layers.
+            activation (torch.nn.Module): An instantiated activation function module (e.g., `nn.ReLU()`) for the hidden layers.
         """
         super(Encoder, self).__init__()
         self.flatten = nn.Flatten()
@@ -67,6 +67,7 @@ class Encoder(nn.Module):
         )
 
         layers = []
+        # The input dimension accounts for channels
         input_dim = n_features * num_classes
         for hidden_size in hidden_layer_sizes:
             layers.append(nn.Linear(input_dim, hidden_size))
@@ -86,13 +87,13 @@ class Encoder(nn.Module):
     def forward(
         self, x: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Forward pass through the encoder.
+        """Performs the forward pass through the encoder.
 
         Args:
-            x (torch.Tensor): Input data of shape (batch_size, n_features, num_classes).
+            x (torch.Tensor): The input data tensor of shape `(batch_size, n_features, num_classes)`.
 
         Returns:
-            Tuple[torch.Tensor, torch.Tensor, torch.Tensor]: Tuple of z_mean, z_log_var, and z.
+            Tuple[torch.Tensor, torch.Tensor, torch.Tensor]: A tuple containing the latent mean (`z_mean`), latent log-variance (`z_log_var`), and a sample from the latent distribution (`z`).
         """
         x = self.flatten(x)
         x = self.hidden_layers(x)
@@ -103,9 +104,9 @@ class Encoder(nn.Module):
 
 
 class Decoder(nn.Module):
-    """Decoder module for the VAE model.
+    """The Decoder module of a Variational Autoencoder (VAE).
 
-    This module is used to decode the latent space into the output data. The decoder consists of a series of hidden layers followed by a dense layer to compute the output data. The decoder is used to decode the latent space into the output data for the VAE model. The output data is reshaped to the original shape of the input data.
+    This module defines the decoder network, which takes a sample from the low-dimensional latent space and maps it back to the high-dimensional data space. It aims to reconstruct the original input data. The architecture consists of a series of fully-connected hidden layers followed by a final linear layer that produces the reconstructed data, which is then reshaped to match the original input's dimensions.
     """
 
     def __init__(
@@ -115,17 +116,17 @@ class Decoder(nn.Module):
         latent_dim: int,
         hidden_layer_sizes: List[int],
         dropout_rate: float,
-        activation: Union[str, torch.nn.Module],
+        activation: torch.nn.Module,
     ) -> None:
-        """Decoder module for the VAE model.
+        """Initializes the Decoder module.
 
         Args:
-            n_features (int): Number of features in the input data.
-            num_classes (int): Number of classes in the input data.
-            latent_dim (int): Dimensionality of the latent space.
-            hidden_layer_sizes (List[int]): List of hidden layer sizes.
-            dropout_rate (float): Dropout rate for hidden layers.
-            activation (Union[str, torch.nn.Module]): Activation function for hidden layers.
+            n_features (int): The number of features in the output data (e.g., SNPs).
+            num_classes (int): The number of possible classes for each output element (e.g., 4 alleles).
+            latent_dim (int): The dimensionality of the input latent space.
+            hidden_layer_sizes (List[int]): A list of integers specifying the size of each hidden layer.
+            dropout_rate (float): The dropout rate for regularization in the hidden layers.
+            activation (torch.nn.Module): An instantiated activation function module (e.g., `nn.ReLU()`) for the hidden layers.
         """
         super(Decoder, self).__init__()
 
@@ -142,17 +143,20 @@ class Decoder(nn.Module):
             input_dim = hidden_size
 
         self.hidden_layers = nn.Sequential(*layers)
-        self.dense_output = nn.Linear(input_dim, n_features * num_classes)
+        # UPDATED: Output dimension must account for channels
+        output_dim = n_features * num_classes
+        self.dense_output = nn.Linear(input_dim, output_dim)
+        # UPDATED: Reshape must account for channels
         self.reshape = (n_features, num_classes)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass through the decoder.
+        """Performs the forward pass through the decoder.
 
         Args:
-            x (torch.Tensor): Input data of shape (batch_size, latent_dim).
+            x (torch.Tensor): The input latent tensor of shape `(batch_size, latent_dim)`.
 
         Returns:
-            torch.Tensor: Output data of shape (batch_size, n_features, num_classes).
+            torch.Tensor: The reconstructed output data of shape `(batch_size, n_features, num_classes)`.
         """
         x = self.hidden_layers(x)
         x = self.dense_output(x)
@@ -160,64 +164,67 @@ class Decoder(nn.Module):
 
 
 class VAEModel(nn.Module):
-    """Variational Autoencoder (VAE) model for imputation.
+    """A Variational Autoencoder (VAE) model for imputation.
 
-    This model is used to impute missing data using a VAE architecture. The model consists of an encoder and a decoder. The encoder encodes the input data into the latent space, while the decoder decodes the latent space into the output data. The model uses a focal loss for the reconstruction loss and a KL divergence term for the latent space regularization. The model can be used to impute missing data in genotype data.
+    This class combines an `Encoder` and a `Decoder` to form a VAE, a generative model for learning complex data distributions. It is designed for imputing missing values in categorical data, such as genomic SNPs. The model is trained by maximizing the Evidence Lower Bound (ELBO), which is a lower bound on the log-likelihood of the data.
+
+    **Objective Function (ELBO):**
+    The VAE loss function is derived from the ELBO and consists of two main components: a reconstruction term and a regularization term.
+    $$
+    \\mathcal{L}(\\theta, \\phi; x) = \\underbrace{\\mathbb{E}_{q_{\\phi}(z|x)}[\\log p_{\\theta}(x|z)]}_{\\text{Reconstruction Loss}} - \\underbrace{D_{KL}(q_{\\phi}(z|x) || p(z))}_{\\text{KL Divergence}}
+    $$
+    -   The **Reconstruction Loss** encourages the decoder to accurately reconstruct the input data from its latent representation. This implementation uses a `MaskedFocalLoss`.
+    -   The **KL Divergence** acts as a regularizer, forcing the approximate posterior distribution $q_{\\phi}(z|x)$ learned by the encoder to be close to a prior distribution $p(z)$ (typically a standard normal distribution).
     """
 
     def __init__(
         self,
-        *,
         n_features: int,
-        prefix: str = "pgsui",
-        num_classes: int = 3,
+        prefix: str,
+        *,
+        num_classes: int = 4,
+        hidden_layer_sizes: List[int] | np.ndarray = [128, 64],
         latent_dim: int = 2,
-        hidden_layer_sizes: List[int] = [128, 64],
         dropout_rate: float = 0.2,
-        activation: str = "elu",
+        activation: Literal["relu", "elu", "selu", "leaky_relu"] = "relu",
         gamma: float = 2.0,
         beta: float = 1.0,
-        verbose: int = 0,
+        device: Literal["cpu", "gpu", "mps"] = "cpu",
+        verbose: bool = False,
         debug: bool = False,
-        logger: logging.Logger | None = None,
     ):
-        """Variational Autoencoder (VAE) model for imputation.
-
-        This model is used to impute missing data using a VAE architecture. The model consists of an encoder and a decoder. The encoder encodes the input data into the latent space, while the decoder decodes the latent space into the output data. The model uses a focal loss for the reconstruction loss and a KL divergence term for the latent space regularization. The model can be used to impute missing data in genotype data.
+        """Initializes the VAEModel.
 
         Args:
-            n_features (int): Number of features in the input data.
-            prefix (str, optional): Prefix for the logger. Defaults to "pgsui".
-            num_classes (int, optional): Number of classes in the input data. Defaults to 3.
-            latent_dim (int, optional): Dimensionality of the latent space. Defaults to 2.
-            hidden_layer_sizes (List[int], optional): List of hidden layer sizes. Defaults to [128, 64].
-            dropout_rate (float, optional): Dropout rate for hidden layers. Defaults to 0.2.
-            activation (str, optional): Activation function for hidden layers. Defaults to "elu".
-            gamma (float, optional): Focal loss gamma parameter. Defaults to 2.0.
-            beta (float, optional): Beta parameter for the KL divergence term. Defaults to 1.0.
-            verbose (int, optional): Verbosity level for logging messages. Defaults to 0.
-            debug (bool, optional): Debug mode for logging messages. Defaults to False.
-            logger (logging.Logger, optional): Logger object. Defaults to None.
+            n_features (int): The number of features in the input data (e.g., SNPs).
+            prefix (str): A prefix used for logging.
+            num_classes (int): The number of possible classes for each input element. Defaults to 4.
+            hidden_layer_sizes (List[int] | np.ndarray): A list of integers specifying the size of each hidden layer in the encoder and decoder. Defaults to [128, 64].
+            latent_dim (int): The dimensionality of the latent space. Defaults to 2.
+            dropout_rate (float): The dropout rate for regularization in the hidden layers. Defaults to 0.2.
+            activation (str): The name of the activation function to use in hidden layers. Defaults to "relu".
+            gamma (float): The focusing parameter for the focal loss component. Defaults to 2.0.
+            beta (float): A weighting factor for the KL divergence term in the total loss ($\beta$-VAE). Defaults to 1.0.
+            device (Literal["cpu", "gpu", "mps"]): The device to run the model on.
+            verbose (bool): If True, enables detailed logging. Defaults to False.
+            debug (bool): If True, enables debug mode. Defaults to False.
         """
         super(VAEModel, self).__init__()
         self.num_classes = num_classes
         self.gamma = gamma
         self.beta = beta
+        self.device = device
 
-        if logger is None:
-            prefix = "pgsui_output" if prefix == "pgsui" else prefix
-            logman = LoggerManager(
-                name=__name__, prefix=prefix, verbose=verbose >= 1, debug=debug
-            )
-            self.logger = logman.get_logger()
-        else:
-            self.logger = logger
+        logman = LoggerManager(
+            name=__name__, prefix=prefix, verbose=verbose, debug=debug
+        )
+        self.logger = logman.get_logger()
 
         activation = self._resolve_activation(activation)
 
         self.encoder = Encoder(
             n_features,
-            num_classes,
+            self.num_classes,
             latent_dim,
             hidden_layer_sizes,
             dropout_rate,
@@ -225,9 +232,10 @@ class VAEModel(nn.Module):
         )
 
         decoder_layer_sizes = list(reversed(hidden_layer_sizes))
+
         self.decoder = Decoder(
             n_features,
-            num_classes,
+            self.num_classes,
             latent_dim,
             decoder_layer_sizes,
             dropout_rate,
@@ -237,13 +245,13 @@ class VAEModel(nn.Module):
     def forward(
         self, x: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Forward pass through the VAE model.
+        """Performs the forward pass through the full VAE model.
 
         Args:
-            x (torch.Tensor): Input data of shape (batch_size, n_features, num_classes).
+            x (torch.Tensor): The input data tensor of shape `(batch_size, n_features, num_classes)`.
 
         Returns:
-            Tuple[torch.Tensor, torch.Tensor, torch.Tensor]: Tuple of the reconstruction, z_mean, and z_log_var
+            Tuple[torch.Tensor, torch.Tensor, torch.Tensor]: A tuple containing the reconstructed output, the latent mean (`z_mean`), and the latent log-variance (`z_log_var`).
         """
         z_mean, z_log_var, z = self.encoder(x)
         reconstruction = self.decoder(z)
@@ -251,54 +259,76 @@ class VAEModel(nn.Module):
 
     def compute_loss(
         self,
-        y: torch.Tensor,
         outputs: Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+        y: torch.Tensor,
         mask: torch.Tensor | None = None,
         class_weights: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Compute the loss function for the VAE model.
+        """Computes the VAE loss function (negative ELBO).
 
-        This method computes the loss function for the VAE model. The loss function consists of a reconstruction loss and a KL divergence term. The reconstruction loss is computed using a focal loss, while the KL divergence term is computed using the KL divergence between the posterior and the prior. The class weights and mask are used to weight the loss function and mask the loss values, respectively. The loss function is a weighted sum of the reconstruction loss and the KL divergence term. The class weights are used to weight the loss values for each class. The mask is used to mask the loss values for missing data. The loss function is used to optimize the model parameters using backpropagation. The loss function is used to compute the gradients of the model parameters with respect to the loss value.
+        The loss is the sum of a reconstruction term and a regularizing KL divergence term. The reconstruction loss is calculated using a masked focal loss, and the KL divergence measures the difference between the learned latent distribution and a standard normal prior.
 
         Args:
-            y (torch.Tensor): Target data tensor.
-            outputs (Tuple[torch.Tensor, torch.Tensor, torch.Tensor]): Tuple of the reconstruction, z_mean, and z_log_var.
-            mask (torch.Tensor, optional): Mask tensor. Defaults to None.
-            class_weights (torch.Tensor, optional): Class weights tensor. Defaults to None.
+            outputs (Tuple[torch.Tensor, torch.Tensor, torch.Tensor]): The tuple of (reconstruction, z_mean, z_log_var) from the model's forward pass.
+            y (torch.Tensor): The target data tensor, expected to be one-hot encoded. This is converted to class indices internally for the loss function.
+            mask (torch.Tensor | None): A boolean mask to exclude missing values from the reconstruction loss.
+            class_weights (torch.Tensor | None): Weights to apply to each class in the reconstruction loss to handle imbalance.
 
         Returns:
-            torch.Tensor: Loss value.
+            torch.Tensor: The computed scalar loss value.
         """
         reconstruction, z_mean, z_log_var = outputs
 
-        # KL Divergence using torch.distributions. Normal is used as the prior.
-        prior = Normal(0, 1)
+        # 1. KL Divergence Calculation
+        prior = Normal(torch.zeros_like(z_mean), torch.ones_like(z_log_var))
         posterior = Normal(z_mean, torch.exp(0.5 * z_log_var))
-        kl_loss = torch.distributions.kl.kl_divergence(posterior, prior).mean()
+        kl_loss = (
+            torch.distributions.kl.kl_divergence(posterior, prior).sum(dim=1).mean()
+        )
 
         if class_weights is None:
             class_weights = torch.ones(self.num_classes, device=y.device)
 
-        if mask is None:
-            mask = torch.ones_like(y, dtype=torch.bool)
+        # 2. Reconstruction Loss Calculation
+        # Reverting to the robust method of flattening tensors and using the
+        # custom loss function.
+        n_classes = reconstruction.shape[-1]
+        logits_flat = reconstruction.reshape(-1, n_classes)
 
+        # Convert one-hot `y` to class indices for the loss function.
+        targets_flat = torch.argmax(y, dim=-1).reshape(-1)
+
+        if mask is None:
+            # If no mask is provided, all targets are considered valid.
+            mask_flat = torch.ones_like(targets_flat, dtype=torch.bool)
+        else:
+            # The mask needs to be reshaped to match the flattened targets.
+            mask_flat = mask.reshape(-1)
+
+        # Logits, class-index targets, and the valid mask.
         criterion = MaskedFocalLoss(alpha=class_weights, gamma=self.gamma)
-        reconstruction_loss = criterion(reconstruction, y, valid_mask=mask)
+
+        reconstruction_loss = criterion(
+            logits_flat.to(self.device),
+            targets_flat.to(self.device),
+            valid_mask=mask_flat.to(self.device),
+        )
+
         return reconstruction_loss + self.beta * kl_loss
 
-    def _resolve_activation(self, activation: str | torch.nn.Module) -> torch.nn.Module:
-        """Resolve the activation function.
-
-        This method resolves the activation function based on the input string.
+    def _resolve_activation(
+        self, activation: Literal["relu", "elu", "leaky_relu", "selu"]
+    ) -> torch.nn.Module:
+        """Resolves an activation function module from a string name.
 
         Args:
-            activation (Union[str, torch.nn.Module]): Activation function.
+            activation (Literal["relu", "elu", "leaky_relu", "selu"]): The name of the activation function.
 
         Returns:
-            torch.nn.Module: Resolved activation function.
+            torch.nn.Module: The corresponding instantiated PyTorch activation function module.
 
         Raises:
-            ValueError: If the activation function is not supported.
+            ValueError: If the provided activation name is not supported.
         """
         if isinstance(activation, str):
             activation = activation.lower()
