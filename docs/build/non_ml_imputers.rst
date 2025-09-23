@@ -1,10 +1,10 @@
-Non-Machine Learning Imputers
-==============================
+Deterministic (non-Machine Learning) Imputers
+=============================================
 
-ImputePhylo, ImputeAlleleFreq, ImputeRefAllele
------------------------------------------------
+ImputeMostFrequent, ImputeRefAllele
+-----------------------------------
 
-.. automodule:: pgsui.impute.simple_imputers
+.. automodule:: pgsui.impute.deterministic.imputers
    :members:
    :undoc-members:
    :noindex:
