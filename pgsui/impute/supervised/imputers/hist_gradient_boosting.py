@@ -1,376 +1,304 @@
-import copy
-from pathlib import Path
-from pprint import pformat
-from typing import Any, Literal
+# Standard library
+from typing import TYPE_CHECKING, Generator, List, Literal
 
+# Third-party
 import numpy as np
-import optuna
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.experimental import enable_iterative_imputer  # noqa
 from sklearn.impute import IterativeImputer
+from sklearn.model_selection import train_test_split
+
+# Project
+from snpio.analysis.genotype_encoder import GenotypeEncoder
 from snpio.utils.logging import LoggerManager
 
-from pgsui.impute.supervised.base_supervised import BaseSupervisedImputer
-from pgsui.utils.misc import validate_input_type
+from pgsui.data_processing.containers import _HGBParams, _ImputerParams, _SimParams
+from pgsui.data_processing.transformers import SimGenotypeDataTransformer
+from pgsui.impute.supervised.base import BaseImputer
+from pgsui.utils.plotting import Plotting
+from pgsui.utils.scorers import Scorer
+
+if TYPE_CHECKING:
+    from snpio.read_input.genotype_data import GenotypeData
 
 
-class ImputeHistGradientBoosting(BaseSupervisedImputer):
-    """Histogram Gradient Boosting imputer for genotype data.
+class ImputeHistGradientBoosting(BaseImputer):
+    """Supervised imputation with Histogram-based Gradient Boosting on 0/1/2 genotypes.
 
-    This class implements a HistGradientBoosting imputer for genotype data. The class inherits from the BaseSupervisedImputer class and provides methods for fitting and transforming genotype data using a HistGradientBoosting model. The class uses the scikit-learn model for imputation.
+    This implementation uses the following workflow:
+        - Uses 0/1/2 encoded genotypes (with -9 for missing).
+        - Splits by samples into train/test once (no per-locus CV).
+        - Trains one HistGradientBoosting per locus using all *other* loci as predictors.
+        - Computes the same metrics (accuracy, F1, PR-macro, etc.) and renders the same plots/classification reports (zygosity and IUPAC).
+
+    Compared with allele-wise/iterative imputers, this is simpler and scales well with parallelization across loci.
+
+    Attributes:
+        model_name (str): Name used in logs/paths.
+        genotypes_012_ (np.ndarray): 0/1/2 matrix with -9 for missing.
+        models_ (list[HistGradientBoostingClassifier | None]): One fitted model per locus; None where model couldn't be trained.
     """
 
     def __init__(
         self,
-        genotype_data: Any = None,
+        genotype_data: "GenotypeData",
         *,
+        # General parameters
         prefix: str = "pgsui",
-        output_dir: str | Path = "output",
-        verbose: int = 0,
+        seed: int | None = None,
         n_jobs: int = 1,
-        seed: int = 42,
-        tune: bool = False,
-        tune_metric: str = "pr_macro",
-        tune_n_trials: int = 100,
-        tune_save_db: bool = False,
-        sim_prop_missing: float = 0.1,
-        sim_strategy: str = "random_inv_multinom",
-        scorer_averaging: Literal["macro", "micro", "weighted"] = "weighted",
-        model_n_nearest_features: int = 5,
-        model_max_iter: int = 10,
-        model_max_model_iter: int = 100,
-        model_learning_rate: float = 0.1,
-        model_loss: str = "log_loss",
-        model_early_stopping: bool = True,
-        model_min_samples_leaf: int = 20,
-        model_l2_regularization: float = 0.0,
-        model_max_depth: int = 10,
-        model_max_features: str = "auto",
-        model_validation_split: float = 0.2,
-        plot_format: str = "pdf",
-        plot_fontsize: int | float = 18,
-        plot_dpi: int | float = 300,
-        plot_title_fontsize=20,
-        plot_despine=True,
-        plot_show_plots=False,
+        verbose: bool = False,
         debug: bool = False,
+        # Model hyperparameters
+        model_n_estimators: int = 300,
+        model_learning_rate: float = 0.1,
+        model_n_iter_no_change: int = 10,
+        model_tol: float = 1e-7,
+        model_max_depth: int | None = None,
+        model_min_samples_leaf: int = 1,
+        model_max_features: float = 1.0,
+        model_validation_split: float = 0.2,
+        model_n_nearest_features: int | None = 10,
+        model_max_iter: int = 10,
+        # Simulation parameters
+        sim_prop_missing: float = 0.5,
+        sim_strategy: Literal["random", "random_inv_genotype"] = "random_inv_genotype",
+        sim_het_boost: float = 2.0,
+        # Plotting parameters
+        plot_format: Literal["pdf", "png", "jpg", "jpeg"] = "pdf",
+        plot_fontsize: int = 18,
+        plot_despine: bool = True,
+        plot_dpi: int = 300,
+        plot_show_plots: bool = False,
     ):
-        """Initializes the imputer with a logger.
-
-        This class initializes the imputer with a logger using the LoggerManager class. The logger is used to log messages during the model fitting and transformation processes.
+        """Initialize the HistGradientBoostingClassifier imputer.
 
         Args:
-            genotype_data (Any): Genotype data object.
-            prefix (str): Prefix for the logger.
-            output_dir (str | Path): Output directory for the logger.
-            verbose (int): Verbosity level for the logger.
-            n_jobs (int): Number of jobs to run in parallel.
-            seed (int): Random seed for reproducibility.
-            tune (bool): Whether to tune hyperparameters.
-            tune_metric (str): Metric to optimize during hyperparameter tuning.
-            tune_n_trials (int): Number of trials for hyperparameter tuning.
-            tune_save_db (bool): Whether to save the optuna database.
-            sim_prop_missing (float): Proportion of missing data to simulate.
-            sim_strategy (str): Strategy for simulating missing data.
-            scorer_averaging (str): Averaging strategy for scoring metrics.
-            model_n_nearest_features (int): Number of nearest features for imputation.
-            model_max_iter (int): Maximum number of iterations for imputation.
-            model_max_model_iter (int): Maximum number of iterations for model training.
-            model_learning_rate (float): Learning rate for model training.
-            model_loss (str): Loss function for model training.
-            model_early_stopping (bool): Whether to use early stopping for model training.
-            model_min_samples_leaf (int): Minimum number of samples for leaf nodes.
-            model_l2_regularization (float): L2 regularization parameter.
-            model_max_depth (int): Maximum depth of the model.
-            model_max_features (str): Maximum number of features to consider for splitting.
-            model_validation_split (float): Validation split for model evaluation.
-            plot_format (str): Format for saving plots.
-            plot_fontsize (int | float): Font size for plots.
-            plot_dpi (int | float): DPI for saving plots.
-            plot_title_fontsize (int): Font size for plot titles.
-            plot_despine (bool): Whether to remove spines from plots.
+            genotype_data (GenotypeData): SNPio genotype container.
+            prefix (str): Output prefix.
+            seed (int | None): RNG seed.
+            n_jobs (int): Parallel jobs for per-locus training/prediction.
+            verbose (bool): Verbose logging.
+            debug (bool): Debug logging.
+            model_n_estimators (int): HGB boosted trees.
+            model_learning_rate (float): HGB learning rate.
+            model_n_iter_no_change (int): Early stopping rounds.
+            model_tol (float): Early stopping tolerance.
+            model_max_depth (int | None): HGB depth.
+            model_min_samples_split (int): Min split.
+            model_min_samples_leaf (int): Min leaf.
+            model_max_features (str|float|None): max_features.
+            model_criterion (str): Split criterion.
+            model_validation_split (float): Test fraction by samples.
+            model_n_nearest_features (int | None): Number of Nearest Neighbors for IterativeImputer. Defaults to 10.
+            model_max_iter (int): Max IterativeImputer iterations.
+            sim_prop_missing (float): Proportion of genotypes to simulate as missing.
+            sim_strategy (str): Strategy for simulating missingness.
+            sim_het_boost (float): Factor to boost heterozygous missingness.
+            plot_format (Literal["pdf", "png", "jpg", "jpeg"]): Plot format.
+            plot_fontsize (int): Font size for plots.
+            plot_despine (bool): Whether to despine plots.
+            plot_dpi (int): DPI for plots.
             plot_show_plots (bool): Whether to show plots.
-            debug (bool): Whether to run in debug mode.
         """
         self.model_name = "ImputeHistGradientBoosting"
         self.Model = HistGradientBoostingClassifier
 
-        logman = LoggerManager(
-            __name__, prefix=prefix, verbose=verbose >= 1, debug=debug
-        )
+        self.genotype_data = genotype_data
+        self.pgenc = GenotypeEncoder(genotype_data)
+        self.prefix = prefix
+        self.seed = seed
+        self.n_jobs = n_jobs
+        self.verbose = verbose
+        self.debug = debug
+
+        super().__init__(verbose=verbose, debug=debug)
+
+        logman = LoggerManager(__name__, prefix=prefix, verbose=verbose, debug=debug)
         self.logger = logman.get_logger()
 
-        super().__init__(
-            prefix=prefix, output_dir=output_dir, verbose=verbose, debug=debug
+        # Ensure supervised-family directories (models/plots/metrics/optimize)
+        self._create_model_directories(
+            prefix, ["models", "plots", "metrics", "optimize"]
         )
 
-        self.genotype_data = genotype_data
-        self.n_jobs = n_jobs
-        self.seed = seed
-        self.n_nearest_features = model_n_nearest_features
-        self.max_iter = model_max_iter
-        self.tune = tune
-        self.tune_metric = tune_metric
-        self.tune_n_trials = tune_n_trials
-        self.tune_save_db = tune_save_db
-        self.sim_prop_missing = sim_prop_missing
-        self.sim_strategy = sim_strategy
-        self.max_depth = model_max_depth
-        self.max_features = model_max_features
-        self.loss = model_loss
-        self.max_model_iter = model_max_model_iter
-        self.model_early_stopping = model_early_stopping
-        self.model_min_samples_leaf = model_min_samples_leaf
-        self.model_l2_regularization = model_l2_regularization
-        self.learning_rate = model_learning_rate
-        self.validation_split = model_validation_split
+        # Plotting config
         self.plot_format = plot_format
-        self.plot_fontsize = plot_fontsize
         self.plot_dpi = plot_dpi
-        self.title_fontsize = plot_title_fontsize
+        self.plot_fontsize = plot_fontsize
+        self.title_fontsize = plot_fontsize
         self.despine = plot_despine
         self.show_plots = plot_show_plots
-        self.scorer_averaging = scorer_averaging
 
-        # Model parameters
-        # Model parameters
-        self.model_params = {
-            "loss": model_loss,
-            "max_iter": model_max_model_iter,
-            "max_depth": model_max_depth,
-            "min_samples_leaf": model_min_samples_leaf,
-            "l2_regularization": model_l2_regularization,
-            "learning_rate": model_learning_rate,
-            "max_features": model_max_features,
-            "early_stopping": model_early_stopping,
-            "random_state": self.seed,
-        }
+        # Data/task config
+        self.validation_split = model_validation_split
 
-        self.is_fit_ = False
-
-        _ = genotype_data.snp_data
-
-    def fit(self, X: np.ndarray, y: None = None) -> "ImputeHistGradientBoosting":
-        """Fits the imputer to the genotype data.
-
-        This method fits the imputer to the genotype data using the scikit-learn model. The method takes the genotype data X and the target labels y as input and fits the model to the data.
-
-        Args:
-            X (np.ndarray): Genotype data array.
-            y (np.ndarray): Ignored. Only for compatibility with scikit-learn API.
-
-        Returns:
-            ImputeHistGradientBoosting: Fitted imputer.
-        """
-        self.logger.info(f"Fitting {self.model_name} imputer to genotype data.")
-
-        X = validate_input_type(X)
-        y = X.copy()
-
-        self.n_features_ = X.shape[1]
-        self.num_classes_ = len(np.unique(y[y >= 0 & ~np.isnan(y)]))
-
-        self.class_weights_ = self.compute_class_weights(X)
-        self.class_weights_ = validate_input_type(self.class_weights_)
-
-        transformers = self.init_transformers()
-        self.sim_, self.plotter_, self.scorers_ = transformers
-
-        Xenc = np.where(np.logical_or(X < 0, np.isnan(X)), -1, X)
-        yenc = np.where(np.logical_or(y < 0, np.isnan(y)), np.nan, y)
-
-        Xsim, missing_masks = self.sim_.fit_transform(Xenc)
-        self.sim_missing_mask_ = missing_masks["simulated"]
-        self.original_missing_mask_ = missing_masks["original"]
-        self.all_missing_mask_ = missing_masks["all"]
-
-        Xsim = np.where(Xsim < 0, np.nan, Xsim)
-        Xenc = np.where(Xenc < 0, np.nan, Xenc)
-        data = self.split_data(Xsim, yenc, self.sim_missing_mask_)
-
-        (
-            self.X_train_,
-            self.X_test_,
-            self.y_train_,
-            self.y_test_,
-            self.sim_mask_train_,
-            self.sim_mask_test_,
-        ) = data
-
-        if self.tune:
-            best_params = self.tune_hyperparameters()
-
-            # Reinitialize model with best hyperparameters.
-            self.best_params_ = self.set_best_params(best_params)
-            self.model_params.update(self.best_params_)
-
-            # Log best hyperparameters.
-            self.logger.info("Best parameters:")
-            best_params_tmp = copy.deepcopy(best_params)
-            best_params_tmp["n_nearest_features"] = self.n_nearest_features
-            best_params_tmp["max_iter"] = self.max_iter
-            best_params_fmt = pformat(best_params_tmp, indent=4).split("\n")
-            [self.logger.info(p) for p in best_params_fmt]
-        else:
-            self.best_params_ = self.model_params
-
-        self.Model_ = self.train_model(self.X_train_, self.y_train_)
-
-        self.logger.info(f"Model fitted.")
-
-        self.metrics_ = self.evaluate_model(
-            self.X_test_, self.y_test_, self.sim_mask_test_, Model=self.Model_
+        # HGB params
+        self.params = _HGBParams(
+            max_iter=model_n_estimators,
+            learning_rate=model_learning_rate,
+            max_depth=model_max_depth,
+            min_samples_leaf=model_min_samples_leaf,
+            max_features=model_max_features,
+            random_state=seed,
+            verbose=debug,
+            n_iter_no_change=model_n_iter_no_change,
+            tol=model_tol,
         )
 
-        self.logger.info(f"Model evaluation complete.")
+        # Imputer params
+        self.imputer_params = _ImputerParams(
+            n_nearest_features=model_n_nearest_features,
+            max_iter=model_max_iter,
+            random_state=seed,
+            verbose=verbose,
+        )
 
+        self.sim_params = _SimParams(
+            prop_missing=sim_prop_missing,
+            strategy=sim_strategy,
+            missing_val=-1,
+            het_boost=sim_het_boost,
+            seed=seed,
+        )
+
+        self.max_iter = model_max_iter
+        self.n_nearest_features = model_n_nearest_features
+
+        # Will be set in fit()
+        self.is_haploid_: bool | None = None
+        self.num_classes_: int | None = None
+        self.num_features_: int | None = None
+        self.models_: List[HistGradientBoostingClassifier | None] | None = None
+        self.is_fit_: bool = False
+
+    def fit(self) -> "BaseImputer":
+        """Fit the imputer using self.genotype_data with no arguments.
+
+        Steps:
+            1) Encode to 0/1/2 with -9/-1 as missing.
+            2) Split samples into train/test.
+            3) Train IterativeImputer on train (convert missing -> NaN).
+            4) Evaluate on test **non-missing positions** (reconstruction metrics)
+            and call your original plotting stack via _make_class_reports().
+
+        Returns:
+            BaseImputer: self.
+        """
+        # Prepare utilities & metadata
+        self.scorers_ = Scorer(
+            prefix=self.prefix, average="macro", verbose=self.verbose, debug=self.debug
+        )
+
+        self.plotter_ = Plotting(
+            self.model_name,
+            prefix=self.prefix,
+            plot_format=self.plot_format,
+            plot_dpi=self.plot_dpi,
+            plot_fontsize=self.plot_fontsize,
+            title_fontsize=self.title_fontsize,
+            despine=self.despine,
+            show_plots=self.show_plots,
+            verbose=self.verbose,
+            debug=self.debug,
+        )
+
+        X_int = self.pgenc.genotypes_012
+        self.X012_ = X_int.astype(float)
+        self.X012_[self.X012_ < 0] = np.nan  # Ensure missing are NaN
+        self.is_haploid_ = np.count_nonzero(self.X012_ == 1) == 0
+        self.num_classes_ = 2 if self.is_haploid_ else 3
+        self.n_samples_, self.n_features_ = X_int.shape
+
+        # Split
+        X_train, X_test = train_test_split(
+            self.X012_,
+            test_size=self.validation_split,
+            random_state=self.seed,
+            shuffle=True,
+        )
+
+        # Simulate missing values on test set.
+        sim_transformer = SimGenotypeDataTransformer(**self.sim_params.to_dict())
+
+        X_test = np.nan_to_num(X_test, nan=-1)  # ensure missing are -1
+        sim_transformer.fit(X_test)
+        X_test_sim, missing_masks = sim_transformer.transform(X_test)
+        sim_mask = missing_masks["simulated"]
+        X_test_sim[X_test_sim < 0] = np.nan  # ensure missing are NaN
+
+        self.model_params_ = self.params.to_dict()
+        self.model_params_["random_state"] = self.seed
+
+        # Train IterativeImputer
+        est = self.Model(**self.model_params_)
+
+        self.imputer_ = IterativeImputer(estimator=est, **self.imputer_params.to_dict())
+
+        self.imputer_.fit(X_train)
         self.is_fit_ = True
+
+        X_test_imputed = self.imputer_.transform(X_test_sim)
+
+        # Predict on simulated test set
+        y_true_flat = X_test[sim_mask].copy()
+        y_pred_flat = X_test_imputed[sim_mask].copy()
+
+        # Round and clip predictions to valid {0,1,2} or {0,1} if haploid.
+        if self.is_haploid_:
+            y_pred_flat = np.clip(np.rint(y_pred_flat), 0, 1).astype(int, copy=False)
+            y_true_flat = np.clip(np.rint(y_true_flat), 0, 1).astype(int, copy=False)
+        else:
+            y_pred_flat = np.clip(np.rint(y_pred_flat), 0, 2).astype(int, copy=False)
+            y_true_flat = np.clip(np.rint(y_true_flat), 0, 2).astype(int, copy=False)
+
+        # Evaluate (012 / zygosity)
+        self._evaluate_012_and_plot(y_true_flat.copy(), y_pred_flat.copy())
+
+        # Evaluate (IUPAC)
+        encodings_dict = {
+            "A": 0,
+            "C": 1,
+            "G": 2,
+            "T": 3,
+            "W": 4,
+            "R": 5,
+            "M": 6,
+            "K": 7,
+            "Y": 8,
+            "S": 9,
+            "N": -1,
+        }
+
+        y_true_iupac_tmp = self.pgenc.decode_012(y_true_flat)
+        y_pred_iupac_tmp = self.pgenc.decode_012(y_pred_flat)
+        y_true_iupac = self.pgenc.convert_int_iupac(
+            y_true_iupac_tmp, encodings_dict=encodings_dict
+        )
+        y_pred_iupac = self.pgenc.convert_int_iupac(
+            y_pred_iupac_tmp, encodings_dict=encodings_dict
+        )
+        self._evaluate_iupac10_and_plot(y_true_iupac, y_pred_iupac)
 
         return self
 
-    def transform(self, X: np.ndarray) -> np.ndarray:
-        """Transforms the genotype data using the imputer.
-
-        This method transforms the genotype data using the imputer fitted during the fit method. The method takes the genotype data X as input and returns the imputed genotype data.
-
-        Args:
-            X (np.ndarray): Genotype data array.
+    def transform(self) -> np.ndarray:
+        """Impute all samples and return imputed genotypes.
 
         Returns:
-            np.ndarray: Imputed genotype data array.
+            np.ndarray: (n_samples, n_loci) integers with no -9/-1/NaN.
         """
-        # Check if model is fitted.
-        self._check_is_fitted()
+        if not self.is_fit_:
+            msg = "Imputer has not been fit; call fit() before transform()."
+            self.logger.error(msg)
+            raise RuntimeError(msg)
 
-        X = validate_input_type(X)
-        Xenc = np.where(np.logical_or(X < 0, np.isnan(X)), np.nan, X)
-        X_imputed = self.impute(Xenc, self.Model_)
+        X = self.X012_.copy()
+        X_imp = self.imputer_.transform(X)
 
-        self.plotter_.plot_gt_distribution(X, is_imputed=False)
-        self.plotter_.plot_gt_distribution(X_imputed, is_imputed=True)
+        if np.any(X_imp < 0) or np.isnan(X_imp).any():
+            self.logger.warning("Some imputed values are still missing; setting to -9.")
+            X_imp[X_imp < 0] = -9
+            X_imp[np.isnan(X_imp)] = -9
 
-        return X_imputed
-
-    def objective(self, trial, Model):
-        """Objective function for hyperparameter tuning.
-
-        This method defines the objective function for hyperparameter tuning using the Optuna library. The method takes a trial object and a model object as input and returns the loss value for the model.
-
-        Args:
-            trial: Optuna trial object.
-            Model: Model object.
-
-        Returns:
-            float: Loss value for the model.
-        """
-        # Hyperparameter sampling
-        learning_rate = trial.suggest_float("learning_rate", 1e-3, 1e-1, log=True)
-        loss = trial.suggest_categorical("loss", ["log_loss", "binary_crossentropy"])
-        max_model_iter = trial.suggest_int("max_model_iter", 100, 1000, step=100)
-        max_depth = trial.suggest_int("max_depth", 3, 10)
-        n_nearest_features = trial.suggest_int("n_nearest_features", 3, 20)
-        max_iter = trial.suggest_int("max_iter", 5, 30, step=5)
-        max_features = trial.suggest_float("max_features", 0.1, 1.0, step=0.1)
-        early_stopping = trial.suggest_categorical("early_stopping", [True, False])
-        l2_regularization = trial.suggest_float(
-            "l2_regularization", 0.0, 0.2, step=0.001
-        )
-        min_samples_leaf = trial.suggest_int("min_samples_leaf", 10, 50, step=10)
-
-        categorical_features = np.ones((self.n_features_,), dtype=bool)
-
-        # Model parameters
-        model_params = {
-            "loss": loss,
-            "max_iter": max_model_iter,
-            "max_depth": max_depth,
-            "learning_rate": learning_rate,
-            "max_features": max_features,
-            "l2_regularization": l2_regularization,
-            "min_samples_leaf": min_samples_leaf,
-            "categorical_features": categorical_features,
-            "early_stopping": early_stopping,
-            "random_state": self.seed,
-        }
-
-        try:
-            imputer = IterativeImputer(
-                Model(
-                    validation_fraction=0.0, warm_start=True, n_jobs=1, **model_params
-                ),
-                max_iter=max_iter,
-                tol=1e-2,
-                n_nearest_features=n_nearest_features,
-                initial_strategy="most_frequent",
-                random_state=self.seed,
-                verbose=self.verbose,
-                keep_empty_features=True,
-                skip_complete=True,
-            )
-
-            imputer.fit(self.X_train_)
-
-            if imputer is None:
-                msg = f"Trial {trial.number} pruned due to failed model training. Model was NoneType."
-                self.logger.warning(msg)
-                raise optuna.exceptions.TrialPruned()
-
-            # Efficient evaluation
-            metrics = self.evaluate_model(
-                self.X_test_,
-                self.y_test_,
-                self.sim_mask_test_,
-                objective_mode=True,
-                trial=trial,
-                Model=imputer,
-            )
-
-            if self.tune_metric not in metrics:
-                msg = f"Invalid tuning metric: {self.tune_metric}"
-                self.logger.error(msg)
-                raise KeyError(msg)
-
-            score = metrics[self.tune_metric]
-
-            trial.report(score, step=trial.number)
-
-            if trial.should_prune():
-                msg = f"Trial {trial.number} pruned based on optuna report."
-                self.logger.warning(msg)
-                raise optuna.exceptions.TrialPruned()
-
-            return metrics[self.tune_metric]
-
-        except Exception as e:
-            msg = f"Trial {trial.number} pruned due to exception: {e}"
-            self.logger.warning(msg)
-            raise optuna.exceptions.TrialPruned()
-
-    def set_best_params(self, best_params: dict) -> dict:
-        """Sets the best hyperparameters for the model.
-
-        This method sets the best hyperparameters for the model based on the hyperparameter tuning results.
-
-        Args:
-            best_params: Best hyperparameters for the model.
-
-        Returns:
-            dict: Best hyperparameters for the model.
-        """
-        best_params_fit = {
-            "loss": best_params["loss"],
-            "max_iter": best_params["max_model_iter"],
-            "learning_rate": best_params["learning_rate"],
-            "early_stopping": best_params["early_stopping"],
-            "min_samples_leaf": best_params["min_samples_leaf"],
-            "l2_regularization": best_params["l2_regularization"],
-            "max_depth": best_params["max_depth"],
-            "max_features": best_params["max_features"],
-            "criterion": best_params["criterion"],
-            "random_state": self.seed,
-        }
-
-        self.n_nearest_features = best_params_fit.pop("n_nearest_features")
-        self.max_iter = best_params_fit.pop("max_iter")
-
-        return best_params_fit
+        return self.pgenc.decode_012(X_imp)
