@@ -130,3 +130,5 @@ docs/build/_build/doctrees/pgsui.data_processing.doctree
 .training_data.nosync/
 training_data_2
 pgsui_*_output/
+summarize/
+old_tests/
