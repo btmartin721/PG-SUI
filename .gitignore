@@ -132,3 +132,4 @@ training_data_2
 pgsui_*_output/
 summarize/
 old_tests/
+pgsui_output/
