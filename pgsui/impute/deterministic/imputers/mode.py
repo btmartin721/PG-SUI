@@ -1,7 +1,7 @@
 # Standard library imports
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Sequence, Tuple, Union
 
 # Third-party imports
 import matplotlib.pyplot as plt
@@ -22,10 +22,53 @@ from pgsui.utils.classification_viz import ClassificationReportVisualizer
 
 # Local imports
 from pgsui.utils.plotting import Plotting
+from pgsui.data_processing.config import apply_dot_overrides, load_yaml_to_dataclass
+from pgsui.data_processing.containers import MostFrequentConfig
 
 # Type checking imports
 if TYPE_CHECKING:
     from snpio.read_input.genotype_data import GenotypeData
+
+
+def ensure_mostfrequent_config(
+    config: Union[MostFrequentConfig, dict, str, None],
+) -> MostFrequentConfig:
+    """Return a concrete MostFrequentConfig (dataclass, dict, YAML path, or None).
+
+    Args:
+        config (Union[MostFrequentConfig, dict, str, None]): The configuration to ensure is a MostFrequentConfig.
+
+    Returns:
+        MostFrequentConfig: The ensured MostFrequentConfig.
+    """
+    if config is None:
+        return MostFrequentConfig()
+    if isinstance(config, MostFrequentConfig):
+        return config
+    if isinstance(config, str):
+        return load_yaml_to_dataclass(
+            config, MostFrequentConfig, preset_builder=MostFrequentConfig.from_preset
+        )
+    if isinstance(config, dict):
+        base = MostFrequentConfig()
+        # honor optional top-level 'preset'
+        preset = config.pop("preset", None)
+        if preset:
+            base = MostFrequentConfig.from_preset(preset)
+
+        def _flatten(prefix: str, d: dict, out: dict) -> dict:
+            for k, v in d.items():
+                kk = f"{prefix}.{k}" if prefix else k
+                if isinstance(v, dict):
+                    _flatten(kk, v, out)
+                else:
+                    out[kk] = v
+            return out
+
+        flat = _flatten("", config, {})
+        return apply_dot_overrides(base, flat)
+
+    raise TypeError("config must be a MostFrequentConfig, dict, YAML path, or None.")
 
 
 class ImputeMostFrequent:
@@ -38,73 +81,62 @@ class ImputeMostFrequent:
         self,
         genotype_data: "GenotypeData",
         *,
-        prefix: str = "pgsui",
-        plot_format: Literal["pdf", "png", "jpg", "jpeg"] = "pdf",
-        plot_fontsize: int = 18,
-        plot_despine: bool = True,
-        plot_dpi: int = 300,
-        plot_show_plots: bool = False,
-        by_populations: bool = False,
-        default: int = 0,
-        missing: int = -1,
-        verbose: bool = True,
-        seed: int | None = None,
-        debug: bool = False,
-        test_size: float = 0.2,
-        test_indices: Sequence[int] | None = None,
+        config: Optional[Union[MostFrequentConfig, dict, str]] = None,
+        overrides: Optional[dict] = None,
     ) -> None:
-        """Initialize the ImputeMostFrequent imputer.
-
-        This method sets up the imputer with the provided genotype data and configuration parameters. It initializes logging, prepares the genotype data for imputation, and sets up various attributes needed for the imputation process.
+        """Initialize the Most-Frequent (mode) imputer from a unified config.
 
         Args:
-            genotype_data (GenotypeData): The genotype data to be imputed.
-            prefix (str, optional): Prefix for output files and directories. Defaults to "pgsui".
-            plot_format (Literal["pdf", "png", "jpg", "jpeg"], optional): Format for saving plots. Defaults to "pdf".
-            plot_fontsize (int, optional): Font size for plots. Defaults to 18.
-            plot_despine (bool, optional): Whether to despine plots. Defaults to True.
-            plot_dpi (int, optional): DPI for saved plots. Defaults to 300.
-            plot_show_plots (bool, optional): Whether to display plots interactively. Defaults to False.
-            by_populations (bool, optional): Whether to compute modes by populations. Requires genotype_data.populations. Defaults to False.
-            default (int, optional): Default value to use when no valid mode can be computed. Must be in {0, 1, 2}. Defaults to 0.
-            missing (int, optional): Value representing missing genotypes in the input data. Defaults to -1.
-            verbose (bool, optional): Whether to enable verbose logging. Defaults to True.
-            seed (int | None, optional): Random seed for reproducibility. If None, uses a random seed. Defaults to None.
-            debug (bool, optional): Whether to enable debug logging. Defaults to False.
-            test_size (float, optional): Proportion of the dataset to include in the test split if test_indices is not provided. Must be between 0 and 1. Defaults to 0.2.
-            test_indices (Sequence[int] | None, optional): Specific indices to use as the test set. If provided, overrides test_size. Defaults to None.
-        """
-        self.genotype_data = genotype_data
-        self.prefix = prefix
-        self.plot_format = plot_format
-        self.plot_fontsize = plot_fontsize
-        self.plot_despine = plot_despine
-        self.plot_dpi = plot_dpi
-        self.show_plots = plot_show_plots
-        self.by_populations = by_populations
-        self.default = int(default)
-        self.missing = int(missing)
-        self.verbose = verbose
-        self.debug = debug
+            genotype_data (GenotypeData): Backing genotype data.
+            config (MostFrequentConfig | dict | str | None): Configuration as a dataclass,
+                nested dict, or YAML path. If None, defaults are used.
+            overrides (dict | None): Flat dot-key overrides applied last with highest precedence, e.g. {'algo.by_populations': True, 'split.test_size': 0.3}.
 
-        logman = LoggerManager(__name__, prefix=prefix, verbose=verbose, debug=debug)
+        Notes:
+            - This mirrors other config-driven models (AE/VAE/NLPCA/UBP).
+            - Evaluation split behavior uses cfg.split; plotting uses cfg.plot.
+            - I/O/logging seeds and verbosity use cfg.io.
+        """
+        # Normalize config then apply highest-precedence overrides
+        cfg = ensure_mostfrequent_config(config)
+        if overrides:
+            cfg = apply_dot_overrides(cfg, overrides)
+        self.cfg = cfg
+
+        # Basic fields
+        self.genotype_data = genotype_data
+        self.prefix = cfg.io.prefix
+        self.verbose = cfg.io.verbose
+        self.debug = cfg.io.debug
+
+        # Logger
+        logman = LoggerManager(
+            __name__, prefix=self.prefix, verbose=self.verbose, debug=self.debug
+        )
         self.logger = logman.get_logger()
 
-        self.rng = np.random.default_rng(seed)
+        # RNG / encoder
+        self.rng = np.random.default_rng(cfg.io.seed)
         self.encoder = GenotypeEncoder(self.genotype_data)
 
-        # --- Work in 0/1/2 with -1 for missing (exactly like ImputeNLPCA) ---
+        # Work in 0/1/2 with -1 for missing (parity with DL modules)
         X012 = self.encoder.genotypes_012.astype(np.int16, copy=True)
         X012[X012 < 0] = -1
         self.X012_ = X012
         self.num_features_ = X012.shape[1]
 
-        # Book-keeping
-        self.test_size = float(test_size)
+        # Split & algo knobs
+        self.test_size = float(cfg.split.test_size)
         self.test_indices = (
-            None if test_indices is None else np.asarray(test_indices, dtype=int)
+            None
+            if cfg.split.test_indices is None
+            else np.asarray(cfg.split.test_indices, dtype=int)
         )
+        self.by_populations = bool(cfg.algo.by_populations)
+        self.default = int(cfg.algo.default)
+        self.missing = int(cfg.algo.missing)
 
+        # Populations (only if requested)
         self.pops = None
         if self.by_populations:
             pops = getattr(self.genotype_data, "populations", None)
@@ -112,49 +144,52 @@ class ImputeMostFrequent:
                 msg = "by_populations=True requires genotype_data.populations."
                 self.logger.error(msg)
                 raise TypeError(msg)
-
             self.pops = np.asarray(pops)
             if len(self.pops) != self.X012_.shape[0]:
                 msg = f"`populations` length ({len(self.pops)}) != number of samples ({self.X012_.shape[0]})."
                 self.logger.error(msg)
                 raise ValueError(msg)
 
+        # State
         self.is_fit_: bool = False
         self.global_modes_: Dict[int, int] = {}
         self.group_modes_: Dict[str | int, Dict[int, int]] = {}
-
         self.sim_mask_: Optional[np.ndarray] = None
         self.train_idx_: Optional[np.ndarray] = None
         self.test_idx_: Optional[np.ndarray] = None
-        self.X_train_df_: Optional[pd.DataFrame] = None  # masked inputs
+        self.X_train_df_: Optional[pd.DataFrame] = None
         self.ground_truth012_: Optional[np.ndarray] = None
         self.metrics_: Dict[str, int | float] = {}
         self.X_imputed012_: Optional[np.ndarray] = None
 
+        # Ploidy heuristic for 0/1/2 scoring parity
+        uniq = np.unique(self.X012_[self.X012_ != -1])
+        self.is_haploid_ = np.array_equal(np.sort(uniq), np.array([0, 2]))
+
+        # Plotting (use config, not genotype_data fields)
+        self.plot_format = cfg.plot.fmt
+        self.plot_fontsize = cfg.plot.fontsize
+        self.plot_despine = cfg.plot.despine
+        self.plot_dpi = cfg.plot.dpi
+        self.show_plots = cfg.plot.show
+
         self.model_name = (
             "ImputeMostFrequentPerPop" if self.by_populations else "ImputeMostFrequent"
         )
-
-        # Needed for 10-class report from 0/1/2 predictions
         self.plotter_ = Plotting(
             self.model_name,
             prefix=self.prefix,
-            plot_format=genotype_data.plot_format,
-            plot_fontsize=genotype_data.plot_fontsize,
-            plot_dpi=genotype_data.plot_dpi,
-            title_fontsize=genotype_data.plot_fontsize,
-            despine=genotype_data.plot_despine,
-            show_plots=genotype_data.show_plots,
+            plot_format=self.plot_format,
+            plot_fontsize=self.plot_fontsize,
+            plot_dpi=self.plot_dpi,
+            title_fontsize=self.plot_fontsize,
+            despine=self.plot_despine,
+            show_plots=self.show_plots,
             verbose=self.verbose,
             debug=self.debug,
         )
 
-        # Ploidy flag for 0/1/2 scoring (match NLPCA logic)
-        # If haploid, we'll remap 2->1 during scoring.
-        # Heuristic: haploid if only {0,2} (i.e., REF/ALT presence) ever appear
-        uniq = np.unique(self.X012_[self.X012_ != -1])
-        self.is_haploid_ = np.array_equal(np.sort(uniq), np.array([0, 2]))
-
+        # Output dirs
         dirs = ["models", "plots", "metrics", "optimize"]
         self._create_model_directories(self.prefix, dirs)
 
@@ -401,13 +436,13 @@ class ImputeMostFrequent:
             "n_masked_test": int(y_true.size),
             "accuracy": accuracy_score(y_true, y_pred),
             "f1": f1_score(
-                y_true, y_pred, average="weighted", labels=labels, zero_division=0
+                y_true, y_pred, average="macro", labels=labels, zero_division=0
             ),
             "precision": precision_score(
-                y_true, y_pred, average="weighted", labels=labels, zero_division=0
+                y_true, y_pred, average="macro", labels=labels, zero_division=0
             ),
             "recall": recall_score(
-                y_true, y_pred, average="weighted", labels=labels, zero_division=0
+                y_true, y_pred, average="macro", labels=labels, zero_division=0
             ),
         }
         self.metrics_.update({f"zygosity_{k}": v for k, v in metrics.items()})
@@ -472,13 +507,13 @@ class ImputeMostFrequent:
         metrics = {
             "accuracy": accuracy_score(y_true, y_pred),
             "f1": f1_score(
-                y_true, y_pred, average="weighted", labels=labels_idx, zero_division=0
+                y_true, y_pred, average="macro", labels=labels_idx, zero_division=0
             ),
             "precision": precision_score(
-                y_true, y_pred, average="weighted", labels=labels_idx, zero_division=0
+                y_true, y_pred, average="macro", labels=labels_idx, zero_division=0
             ),
             "recall": recall_score(
-                y_true, y_pred, average="weighted", labels=labels_idx, zero_division=0
+                y_true, y_pred, average="macro", labels=labels_idx, zero_division=0
             ),
         }
         self.metrics_.update({f"iupac_{k}": v for k, v in metrics.items()})
