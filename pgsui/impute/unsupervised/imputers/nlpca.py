@@ -1,5 +1,6 @@
-import copy
-from typing import TYPE_CHECKING, Dict, Literal, Tuple
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Dict, Literal, Tuple, Any
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -13,6 +14,8 @@ from snpio.analysis.genotype_encoder import GenotypeEncoder
 from snpio.utils.logging import LoggerManager
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
+from pgsui.data_processing.config import load_yaml_to_dataclass, apply_dot_overrides
+from pgsui.data_processing.containers import NLPCAConfig
 from pgsui.impute.unsupervised.base import BaseNNImputer
 from pgsui.impute.unsupervised.callbacks import EarlyStopping
 from pgsui.impute.unsupervised.models.nlpca_model import NLPCAModel
@@ -21,144 +24,180 @@ if TYPE_CHECKING:
     from snpio.read_input.genotype_data import GenotypeData
 
 
-class ImputeNLPCA(BaseNNImputer):
-    """Imputes missing genotypes using a Non-linear PCA model on 0/1/2 encoded data."
+def ensure_nlpca_config(config: NLPCAConfig | dict | str | None) -> NLPCAConfig:
+    """Return a concrete NLPCAConfig from dataclass, dict, YAML path, or None."""
+    if config is None:
+        return NLPCAConfig()
+    if isinstance(config, NLPCAConfig):
+        return config
+    if isinstance(config, str):
+        # YAML path — top-level `preset` key is supported
+        return load_yaml_to_dataclass(
+            config,
+            NLPCAConfig,
+            preset_builder=NLPCAConfig.from_preset,
+        )
+    if isinstance(config, dict):
+        # Flatten dict into dot-keys then overlay onto a fresh instance
+        base = NLPCAConfig()
 
-    This class implements a Non-linear PCA (NLPCA) imputer, specifically designed for genotype data encoded as 0/1/2. It uses a neural network architecture to learn a low-dimensional representation of the data and reconstruct missing values.
+        def _flatten(prefix: str, d: dict, out: dict) -> dict:
+            for k, v in d.items():
+                kk = f"{prefix}.{k}" if prefix else k
+                if isinstance(v, dict):
+                    _flatten(kk, v, out)
+                else:
+                    out[kk] = v
+            return out
+
+        # Lift any present preset first
+        preset_name = config.pop("preset", None)
+        if "io" in config and isinstance(config["io"], dict):
+            preset_name = preset_name or config["io"].pop("preset", None)
+
+        if preset_name:
+            base = NLPCAConfig.from_preset(preset_name)
+
+        flat = _flatten("", config, {})
+        return apply_dot_overrides(base, flat)
+
+    raise TypeError("config must be an NLPCAConfig, dict, YAML path, or None.")
+
+
+class ImputeNLPCA(BaseNNImputer):
+    """Imputes missing genotypes using a Non-linear Principal Component Analysis (NLPCA) model.
+
+    This class implements an imputer based on Non-linear Principal Component Analysis (NLPCA) using a neural network architecture. It is designed to handle genotype data encoded in 0/1/2 format, where 0 represents the reference allele, 1 represents the heterozygous genotype, and 2 represents the alternate allele. Missing genotypes should be represented as -9 or -1.
+
+    The NLPCA model consists of an encoder-decoder architecture that learns a low-dimensional latent representation of the genotype data. The model is trained using a focal loss function to address class imbalance, and it can incorporate L1 regularization to promote sparsity in the learned representations.
+
+    Key Features:
+        - Supports both haploid and diploid genotype data.
+        - Configurable model architecture with options for latent dimension, dropout rate, number of hidden layers, and activation functions.
+        - Hyperparameter tuning using Optuna for optimal model performance.
+        - Evaluation metrics including accuracy, F1-score, precision, recall, and ROC-AUC.
+        - Visualization of training history and genotype distributions.
+        - Flexible configuration via dataclass, dictionary, or YAML file.
+
+    Example:
+        >>> from snpio import VCFReader
+        >>> from pgsui import ImputeNLPCA
+        >>> gdata = VCFReader("genotypes.vcf.gz")
+        >>> imputer = ImputeNLPCA(gdata, config="nlpca_config.yaml")
+        >>> imputer.fit()
+        >>> imputed_genotypes = imputer.transform()
+        >>> print(imputed_genotypes)
+        [['A' 'G' 'C' ...],
+         ['G' 'G' 'C' ...],
+         ...
+         ['T' 'C' 'A' ...],
+         ['C' 'C' 'C' ...]]
     """
 
     def __init__(
         self,
         genotype_data: "GenotypeData",
         *,
-        seed: int | None = None,
-        n_jobs: int = 1,
-        prefix: str = "pgsui",
-        verbose: bool = False,
-        weights_beta: float = 0.9999,
-        weights_max_ratio: float = 1.0,
-        tune: bool = False,
-        tune_metric: Literal["f1", "accuracy", "pr_macro"] = "f1",
-        tune_n_trials: int = 100,
-        model_latent_init: Literal["random", "pca"] = "random",
-        model_validation_split: float = 0.2,
-        model_latent_dim: int = 2,
-        model_dropout_rate: float = 0.2,
-        model_num_hidden_layers: int = 2,
-        model_batch_size: int = 32,
-        model_learning_rate: float = 0.001,
-        model_lr_input_factor: float = 1.0,
-        model_early_stop_gen: int = 25,
-        model_min_epochs: int = 100,
-        model_epochs: int = 5000,
-        model_l1_penalty: float = 0.0,
-        model_layer_scaling_factor: float = 5.0,
-        model_layer_schedule: Literal["pyramid", "constant", "linear"] = "pyramid",
-        model_gamma: float = 2.0,
-        model_hidden_activation: Literal["relu", "elu", "selu", "leaky_relu"] = "relu",
-        model_device: Literal["gpu", "cpu", "mps"] = "cpu",
-        plot_format: Literal["pdf", "png", "jpg", "jpeg"] = "pdf",
-        plot_fontsize: int = 18,
-        plot_despine: bool = True,
-        plot_dpi: int = 300,
-        plot_show_plots: bool = False,
-        debug: bool = False,
+        config: NLPCAConfig | dict | str | None = None,
+        overrides: dict | None = None,
     ):
-        """Initializes the simplified ImputeNLPCA imputer.
-
-        This class extends the BaseNNImputer to implement a Non-linear PCA model for genotype imputation. It supports hyperparameter tuning using Optuna and provides various configuration options for model training and plotting.
-
+        """
         Args:
-            genotype_data (GenotypeData): Genotype data object with SNP data.
-            seed (int | None): Random seed for reproducibility.
-            n_jobs (int): Number of parallel jobs. If -1, use all available cores.
-            prefix (str): Prefix for output files.
-            verbose (bool): If True, enables verbose logging.
-            weights_beta (float): Beta parameter for class-balanced weights.
-            weights_max_ratio (float): Max ratio for class weights to prevent extreme values.
-            tune (bool): If True, performs hyperparameter tuning using Optuna.
-            tune_metric (str): Metric to optimize during tuning ('f1', 'accuracy', 'pr_macro').
-            tune_n_trials (int): Number of trials for hyperparameter tuning.
-            model_latent_init (str): Method to initialize latent space ('random' or 'pca').
-            model_validation_split (float): Fraction of data to use for validation during training.
-            model_latent_dim (int): Dimensionality of the latent space.
-            model_dropout_rate (float): Dropout rate for the neural network.
-            model_num_hidden_layers (int): Number of hidden layers in the neural network.
-            model_batch_size (int): Batch size for training.
-            model_learning_rate (float): Learning rate for the optimizer.
-            model_lr_input_factor (float): Factor to scale learning rate for latent vectors.
-            model_early_stop_gen (int): Generations with no improvement before early stopping.
-            model_min_epochs (int): Minimum number of epochs to train before considering early stopping.
-            model_epochs (int): Maximum number of training epochs.
-            model_l1_penalty (float): L1 regularization penalty.
-            model_layer_scaling_factor (float): Scaling factor for hidden layer sizes.
-            model_layer_schedule (str): Schedule for hidden layer sizes ('pyramid', 'constant', 'linear').
-            model_gamma (float): Gamma parameter for focal loss.
-            model_hidden_activation (str): Activation function for hidden layers ('relu', 'elu', 'selu', 'leaky_relu').
-            model_device (str): Device to run the model on ('gpu', 'cpu', 'mps').
-            plot_format (str): Format for saving plots ('pdf', 'png', 'jpg').
-            plot_fontsize (int): Font size for plots.
-            plot_despine (bool): If True, removes top and right spines from plots.
-            plot_dpi (int): DPI resolution for saved plots.
-            plot_show_plots (bool): If True, displays plots interactively.
-            debug (bool): If True, enables debug mode with more detailed logging.
+            genotype_data (GenotypeData): Backing genotype data.
+            config (NLPCAConfig | dict | str | None): Structured configuration as dataclass, nested dict, YAML path, or None.
+            overrides (dict | None): Dot-key overrides (e.g. {'model.latent_dim': 4}).
         """
         self.model_name = "ImputeNLPCA"
-        kwargs = {"prefix": prefix, "debug": debug, "verbose": verbose}
-        logman = LoggerManager(__name__, **kwargs)
+        self.genotype_data = genotype_data
+
+        # Normalize config first, then apply overrides (highest precedence)
+        cfg = ensure_nlpca_config(config)
+        if overrides:
+            cfg = apply_dot_overrides(cfg, overrides)
+
+        self.cfg = cfg
+
+        logman = LoggerManager(
+            __name__,
+            prefix=self.cfg.io.prefix,
+            debug=self.cfg.io.debug,
+            verbose=self.cfg.io.verbose,
+        )
         self.logger = logman.get_logger()
 
+        # Initialize BaseNNImputer with device/dirs/logging from config
         super().__init__(
-            prefix=prefix, device=model_device, verbose=verbose, debug=debug
+            prefix=self.cfg.io.prefix,
+            device=self.cfg.train.device,
+            verbose=self.cfg.io.verbose,
+            debug=self.cfg.io.debug,
         )
 
-        self.genotype_data = genotype_data
-        self.pgenc = GenotypeEncoder(genotype_data)
         self.Model = NLPCAModel
-        self.seed = seed
-        self.rng = np.random.default_rng(seed)
-        self.verbose = verbose
-        self.n_jobs = n_jobs
+        self.pgenc = GenotypeEncoder(genotype_data)
+        self.seed = self.cfg.io.seed
+        self.n_jobs = self.cfg.io.n_jobs
+        self.prefix = self.cfg.io.prefix
+        self.scoring_averaging = self.cfg.io.scoring_averaging
+        self.verbose = self.cfg.io.verbose
+        self.debug = self.cfg.io.debug
 
-        # Model & Training Params
-        self.latent_dim = model_latent_dim
-        self.dropout_rate = model_dropout_rate
-        self.num_hidden_layers = model_num_hidden_layers
-        self.layer_scaling_factor = model_layer_scaling_factor
-        self.layer_schedule = model_layer_schedule
-        self.latent_init = model_latent_init
-        self.batch_size = model_batch_size
-        self.learning_rate = model_learning_rate
-        self.lr_input_factor = model_lr_input_factor
-        self.early_stop_gen = model_early_stop_gen
-        self.min_epochs = model_min_epochs
-        self.epochs = model_epochs
-        self.l1_penalty = model_l1_penalty
-        self.gamma = model_gamma
-        self.activation = model_hidden_activation
-        self.validation_split = model_validation_split
-        self.beta = weights_beta
-        self.max_ratio = weights_max_ratio
+        self.rng = np.random.default_rng(self.seed)
+
+        # Model/train hyperparams
+        self.latent_dim = self.cfg.model.latent_dim
+        self.dropout_rate = self.cfg.model.dropout_rate
+        self.num_hidden_layers = self.cfg.model.num_hidden_layers
+        self.layer_scaling_factor = self.cfg.model.layer_scaling_factor
+        self.layer_schedule = self.cfg.model.layer_schedule
+        self.latent_init = self.cfg.model.latent_init
+        self.activation = self.cfg.model.hidden_activation
+        self.gamma = self.cfg.model.gamma
+
+        self.batch_size = self.cfg.train.batch_size
+        self.learning_rate = self.cfg.train.learning_rate
+        self.lr_input_factor = self.cfg.train.lr_input_factor
+        self.l1_penalty = self.cfg.train.l1_penalty
+        self.early_stop_gen = self.cfg.train.early_stop_gen
+        self.min_epochs = self.cfg.train.min_epochs
+        self.epochs = self.cfg.train.max_epochs
+        self.validation_split = self.cfg.train.validation_split
+        self.beta = self.cfg.train.weights_beta
+        self.max_ratio = self.cfg.train.weights_max_ratio
 
         # Tuning
-        self.tune = tune
-        self.tune_metric = tune_metric
-        self.n_trials = tune_n_trials
+        self.tune = self.cfg.tune.enabled
+        self.tune_fast = self.cfg.tune.fast
+        self.tune_proxy_metric_batch = self.cfg.tune.proxy_metric_batch
+        self.tune_batch_size = self.cfg.tune.batch_size
+        self.tune_epochs = self.cfg.tune.epochs
+        self.tune_eval_interval = self.cfg.tune.eval_interval
+        self.tune_metric = self.cfg.tune.metric
+        self.n_trials = self.cfg.tune.n_trials
+        self.tune_save_db = self.cfg.tune.save_db
+        self.tune_resume = self.cfg.tune.resume
+        self.tune_max_samples = self.cfg.tune.max_samples
+        self.tune_max_loci = self.cfg.tune.max_loci
+        self.tune_infer_epochs = getattr(self.cfg.tune, "infer_epochs", 100)
+        self.tune_patience = self.cfg.tune.patience
 
-        # Plotting & Output
-        self.prefix = prefix
-        self.plot_format = plot_format
-        self.plot_dpi = plot_dpi
-        self.show_plots = plot_show_plots
-        self.plot_fontsize = plot_fontsize
-        self.title_fontsize = plot_fontsize
-        self.despine = plot_despine
-        self.scoring_averaging = "weighted"
+        # Eval
+        self.eval_latent_steps = self.cfg.evaluate.eval_latent_steps
+        self.eval_latent_lr = self.cfg.evaluate.eval_latent_lr
+        self.eval_latent_weight_decay = self.cfg.evaluate.eval_latent_weight_decay
+
+        # Plotting (note: PlotConfig has 'show', not 'show_plots')
+        self.plot_format = self.cfg.plot.fmt
+        self.plot_dpi = self.cfg.plot.dpi
+        self.plot_fontsize = self.cfg.plot.fontsize
+        self.title_fontsize = self.cfg.plot.fontsize
+        self.despine = self.cfg.plot.despine
+        self.show_plots = self.cfg.plot.show
 
         # Core model config
         self.is_haploid = None
-        self.num_classes_ = None  # Will be 2 or 3
-        self.model_params = {}
+        self.num_classes_ = None
+        self.model_params: Dict[str, Any] = {}
 
     def fit(self) -> "ImputeNLPCA":
         """Fits the NLPCA model to the 0/1/2 encoded genotype data.
@@ -188,11 +227,18 @@ class ImputeNLPCA(BaseNNImputer):
 
         self.ploidy = 1 if self.is_haploid else 2
 
-        self.num_classes_ = 2 if self.is_haploid else 3
-        self.logger.info(
-            f"Data is {'haploid' if self.is_haploid else 'diploid'}. "
-            f"Using {self.num_classes_} classes for prediction."
-        )
+        if self.is_haploid:
+            self.num_classes_ = 2
+
+            # Remap labels from {0, 2} to {0, 1}
+            self.ground_truth_[self.ground_truth_ == 2] = 1
+            self.logger.info("Haploid data detected. Using 2 classes (REF=0, ALT=1).")
+        else:
+            self.num_classes_ = 3
+
+            self.logger.info(
+                "Diploid data detected. Using 3 classes (REF=0, HET=1, ALT=2)."
+            )
 
         n_samples, self.num_features_ = X.shape
 
@@ -216,10 +262,12 @@ class ImputeNLPCA(BaseNNImputer):
 
         # --- Tuning & Model Setup ---
         self.plotter_, self.scorers_ = self.initialize_plotting_and_scorers()
+
         if self.tune:
             self.tune_hyperparameters()
-
-        self.best_params_ = getattr(self, "best_params_", self.model_params.copy())
+            self.best_params_ = getattr(self, "best_params_", self.model_params.copy())
+        else:
+            self.best_params_ = self._set_best_params_default()
 
         # Class weights from 0/1/2 training data
         self.class_weights_ = self._class_weights_from_zygosity(self.X_train_)
@@ -313,12 +361,14 @@ class ImputeNLPCA(BaseNNImputer):
         model.train()
         running_loss = 0.0
 
+        nF = getattr(model, "n_features", self.num_features_)
+
         for batch_indices, y_batch in loader:
             optimizer.zero_grad(set_to_none=True)
             latent_optimizer.zero_grad(set_to_none=True)
 
             logits = model.phase23_decoder(latent_vectors[batch_indices]).view(
-                len(batch_indices), self.num_features_, self.num_classes_
+                len(batch_indices), nF, self.num_classes_
             )
 
             # --- Simplified Focal Loss on 0/1/2 Classes ---
@@ -371,9 +421,12 @@ class ImputeNLPCA(BaseNNImputer):
             raise NotFittedError("Model or latent vectors not available.")
 
         model.eval()
+
+        nF = getattr(model, "n_features", self.num_features_)
+
         with torch.no_grad():
             logits = model.phase23_decoder(latent_vectors.to(self.device)).view(
-                len(latent_vectors), self.num_features_, self.num_classes_
+                len(latent_vectors), nF, self.num_classes_
             )
             probas = torch.softmax(logits, dim=-1)
             labels = torch.argmax(probas, dim=-1)
@@ -382,35 +435,40 @@ class ImputeNLPCA(BaseNNImputer):
 
     def _evaluate_model(
         self,
-        X_test: np.ndarray,
+        X_val: np.ndarray,
         model: torch.nn.Module,
         params: dict,
         objective_mode: bool = False,
+        latent_vectors_val: torch.Tensor | None = None,
     ) -> Dict[str, float]:
-        """Evaluates the model on a test set.
+        """Evaluates the model on a validation set.
 
-        This method evaluates the trained NLPCA model on a test dataset by optimizing latent vectors for the test samples, predicting genotypes, and computing various performance metrics. It can operate in an objective mode that suppresses logging for automated evaluations.
+        This method evaluates the trained NLPCA model on a validation dataset by optimizing latent vectors for the validation samples, predicting genotypes, and computing various performance metrics. It can operate in an objective mode that suppresses logging for automated evaluations.
 
         Args:
-            X_test (np.ndarray): Test data in 0/1/2 encoding with -1 for missing.
+            X_val (np.ndarray): Validation data in 0/1/2 encoding with -1 for missing.
             model (torch.nn.Module): Trained NLPCA model.
             params (dict): Model parameters.
             objective_mode (bool): If True, suppresses logging and reports only the metric.
+            latent_vectors_val (torch.Tensor | None): Pre-optimized latent vectors for validation data.
 
         Returns:
             Dict[str, float]: Dictionary of evaluation metrics.
         """
-        # Optimize latents for the test set
-        test_latent_vectors = self._optimize_latents_for_inference(
-            X_test, model, params
-        )
+        if latent_vectors_val is not None:
+            test_latent_vectors = latent_vectors_val
+        else:
+            test_latent_vectors = self._optimize_latents_for_inference(
+                X_val, model, params
+            )
 
+        # The rest of the function remains the same...
         pred_labels, pred_probas = self._predict(
             model=model, latent_vectors=test_latent_vectors
         )
 
-        eval_mask = X_test != -1
-        y_true_flat = X_test[eval_mask]
+        eval_mask = X_val != -1
+        y_true_flat = X_val[eval_mask]
         pred_labels_flat = pred_labels[eval_mask]
         pred_probas_flat = pred_probas[eval_mask]
 
@@ -420,16 +478,6 @@ class ImputeNLPCA(BaseNNImputer):
         # For haploids, remap class 2 to 1 for scoring (e.g., f1-score)
         labels_for_scoring = [0, 1] if self.is_haploid else [0, 1, 2]
         target_names = ["REF", "ALT"] if self.is_haploid else ["REF", "HET", "ALT"]
-
-        if self.is_haploid:
-            y_true_flat[y_true_flat == 2] = 1
-            pred_labels_flat[pred_labels_flat == 2] = 1
-
-            # Adjust probabilities for 2 classes
-            probas_2_class = np.zeros((len(pred_probas_flat), 2))
-            probas_2_class[:, 0] = pred_probas_flat[:, 0]
-            probas_2_class[:, 1] = pred_probas_flat[:, 2]
-            pred_probas_flat = probas_2_class
 
         y_true_ohe = np.eye(len(labels_for_scoring))[y_true_flat]
 
@@ -453,12 +501,12 @@ class ImputeNLPCA(BaseNNImputer):
                 labels=target_names,
             )
 
-            y_true_dec = self.pgenc.decode_012(X_test)
-            X_pred = X_test.copy()
+            y_true_dec = self.pgenc.decode_012(X_val)
+            X_pred = X_val.copy()
             X_pred[eval_mask] = pred_labels_flat
-            y_pred_dec = self.pgenc.decode_012(
-                X_pred.reshape(X_test.shape[0], self.num_features_)
-            )
+
+            nF_eval = X_val.shape[1]
+            y_pred_dec = self.pgenc.decode_012(X_pred.reshape(X_val.shape[0], nF_eval))
 
             encodings_dict = {
                 "A": 0,
@@ -503,7 +551,9 @@ class ImputeNLPCA(BaseNNImputer):
             torch.utils.data.DataLoader: DataLoader for the dataset.
         """
         y_tensor = torch.from_numpy(y).long().to(self.device)
-        dataset = torch.utils.data.TensorDataset(torch.arange(len(y)), y_tensor)
+        dataset = torch.utils.data.TensorDataset(
+            torch.arange(len(y), device=self.device), y_tensor.to(self.device)
+        )
         return torch.utils.data.DataLoader(
             dataset, batch_size=self.batch_size, shuffle=True
         )
@@ -515,9 +565,9 @@ class ImputeNLPCA(BaseNNImputer):
         X: np.ndarray,
         latent_init: Literal["random", "pca"],
     ) -> torch.nn.Parameter:
-        """Initializes the latent space using random or PCA initialization.
+        """Initializes the latent space for the NLPCA model.
 
-        This method initializes the latent space for the NLPCA model. It supports two initialization methods: random initialization using Xavier uniform distribution and PCA-based initialization. For PCA initialization, it performs mean imputation on missing values and uses sklearn's PCA to derive the initial latent vectors. If the number of PCA components is less than the desired latent dimension, it pads the remaining dimensions with random noise. The resulting latent vectors are returned as a trainable PyTorch parameter.
+        This method initializes the latent space for the NLPCA model based on the specified initialization method. It supports two methods: 'random' initialization using Xavier uniform distribution, and 'pca' initialization which uses PCA to derive initial latent vectors from the data. The latent vectors are returned as a PyTorch Parameter, allowing them to be optimized during training.
 
         Args:
             params (dict): Model parameters including 'latent_dim'.
@@ -526,94 +576,124 @@ class ImputeNLPCA(BaseNNImputer):
             latent_init (str): Method to initialize latent space ('random' or 'pca').
 
         Returns:
-            torch.nn.Parameter: Initialized latent vectors as a trainable parameter.
+            torch.nn.Parameter: Initialized latent vectors as a PyTorch Parameter.
         """
         latent_dim = int(params["latent_dim"])
+
         if latent_init == "pca":
-            # Use a copy to avoid modifying the original data
-            X_pca = X.copy().astype(np.float32)
+            X_pca = X.astype(np.float32, copy=True)
+            # mark missing
+            X_pca[X_pca < 0] = np.nan
 
-            # Simple mean imputation for PCA
-            col_means = np.nanmean(np.where(X_pca == -1, np.nan, X_pca), axis=0)
+            # ---- SAFE column means without warnings ----
+            valid_counts = np.sum(~np.isnan(X_pca), axis=0)
+            col_sums = np.nansum(X_pca, axis=0)
+            col_means = np.divide(
+                col_sums,
+                valid_counts,
+                out=np.zeros_like(col_sums, dtype=np.float32),
+                where=valid_counts > 0,
+            )
 
-            # Handle columns that are all NaN
-            col_means = np.nan_to_num(col_means, nan=np.nanmean(col_means))
+            # impute NaNs with per-column means (all-NaN cols -> 0.0 by the divide above)
+            nan_r, nan_c = np.where(np.isnan(X_pca))
+            if nan_r.size:
+                X_pca[nan_r, nan_c] = col_means[nan_c]
 
-            nan_mask = X_pca == -1
-            X_pca[nan_mask] = np.take(col_means, np.where(nan_mask)[1])
+            # center columns
+            X_pca = X_pca - X_pca.mean(axis=0, keepdims=True)
 
-            # Ensure n_components is valid
-            n_components = min(latent_dim, n_samples, self.num_features_)
+            # ---- guard: degenerate / all-zero after centering -> fall back to random ----
+            if (not np.isfinite(X_pca).all()) or np.allclose(X_pca, 0.0):
+                latents = torch.empty(n_samples, latent_dim, device=self.device)
+                torch.nn.init.xavier_uniform_(latents)
+                return torch.nn.Parameter(latents, requires_grad=True)
+
+            # rank-aware component count, at least 1
+            try:
+                est_rank = np.linalg.matrix_rank(X_pca)
+            except Exception:
+                est_rank = min(n_samples, X_pca.shape[1])
+            n_components = max(1, min(latent_dim, est_rank, n_samples, X_pca.shape[1]))
+
+            # use deterministic SVD to avoid power-iteration warnings
+            pca = PCA(
+                n_components=n_components, svd_solver="full", random_state=self.seed
+            )
+            initial = pca.fit_transform(X_pca)  # (n_samples, n_components)
+
+            # pad if latent_dim > n_components
             if n_components < latent_dim:
-                self.logger.warning(
-                    f"Latent dim reduced from {latent_dim} to {n_components} for PCA."
-                )
-
-            pca = PCA(n_components=n_components, random_state=self.seed)
-            initial_latents = pca.fit_transform(X_pca)
-
-            # Pad with random noise if PCA components are fewer than latent_dim
-            if n_components < latent_dim:
-                padding = self.rng.standard_normal(
+                pad = self.rng.standard_normal(
                     size=(n_samples, latent_dim - n_components)
                 )
-                initial_latents = np.hstack([initial_latents, padding])
+                initial = np.hstack([initial, pad])
 
-            initial_latents = (initial_latents - initial_latents.mean(axis=0)) / (
-                initial_latents.std(axis=0) + 1e-6
-            )
-            latents_tensor = torch.from_numpy(initial_latents).float().to(self.device)
-        else:  # Random initialization
-            latents_tensor = torch.empty(n_samples, latent_dim, device=self.device)
-            torch.nn.init.xavier_uniform_(latents_tensor)
+            # standardize latent dims
+            initial = (initial - initial.mean(axis=0)) / (initial.std(axis=0) + 1e-6)
 
-        return torch.nn.Parameter(latents_tensor, requires_grad=True)
+            latents = torch.from_numpy(initial).float().to(self.device)
+            return torch.nn.Parameter(latents, requires_grad=True)
+
+        # --- Random init path (unchanged) ---
+        latents = torch.empty(n_samples, latent_dim, device=self.device)
+        torch.nn.init.xavier_uniform_(latents)
+        return torch.nn.Parameter(latents, requires_grad=True)
 
     def _objective(self, trial: optuna.Trial) -> float:
-        """Defines the objective function for Optuna hyperparameter tuning.
+        self._prepare_tuning_artifacts()
+        trial_params = self._sample_hyperparameters(trial)
+        model_params = dict(trial_params["model_params"])
 
-        This method serves as the objective function for Optuna during hyperparameter tuning. It samples a set of hyperparameters, initializes the NLPCA model, trains it on the training set, and evaluates its performance on the validation set. The performance metric specified by `self.tune_metric` is returned for optimization. If any error occurs during the trial, it raises a TrialPruned exception to indicate failure.
+        if self.tune and self.tune_fast:
+            model_params["n_features"] = self._tune_num_features
 
-        Args:
-            trial (optuna.Trial): An Optuna trial object for hyperparameter suggestions.
+        lr = trial_params["lr"]
+        l1_penalty = trial_params["l1_penalty"]
+        lr_input_fac = trial_params["lr_input_factor"]
 
-        Returns:
-            float: The value of the tuning metric to be optimized.
-        """
-        try:
-            params = self._sample_hyperparameters(trial)
-            X_train_trial = self.ground_truth_[self.train_idx_]
-            X_test_trial = self.ground_truth_[self.test_idx_]
+        X_train_trial = self._tune_X_train
+        X_test_trial = self._tune_X_test
+        class_weights = self._tune_class_weights
+        train_loader = self._tune_loader
 
-            class_weights = self._class_weights_from_zygosity(X_train_trial)
-            train_loader = self._get_data_loaders(X_train_trial)
+        train_latents = self._create_latent_space(
+            model_params,
+            len(X_train_trial),
+            X_train_trial,
+            trial_params["latent_init"],
+        )
 
-            train_latent_vectors = self._create_latent_space(
-                params, len(X_train_trial), X_train_trial, params["latent_init"]
-            )
-            model = self.build_model(self.Model, params["model_params"])
-            model.apply(self.initialize_weights)
+        model = self.build_model(self.Model, model_params)
+        model.n_features = model_params["n_features"]
+        model.apply(self.initialize_weights)
 
-            _, model, _ = self._train_and_validate_model(
-                model=model,
-                loader=train_loader,
-                lr=params["lr"],
-                l1_penalty=params["l1_penalty"],
-                trial=trial,
-                latent_vectors=train_latent_vectors,
-                lr_input_factor=params["lr_input_factor"],
-                class_weights=class_weights,
-            )
+        # train; pass an explicit flag that we are in tuning + whether to fix latents
+        _, model, _ = self._train_and_validate_model(
+            model=model,
+            loader=train_loader,
+            lr=lr,
+            l1_penalty=l1_penalty,
+            trial=trial,
+            latent_vectors=train_latents,
+            lr_input_factor=lr_input_fac,
+            class_weights=class_weights,
+            X_val=X_test_trial,
+            params=model_params,
+            prune_metric=self.tune_metric,
+            prune_warmup_epochs=5,
+            eval_interval=self.tune_eval_interval,
+            eval_latent_steps=0,
+            eval_latent_lr=0.0,
+            eval_latent_weight_decay=0.0,
+        )
 
-            metrics = self._evaluate_model(
-                X_test_trial, model, params, objective_mode=True
-            )
-            self._clear_resources(model, train_loader, train_latent_vectors)
+        metrics = self._evaluate_model(
+            X_test_trial, model, model_params, objective_mode=True
+        )
 
-            return metrics[self.tune_metric]
-
-        except Exception as e:
-            raise optuna.exceptions.TrialPruned(f"Trial failed with error: {e}")
+        self._clear_resources(model, train_loader, latent_vectors=train_latents)
+        return metrics[self.tune_metric]
 
     def _sample_hyperparameters(
         self, trial: optuna.Trial
@@ -630,17 +710,17 @@ class ImputeNLPCA(BaseNNImputer):
         """
         params = {
             "latent_dim": trial.suggest_int("latent_dim", 2, 32),
-            "lr": trial.suggest_float("learning_rate", 1e-5, 1e-2, log=True),
-            "dropout_rate": trial.suggest_float("dropout_rate", 0.0, 0.6),
-            "num_hidden_layers": trial.suggest_int("num_hidden_layers", 1, 8),
+            "lr": trial.suggest_float("learning_rate", 1e-5, 1e-3, log=True),
+            "dropout_rate": trial.suggest_float("dropout_rate", 0.0, 0.5, step=0.05),
+            "num_hidden_layers": trial.suggest_int("num_hidden_layers", 1, 16),
             "activation": trial.suggest_categorical(
-                "activation", ["relu", "elu", "selu"]
+                "activation", ["relu", "elu", "selu", "leaky_relu"]
             ),
-            "gamma": trial.suggest_float("gamma", 0.0, 5.0),
+            "gamma": trial.suggest_float("gamma", 0.1, 5.0, step=0.1),
             "lr_input_factor": trial.suggest_float(
                 "lr_input_factor", 0.1, 10.0, log=True
             ),
-            "l1_penalty": trial.suggest_float("l1_penalty", 1e-7, 1e-2, log=True),
+            "l1_penalty": trial.suggest_float("l1_penalty", 1e-6, 1e-3, log=True),
             "layer_scaling_factor": trial.suggest_float(
                 "layer_scaling_factor", 2.0, 10.0
             ),
@@ -650,23 +730,36 @@ class ImputeNLPCA(BaseNNImputer):
             "latent_init": trial.suggest_categorical("latent_init", ["random", "pca"]),
         }
 
+        use_n_features = (
+            self._tune_num_features
+            if (self.tune and self.tune_fast and hasattr(self, "_tune_num_features"))
+            else self.num_features_
+        )
+        use_n_samples = (
+            len(self._tune_train_idx)
+            if (self.tune and self.tune_fast and hasattr(self, "_tune_train_idx"))
+            else len(self.train_idx_)
+        )
+
         hidden_layer_sizes = self._compute_hidden_layer_sizes(
             n_inputs=params["latent_dim"],
-            n_outputs=self.num_features_ * self.num_classes_,
-            n_samples=len(self.train_idx_),
+            n_outputs=use_n_features * self.num_classes_,
+            n_samples=use_n_samples,
             n_hidden=params["num_hidden_layers"],
             alpha=params["layer_scaling_factor"],
             schedule=params["layer_schedule"],
         )
 
         params["model_params"] = {
-            "n_features": self.num_features_,
+            "n_features": use_n_features,
             "num_classes": self.num_classes_,
             "latent_dim": params["latent_dim"],
             "dropout_rate": params["dropout_rate"],
             "hidden_layer_sizes": hidden_layer_sizes,
             "activation": params["activation"],
+            "gamma": params["gamma"],
         }
+
         return params
 
     def _set_best_params(
@@ -689,7 +782,6 @@ class ImputeNLPCA(BaseNNImputer):
         self.lr_input_factor = best_params["lr_input_factor"]
         self.l1_penalty = best_params["l1_penalty"]
         self.activation = best_params["activation"]
-        self.latent_init = best_params["latent_init"]
 
         hidden_layer_sizes = self._compute_hidden_layer_sizes(
             n_inputs=self.latent_dim,
@@ -698,6 +790,33 @@ class ImputeNLPCA(BaseNNImputer):
             n_hidden=best_params["num_hidden_layers"],
             alpha=best_params["layer_scaling_factor"],
             schedule=best_params["layer_schedule"],
+        )
+
+        return {
+            "n_features": self.num_features_,
+            "latent_dim": self.latent_dim,
+            "hidden_layer_sizes": hidden_layer_sizes,
+            "dropout_rate": self.dropout_rate,
+            "activation": self.activation,
+            "gamma": self.gamma,
+            "num_classes": self.num_classes_,
+        }
+
+    def _set_best_params_default(self) -> Dict[str, int | float | str | list]:
+        """Default (no-tuning) model_params aligned with current attributes.
+
+        This method constructs the model parameters dictionary using the current instance attributes of the ImputeUBP class. It computes the sizes of the hidden layers based on the instance's latent dimension, dropout rate, learning rate, and other relevant attributes. The method returns a dictionary containing the model parameters that can be used to build the UBP model when no hyperparameter tuning has been performed.
+
+        Returns:
+            Dict[str, int | float | str | list]: model_params payload.
+        """
+        hidden_layer_sizes = self._compute_hidden_layer_sizes(
+            n_inputs=self.latent_dim,
+            n_outputs=self.num_features_ * self.num_classes_,
+            n_samples=len(self.ground_truth_),
+            n_hidden=self.num_hidden_layers,
+            alpha=self.layer_scaling_factor,
+            schedule=self.layer_schedule,
         )
 
         return {
@@ -721,26 +840,20 @@ class ImputeNLPCA(BaseNNImputer):
         latent_vectors: torch.nn.Parameter | None = None,
         lr_input_factor: float = 1.0,
         class_weights: torch.Tensor | None = None,
+        *,
+        X_val: np.ndarray | None = None,
+        params: dict | None = None,
+        prune_metric: str | None = None,  # "f1" | "accuracy" | "pr_macro"
+        prune_warmup_epochs: int = 3,
+        eval_interval: int = 1,
+        eval_latent_steps: int = 50,
+        eval_latent_lr: float = 1e-2,
+        eval_latent_weight_decay: float = 0.0,
     ) -> Tuple:
-        """Orchestrates the training loop for a given model and configuration.
 
-        This method sets up the optimizers and learning rate scheduler, then executes the training loop for the NLPCA model. It handles both model parameter updates and latent vector updates. If specified, it returns the training history along with the best loss and model.
-
-        Args:
-            model (torch.nn.Module): The NLPCA model to train.
-            loader (torch.utils.data.DataLoader): DataLoader for training data.
-            lr (float): Learning rate for the optimizer.
-            l1_penalty (float): L1 regularization penalty.
-            trial (optuna.Trial | None): Optuna trial object for hyperparameter tuning.
-            return_history (bool): If True, returns training history.
-            latent_vectors (torch.nn.Parameter | None): Latent vectors for samples.
-            lr_input_factor (float): Factor to scale learning rate for latent vectors.
-            class_weights (torch.Tensor | None): Class weights for handling class imbalance.
-
-        Returns:
-            Tuple: (best_loss, best_model, history, latent_vectors) if return_history is True, else (best_loss, best_model, latent_vectors).
-        """
         if latent_vectors is None or class_weights is None:
+            msg = "latent_vectors and class_weights must be provided."
+            self.logger.error(msg)
             raise TypeError("Must provide latent_vectors and class_weights.")
 
         latent_optimizer = torch.optim.Adam([latent_vectors], lr=lr * lr_input_factor)
@@ -748,21 +861,29 @@ class ImputeNLPCA(BaseNNImputer):
         scheduler = CosineAnnealingLR(optimizer, T_max=self.epochs)
 
         result = self._execute_training_loop(
-            loader,
-            optimizer,
-            latent_optimizer,
-            scheduler,
-            model,
-            l1_penalty,
-            return_history,
-            latent_vectors,
-            class_weights,
+            loader=loader,
+            optimizer=optimizer,
+            latent_optimizer=latent_optimizer,
+            scheduler=scheduler,
+            model=model,
+            l1_penalty=l1_penalty,
+            return_history=return_history,
+            latent_vectors=latent_vectors,
+            class_weights=class_weights,
+            # NEW ↓↓↓
+            trial=trial,
+            X_val=X_val,
+            params=params,
+            prune_metric=prune_metric,
+            prune_warmup_epochs=prune_warmup_epochs,
+            eval_interval=eval_interval,
+            eval_latent_steps=eval_latent_steps,
+            eval_latent_lr=eval_latent_lr,
+            eval_latent_weight_decay=eval_latent_weight_decay,
         )
 
         if return_history:
-            return result  # (best_loss, best_model, history, latents)
-
-        # (best_loss, best_model, latents)
+            return result
         return result[0], result[1], result[3]
 
     def _train_final_model(
@@ -788,6 +909,7 @@ class ImputeNLPCA(BaseNNImputer):
         self.logger.info(f"Training the final model...")
 
         model = self.build_model(self.Model, best_params)
+        model.n_features = best_params["n_features"]
         model.apply(self.initialize_weights)
 
         loss, trained_model, history, latent_vectors = self._train_and_validate_model(
@@ -799,6 +921,15 @@ class ImputeNLPCA(BaseNNImputer):
             latent_vectors=initial_latent_vectors,
             lr_input_factor=self.lr_input_factor,
             class_weights=self.class_weights_,
+            # NEW (no pruning since trial=None)
+            X_val=self.X_test_,
+            params=best_params,
+            prune_metric=self.tune_metric,
+            prune_warmup_epochs=5,
+            eval_interval=1,
+            eval_latent_steps=50,
+            eval_latent_lr=self.learning_rate * self.lr_input_factor,
+            eval_latent_weight_decay=0.0,
         )
 
         if trained_model is None:
@@ -809,7 +940,7 @@ class ImputeNLPCA(BaseNNImputer):
         fn = self.models_dir / "final_model.pt"
         torch.save(trained_model.state_dict(), fn)
 
-        return loss, trained_model, {"Train": history}, latent_vectors
+        return (loss, trained_model, {"Train": history}, latent_vectors)
 
     def _execute_training_loop(
         self,
@@ -822,10 +953,20 @@ class ImputeNLPCA(BaseNNImputer):
         return_history,
         latent_vectors,
         class_weights,
+        *,
+        trial: optuna.Trial | None = None,
+        X_val: np.ndarray | None = None,
+        params: dict | None = None,
+        prune_metric: str | None = None,
+        prune_warmup_epochs: int = 3,
+        eval_interval: int = 1,
+        eval_latent_steps: int = 50,
+        eval_latent_lr: float = 1e-2,
+        eval_latent_weight_decay: float = 0.0,
     ) -> Tuple[float, torch.nn.Module, list, torch.nn.Parameter]:
-        """Executes the core training loop.
+        """Executes the training loop with optional Optuna pruning.
 
-        This method runs the training loop for the NLPCA model, performing multiple epochs of training. It utilizes early stopping to prevent overfitting and can return the training history if specified. The method updates both the model parameters and latent vectors during training.
+        This method runs the training loop for the NLPCA model, performing multiple epochs of training. It supports optional integration with Optuna for hyperparameter tuning and pruning based on validation performance. The method tracks training history, applies early stopping, and returns the best model and training metrics.
 
         Args:
             loader (torch.utils.data.DataLoader): DataLoader for training data.
@@ -834,15 +975,25 @@ class ImputeNLPCA(BaseNNImputer):
             scheduler (torch.optim.lr_scheduler._LRScheduler): Learning rate scheduler.
             model (torch.nn.Module): The NLPCA model.
             l1_penalty (float): L1 regularization penalty.
-            return_history (bool): If True, returns training history.
+            return_history (bool): Whether to return training history.
             latent_vectors (torch.nn.Parameter): Latent vectors for samples.
-            class_weights (torch.Tensor): Class weights for handling class imbalance.
+            class_weights (torch.Tensor): Class weights for
+            handling class imbalance.
+            trial (optuna.Trial | None): Optuna trial for hyperparameter tuning.
+            X_val (np.ndarray | None): Validation data for pruning.
+            params (dict | None): Model parameters.
+            prune_metric (str | None): Metric to monitor for pruning.
+            prune_warmup_epochs (int): Epochs to wait before pruning.
+            eval_interval (int): Epoch interval for evaluation.
+            eval_latent_steps (int): Steps to refine latents during eval.
+            eval_latent_lr (float): Learning rate for latent refinement during eval.
+            eval_latent_weight_decay (float): Weight decay for latent refinement during eval.
 
         Returns:
             Tuple[float, torch.nn.Module, list, torch.nn.Parameter]: Best loss, best model, training history, and optimized latent vectors.
 
         Raises:
-            optuna.exceptions.TrialPruned: If the trial is pruned due to NaN or Inf loss.
+            optuna.exceptions.TrialPruned: If the trial is pruned based on validation performance.
         """
         best_model = None
         train_history = []
@@ -854,7 +1005,17 @@ class ImputeNLPCA(BaseNNImputer):
             debug=self.debug,
         )
 
-        for epoch in range(self.epochs):
+        # compute the epoch budget used by the loop
+        max_epochs = (
+            self.tune_epochs if (trial is not None and self.tune_fast) else self.epochs
+        )
+        scheduler = CosineAnnealingLR(optimizer, T_max=max_epochs)
+
+        # just above the for-epoch loop
+        _latent_cache: dict = {}
+        _latent_cache_key = f"{self.prefix}_{self.model_name}_val_latents"
+
+        for epoch in range(max_epochs):
             train_loss, latent_vectors = self._train_step(
                 loader,
                 optimizer,
@@ -872,14 +1033,43 @@ class ImputeNLPCA(BaseNNImputer):
             if return_history:
                 train_history.append(train_loss)
 
+            if (
+                trial is not None
+                and X_val is not None
+                and ((epoch + 1) % eval_interval == 0)
+            ):
+                metric_key = prune_metric or getattr(self, "tune_metric", "f1")
+
+                do_infer = (eval_latent_steps or 0) > 0
+                metric_val = self._eval_for_pruning(
+                    model=model,
+                    X_val=X_val,
+                    params=params or getattr(self, "best_params_", {}),
+                    metric=metric_key,
+                    objective_mode=True,
+                    do_latent_infer=do_infer,
+                    latent_steps=eval_latent_steps,
+                    latent_lr=eval_latent_lr,
+                    latent_weight_decay=eval_latent_weight_decay,
+                    latent_seed=(self.seed if self.seed is not None else None),
+                    _latent_cache=_latent_cache,
+                    _latent_cache_key=_latent_cache_key,
+                )
+
+                trial.report(metric_val, step=epoch + 1)
+                if (epoch + 1) >= prune_warmup_epochs and trial.should_prune():
+                    raise optuna.exceptions.TrialPruned(
+                        f"Pruned at epoch {epoch + 1}: {metric_key}={metric_val:.3f}"
+                    )
+
             early_stopping(train_loss, model)
             if early_stopping.early_stop:
                 self.logger.info(f"Early stopping at epoch {epoch + 1}.")
                 break
 
         best_loss = early_stopping.best_score
-        best_model = copy.deepcopy(early_stopping.best_model)
-
+        best_model = model  # reuse instance
+        best_model.load_state_dict(early_stopping.best_model.state_dict())
         return best_loss, best_model, train_history, latent_vectors
 
     def _optimize_latents_for_inference(
@@ -902,8 +1092,14 @@ class ImputeNLPCA(BaseNNImputer):
         Returns:
             torch.Tensor: Optimized latent vectors for the new data.
         """
-        self.logger.info("Optimizing latent vectors for new data...")
+        if self.tune and self.tune_fast:
+            inference_epochs = min(
+                inference_epochs, getattr(self, "tune_infer_epochs", 20)
+            )
+
         model.eval()
+
+        nF = getattr(model, "n_features", self.num_features_)
 
         new_latent_vectors = self._create_latent_space(
             params, len(X_new), X_new, self.latent_init
@@ -916,7 +1112,7 @@ class ImputeNLPCA(BaseNNImputer):
         for _ in range(inference_epochs):
             latent_optimizer.zero_grad()
             logits = model.phase23_decoder(new_latent_vectors).view(
-                len(X_new), self.num_features_, self.num_classes_
+                len(X_new), nF, self.num_classes_
             )
             loss = F.cross_entropy(
                 logits.view(-1, self.num_classes_), y_target.view(-1), ignore_index=-1
@@ -928,3 +1124,89 @@ class ImputeNLPCA(BaseNNImputer):
             latent_optimizer.step()
 
         return new_latent_vectors.detach()
+
+    def _latent_infer_for_eval(
+        self,
+        model: torch.nn.Module,
+        X_val: np.ndarray,
+        *,
+        steps: int,
+        lr: float,
+        weight_decay: float,
+        seed: int,
+        cache: dict | None,
+        cache_key: str | None,
+    ) -> None:
+        """Freeze weights; refine validation latents only (no leakage).
+
+        Args:
+            model (torch.nn.Module): Trained NLPCA model.
+            X_val (np.ndarray): Validation data in 0/1/2 encoding with - 1 for missing.
+            steps (int): Number of optimization steps for latent refinement.
+            lr (float): Learning rate for latent optimization.
+            weight_decay (float): Weight decay for latent optimization.
+            seed (int): Random seed for reproducibility.
+            cache (dict | None): Cache for storing optimized latents.
+            cache_key (str | None): Key for storing/retrieving latents in/from cache
+
+        Returns:
+            None. Updates cache in place if provided.
+        """
+        if seed is None:
+            seed = np.random.randint(0, 999999)
+
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+
+        model.eval()
+
+        nF = getattr(model, "n_features", self.num_features_)
+
+        for p in model.parameters():
+            p.requires_grad_(False)
+
+        X_val = X_val.astype(np.int64, copy=False)
+        X_val[X_val < 0] = -1
+        y_target = torch.from_numpy(X_val).long().to(self.device)
+
+        # Get latent_dim from the *model actually being evaluated*
+        latent_dim_model = self._first_linear_in_features(model)
+
+        # Make a cache key that is specific to this latent size (and feature schema)
+        cache_key = (
+            f"{self.prefix}_nlpca_val_latents_"
+            f"z{latent_dim_model}_L{self.num_features_}_K{self.num_classes_}"
+        )
+
+        # Warm-start from cache if available *and* shape-compatible
+        if cache is not None and cache_key in cache:
+            val_latents = cache[cache_key].detach().clone().requires_grad_(True)
+        else:
+            val_latents = self._create_latent_space(
+                {"latent_dim": latent_dim_model},  # <-- use model’s latent size
+                n_samples=X_val.shape[0],
+                X=X_val,
+                latent_init=self.latent_init,
+            ).requires_grad_(True)
+
+        opt = torch.optim.AdamW([val_latents], lr=lr, weight_decay=weight_decay)
+
+        for _ in range(max(int(steps), 0)):
+            opt.zero_grad(set_to_none=True)
+            logits = model.phase23_decoder(val_latents).view(
+                X_val.shape[0], nF, self.num_classes_
+            )
+            loss = F.cross_entropy(
+                logits.view(-1, self.num_classes_),
+                y_target.view(-1),
+                ignore_index=-1,
+                reduction="mean",
+            )
+            loss.backward()
+            opt.step()
+
+        if cache is not None:
+            cache[cache_key] = val_latents.detach().clone()
+
+        for p in model.parameters():
+            p.requires_grad_(True)

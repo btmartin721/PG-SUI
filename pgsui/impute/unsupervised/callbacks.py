@@ -101,6 +101,9 @@ class EarlyStopping:
             # Now check if we surpass patience AND have reached min_epochs
             if self.counter >= self.patience and self.epoch_count >= self.min_epochs:
 
+                if self.best_model is None:
+                    self.best_model = model
+
                 self.early_stop = True
 
                 if self.verbose:

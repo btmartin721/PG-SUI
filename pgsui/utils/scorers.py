@@ -23,7 +23,7 @@ class Scorer:
     def __init__(
         self,
         prefix: str,
-        average: Literal["micro", "macro", "weighted"] = "weighted",
+        average: Literal["micro", "macro", "weighted"] = "macro",
         verbose: bool = False,
         debug: bool = False,
     ) -> None:

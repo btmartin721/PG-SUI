@@ -167,9 +167,7 @@ class ImputePhylo:
         self.nuc_map = {v: k for k, v in self.char_map.items()}
         self.imputer_data_: Optional[Tuple] = None
         self.ground_truth_: Optional[Dict] = None
-        self.scorer = Scorer(
-            self.prefix, average="weighted", verbose=verbose, debug=debug
-        )
+        self.scorer = Scorer(self.prefix, average="macro", verbose=verbose, debug=debug)
         self.plotter = Plotting(
             "ImputePhylo",
             prefix=self.prefix,

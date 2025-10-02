@@ -1,3 +1,4 @@
+import logging
 import warnings
 from pathlib import Path
 from typing import Dict, List, Literal, Optional, Sequence
@@ -25,6 +26,17 @@ from sklearn.preprocessing import label_binarize
 from snpio.utils.logging import LoggerManager
 
 from pgsui.utils import misc
+
+# Quiet Matplotlib/fontTools INFO logging when saving PDF/SVG
+for name in (
+    "fontTools",
+    "fontTools.subset",
+    "fontTools.ttLib",
+    "matplotlib.font_manager",
+):
+    lg = logging.getLogger(name)
+    lg.setLevel(logging.WARNING)
+    lg.propagate = False
 
 
 class Plotting:

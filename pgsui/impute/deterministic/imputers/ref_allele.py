@@ -1,7 +1,7 @@
 # Standard library
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, List, Literal, Sequence, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union
 
 # Third-party
 import matplotlib.pyplot as plt
@@ -22,9 +22,49 @@ from snpio.utils.logging import LoggerManager
 
 from pgsui.utils.classification_viz import ClassificationReportVisualizer
 from pgsui.utils.plotting import Plotting
+from pgsui.data_processing.config import apply_dot_overrides, load_yaml_to_dataclass
+from pgsui.data_processing.containers import RefAlleleConfig
 
 if TYPE_CHECKING:
     from snpio.read_input.genotype_data import GenotypeData
+
+
+def ensure_refallele_config(
+    config: Union[RefAlleleConfig, dict, str, None],
+) -> RefAlleleConfig:
+    """Return a concrete RefAlleleConfig (dataclass, dict, YAML path, or None).
+
+    Args:
+        config (Union[RefAlleleConfig, dict, str, None]): Configuration input which can be a RefAlleleConfig instance, a dictionary of parameters, a path to a YAML file, or None.
+    """
+    if config is None:
+        return RefAlleleConfig()
+    if isinstance(config, RefAlleleConfig):
+        return config
+    if isinstance(config, str):
+        return load_yaml_to_dataclass(
+            config, RefAlleleConfig, preset_builder=RefAlleleConfig.from_preset
+        )
+    if isinstance(config, dict):
+        base = RefAlleleConfig()
+        # honor optional top-level 'preset'
+        preset = config.pop("preset", None)
+        if preset:
+            base = RefAlleleConfig.from_preset(preset)
+
+        def _flatten(prefix: str, d: dict, out: dict) -> dict:
+            for k, v in d.items():
+                kk = f"{prefix}.{k}" if prefix else k
+                if isinstance(v, dict):
+                    _flatten(kk, v, out)
+                else:
+                    out[kk] = v
+            return out
+
+        flat = _flatten("", config, {})
+        return apply_dot_overrides(base, flat)
+
+    raise TypeError("config must be a RefAlleleConfig, dict, YAML path, or None.")
 
 
 class ImputeRefAllele:
@@ -37,67 +77,52 @@ class ImputeRefAllele:
         self,
         genotype_data: "GenotypeData",
         *,
-        prefix: str = "pgsui",
-        plot_format: Literal["pdf", "png", "jpg", "jpeg"] = "pdf",
-        plot_fontsize: int = 18,
-        plot_despine: bool = True,
-        plot_dpi: int = 300,
-        plot_show_plots: bool = False,
-        missing: int = -1,
-        verbose: bool = True,
-        seed: int | None = None,
-        debug: bool = False,
-        test_size: float = 0.2,
-        test_indices: Sequence[int] | None = None,
+        config: Optional[Union[RefAlleleConfig, dict, str]] = None,
+        overrides: Optional[dict] = None,
     ) -> None:
-        """Initialize the RefAllele imputer.
+        """Initialize the Ref-Allele imputer from a unified config.
 
         Args:
-            genotype_data (GenotypeData): Genotype data object with 0/1/2
-            prefix (str, optional): Prefix for output directories and files. Defaults to "pgsui".
-            plot_format (Literal["pdf", "png", "jpg", "jpeg"], optional): Format for saving plots. Defaults to "pdf".
-            plot_fontsize (int, optional): Font size for plots. Defaults to 18.
-            plot_despine (bool, optional): Whether to despine plots. Defaults to True.
-            plot_dpi (int, optional): DPI for saved plots. Defaults to 300.
-            plot_show_plots (bool, optional): Whether to display plots interactively. Defaults to False.
-            missing (int, optional): Value representing missing genotypes. Defaults to -1.
-            verbose (bool, optional): Whether to enable verbose logging. Defaults to True.
-            seed (int | None, optional): Random seed for reproducibility. Defaults to None.
-            debug (bool, optional): Whether to enable debug logging. Defaults to False.
-            test_size (float, optional): Proportion of samples to use as test set if test indices not provided. Defaults to 0.2.
-            test_indices (Sequence[int] | None, optional): Specific sample indices to use as test set. Defaults to None.
+            genotype_data (GenotypeData): Backing genotype data.
+            config (RefAlleleConfig | dict | str | None): Configuration as a dataclass, nested dict, or YAML path. If None, defaults are used.
+            overrides (dict | None): Flat dot-key overrides applied last with highest precedence, e.g. {'split.test_size': 0.25, 'algo.missing': -1}.
         """
-        self.genotype_data = genotype_data
-        self.prefix = prefix
-        self.plot_format = plot_format
-        self.plot_fontsize = plot_fontsize
-        self.plot_despine = plot_despine
-        self.plot_dpi = plot_dpi
-        self.show_plots = plot_show_plots
-        self.missing = int(missing)
-        self.verbose = verbose
-        self.debug = debug
+        # Normalize config then apply highest-precedence overrides
+        cfg = ensure_refallele_config(config)
+        if overrides:
+            cfg = apply_dot_overrides(cfg, overrides)
+        self.cfg = cfg
 
-        logman = LoggerManager(__name__, prefix=prefix, verbose=verbose, debug=debug)
+        # Basic fields
+        self.genotype_data = genotype_data
+        self.prefix = cfg.io.prefix
+        self.verbose = cfg.io.verbose
+        self.debug = cfg.io.debug
+
+        # Logger
+        logman = LoggerManager(
+            __name__, prefix=self.prefix, verbose=self.verbose, debug=self.debug
+        )
         self.logger = logman.get_logger()
 
-        self.rng = np.random.default_rng(seed)
+        # RNG / encoder
+        self.rng = np.random.default_rng(cfg.io.seed)
         self.encoder = GenotypeEncoder(self.genotype_data)
 
-        # --- Work in 0/1/2 with -1 as missing ---
+        # Work in 0/1/2 with -1 for missing
         X012 = self.encoder.genotypes_012.astype(np.int16, copy=True)
         X012[X012 < 0] = -1
         self.X012_ = X012
         self.num_features_ = X012.shape[1]
 
-        self.test_size = float(test_size)
+        # Split & algo knobs
+        self.test_size = float(cfg.split.test_size)
         self.test_indices = (
-            None if test_indices is None else np.asarray(test_indices, dtype=int)
+            None
+            if cfg.split.test_indices is None
+            else np.asarray(cfg.split.test_indices, dtype=int)
         )
-
-        # DL parity: detect haploid vs diploid for 0/1/2 scoring (fold 2->1 for haploid)
-        uniq = np.unique(self.X012_[self.X012_ != -1])
-        self.is_haploid_ = np.array_equal(np.sort(uniq), np.array([0, 2]))
+        self.missing = int(cfg.algo.missing)
 
         # State
         self.is_fit_: bool = False
@@ -109,22 +134,32 @@ class ImputeRefAllele:
         self.X_imputed012_: np.ndarray | None = None
         self.metrics_: Dict[str, int | float] = {}
 
-        # Plotter (shared style with DL modules)
+        # Ploidy heuristic for 0/1/2 scoring parity
+        uniq = np.unique(self.X012_[self.X012_ != -1])
+        self.is_haploid_ = np.array_equal(np.sort(uniq), np.array([0, 2]))
+
+        # Plotting (use config)
+        self.plot_format = cfg.plot.fmt
+        self.plot_fontsize = cfg.plot.fontsize
+        self.plot_despine = cfg.plot.despine
+        self.plot_dpi = cfg.plot.dpi
+        self.show_plots = cfg.plot.show
+
+        self.model_name = "ImputeRefAllele"
         self.plotter_ = Plotting(
-            "ImputeRefAllele",
+            self.model_name,
             prefix=self.prefix,
-            plot_format=genotype_data.plot_format,
-            plot_fontsize=genotype_data.plot_fontsize,
-            plot_dpi=genotype_data.plot_dpi,
-            title_fontsize=genotype_data.plot_fontsize,
-            despine=genotype_data.plot_despine,
-            show_plots=genotype_data.show_plots,
+            plot_format=self.plot_format,
+            plot_fontsize=self.plot_fontsize,
+            plot_dpi=self.plot_dpi,
+            title_fontsize=self.plot_fontsize,
+            despine=self.plot_despine,
+            show_plots=self.show_plots,
             verbose=self.verbose,
             debug=self.debug,
         )
 
-        self.model_name = "ImputeRefAllele"
-
+        # Output dirs
         dirs = ["models", "plots", "metrics", "optimize"]
         self._create_model_directories(self.prefix, dirs)
 

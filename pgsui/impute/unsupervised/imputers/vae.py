@@ -1,5 +1,7 @@
+from __future__ import annotations
+
 import copy
-from typing import TYPE_CHECKING, Dict, Literal, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -10,8 +12,9 @@ from sklearn.model_selection import train_test_split
 from snpio.analysis.genotype_encoder import GenotypeEncoder
 from snpio.utils.logging import LoggerManager
 from torch.optim.lr_scheduler import CosineAnnealingLR
-from torch.utils.data import DataLoader, TensorDataset
 
+from pgsui.data_processing.config import apply_dot_overrides, load_yaml_to_dataclass
+from pgsui.data_processing.containers import VAEConfig
 from pgsui.impute.unsupervised.base import BaseNNImputer
 from pgsui.impute.unsupervised.callbacks import EarlyStopping
 from pgsui.impute.unsupervised.models.vae_model import VAEModel
@@ -20,187 +23,196 @@ if TYPE_CHECKING:
     from snpio.read_input.genotype_data import GenotypeData
 
 
-class ImputeVAE(BaseNNImputer):
-    """VAE imputer on 0/1/2-encoded genotypes (missing=-1), NLPCA/AE-parity.
+def ensure_vae_config(config: Union[VAEConfig, dict, str, None]) -> VAEConfig:
+    if config is None:
+        return VAEConfig()
+    if isinstance(config, VAEConfig):
+        return config
+    if isinstance(config, str):
+        return load_yaml_to_dataclass(
+            config, VAEConfig, preset_builder=VAEConfig.from_preset
+        )
+    if isinstance(config, dict):
+        base = VAEConfig()
+        # Respect top-level preset
+        preset = config.pop("preset", None)
+        if preset:
+            base = VAEConfig.from_preset(preset)
+        # Flatten + apply
+        flat: Dict[str, object] = {}
 
-    Inputs = one-hot(0/1/2) with zeros where missing; Targets = same 0/1/2 ints. Diploid => 3 classes (0/1/2), Haploid => 2 classes (0/2 collapsed to 0/1 for scoring). Preserves VAE specifics: stochastic z, KL term (β), and β-annealing schedule. Produces same reports/plots as ImputeNLPCA/ImputeAutoencoder, including IUPAC→10-int.
+        def _flatten(prefix: str, d: dict, out: dict) -> dict:
+            for k, v in d.items():
+                kk = f"{prefix}.{k}" if prefix else k
+                if isinstance(v, dict):
+                    _flatten(kk, v, out)
+                else:
+                    out[kk] = v
+            return out
+
+        flat = _flatten("", config, {})
+        return apply_dot_overrides(base, flat)
+    raise TypeError("config must be a VAEConfig, dict, YAML path, or None.")
+
+
+class ImputeVAE(BaseNNImputer):
+    """Variational Autoencoder imputer on 0/1/2 encodings (missing=-1).
+
+    This imputer implements a VAE with a multinomial (categorical) latent space. It is designed to handle missing data by inferring the latent distribution and generating plausible predictions. The model is trained using a combination of reconstruction loss (cross-entropy) and a KL divergence term, with the KL weight (beta) annealed over time. The imputer supports both haploid and diploid genotype data.
     """
 
     def __init__(
         self,
         genotype_data: "GenotypeData",
         *,
-        seed: int | None = None,
-        n_jobs: int = 1,
-        prefix: str = "pgsui",
-        verbose: bool = False,
-        # weighting
-        weights_beta: float = 0.9999,
-        weights_max_ratio: float = 1.0,
-        # tuning
-        tune: bool = False,
-        tune_metric: Literal["f1", "accuracy", "pr_macro"] = "f1",
-        tune_n_trials: int = 100,
-        # model/training
-        model_latent_dim: int = 16,
-        model_dropout_rate: float = 0.2,
-        model_num_hidden_layers: int = 3,
-        model_batch_size: int = 64,
-        model_learning_rate: float = 1e-3,
-        model_early_stop_gen: int = 25,
-        model_min_epochs: int = 100,
-        model_epochs: int = 5000,
-        model_l1_penalty: float = 0.0,
-        model_layer_scaling_factor: float = 5.0,
-        model_layer_schedule: Literal["pyramid", "constant", "linear"] = "pyramid",
-        model_gamma: float = 2.0,
-        model_beta: float = 1.0,
-        model_hidden_activation: Literal["relu", "elu", "selu", "leaky_relu"] = "relu",
-        model_device: Literal["gpu", "cpu", "mps"] = "cpu",
-        model_validation_split: float = 0.2,
-        # plotting
-        plot_format: Literal["pdf", "png", "jpg", "jpeg"] = "pdf",
-        plot_dpi: int = 300,
-        plot_show_plots: bool = False,
-        plot_fontsize: int = 18,
-        plot_despine: bool = True,
-        debug: bool = False,
+        config: Optional[Union["VAEConfig", dict, str]] = None,
+        overrides: dict | None = None,
     ):
-        """Initializes the ImputeVAE imputer.
-
-        This class extends the BaseNNImputer to implement a Variational Autoencoder (VAE) model for genotype imputation. It supports hyperparameter tuning using Optuna and provides various configuration options for model training and plotting.
+        """Initialize the VAE imputer with a unified config interface.
 
         Args:
-            genotype_data (GenotypeData): The genotype data object containing SNP data.
-            seed (int | None): Random seed for reproducibility. If None, a random seed is used. Defaults to None.
-            n_jobs (int): The number of parallel jobs to use for training. Defaults to 1.
-            prefix (str): A prefix used for logging and saving models. Defaults to "pgsui".
-            verbose (bool): If True, enables detailed logging. Defaults to False.
-            weights_beta (float): The beta parameter for weighting in the loss function. Defaults to 0.9999.
-            weights_max_ratio (float): The maximum ratio for class weighting. Defaults to 1.0.
-            tune (bool): If True, enables hyperparameter tuning using Optuna. Defaults to False.
-            tune_metric (Literal["f1", "accuracy", "pr_macro"]): The metric to optimize during hyperparameter tuning. Defaults to "f1".
-            tune_n_trials (int): The number of trials for hyperparameter tuning. Defaults to 100.
-            model_latent_dim (int): The dimensionality of the latent space in the VAE. Defaults to 16.
-            model_dropout_rate (float): The dropout rate for regularization in hidden layers. Defaults to 0.2.
-            model_num_hidden_layers (int): The number of hidden layers in the encoder and decoder. Defaults to 3.
-            model_batch_size (int): The batch size for training. Defaults to 64.
-            model_learning_rate (float): The learning rate for the optimizer. Defaults to 1e-3.
-            model_early_stop_gen (int): The number of generations with no improvement before early stopping. Defaults to 25.
-            model_min_epochs (int): The minimum number of epochs to train before considering early stopping. Defaults to 100.
-            model_epochs (int): The maximum number of epochs for training. Defaults to 5000.
-            model_l1_penalty (float): The L1 penalty for regularization in the loss function. Defaults to 0.0.
-            model_layer_scaling_factor (float): The scaling factor for determining hidden layer sizes. Defaults to 5.0.
-            model_layer_schedule (Literal["pyramid", "constant", "linear"]): The schedule for hidden layer sizes. Defaults to "pyramid".
-            model_gamma (float): The focusing parameter for the focal loss function. Defaults to 2.0.
-            model_beta (float): The beta parameter for the KL divergence term in the VAE loss. Defaults to 1.0.
-            model_hidden_activation (Literal["relu", "elu", "selu", "leaky_relu"]): The activation function for hidden layers. Defaults to "relu".
-            model_device (Literal["gpu", "cpu", "mps"]): The PyTorch device to run the model on. Defaults to "cpu".
-            model_validation_split (float): The proportion of data to use for validation. Defaults to 0.2.
-            plot_format (Literal["pdf", "png", "jpg"]): The file format for saving plots. Defaults to "pdf".
-            plot_dpi (int): The resolution (dots per inch) for saved plots. Defaults to 300.
-            plot_show_plots (bool): If True, displays plots interactively. Defaults to False.
-            plot_fontsize (int): The font size for plot text. Defaults to 18.
-            plot_despine (bool): If True, removes the top and right spines from plots. Defaults to True.
-            debug (bool): If True, enables debug mode. Defaults to False.
+            genotype_data: Backing genotype data object.
+            config: VAEConfig, nested dict, YAML path, or None (defaults).
+            overrides: Optional dot-key overrides with highest precedence.
         """
         self.model_name = "ImputeVAE"
-        kwargs = {"prefix": prefix, "debug": debug, "verbose": verbose}
-        logman = LoggerManager(__name__, **kwargs)
+        self.genotype_data = genotype_data
+
+        # Normalize configuration and apply top-precedence overrides
+        cfg = ensure_vae_config(config)
+        if overrides:
+            cfg = apply_dot_overrides(cfg, overrides)
+        self.cfg = cfg
+
+        # Logger (align with AE/NLPCA)
+        logman = LoggerManager(
+            __name__,
+            prefix=self.cfg.io.prefix,
+            debug=self.cfg.io.debug,
+            verbose=self.cfg.io.verbose,
+        )
         self.logger = logman.get_logger()
 
+        # BaseNNImputer bootstraps device/dirs/log formatting
         super().__init__(
-            prefix=prefix, device=model_device, verbose=verbose, debug=debug
+            prefix=self.cfg.io.prefix,
+            device=self.cfg.train.device,
+            verbose=self.cfg.io.verbose,
+            debug=self.cfg.io.debug,
         )
 
-        self.genotype_data = genotype_data
+        # Model hook & encoder
+        self.Model = VAEModel
         self.pgenc = GenotypeEncoder(genotype_data)
 
-        self.Model = VAEModel
-        self.seed = seed
-        self.rng = np.random.default_rng(seed)
-        self.verbose = verbose
-        self.n_jobs = n_jobs
+        # IO/global
+        self.seed = self.cfg.io.seed
+        self.n_jobs = self.cfg.io.n_jobs
+        self.prefix = self.cfg.io.prefix
+        self.scoring_averaging = self.cfg.io.scoring_averaging
+        self.verbose = self.cfg.io.verbose
+        self.debug = self.cfg.io.debug
+        self.rng = np.random.default_rng(self.seed)
 
-        # Model & training params
-        self.latent_dim = model_latent_dim
-        self.dropout_rate = model_dropout_rate
-        self.num_hidden_layers = model_num_hidden_layers
-        self.layer_scaling_factor = model_layer_scaling_factor
-        self.layer_schedule = model_layer_schedule
-        self.batch_size = model_batch_size
-        self.learning_rate = model_learning_rate
-        self.early_stop_gen = model_early_stop_gen
-        self.min_epochs = model_min_epochs
-        self.epochs = model_epochs
-        self.l1_penalty = model_l1_penalty
-        self.gamma = model_gamma
-        self.beta = model_beta
-        self.activation = model_hidden_activation
-        self.validation_split = model_validation_split
+        # Model hyperparams (AE-parity)
+        self.latent_dim = self.cfg.model.latent_dim
+        self.dropout_rate = self.cfg.model.dropout_rate
+        self.num_hidden_layers = self.cfg.model.num_hidden_layers
+        self.layer_scaling_factor = self.cfg.model.layer_scaling_factor
+        self.layer_schedule = self.cfg.model.layer_schedule
+        self.activation = self.cfg.model.hidden_activation
+        self.gamma = self.cfg.model.gamma  # focal loss focusing (for recon CE)
 
-        # weighting
-        self.beta_w = weights_beta
-        self.max_ratio = weights_max_ratio
+        # VAE-only KL controls
+        self.kl_beta_final = self.cfg.vae.kl_beta
+        self.kl_warmup = self.cfg.vae.kl_warmup
+        self.kl_ramp = self.cfg.vae.kl_ramp
 
-        # tuning
-        self.tune = tune
-        self.tune_metric = tune_metric
-        self.n_trials = tune_n_trials
+        # Train hyperparams (AE-parity)
+        self.batch_size = self.cfg.train.batch_size
+        self.learning_rate = self.cfg.train.learning_rate
+        self.l1_penalty = self.cfg.train.l1_penalty
+        self.early_stop_gen = self.cfg.train.early_stop_gen
+        self.min_epochs = self.cfg.train.min_epochs
+        self.epochs = self.cfg.train.max_epochs
+        self.validation_split = self.cfg.train.validation_split
+        self.beta = self.cfg.train.weights_beta
+        self.max_ratio = self.cfg.train.weights_max_ratio
 
-        # plotting
-        self.prefix = prefix
-        self.plot_format = plot_format
-        self.plot_dpi = plot_dpi
-        self.show_plots = plot_show_plots
-        self.plot_fontsize = plot_fontsize
-        self.title_fontsize = plot_fontsize
-        self.despine = plot_despine
-        self.scoring_averaging = "weighted"
+        # Tuning (AE-parity surface; VAE ignores latent refinement during eval)
+        self.tune = self.cfg.tune.enabled
+        self.tune_fast = self.cfg.tune.fast
+        self.tune_batch_size = self.cfg.tune.batch_size
+        self.tune_epochs = self.cfg.tune.epochs
+        self.tune_eval_interval = self.cfg.tune.eval_interval
+        self.tune_metric = self.cfg.tune.metric
+        self.n_trials = self.cfg.tune.n_trials
+        self.tune_save_db = self.cfg.tune.save_db
+        self.tune_resume = self.cfg.tune.resume
+        self.tune_max_samples = self.cfg.tune.max_samples
+        self.tune_max_loci = self.cfg.tune.max_loci
+        self.tune_patience = self.cfg.tune.patience
 
-        # core config (filled in fit)
-        self.is_haploid = None
-        self.num_classes_ = None  # 2 or 3
-        self.model_params = {}
+        # Plotting (AE-parity)
+        self.plot_format = self.cfg.plot.fmt
+        self.plot_dpi = self.cfg.plot.dpi
+        self.plot_fontsize = self.cfg.plot.fontsize
+        self.title_fontsize = self.cfg.plot.fontsize
+        self.despine = self.cfg.plot.despine
+        self.show_plots = self.cfg.plot.show
+
+        # Derived at fit-time
+        self.is_haploid: bool | None = None
+        self.num_classes_: int | None = None
+        self.model_params: Dict[str, Any] = {}
 
     # -------------------- Fit -------------------- #
     def fit(self) -> "ImputeVAE":
+        """Fit the VAE on 0/1/2 encoded genotypes (missing → -1).
+
+        Returns:
+            ImputeVAE: Fitted instance.
+
+        Raises:
+            RuntimeError: If training fails to produce a model.
+        """
         self.logger.info(f"Fitting {self.model_name} (0/1/2 VAE) ...")
 
-        # 0/1/2 prep (missing -> -1)
+        # Data prep aligns with AE/NLPCA
         X = self.pgenc.genotypes_012.astype(np.float32)
         X[X < 0] = np.nan
         X[np.isnan(X)] = -1
         self.ground_truth_ = X.astype(np.int64)
 
-        # ploidy/classes
+        # Ploidy/classes
         self.is_haploid = np.all(
             np.isin(
-                self.genotype_data.snp_data, ["A", "C", "G", "T", "N", "-", ".", "?"]
+                self.genotype_data.snp_data,
+                ["A", "C", "G", "T", "N", "-", ".", "?"],
             )
         )
         self.ploidy = 1 if self.is_haploid else 2
         self.num_classes_ = 2 if self.is_haploid else 3
         self.logger.info(
-            f"Data is {'haploid' if self.is_haploid else 'diploid'}. "
-            f"Using {self.num_classes_} classes."
+            f"Data is {'haploid' if self.is_haploid else 'diploid'}; "
+            f"using {self.num_classes_} classes."
         )
 
         n_samples, self.num_features_ = X.shape
 
-        # model params (decoder emits L*K logits)
+        # Model params (decoder outputs L*K logits)
         self.model_params = {
             "n_features": self.num_features_,
             "num_classes": self.num_classes_,
             "latent_dim": self.latent_dim,
             "dropout_rate": self.dropout_rate,
             "activation": self.activation,
-            "gamma": self.gamma,
-            "beta": self.beta,  # VAE loss uses model.beta (we anneal it below)
-            # hidden sizes set in _default/_set_best_params
+            # 'hidden_layer_sizes' computed below,
+            # 'beta' (KL weight) is scheduled on model.beta each epoch.
+            # 'gamma' (if your VAEModel uses focal CE) is scheduled similarly.
         }
 
-        # train/val split (sample-wise)
+        # Train/Val split
         indices = np.arange(n_samples)
         train_idx, val_idx = train_test_split(
             indices, test_size=self.validation_split, random_state=self.seed
@@ -209,22 +221,25 @@ class ImputeVAE(BaseNNImputer):
         self.X_train_ = self.ground_truth_[train_idx]
         self.X_val_ = self.ground_truth_[val_idx]
 
-        # plotting/scorers & (optional) tuning
+        # Plotters/scorers (shared utilities)
         self.plotter_, self.scorers_ = self.initialize_plotting_and_scorers()
+
+        # Optional tuning
         if self.tune:
             self.tune_hyperparameters()
 
+        # Best params (tuned or default)
         self.best_params_ = getattr(self, "best_params_", self._default_best_params())
 
-        # class weights on 0/1/2
+        # Class weights (device-aware)
         self.class_weights_ = self._class_weights_from_zygosity(self.X_train_).to(
             self.device
         )
 
-        # loader (indices + integer targets; inputs built on the fly)
+        # DataLoader
         train_loader = self._get_data_loader(self.X_train_)
 
-        # build & train VAE
+        # Build & train
         model = self.build_model(self.Model, self.best_params_)
         model.apply(self.initialize_weights)
 
@@ -235,13 +250,28 @@ class ImputeVAE(BaseNNImputer):
             l1_penalty=self.l1_penalty,
             return_history=True,
             class_weights=self.class_weights_,
+            # Validation+pruning parameters
+            X_val=self.X_val_,
+            params=self.best_params_,
+            prune_metric=self.tune_metric,
+            prune_warmup_epochs=5,
+            eval_interval=1,
+            eval_requires_latents=False,  # no latent refinement for eval
+            eval_latent_steps=0,
+            eval_latent_lr=0.0,
+            eval_latent_weight_decay=0.0,
         )
+
         if trained_model is None:
-            raise RuntimeError("Final model training failed.")
+            msg = "VAE training failed; no model was returned."
+            self.logger.error(msg)
+            raise RuntimeError(msg)
 
         torch.save(
-            trained_model.state_dict(), self.models_dir / "final_model_vae_012.pt"
+            trained_model.state_dict(),
+            self.models_dir / f"final_model_{self.model_name}.pt",
         )
+
         self.best_loss_, self.model_, self.history_ = (
             loss,
             trained_model,
@@ -249,21 +279,19 @@ class ImputeVAE(BaseNNImputer):
         )
         self.is_fit_ = True
 
-        # validation evaluation (parity with AE/NLPCA)
+        # Evaluate (AE-parity reporting)
         self._evaluate_model(self.X_val_, self.model_, self.best_params_)
         self.plotter_.plot_history(self.history_)
         return self
 
     def transform(self) -> np.ndarray:
-        """Impute full dataset -> IUPAC strings; plots distributions.
-
-        This method imputes missing genotype data in the full dataset using the trained VAE model. It generates IUPAC strings for the imputed genotypes and plots the distributions of the original and imputed genotypes.
+        """Impute missing genotypes and return IUPAC strings.
 
         Returns:
-            np.ndarray: The imputed genotype data in 0/1/2 encoding.
+            np.ndarray: IUPAC strings of shape (n_samples, n_loci).
 
         Raises:
-            NotFittedError: If the model has not been fitted yet.
+            NotFittedError: If called before fit().
         """
         if not getattr(self, "is_fit_", False):
             raise NotFittedError("Model is not fitted. Call fit() before transform().")
@@ -273,66 +301,75 @@ class ImputeVAE(BaseNNImputer):
 
         pred_labels, _ = self._predict(self.model_, X=X_to_impute, return_proba=True)
 
-        imputed = X_to_impute.copy()
-        imputed[X_to_impute == -1] = pred_labels[X_to_impute == -1]
+        # Fill only missing
+        missing_mask = X_to_impute == -1
+        imputed_array = X_to_impute.copy()
+        imputed_array[missing_mask] = pred_labels[missing_mask]
 
-        imputed_genotypes = self.pgenc.decode_012(imputed)
+        # Decode to IUPAC & plot
+        imputed_genotypes = self.pgenc.decode_012(imputed_array)
         original_genotypes = self.pgenc.decode_012(X_to_impute)
 
         plt.rcParams.update(self.plotter_.param_dict)
         self.plotter_.plot_gt_distribution(original_genotypes, is_imputed=False)
         self.plotter_.plot_gt_distribution(imputed_genotypes, is_imputed=True)
+
         return imputed_genotypes
 
-    def _get_data_loader(self, y: np.ndarray) -> DataLoader:
-        """Yield (indices, y_int) where y_int is 0/1/2 with -1 for missing.
+    # ---------- plumbing identical to AE, naming aligned ---------- #
 
-        This method creates a PyTorch DataLoader for the input data, yielding batches of (indices, y_int) where y_int is the integer representation of the genotype data (0, 1, 2) with -1 for missing values.
+    def _get_data_loader(self, y: np.ndarray) -> torch.utils.data.DataLoader:
+        """Create DataLoader over indices + integer targets (-1 for missing).
 
         Args:
-            y (np.ndarray): The target array of shape `(n_samples, n_features)` with integer values (0, 1, 2) and -1 for missing values.
+            y: 0/1/2 matrix with -1 for missing.
 
         Returns:
-            DataLoader: A PyTorch DataLoader yielding batches of (indices, y_int).
-
-        Raises:
-            TypeError: If the input array `y` is not of type `np.ndarray`.
+            torch.utils.data.DataLoader: Shuffled DataLoader.
         """
         y_tensor = torch.from_numpy(y).long().to(self.device)
-        dataset = TensorDataset(torch.arange(len(y), device=self.device), y_tensor)
-        return DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
+        dataset = torch.utils.data.TensorDataset(
+            torch.arange(len(y), device=self.device), y_tensor
+        )
+        return torch.utils.data.DataLoader(
+            dataset, batch_size=self.batch_size, shuffle=True
+        )
 
     def _train_and_validate_model(
         self,
         model: torch.nn.Module,
-        loader: DataLoader,
+        loader: torch.utils.data.DataLoader,
         lr: float,
         l1_penalty: float,
         trial: optuna.Trial | None = None,
         return_history: bool = False,
         class_weights: torch.Tensor | None = None,
+        *,
+        X_val: np.ndarray | None = None,
+        params: dict | None = None,
+        prune_metric: str | None = None,  # "f1" | "accuracy" | "pr_macro"
+        prune_warmup_epochs: int = 3,
+        eval_interval: int = 1,
+        eval_requires_latents: bool = False,  # VAE: no latent refinement at eval
+        eval_latent_steps: int = 0,
+        eval_latent_lr: float = 0.0,
+        eval_latent_weight_decay: float = 0.0,
     ) -> Tuple[float, torch.nn.Module | None, list | None]:
-        """Wrap VAE training (no latent-input optimization; β-annealing inside).
-
-        This method handles the training of the VAE model using the provided DataLoader. It sets up the optimizer and learning rate scheduler, then executes the training loop. The method supports returning the training history if specified.
-
-        Args:
-            model (torch.nn.Module): The PyTorch model to be trained.
-            loader (DataLoader): The DataLoader providing training data.
-            lr (float): The learning rate for the optimizer.
-            l1_penalty (float): The L1 penalty for regularization in the loss function.
-            trial (optuna.Trial | None): An optional Optuna trial object for hyperparameter tuning. Defaults to None.
-            return_history (bool): If True, returns the training history. Defaults to False.
-            class_weights (torch.Tensor | None): An optional tensor of weights for each class to address imbalance. Defaults to None.
+        """Wrap the VAE training loop with β-anneal & Optuna pruning.
 
         Returns:
-            Tuple[float, torch.nn.Module | None, list | None]: A tuple containing the best loss value, the trained model, and optionally the training history.
+            Tuple(best_loss, best_model, history or None).
         """
         if class_weights is None:
             raise TypeError("Must provide class_weights.")
 
+        # Epoch budget mirrors AE (tuning vs final)
+        max_epochs = (
+            self.tune_epochs if (trial is not None and self.tune_fast) else self.epochs
+        )
+
         optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-        scheduler = CosineAnnealingLR(optimizer, T_max=self.epochs)
+        scheduler = CosineAnnealingLR(optimizer, T_max=max_epochs)
 
         best_loss, best_model, hist = self._execute_training_loop(
             loader=loader,
@@ -343,6 +380,15 @@ class ImputeVAE(BaseNNImputer):
             trial=trial,
             return_history=return_history,
             class_weights=class_weights,
+            X_val=X_val,
+            params=params,
+            prune_metric=prune_metric,
+            prune_warmup_epochs=prune_warmup_epochs,
+            eval_interval=eval_interval,
+            eval_requires_latents=eval_requires_latents,
+            eval_latent_steps=eval_latent_steps,
+            eval_latent_lr=eval_latent_lr,
+            eval_latent_weight_decay=eval_latent_weight_decay,
         )
         if return_history:
             return best_loss, best_model, hist
@@ -350,31 +396,29 @@ class ImputeVAE(BaseNNImputer):
 
     def _execute_training_loop(
         self,
-        loader: DataLoader,
+        loader: torch.utils.data.DataLoader,
         optimizer: torch.optim.Optimizer,
         scheduler: torch.optim.lr_scheduler._LRScheduler,
         model: torch.nn.Module,
         l1_penalty: float,
-        trial,
+        trial: optuna.Trial | None,
         return_history: bool,
         class_weights: torch.Tensor,
+        *,
+        X_val: np.ndarray | None = None,
+        params: dict | None = None,
+        prune_metric: str | None = None,
+        prune_warmup_epochs: int = 3,
+        eval_interval: int = 1,
+        eval_requires_latents: bool = False,
+        eval_latent_steps: int = 0,
+        eval_latent_lr: float = 0.0,
+        eval_latent_weight_decay: float = 0.0,
     ) -> Tuple[float, torch.nn.Module, list]:
-        """Train with focal CE recon + KL; β-anneal schedule (warm, ramp, hold).
-
-        This method executes the core training loop for the VAE model. It performs multiple epochs of training, applying β-annealing to the KL divergence term in the loss function. The method utilizes early stopping to prevent overfitting and can return the training history if specified.
-
-        Args:
-            loader (DataLoader): The DataLoader providing training data.
-            optimizer (torch.optim.Optimizer): The optimizer for training.
-            scheduler (torch.optim.lr_scheduler._LRScheduler): The learning rate scheduler.
-            model (torch.nn.Module): The PyTorch model to be trained.
-            l1_penalty (float): The L1 penalty for regularization in the loss function.
-            trial (optuna.Trial | None): An optional Optuna trial object for hyperparameter tuning. Defaults to None.
-            return_history (bool): If True, returns the training history. Defaults to False.
-            class_weights (torch.Tensor): A tensor of weights for each class to address imbalance. Defaults to None.
+        """Train VAE with focal CE + KL(β) anneal, early stopping & pruning.
 
         Returns:
-            Tuple[float, torch.nn.Module, list]: A tuple containing the best loss value, the trained model, and optionally the training history.
+            Tuple(best_loss, best_model, history).
         """
         best_model = None
         history: list[float] = []
@@ -387,16 +431,34 @@ class ImputeVAE(BaseNNImputer):
             debug=self.debug,
         )
 
-        warm, ramp, beta_final = 50, 200, self.beta
-        for epoch in range(self.epochs):
-            # β-annealing (stored on model so compute_loss can read it)
-            if epoch < warm:
+        # AE-parity gamma schedule for focal CE (reconstruction)
+        gamma_warm, gamma_ramp, gamma_final = 50, 100, self.gamma
+        # VAE β schedule for KL term
+        beta_warm, beta_ramp, beta_final = (
+            self.kl_warmup,
+            self.kl_ramp,
+            self.kl_beta_final,
+        )
+
+        for epoch in range(scheduler.T_max):
+            # ----- schedules -----
+            # focal γ schedule (if your VAEModel uses it for recon CE)
+            if epoch < gamma_warm:
+                model.gamma = 0.0
+            elif epoch < gamma_warm + gamma_ramp:
+                model.gamma = gamma_final * ((epoch - gamma_warm) / gamma_ramp)
+            else:
+                model.gamma = gamma_final
+
+            # KL β schedule
+            if epoch < beta_warm:
                 model.beta = 0.0
-            elif epoch < warm + ramp:
-                model.beta = beta_final * ((epoch - warm) / ramp)
+            elif epoch < beta_warm + beta_ramp:
+                model.beta = beta_final * ((epoch - beta_warm) / beta_ramp)
             else:
                 model.beta = beta_final
 
+            # ----- one epoch -----
             train_loss = self._train_step(
                 loader=loader,
                 optimizer=optimizer,
@@ -416,42 +478,72 @@ class ImputeVAE(BaseNNImputer):
                 self.logger.info(f"Early stopping at epoch {epoch + 1}.")
                 break
 
+            # ---- Optuna report/prune on VALIDATION metric ----
+            if (
+                trial is not None
+                and X_val is not None
+                and ((epoch + 1) % eval_interval == 0)
+            ):
+                metric_key = prune_metric or getattr(self, "tune_metric", "f1")
+                metric_val = self._eval_for_pruning(
+                    model=model,
+                    X_val=X_val,
+                    params=params or getattr(self, "best_params_", {}),
+                    metric=metric_key,
+                    objective_mode=True,
+                    do_latent_infer=False,  # VAE: no latent refinement needed
+                    latent_steps=0,
+                    latent_lr=0.0,
+                    latent_weight_decay=0.0,
+                    latent_seed=(self.seed if self.seed is not None else 123),
+                    _latent_cache=None,
+                    _latent_cache_key=None,
+                )
+                trial.report(metric_val, step=epoch + 1)
+                if (epoch + 1) >= prune_warmup_epochs and trial.should_prune():
+                    raise optuna.exceptions.TrialPruned(
+                        f"Pruned at epoch {epoch + 1}: {metric_key}={metric_val:.5f}"
+                    )
+
         best_loss = early_stopping.best_score
         best_model = copy.deepcopy(early_stopping.best_model)
         return best_loss, best_model, history
 
     def _train_step(
         self,
-        loader: DataLoader,
+        loader: torch.utils.data.DataLoader,
         optimizer: torch.optim.Optimizer,
         model: torch.nn.Module,
         l1_penalty: float,
         class_weights: torch.Tensor,
     ) -> float:
-        """One epoch: (indices, y_int) → one-hot → VAE forward → recon+KL.
+        """One epoch: one-hot inputs → VAE forward → recon (focal) + KL.
 
-        This method executes a single training epoch for the VAE model. It processes the input data through the model and computes the loss, which is a combination of reconstruction loss and KL divergence. The method applies backpropagation and updates the model parameters.
+        The VAEModel is expected to return (recon_logits, mu, logvar, ...) and
+        expose a `compute_loss(outputs, y, mask, class_weights)` method that
+        reads scheduled `model.beta` (and optionally `model.gamma`) attributes.
 
         Args:
-            loader (DataLoader): The DataLoader providing training data.
-            optimizer (torch.optim.Optimizer): The optimizer for training.
-            model (torch.nn.Module): The PyTorch model to be trained.
-            l1_penalty (float): The L1 penalty for regularization in the loss function.
-            class_weights (torch.Tensor): A tensor of weights for each class to address imbalance.
+            loader: Yields (indices, y_int) where y_int is 0/1/2; -1 for missing.
+            optimizer: Optimizer.
+            model: VAE model.
+            l1_penalty: L1 regularization coefficient.
+            class_weights: CE class weights on device.
 
         Returns:
-            float: The average training loss for the epoch.
+            float: Mean training loss for the epoch.
         """
         model.train()
         running = 0.0
 
-        for x_batch, y_batch in loader:
+        for _, y_batch in loader:
             optimizer.zero_grad(set_to_none=True)
 
             x_ohe = self._one_hot_encode_012(y_batch)  # (B, L, K), zeros for -1
-            outputs = model(x_ohe)  # expect (recon_logits, mu, logvar, ...)
+            outputs = model(x_ohe)  # (recon_logits, mu, logvar, ...)
 
-            y_ohe = self._one_hot_encode_012(y_batch)  # reuse for compute_loss
+            # Targets for masked focal CE, same shapes as AE path
+            y_ohe = self._one_hot_encode_012(y_batch)
             valid_mask = y_batch != -1
 
             loss = model.compute_loss(
@@ -479,23 +571,18 @@ class ImputeVAE(BaseNNImputer):
         X: np.ndarray | torch.Tensor,
         return_proba: bool = False,
     ) -> Tuple[np.ndarray, np.ndarray] | np.ndarray:
-        """Forward (encoder→z→decoder) to 0/1/2 labels (+probas).
-
-        This method performs prediction using the trained VAE model. It takes input data and produces predicted labels (0, 1, 2) and optionally class probabilities. The method handles both NumPy arrays and PyTorch tensors as input.
+        """Predict 0/1/2 labels (and probabilities) from masked inputs.
 
         Args:
-            model (torch.nn.Module): The trained PyTorch model for prediction.
-            X (np.ndarray | torch.Tensor): The input data for prediction, either as a NumPy array or a PyTorch tensor.
-            return_proba (bool): If True, returns class probabilities along with labels. Defaults to False.
+            model: Trained model.
+            X: 0/1/2 matrix with -1 for missing.
+            return_proba: If True, also return probabilities.
 
         Returns:
-            Tuple[np.ndarray, np.ndarray] | np.ndarray: If `return_proba` is True, returns a tuple of predicted labels and class probabilities. Otherwise, returns only the predicted labels.
-
-        Raises:
-            NotFittedError: If the model is not fitted.
+            Labels, and probabilities if requested.
         """
         if model is None:
-            msg = "Model is not fitted."
+            msg = "Model is not trained. Call fit() before predict()."
             self.logger.error(msg)
             raise NotFittedError(msg)
 
@@ -504,7 +591,7 @@ class ImputeVAE(BaseNNImputer):
             X_tensor = torch.from_numpy(X) if isinstance(X, np.ndarray) else X
             X_tensor = X_tensor.to(self.device).long()
             x_ohe = self._one_hot_encode_012(X_tensor)
-            outputs = model(x_ohe)
+            outputs = model(x_ohe)  # first element must be recon logits
             logits = outputs[0].view(-1, self.num_features_, self.num_classes_)
             probas = torch.softmax(logits, dim=-1)
             labels = torch.argmax(probas, dim=-1)
@@ -520,31 +607,32 @@ class ImputeVAE(BaseNNImputer):
         model: torch.nn.Module,
         params: dict,
         objective_mode: bool = False,
+        latent_vectors_val: np.ndarray | None = None,
     ) -> Dict[str, float]:
-        """Same eval/reporting as AE/NLPCA, including IUPAC→10-int report.
+        """Evaluate on 0/1/2; then IUPAC decoding and 10-base integer reports.
 
-        This method evaluates the trained VAE model on validation data and generates various evaluation metrics and reports. It supports both detailed logging and a simplified mode for hyperparameter tuning.
-
-        Args:
-            X_val (np.ndarray): The validation data for evaluation.
-            model (torch.nn.Module): The trained PyTorch model for evaluation.
-            params (dict): The model parameters used for evaluation.
-            objective_mode (bool): If True, suppresses detailed logging and reports. Defaults to False.
-
-        Returns:
-            Dict[str, float]: A dictionary containing evaluation metrics.
+        Mirrors AE evaluation behavior for direct comparability.
         """
         pred_labels, pred_probas = self._predict(
             model=model, X=X_val, return_proba=True
         )
 
-        eval_mask = X_val != -1
-        y_true_flat = X_val[eval_mask]
-        y_pred_flat = pred_labels[eval_mask]
-        y_proba_flat = pred_probas[eval_mask]
+        # mask out true missing AND any non-finite prob rows
+        finite_mask = np.all(np.isfinite(pred_probas), axis=-1)  # (N,L)
+        eval_mask = (X_val != -1) & finite_mask
+
+        y_true_flat = X_val[eval_mask].astype(np.int64, copy=False)
+        y_pred_flat = pred_labels[eval_mask].astype(np.int64, copy=False)
+        y_proba_flat = pred_probas[eval_mask].astype(np.float64, copy=False)
 
         if y_true_flat.size == 0:
             return {self.tune_metric: 0.0}
+
+        # ensure valid probability simplex after masking
+        y_proba_flat = np.clip(y_proba_flat, 0.0, 1.0)
+        row_sums = y_proba_flat.sum(axis=1, keepdims=True)
+        row_sums[row_sums == 0] = 1.0
+        y_proba_flat = y_proba_flat / row_sums
 
         labels_for_scoring = [0, 1] if self.is_haploid else [0, 1, 2]
         target_names = ["REF", "ALT"] if self.is_haploid else ["REF", "HET", "ALT"]
@@ -573,7 +661,7 @@ class ImputeVAE(BaseNNImputer):
         if not objective_mode:
             self.logger.info(f"Validation Metrics: {metrics}")
 
-            # Main report (0/1/2 or 0/1 collapsed)
+            # Primary report
             self._make_class_reports(
                 y_true=y_true_flat,
                 y_pred_proba=y_proba_flat,
@@ -620,17 +708,9 @@ class ImputeVAE(BaseNNImputer):
 
         return metrics
 
+    # -------------------- Optuna -------------------- #
     def _objective(self, trial: optuna.Trial) -> float:
-        """Optuna objective for 0/1/2 VAE.
-
-        This method defines the objective function for hyperparameter tuning using Optuna. It samples hyperparameters, trains the VAE model, and evaluates it on validation data, returning the value of the tuning metric to be optimized.
-
-        Args:
-            trial (optuna.Trial): An Optuna trial object for hyperparameter tuning.
-
-        Returns:
-            float: The value of the tuning metric to be optimized.
-        """
+        """Optuna objective for VAE (no latent refinement during eval)."""
         try:
             params = self._sample_hyperparameters(trial)
 
@@ -643,6 +723,7 @@ class ImputeVAE(BaseNNImputer):
             model = self.build_model(self.Model, params["model_params"])
             model.apply(self.initialize_weights)
 
+            # Train + prune on metric
             _, model, _ = self._train_and_validate_model(
                 model=model,
                 loader=train_loader,
@@ -651,27 +732,32 @@ class ImputeVAE(BaseNNImputer):
                 trial=trial,
                 return_history=False,
                 class_weights=class_weights,
+                X_val=X_val,
+                params=params,
+                prune_metric=self.tune_metric,
+                prune_warmup_epochs=5,
+                eval_interval=self.tune_eval_interval,
+                eval_requires_latents=False,
+                eval_latent_steps=0,
+                eval_latent_lr=0.0,
+                eval_latent_weight_decay=0.0,
             )
 
             metrics = self._evaluate_model(X_val, model, params, objective_mode=True)
             self._clear_resources(model, train_loader)
             return metrics[self.tune_metric]
+
         except Exception as e:
-            raise optuna.exceptions.TrialPruned(f"Trial failed with error: {e}")
+            # Keep sweeps moving
+            self.logger.debug(f"Trial failed with error: {e}")
+            raise optuna.exceptions.TrialPruned(
+                f"Trial failed with error. Enable debug logging for details."
+            )
 
     def _sample_hyperparameters(
         self, trial: optuna.Trial
-    ) -> Dict[str, int | float | str | list]:
-        """Sample VAE hyperparams; hidden sizes follow AE/NLPCA sizing helper.
-
-        This method samples hyperparameters for the VAE model using the provided Optuna trial object. It defines the search space for various hyperparameters and computes the hidden layer sizes based on the sampled parameters.
-
-        Args:
-            trial (optuna.Trial): An Optuna trial object for hyperparameter tuning.
-
-        Returns:
-            Dict[str, int | float | str | list]: A dictionary of sampled hyperparameters.
-        """
+    ) -> Dict[str, int | float | str]:
+        """Sample VAE hyperparameters; hidden sizes mirror AE/NLPCA helper."""
         params = {
             "latent_dim": trial.suggest_int("latent_dim", 2, 64),
             "lr": trial.suggest_float("learning_rate", 1e-5, 1e-2, log=True),
@@ -687,7 +773,9 @@ class ImputeVAE(BaseNNImputer):
             "layer_schedule": trial.suggest_categorical(
                 "layer_schedule", ["pyramid", "constant", "linear"]
             ),
+            # VAE-specific β (final value after anneal)
             "beta": trial.suggest_float("beta", 0.25, 4.0),
+            # focal gamma (if used in VAE recon CE)
             "gamma": trial.suggest_float("gamma", 0.0, 5.0),
         }
 
@@ -701,13 +789,17 @@ class ImputeVAE(BaseNNImputer):
             schedule=params["layer_schedule"],
         )
 
+        # [latent_dim] + interior widths (exclude output width)
+        hidden_only = [hidden_layer_sizes[0]] + hidden_layer_sizes[1:-1]
+
         params["model_params"] = {
             "n_features": self.num_features_,
             "num_classes": self.num_classes_,
             "latent_dim": params["latent_dim"],
             "dropout_rate": params["dropout_rate"],
-            "hidden_layer_sizes": hidden_layer_sizes,
+            "hidden_layer_sizes": hidden_only,
             "activation": params["activation"],
+            # Pass through VAE recon/regularization coefficients
             "beta": params["beta"],
             "gamma": params["gamma"],
         }
@@ -716,16 +808,7 @@ class ImputeVAE(BaseNNImputer):
     def _set_best_params(
         self, best_params: Dict[str, int | float | str | list]
     ) -> Dict[str, int | float | str | list]:
-        """Adopt best params and return model_params.
-
-        This method updates the model's hyperparameters with the best ones found during tuning and prepares the model parameters for building the VAE. It computes the hidden layer sizes based on the best hyperparameters.
-
-        Args:
-            best_params (Dict[str, int | float | str | list]): The best hyperparameters found during tuning.
-
-        Returns:
-            Dict[str, int | float | str | list]: A dictionary of model parameters to be used for building the model.
-        """
+        """Adopt best params and return VAE model_params."""
         self.latent_dim = best_params["latent_dim"]
         self.dropout_rate = best_params["dropout_rate"]
         self.learning_rate = best_params["learning_rate"]
@@ -733,7 +816,7 @@ class ImputeVAE(BaseNNImputer):
         self.activation = best_params["activation"]
         self.layer_scaling_factor = best_params["layer_scaling_factor"]
         self.layer_schedule = best_params["layer_schedule"]
-        self.beta = best_params.get("beta", self.beta)
+        self.kl_beta_final = best_params.get("beta", self.kl_beta_final)
         self.gamma = best_params.get("gamma", self.gamma)
 
         hidden_layer_sizes = self._compute_hidden_layer_sizes(
@@ -744,26 +827,21 @@ class ImputeVAE(BaseNNImputer):
             alpha=best_params["layer_scaling_factor"],
             schedule=best_params["layer_schedule"],
         )
+        hidden_only = [hidden_layer_sizes[0]] + hidden_layer_sizes[1:-1]
 
         return {
             "n_features": self.num_features_,
             "latent_dim": self.latent_dim,
-            "hidden_layer_sizes": hidden_layer_sizes,
+            "hidden_layer_sizes": hidden_only,
             "dropout_rate": self.dropout_rate,
             "activation": self.activation,
             "num_classes": self.num_classes_,
-            "beta": self.beta,
+            "beta": self.kl_beta_final,
             "gamma": self.gamma,
         }
 
     def _default_best_params(self) -> Dict[str, int | float | str | list]:
-        """Default model params when tuning is disabled.
-
-        This method provides a set of default hyperparameters for the VAE model when hyperparameter tuning is not performed. It computes the hidden layer sizes based on the default parameters.
-
-        Returns:
-            Dict[str, int | float | str | list]: A dictionary of default model parameters.
-        """
+        """Default VAE model params when tuning is disabled."""
         hidden_layer_sizes = self._compute_hidden_layer_sizes(
             n_inputs=self.num_features_ * self.num_classes_,
             n_outputs=self.num_features_ * self.num_classes_,
@@ -779,6 +857,6 @@ class ImputeVAE(BaseNNImputer):
             "dropout_rate": self.dropout_rate,
             "activation": self.activation,
             "num_classes": self.num_classes_,
-            "beta": self.beta,
+            "beta": self.kl_beta_final,
             "gamma": self.gamma,
         }
