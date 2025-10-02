@@ -29,6 +29,7 @@ import argparse
 import ast
 import logging
 import sys
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from snpio import VCFReader
@@ -55,59 +56,6 @@ from pgsui.data_processing.containers import (
     UBPConfig,
     VAEConfig,
 )
-
-
-def _select_probe_cfg(
-    selected_models: Tuple[str, ...],
-    cfgs_by_model: Dict[str, Any],
-    args: argparse.Namespace,
-) -> Any:
-    """Pick a config object to serve as a 'probe' for shared defaults.
-
-    Preference order:
-        1) The first *selected* config-driven model with a built config.
-        2) If none were built (e.g., only legacy models selected), construct from --preset if provided; otherwise from dataclass defaults. If UBP or NLPCA appears in the selected models list, prefer that corresponding config class for the construction to keep semantics consistent with the user's model choice.
-
-    Args:
-        selected_models: Tuple of model names selected by user.
-        cfgs_by_model: Map of model name -> config object (or None for legacy).
-        args: Parsed CLI args.
-
-    Returns:
-        A config dataclass instance exposing io/train/tune/plot.
-    """
-    # 1) Take the first selected *config-driven* model that already has a config
-    for m in selected_models:
-        reg = MODEL_REGISTRY.get(m, {})
-        if reg.get("config_cls") is not None:
-            cfg = cfgs_by_model.get(m)
-            if cfg is not None:
-                return cfg
-
-    # 2) No config-driven model was selected/built. Construct a temporary one.
-    want_ubp = "ImputeUBP" in selected_models
-    want_nlpca = "ImputeNLPCA" in selected_models
-
-    # Prefer the config class that matches what the user listed, if any.
-    if want_ubp:
-        return (
-            UBPConfig.from_preset(args.preset)
-            if hasattr(args, "preset")
-            else UBPConfig()
-        )
-    if want_nlpca:
-        return (
-            NLPCAConfig.from_preset(args.preset)
-            if hasattr(args, "preset")
-            else NLPCAConfig()
-        )
-
-    # Neither UBP nor NLPCA selected (only legacy models): pick a stable default.
-    return (
-        NLPCAConfig.from_preset(args.preset)
-        if hasattr(args, "preset")
-        else NLPCAConfig()
-    )
 
 
 # ----------------------------- CLI Utilities ----------------------------- #
@@ -178,13 +126,6 @@ def _parse_overrides(pairs: list[str]) -> dict:
     return out
 
 
-def _device_to_model_arg(device_str: str) -> str:
-    """Map config train.device -> torch device string for non-config models."""
-    # Config uses: 'cpu' | 'gpu' | 'mps'
-    # Torch expects: 'cpu' | 'cuda' | 'mps'
-    return "cuda" if device_str == "gpu" else device_str
-
-
 def _args_to_cli_overrides(args: argparse.Namespace) -> dict:
     """Convert explicitly provided CLI flags into config dot-overrides."""
     overrides: dict = {}
@@ -237,6 +178,7 @@ def build_genotype_data(
         force_popmap=force_popmap,
         verbose=verbose,
         include_pops=include_pops if include_pops else None,
+        prefix=f"snpio_{Path(vcf_path).stem}",
     )
     logging.info("Loaded genotype data.")
     return gd
@@ -248,8 +190,9 @@ def run_model_safely(model_name: str, builder, *, warn_only: bool = True) -> Non
     try:
         model = builder()
         model.fit()
-        _ = model.transform()
+        X_imputed = model.transform()
         logging.info("✓ %s completed.", model_name)
+        return X_imputed
     except Exception as e:
         if warn_only:
             logging.warning("⚠ %s failed: %s", model_name, e, exc_info=True)
@@ -606,7 +549,14 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     logging.info("Selected models: %s", ", ".join(selected_models))
     for name in selected_models:
-        run_model_safely(name, model_builders[name], warn_only=True)
+        X_imputed = run_model_safely(name, model_builders[name], warn_only=True)
+        gd_imp = gd.copy()
+        gd_imp.snp_data = X_imputed
+
+        pth = Path(f"psgui_output/{Path(vcf_path).stem}_output/imputed")
+        pth.mkdir(parents=True, exist_ok=True)
+        logging.info("Writing imputed VCF for %s to %s ...", name, pth)
+        gd_imp.write_vcf(pth / f"{name.lower()}.vcf.gz")
 
     logging.info("All requested models processed.")
     return 0
