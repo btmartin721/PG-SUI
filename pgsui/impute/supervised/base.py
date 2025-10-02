@@ -168,13 +168,13 @@ class BaseImputer:
             "n_masked_test": int(y_true.size),
             "accuracy": accuracy_score(y_true, y_pred),
             "f1": f1_score(
-                y_true, y_pred, average="weighted", labels=labels, zero_division=0
+                y_true, y_pred, average="macro", labels=labels, zero_division=0
             ),
             "precision": precision_score(
-                y_true, y_pred, average="weighted", labels=labels, zero_division=0
+                y_true, y_pred, average="macro", labels=labels, zero_division=0
             ),
             "recall": recall_score(
-                y_true, y_pred, average="weighted", labels=labels, zero_division=0
+                y_true, y_pred, average="macro", labels=labels, zero_division=0
             ),
         }
 
@@ -242,13 +242,13 @@ class BaseImputer:
         metrics = {
             "accuracy": accuracy_score(y_true, y_pred),
             "f1": f1_score(
-                y_true, y_pred, average="weighted", labels=labels_idx, zero_division=0
+                y_true, y_pred, average="macro", labels=labels_idx, zero_division=0
             ),
             "precision": precision_score(
-                y_true, y_pred, average="weighted", labels=labels_idx, zero_division=0
+                y_true, y_pred, average="macro", labels=labels_idx, zero_division=0
             ),
             "recall": recall_score(
-                y_true, y_pred, average="weighted", labels=labels_idx, zero_division=0
+                y_true, y_pred, average="macro", labels=labels_idx, zero_division=0
             ),
         }
         metrics.update({f"iupac_{k}": v for k, v in metrics.items()})
