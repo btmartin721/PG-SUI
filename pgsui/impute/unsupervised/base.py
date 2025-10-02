@@ -1,7 +1,7 @@
 import copy
 import gc
 import json
-import os
+import logging
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Tuple
 
@@ -12,6 +12,7 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 from sklearn.metrics import classification_report
+from sklearn.model_selection import train_test_split
 from snpio.utils.logging import LoggerManager
 
 from pgsui.impute.unsupervised.nn_scorers import Scorer
@@ -43,6 +44,7 @@ class BaseNNImputer:
             verbose (bool): If True, enables detailed logging output. Defaults to False.
             debug (bool): If True, enables debug mode. Defaults to False.
         """
+        logging.getLogger("fontTools").setLevel(logging.WARNING)
         self.device = self._select_device(device)
 
         # Prepare directory structure
@@ -50,7 +52,7 @@ class BaseNNImputer:
         self._create_model_directories(prefix, outdirs)
         self.debug = debug
 
-        # Initialize logger
+        # Initialize loggers
         kwargs = {"prefix": prefix, "verbose": verbose, "debug": debug}
         logman = LoggerManager(__name__, **kwargs)
         self.logger = logman.get_logger()
@@ -63,7 +65,7 @@ class BaseNNImputer:
         Raises:
             NotImplementedError: If the `_objective` or `_set_best_params` methods are not implemented in the inheriting child class.
         """
-        self.logger.info("Tuning hyperparameters...")
+        self.logger.info("Tuning hyperparameters. This might take a while...")
 
         study_db = None
         load_if_exists = False
@@ -77,7 +79,7 @@ class BaseNNImputer:
             if not self.tune_resume and study_db.exists():
                 study_db.unlink()
 
-        study_name = f"{self.prefix}_{self.model_name} Model Optimization"
+        study_name = f"{self.prefix} {self.model_name} Model Optimization"
         storage = f"sqlite:///{study_db}" if self.tune_save_db else None
 
         study = optuna.create_study(
@@ -85,6 +87,7 @@ class BaseNNImputer:
             study_name=study_name,
             storage=storage,
             load_if_exists=load_if_exists,
+            pruner=optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=10),
         )
 
         if not hasattr(self, "_objective"):
@@ -94,12 +97,17 @@ class BaseNNImputer:
 
         self.n_jobs = getattr(self, "n_jobs", 1)
         if self.n_jobs < -1 or self.n_jobs == 0:
-            self.n_jobs = max(1, (os.cpu_count() or 2) - 1)
+            self.logger.warning(f"Invalid n_jobs={self.n_jobs}. Setting n_jobs=1.")
+            self.n_jobs = 1
+
+        show_progress_bar = not self.verbose and not self.debug and self.n_jobs == 1
 
         study.optimize(
             lambda trial: self._objective(trial),
             n_trials=self.n_trials,
-            n_jobs=getattr(self, "n_jobs", 1),
+            n_jobs=self.n_jobs,
+            gc_after_trial=True,
+            show_progress_bar=show_progress_bar,
         )
 
         best_metric = study.best_value
@@ -285,9 +293,7 @@ class BaseNNImputer:
     ) -> torch.Tensor:
         """Class-balanced weights (Cui et al. 2019) with overflow-safe effective number.
 
-        mode="allele": y is 1D alleles in {0..3}, train_mask same shape.
-
-        mode="genotype10": y is (nS,nF,2) alleles; train_mask is (nS,nF) loci where both alleles known.
+        mode="allele": y is 1D alleles in {0..3}, train_mask same shape. mode="genotype10": y is (nS,nF,2) alleles; train_mask is (nS,nF) loci where both alleles known.
 
         Args:
             y (np.ndarray): Ground truth labels.
@@ -421,7 +427,7 @@ class BaseNNImputer:
         self,
         model: torch.nn.Module,
         train_loader: torch.utils.data.DataLoader,
-        latent_vectors: torch.nn.Parameter,
+        latent_vectors: torch.nn.Parameter | None = None,
     ) -> None:
         """Releases GPU and CPU memory after an Optuna trial.
 
@@ -430,10 +436,14 @@ class BaseNNImputer:
         Args:
             model (torch.nn.Module): The model from the completed trial.
             train_loader (torch.utils.data.DataLoader): The data loader from the trial.
-            latent_vectors (torch.nn.Parameter): The latent vectors from the trial.
+            latent_vectors (torch.nn.Parameter | None): The latent vectors from the trial.
         """
         try:
-            del model, train_loader, latent_vectors
+            del model, train_loader
+
+            if latent_vectors is not None:
+                del latent_vectors
+
         except NameError:
             pass
 
@@ -619,18 +629,30 @@ class BaseNNImputer:
             - The sizes are adjusted according to the specified schedule and constraints.
         """
         if n_hidden < 0:
-            raise ValueError("n_hidden must be >= 0.")
+            msg = f"n_hidden must be >= 0, got {n_hidden}."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
         if n_hidden == 0:
             return []
+
         denom = float(alpha) * float(n_inputs + n_outputs)
+
         if denom <= 0:
-            raise ValueError("alpha * (n_inputs + n_outputs) must be > 0.")
+            msg = f"alpha * (n_inputs + n_outputs) must be > 0, got {denom}."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
         base = int(np.ceil(float(n_samples) / denom))
+
         if max_size is None:
             max_size = max(n_inputs, base)
+
         base = int(np.clip(base, min_size, max_size))
+
         if schedule == "constant":
             sizes = np.full(shape=(n_hidden,), fill_value=base, dtype=float)
+
         elif schedule == "linear":
             target = max(min_size, min(base, base // 4))
             sizes = (
@@ -638,6 +660,7 @@ class BaseNNImputer:
                 if n_hidden == 1
                 else np.linspace(base, target, num=n_hidden, dtype=float)
             )
+
         elif schedule == "pyramid":
             if n_hidden == 1:
                 sizes = np.array([base], dtype=float)
@@ -651,6 +674,7 @@ class BaseNNImputer:
                         decay = float(np.clip(decay, 0.25, 0.99))
                 exponents = np.arange(n_hidden, dtype=float)
                 sizes = base * (decay**exponents)
+
         else:
             msg = f"Unknown schedule '{schedule}'. Use 'pyramid', 'constant', or 'linear'."
             self.logger.error(msg)
@@ -719,3 +743,165 @@ class BaseNNImputer:
             X_ohe[valid] = F.one_hot(idx, num_classes=K).float()
 
         return X_ohe
+
+    def _eval_for_pruning(
+        self,
+        *,
+        model: torch.nn.Module,
+        X_val: np.ndarray,
+        params: dict,
+        metric: str,
+        objective_mode: bool = True,
+        do_latent_infer: bool = False,
+        latent_steps: int = 50,
+        latent_lr: float = 1e-2,
+        latent_weight_decay: float = 0.0,
+        latent_seed: int = 123,
+        _latent_cache: dict | None = None,
+        _latent_cache_key: str | None = None,
+    ) -> float:
+        """Compute a scalar metric (to MAXIMIZE) on a fixed validation set.
+
+        This method evaluates the model on a validation dataset and computes a specified metric, which is used for pruning decisions during hyperparameter tuning. It supports optional latent inference to optimize latent representations before evaluation. The method handles potential issues with non-finite metric values by returning negative infinity, making it easier to prune poorly performing trials.
+
+        Args:
+            model (torch.nn.Module): The model to evaluate.
+            X_val (np.ndarray): Validation data.
+            params (dict): Model parameters.
+            metric (str): Metric name to return.
+            objective_mode (bool): If True, use objective-mode evaluation. Default is True.
+            do_latent_infer (bool): If True, perform latent inference before evaluation. Default
+            latent_steps (int): Number of steps for latent inference. Default is 50.
+            latent_lr (float): Learning rate for latent inference. Default is 1e-2
+            latent_weight_decay (float): Weight decay for latent inference. Default is 0.0.
+            latent_seed (int): Random seed for latent inference. Default is 123.
+            _latent_cache (dict | None): Optional cache for storing/retrieving optimized latents
+            _latent_cache_key (str | None): Key for storing/retrieving in _latent_cache.
+
+        Returns:
+            float: The computed metric value to maximize. Returns -inf on failure.
+        """
+        optimized_val_latents = None
+
+        # Optional latent inference path for models that need it.
+        if do_latent_infer and hasattr(self, "_latent_infer_for_eval"):
+            self._latent_infer_for_eval(
+                model=model,
+                X_val=X_val,
+                steps=latent_steps,
+                lr=latent_lr,
+                weight_decay=latent_weight_decay,
+                seed=latent_seed,
+                cache=_latent_cache,
+                cache_key=_latent_cache_key,
+            )
+            # Retrieve the optimized latents from the cache
+            if _latent_cache is not None and _latent_cache_key in _latent_cache:
+                optimized_val_latents = _latent_cache[_latent_cache_key]
+
+        # Child's evaluator now accepts the pre-computed latents
+        metrics = self._evaluate_model(
+            X_val=X_val,
+            model=model,
+            params=params,
+            objective_mode=objective_mode,
+            latent_vectors_val=optimized_val_latents,  # Pass them here
+        )
+
+        # Prefer the requested metric; fall back to self.tune_metric if needed.
+        val = metrics.get(metric, metrics.get(getattr(self, "tune_metric", ""), None))
+        if val is None or not np.isfinite(val):
+            return -np.inf  # make pruning decisions easy/robust on bad reads
+        return float(val)
+
+    def _first_linear_in_features(self, model: torch.nn.Module) -> int:
+        """Return in_features of the model's first Linear layer.
+
+        Args:
+            model (torch.nn.Module): The model to inspect.
+
+        Returns:
+            int: The in_features of the first Linear layer.
+        """
+        for m in model.modules():
+            if isinstance(m, torch.nn.Linear):
+                return int(m.in_features)
+        raise RuntimeError("No Linear layers found in model.")
+
+    def _assert_model_latent_compat(
+        self, model: torch.nn.Module, latent_vectors: torch.nn.Parameter
+    ) -> None:
+        """Raise if model's first Linear doesn't match latent_vectors width.
+
+        This method checks that the dimensionality of the provided latent vectors matches the expected input feature size of the model's first linear layer. If there is a mismatch, it raises a ValueError with a descriptive message.
+
+        Args:
+            model (torch.nn.Module): The model to check.
+            latent_vectors (torch.nn.Parameter): The latent vectors to check.
+
+        Raises:
+            ValueError: If the latent dimension does not match the model's expected input features.
+        """
+        zdim = int(latent_vectors.shape[1])
+        first_in = self._first_linear_in_features(model)
+        if first_in != zdim:
+            raise ValueError(
+                f"Latent mismatch: zdim={zdim}, model first Linear expects in_features={first_in}"
+            )
+
+    def _prepare_tuning_artifacts(self) -> None:
+        """Prepare data and artifacts needed for hyperparameter tuning.
+
+        This method sets up the necessary data splits, data loaders, and class weights required for hyperparameter tuning. It creates training and validation sets from the ground truth data, initializes data loaders with a specified batch size, and computes class-balanced weights based on the training data. The method also handles optional subsampling of the dataset for faster tuning and prepares slices for evaluation if needed.
+
+        Raises:
+            AttributeError: If the ground truth data (`ground_truth_`) is not set.
+        """
+        if getattr(self, "_tune_ready", False):
+            return
+
+        X = self.ground_truth_
+        n_samp, n_loci = X.shape
+        rng = self.rng
+
+        if self.tune_fast:
+            s = min(n_samp, self.tune_max_samples)
+            l = n_loci if self.tune_max_loci == 0 else min(n_loci, self.tune_max_loci)
+
+            samp_idx = np.sort(rng.choice(n_samp, size=s, replace=False))
+            loci_idx = np.sort(rng.choice(n_loci, size=l, replace=False))
+            X_small = X[samp_idx][:, loci_idx]
+        else:
+            X_small = X
+
+        idx = np.arange(X_small.shape[0])
+        tr, te = train_test_split(
+            idx, test_size=self.validation_split, random_state=self.seed
+        )
+        self._tune_train_idx = tr
+        self._tune_test_idx = te
+        self._tune_X_train = X_small[tr]
+        self._tune_X_test = X_small[te]
+
+        self._tune_class_weights = self._class_weights_from_zygosity(self._tune_X_train)
+
+        # Temporarily bump batch size only for tuning loader
+        orig_bs = self.batch_size
+        self.batch_size = self.tune_batch_size
+        self._tune_loader = self._get_data_loaders(self._tune_X_train)
+        self.batch_size = orig_bs
+
+        self._tune_num_features = self._tune_X_train.shape[1]
+        self._tune_val_latents_source = None
+        self._tune_train_latents_source = None
+
+        # Optional: for huge val sets, thin them for proxy metric
+        if (
+            self.tune_proxy_metric_batch
+            and self._tune_X_test.shape[0] > self.tune_proxy_metric_batch
+        ):
+            self._tune_eval_slice = np.arange(self.tune_proxy_metric_batch)
+        else:
+            self._tune_eval_slice = None
+
+        self._tune_ready = True
