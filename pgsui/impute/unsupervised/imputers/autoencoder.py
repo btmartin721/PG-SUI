@@ -1,5 +1,5 @@
 import copy
-from typing import TYPE_CHECKING, Dict, Literal, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -12,6 +12,8 @@ from snpio.analysis.genotype_encoder import GenotypeEncoder
 from snpio.utils.logging import LoggerManager
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
+from pgsui.data_processing.config import apply_dot_overrides, load_yaml_to_dataclass
+from pgsui.data_processing.containers import AutoencoderConfig
 from pgsui.impute.unsupervised.base import BaseNNImputer
 from pgsui.impute.unsupervised.callbacks import EarlyStopping
 from pgsui.impute.unsupervised.models.autoencoder_model import AutoencoderModel
@@ -20,141 +22,162 @@ if TYPE_CHECKING:
     from snpio.read_input.genotype_data import GenotypeData
 
 
+def ensure_autoencoder_config(
+    config: AutoencoderConfig | dict | str | None,
+) -> AutoencoderConfig:
+    """Return a concrete AutoencoderConfig from dataclass, dict, YAML path, or None."""
+    if config is None:
+        return AutoencoderConfig()
+    if isinstance(config, AutoencoderConfig):
+        return config
+    if isinstance(config, str):
+        # YAML path — top-level `preset` key is supported
+        return load_yaml_to_dataclass(
+            config, AutoencoderConfig, preset_builder=AutoencoderConfig.from_preset
+        )
+    if isinstance(config, dict):
+        # Flatten dict into dot-keys then overlay onto a fresh instance
+        base = AutoencoderConfig()
+
+        def _flatten(prefix: str, d: dict, out: dict) -> dict:
+            for k, v in d.items():
+                kk = f"{prefix}.{k}" if prefix else k
+                if isinstance(v, dict):
+                    _flatten(kk, v, out)
+                else:
+                    out[kk] = v
+            return out
+
+        # Lift any present preset first
+        preset_name = config.pop("preset", None)
+        if "io" in config and isinstance(config["io"], dict):
+            preset_name = preset_name or config["io"].pop("preset", None)
+
+        if preset_name:
+            base = AutoencoderConfig.from_preset(preset_name)
+
+        flat = _flatten("", config, {})
+        return apply_dot_overrides(base, flat)
+
+    raise TypeError("config must be an AutoencoderConfig, dict, YAML path, or None.")
+
+
 class ImputeAutoencoder(BaseNNImputer):
     """Impute missing genotypes with a standard Autoencoder on 0/1/2 encodings.
 
-    This class mirrors `ImputeNLPCA` data flow and evaluation, but trains a *conventional* autoencoder (no backprop into inputs / no latent optimization): inputs are the visible 0/1/2 calls (one-hot, zeros where missing), and targets are the same integer 0/1/2 matrix with -1 for missing. The decoder predicts logits for 0/1/2 at each locus, and cross-entropy is computed with masking.
+    This imputer uses a feedforward autoencoder architecture to learn compressed and reconstructive representations of genotype data encoded as 0 (homozygous reference), 1 (heterozygous), and 2 (homozygous alternate). Missing genotypes are represented as -1 during training and imputation.
+
+    The model is trained to minimize a focal cross-entropy loss, which helps to address class imbalance by focusing more on hard-to-classify examples. The architecture includes configurable parameters such as the number of hidden layers, latent dimension size, dropout rate, and activation functions.
     """
 
     def __init__(
         self,
         genotype_data: "GenotypeData",
         *,
-        seed: int | None = None,
-        n_jobs: int = 1,
-        prefix: str = "pgsui",
-        verbose: bool = False,
-        weights_beta: float = 0.9999,
-        weights_max_ratio: float = 1.0,
-        tune: bool = False,
-        tune_metric: Literal["f1", "accuracy", "pr_macro"] = "f1",
-        tune_n_trials: int = 100,
-        model_validation_split: float = 0.2,
-        model_latent_dim: int = 16,
-        model_dropout_rate: float = 0.2,
-        model_num_hidden_layers: int = 3,
-        model_batch_size: int = 64,
-        model_learning_rate: float = 1e-3,
-        model_early_stop_gen: int = 25,
-        model_min_epochs: int = 100,
-        model_epochs: int = 5000,
-        model_l1_penalty: float = 0.0,
-        model_layer_scaling_factor: float = 5.0,
-        model_layer_schedule: Literal["pyramid", "constant", "linear"] = "pyramid",
-        model_gamma: float = 2.0,
-        model_hidden_activation: Literal["relu", "elu", "selu", "leaky_relu"] = "relu",
-        model_device: Literal["gpu", "cpu", "mps"] = "cpu",
-        plot_format: Literal["pdf", "png", "jpg", "jpeg"] = "pdf",
-        plot_fontsize: int = 18,
-        plot_despine: bool = True,
-        plot_dpi: int = 300,
-        plot_show_plots: bool = False,
-        debug: bool = False,
+        config: Optional[Union["AutoencoderConfig", dict, str]] = None,
+        overrides: dict | None = None,
     ):
-        """Initialize the Autoencoder imputer.
+        """Initialize the Autoencoder imputer with a unified config interface.
 
         Args:
-            genotype_data (GenotypeData): Source genotype data object.
-            seed (int | None): Random seed. If None, use random seed.
-            n_jobs (int): Number of parallel jobs. If -1, use all available cores.
-            prefix (str): Output prefix.
-            verbose (bool): Verbose logging.
-            weights_beta (float): Beta for class-balanced weights.
-            weights_max_ratio (float): Max ratio clamp for class weights.
-            tune (bool): Whether to run Optuna tuning.
-            tune_metric (str): Metric name optimized during tuning.
-            tune_n_trials (int): Number of Optuna trials.
-            model_validation_split (float): Validation split fraction.
-            model_latent_dim (int): Bottleneck dimension for AE.
-            model_dropout_rate (float): Dropout rate.
-            model_num_hidden_layers (int): Number of hidden layers (encoder/decoder sized internally).
-            model_batch_size (int): Batch size.
-            model_learning_rate (float): Learning rate.
-            model_early_stop_gen (int): Early stopping patience.
-            model_min_epochs (int): Minimum epochs before early stop.
-            model_epochs (int): Max epochs.
-            model_l1_penalty (float): L1 regularization.
-            model_layer_scaling_factor (float): Hidden layer scaling factor.
-            model_layer_schedule (str): Hidden size schedule ('pyramid', 'constant', 'linear').
-            model_gamma (float): Focal loss gamma.
-            model_hidden_activation (str): Activation function.
-            model_device (str): Device to run on.
-            plot_format (str): Plot format.
-            plot_fontsize (int): Plot font size.
-            plot_despine (bool): If True, despine plots.
-            plot_dpi (int): Plot DPI.
-            plot_show_plots (bool): If True, show plots interactively.
-            debug (bool): Debug mode.
+            genotype_data: Backing genotype data object.
+            config: Structured configuration as dataclass, nested dict, YAML path, or None.
+            overrides: Optional dot-key overrides with highest precedence (e.g., {'model.latent_dim': 32}).
         """
         self.model_name = "ImputeAutoencoder"
-        kwargs = {"prefix": prefix, "debug": debug, "verbose": verbose}
-        logman = LoggerManager(__name__, **kwargs)
+        self.genotype_data = genotype_data
+
+        # Normalize config then apply highest-precedence overrides
+        cfg = ensure_autoencoder_config(config)
+        if overrides:
+            cfg = apply_dot_overrides(cfg, overrides)
+        self.cfg = cfg
+
+        # Logger consistent with NLPCA
+        logman = LoggerManager(
+            __name__,
+            prefix=self.cfg.io.prefix,
+            debug=self.cfg.io.debug,
+            verbose=self.cfg.io.verbose,
+        )
         self.logger = logman.get_logger()
 
+        # BaseNNImputer bootstrapping (device/dirs/logging handled here)
         super().__init__(
-            prefix=prefix, device=model_device, verbose=verbose, debug=debug
+            prefix=self.cfg.io.prefix,
+            device=self.cfg.train.device,
+            verbose=self.cfg.io.verbose,
+            debug=self.cfg.io.debug,
         )
 
-        self.genotype_data = genotype_data
-        self.pgenc = GenotypeEncoder(genotype_data)
+        # Model hook & encoder
         self.Model = AutoencoderModel
-        self.seed = seed
-        self.rng = np.random.default_rng(seed)
-        self.verbose = verbose
-        self.n_jobs = n_jobs
+        self.pgenc = GenotypeEncoder(genotype_data)
 
-        # Model & training params
-        self.latent_dim = model_latent_dim
-        self.dropout_rate = model_dropout_rate
-        self.num_hidden_layers = model_num_hidden_layers
-        self.layer_scaling_factor = model_layer_scaling_factor
-        self.layer_schedule = model_layer_schedule
-        self.batch_size = model_batch_size
-        self.learning_rate = model_learning_rate
-        self.early_stop_gen = model_early_stop_gen
-        self.min_epochs = model_min_epochs
-        self.epochs = model_epochs
-        self.l1_penalty = model_l1_penalty
-        self.gamma = model_gamma
-        self.activation = model_hidden_activation
-        self.validation_split = model_validation_split
-        self.beta = weights_beta
-        self.max_ratio = weights_max_ratio
+        # IO / global
+        self.seed = self.cfg.io.seed
+        self.n_jobs = self.cfg.io.n_jobs
+        self.prefix = self.cfg.io.prefix
+        self.scoring_averaging = self.cfg.io.scoring_averaging
+        self.verbose = self.cfg.io.verbose
+        self.debug = self.cfg.io.debug
+        self.rng = np.random.default_rng(self.seed)
+
+        # Model hyperparams
+        self.latent_dim = self.cfg.model.latent_dim
+        self.dropout_rate = self.cfg.model.dropout_rate
+        self.num_hidden_layers = self.cfg.model.num_hidden_layers
+        self.layer_scaling_factor = self.cfg.model.layer_scaling_factor
+        self.layer_schedule = self.cfg.model.layer_schedule
+        self.activation = self.cfg.model.hidden_activation
+        self.gamma = self.cfg.model.gamma
+
+        # Train hyperparams
+        self.batch_size = self.cfg.train.batch_size
+        self.learning_rate = self.cfg.train.learning_rate
+        self.l1_penalty = self.cfg.train.l1_penalty
+        self.early_stop_gen = self.cfg.train.early_stop_gen
+        self.min_epochs = self.cfg.train.min_epochs
+        self.epochs = self.cfg.train.max_epochs
+        self.validation_split = self.cfg.train.validation_split
+        self.beta = self.cfg.train.weights_beta
+        self.max_ratio = self.cfg.train.weights_max_ratio
 
         # Tuning
-        self.tune = tune
-        self.tune_metric = tune_metric
-        self.n_trials = tune_n_trials
+        self.tune = self.cfg.tune.enabled
+        self.tune_fast = self.cfg.tune.fast
+        self.tune_batch_size = self.cfg.tune.batch_size
+        self.tune_epochs = self.cfg.tune.epochs
+        self.tune_eval_interval = self.cfg.tune.eval_interval
+        self.tune_metric = self.cfg.tune.metric
+        self.n_trials = self.cfg.tune.n_trials
+        self.tune_save_db = self.cfg.tune.save_db
+        self.tune_resume = self.cfg.tune.resume
+        self.tune_max_samples = self.cfg.tune.max_samples
+        self.tune_max_loci = self.cfg.tune.max_loci
+        self.tune_infer_epochs = getattr(self.cfg.tune, "infer_epochs", 0)  # AE unused
+        self.tune_patience = self.cfg.tune.patience
 
-        # Plotting & Output
-        self.prefix = prefix
-        self.plot_format = plot_format
-        self.plot_dpi = plot_dpi
-        self.show_plots = plot_show_plots
-        self.plot_fontsize = plot_fontsize
-        self.title_fontsize = plot_fontsize
-        self.despine = plot_despine
-        self.scoring_averaging = "weighted"
+        # Evaluate (AE ignores latent refinement knobs but we keep structure parity)
+        self.eval_latent_steps = 0
+        self.eval_latent_lr = 0.0
+        self.eval_latent_weight_decay = 0.0
 
-        # Core model config
-        self.is_haploid = None
-        self.num_classes_ = None  # 2 if haploid else 3
-        self.model_params = {}
+        # Plotting (parity with NLPCA PlotConfig)
+        self.plot_format = self.cfg.plot.fmt
+        self.plot_dpi = self.cfg.plot.dpi
+        self.plot_fontsize = self.cfg.plot.fontsize
+        self.title_fontsize = self.cfg.plot.fontsize
+        self.despine = self.cfg.plot.despine
+        self.show_plots = self.cfg.plot.show
+
+        # Core derived at fit-time
+        self.is_haploid: bool | None = None
+        self.num_classes_: int | None = None
+        self.model_params: Dict[str, Any] = {}
 
     def fit(self) -> "ImputeAutoencoder":
-        """Fit the Autoencoder on 0/1/2 encoded genotypes (missing = -9 or -1).
-
-        This method prepares the data, splits into training and validation sets, initializes the model, and trains it using focal cross-entropy loss with class weighting. It also handles hyperparameter tuning if enabled.
+        """Fit the autoencoder on 0/1/2 encoded genotypes (missing → -1).
 
         Returns:
             ImputeAutoencoder: Fitted instance.
@@ -164,7 +187,7 @@ class ImputeAutoencoder(BaseNNImputer):
         """
         self.logger.info(f"Fitting {self.model_name} (0/1/2 AE) ...")
 
-        # --- DATA PREPARATION (parity with ImputeNLPCA) ---
+        # --- Data prep (mirror NLPCA) ---
         X = self.pgenc.genotypes_012.astype(np.float32)
         X[X < 0] = np.nan
         X[np.isnan(X)] = -1
@@ -173,26 +196,27 @@ class ImputeAutoencoder(BaseNNImputer):
         # Ploidy & classes
         self.is_haploid = np.all(
             np.isin(
-                self.genotype_data.snp_data, ["A", "C", "G", "T", "N", "-", ".", "?"]
+                self.genotype_data.snp_data,
+                ["A", "C", "G", "T", "N", "-", ".", "?"],
             )
         )
         self.ploidy = 1 if self.is_haploid else 2
         self.num_classes_ = 2 if self.is_haploid else 3
         self.logger.info(
-            f"Data is {'haploid' if self.is_haploid else 'diploid'}. "
-            f"Using {self.num_classes_} classes."
+            f"Data is {'haploid' if self.is_haploid else 'diploid'}; "
+            f"using {self.num_classes_} classes."
         )
 
         n_samples, self.num_features_ = X.shape
 
-        # AE model params: decoder outputs L * num_classes
+        # Model params (decoder outputs L * K logits)
         self.model_params = {
             "n_features": self.num_features_,
             "num_classes": self.num_classes_,
             "latent_dim": self.latent_dim,
             "dropout_rate": self.dropout_rate,
             "activation": self.activation,
-            # hidden_layer_sizes added below
+            # hidden_layer_sizes are computed below
         }
 
         # Train/Val split
@@ -204,22 +228,25 @@ class ImputeAutoencoder(BaseNNImputer):
         self.X_train_ = self.ground_truth_[train_idx]
         self.X_val_ = self.ground_truth_[val_idx]
 
-        # Plotters/scorers & tuning
+        # Plotters/scorers (shared utilities)
         self.plotter_, self.scorers_ = self.initialize_plotting_and_scorers()
+
+        # Tuning (optional; AE never needs latent refinement)
         if self.tune:
             self.tune_hyperparameters()
 
+        # Best params (tuned or default)
         self.best_params_ = getattr(self, "best_params_", self._default_best_params())
 
-        # Class weights from train set
+        # Class weights (device-aware)
         self.class_weights_ = self._class_weights_from_zygosity(self.X_train_).to(
             self.device
         )
 
-        # Loader (indices + targets); inputs are created ad hoc in _train_step
+        # DataLoader
         train_loader = self._get_data_loaders(self.X_train_)
 
-        # Build and train model
+        # Build & train
         model = self.build_model(self.Model, self.best_params_)
         model.apply(self.initialize_weights)
 
@@ -230,13 +257,26 @@ class ImputeAutoencoder(BaseNNImputer):
             l1_penalty=self.l1_penalty,
             return_history=True,
             class_weights=self.class_weights_,
+            # Validation+pruning parameters (AE never optimizes latents)
+            X_val=self.X_val_,
+            params=self.best_params_,
+            prune_metric=self.tune_metric,
+            prune_warmup_epochs=5,
+            eval_interval=1,
+            eval_requires_latents=False,
+            eval_latent_steps=0,
+            eval_latent_lr=0.0,
+            eval_latent_weight_decay=0.0,
         )
 
         if trained_model is None:
-            raise RuntimeError("Final model training failed.")
+            msg = "Autoencoder training failed; no model was returned."
+            self.logger.error(msg)
+            raise RuntimeError(msg)
 
         torch.save(
-            trained_model.state_dict(), self.models_dir / "final_model_ae_012.pt"
+            trained_model.state_dict(),
+            self.models_dir / f"final_model_{self.model_name}.pt",
         )
 
         self.best_loss_, self.model_, self.history_ = (
@@ -246,18 +286,19 @@ class ImputeAutoencoder(BaseNNImputer):
         )
         self.is_fit_ = True
 
-        # Evaluate on validation set (same flow as ImputeNLPCA)
+        # Evaluate on validation set (parity with NLPCA reporting)
         self._evaluate_model(self.X_val_, self.model_, self.best_params_)
         self.plotter_.plot_history(self.history_)
         return self
 
     def transform(self) -> np.ndarray:
-        """Impute missing genotypes and return IUPAC strings.
-
-        This method uses the trained autoencoder to predict missing genotypes in the dataset. It fills in only the missing values and decodes the imputed 0/1/2 matrix back to IUPAC strings. It also generates distribution plots of the original and imputed genotypes.
+        """Impute missing genotypes (0/1/2) and return IUPAC strings.
 
         Returns:
-            np.ndarray: IUPAC strings array of shape (n_samples, L).
+            np.ndarray: IUPAC strings of shape (n_samples, n_loci).
+
+        Raises:
+            NotFittedError: If called before fit().
         """
         if not getattr(self, "is_fit_", False):
             raise NotFittedError("Model is not fitted. Call fit() before transform().")
@@ -273,11 +314,11 @@ class ImputeAutoencoder(BaseNNImputer):
         imputed_array = X_to_impute.copy()
         imputed_array[missing_mask] = pred_labels[missing_mask]
 
-        # Decode to IUPAC strings & plot
+        # Decode to IUPAC & plot
         imputed_genotypes = self.pgenc.decode_012(imputed_array)
         original_genotypes = self.pgenc.decode_012(X_to_impute)
 
-        plt.rcParams.update(self.plotter_.param_dict)  # ensure consistent style
+        plt.rcParams.update(self.plotter_.param_dict)
         self.plotter_.plot_gt_distribution(original_genotypes, is_imputed=False)
         self.plotter_.plot_gt_distribution(imputed_genotypes, is_imputed=True)
 
@@ -311,26 +352,50 @@ class ImputeAutoencoder(BaseNNImputer):
         trial: optuna.Trial | None = None,
         return_history: bool = False,
         class_weights: torch.Tensor | None = None,
+        *,
+        X_val: np.ndarray | None = None,
+        params: dict | None = None,
+        prune_metric: str | None = None,  # "f1" | "accuracy" | "pr_macro"
+        prune_warmup_epochs: int = 3,
+        eval_interval: int = 1,
+        eval_requires_latents: bool = False,  # AE: always False
+        eval_latent_steps: int = 0,
+        eval_latent_lr: float = 0.0,
+        eval_latent_weight_decay: float = 0.0,
     ) -> Tuple[float, torch.nn.Module | None, list | None]:
-        """Wrap the AE training loop (no latent optimizer).
+        """Wrap the AE training loop (no latent optimizer), with Optuna pruning.
 
         Args:
-            model (torch.nn.Module): Autoencoder model.
-            loader (DataLoader): Yields (indices, y_int) where y_int is 0/1/2, -1 for missing.
-            lr (float): Learning rate.
-            l1_penalty (float): L1 regularization.
-            trial (optuna.Trial | None): Optuna trial for pruning, or None.
-            return_history (bool): If True, return training history.
-            class_weights (torch.Tensor | None): Class weights for cross-entropy loss.
+            model: Autoencoder model.
+            loader: Batches (indices, y_int) where y_int is 0/1/2; -1 for missing.
+            lr: Learning rate.
+            l1_penalty: L1 regularization coeff.
+            trial: Optuna trial for pruning (optional).
+            return_history: If True, return train loss history.
+            class_weights: Class weights tensor (on device).
+            X_val: Validation matrix (0/1/2 with -1 for missing).
+            params: Model params for evaluation.
+            prune_metric: Metric for pruning reports.
+            prune_warmup_epochs: Pruning warmup epochs.
+            eval_interval: Eval frequency (epochs).
+            eval_requires_latents: Ignored for AE (no latent inference).
+            eval_latent_steps: Unused for AE.
+            eval_latent_lr: Unused for AE.
+            eval_latent_weight_decay: Unused for AE.
 
         Returns:
-            Tuple[float, torch.nn.Module | None, list | None]: Best loss, best model, and training history (if requested). If training fails, returns (inf, None, None).
+            Tuple(best_loss, best_model, history or None).
         """
         if class_weights is None:
             raise TypeError("Must provide class_weights.")
 
+        # Epoch budget mirrors NLPCA config (tuning vs final)
+        max_epochs = (
+            self.tune_epochs if (trial is not None and self.tune_fast) else self.epochs
+        )
+
         optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-        scheduler = CosineAnnealingLR(optimizer, T_max=self.epochs)
+        scheduler = CosineAnnealingLR(optimizer, T_max=max_epochs)
 
         best_loss, best_model, hist = self._execute_training_loop(
             loader=loader,
@@ -341,6 +406,15 @@ class ImputeAutoencoder(BaseNNImputer):
             trial=trial,
             return_history=return_history,
             class_weights=class_weights,
+            X_val=X_val,
+            params=params,
+            prune_metric=prune_metric,
+            prune_warmup_epochs=prune_warmup_epochs,
+            eval_interval=eval_interval,
+            eval_requires_latents=False,  # AE: no latent inference
+            eval_latent_steps=0,
+            eval_latent_lr=0.0,
+            eval_latent_weight_decay=0.0,
         )
         if return_history:
             return best_loss, best_model, hist
@@ -353,31 +427,29 @@ class ImputeAutoencoder(BaseNNImputer):
         scheduler: torch.optim.lr_scheduler._LRScheduler,
         model: torch.nn.Module,
         l1_penalty: float,
-        trial,
+        trial: optuna.Trial | None,
         return_history: bool,
         class_weights: torch.Tensor,
+        *,
+        X_val: np.ndarray | None = None,
+        params: dict | None = None,
+        prune_metric: str | None = None,
+        prune_warmup_epochs: int = 3,
+        eval_interval: int = 1,
+        eval_requires_latents: bool = False,  # AE: False
+        eval_latent_steps: int = 0,
+        eval_latent_lr: float = 0.0,
+        eval_latent_weight_decay: float = 0.0,
     ) -> Tuple[float, torch.nn.Module, list]:
-        """Execute training with focal CE (gamma warm/ramp) mirroring NLPCA.
-
-        This method runs the training loop for the autoencoder model, applying focal cross-entropy loss with class weighting and handling early stopping. It includes a learning rate scheduler and supports Optuna pruning if a trial is provided.
-
-        Args:
-            loader (DataLoader): Yields (indices, y_int) where y_int is 0/1/2, -1 for missing.
-            optimizer (torch.optim.Optimizer): Optimizer.
-            scheduler (torch.optim.lr_scheduler._LRScheduler): Learning rate scheduler.
-            model (torch.nn.Module): Autoencoder model.
-            l1_penalty (float): L1 regularization.
-            trial (optuna.Trial | None): Optuna trial for pruning, or None.
-            return_history (bool): If True, return training history.
-            class_weights (torch.Tensor): Class weights for
-                cross-entropy loss.
+        """Train AE with focal CE (gamma warm/ramp) + early stopping & pruning.
 
         Returns:
-            Tuple[float, torch.nn.Module, list]: Best loss, best model, and training history (if requested).
+            Tuple(best_loss, best_model, history).
         """
         best_loss = float("inf")
         best_model = None
         history: list[float] = []
+
         early_stopping = EarlyStopping(
             patience=self.early_stop_gen,
             min_epochs=self.min_epochs,
@@ -386,8 +458,12 @@ class ImputeAutoencoder(BaseNNImputer):
             debug=self.debug,
         )
 
+        # Parity with NLPCA (warm/ramp gamma schedule)
         warm, ramp, gamma_final = 50, 100, self.gamma
-        for epoch in range(self.epochs):
+
+        # Epoch budget mirrors the caller's scheduler T_max
+        # (already set to tune_epochs or epochs).
+        for epoch in range(scheduler.T_max):
             # Gamma schedule
             if epoch < warm:
                 model.gamma = 0.0
@@ -396,6 +472,7 @@ class ImputeAutoencoder(BaseNNImputer):
             else:
                 model.gamma = gamma_final
 
+            # ---- one epoch ----
             train_loss = self._train_step(
                 loader=loader,
                 optimizer=optimizer,
@@ -415,6 +492,33 @@ class ImputeAutoencoder(BaseNNImputer):
             if early_stopping.early_stop:
                 self.logger.info(f"Early stopping at epoch {epoch + 1}.")
                 break
+
+            # ---- Optuna report/prune on VALIDATION metric ----
+            if (
+                trial is not None
+                and X_val is not None
+                and ((epoch + 1) % eval_interval == 0)
+            ):
+                metric_key = prune_metric or getattr(self, "tune_metric", "f1")
+                metric_val = self._eval_for_pruning(
+                    model=model,
+                    X_val=X_val,
+                    params=params or getattr(self, "best_params_", {}),
+                    metric=metric_key,
+                    objective_mode=True,
+                    do_latent_infer=False,  # AE: False
+                    latent_steps=0,
+                    latent_lr=0.0,
+                    latent_weight_decay=0.0,
+                    latent_seed=(self.seed if self.seed is not None else 123),
+                    _latent_cache=None,  # AE: not used
+                    _latent_cache_key=None,
+                )
+                trial.report(metric_val, step=epoch + 1)
+                if (epoch + 1) >= prune_warmup_epochs and trial.should_prune():
+                    raise optuna.exceptions.TrialPruned(
+                        f"Pruned at epoch {epoch + 1}: {metric_key}={metric_val:.5f}"
+                    )
 
         best_loss = early_stopping.best_score
         best_model = copy.deepcopy(early_stopping.best_model)
@@ -529,6 +633,7 @@ class ImputeAutoencoder(BaseNNImputer):
         model: torch.nn.Module,
         params: dict,
         objective_mode: bool = False,
+        latent_vectors_val: Optional[np.ndarray] = None,
     ) -> Dict[str, float]:
         """Evaluate on 0/1/2; then IUPAC decoding and 10-base integer reports.
 
@@ -548,13 +653,22 @@ class ImputeAutoencoder(BaseNNImputer):
             model=model, X=X_val, return_proba=True
         )
 
-        eval_mask = X_val != -1
-        y_true_flat = X_val[eval_mask]
-        y_pred_flat = pred_labels[eval_mask]
-        y_proba_flat = pred_probas[eval_mask]
+        # mask out true missing AND any non-finite prob rows
+        finite_mask = np.all(np.isfinite(pred_probas), axis=-1)  # (N,L)
+        eval_mask = (X_val != -1) & finite_mask
+
+        y_true_flat = X_val[eval_mask].astype(np.int64, copy=False)
+        y_pred_flat = pred_labels[eval_mask].astype(np.int64, copy=False)
+        y_proba_flat = pred_probas[eval_mask].astype(np.float64, copy=False)
 
         if y_true_flat.size == 0:
             return {self.tune_metric: 0.0}
+
+        # ensure valid probability simplex after masking (no NaNs/Infs, sums=1)
+        y_proba_flat = np.clip(y_proba_flat, 0.0, 1.0)
+        row_sums = y_proba_flat.sum(axis=1, keepdims=True)
+        row_sums[row_sums == 0] = 1.0
+        y_proba_flat = y_proba_flat / row_sums
 
         labels_for_scoring = [0, 1] if self.is_haploid else [0, 1, 2]
         target_names = ["REF", "ALT"] if self.is_haploid else ["REF", "HET", "ALT"]
@@ -632,19 +746,19 @@ class ImputeAutoencoder(BaseNNImputer):
         return metrics
 
     def _objective(self, trial: optuna.Trial) -> float:
-        """Optuna objective for AE on 0/1/2 data.
-
-        This method defines the objective function for hyperparameter tuning using Optuna. It samples hyperparameters, trains the autoencoder model on the training set, evaluates it on the validation set, and returns the value of the metric being optimized.
+        """Optuna objective for AE; mirrors NLPCA study driver without latents.
 
         Args:
-            trial (optuna.Trial): Optuna trial object.
+            trial: Optuna trial.
 
         Returns:
-            float: Value of the metric being optimized.
+            float: Value of the tuning metric (maximize).
         """
         try:
+            # Sample hyperparameters (existing helper; unchanged signature)
             params = self._sample_hyperparameters(trial)
 
+            # Optionally sub-sample for fast tuning (same keys used by NLPCA if you adopt them)
             X_train = self.ground_truth_[self.train_idx_]
             X_val = self.ground_truth_[self.test_idx_]
 
@@ -654,6 +768,7 @@ class ImputeAutoencoder(BaseNNImputer):
             model = self.build_model(self.Model, params["model_params"])
             model.apply(self.initialize_weights)
 
+            # Train + prune on metric
             _, model, _ = self._train_and_validate_model(
                 model=model,
                 loader=train_loader,
@@ -662,12 +777,23 @@ class ImputeAutoencoder(BaseNNImputer):
                 trial=trial,
                 return_history=False,
                 class_weights=class_weights,
+                X_val=X_val,
+                params=params,
+                prune_metric=self.tune_metric,
+                prune_warmup_epochs=5,
+                eval_interval=self.tune_eval_interval,
+                eval_requires_latents=False,
+                eval_latent_steps=0,
+                eval_latent_lr=0.0,
+                eval_latent_weight_decay=0.0,
             )
 
             metrics = self._evaluate_model(X_val, model, params, objective_mode=True)
             self._clear_resources(model, train_loader)
             return metrics[self.tune_metric]
+
         except Exception as e:
+            # Keep sweeps moving
             raise optuna.exceptions.TrialPruned(f"Trial failed with error: {e}")
 
     def _sample_hyperparameters(
@@ -710,12 +836,18 @@ class ImputeAutoencoder(BaseNNImputer):
             schedule=params["layer_schedule"],
         )
 
+        # Keep the latent_dim as the first element,
+        # then the interior hidden widths.
+        # If there are no interior widths (very small nets),
+        # this still leaves [latent_dim].
+        hidden_only = [hidden_layer_sizes[0]] + hidden_layer_sizes[1:-1]
+
         params["model_params"] = {
             "n_features": self.num_features_,
             "num_classes": self.num_classes_,
             "latent_dim": params["latent_dim"],
             "dropout_rate": params["dropout_rate"],
-            "hidden_layer_sizes": hidden_layer_sizes,
+            "hidden_layer_sizes": hidden_only,
             "activation": params["activation"],
         }
         return params
@@ -750,10 +882,16 @@ class ImputeAutoencoder(BaseNNImputer):
             schedule=best_params["layer_schedule"],
         )
 
+        # Keep the latent_dim as the first element,
+        # then the interior hidden widths.
+        # If there are no interior widths (very small nets),
+        # this still leaves [latent_dim].
+        hidden_only = [hidden_layer_sizes[0]] + hidden_layer_sizes[1:-1]
+
         return {
             "n_features": self.num_features_,
             "latent_dim": self.latent_dim,
-            "hidden_layer_sizes": hidden_layer_sizes,
+            "hidden_layer_sizes": hidden_only,
             "dropout_rate": self.dropout_rate,
             "activation": self.activation,
             "num_classes": self.num_classes_,
