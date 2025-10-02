@@ -11,6 +11,14 @@ from pgsui.impute.unsupervised.imputers.autoencoder import ImputeAutoencoder
 from pgsui.impute.unsupervised.imputers.nlpca import ImputeNLPCA
 from pgsui.impute.unsupervised.imputers.ubp import ImputeUBP
 from pgsui.impute.unsupervised.imputers.vae import ImputeVAE
+from pgsui.data_processing.containers import (
+    AutoencoderConfig,
+    NLPCAConfig,
+    UBPConfig,
+    VAEConfig,
+    MostFrequentConfig,
+    RefAlleleConfig,
+)
 
 __all__ = [
     "ImputeAutoencoder",
@@ -21,4 +29,10 @@ __all__ = [
     "ImputeHistGradientBoosting",
     "ImputeRefAllele",
     "ImputeMostFrequent",
+    "AutoencoderConfig",
+    "VAEConfig",
+    "NLPCAConfig",
+    "UBPConfig",
+    "MostFrequentConfig",
+    "RefAlleleConfig",
 ]
