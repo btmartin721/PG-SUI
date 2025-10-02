@@ -1,4 +1,35 @@
-import importlib.resources as pkg_resources
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""PG-SUI Imputation CLI
+
+Argument-precedence model:
+    code defaults  <  preset (--preset)  <  YAML (--config)  <  explicit CLI flags  <  --set k=v
+
+Notes
+-----
+- Preset is a CLI-only choice and will be respected unless overridden by YAML or CLI.
+- YAML entries override preset (a 'preset' key in YAML is ignored with a warning).
+- CLI flags only override when explicitly provided (argparse uses SUPPRESS).
+- --set key=value has the highest precedence and applies dot-path overrides.
+
+Examples
+--------
+python cli.py --vcf data.vcf.gz --popmap pops.popmap --prefix run1
+python cli.py --vcf data.vcf.gz --popmap pops.popmap --prefix tuned --tune
+python cli.py --vcf data.vcf.gz --popmap pops.popmap --prefix demo \
+    --models ImputeUBP ImputeVAE ImputeMostFrequent --seed deterministic --verbose
+python cli.py --vcf data.vcf.gz --popmap pops.popmap --prefix subset \
+    --include-pops EA GU TT ON --device cpu
+"""
+
+from __future__ import annotations
+
+import argparse
+import ast
+import logging
+import sys
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from snpio import VCFReader
 
@@ -10,122 +41,576 @@ from pgsui import (
     ImputeUBP,
     ImputeVAE,
 )
+from pgsui.data_processing.config import (
+    apply_dot_overrides,
+    dataclass_to_yaml,
+    load_yaml_to_dataclass,
+    save_dataclass_yaml,
+)
+from pgsui.data_processing.containers import (
+    AutoencoderConfig,
+    MostFrequentConfig,
+    NLPCAConfig,
+    RefAlleleConfig,
+    UBPConfig,
+    VAEConfig,
+)
 
 
-def main():
-    # Locate the correct installed path for VCF and popmap files
-    vcf_path = (
-        pkg_resources.files("pgsui")
-        / "example_data/vcf_files/phylogen_subset14K.vcf.gz"
+def _select_probe_cfg(
+    selected_models: Tuple[str, ...],
+    cfgs_by_model: Dict[str, Any],
+    args: argparse.Namespace,
+) -> Any:
+    """Pick a config object to serve as a 'probe' for shared defaults.
+
+    Preference order:
+        1) The first *selected* config-driven model with a built config.
+        2) If none were built (e.g., only legacy models selected), construct from --preset if provided; otherwise from dataclass defaults. If UBP or NLPCA appears in the selected models list, prefer that corresponding config class for the construction to keep semantics consistent with the user's model choice.
+
+    Args:
+        selected_models: Tuple of model names selected by user.
+        cfgs_by_model: Map of model name -> config object (or None for legacy).
+        args: Parsed CLI args.
+
+    Returns:
+        A config dataclass instance exposing io/train/tune/plot.
+    """
+    # 1) Take the first selected *config-driven* model that already has a config
+    for m in selected_models:
+        reg = MODEL_REGISTRY.get(m, {})
+        if reg.get("config_cls") is not None:
+            cfg = cfgs_by_model.get(m)
+            if cfg is not None:
+                return cfg
+
+    # 2) No config-driven model was selected/built. Construct a temporary one.
+    want_ubp = "ImputeUBP" in selected_models
+    want_nlpca = "ImputeNLPCA" in selected_models
+
+    # Prefer the config class that matches what the user listed, if any.
+    if want_ubp:
+        return (
+            UBPConfig.from_preset(args.preset)
+            if hasattr(args, "preset")
+            else UBPConfig()
+        )
+    if want_nlpca:
+        return (
+            NLPCAConfig.from_preset(args.preset)
+            if hasattr(args, "preset")
+            else NLPCAConfig()
+        )
+
+    # Neither UBP nor NLPCA selected (only legacy models): pick a stable default.
+    return (
+        NLPCAConfig.from_preset(args.preset)
+        if hasattr(args, "preset")
+        else NLPCAConfig()
     )
-    popmap_path = (
-        pkg_resources.files("pgsui") / "example_data/popmaps/phylogen_nomx.popmap"
+
+
+# ----------------------------- CLI Utilities ----------------------------- #
+def _configure_logging(verbose: bool, log_file: Optional[str] = None) -> None:
+    """Configure root logger.
+
+    Args:
+        verbose: If True, DEBUG; else INFO.
+        log_file: Optional file to tee logs to.
+    """
+    level = logging.DEBUG if verbose else logging.INFO
+    handlers: List[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+    if log_file:
+        handlers.append(logging.FileHandler(log_file, mode="w", encoding="utf-8"))
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s - %(levelname)s - %(message)s",
+        handlers=handlers,
     )
 
-    print(f"Using VCF file: {vcf_path}")
-    print(f"Using popmap file: {popmap_path}")
 
-    # Pass absolute paths to VCFReader
+def _parse_seed(seed_arg: str) -> Optional[int]:
+    """Parse --seed argument into an int or None."""
+    s = seed_arg.strip().lower()
+    if s == "random":
+        return None
+    if s == "deterministic":
+        return 42
+    try:
+        return int(seed_arg)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(
+            "Invalid --seed. Use 'random', 'deterministic', or an integer."
+        ) from e
+
+
+def _parse_models(models: Iterable[str]) -> Tuple[str, ...]:
+    """Validate and canonicalize model names."""
+    valid = {
+        "ImputeUBP",
+        "ImputeVAE",
+        "ImputeAutoencoder",
+        "ImputeNLPCA",
+        "ImputeMostFrequent",
+        "ImputeRefAllele",
+    }
+    selected = tuple(models) if models else tuple(valid)
+    unknown = [m for m in selected if m not in valid]
+    if unknown:
+        raise argparse.ArgumentTypeError(
+            f"Unknown model(s): {unknown}. Valid options: {sorted(valid)}"
+        )
+    return selected
+
+
+def _parse_overrides(pairs: list[str]) -> dict:
+    """Parse --set key=value into typed values via literal_eval."""
+    out: dict = {}
+    for kv in pairs or []:
+        if "=" not in kv:
+            raise argparse.ArgumentTypeError(f"--set expects key=value, got '{kv}'")
+        k, v = kv.split("=", 1)
+        v = v.strip()
+        try:
+            out[k] = ast.literal_eval(v)
+        except Exception:
+            out[k] = v  # raw string fallback
+    return out
+
+
+def _device_to_model_arg(device_str: str) -> str:
+    """Map config train.device -> torch device string for non-config models."""
+    # Config uses: 'cpu' | 'gpu' | 'mps'
+    # Torch expects: 'cpu' | 'cuda' | 'mps'
+    return "cuda" if device_str == "gpu" else device_str
+
+
+def _args_to_cli_overrides(args: argparse.Namespace) -> dict:
+    """Convert explicitly provided CLI flags into config dot-overrides."""
+    overrides: dict = {}
+
+    # IO / top-level controls
+    if hasattr(args, "prefix") and args.prefix is not None:
+        overrides["io.prefix"] = args.prefix
+    if hasattr(args, "verbose"):
+        overrides["io.verbose"] = bool(args.verbose)
+    if hasattr(args, "n_jobs"):
+        overrides["io.n_jobs"] = int(args.n_jobs)
+    if hasattr(args, "seed"):
+        overrides["io.seed"] = _parse_seed(args.seed)
+
+    # Train
+    if hasattr(args, "batch_size"):
+        overrides["train.batch_size"] = int(args.batch_size)
+    if hasattr(args, "device"):
+        dev = args.device
+        if dev == "cuda":
+            dev = "gpu"
+        overrides["train.device"] = dev
+
+    # Plot
+    if hasattr(args, "plot_format"):
+        overrides["plot.fmt"] = args.plot_format
+
+    # Tuning
+    if hasattr(args, "tune"):
+        overrides["tune.enabled"] = bool(args.tune)
+    if hasattr(args, "tune_n_trials"):
+        overrides["tune.n_trials"] = int(args.tune_n_trials)
+
+    return overrides
+
+
+# ------------------------------ Core Runner ------------------------------ #
+def build_genotype_data(
+    vcf_path: str,
+    popmap_path: str | None,
+    force_popmap: bool,
+    verbose: bool,
+    include_pops: List[str] | None,
+) -> VCFReader:
+    """Load genotype data from VCF/popmap."""
+    logging.info("Loading VCF and popmap data...")
     gd = VCFReader(
         filename=vcf_path,
         popmapfile=popmap_path,
-        force_popmap=True,
-        verbose=True,
-        include_pops=["EA", "GU", "TT", "ON"],
+        force_popmap=force_popmap,
+        verbose=verbose,
+        include_pops=include_pops if include_pops else None,
+    )
+    logging.info("Loaded genotype data.")
+    return gd
+
+
+def run_model_safely(model_name: str, builder, *, warn_only: bool = True) -> None:
+    """Run model builder + fit/transform with error isolation."""
+    logging.info("▶ Running %s ...", model_name)
+    try:
+        model = builder()
+        model.fit()
+        _ = model.transform()
+        logging.info("✓ %s completed.", model_name)
+    except Exception as e:
+        if warn_only:
+            logging.warning("⚠ %s failed: %s", model_name, e, exc_info=True)
+        else:
+            raise
+
+
+# -------------------------- Model Registry ------------------------------- #
+# Add config-driven models here by listing the class and its config dataclass.
+MODEL_REGISTRY: Dict[str, Dict[str, Any]] = {
+    "ImputeUBP": {"cls": ImputeUBP, "config_cls": UBPConfig},
+    "ImputeNLPCA": {"cls": ImputeNLPCA, "config_cls": NLPCAConfig},
+    "ImputeAutoencoder": {"cls": ImputeAutoencoder, "config_cls": AutoencoderConfig},
+    "ImputeVAE": {"cls": ImputeVAE, "config_cls": VAEConfig},
+    "ImputeMostFrequent": {"cls": ImputeMostFrequent, "config_cls": MostFrequentConfig},
+    "ImputeRefAllele": {"cls": ImputeRefAllele, "config_cls": RefAlleleConfig},
+}
+
+
+def _build_effective_config_for_model(
+    model_name: str, args: argparse.Namespace
+) -> Any | None:
+    """Build the effective config object for a specific model (if it has one).
+
+    Precedence (lowest → highest):
+        defaults < preset (--preset) < YAML (--config) < explicit CLI flags < --set
+
+    Returns:
+        Config dataclass instance or None (for models without config dataclasses).
+    """
+    reg = MODEL_REGISTRY[model_name]
+    cfg_cls = reg.get("config_cls")
+
+    if cfg_cls is None:
+        return None
+
+    # 0) Start from pure dataclass defaults.
+    cfg = cfg_cls()
+
+    # 1) If user explicitly provided a preset, overlay it.
+    if hasattr(args, "preset"):
+        preset_name = args.preset
+        cfg = cfg_cls.from_preset(preset_name)
+        logging.info("Initialized %s from '%s' preset.", model_name, preset_name)
+    else:
+        logging.info("Initialized %s from dataclass defaults (no preset).", model_name)
+
+    # 2) YAML overlays preset/defaults (boss). Ignore any 'preset' in YAML.
+    yaml_path = getattr(args, "config", None)
+    if yaml_path:
+        cfg = load_yaml_to_dataclass(
+            yaml_path,
+            cfg_cls,
+            base=cfg,
+            yaml_preset_behavior="ignore",  # 'preset' key in YAML ignored with warning
+        )
+        logging.info(
+            "Loaded YAML config for %s from %s (ignored 'preset' in YAML if present).",
+            model_name,
+            yaml_path,
+        )
+
+    # 3) Explicit CLI flags overlay YAML (boss's boss).
+    cli_overrides = _args_to_cli_overrides(args)
+    if cli_overrides:
+        cfg = apply_dot_overrides(cfg, cli_overrides)
+
+    # 4) --set has highest precedence (supreme boss).
+    user_overrides = _parse_overrides(getattr(args, "set", []))
+    if user_overrides:
+        cfg = apply_dot_overrides(cfg, user_overrides)
+
+    return cfg
+
+
+def _maybe_print_or_dump_configs(
+    cfgs_by_model: Dict[str, Any], args: argparse.Namespace
+) -> bool:
+    """Handle --print-config / --dump-config for ALL config-driven models selected.
+
+    Returns:
+        True if we printed/dumped and should exit; else False.
+    """
+    did_io = False
+    if getattr(args, "print_config", False):
+        for m, cfg in cfgs_by_model.items():
+            if cfg is None:
+                continue
+            print(f"# --- {m} effective config ---")
+            print(dataclass_to_yaml(cfg))
+            print()
+        did_io = True
+
+    if hasattr(args, "dump_config") and args.dump_config:
+        # If multiple models, add suffix per model (before extension if possible)
+        dump_base = args.dump_config
+        for m, cfg in cfgs_by_model.items():
+            if cfg is None:
+                continue
+            if "." in dump_base:
+                stem, ext = dump_base.rsplit(".", 1)
+                path = f"{stem}.{m}.{ext}"
+            else:
+                path = f"{dump_base}.{m}.yaml"
+            save_dataclass_yaml(cfg, path)
+            logging.info("Saved %s config to %s", m, path)
+        did_io = True
+
+    return did_io
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="pgsui-cli",
+        description="Run PG-SUI imputation models on a VCF with minimal fuss.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
-    ubp = ImputeUBP(
-        gd,
-        prefix="pgsui_test",
-        n_jobs=8,
-        tune=False,
-        tune_n_trials=100,
-        model_batch_size=64,
-        verbose=True,
+    # ----------------------------- Required I/O ----------------------------- #
+    parser.add_argument("--vcf", required=True, help="Path to input VCF(.gz) file.")
+    parser.add_argument(
+        "--popmap", default=argparse.SUPPRESS, help="Path to population map file."
+    )
+    parser.add_argument(
+        "--prefix",
+        default=argparse.SUPPRESS,
+        help="Run/output prefix; overrides config if provided.",
     )
 
-    ubp.fit()
-    X_imputed = ubp.transform()
-    print(X_imputed)
-    print(X_imputed.shape)
-
-    vae = ImputeVAE(
-        gd,
-        n_jobs=1,
-        verbose=1,
-        model_device="cpu",
-        tune=False,
-        prefix="pgsui_test",
-        tune_n_trials=50,
-        model_batch_size=64,
-        model_learning_rate=0.0008020404122071253,
-        model_latent_dim=28,
-        model_l1_penalty=1.682421969883547e-06,
-        model_gamma=4.5,
-        model_dropout_rate=0.01,
-        weights_beta=0.99,
-        weights_max_ratio=2.0,
-        model_hidden_activation="leaky_relu",
-        model_early_stop_gen=25,
-        model_num_hidden_layers=13,
-        plot_format="png",
+    # ---------------------- Generic Config Inputs -------------------------- #
+    parser.add_argument(
+        "--config",
+        default=argparse.SUPPRESS,
+        help="YAML config for config-driven models (NLPCA/UBP/Autoencoder/VAE).",
+    )
+    parser.add_argument(
+        "--preset",
+        choices=("fast", "balanced", "thorough"),
+        default=argparse.SUPPRESS,  # <-- no default; optional
+        help="If provided, initialize config(s) from this preset; otherwise start from dataclass defaults.",
+    )
+    parser.add_argument(
+        "--set",
+        action="append",
+        default=argparse.SUPPRESS,
+        help="Dot-key overrides, e.g. --set model.latent_dim=4",
+    )
+    parser.add_argument(
+        "--print-config",
+        action="store_true",
+        help="Print effective config(s) and exit.",
+    )
+    parser.add_argument(
+        "--dump-config",
+        default=argparse.SUPPRESS,
+        help="Write effective config(s) YAML to this path (multi-model gets suffixed).",
     )
 
-    vae.fit()
-    X_imputed = vae.transform()
-    print(X_imputed)
-    print(X_imputed.shape)
-
-    ae = ImputeAutoencoder(
-        gd,
-        n_jobs=1,
-        verbose=1,
-        model_device="cpu",
-        tune=False,
-        prefix="pgsui_test",
-        tune_n_trials=10,
-        model_batch_size=64,
-        tune_metric="f1",
-        plot_format="png",
+    # ------------------------------ Toggles -------------------------------- #
+    parser.add_argument(
+        "--tune",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="Enable hyperparameter tuning (if supported).",
+    )
+    parser.add_argument(
+        "--tune-n-trials",
+        type=int,
+        default=argparse.SUPPRESS,
+        help="Optuna trials when --tune is set.",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=argparse.SUPPRESS,
+        help="Batch size for NN-based models.",
+    )
+    parser.add_argument(
+        "--device",
+        choices=("cpu", "cuda", "mps"),
+        default=argparse.SUPPRESS,
+        help="Compute device for NN-based models.",
+    )
+    parser.add_argument(
+        "--n-jobs",
+        type=int,
+        default=argparse.SUPPRESS,
+        help="Parallel workers for various steps.",
+    )
+    parser.add_argument(
+        "--plot-format",
+        choices=("png", "pdf", "svg"),
+        default=argparse.SUPPRESS,
+        help="Figure format for model plots.",
     )
 
-    ae.fit()
-    X_imputed = ae.transform()
-    print(X_imputed)
-    print(X_imputed.shape)
-
-    nlpca = ImputeNLPCA(
-        gd,
-        verbose=1,
-        model_device="cpu",
-        tune=False,
-        prefix="pgsui_test",
-        tune_n_trials=20,
-        model_batch_size=64,
+    # --------------------------- Seed & logging ---------------------------- #
+    parser.add_argument(
+        "--seed",
+        default=argparse.SUPPRESS,
+        help="Random seed: 'random', 'deterministic', or an integer.",
+    )
+    parser.add_argument("--verbose", action="store_true", help="Debug-level logging.")
+    parser.add_argument(
+        "--log-file", default=argparse.SUPPRESS, help="Also write logs to a file."
     )
 
-    nlpca.fit()
-    X_imputed = nlpca.transform()
-    print(X_imputed)
-    print(X_imputed.shape)
+    # ---------------------------- Data filtering --------------------------- #
+    parser.add_argument(
+        "--include-pops",
+        nargs="+",
+        default=argparse.SUPPRESS,
+        help="Optional list of population IDs to include.",
+    )
+    parser.add_argument(
+        "--force-popmap",
+        action="store_true",
+        default=False,
+        help="Require popmap (error if absent).",
+    )
 
-    mode = ImputeMostFrequent(gd, prefix="pgsui_test", verbose=True, seed=42)
-    mode.fit()
-    X_imputed = mode.transform()
-    print(X_imputed)
-    print(X_imputed.shape)
+    # ---------------------------- Model selection -------------------------- #
+    parser.add_argument(
+        "--models",
+        nargs="+",
+        default=argparse.SUPPRESS,
+        help=(
+            "Which models to run. Choices: "
+            "ImputeUBP ImputeVAE ImputeAutoencoder ImputeNLPCA "
+            "ImputeMostFrequent ImputeRefAllele. Default is all."
+        ),
+    )
 
-    mode.fit()
-    X_imputed = mode.transform()
-    print(X_imputed)
-    print(X_imputed.shape)
+    # ------------------------------ Safety/UX ------------------------------ #
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Parse args and load data, but skip model training.",
+    )
 
-    ref = ImputeRefAllele(gd, prefix="pgsui_test", verbose=True, seed=42)
-    ref.fit()
-    X_imputed = ref.transform()
-    print(X_imputed)
-    print(X_imputed.shape)
+    args = parser.parse_args(argv)
+
+    # Logging (verbose default is False unless passed)
+    _configure_logging(
+        verbose=getattr(args, "verbose", False),
+        log_file=getattr(args, "log_file", None),
+    )
+
+    # Models selection (default to all if not explicitly provided)
+    try:
+        selected_models = _parse_models(getattr(args, "models", ()))
+    except argparse.ArgumentTypeError as e:
+        parser.error(str(e))
+        return 2
+
+    # Data I/O flags
+    vcf_path = args.vcf
+    popmap_path = getattr(args, "popmap", None)
+    include_pops = getattr(args, "include_pops", None)
+    verbose_flag = getattr(args, "verbose", False)
+    force_popmap = bool(getattr(args, "force_popmap", False))
+
+    # Load genotype data
+    gd = build_genotype_data(
+        vcf_path=vcf_path,
+        popmap_path=popmap_path,
+        force_popmap=force_popmap,
+        verbose=verbose_flag,
+        include_pops=include_pops,
+    )
+
+    if getattr(args, "dry_run", False):
+        logging.info("Dry run complete. Exiting without training models.")
+        return 0
+
+    # ---------------- Build config(s) per selected model ------------------- #
+    cfgs_by_model: Dict[str, Any] = {
+        m: _build_effective_config_for_model(m, args) for m in selected_models
+    }
+
+    # Maybe print/dump configs and exit
+    if _maybe_print_or_dump_configs(cfgs_by_model, args):
+        return 0
+
+    # ------------------------- Model Builders ------------------------------ #
+    def build_impute_ubp():
+        cfg = cfgs_by_model.get("ImputeUBP")
+        if cfg is None:
+            cfg = (
+                UBPConfig.from_preset(args.preset)
+                if hasattr(args, "preset")
+                else UBPConfig()
+            )
+        return ImputeUBP(genotype_data=gd, config=cfg)
+
+    def build_impute_nlpca():
+        cfg = cfgs_by_model.get("ImputeNLPCA")
+        if cfg is None:
+            cfg = (
+                NLPCAConfig.from_preset(args.preset)
+                if hasattr(args, "preset")
+                else NLPCAConfig()
+            )
+        return ImputeNLPCA(genotype_data=gd, config=cfg)
+
+    def build_impute_vae():
+        cfg = cfgs_by_model.get("ImputeVAE")
+        if cfg is None:
+            cfg = (
+                VAEConfig.from_preset(args.preset)
+                if hasattr(args, "preset")
+                else VAEConfig()
+            )
+        return ImputeVAE(genotype_data=gd, config=cfg)
+
+    def build_impute_autoencoder():
+        cfg = cfgs_by_model.get("ImputeAutoencoder")
+        if cfg is None:
+            cfg = (
+                AutoencoderConfig.from_preset(args.preset)
+                if hasattr(args, "preset")
+                else AutoencoderConfig()
+            )
+        return ImputeAutoencoder(genotype_data=gd, config=cfg)
+
+    def build_impute_mostfreq():
+        cfg = cfgs_by_model.get("ImputeMostFrequent")
+        if cfg is None:
+            cfg = (
+                MostFrequentConfig.from_preset(args.preset)
+                if hasattr(args, "preset")
+                else MostFrequentConfig()
+            )
+        return ImputeMostFrequent(gd, config=cfg)
+
+    def build_impute_refallele():
+        cfg = cfgs_by_model.get("ImputeRefAllele")
+        if cfg is None:
+            cfg = (
+                RefAlleleConfig.from_preset(args.preset)
+                if hasattr(args, "preset")
+                else RefAlleleConfig()
+            )
+        return ImputeRefAllele(gd, config=cfg)
+
+    model_builders = {
+        "ImputeUBP": build_impute_ubp,
+        "ImputeVAE": build_impute_vae,
+        "ImputeAutoencoder": build_impute_autoencoder,
+        "ImputeNLPCA": build_impute_nlpca,
+        "ImputeMostFrequent": build_impute_mostfreq,
+        "ImputeRefAllele": build_impute_refallele,
+    }
+
+    logging.info("Selected models: %s", ", ".join(selected_models))
+    for name in selected_models:
+        run_model_safely(name, model_builders[name], warn_only=True)
+
+    logging.info("All requested models processed.")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
