@@ -4,6 +4,13 @@ An overview of changes to **PG-SUI** by release. This mirrors the Sphinx/RST cha
 
 ---
 
+## 1.6.2 - 2025-10-04
+
+### Changes - 1.6.2
+
+- Updated dependencies in ``pyproject.toml`` and ``conf.py``.
+- Version bump.
+
 ## 1.6.1 — 2025-10-04
 
 ### Highlights
