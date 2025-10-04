@@ -23,10 +23,10 @@ class BaseImputer:
 
     This class provides a common framework and shared functionality for imputers that use scikit-learn's `IterativeImputer`. It is not intended for direct instantiation. Child classes should inherit from this class and provide a specific estimator model (e.g., RandomForest, GradientBoosting).
 
-    **Provided Functionality:**
-    - A hyperparameter tuning workflow using Optuna.
-    - Standardized data splitting, model training, and evaluation methods.
-    - Utilities for creating output directories and handling model state.
+    Notes:
+        - A hyperparameter tuning workflow using Optuna.
+        - Standardized data splitting, model training, and evaluation methods.
+        - Utilities for creating output directories and handling model state.
     """
 
     def __init__(self, verbose: bool = False, debug: bool = False) -> None:
