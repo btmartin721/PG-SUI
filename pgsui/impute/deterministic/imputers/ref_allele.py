@@ -20,10 +20,10 @@ from sklearn.metrics import (
 from snpio import GenotypeEncoder
 from snpio.utils.logging import LoggerManager
 
-from pgsui.utils.classification_viz import ClassificationReportVisualizer
-from pgsui.utils.plotting import Plotting
 from pgsui.data_processing.config import apply_dot_overrides, load_yaml_to_dataclass
 from pgsui.data_processing.containers import RefAlleleConfig
+from pgsui.utils.classification_viz import ClassificationReportVisualizer
+from pgsui.utils.plotting import Plotting
 
 if TYPE_CHECKING:
     from snpio.read_input.genotype_data import GenotypeData
@@ -311,6 +311,8 @@ class ImputeRefAllele:
     def _evaluate_012_and_plot(self, y_true: np.ndarray, y_pred: np.ndarray) -> None:
         """0/1/2 zygosity report & confusion matrix.
 
+        This method generates a classification report and confusion matrix for genotypes encoded as 0 (REF), 1 (HET), and 2 (ALT). If the data is determined to be haploid (only 0 and 2 present), it folds the ALT genotype (2) into HET (1) for evaluation purposes. The method computes various performance metrics, logs the classification report, and creates visualizations of the results.
+
         Args:
             y_true (np.ndarray): True genotypes (0/1/2) for masked
             y_pred (np.ndarray): Predicted genotypes (0/1/2) for
@@ -473,6 +475,8 @@ class ImputeRefAllele:
 
     def _save_report(self, report_dict: Dict[str, float], suffix: str) -> None:
         """Save classification report dictionary as a JSON file.
+
+        This method saves the provided classification report dictionary to a JSON file in the metrics directory. The filename includes a suffix to distinguish between different types of reports (e.g., 'zygosity' or 'iupac').
 
         Args:
             report_dict (Dict[str, float]): The classification report dictionary to save.
