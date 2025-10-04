@@ -2,262 +2,186 @@
 Changelog
 ==========
 
-Overview of the changes made to PG-SUI for each release.
+An overview of changes to **PG-SUI** by release. This file mirrors the GitHub Markdown changelog and reflects the refactor-era docs: dataclass-first configs, presets, unified scikit-learn framework-based ``fit()/transform()`` methods, CLI precedence, and updated deterministic/supervised docs.
 
-Version 1.6.0 - 2025-09-23
---------------------------
+Unreleased
+----------
+
+- HTML summary report that stitches plots, key metrics, and logs into a single artifact.
+- Add end-to-end CLI examples for multi-model radar (macro-F1, macro-PR, overall accuracy, HET-F1).
+- Expand config presets with GPU/MPS-aware training defaults.
+
+1.6.1 — 2025-10-04
+------------------
+
+Highlights
+^^^^^^^^^^
+
+- **Dataclass-based configuration** across models (e.g., ``VAEConfig``, ``UBPConfig``, ``NLPCAConfig``, ``MostFrequentConfig``, ``RefAlleleConfig``, **``HGBConfig``**, **``RFConfig``**).
+- **Presets** for all configs: ``fast``, ``balanced``, ``thorough``.
+- **Unified contract:** models receive ``GenotypeData`` at construction; call ``fit()`` then ``transform()`` (no arguments).
+- **CLI precedence:** ``code defaults < --preset < --config < explicit flags < --set k=v``.
+- **New visualizations:** cross-model radar, improved PR curves, zygosity bars, confusion matrices, training curves.
 
 Features
 ^^^^^^^^
 
-- Fully functional models. Ready for validation
-- Models include: ``ImputeAutoencoder``, ``ImputeNLPCA``, ``ImputeUBP``, ``ImputeVAE``, ``ImputeRandomForest``, ``ImputeHistGradientBoosting``
+- Added ``HGBConfig`` and ``RFConfig`` dataclasses for supervised imputers (Histogram-based Gradient Boosting and Random Forest) with presets and YAML support.
+- Deterministic imputers (``ImputeMostFrequent``, ``ImputeRefAllele``) upgraded to the dataclass/YAML pipeline and unified plotting/metrics output.
 
-Version 1.5.1 - 2025-02-07
---------------------------
+Enhancements
+^^^^^^^^^^^^
 
-Bug Fixes
-^^^^^^^^^
+- Consistent nested config sections across all families: ``io``, ``training``/``train``, ``tuning``/``tune``, ``evaluate``, ``plot``, ``algorithm``/``algo``.
+- Optuna tuning flow streamlined (proxy batch option, warm-up pruning, latent-inference hooks for NLPCA-like decoders).
+- Improved logging and directory structure: ``{prefix}_output/{Family}/{plots,metrics,models,optimize}/{Model}/``.
 
-- Fixed bug where `ImputeAutoencoder` would not run due to missing `self` argument.
+Docs
+^^^^
+
+- **About PG-SUI**: rewritten with author–year citations; clarifies supervised vs unsupervised vs deterministic.
+- **Deterministic Imputers** page: refactor-aligned; examples, YAML usage, CLI overrides, dataclass API.
+- **Supervised Imputers** page: ``RFConfig``/``HGBConfig`` added; clarified ``IterativeImputer`` integration and evaluation protocol.
+- **Tutorials**: “Implementing New Models” updated to dataclass + wrapper patterns (NLPCA/UBP/decoder-first examples).
+- Fixed Sphinx issues (e.g., ``:noindex:`` typos, math blocks, section headings).
+
+Breaking Changes
+^^^^^^^^^^^^^^^^
+
+- ``fit(X, y=None)`` and ``transform(X)`` signatures removed; new pattern:
+
+  .. code-block:: python
+
+     model = SomeImputer(genotype_data=gd, config=SomeConfig.from_preset("balanced"))
+     model.fit()
+     X_imputed = model.transform()
+
+- CLI flags harmonized; prefer dot-path overrides such as ``--set training.model_latent_dim=16``.
+
+1.6.0 — 2025-09-23
+------------------
 
 Features
 ^^^^^^^^
 
-- Added new simulation strategies for simulating missing data in genotype calls.
+- Core imputation families validated end-to-end:
+
+  - Unsupervised: ``ImputeAutoencoder``, ``ImputeNLPCA``, ``ImputeUBP``, ``ImputeVAE``.
+  - Supervised: ``ImputeRandomForest``, ``ImputeHistGradientBoosting``.
+
+- Shared plotting stack and classification reports (zygosity and IUPAC-10).
+
+1.5.2 — 2025-03-01
+------------------
+
+Features
+^^^^^^^^
+
+- Added unsupervised models:
+  ``ImputeAutoencoder``, ``ImputeNLPCA``, ``ImputeUBP``, ``ImputeVAE``.
 
 Changes
 ^^^^^^^
 
-- Updated the `SimGenotypeDataTransformer` class to support additional simulation strategies.
-- Improved documentation and tutorials.
+- ``BaseNNImputer`` extended to standardize training loops, evaluation, and plotting.
+- Documentation: new tutorials and examples for extending/implementing models.
 
-Version 1.5 - 2025-01-28
-------------------------
-
-Features
-^^^^^^^^
-
-- Added Optuna parameter optimization for all deep learning models.
-- More efficient code for all deep learning models.
-- Added new deep learning models for imputation.
-- Modularity for developing and adjusting deep learning models.
-
-Changed
-^^^^^^^
-
-- Refactored the entire codebase to use the `GenotypeData` class for all data manipulation and imputation.
-- Refactored to use PyTorch instead of Tensorflow for all deep learning models.
-- GridSearchCV and GASearchCV have been replaced with Optuna for all deep learning models.
-
-Version 1.0.2.1 - 2023-09-11
-----------------------------
+1.5.1 — 2025-02-07
+------------------
 
 Bug Fixes
 ^^^^^^^^^
 
-- Fixed bug where supervised imputers would fail due to duplicated `self` argument.
+- Fixed ``ImputeAutoencoder`` missing ``self`` error.
+- Various stability fixes in supervised pipelines.
 
-- Fixed bug where `ImputeNLPCA` would run `ImputeUBP` instead.
+Features
+^^^^^^^^
 
-- Fixed gt_probability heatmap plot. It works correctly now.
+- New simulation strategies for training-time missingness.
 
-- Fixed issues where plot directories were not being created.
+Changes
+^^^^^^^
 
-- Fixed bugs where non-ML imputers would not decode the integer genotypes.
+- ``SimGenotypeDataTransformer`` expanded; tutorials refreshed.
 
-- Renamed gt probability plot to `simulated_genotypes`.
+1.5 — 2025-01-28
+----------------
 
-- Fixed default `prefix` argument for supervised imputers. It now aligns with the unsupervised imputers as `imputer`.
+Features
+^^^^^^^^
 
-- Fixed bugs where `ImputeKNN` and `ImputeRandomForest` would not run.
-
-- Set max pandas version to prevent future warnings.
-
-- Added `warnings.simplefilter` to each module to catch `FutureWarning`
+- **Optuna** parameter optimization integrated for deep models.
+- Performance improvements across DL implementations; modular architecture for easier research iteration.
 
 Changed
 ^^^^^^^
 
-- Implemented new plotting for test.py
+- Moved to **PyTorch** (from TensorFlow) for deep learning.
+- Unified on ``GenotypeData`` as the core data container.
+- Replaced Grid/GASearchCV with Optuna.
 
-Version 1.0.2 - 2023-08-28
---------------------------
+1.0.2.1 — 2023-09-11
+--------------------
 
 Bug Fixes
 ^^^^^^^^^
 
-- Use GenotypeData copy method internally due to Cython pysam VariantHeader.
-
-Version 1.0 - 2023-07-29
-------------------------
+- Resolved duplicated ``self`` in supervised imputers.
+- Corrected ``ImputeNLPCA`` incorrectly dispatching to ``ImputeUBP``.
+- Fixed ``gt_probability`` heatmap (now ``simulated_genotypes`` plot).
+- Ensured plot directories are created.
+- Non-ML imputers now decode integer genotypes correctly.
+- Supervised default ``prefix`` matches unsupervised (``imputer``).
+- Fixed ``ImputeKNN`` and ``ImputeRandomForest`` execution errors.
+- Pinned pandas to avoid future warnings; added ``warnings.simplefilter`` for ``FutureWarning``.
 
 Changed
 ^^^^^^^
 
-- No longer in beta stages. Full release v1.0.
+- New plotting for ``test.py``.
 
-Version 0.3.0 - 2023-07-26
---------------------------
+1.0.2 — 2023-08-28
+------------------
+
+Bug Fix
+^^^^^^^
+
+- Use ``GenotypeData.copy()`` internally to work around pysam Cython ``VariantHeader`` behavior.
+
+1.0 — 2023-07-29
+----------------
+
+Changed
+^^^^^^^
+
+- First full (non-beta) release.
+
+0.3.0 — 2023-07-26
+------------------
 
 Features
 ^^^^^^^^
-- Unsupervised models now impute on nucleotide-encoded multilabel data instead of 012 data.
 
-- Much higher metric scores due to the new multilabel encodings (less class imbalance)
-
-- Unsupervised grid searches are faster due to less redundant code and removig unnecessary calculations with the scoring functions.
+- Unsupervised models: moved from 0/1/2 to nucleotide multi-label encoding (4-class), improving metrics via reduced class imbalance.
+- Faster unsupervised grid searches by pruning redundant scorer work.
 
 Changed
 ^^^^^^^
 
-- Documentation updates to make it easier to understand all the available arguments and what they are for.
-
-- Refactored ``estimators.py`` and ``scorers.py`` for better modularity and easier code maintenance.
+- Docs clearer on argument purposes.
+- Refactors in ``estimators.py``, ``scorers.py`` for modularity/maintainability.
 
 Removed
 ^^^^^^^
 
-- 012-encoded inputs for unsupervised imputers. Now uses multilabel nucleotide (4 class) inputs.
+- 0/1/2 inputs for unsupervised (superseded by nucleotide multi-label).
 
-Version 0.2.4 - 2023-07-24
---------------------------
-
-Features
-^^^^^^^^
-
-- Initial release with four unsupervised neural network models, three supervised IterativeImputer models, and four non-machine-learning imputers.
-
-Version 1.5.1 - 2025-02-07
---------------------------
-
-Bug Fixes
-^^^^^^^^^
-
-- Fixed bug where `ImputeAutoencoder` would not run due to missing `self` argument.
+0.2.4 — 2023-07-24
+------------------
 
 Features
 ^^^^^^^^
 
-- Added new simulation strategies for simulating missing data in genotype calls.
-
-Changes
-^^^^^^^
-
-- Updated the `SimGenotypeDataTransformer` class to support additional simulation strategies.
-- Improved documentation and tutorials.
-
-Version 1.5 - 2025-01-28
-------------------------
-
-Features
-^^^^^^^^
-
-- Added Optuna parameter optimization for all deep learning models.
-- More efficient code for all deep learning models.
-- Added new deep learning models for imputation.
-- Modularity for developing and adjusting deep learning models.
-
-Changed
-^^^^^^^
-
-- Refactored the entire codebase to use the `GenotypeData` class for all data manipulation and imputation.
-- Refactored to use PyTorch instead of Tensorflow for all deep learning models.
-- GridSearchCV and GASearchCV have been replaced with Optuna for all deep learning models.
-
-Version 1.0.2.1 - 2023-09-11
-----------------------------
-
-Bug Fixes
-^^^^^^^^^
-
-- Fixed bug where supervised imputers would fail due to duplicated `self` argument.
-
-- Fixed bug where `ImputeNLPCA` would run `ImputeUBP` instead.
-
-- Fixed gt_probability heatmap plot. It works correctly now.
-
-- Fixed issues where plot directories were not being created.
-
-- Fixed bugs where non-ML imputers would not decode the integer genotypes.
-
-- Renamed gt probability plot to `simulated_genotypes`.
-
-- Fixed default `prefix` argument for supervised imputers. It now aligns with the unsupervised imputers as `imputer`.
-
-- Fixed bugs where `ImputeKNN` and `ImputeRandomForest` would not run.
-
-- Set max pandas version to prevent future warnings.
-
-- Added `warnings.simplefilter` to each module to catch `FutureWarning`
-
-Changed
-^^^^^^^
-
-- Implemented new plotting for test.py
-
-Version 1.0.2 - 2023-08-28
---------------------------
-
-Bug Fixes
-^^^^^^^^^
-
-- Use GenotypeData copy method internally due to Cython pysam VariantHeader.
-
-Version 1.0 - 2023-07-29
-------------------------
-
-Changed
-^^^^^^^
-
-- No longer in beta stages. Full release v1.0.
-
-Version 0.3.0 - 2023-07-26
---------------------------
-
-Features
-^^^^^^^^
-
-- Unsupervised models now impute on nucleotide-encoded multilabel data instead of 012 data.
-
-- Much higher metric scores due to the new multilabel encodings (less class imbalance)
-
-- Unsupervised grid searches are faster due to less redundant code and removig unnecessary calculations with the scoring functions.
-
-Changed
-^^^^^^^
-
-- Documentation updates to make it easier to understand all the available arguments and what they are for.
-
-- Refactored ``estimators.py`` and ``scorers.py`` for better modularity and easier code maintenance.
-
-Removed
-^^^^^^^
-
-- 012-encoded inputs for unsupervised imputers. Now uses multilabel nucleotide (4 class) inputs.
-
-Version 0.2.4 - 2023-07-24
---------------------------
-
-Features
-^^^^^^^^
-
-- Initial release with four unsupervised neural network models, three supervised IterativeImputer models, and four non-machine-learning imputers.
-
-Version 1.5.2 - 2025-03-01
---------------------------
-
-Features
-^^^^^^^^
-
-- Added `ImputeAutoencoder` class for imputing missing values in genotype data using an Autoencoder model.
-- Added `ImputeNLPCA` class for imputing missing values in genotype data using Non-linear Principal Component Analysis (NLPCA).
-- Added `ImputeUBP` class for imputing missing values in genotype data using Unsupervised Backpropagation (UBP).
-- Added `ImputeVAE` class for imputing missing values in genotype data using a Variational Autoencoder (VAE).
-
-Changes
-^^^^^^^
-
-- Updated `BaseNNImputer` class to support new imputation models.
-- Improved logging and error handling across all imputation models.
-- Enhanced documentation with new tutorials and examples for implementing new imputation models.
+- Initial public release:
+  four unsupervised neural models, three supervised ``IterativeImputer``-based models, and four deterministic imputers.
