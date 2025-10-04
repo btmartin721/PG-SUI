@@ -126,15 +126,16 @@ class AutoencoderModel(nn.Module):
     This class combines an `Encoder` and a `Decoder` to form a standard autoencoder. The model is trained to learn a compressed, low-dimensional representation of the input data and then reconstruct it as accurately as possible. It is particularly useful for unsupervised dimensionality reduction and data imputation.
 
     **Model Architecture and Objective:**
+
     The autoencoder consists of two parts: an encoder, $f_{\theta}$, and a decoder, $g_{\phi}$.
-    1.  The **encoder** maps the input data $x$ to a latent representation $z$:
-        $$
-        z = f_{\theta}(x)
-        $$
-    2.  The **decoder** reconstructs the data $\hat{x}$ from the latent representation:
-        $$
-        \hat{x} = g_{\phi}(z)
-        $$
+        1.  The **encoder** maps the input data $x$ to a latent representation $z$:
+            $$
+            z = f_{\theta}(x)
+            $$
+        2.  The **decoder** reconstructs the data $\hat{x}$ from the latent representation:
+            $$
+            \hat{x} = g_{\phi}(z)
+            $$
 
     The model is trained by minimizing a reconstruction loss, $L(x, \hat{x})$, which measures the dissimilarity between the original input and the reconstructed output. This implementation uses a `MaskedFocalLoss` to handle missing values and class imbalance effectively.
     """
