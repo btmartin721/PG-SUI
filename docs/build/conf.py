@@ -24,10 +24,10 @@ copyright = "2021, Bradley T. Martin and Tyler K. Chafin"
 author = "Bradley T. Martin and Tyler K. Chafin"
 
 # The short X.Y version
-version = "1.5.1"
+version = "1.6.1"
 
 # The full version, including alpha/beta/rc tags
-release = "v1.5.1 (beta)"
+release = "v1.6.1"
 
 
 # -- General configuration ---------------------------------------------------
