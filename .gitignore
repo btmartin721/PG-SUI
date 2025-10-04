@@ -133,3 +133,4 @@ pgsui_*_output/
 summarize/
 old_tests/
 pgsui_output/
+*14K.vcf_output/
