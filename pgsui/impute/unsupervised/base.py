@@ -476,9 +476,6 @@ class BaseNNImputer:
             y_pred (np.ndarray): Predicted labels (1D array).
             metrics (Dict[str, float]): Computed metrics.
             msg (str): Message to log before generating plots.
-
-        Raises:
-            ValueError: If `labels` length is not 3 or 10.
         """
         self.logger.info(msg)
 
@@ -810,8 +807,10 @@ class BaseNNImputer:
 
         # Prefer the requested metric; fall back to self.tune_metric if needed.
         val = metrics.get(metric, metrics.get(getattr(self, "tune_metric", ""), None))
+
         if val is None or not np.isfinite(val):
             return -np.inf  # make pruning decisions easy/robust on bad reads
+
         return float(val)
 
     def _first_linear_in_features(self, model: torch.nn.Module) -> int:
