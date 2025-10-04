@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, Literal, Optional, Sequence
 
+from pgsui.data_processing.config import apply_dot_overrides, load_yaml_to_dataclass
+
 
 @dataclass
 class _SimParams:
@@ -164,6 +166,8 @@ class _HGBParams:
 class ModelConfig:
     """Model architecture configuration.
 
+    This class contains configuration options for the model architecture, including latent space initialization, dimensionality, dropout rate, and other relevant settings.
+
     Attributes:
         latent_init (Literal["random", "pca"]): Method for initializing the latent space.
         latent_dim (int): Dimensionality of the latent space.
@@ -191,6 +195,27 @@ class ModelConfig:
 
 @dataclass
 class TrainConfig:
+    """Training procedure configuration.
+
+    This class contains configuration options for the training procedure, including batch size, learning rate, early stopping criteria, and other relevant settings.
+
+    Attributes:
+        batch_size (int): Number of samples per training batch.
+        learning_rate (float): Learning rate for the optimizer.
+        lr_input_factor (float): Factor to scale the learning rate for input layer.
+        l1_penalty (float): L1 regularization penalty.
+        early_stop_gen (int): Number of generations with no improvement to wait before early stopping.
+        min_epochs (int): Minimum number of epochs to train.
+        max_epochs (int): Maximum number of epochs to train.
+        validation_split (float): Proportion of data to use for validation.
+        weights_beta (float): Smoothing factor for class weights.
+        weights_max_ratio (float): Maximum ratio for class weights to prevent extreme values.
+        device (Literal["gpu", "cpu", "mps"]): Device to use for computation.
+
+    Notes:
+        - The `device` attribute specifies the computation device to use, such as "gpu", "cpu", or "mps" (for Apple Silicon).
+    """
+
     batch_size: int = 32
     learning_rate: float = 1e-3
     lr_input_factor: float = 1.0
@@ -208,18 +233,23 @@ class TrainConfig:
 class TuneConfig:
     """Hyperparameter tuning configuration.
 
+    This class contains configuration options for hyperparameter tuning, including the number of trials, evaluation metrics, and other relevant settings.
+
     Attributes:
         enabled (bool): If True, enables hyperparameter tuning.
-        metric (Literal["f1", "accuracy", "pr_macro"]): Metric to optimize
+        metric (Literal["f1", "accuracy", "pr_macro"]): Metric to optimize during tuning.
         n_trials (int): Number of hyperparameter trials to run.
-        resume (bool): If True, resumes from previous tuning results.
-        save_db (bool): If True, saves tuning results to a database.
-        fast (bool): If True, uses a faster tuning strategy.
-        max_samples (int): Maximum number of samples to use for tuning.
-        max_loci (int): Maximum number of loci to use for tuning (0 = all
-            loci).
-        epochs (int): Number of epochs for each trial.
+        resume (bool): If True, resumes tuning from a previous state.
+        save_db (bool): If True, saves the tuning results to a database.
+        fast (bool): If True, uses a faster but less thorough tuning approach.
+        max_samples (int): Maximum number of samples to use for tuning. 0 means all samples.
+        max_loci (int): Maximum number of loci to use for tuning. 0 means all loci.
+        epochs (int): Number of epochs to train each trial.
         batch_size (int): Batch size for training during tuning.
+        eval_interval (int): Interval (in epochs) at which to evaluate the model during tuning.
+        infer_epochs (int): Number of epochs for inference during tuning.
+        patience (int): Number of evaluations with no improvement before stopping early.
+        proxy_metric_batch (int): If > 0, uses a subset of data for proxy metric evaluation.
     """
 
     enabled: bool = False
@@ -242,12 +272,9 @@ class TuneConfig:
 class EvalConfig:
     """Evaluation configuration.
 
+    This class contains configuration options for the evaluation process, including batch size, evaluation intervals, and other relevant settings.
+
     Attributes:
-        batch_size (int): Batch size for evaluation.
-        eval_interval (int): Interval (in epochs) for evaluation during training.
-        infer_epochs (int): Number of epochs for inference during evaluation.
-        patience (int): Patience for early stopping during evaluation.
-        proxy_metric_batch (int): Batch size for proxy metric calculation.
         eval_latent_steps (int): Number of optimization steps for latent space evaluation.
         eval_latent_lr (float): Learning rate for latent space optimization.
         eval_latent_weight_decay (float): Weight decay for latent space optimization.
@@ -261,6 +288,8 @@ class EvalConfig:
 @dataclass
 class PlotConfig:
     """Plotting configuration.
+
+    This class contains configuration options for plotting, including file format, resolution, and other relevant settings.
 
     Attributes:
         fmt (Literal["pdf", "png", "jpg", "jpeg", "svg"]): Output file format.
@@ -281,7 +310,7 @@ class PlotConfig:
 class IOConfig:
     """I/O configuration.
 
-    This class contains configuration options for input/output operations.
+    This class contains configuration options for input/output operations, including file prefixes, verbosity, random seed, and other relevant settings.
 
     Attributes:
         prefix (str): Prefix for output files. Default is "pgsui".
@@ -305,7 +334,7 @@ class IOConfig:
 class NLPCAConfig:
     """Top-level configuration for ImputeNLPCA.
 
-    This class contains all the configuration options for the ImputeNLPCA model.
+    This class contains all the configuration options for the ImputeNLPCA model. The configuration is organized into several sections, each represented by a dataclass.
 
     Attributes:
         io (IOConfig): I/O configuration.
@@ -316,8 +345,10 @@ class NLPCAConfig:
         plot (PlotConfig): Plotting configuration.
 
     Notes:
-        - Presets: "fast": Prioritizes speed over thoroughness. "balanced": A balance between speed and thoroughness. "thorough": Prioritizes thoroughness over speed.
-        - Overrides: Overrides are applied after presets and can be used to fine-tune specific parameters.
+        - fast:     Quick baseline; tiny net; NO tuning by default.
+        - balanced: Practical default balancing speed and model performance; moderate tuning.
+        - thorough: Prioritizes model performance; deeper nets; extensive tuning.
+        - Overrides: Overrides are applied after presets and can be used to fine-tune specific parameters. Specifically uses flat dot-keys like {"model.latent_dim": 8}.
     """
 
     io: IOConfig = field(default_factory=IOConfig)
@@ -333,13 +364,10 @@ class NLPCAConfig:
     ) -> "NLPCAConfig":
         """Build a config from a named preset.
 
-        The presets are intended to be practical, not theoretical:
-        - fast: Very quick sanity runs; minimal capacity; NO tuning by default.
-        - balanced: Good default for most datasets; moderate tuning, moderate depth.
-        - thorough: Maximum quality; deeper nets, longer training, more trials.
+        This method allows for easy construction of a NLPCAConfig instance with sensible defaults based on the chosen preset. Presets adjust both model capacity and training/tuning behavior across speed/quality tradeoffs:
 
         Args:
-            preset: One of {"fast", "balanced", "thorough"}.
+            preset (Literal["fast", "balanced", "thorough"]): One of {"fast", "balanced", "thorough"}.
 
         Returns:
             NLPCAConfig: Configuration instance with preset values applied.
@@ -454,6 +482,8 @@ class NLPCAConfig:
     def apply_overrides(self, overrides: Dict[str, Any] | None) -> "NLPCAConfig":
         """Apply flat dot-key overrides (e.g. {'model.latent_dim': 4}).
 
+        This method allows for easy modification of the configuration by specifying the keys to change in a flat dictionary format.
+
         Args:
             overrides (Dict[str, Any] | None): A mapping of dot-key paths to values to override.
 
@@ -500,11 +530,10 @@ class UBPConfig:
         plot (PlotConfig): Plotting configuration.
 
     Notes:
-        - Presets:
-            fast:       Prioritizes speed.
-            balanced:   Balanced speed vs thoroughness.
-            thorough:   Prioritizes thoroughness.
-        - Overrides: flat dot-keys like {"model.latent_dim": 8}.
+        - fast:     Quick baseline; tiny net; NO tuning by default.
+        - balanced: Practical default balancing speed and model performance; moderate tuning.
+        - thorough: Prioritizes model performance; deeper nets; extensive tuning.
+        - Overrides: Overrides are applied after presets and can be used to fine-tune specific parameters. Specifically uses flat dot-keys like {"model.latent_dim": 8}.
     """
 
     io: IOConfig = field(default_factory=IOConfig)
@@ -520,16 +549,19 @@ class UBPConfig:
     ) -> "UBPConfig":
         """Build a UBPConfig from a named preset.
 
-        UBP is often used when classes (genotype states) are imbalanced. Presets adjust both capacity and weighting behavior across speed/quality tradeoffs:
-        - fast:     Quick baseline; tiny net; NO tuning by default.
-        - balanced: Practical default; moderate tuning; mild class weighting cap.
-        - thorough: Highest quality; deeper nets; extensive tuning; stronger focus.
+        This method allows for easy construction of a UBPConfig instance with sensible defaults based on the chosen preset. UBP is often used when classes (genotype states) are imbalanced. Presets adjust both capacity and weighting behavior across speed/quality tradeoffs.
 
         Args:
             preset (Literal["fast", "balanced", "thorough"]): One of {"fast","balanced","thorough"}.
 
         Returns:
             UBPConfig: Populated config instance.
+
+        Notes:
+            - fast:     Quick baseline; tiny net; NO tuning by default.
+            - balanced: Practical default balancing speed and model performance; moderate tuning.
+            - thorough: Prioritizes model performance; deeper nets; extensive tuning.
+            - Overrides: Overrides are applied after presets and can be used to fine-tune specific parameters. Specifically uses flat dot-keys like {"model.latent_dim": 8}.
 
         Raises:
             ValueError: If an unknown preset is provided.
@@ -641,7 +673,7 @@ class UBPConfig:
         """Apply flat dot-key overrides (e.g. {'model.latent_dim': 4}).
 
         Args:
-            overrides: Mapping of dot-key paths to values to override.
+            overrides (Dict[str, Any] | None): Mapping of dot-key paths to values to override.
 
         Returns:
             UBPConfig: This instance after applying overrides.
@@ -664,6 +696,8 @@ class UBPConfig:
     def to_dict(self) -> Dict[str, Any]:
         """Return the config as a nested dictionary.
 
+        This method uses `asdict` from the `dataclasses` module to convert the dataclass instance into a dictionary.
+
         Returns:
             Dict[str, Any]: Nested dictionary.
         """
@@ -685,10 +719,9 @@ class AutoencoderConfig:
         plot (PlotConfig): Plotting configuration.
 
     Notes:
-        - Presets:
-            fast:       Prioritizes speed.
-            balanced:   Balanced speed vs thoroughness.
-            thorough:   Prioritizes thoroughness.
+        - fast:     Quick baseline; tiny net; NO tuning by default.
+        - balanced: Practical default; moderate tuning.
+        - thorough: Prioritizes model performance; deeper nets; extensive tuning.
         - Overrides: flat dot-keys like {"model.latent_dim": 8}.
     """
 
@@ -703,6 +736,16 @@ class AutoencoderConfig:
     def from_preset(
         cls, preset: Literal["fast", "balanced", "thorough"] = "balanced"
     ) -> "AutoencoderConfig":
+        """Build an AutoencoderConfig from a named preset.
+
+        This method allows for easy construction of an AutoencoderConfig instance with sensible defaults based on the chosen preset. Presets adjust both model capacity and training/tuning behavior across speed/quality tradeoffs.
+
+        Args:
+            preset (Literal["fast", "balanced", "thorough"]): One of {"fast","balanced", "thorough"}.
+
+        Returns:
+            AutoencoderConfig: Populated config instance.
+        """
         if preset not in {"fast", "balanced", "thorough"}:
             raise ValueError(f"Unknown preset: {preset}")
 
@@ -809,6 +852,14 @@ class AutoencoderConfig:
         return cfg
 
     def apply_overrides(self, overrides: Dict[str, Any] | None) -> "AutoencoderConfig":
+        """Apply flat dot-key overrides (e.g. {'model.latent_dim': 4}).
+
+        Args:
+            overrides (Dict[str, Any] | None): Mapping of dot-key paths to values to override.
+
+        Returns:
+            AutoencoderConfig: This instance after applying overrides.
+        """
         if not overrides:
             return self
         for k, v in overrides.items():
@@ -829,7 +880,21 @@ class AutoencoderConfig:
 
 @dataclass
 class VAEExtraConfig:
-    """VAE-specific knobs."""
+    """VAE-specific knobs.
+
+    This class contains additional configuration options specific to Variational Autoencoders (VAEs), particularly for controlling the KL divergence term in the loss function.
+
+    Attributes:
+        kl_beta (float): Final β for KL divergence term.
+        kl_warmup (int): Number of epochs with β=0 (warm-up period
+            to stabilize training).
+        kl_ramp (int): Number of epochs for linear ramp to final β.
+
+    Notes:
+        - These parameters control the behavior of the KL divergence term in the VAE loss function.
+        - The warm-up period helps to stabilize training by gradually introducing the KL term.
+        - The ramp period defines how quickly the KL term reaches its final value.
+    """
 
     kl_beta: float = 1.0  # final β for KL
     kl_warmup: int = 50  # epochs with β=0
@@ -838,7 +903,25 @@ class VAEExtraConfig:
 
 @dataclass
 class VAEConfig:
-    """Top-level configuration for ImputeVAE (AE-parity + VAE extras)."""
+    """Top-level configuration for ImputeVAE (AE-parity + VAE extras).
+
+    This class contains all the configuration options for the ImputeVAE model. The configuration is organized into several sections, each represented by a dataclass.
+
+    Attributes:
+        io (IOConfig): I/O configuration.
+        model (ModelConfig): Model architecture configuration.
+        train (TrainConfig): Training procedure configuration.
+        tune (TuneConfig): Hyperparameter tuning configuration.
+        evaluate (EvalConfig): Evaluation configuration.
+        plot (PlotConfig): Plotting configuration.
+        vae (VAEExtraConfig): VAE-specific configuration.
+
+    Notes:
+        - fast:     Quick baseline; tiny net; NO tuning by default.
+        - balanced: Practical default; moderate tuning.
+        - thorough: Prioritizes model performance; deeper nets; extensive tuning.
+        - Overrides: flat dot-keys like {"model.latent_dim": 8}.
+    """
 
     io: IOConfig = field(default_factory=IOConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
@@ -852,7 +935,16 @@ class VAEConfig:
     def from_preset(
         cls, preset: Literal["fast", "balanced", "thorough"] = "balanced"
     ) -> "VAEConfig":
-        """Mirror AutoencoderConfig presets and add VAE defaults."""
+        """Mirror AutoencoderConfig presets and add VAE defaults.
+
+        This method allows for easy construction of a VAEConfig instance with sensible defaults based on the chosen preset. Presets adjust both model capacity and training/tuning behavior across speed/quality tradeoffs.
+
+        Args:
+            preset (Literal["fast", "balanced", "thorough"]): One of {"fast", "balanced", "thorough"}.
+
+        Returns:
+            VAEConfig: Configuration instance with preset values applied.
+        """
         if preset not in {"fast", "balanced", "thorough"}:
             raise ValueError(f"Unknown preset: {preset}")
 
@@ -991,7 +1083,10 @@ class MostFrequentAlgoConfig:
 
 @dataclass
 class DeterministicSplitConfig:
-    """Evaluation split configuration shared by deterministic imputers."""
+    """Evaluation split configuration shared by deterministic imputers.
+
+    This class contains configuration options for splitting data into training and testing sets for deterministic imputation algorithms. The split can be defined by a proportion of the data or by specific indices.
+    """
 
     test_size: float = 0.2
     # If provided, overrides test_size.
@@ -1002,7 +1097,7 @@ class DeterministicSplitConfig:
 class MostFrequentConfig:
     """Top-level configuration for ImputeMostFrequent.
 
-    Sections mirror other configs for alignment:
+    Sections for alignment:
         - io (IOConfig)
         - plot (PlotConfig)
         - split (DeterministicSplitConfig)
@@ -1020,8 +1115,13 @@ class MostFrequentConfig:
     ) -> "MostFrequentConfig":
         """Presets mainly keep parity with logging/IO and split test_size.
 
-        Deterministic imputers don't have model/train knobs; presets exist
-        for interface symmetry and minor UX defaults.
+        Deterministic imputers don't have model/train knobs; presets exist for interface symmetry and minor UX defaults.
+
+        Args:
+            preset (Literal["fast", "balanced", "thorough"]): One of {"fast", "balanced", "thorough"}.
+
+        Returns:
+            MostFrequentConfig: Populated config instance.
         """
         if preset not in {"fast", "balanced", "thorough"}:
             raise ValueError(f"Unknown preset: {preset}")
@@ -1032,7 +1132,14 @@ class MostFrequentConfig:
         return cfg
 
     def apply_overrides(self, overrides: Dict[str, Any] | None) -> "MostFrequentConfig":
-        """Apply dot-key overrides (e.g., {'algo.by_populations': True})."""
+        """Apply dot-key overrides (e.g., {'algo.by_populations': True}).
+
+        Args:
+            overrides (Dict[str, Any]): Mapping of dot-key paths to values to override.
+
+        Returns:
+            MostFrequentConfig: This instance after applying overrides.
+        """
         if not overrides:
             return self
         for k, v in overrides.items():
@@ -1044,16 +1151,27 @@ class MostFrequentConfig:
             if hasattr(node, last):
                 setattr(node, last, v)
             else:
-                raise KeyError(f"Unknown config key: {k}")
+                pass
         return self
 
     def to_dict(self) -> Dict[str, Any]:
+        """Return the config as a dictionary.
+
+        Returns:
+            Dict[str, Any]: The config as a nested dictionary.
+        """
         return asdict(self)
 
 
 @dataclass
 class RefAlleleAlgoConfig:
-    """Algorithmic knobs for ImputeRefAllele."""
+    """Algorithmic knobs for ImputeRefAllele.
+
+    This class contains configuration options specific to the reference allele imputation algorithm.
+
+    Attributes:
+        missing (int): Code for missing genotypes in 0/1/2.
+    """
 
     missing: int = -1
 
@@ -1061,6 +1179,8 @@ class RefAlleleAlgoConfig:
 @dataclass
 class RefAlleleConfig:
     """Top-level configuration for ImputeRefAllele.
+
+    This class contains all the configuration options for the ImputeRefAllele model. The configuration is organized into several sections, each represented by a dataclass.
 
     Sections for alignment:
         - io (IOConfig)
@@ -1078,6 +1198,16 @@ class RefAlleleConfig:
     def from_preset(
         cls, preset: Literal["fast", "balanced", "thorough"] = "balanced"
     ) -> "RefAlleleConfig":
+        """Presets mainly keep parity with logging/IO and split test_size.
+
+        Deterministic imputers don't have model/train knobs; presets exist for interface symmetry and minor UX defaults.
+
+        Args:
+            preset (Literal["fast", "balanced", "thorough"]): One of {"fast", "balanced", "thorough"}.
+
+        Returns:
+            RefAlleleConfig: Populated config instance.
+        """
         if preset not in {"fast", "balanced", "thorough"}:
             raise ValueError(f"Unknown preset: {preset}")
 
@@ -1087,7 +1217,16 @@ class RefAlleleConfig:
         return cfg
 
     def apply_overrides(self, overrides: Dict[str, Any] | None) -> "RefAlleleConfig":
-        """Apply dot-key overrides (e.g., {'split.test_size': 0.3})."""
+        """Apply dot-key overrides (e.g., {'split.test_size': 0.3}).
+
+        This method allows for easy modification of the configuration by specifying the keys to change in a flat dictionary format.
+
+        Args:
+            overrides (Dict[str, Any] | None): A mapping of dot-key paths to values to override.
+
+        Returns:
+            RefAlleleConfig: The updated config instance (same as `self`).
+        """
         if not overrides:
             return self
         for k, v in overrides.items():
@@ -1099,8 +1238,492 @@ class RefAlleleConfig:
             if hasattr(node, last):
                 setattr(node, last, v)
             else:
-                raise KeyError(f"Unknown config key: {k}")
+                pass
         return self
 
     def to_dict(self) -> Dict[str, Any]:
+        """Convert the config to a dictionary.
+
+        Returns:
+            Dict[str, Any]: The config as a nested dictionary.
+        """
         return asdict(self)
+
+
+def _flatten_dict(
+    d: Dict[str, Any], prefix: str = "", out: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    out = out or {}
+    for k, v in d.items():
+        kk = f"{prefix}.{k}" if prefix else k
+        if isinstance(v, dict):
+            _flatten_dict(v, kk, out)
+        else:
+            out[kk] = v
+    return out
+
+
+@dataclass
+class IOConfigSupervised:
+    """I/O, logging, and run identity.
+
+    This class contains configuration options for input/output operations, logging, and run identification.
+
+    Attributes:
+        prefix (str): Prefix for output files and logs.
+        seed (Optional[int]): Random seed for reproducibility.
+        n_jobs (int): Number of parallel jobs to use. -1 uses all available cores.
+        verbose (bool): Whether to enable verbose logging.
+        debug (bool): Whether to enable debug mode with more detailed logs.
+
+    Notes:
+        - The prefix is used to name output files and logs, helping to organize results from different runs.
+        - Setting a random seed ensures that results are reproducible across different runs.
+        - The number of jobs can be adjusted based on the available computational resources.
+        - Verbose and debug modes provide additional logging information, which can be useful for troubleshooting.
+    """
+
+    prefix: str = "pgsui"
+    seed: Optional[int] = None
+    n_jobs: int = 1
+    verbose: bool = False
+    debug: bool = False
+
+
+@dataclass
+class PlotConfigSupervised:
+    """Plot/figure styling.
+
+    This class contains parameters for controlling the appearance of plots generated during the imputation process.
+
+    Attributes:
+        fmt (Literal["pdf", "png", "jpg", "jpeg"]): File format
+            for saving plots.
+        dpi (int): Resolution in dots per inch for raster formats.
+        fontsize (int): Base font size for plot text.
+        despine (bool): Whether to remove top/right spines from plots.
+        show (bool): Whether to display plots interactively.
+
+    Notes:
+        - Supported formats: "pdf", "png", "jpg", "jpeg".
+        - Higher DPI values yield better quality in raster images.
+        - Despining is a common aesthetic choice for cleaner plots.
+    """
+
+    fmt: Literal["pdf", "png", "jpg", "jpeg"] = "pdf"
+    dpi: int = 300
+    fontsize: int = 18
+    despine: bool = True
+    show: bool = False
+
+
+@dataclass
+class TrainConfigSupervised:
+    """Training/evaluation split (by samples).
+
+    This class contains configuration options for splitting the dataset into training and validation sets during the training process.
+
+    Attributes:
+        validation_split (float): Proportion of data to use for validation.
+
+    Notes:
+        - Value should be between 0.0 and 1.0.
+    """
+
+    validation_split: float = 0.20
+
+    def __post_init__(self):
+        """Validate that validation_split is between 0.0 and 1.0."""
+        if not (0.0 < self.validation_split < 1.0):
+            raise ValueError("validation_split must be between 0.0 and 1.0")
+
+
+@dataclass
+class ImputerConfigSupervised:
+    """IterativeImputer-like scaffolding used by current supervised wrappers.
+
+    This class contains configuration options for the imputation process, specifically for iterative imputation methods.
+
+    Attributes:
+        n_nearest_features (Optional[int]): Number of nearest features to use
+            for imputation. If None, all features are used.
+        max_iter (int): Maximum number of imputation iterations to perform.
+
+    Notes:
+        - n_nearest_features can help speed up imputation by limiting the number of features considered.
+        - max_iter controls how many times the imputation process is repeated to refine estimates.
+        - If n_nearest_features is None, the imputer will consider all features for each missing value.
+        - Default max_iter is set to 10, which is typically sufficient for convergence.
+        - Iterative imputation can be computationally intensive; consider adjusting n_nearest_features for large datasets.
+    """
+
+    n_nearest_features: Optional[int] = 10
+    max_iter: int = 10
+
+
+@dataclass
+class SimConfigSupervised:
+    """Simulation of missingness for evaluation.
+
+    This class contains configuration options for simulating missing data during the evaluation process.
+
+    Attributes:
+        prop_missing (float): Proportion of features to randomly set as missing.
+        strategy (Literal["random", "random_inv_genotype"]): Strategy for generating missingness.
+        het_boost (float): Boosting factor for heterogeneity in missingness.
+        missing_val (int): Internal code for missing genotypes (e.g., -1).
+
+    Notes:
+        - The choice of strategy can affect the realism of the missing data simulation.
+        - Heterogeneous missingness can be useful for testing model robustness.
+    """
+
+    prop_missing: float = 0.5
+    strategy: Literal["random", "random_inv_genotype"] = "random_inv_genotype"
+    het_boost: float = 2.0
+    missing_val: int = -1  # internal use; your wrappers expect -1
+
+
+@dataclass
+class TuningConfigSupervised:
+    """Optuna tuning envelope (kept for parity with unsupervised)."""
+
+    enabled: bool = True
+    n_trials: int = 100
+    metric: str = "pr_macro"
+    n_jobs: int = 8  # for parallel eval (model-dependent)
+    fast: bool = True  # placeholder—trees don't need it but kept for consistency
+
+
+@dataclass
+class RFModelConfig:
+    """Random Forest hyperparameters."""
+
+    n_estimators: int = 100
+    max_depth: Optional[int] = None
+    min_samples_split: int = 2
+    min_samples_leaf: int = 1
+    max_features: Literal["sqrt", "log2"] | float | None = "sqrt"
+    criterion: Literal["gini", "entropy", "log_loss"] = "gini"
+    class_weight: Literal["balanced", "balanced_subsample", None] = "balanced"
+
+
+@dataclass
+class HGBModelConfig:
+    """Histogram-based Gradient Boosting hyperparameters.
+
+    This class contains configuration options for the Histogram-based Gradient Boosting (HGB) model used in imputation.
+
+    Attributes:
+        n_estimators (int): Number of boosting iterations.
+        learning_rate (float): Step size for each boosting iteration.
+        max_depth (Optional[int]): Maximum depth of each tree. If None, nodes are expanded until all leaves are pure or contain less than min_samples_leaf samples.
+        min_samples_leaf (int): Minimum number of samples required to be at a leaf node.
+        max_features (float | None): Proportion of features to consider when looking for the best split. If None, all features are considered.
+        n_iter_no_change (int): Number of iterations with no improvement to wait before early stopping.
+        tol (float): Minimum improvement in the loss to qualify as an improvement.
+
+    Notes:
+        - These parameters control the complexity and learning behavior of the HGB model.
+        - Early stopping is implemented to prevent overfitting.
+        - The choice of criterion affects how the quality of a split is measured.
+        - The model is sensitive to the learning_rate; smaller values require more estimators.
+        - max_features can be set to a float between 0.0 and 1.0 to use a proportion of features.
+        - Early stopping is driven by ``n_iter_no_change / tol``; sklearn controls randomness via random_state.
+    """
+
+    # sklearn.HistGradientBoostingClassifier uses 'max_iter'
+    # as number of boosting iterations
+    n_estimators: int = 100  # maps to max_iter
+    learning_rate: float = 0.1
+    max_depth: Optional[int] = None
+    min_samples_leaf: int = 1
+    max_features: float | None = 1.0
+    n_iter_no_change: int = 10
+    tol: float = 1e-7
+
+    def __post_init__(self):
+        """Validate max_features if it's a float."""
+        if isinstance(self.max_features, float):
+            if not (0.0 < self.max_features <= 1.0):
+                raise ValueError("max_features as float must be in (0.0, 1.0]")
+
+        if self.n_estimators <= 0:
+            raise ValueError("n_estimators must be a positive integer")
+
+
+@dataclass
+class RFConfig:
+    """Configuration for ImputeRandomForest.
+
+    This dataclass mirrors the legacy ``__init__`` signature while supporting presets, YAML loading, and dot-key overrides. Use ``to_imputer_kwargs()`` to call the current constructor, or refactor the imputer to accept ``config: RFConfig``.
+
+    Attributes:
+        io (IOConfigSupervised): Run identity, logging, and seeds.
+        model (RFModelConfig): RandomForest hyperparameters.
+        train (TrainConfigSupervised): Sample split for validation.
+        imputer (ImputerConfigSupervised): IterativeImputer scaffolding (neighbors/iters).
+        sim (SimConfigSupervised): Simulated missingness used during evaluation.
+        plot (PlotConfigSupervised): Plot styling and export options.
+        tune (TuningConfigSupervised): Optuna knobs (not required by RF itself).
+    """
+
+    io: IOConfigSupervised = field(default_factory=IOConfigSupervised)
+    model: RFModelConfig = field(default_factory=RFModelConfig)
+    train: TrainConfigSupervised = field(default_factory=TrainConfigSupervised)
+    imputer: ImputerConfigSupervised = field(default_factory=ImputerConfigSupervised)
+    sim: SimConfigSupervised = field(default_factory=SimConfigSupervised)
+    plot: PlotConfigSupervised = field(default_factory=PlotConfigSupervised)
+    tune: TuningConfigSupervised = field(default_factory=TuningConfigSupervised)
+
+    @classmethod
+    def from_preset(
+        cls, preset: Literal["fast", "balanced", "thorough"] = "balanced"
+    ) -> "RFConfig":
+        """Build a config from a named preset.
+
+        This method allows for easy construction of an RFConfig instance with sensible defaults based on the chosen preset. Presets adjust both model capacity and training/tuning behavior across speed/quality tradeoffs.
+
+        Args:
+            preset: One of {"fast", "balanced", "thorough"}.
+                - fast:      Quick baseline; fewer trees; fewer imputer iters.
+                - balanced:  Balances speed and model performance; moderate trees and imputer iters.
+                - thorough:  Prioritizes model performance; more trees; more imputer iters.
+
+        Returns:
+            RFConfig: Config with preset values applied.
+        """
+        cfg = cls()
+        if preset == "fast":
+            cfg.model.n_estimators = 50
+            cfg.model.max_depth = None
+            cfg.imputer.max_iter = 5
+            cfg.io.n_jobs = 1
+            cfg.tune.enabled = False
+        elif preset == "balanced":
+            cfg.model.n_estimators = 100
+            cfg.model.max_depth = None
+            cfg.imputer.max_iter = 10
+            cfg.io.n_jobs = 1
+            cfg.tune.enabled = False
+            cfg.tune.n_trials = 100
+        elif preset == "thorough":
+            cfg.model.n_estimators = 500
+            cfg.model.max_depth = None
+            cfg.imputer.max_iter = 15
+            cfg.io.n_jobs = 1
+            cfg.tune.enabled = False
+            cfg.tune.n_trials = 250
+        else:
+            raise ValueError(f"Unknown preset: {preset}")
+
+        return cfg
+
+    @classmethod
+    def from_yaml(cls, path: str) -> "RFConfig":
+        """Load from YAML; honors optional top-level 'preset' then merges keys.
+
+        Args:
+            path (str): Path to the YAML configuration file.
+
+        Returns:
+            RFConfig: Config instance populated from the YAML file.
+        """
+        return load_yaml_to_dataclass(path, cls, preset_builder=cls.from_preset)
+
+    def apply_overrides(self, overrides: Dict[str, Any] | None) -> "RFConfig":
+        """Apply flat dot-key overrides (e.g., {'model.n_estimators': 500}).
+
+        Args:
+            overrides (Dict[str, Any] | None): Mapping of dot-key paths to values to override.
+
+        Returns:
+            RFConfig: This instance after applying overrides.
+        """
+        if overrides:
+            apply_dot_overrides(self, overrides)
+        return self
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return as nested dictionary.
+
+        Returns:
+            Dict[str, Any]: The config as a nested dictionary.
+        """
+        return asdict(self)
+
+    def to_imputer_kwargs(self) -> Dict[str, Any]:
+        """Map config fields to current ImputeRandomForest ``__init__`` kwargs.
+
+        Returns:
+            Dict[str, Any]: kwargs compatible with ImputeRandomForest(..., \*\*kwargs).
+        """
+        return {
+            # General
+            "prefix": self.io.prefix,
+            "seed": self.io.seed,
+            "n_jobs": self.io.n_jobs,
+            "verbose": self.io.verbose,
+            "debug": self.io.debug,
+            # Model hyperparameters
+            "model_n_estimators": self.model.n_estimators,
+            "model_max_depth": self.model.max_depth,
+            "model_min_samples_split": self.model.min_samples_split,
+            "model_min_samples_leaf": self.model.min_samples_leaf,
+            "model_max_features": self.model.max_features,
+            "model_criterion": self.model.criterion,
+            "model_validation_split": self.train.validation_split,
+            "model_n_nearest_features": self.imputer.n_nearest_features,
+            "model_max_iter": self.imputer.max_iter,
+            # Simulation
+            "sim_prop_missing": self.sim.prop_missing,
+            "sim_strategy": self.sim.strategy,
+            "sim_het_boost": self.sim.het_boost,
+            # Plotting
+            "plot_format": self.plot.fmt,
+            "plot_fontsize": self.plot.fontsize,
+            "plot_despine": self.plot.despine,
+            "plot_dpi": self.plot.dpi,
+            "plot_show_plots": self.plot.show,
+        }
+
+
+@dataclass
+class HGBConfig:
+    """Configuration for ImputeHistGradientBoosting.
+
+    Mirrors the legacy __init__ signature and provides presets/YAML/overrides.
+    Use `to_imputer_kwargs()` now, or switch the imputer to accept `config: HGBConfig`.
+
+    Attributes:
+        io (IOConfigSupervised): Run identity, logging, and seeds.
+        model (HGBModelConfig): HistGradientBoosting hyperparameters.
+        train (TrainConfigSupervised): Sample split for validation.
+        imputer (ImputerConfigSupervised): IterativeImputer scaffolding (neighbors/iters).
+        sim (SimConfigSupervised): Simulated missingness used during evaluation.
+        plot (PlotConfigSupervised): Plot styling and export options.
+        tune (TuningConfigSupervised): Optuna knobs (not required by HGB itself).
+    """
+
+    io: IOConfigSupervised = field(default_factory=IOConfigSupervised)
+    model: HGBModelConfig = field(default_factory=HGBModelConfig)
+    train: TrainConfigSupervised = field(default_factory=TrainConfigSupervised)
+    imputer: ImputerConfigSupervised = field(default_factory=ImputerConfigSupervised)
+    sim: SimConfigSupervised = field(default_factory=SimConfigSupervised)
+    plot: PlotConfigSupervised = field(default_factory=PlotConfigSupervised)
+    tune: TuningConfigSupervised = field(default_factory=TuningConfigSupervised)
+
+    @classmethod
+    def from_preset(
+        cls, preset: Literal["fast", "balanced", "thorough"] = "balanced"
+    ) -> "HGBConfig":
+        """Build a config from a named preset.
+
+        This class method allows for easy construction of a HGBConfig instance with sensible defaults based on the chosen preset. Presets adjust both model capacity and training/tuning behavior across speed/quality tradeoffs.
+
+        Args:
+            preset: One of {"fast", "balanced", "thorough"}.
+                - fast:      Quick baseline; fewer trees; fewer imputer iters.
+                - balanced:  Balances speed and model performance; moderate trees and imputer iters.
+                - thorough:  Prioritizes model performance; more trees; more imputer iters.
+
+        Returns:
+            HGBConfig: Config with preset values applied.
+        """
+        cfg = cls()
+        if preset == "fast":
+            cfg.model.n_estimators = 50
+            cfg.model.learning_rate = 0.15
+            cfg.model.max_depth = None
+            cfg.imputer.max_iter = 5
+            cfg.io.n_jobs = 1
+            cfg.tune.enabled = False
+            cfg.tune.n_trials = 50
+        elif preset == "balanced":
+            cfg.model.n_estimators = 100
+            cfg.model.learning_rate = 0.1
+            cfg.model.max_depth = None
+            cfg.imputer.max_iter = 10
+            cfg.io.n_jobs = 1
+            cfg.tune.enabled = False
+            cfg.tune.n_trials = 100
+        elif preset == "thorough":
+            cfg.model.n_estimators = 500
+            cfg.model.learning_rate = 0.08
+            cfg.model.max_depth = None
+            cfg.imputer.max_iter = 15
+            cfg.io.n_jobs = 1
+            cfg.tune.enabled = False
+            cfg.tune.n_trials = 250
+        else:
+            raise ValueError(f"Unknown preset: {preset}")
+        return cfg
+
+    @classmethod
+    def from_yaml(cls, path: str) -> "HGBConfig":
+        """Load from YAML; honors optional top-level 'preset' then merges keys.
+
+        Args:
+            path (str): Path to the YAML configuration file.
+
+        Returns:
+            HGBConfig: Config instance populated from the YAML file.
+        """
+        return load_yaml_to_dataclass(path, cls, preset_builder=cls.from_preset)
+
+    def apply_overrides(self, overrides: Dict[str, Any] | None) -> "HGBConfig":
+        """Apply flat dot-key overrides (e.g., {'model.learning_rate': 0.05}).
+
+        Args:
+            overrides (Dict[str, Any] | None): Mapping of dot-key paths to values to override.
+
+        Returns:
+            HGBConfig: This instance after applying overrides.
+        """
+        if overrides:
+            apply_dot_overrides(self, overrides)
+        return self
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return as nested dict.
+
+        Returns:
+            Dict[str, Any]: The config as a nested dictionary.
+        """
+        return asdict(self)
+
+    def to_imputer_kwargs(self) -> Dict[str, Any]:
+        """Map config fields to current ImputeHistGradientBoosting ``__init__`` kwargs.
+
+        Returns:
+            Dict[str, Any]: kwargs compatible with ImputeHistGradientBoosting(..., \*\*kwargs).
+        """
+        return {
+            # General
+            "prefix": self.io.prefix,
+            "seed": self.io.seed,
+            "n_jobs": self.io.n_jobs,
+            "verbose": self.io.verbose,
+            "debug": self.io.debug,
+            # Model hyperparameters (note the mapping to sklearn's HGB)
+            "model_n_estimators": self.model.n_estimators,  # -> max_iter
+            "model_learning_rate": self.model.learning_rate,
+            "model_n_iter_no_change": self.model.n_iter_no_change,
+            "model_tol": self.model.tol,
+            "model_max_depth": self.model.max_depth,
+            "model_min_samples_leaf": self.model.min_samples_leaf,
+            "model_max_features": self.model.max_features,
+            "model_validation_split": self.train.validation_split,
+            "model_n_nearest_features": self.imputer.n_nearest_features,
+            "model_max_iter": self.imputer.max_iter,
+            # Simulation
+            "sim_prop_missing": self.sim.prop_missing,
+            "sim_strategy": self.sim.strategy,
+            "sim_het_boost": self.sim.het_boost,
+            # Plotting
+            "plot_format": self.plot.fmt,
+            "plot_fontsize": self.plot.fontsize,
+            "plot_despine": self.plot.despine,
+            "plot_dpi": self.plot.dpi,
+            "plot_show_plots": self.plot.show,
+        }
