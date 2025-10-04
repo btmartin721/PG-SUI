@@ -28,9 +28,11 @@ Phase 1: Linear Decoder
 The model in Phase 1 employs a simple linear mapping from the latent space to the output space:
 
 .. math::
+
     \mathbf{Y}_{1} = \mathbf{W}_{1} \mathbf{Z} + \mathbf{b}_{1}
 
 where:
+
 - :math:`\mathbf{Z} \in \mathbb{R}^{d}` is the latent input of dimension :math:`d`.
 - :math:`\mathbf{W}_{1}` is the weight matrix of the linear decoder.
 - :math:`\mathbf{b}_{1}` is the bias vector.
@@ -42,9 +44,11 @@ Phases 2 and 3: Deep Network
 Phases 2 and 3 use a deeper neural network to refine the imputed data. The network consists of multiple hidden layers, each with weights, biases, activation functions, and dropout for regularization:
 
 .. math::
+
     \mathbf{H}_{i} = \sigma(\mathbf{W}_{i} \mathbf{H}_{i-1} + \mathbf{b}_{i}) \quad \text{for } i = 2, \dots, L
 
 where:
+
 - :math:`\mathbf{H}_{0} = \mathbf{Z}` is the initial input.
 - :math:`\sigma` is an activation function, such as ReLU or ELU.
 - :math:`\mathbf{W}_{i}` and :math:`\mathbf{b}_{i}` are the weights and biases of the :math:`i`-th layer.
@@ -53,6 +57,7 @@ where:
 The final layer produces the output:
 
 .. math::
+
     \mathbf{Y}_{2} = \mathbf{W}_{L} \mathbf{H}_{L-1} + \mathbf{b}_{L}
 
 Loss Function
@@ -61,9 +66,11 @@ Loss Function
 The model minimizes a masked focal loss to handle class imbalance and focus on difficult-to-predict samples:
 
 .. math::
+
     \mathcal{L}_{\text{focal}}(p_t) = - \alpha_t (1 - p_t)^{\gamma} \log(p_t)
 
 where:
+
 - :math:`p_t` is the probability of the correct class.
 - :math:`\alpha_t` is a weighting factor for class balance.
 - :math:`\gamma` controls the focus on difficult examples.
@@ -71,10 +78,12 @@ where:
 The overall loss is computed as:
 
 .. math::
+    
     \mathcal{L} = \frac{1}{|M|} \sum_{(i,j) \in M} \mathcal{L}_{\text{focal}}(p_t)
 
 where:
-- :math:`M` is the set of valid (unmasked) samples.
+
+- :math:`M` is the set of valid (unmasked) samples.  
 - :math:`|M|` is the number of valid samples.
 
 Training Procedure
@@ -93,33 +102,6 @@ Final Output
 The output of the model is an imputed tensor :math:`\hat{\mathbf{X}} \in \mathbb{R}^{n \times c}` that predicts the missing values in the input data.
 
 
-Implementation in PG-SUI
-~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: python
-
-    ubp = ImputeUBP(
-        genotype_data=data, 
-        tune=True, # Tune parameters with Optuna.
-        tune_n_trials=100, # Recommended: 100-1000.
-        tune_metric="pr_macro", # Deals well with class imbalance.
-        weights_temperature=3.0, # For adjusting class weights.
-        weights_alpha=1.0,
-        weights_normalize=True,
-        model_early_stop_gen=20, # Model parameters.
-        model_min_epochs=20,
-        model_validation_split=0.21,
-        model_learning_rate=0.0001,
-        model_latent_dim=2, 
-        model_num_hidden_layers=2, 
-        model_hidden_layer_sizes=[128, 64], 
-        model_gamma=2.0, # For focal loss. 
-        device="cpu", 
-        n_jobs=8, # Number of CPUs to use with Optuna parameter tuning.
-        verbose=1, 
-        seed=42, # For reproducibility.
-    )
-
 Nonlinear Principal Component Analysis (NLPCA) Model
 ----------------------------------------------------
 
@@ -135,6 +117,7 @@ The NLPCA model consists of a deep neural network with multiple hidden layers. T
 The forward pass of the NLPCA model can be described mathematically as:
 
 .. math::
+
     \mathbf{H}_{1} = \sigma(\mathbf{W}_{1} \mathbf{X} + \mathbf{b}_{1})
 
     \mathbf{H}_{2} = \sigma(\mathbf{W}_{2} \mathbf{H}_{1} + \mathbf{b}_{2})
@@ -146,6 +129,7 @@ The forward pass of the NLPCA model can be described mathematically as:
     \mathbf{Y} = \mathbf{W}_{\text{out}} \mathbf{H}_{L} + \mathbf{b}_{\text{out}}
 
 where:
+
 - :math:`\mathbf{X} \in \mathbb{R}^{n \times d}` is the input data with :math:`n` samples and :math:`d` features.
 - :math:`\mathbf{H}_{i}` is the hidden representation at layer :math:`i`.
 - :math:`\mathbf{W}_{i}` and :math:`\mathbf{b}_{i}` are the weights and biases at layer :math:`i`.
@@ -159,9 +143,11 @@ Loss Function
 The NLPCA model uses a masked focal loss to handle class imbalance and ignore missing values. The focal loss is defined as:
 
 .. math::
+
     \mathcal{L}_{\text{focal}}(p_t) = - \alpha_t (1 - p_t)^{\gamma} \log(p_t)
 
 where:
+
 - :math:`p_t` is the probability of the correct class.
 - :math:`\alpha_t` is a weighting factor for class balance.
 - :math:`\gamma` controls the focus on difficult examples.
@@ -169,10 +155,12 @@ where:
 To ignore missing values, a masking operation is applied:
 
 .. math::
+
     \mathcal{L} = \frac{1}{|M|} \sum_{(i,j) \in M} \mathcal{L}_{\text{focal}}(p_t)
 
 where:
-- :math:`M` is the set of valid (unmasked) samples.
+
+- :math:`M` is the set of valid (unmasked) samples.  
 - :math:`|M|` is the number of valid samples.
 
 Training Procedure
@@ -193,9 +181,11 @@ Refinement of Inputs
 During training, the model refines the input data to better represent the underlying patterns. This is achieved through a manual gradient update:
 
 .. math::
+
     \mathbf{X} \leftarrow \mathbf{X} - \eta \frac{\partial \mathcal{L}}{\partial \mathbf{X}}
 
 where:
+
 - :math:`\eta` is the learning rate for input refinement.
 
 Final Output
@@ -223,6 +213,7 @@ Encoder Network
 The encoder network transforms the input data through several hidden layers:
 
 .. math::
+    
     \mathbf{H}_{1} = \sigma(\mathbf{W}_{1} \mathbf{X} + \mathbf{b}_{1})
 
     \mathbf{H}_{2} = \sigma(\mathbf{W}_{2} \mathbf{H}_{1} + \mathbf{b}_{2})
@@ -232,6 +223,7 @@ The encoder network transforms the input data through several hidden layers:
     \mathbf{Z} = \sigma(\mathbf{W}_{L} \mathbf{H}_{L-1} + \mathbf{b}_{L})
 
 where:
+
 - :math:`\mathbf{X} \in \mathbb{R}^{n \times d}` is the input data.
 - :math:`\mathbf{H}_{i}` is the hidden representation at layer :math:`i`.
 - :math:`\mathbf{W}_{i}` and :math:`\mathbf{b}_{i}` are the weights and biases of the encoder.
@@ -244,11 +236,13 @@ Decoder Network
 The decoder reconstructs the original input data from the latent representation:
 
 .. math::
+
     \mathbf{H}_{i} = \sigma(\mathbf{W}_{i} \mathbf{H}_{i-1} + \mathbf{b}_{i})
 
     \mathbf{\hat{X}} = \sigma(\mathbf{W}_{\text{out}} \mathbf{H}_{L} + \mathbf{b}_{\text{out}})
 
 where:
+
 - :math:`\mathbf{\hat{X}}` is the reconstructed input.
 
 Loss Function
@@ -257,9 +251,11 @@ Loss Function
 The model uses a masked focal loss to handle missing values and focus on difficult-to-predict data points. The masked focal loss is defined as:
 
 .. math::
+
     \mathcal{L}_{\text{focal}}(p_t) = - \alpha_t (1 - p_t)^{\gamma} \log(p_t)
 
 where:
+
 - :math:`p_t` is the predicted probability of the correct class.
 - :math:`\alpha_t` is a class balance weight.
 - :math:`\gamma` is a parameter that controls the focus on hard-to-predict samples.
@@ -267,9 +263,11 @@ where:
 The overall loss is computed only over valid (unmasked) entries:
 
 .. math::
+
     \mathcal{L} = \frac{1}{|M|} \sum_{(i,j) \in M} \mathcal{L}_{\text{focal}}(p_t)
 
 where:
+
 - :math:`M` is the set of valid (unmasked) samples.
 - :math:`|M|` is the number of valid samples.
 
@@ -306,11 +304,13 @@ Encoder Network
 The encoder maps the input :math:`\mathbf{X}` to the parameters of a Gaussian distribution over the latent space:
 
 .. math::
+    
     \mu = f_{\mu}(\mathbf{X})
 
     \log \sigma^{2} = f_{\sigma}(\mathbf{X})
 
 where:
+
 - :math:`\mu` is the mean of the distribution.
 - :math:`\sigma^{2}` is the variance.
 - :math:`f_{\mu}` and :math:`f_{\sigma}` are neural networks representing the encoder.
@@ -321,6 +321,7 @@ Latent Space Sampling
 The model samples a latent variable :math:`\mathbf{z}` using the reparameterization trick:
 
 .. math::
+    
     \mathbf{z} = \mu + \epsilon \cdot \sigma, \quad \epsilon \sim \mathcal{N}(0, \mathbf{I})
 
 This allows the model to backpropagate through the sampling step during training.
@@ -331,6 +332,7 @@ Decoder Network
 The decoder reconstructs the input data from the sampled latent variables:
 
 .. math::
+
     \mathbf{\hat{X}} = f_{\text{dec}}(\mathbf{z})
 
 where :math:`f_{\text{dec}}` is a neural network representing the decoder.
@@ -342,9 +344,11 @@ The VAE loss consists of two components:
 1. **Reconstruction Loss:** Measures the difference between the original and reconstructed inputs using a masked focal loss:
 
 .. math::
+    
     \mathcal{L}_{\text{recon}} = \frac{1}{|M|} \sum_{(i,j) \in M} \alpha_t (1 - p_t)^{\gamma} \log(p_t)
 
 where:
+
 - :math:`M` is the set of valid (unmasked) samples.
 - :math:`\alpha_t` is a class weight.
 - :math:`\gamma` controls the focus on hard-to-predict samples.
@@ -352,6 +356,7 @@ where:
 2. **KL Divergence:** Regularizes the learned latent distribution to be close to the prior distribution (a standard normal distribution):
 
 .. math::
+
     \mathcal{L}_{\text{KL}} = D_{\text{KL}}(q(\mathbf{z} | \mathbf{X}) \| p(\mathbf{z}))
 
 where:
@@ -362,6 +367,7 @@ where:
 The total loss is given by:
 
 .. math::
+
     \mathcal{L} = \mathcal{L}_{\text{recon}} + \beta \mathcal{L}_{\text{KL}}
 
 where :math:`\beta` is a weighting factor that balances the reconstruction and KL divergence losses.
@@ -390,35 +396,26 @@ MICE performs **sequential regression-based imputation**, where each missing val
 
 Let:
 
-- \( X = (X_1, X_2, ..., X_p) \) be the SNP dataset with missing values.
-- \( X_{-j} \) be all columns except the \( j \)th one.
+- :math:`X = (X_1, X_2, ..., X_p)` be the SNP dataset with missing values.
+- :math:`X_{-j}` be all columns except the :math:`jth` one.
 
-For each column \( X_j \):
+For each column :math:`X_j`:
 
 1. **Initialize** missing values using a simple strategy (e.g., mean imputation).
-2. **Train a regression model** \( f_j \) predicting \( X_j \) using \( X_{-j} \):
+2. **Train a regression model** :math:`f_j` predicting :math:`X_j` using :math:`X_{-j}`:
 
 .. math::
 
     X_j = f_j(X_{-j}) + \epsilon
 
-   where \( f_j \) is a regression model (e.g., **Random Forest**, **XGBoost**, **KNN**).
+where:
 
-3. **Predict missing values** in \( X_j \) using \( f_j \).
+   :math:`f_j` is a regression model (e.g., **Random Forest**, **HistGradientBoosting**).
+
+3. **Predict missing values** in :math:`X_j` using :math:`f_j`.
 4. **Repeat for all columns** and cycle multiple times (controlled by `max_iter`).
 
 The process stops when convergence is reached (i.e., imputed values stabilize across iterations).
-
-Coming Soon in PG-SUI
-----------------------
-
-The `IterativeImputer` methods are in development and will be available in future versions of PG-SUI.
-
-.. code-block:: python
-
-    knn = ImputeKNN(genotype_data=data, **kwargs)
-    rf = ImputeRandomForest(genotype_data=data, **kwargs)
-    xgb = ImputeXGBoost(genotype_data=data, **kwargs)
 
 Further Reading
 ---------------
