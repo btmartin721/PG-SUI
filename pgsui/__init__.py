@@ -1,8 +1,18 @@
 ## PG-SUI package by Bradley T. Martin and Tyler K. Chafin
 ## E-mail: evobio721@gmail.com
 
-from pgsui.impute.deterministic.imputers.ref_allele import ImputeRefAllele
+from pgsui.data_processing.containers import (
+    AutoencoderConfig,
+    HGBConfig,
+    MostFrequentConfig,
+    NLPCAConfig,
+    RefAlleleConfig,
+    RFConfig,
+    UBPConfig,
+    VAEConfig,
+)
 from pgsui.impute.deterministic.imputers.mode import ImputeMostFrequent
+from pgsui.impute.deterministic.imputers.ref_allele import ImputeRefAllele
 from pgsui.impute.supervised.imputers.hist_gradient_boosting import (
     ImputeHistGradientBoosting,
 )
@@ -11,28 +21,22 @@ from pgsui.impute.unsupervised.imputers.autoencoder import ImputeAutoencoder
 from pgsui.impute.unsupervised.imputers.nlpca import ImputeNLPCA
 from pgsui.impute.unsupervised.imputers.ubp import ImputeUBP
 from pgsui.impute.unsupervised.imputers.vae import ImputeVAE
-from pgsui.data_processing.containers import (
-    AutoencoderConfig,
-    NLPCAConfig,
-    UBPConfig,
-    VAEConfig,
-    MostFrequentConfig,
-    RefAlleleConfig,
-)
 
 __all__ = [
-    "ImputeAutoencoder",
+    "ImputeAutoencoder",  # Unsupervised imputer classes
     "ImputeVAE",
     "ImputeNLPCA",
     "ImputeUBP",
-    "ImputeRandomForest",
+    "ImputeRandomForest",  # Supervised imputer classes
     "ImputeHistGradientBoosting",
-    "ImputeRefAllele",
+    "ImputeRefAllele",  # Deterministic imputer classes
     "ImputeMostFrequent",
-    "AutoencoderConfig",
+    "AutoencoderConfig",  # Unsupervised imputer configs
     "VAEConfig",
     "NLPCAConfig",
     "UBPConfig",
-    "MostFrequentConfig",
+    "MostFrequentConfig",  # Deterministic imputer configs
     "RefAlleleConfig",
+    "RFConfig",  # Supervised imputer configs
+    "HGBConfig",
 ]
