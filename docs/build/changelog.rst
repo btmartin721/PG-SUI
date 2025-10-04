@@ -4,12 +4,14 @@ Changelog
 
 An overview of changes to **PG-SUI** by release. This file mirrors the GitHub Markdown changelog and reflects the refactor-era docs: dataclass-first configs, presets, unified scikit-learn framework-based ``fit()/transform()`` methods, CLI precedence, and updated deterministic/supervised docs.
 
-Unreleased
-----------
+1.6.2 — 2025-10-04
+------------------
 
-- HTML summary report that stitches plots, key metrics, and logs into a single artifact.
-- Add end-to-end CLI examples for multi-model radar (macro-F1, macro-PR, overall accuracy, HET-F1).
-- Expand config presets with GPU/MPS-aware training defaults.
+Changes
+^^^^^^^
+
+- Updated dependencies in ``pyproject.toml`` and ``conf.py``
+- Version bump
 
 1.6.1 — 2025-10-04
 ------------------
