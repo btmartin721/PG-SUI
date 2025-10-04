@@ -173,8 +173,7 @@ class ImputeRandomForest(BaseImputer):
             1) Encode to 0/1/2 with -9/-1 as missing.
             2) Split samples into train/test.
             3) Train IterativeImputer on train (convert missing -> NaN).
-            4) Evaluate on test **non-missing positions** (reconstruction metrics)
-            and call your original plotting stack via _make_class_reports().
+            4) Evaluate on test **non-missing positions** (reconstruction metrics) and call your original plotting stack via _make_class_reports().
 
         Returns:
             BaseImputer: self.

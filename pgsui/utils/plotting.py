@@ -57,13 +57,13 @@ class Plotting:
     Attributes:
         model_name (str): Name of the model.
         prefix (str): Prefix for the output directory.
-        output_dir (Path): Output directory for the plots.
         plot_format (Literal["pdf", "png", "jpeg", "jpg"]): Format for the plots ('pdf', 'png', 'jpeg', 'jpg').
         plot_fontsize (int): Font size for the plots.
         plot_dpi (int): Dots per inch for the plots.
         title_fontsize (int): Font size for the plot titles.
         show_plots (bool): Whether to display the plots.
-        logger (LoggerManager): Logger object for logging messages.
+        output_dir (Path): Directory where plots will be saved.
+        logger (logging.Logger): Logger instance for logging messages.
     """
 
     def __init__(
@@ -481,8 +481,10 @@ class Plotting:
         """
         y_true_1d = misc.validate_input_type(y_true_1d, return_type="array")
         y_pred_1d = misc.validate_input_type(y_pred_1d, return_type="array")
+
         if y_true_1d.ndim > 1:
             y_true_1d = y_true_1d.flatten()
+
         if y_pred_1d.ndim > 1:
             y_pred_1d = y_pred_1d.flatten()
 
@@ -497,6 +499,7 @@ class Plotting:
             display_labels = labels  # sklearn will convert to strings
 
         fig, ax = plt.subplots(1, 1, figsize=(15, 15))
+
         ConfusionMatrixDisplay.from_predictions(
             y_true=y_true_1d,
             y_pred=y_pred_1d,
@@ -528,10 +531,10 @@ class Plotting:
         This plots counts for all genotypes present in X. It supports IUPAC single-letter genotypes and integer encodings. Missing markers '-', '.', '?' are normalized to 'N'. Bars are annotated with counts and percentages.
 
         Args:
-            X: Array-like genotype matrix. Rows=loci, cols=samples (any orientation is OK). Elements are IUPAC one-letter genotypes (e.g., 'A','C','G','T','N','R',...) or integers (e.g., 0/1/2[/3]).
-            is_imputed: Whether these genotypes are imputed. Affects the title only. Defaults to False.
+            X (np.ndarray | pd.DataFrame | list | torch.Tensor): Array-like genotype matrix. Rows=loci, cols=samples (any orientation is OK). Elements are IUPAC one-letter genotypes (e.g., 'A','C','G','T','N','R',...) or integers (e.g., 0/1/2[/3]).
+            is_imputed (bool): Whether these genotypes are imputed. Affects the title only. Defaults to False.
         """
-        # --- Flatten X to a 1D Series ---
+        # Flatten X to a 1D Series
         if isinstance(X, pd.DataFrame):
             arr = X.values
         elif torch.is_tensor(X):
@@ -545,6 +548,7 @@ class Plotting:
         if s.dtype.kind in ("O", "U", "S"):  # string-like → IUPAC path
             s = s.astype(str).str.upper().replace({"-": "N", ".": "N", "?": "N"})
             x_label = "Genotype (IUPAC)"
+
             # Define canonical order: N, A/C/T/G, then IUPAC ambiguity codes.
             canonical = ["A", "C", "T", "G"]
             iupac_ambiguity = sorted(["M", "R", "W", "S", "Y", "K", "V", "H", "D", "B"])

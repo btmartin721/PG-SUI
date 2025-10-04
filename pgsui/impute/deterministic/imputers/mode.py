@@ -1,7 +1,7 @@
 # Standard library imports
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Sequence, Tuple, Union
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union
 
 # Third-party imports
 import matplotlib.pyplot as plt
@@ -18,12 +18,12 @@ from sklearn.metrics import (
 from snpio import GenotypeEncoder
 from snpio.utils.logging import LoggerManager
 
+from pgsui.data_processing.config import apply_dot_overrides, load_yaml_to_dataclass
+from pgsui.data_processing.containers import MostFrequentConfig
 from pgsui.utils.classification_viz import ClassificationReportVisualizer
 
 # Local imports
 from pgsui.utils.plotting import Plotting
-from pgsui.data_processing.config import apply_dot_overrides, load_yaml_to_dataclass
-from pgsui.data_processing.containers import MostFrequentConfig
 
 # Type checking imports
 if TYPE_CHECKING:
@@ -319,6 +319,8 @@ class ImputeMostFrequent:
     def _impute_by_population_mode(self, df_in: pd.DataFrame) -> pd.DataFrame:
         """Impute missing cells in df_in using population-specific modes.
 
+        This method imputes missing values in the provided DataFrame using population-specific modes. It fills in missing values (NaNs) with the most frequent genotype for each locus within the corresponding population. If a population-specific mode is not available for a locus, it falls back to the global mode.
+
         Args:
             df_in (pd.DataFrame): Input DataFrame with missing values as NaN.
 
@@ -343,6 +345,8 @@ class ImputeMostFrequent:
 
     def _series_mode(self, s: pd.Series) -> int:
         """Compute the mode of a pandas Series, ignoring NaNs.
+
+        This method computes the mode of a pandas Series, ignoring NaN values. If the Series is empty after removing NaNs, it returns a default value. The method ensures that the mode is one of the valid genotype values (0, 1, or 2), clamping to the default if necessary.
 
         Args:
             s (pd.Series): Input pandas Series.
@@ -417,6 +421,8 @@ class ImputeMostFrequent:
 
     def _evaluate_012_and_plot(self, y_true: np.ndarray, y_pred: np.ndarray) -> None:
         """0/1/2 zygosity report & confusion matrix.
+
+        This method generates a classification report and confusion matrix for genotypes encoded as 0 (REF), 1 (HET), and 2 (ALT). If the data is determined to be haploid (only 0 and 2 present), it folds the ALT genotype (2) into HET (1) for evaluation purposes. The method computes various performance metrics, logs the classification report, and creates visualizations of the results.
 
         Args:
             y_true (np.ndarray): True genotypes (0/1/2) for masked
@@ -494,6 +500,8 @@ class ImputeMostFrequent:
     ) -> None:
         """10-class IUPAC report & confusion matrix.
 
+        This method generates a classification report and confusion matrix for genotypes encoded as 10-class IUPAC codes (0-9). It computes various performance metrics, logs the classification report, and creates visualizations of the results.
+
         Args:
             y_true (np.ndarray): True genotypes (0-9) for masked
             y_pred (np.ndarray): Predicted genotypes (0-9) for masked
@@ -565,6 +573,8 @@ class ImputeMostFrequent:
     def _make_train_test_split(self) -> Tuple[np.ndarray, np.ndarray]:
         """Create train/test split indices.
 
+        This method creates training and testing indices based on the specified test size or provided test indices. If population-based splitting is enabled, it ensures that the test set includes samples from each population according to the specified test size.
+
         Returns:
             Tuple[np.ndarray, np.ndarray]: Arrays of train and test indices.
 
@@ -603,6 +613,8 @@ class ImputeMostFrequent:
 
     def _save_report(self, report_dict: Dict[str, float], suffix: str) -> None:
         """Save classification report dictionary as a JSON file.
+
+        This method saves the provided classification report dictionary to a JSON file in the metrics directory, appending the specified suffix to the filename.
 
         Args:
             report_dict (Dict[str, float]): The classification report dictionary to save.

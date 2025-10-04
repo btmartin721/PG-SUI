@@ -29,6 +29,7 @@ import argparse
 import ast
 import logging
 import sys
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from snpio import VCFReader
@@ -55,59 +56,6 @@ from pgsui.data_processing.containers import (
     UBPConfig,
     VAEConfig,
 )
-
-
-def _select_probe_cfg(
-    selected_models: Tuple[str, ...],
-    cfgs_by_model: Dict[str, Any],
-    args: argparse.Namespace,
-) -> Any:
-    """Pick a config object to serve as a 'probe' for shared defaults.
-
-    Preference order:
-        1) The first *selected* config-driven model with a built config.
-        2) If none were built (e.g., only legacy models selected), construct from --preset if provided; otherwise from dataclass defaults. If UBP or NLPCA appears in the selected models list, prefer that corresponding config class for the construction to keep semantics consistent with the user's model choice.
-
-    Args:
-        selected_models: Tuple of model names selected by user.
-        cfgs_by_model: Map of model name -> config object (or None for legacy).
-        args: Parsed CLI args.
-
-    Returns:
-        A config dataclass instance exposing io/train/tune/plot.
-    """
-    # 1) Take the first selected *config-driven* model that already has a config
-    for m in selected_models:
-        reg = MODEL_REGISTRY.get(m, {})
-        if reg.get("config_cls") is not None:
-            cfg = cfgs_by_model.get(m)
-            if cfg is not None:
-                return cfg
-
-    # 2) No config-driven model was selected/built. Construct a temporary one.
-    want_ubp = "ImputeUBP" in selected_models
-    want_nlpca = "ImputeNLPCA" in selected_models
-
-    # Prefer the config class that matches what the user listed, if any.
-    if want_ubp:
-        return (
-            UBPConfig.from_preset(args.preset)
-            if hasattr(args, "preset")
-            else UBPConfig()
-        )
-    if want_nlpca:
-        return (
-            NLPCAConfig.from_preset(args.preset)
-            if hasattr(args, "preset")
-            else NLPCAConfig()
-        )
-
-    # Neither UBP nor NLPCA selected (only legacy models): pick a stable default.
-    return (
-        NLPCAConfig.from_preset(args.preset)
-        if hasattr(args, "preset")
-        else NLPCAConfig()
-    )
 
 
 # ----------------------------- CLI Utilities ----------------------------- #
@@ -178,13 +126,6 @@ def _parse_overrides(pairs: list[str]) -> dict:
     return out
 
 
-def _device_to_model_arg(device_str: str) -> str:
-    """Map config train.device -> torch device string for non-config models."""
-    # Config uses: 'cpu' | 'gpu' | 'mps'
-    # Torch expects: 'cpu' | 'cuda' | 'mps'
-    return "cuda" if device_str == "gpu" else device_str
-
-
 def _args_to_cli_overrides(args: argparse.Namespace) -> dict:
     """Convert explicitly provided CLI flags into config dot-overrides."""
     overrides: dict = {}
@@ -192,6 +133,9 @@ def _args_to_cli_overrides(args: argparse.Namespace) -> dict:
     # IO / top-level controls
     if hasattr(args, "prefix") and args.prefix is not None:
         overrides["io.prefix"] = args.prefix
+    else:
+        overrides["io.prefix"] = str(Path(args.vcf).stem)
+
     if hasattr(args, "verbose"):
         overrides["io.verbose"] = bool(args.verbose)
     if hasattr(args, "n_jobs"):
@@ -237,6 +181,7 @@ def build_genotype_data(
         force_popmap=force_popmap,
         verbose=verbose,
         include_pops=include_pops if include_pops else None,
+        prefix=f"snpio_{Path(vcf_path).stem}",
     )
     logging.info("Loaded genotype data.")
     return gd
@@ -244,15 +189,16 @@ def build_genotype_data(
 
 def run_model_safely(model_name: str, builder, *, warn_only: bool = True) -> None:
     """Run model builder + fit/transform with error isolation."""
-    logging.info("▶ Running %s ...", model_name)
+    logging.info(f"▶ Running {model_name} ...")
     try:
         model = builder()
         model.fit()
-        _ = model.transform()
-        logging.info("✓ %s completed.", model_name)
+        X_imputed = model.transform()
+        logging.info(f"✓ {model_name} completed.")
+        return X_imputed
     except Exception as e:
         if warn_only:
-            logging.warning("⚠ %s failed: %s", model_name, e, exc_info=True)
+            logging.warning(f"⚠ {model_name} failed: {e}", exc_info=True)
         else:
             raise
 
@@ -293,12 +239,13 @@ def _build_effective_config_for_model(
     if hasattr(args, "preset"):
         preset_name = args.preset
         cfg = cfg_cls.from_preset(preset_name)
-        logging.info("Initialized %s from '%s' preset.", model_name, preset_name)
+        logging.info(f"Initialized {model_name} from '{preset_name}' preset.")
     else:
-        logging.info("Initialized %s from dataclass defaults (no preset).", model_name)
+        logging.info(f"Initialized {model_name} from dataclass defaults (no preset).")
 
     # 2) YAML overlays preset/defaults (boss). Ignore any 'preset' in YAML.
     yaml_path = getattr(args, "config", None)
+
     if yaml_path:
         cfg = load_yaml_to_dataclass(
             yaml_path,
@@ -307,20 +254,33 @@ def _build_effective_config_for_model(
             yaml_preset_behavior="ignore",  # 'preset' key in YAML ignored with warning
         )
         logging.info(
-            "Loaded YAML config for %s from %s (ignored 'preset' in YAML if present).",
-            model_name,
-            yaml_path,
+            f"Loaded YAML config for {model_name} from {yaml_path} (ignored 'preset' in YAML if present)."
         )
 
-    # 3) Explicit CLI flags overlay YAML (boss's boss).
+    # 3) Explicit CLI flags overlay YAML.
     cli_overrides = _args_to_cli_overrides(args)
     if cli_overrides:
         cfg = apply_dot_overrides(cfg, cli_overrides)
 
-    # 4) --set has highest precedence (supreme boss).
+    # 4) --set has highest precedence.
     user_overrides = _parse_overrides(getattr(args, "set", []))
+
     if user_overrides:
-        cfg = apply_dot_overrides(cfg, user_overrides)
+        try:
+            cfg = apply_dot_overrides(cfg, user_overrides)
+        except Exception as e:
+            if model_name in {
+                "ImputeUBP",
+                "ImputeNLPCA",
+                "ImputeAutoencoder",
+                "ImputeVAE",
+            }:
+                logging.error(
+                    f"Error applying --set overrides to {model_name} config: {e}"
+                )
+                raise
+            else:
+                pass  # non-config-driven models ignore --set
 
     return cfg
 
@@ -355,7 +315,7 @@ def _maybe_print_or_dump_configs(
             else:
                 path = f"{dump_base}.{m}.yaml"
             save_dataclass_yaml(cfg, path)
-            logging.info("Saved %s config to %s", m, path)
+            logging.info(f"Saved {m} config to {path}")
         did_io = True
 
     return did_io
@@ -604,9 +564,27 @@ def main(argv: Optional[List[str]] = None) -> int:
         "ImputeRefAllele": build_impute_refallele,
     }
 
-    logging.info("Selected models: %s", ", ".join(selected_models))
+    logging.info(f"Selected models: {', '.join(selected_models)}")
     for name in selected_models:
-        run_model_safely(name, model_builders[name], warn_only=True)
+        X_imputed = run_model_safely(name, model_builders[name], warn_only=True)
+        gd_imp = gd.copy()
+        gd_imp.snp_data = X_imputed
+
+        if name in {"ImputeUBP", "ImputeVAE", "ImputeAutoencoder", "ImputeNLPCA"}:
+            family = "Unsupervised"
+        elif name in {"ImputeMostFrequent", "ImputeRefAllele"}:
+            family = "Deterministic"
+        elif name in {"ImputeHistGradientBoosting", "ImputeRandomForest"}:
+            family = "Supervised"
+        else:
+            raise ValueError(f"Unknown model family for {name}")
+
+        prefix = getattr(args, "prefix", str(Path(vcf_path).stem))
+        pth = Path(f"{prefix}_output/{family}/imputed/{name}")
+        pth.mkdir(parents=True, exist_ok=True)
+
+        logging.info(f"Writing imputed VCF for {name} to {pth} ...")
+        gd_imp.write_vcf(pth / f"{name.lower()}_imputed.vcf.gz")
 
     logging.info("All requested models processed.")
     return 0

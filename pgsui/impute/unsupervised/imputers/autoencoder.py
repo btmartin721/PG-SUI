@@ -25,7 +25,16 @@ if TYPE_CHECKING:
 def ensure_autoencoder_config(
     config: AutoencoderConfig | dict | str | None,
 ) -> AutoencoderConfig:
-    """Return a concrete AutoencoderConfig from dataclass, dict, YAML path, or None."""
+    """Return a concrete AutoencoderConfig from dataclass, dict, YAML path, or None.
+
+    This method normalizes the configuration input for the Autoencoder imputer. It accepts a structured configuration in various formats, including a dataclass instance, a nested dictionary, a YAML file path, or None. The method processes the input accordingly and returns a concrete instance of AutoencoderConfig with all necessary fields populated.
+
+    Args:
+        config (AutoencoderConfig | dict | str | None): Structured configuration as dataclass, nested dict, YAML path, or None.
+
+    Returns:
+        AutoencoderConfig: Concrete configuration instance.
+    """
     if config is None:
         return AutoencoderConfig()
     if isinstance(config, AutoencoderConfig):
@@ -76,8 +85,10 @@ class ImputeAutoencoder(BaseNNImputer):
         *,
         config: Optional[Union["AutoencoderConfig", dict, str]] = None,
         overrides: dict | None = None,
-    ):
+    ) -> None:
         """Initialize the Autoencoder imputer with a unified config interface.
+
+        This initializer sets up the Autoencoder imputer by processing the provided configuration, initializing logging, and preparing the model and data encoder. It supports configuration input as a dataclass, nested dictionary, YAML file path, or None, with optional dot-key overrides for fine-tuning specific parameters.
 
         Args:
             genotype_data: Backing genotype data object.
@@ -158,7 +169,8 @@ class ImputeAutoencoder(BaseNNImputer):
         self.tune_infer_epochs = getattr(self.cfg.tune, "infer_epochs", 0)  # AE unused
         self.tune_patience = self.cfg.tune.patience
 
-        # Evaluate (AE ignores latent refinement knobs but we keep structure parity)
+        # Evaluate
+        # AE does not optimize latents, so these are unused / fixed
         self.eval_latent_steps = 0
         self.eval_latent_lr = 0.0
         self.eval_latent_weight_decay = 0.0
@@ -177,7 +189,9 @@ class ImputeAutoencoder(BaseNNImputer):
         self.model_params: Dict[str, Any] = {}
 
     def fit(self) -> "ImputeAutoencoder":
-        """Fit the autoencoder on 0/1/2 encoded genotypes (missing → -1).
+        """Fit the autoencoder on 0/1/2 encoded genotypes (missing → -9).
+
+        This method trains the autoencoder model using the provided genotype data. It prepares the data by encoding genotypes as 0, 1, and 2, with missing values represented as -9. The method splits the data into training and validation sets, initializes the model and training parameters, and performs training with optional hyperparameter tuning. After training, it evaluates the model on the validation set and stores the fitted model and training history.
 
         Returns:
             ImputeAutoencoder: Fitted instance.
@@ -216,7 +230,6 @@ class ImputeAutoencoder(BaseNNImputer):
             "latent_dim": self.latent_dim,
             "dropout_rate": self.dropout_rate,
             "activation": self.activation,
-            # hidden_layer_sizes are computed below
         }
 
         # Train/Val split
@@ -257,7 +270,6 @@ class ImputeAutoencoder(BaseNNImputer):
             l1_penalty=self.l1_penalty,
             return_history=True,
             class_weights=self.class_weights_,
-            # Validation+pruning parameters (AE never optimizes latents)
             X_val=self.X_val_,
             params=self.best_params_,
             prune_metric=self.tune_metric,
@@ -293,6 +305,8 @@ class ImputeAutoencoder(BaseNNImputer):
 
     def transform(self) -> np.ndarray:
         """Impute missing genotypes (0/1/2) and return IUPAC strings.
+
+        This method imputes missing genotypes in the dataset using the trained autoencoder model. It predicts the most likely genotype (0, 1, or 2) for each missing entry and fills in these values. The imputed genotypes are then decoded back to IUPAC string format for easier interpretation.
 
         Returns:
             np.ndarray: IUPAC strings of shape (n_samples, n_loci).
@@ -358,6 +372,7 @@ class ImputeAutoencoder(BaseNNImputer):
         prune_metric: str | None = None,  # "f1" | "accuracy" | "pr_macro"
         prune_warmup_epochs: int = 3,
         eval_interval: int = 1,
+        # Evaluation parameters (AE ignores latent refinement knobs)
         eval_requires_latents: bool = False,  # AE: always False
         eval_latent_steps: int = 0,
         eval_latent_lr: float = 0.0,
@@ -365,29 +380,33 @@ class ImputeAutoencoder(BaseNNImputer):
     ) -> Tuple[float, torch.nn.Module | None, list | None]:
         """Wrap the AE training loop (no latent optimizer), with Optuna pruning.
 
+        This method orchestrates the training of the autoencoder model using the provided DataLoader. It sets up the optimizer and learning rate scheduler, and executes the training loop with support for early stopping and Optuna pruning based on validation performance. The method returns the best validation loss, the best model state, and optionally the training history.
+
         Args:
-            model: Autoencoder model.
-            loader: Batches (indices, y_int) where y_int is 0/1/2; -1 for missing.
-            lr: Learning rate.
-            l1_penalty: L1 regularization coeff.
-            trial: Optuna trial for pruning (optional).
-            return_history: If True, return train loss history.
-            class_weights: Class weights tensor (on device).
-            X_val: Validation matrix (0/1/2 with -1 for missing).
-            params: Model params for evaluation.
-            prune_metric: Metric for pruning reports.
-            prune_warmup_epochs: Pruning warmup epochs.
-            eval_interval: Eval frequency (epochs).
-            eval_requires_latents: Ignored for AE (no latent inference).
-            eval_latent_steps: Unused for AE.
-            eval_latent_lr: Unused for AE.
-            eval_latent_weight_decay: Unused for AE.
+            model (torch.nn.Module): Autoencoder model.
+            loader (torch.utils.data.DataLoader): Batches (indices, y_int) where y_int is 0/1/2; -1 for missing.
+            lr (float): Learning rate.
+            l1_penalty (float): L1 regularization coeff.
+            trial (optuna.Trial | None): Optuna trial for pruning (optional).
+            return_history (bool): If True, return train loss history.
+            class_weights (torch.Tensor | None): Class weights tensor (on device).
+            X_val (np.ndarray | None): Validation matrix (0/1/2 with -1 for missing).
+            params (dict | None): Model params for evaluation.
+            prune_metric (str | None): Metric for pruning reports.
+            prune_warmup_epochs (int): Pruning warmup epochs.
+            eval_interval (int): Eval frequency (epochs).
+            eval_requires_latents (bool): Ignored for AE (no latent inference).
+            eval_latent_steps (int): Unused for AE.
+            eval_latent_lr (float): Unused for AE.
+            eval_latent_weight_decay (float): Unused for AE.
 
         Returns:
-            Tuple(best_loss, best_model, history or None).
+            Tuple[float, torch.nn.Module | None, list | None]: (best_loss, best_model, history or None).
         """
         if class_weights is None:
-            raise TypeError("Must provide class_weights.")
+            msg = "Must provide class_weights."
+            self.logger.error(msg)
+            raise TypeError(msg)
 
         # Epoch budget mirrors NLPCA config (tuning vs final)
         max_epochs = (
@@ -418,6 +437,7 @@ class ImputeAutoencoder(BaseNNImputer):
         )
         if return_history:
             return best_loss, best_model, hist
+
         return best_loss, best_model, None
 
     def _execute_training_loop(
@@ -436,6 +456,7 @@ class ImputeAutoencoder(BaseNNImputer):
         prune_metric: str | None = None,
         prune_warmup_epochs: int = 3,
         eval_interval: int = 1,
+        # Evaluation parameters (AE ignores latent refinement knobs)
         eval_requires_latents: bool = False,  # AE: False
         eval_latent_steps: int = 0,
         eval_latent_lr: float = 0.0,
@@ -443,8 +464,29 @@ class ImputeAutoencoder(BaseNNImputer):
     ) -> Tuple[float, torch.nn.Module, list]:
         """Train AE with focal CE (gamma warm/ramp) + early stopping & pruning.
 
+        This method executes the training loop for the autoencoder model, performing one epoch at a time. It computes the focal cross-entropy loss while ignoring masked (missing) values and applies L1 regularization if specified. The method incorporates early stopping based on validation performance and supports Optuna pruning to terminate unpromising trials early. It returns the best validation loss, the best model state, and optionally the training history.
+
+        Args:
+            loader (torch.utils.data.DataLoader): Batches (indices, y_int) where y_int is 0/1/2; -1 for missing.
+            optimizer (torch.optim.Optimizer): Optimizer.
+            scheduler (torch.optim.lr_scheduler._LRScheduler): LR scheduler.
+            model (torch.nn.Module): Autoencoder model.
+            l1_penalty (float): L1 regularization coeff.
+            trial (optuna.Trial | None): Optuna trial for pruning (optional).
+            return_history (bool): If True, return train loss history.
+            class_weights (torch.Tensor): Class weights tensor (on device).
+            X_val (np.ndarray | None): Validation matrix (0/1/2 with -1 for missing).
+            params (dict | None): Model params for evaluation.
+            prune_metric (str | None): Metric for pruning reports.
+            prune_warmup_epochs (int): Pruning warmup epochs.
+            eval_interval (int): Eval frequency (epochs).
+            eval_requires_latents (bool): Ignored for AE (no latent inference).
+            eval_latent_steps (int): Unused for AE.
+            eval_latent_lr (float): Unused for AE.
+            eval_latent_weight_decay (float): Unused for AE.
+
         Returns:
-            Tuple(best_loss, best_model, history).
+            Tuple[float, torch.nn.Module, list]: Best validation loss, best model, and training history.
         """
         best_loss = float("inf")
         best_model = None
@@ -493,7 +535,7 @@ class ImputeAutoencoder(BaseNNImputer):
                 self.logger.info(f"Early stopping at epoch {epoch + 1}.")
                 break
 
-            # ---- Optuna report/prune on VALIDATION metric ----
+            # Optuna report/prune on validation metric
             if (
                 trial is not None
                 and X_val is not None
@@ -597,6 +639,8 @@ class ImputeAutoencoder(BaseNNImputer):
         return_proba: bool = False,
     ) -> Tuple[np.ndarray, np.ndarray] | np.ndarray:
         """Predict 0/1/2 labels (and probabilities) from masked inputs.
+
+        This method generates predictions from the trained autoencoder model for the provided input data. It processes the input data, performs a forward pass through the model, and computes the predicted genotype labels (0, 1, or 2) along with their associated probabilities if requested.
 
         Args:
             model (torch.nn.Module): Trained model.
@@ -748,8 +792,10 @@ class ImputeAutoencoder(BaseNNImputer):
     def _objective(self, trial: optuna.Trial) -> float:
         """Optuna objective for AE; mirrors NLPCA study driver without latents.
 
+        This method defines the objective function for hyperparameter tuning using Optuna. It samples hyperparameters, prepares the training and validation data, builds and trains the autoencoder model, and evaluates its performance on the validation set. The method returns the value of the tuning metric to be maximized.
+
         Args:
-            trial: Optuna trial.
+            trial (optuna.Trial): Optuna trial.
 
         Returns:
             float: Value of the tuning metric (maximize).
@@ -793,7 +839,7 @@ class ImputeAutoencoder(BaseNNImputer):
             return metrics[self.tune_metric]
 
         except Exception as e:
-            # Keep sweeps moving
+            # Keep sweeps moving if a trial fails
             raise optuna.exceptions.TrialPruned(f"Trial failed with error: {e}")
 
     def _sample_hyperparameters(

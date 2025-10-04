@@ -1,445 +1,446 @@
 Tutorial: Implementing New Imputation Models
 ============================================
 
-This document provides a step-by-step guide to implementing a new model using the base class `BaseNNImputer`. The guide is structured to help you define the model architecture, configure the model parameters, and integrate it into the existing imputation framework.
+This guide shows how to add a new imputation model that conforms to PG-SUI's
+refactored architecture:
+
+- **Typed dataclass configuration** (``*Config``) with presets and optional dot-key overrides
+- **Instantiate → fit() → transform()** contract (no arguments to ``fit``/``transform``)
+- **BaseNNImputer** wrapper that manages IO, encoding/decoding, training loops, tuning, and plotting
+- **Objective function** compatible with Optuna tuning
+- **Top-level API imports** (``from pgsui import ...``), consistent with existing models (see ``ImputeNLPCA`` and ``NLPCAModel``)
 
 Prerequisites
 -------------
 
-- Familiarity with PyTorch for defining and training neural network models.
-- Knowledge of genotype data encoding and missing value handling.
-- Understanding of the `BaseNNImputer` class and its methods.
+- PyTorch fundamentals (``torch.nn.Module``, optimizers, schedulers)
+- SNP genotype encodings (0/1/2 with -9 or -1 for missing; IUPAC decode/encode via SNPio)
+- Familiarity with ``BaseNNImputer`` life-cycle and helper methods
 
-Step 1: Define the Model Architecture
+Model Development Overview
+--------------------------
+
+A new model requires **three parts**:
+
+1. **A config dataclass**: ``MyNewModelConfig`` (typed, preset-aware)
+2. **A PyTorch module**: ``MyNewDecoder`` (or encoder-decoder) with a clearly shaped output
+3. **An imputer wrapper**: ``ImputeMyNewModel(BaseNNImputer)`` that plugs your module into PG-SUI's training/tuning/eval pipeline
+
+.. note::
+
+   Follow this contract strictly:
+   ``imputer = ImputeX(genotype_data=gd, config=SomeConfig.from_preset("balanced")); imputer.fit(); X_imp = imputer.transform()``
+
+Step 0 — Create a Config Dataclass
+----------------------------------
+
+Define a typed config that mirrors the structure used by existing models (``io``, ``model``, ``train``, ``tune``, ``evaluate``, ``plot``) and provides ``from_preset`` plus optional dot-key overrides.
+
+.. code-block:: python
+
+   from __future__ import annotations
+   from dataclasses import dataclass, field, asdict
+   from typing import Any, Dict, Literal
+
+   from pgsui.data_processing.containers import (
+       IOConfig, TrainConfig, TuneConfig, EvalConfig, PlotConfig, ModelConfig
+   )
+   from pgsui.data_processing.config import apply_dot_overrides
+
+   @dataclass
+   class MyNewModelConfig:
+       """Top-level configuration for ImputeMyNewModel."""
+       io: IOConfig = field(default_factory=IOConfig)
+       model: ModelConfig = field(default_factory=ModelConfig)
+       train: TrainConfig = field(default_factory=TrainConfig)
+       tune: TuneConfig = field(default_factory=TuneConfig)
+       evaluate: EvalConfig = field(default_factory=EvalConfig)
+       plot: PlotConfig = field(default_factory=PlotConfig)
+
+       @classmethod
+       def from_preset(
+           cls, preset: Literal["fast", "balanced", "thorough"] = "balanced"
+       ) -> "MyNewModelConfig":
+           if preset not in {"fast", "balanced", "thorough"}:
+               raise ValueError(f"Unknown preset: {preset}")
+           cfg = cls()
+
+           # Common defaults
+           cfg.io.verbose = True
+           cfg.train.validation_split = 0.2
+           cfg.model.hidden_activation = "relu"
+           cfg.model.layer_schedule = "pyramid"
+           cfg.model.latent_init = "random"
+
+           if preset == "fast":
+               cfg.model.latent_dim = 4
+               cfg.model.num_hidden_layers = 1
+               cfg.model.dropout_rate = 0.10
+               cfg.train.batch_size = 128
+               cfg.train.learning_rate = 1e-3
+               cfg.tune.enabled = False
+           elif preset == "balanced":
+               cfg.model.latent_dim = 8
+               cfg.model.num_hidden_layers = 2
+               cfg.model.dropout_rate = 0.20
+               cfg.train.batch_size = 128
+               cfg.train.learning_rate = 8e-4
+               cfg.tune.enabled = True
+               cfg.tune.fast = True
+               cfg.tune.n_trials = 100
+           else:  # thorough
+               cfg.model.latent_dim = 16
+               cfg.model.num_hidden_layers = 3
+               cfg.model.dropout_rate = 0.30
+               cfg.train.batch_size = 64
+               cfg.train.learning_rate = 6e-4
+               cfg.tune.enabled = True
+               cfg.tune.fast = False
+               cfg.tune.n_trials = 250
+
+           return cfg
+
+       def apply_overrides(self, overrides: Dict[str, Any] | None) -> "MyNewModelConfig":
+           if not overrides:
+               return self
+           return apply_dot_overrides(self, overrides)
+
+       def to_dict(self) -> Dict[str, Any]:
+           return asdict(self)
+
+Step 1 — Implement the PyTorch Module
 -------------------------------------
 
-You need to create a new model class that defines the architecture of your model. The model should inherit from `torch.nn.Module` and implement the following methods:
-
-1. **`__init__` method:** Define the network architecture, including layers, activations, and dropout if applicable.
-2. **`forward` method:** Define the forward pass that computes the output given an input.
-3. **`compute_loss` method:** Define the loss function to compute the loss between predictions and targets.
-
-Example:
+The module predicts per-SNP class logits. Match shapes used by your wrapper (e.g., ``(batch, n_features, n_classes)``). Keep the API similar to ``NLPCAModel``.
 
 .. code-block:: python
 
-    import torch
-    from torch import nn
+   from typing import List, Literal
+   import numpy as np
+   import torch
+   import torch.nn as nn
 
-    from pgsui.impute.unsupervised.loss_functions import MaskedFocalLoss
+   class MyNewDecoder(nn.Module):
+       """Minimal decoder predicting per-SNP logits."""
+       def __init__(
+           self,
+           n_features: int,
+           num_classes: int = 3,
+           latent_dim: int = 8,
+           hidden_layer_sizes: List[int] | np.ndarray = (128, 64),
+           dropout_rate: float = 0.2,
+           activation: Literal["relu", "elu", "selu", "leaky_relu"] = "relu",
+       ):
+           super().__init__()
+           if isinstance(hidden_layer_sizes, np.ndarray):
+               hidden_layer_sizes = hidden_layer_sizes.tolist()
+           act = self._resolve_activation(activation)
 
-    class MyNewModel(nn.Module):
-        def __init__(self, n_features, latent_dim, hidden_layer_sizes, dropout_rate, activation):
-            super(MyNewModel, self).__init__()
-            
-            layers = nn.ModuleList()
+           layers: list[nn.Module] = []
+           in_dim = latent_dim
+           for h in hidden_layer_sizes:
+               layers += [nn.Linear(in_dim, h), nn.BatchNorm1d(h), nn.Dropout(dropout_rate), act]
+               in_dim = h
 
-            # Build hidden layers
-            input_dim = n_features
-            for hidden_size in hidden_layer_sizes:
-                layers.append(nn.Linear(input_dim, hidden_size))
-                layers.append(nn.ReLU()) # or any other torch activation.
-                layers.append(nn.Dropout(dropout_rate))
-                input_dim = hidden_size
+           layers += [nn.Linear(in_dim, n_features * num_classes)]
+           self.decoder = nn.Sequential(*layers)
+           self.n_features = n_features
+           self.num_classes = num_classes
 
-            # Latent layer
-            layers.append(nn.Linear(input_dim, latent_dim))
+       def _resolve_activation(self, name: str) -> nn.Module:
+           return {"relu": nn.ReLU(), "elu": nn.ELU(), "selu": nn.SELU(), "leaky_relu": nn.LeakyReLU()}[name]
 
-            self.encoder = nn.Sequential(*layers)
+       def forward(self, z: torch.Tensor) -> torch.Tensor:
+           # Output shape: (batch, n_features, n_classes)
+           logits = self.decoder(z)
+           return logits.view(-1, self.n_features, self.num_classes)
 
-            decoder_layer_sizes = list(reversed(hidden_layer_sizes))
+Step 2 — Write the Imputer Wrapper
+----------------------------------
 
+Mirror the pattern in ``ImputeNLPCA``:
 
-            decoder_layers = nn.ModuleList()
-            input_dim = latent_dim
-            for hidden_size in decoder_layer_sizes:
-                decoder_layers.append(nn.Linear(input_dim, hidden_size))
-                decoder_layers.append(nn.ReLU())
-                decoder_layers.append(nn.Dropout(dropout_rate))
-                input_dim = hidden_size
-
-            decoder_layers.append(nn.Linear(decoder_layer_sizes[-1], n_features))
-
-            self.decoder = nn.Sequential(*decoder_layers)
-
-        def forward(self, x):
-            z = self.encoder(x)
-            reconstruction = self.decoder(z)
-            return reconstruction
-
-        def compute_loss(
-            self,
-            y: torch.Tensor,
-            outputs: torch.Tensor,
-            mask: torch.Tensor | None = None,
-            class_weights: torch.Tensor | None = None,
-        ) -> torch.Tensor:
-            """Compute the masked focal loss between predictions and targets.
-
-            This method computes the masked focal loss between the model predictions and the ground truth labels. The mask tensor is used to ignore certain values (< 0), and class weights can be provided to balance the loss.
-
-            Args:
-                y (torch.Tensor): Ground truth labels of shape (batch, seq).
-                outputs (torch.Tensor): Model outputs.
-                mask (torch.Tensor, optional): Mask tensor to ignore certain values. Default is None.
-                class_weights (torch.Tensor, optional): Class weights for the loss. Default is None.
-
-            Returns:
-                torch.Tensor: Computed focal loss value.
-            """
-            if class_weights is None:
-                class_weights = torch.ones(self.num_classes, device=y.device)
-
-            if mask is None:
-                mask = torch.ones_like(y, dtype=torch.bool)
-
-            criterion = MaskedFocalLoss(alpha=class_weights, gamma=self.gamma)
-            reconstruction_loss = criterion(outputs, y, valid_mask=mask)
-            return reconstruction_loss
-
-
-The model should define the architecture of the encoder and decoder networks, including the hidden layers, latent layer, and activation functions. The `forward` method should compute the output given an input tensor `x`.
-
-Additionally, you must define your loss function within the model class to handle specific requirements. For example, the above `compute_loss` method computes the masked focal loss between the model predictions and the ground truth labels.
-            
-
-Step 2: Implement the Model Wrapper
------------------------------------
-
-Create a new class that wraps the model architecture. The wrapper should inherit from `BaseNNImputer` and at least implement the following methods:
-
-1. **`fit` method:** Fit the model using the provided data.
-2. **`transform` method:** Transform and impute the data using the trained model.
-3. **`_objective` method:** Define the objective function for hyperparameter tuning (if applicable).
-4. **`_set_best_params` method:** Set the best hyperparameters after tuning.
-5. **`__init__` method:** Initialize the model wrapper and set model-specific parameters.
-
-The model wrapper class should define the model-specific parameters, such as latent dimension, hidden layer sizes, dropout rate, and activation function. The class should also set the model name and model-specific parameters in the `__init__` method.
-
-Other than the required methods, the following class attributes should be defined in the model wrapper class:
-
-- `self.Model`: The model class defined in Step 1.
-- `self.model_name`: A string representing the name of the model.
-- `self.model_params`: A dictionary containing the model-specific parameters.
-- `self.best_params_`: A dictionary containing the best hyperparameters after tuning.
-- `self.num_classes_`: An integer representing the number of classes in the data.
-- `self.num_features_`: An integer representing the number of features in the data.
-- `self.class_weights_`: A tensor containing the class weights for the loss function.
-- `self.activate_`: A string representing the activation function for the final layer (e.g., 'softmax' or 'sigmoid').
-- `self.best_loss_`: A float representing the best loss value after training.
-- `self.model_`: The trained model instance.
-- `self.history_`: A dictionary containing the training history (e.g., loss values over epochs).
-- `self.metrics_`: A dictionary containing the evaluation metrics after training.
-- `self.tune`: A boolean indicating whether to perform hyperparameter tuning.
-- `self.tune_n_trials`: An integer representing the number of trials for hyperparameter tuning.
-- `self.n_jobs`: An integer representing the number of parallel jobs for hyperparameter tuning.
-- `self.tune_metric`: A string representing the metric to optimize during hyperparameter tuning.
-- `self.tune_save_db`: A boolean indicating whether to save the tuning results to a database.
-
-Example:
+- Normalize a config (dataclass, dict, or YAML path) → concrete config
+- Initialize logging via ``LoggerManager``
+- Prepare data via ``GenotypeEncoder`` (0/1/2; -1 for missing)
+- Build/train/evaluate the model
+- Provide ``fit(self)`` and ``transform(self)`` with **no arguments**
 
 .. code-block:: python
 
-    from pgsui.impute.unsupervised.base import BaseNNImputer
-    from my_module.my_new_model import MyNewModel
+   from __future__ import annotations
+   from typing import Any, Dict
+   import numpy as np
+   import torch
+   import torch.nn.functional as F
+   from sklearn.exceptions import NotFittedError
+   from sklearn.model_selection import train_test_split
 
-    class ImputeMyNewModel(BaseNNImputer):
-        def __init__(self, genotype_data, **kwargs):
+   from snpio.analysis.genotype_encoder import GenotypeEncoder
+   from snpio.utils.logging import LoggerManager
+   from pgsui.impute.unsupervised.base import BaseNNImputer
+   from pgsui.data_processing.config import load_yaml_to_dataclass, apply_dot_overrides
 
-            self.model_name = "ImputeUBP"
-            self.is_backprop = self.model_name in {"ImputeUBP", "ImputeNLPCA"}
+   # -- Config normalization helper (like ensure_nlpca_config) -----------------
+   def ensure_my_config(config: MyNewModelConfig | dict | str | None) -> MyNewModelConfig:
+       if config is None:
+           return MyNewModelConfig.from_preset("balanced")
+       if isinstance(config, MyNewModelConfig):
+           return config
+       if isinstance(config, str):
+           return load_yaml_to_dataclass(
+               config, MyNewModelConfig, preset_builder=MyNewModelConfig.from_preset
+           )
+       if isinstance(config, dict):
+           base = MyNewModelConfig.from_preset(config.get("preset", "balanced"))
+           return apply_dot_overrides(base, _flatten_dict(config))
+       raise TypeError("config must be a MyNewModelConfig, dict, YAML path, or None.")
 
-            kwargs = {"prefix": prefix, "debug": debug, "verbose": verbose >= 1}
-            logman = LoggerManager(__name__, **kwargs)
-            self.logger = logman.get_logger()
+   def _flatten_dict(d: dict, prefix: str = "", out: dict | None = None) -> dict:
+       out = out or {}
+       for k, v in d.items():
+           kk = f"{prefix}.{k}" if prefix else k
+           if isinstance(v, dict):
+               _flatten_dict(v, kk, out)
+           else:
+               out[kk] = v
+       return out
 
-            super().__init__(
-                prefix=prefix,
-                output_dir=output_dir,
-                device=model_device,
-                verbose=verbose,
-                debug=debug,
-            )
-            self.Model = MyNewModel
-            self.model_name = "ImputeMyNewModel"
+   class ImputeMyNewModel(BaseNNImputer):
+       """Impute missing 0/1/2 genotypes using MyNewDecoder."""
 
-            # Model-specific parameters
-            self.latent_dim = kwargs.get('model_latent_dim', 2)
-            self.hidden_layer_sizes = kwargs.get('model_hidden_layer_sizes', [128, 64])
-            self.dropout_rate = kwargs.get('model_dropout_rate', 0.2)
-            self.activation = kwargs.get('model_hidden_activation', 'relu')
+       def __init__(
+           self,
+           genotype_data,
+           *,
+           config: MyNewModelConfig | dict | str | None = None,
+           overrides: dict | None = None,
+       ):
+           self.model_name = "ImputeMyNewModel"
+           self.genotype_data = genotype_data
 
-            # Set other necessary kwargs
+           cfg = ensure_my_config(config)
+           if overrides:
+               cfg = apply_dot_overrides(cfg, overrides)
+           self.cfg = cfg
 
-            # Prepare model parameters dictionary
-            self.model_params = {
-                "n_features": genotype_data.shape[1],
-                "latent_dim": self.latent_dim,
-                "hidden_layer_sizes": self.hidden_layer_sizes,
-                "dropout_rate": self.dropout_rate,
-                "activation": self.activation,
-            }
+           logman = LoggerManager(
+               __name__,
+               prefix=self.cfg.io.prefix,
+               debug=self.cfg.io.debug,
+               verbose=self.cfg.io.verbose,
+           )
+           self.logger = logman.get_logger()
 
-        def fit(self, X: np.ndarray | pd.DataFrame | list | Tensor, y: Any | None = None):
-            """Fit the model using the input data.
+           super().__init__(
+               prefix=self.cfg.io.prefix,
+               device=self.cfg.train.device,
+               verbose=self.cfg.io.verbose,
+               debug=self.cfg.io.debug,
+           )
 
-            This method fits the model using the input data. The ``transform`` method then transforms the input data and imputes the missing values using the trained model.
+           self.Model = MyNewDecoder
+           self.pgenc = GenotypeEncoder(genotype_data)
+           self.seed = self.cfg.io.seed
+           self.rng = np.random.default_rng(self.seed)
 
-            Args:
-                X (numpy.ndarray): Input data to fit the model.
-                y (None): Ignored. Only for compatibility with the scikit-learn API.
+           # Cache common attrs from config
+           self.latent_dim = self.cfg.model.latent_dim
+           self.dropout_rate = self.cfg.model.dropout_rate
+           self.num_hidden_layers = self.cfg.model.num_hidden_layers
+           self.hidden_activation = self.cfg.model.hidden_activation
+           self.batch_size = self.cfg.train.batch_size
+           self.learning_rate = self.cfg.train.learning_rate
+           self.validation_split = self.cfg.train.validation_split
+           self.epochs = self.cfg.train.max_epochs
+           self.early_stop_gen = self.cfg.train.early_stop_gen
+           self.min_epochs = self.cfg.train.min_epochs
 
-            Returns:
-                self: Returns an instance of the class.
-            """
-            self.logger.info(f"Fitting the {self.model_name} model...")
+           # Tuning flags
+           self.tune = self.cfg.tune.enabled
+           self.tune_fast = self.cfg.tune.fast
+           self.n_trials = self.cfg.tune.n_trials
+           self.tune_metric = self.cfg.tune.metric
 
-            # Activation for final layer.
-            # Currently, only 'softmax' is supported.
-            self.activate_ = "softmax"
+           # Plotting
+           self.plot_dpi = self.cfg.plot.dpi
+           self.show_plots = self.cfg.plot.show
 
-            # Validate input and unify missing indicators
-            # Ensure NaNs are replaced by -1
-            X = validate_input_type(X)
-            mask = np.logical_or(X < 0, np.isnan(X))
-            X = X.astype(float)
+           # Filled in at fit()
+           self.num_classes_ = None
+           self.num_features_ = None
+           self.class_weights_ = None
+           self.best_params_: Dict[str, Any] = {}
+           self.is_fit_ = False
 
-            # Count number of classes for activation.
-            # If 4 classes, use sigmoid, else use softmax.
-            # Ignore missing values (-9) in counting of classes.
-            # 1. Compute the number of distinct classes
-            self.num_classes_ = len(np.unique(X[X >= 0 & ~mask]))
-            self.model_params["num_classes"] = self.num_classes_
+       def fit(self) -> "ImputeMyNewModel":
+           """Train the model on 0/1/2 data (with -1 for missing)."""
+           self.logger.info(f"Fitting {self.model_name}...")
 
-            # 2. Compute class weights
-            self.class_weights_ = self.compute_class_weights(
-                X,
-                use_log_scale=self.weights_log_scale,
-                alpha=self.weights_alpha,
-                normalize=self.weights_normalize,
-                temperature=self.weights_temperature,
-                max_weight=20.0,
-                min_weight=0.01,
-            )
+           # Prepare 0/1/2 matrix and mark missing as -1
+           X = self.pgenc.genotypes_012.astype(np.int64, copy=True)
+           X[X < 0] = -1
+           n_samples, self.num_features_ = X.shape
 
-            # For final dictionary of hyperparameters
-            self.best_params_ = self.model_params
+           # Determine classes (diploid: 3; haploid collapses to 2)
+           is_haploid = self.pgenc.is_haploid  # if available; else infer
+           self.num_classes_ = 2 if is_haploid else 3
+           if is_haploid:
+               X[X == 2] = 1  # map {0,2} -> {0,1}
 
-            self.tt_, self.sim_, self.plotter_, self.scorers_ = self.init_transformers()
+           # Split
+           idx = np.arange(n_samples)
+           tr, te = train_test_split(idx, test_size=self.validation_split, random_state=self.seed)
+           X_train, X_val = X[tr], X[te]
+           self.train_idx_, self.test_idx_ = tr, te
 
-            Xsim, missing_masks = self.sim_.fit_transform(X)
-            self.original_missing_mask_ = missing_masks["original"]
-            self.sim_missing_mask_ = missing_masks["simulated"]
-            self.all_missing_mask = missing_masks["all"]
+           # Class weights on train
+           self.class_weights_ = self._class_weights_from_zygosity(X_train)
 
-            # Encode the data.
-            Xsim_enc = self.tt_.fit_transform(Xsim)
+           # Hidden sizes from config helper on Base (mirrors NLPCA flow)
+           hidden = self._compute_hidden_layer_sizes(
+               n_inputs=self.latent_dim,
+               n_outputs=self.num_features_ * self.num_classes_,
+               n_samples=len(tr),
+               n_hidden=self.num_hidden_layers,
+               alpha=getattr(self.cfg.model, "layer_scaling_factor", 4.0),
+               schedule=self.cfg.model.layer_schedule,
+           )
 
-            self.num_features_ = Xsim_enc.shape[1]
-            self.model_params["n_features"] = self.num_features_
+           self.best_params_ = {
+               "n_features": self.num_features_,
+               "num_classes": self.num_classes_,
+               "latent_dim": self.latent_dim,
+               "hidden_layer_sizes": hidden,
+               "dropout_rate": self.dropout_rate,
+               "activation": self.hidden_activation,
+           }
 
-            self.Xsim_enc_ = Xsim_enc
-            self.X_ = X
+           # Build model and train
+           model = self.build_model(self.Model, self.best_params_)
+           model.apply(self.initialize_weights)
 
-            if self.tune:
-                self.tune_hyperparameters()
+           loader = self._get_label_loader(X_train)  # batch of (indices, labels)
+           loss, self.model_, self.history_, _ = self._train_and_validate_model(
+               model=model,
+               loader=loader,
+               lr=self.learning_rate,
+               l1_penalty=getattr(self.cfg.train, "l1_penalty", 0.0),
+               return_history=True,
+               latent_vectors=self._create_latent_space(
+                   {"latent_dim": self.latent_dim}, len(X_train), X_train, self.cfg.model.latent_init
+               ),
+               lr_input_factor=getattr(self.cfg.train, "lr_input_factor", 1.0),
+               class_weights=torch.tensor(self.class_weights_, dtype=torch.float32, device=self.device),
+               X_val=X_val,
+               params=self.best_params_,
+               prune_metric=self.tune_metric,
+               prune_warmup_epochs=5,
+               eval_interval=1,
+               eval_latent_steps=0,
+               eval_latent_lr=0.0,
+               eval_latent_weight_decay=0.0,
+           )
 
-            self.loader_ = self.get_data_loaders(Xsim_enc, X, self.latent_dim)
+           self._evaluate_model(X_val, self.model_, self.best_params_)
+           self.is_fit_ = True
+           return self
 
-            self.best_loss_, self.model_, self.history_ = self.train_final_model(
-                self.loader_
-            )
-            self.metrics_ = self.evaluate_model(
-                objective_mode=False, trial=None, model=self.model_, loader=self.loader_
-            )
-            self.plotter_.plot_history(self.history_)
+       def transform(self) -> np.ndarray:
+           """Impute the full dataset and return IUPAC strings."""
+           if not self.is_fit_:
+               raise NotFittedError("Call fit() before transform().")
 
-            return self
+           X_all = self.pgenc.genotypes_012.astype(np.int64, copy=True)
+           X_all[X_all < 0] = -1
 
-        def transform(self, X: np.ndarray | pd.DataFrame | list | Tensor) -> np.ndarray:
-            """Transform and impute the data using the trained model.
+           latents = self._optimize_latents_for_inference(
+               X_all, self.model_, self.best_params_, inference_epochs=200
+           )
+           labels, _ = self._predict(self.model_, latents)
 
-            This method transforms the input data and imputes the missing values using the trained model. The input data is transformed using the transformers and then imputed using the trained model. The ``fit()`` method must be called before calling this method.
+           miss = X_all == -1
+           X_imp = X_all.copy()
+           X_imp[miss] = labels[miss]
 
-            Args:
-                X (numpy.ndarray): Data to transform and impute.
+           return self.pgenc.decode_012(X_imp)
 
-            Returns:
-                numpy.ndarray: Transformed and imputed data.
-            """
-            Xenc = self.tt_.transform(validate_input_type(X))
-            X_imputed = self.impute(Xenc, self.model_)
+       # --- Minimal helpers reused from NLPCA flow ---------------------------
+       def _get_label_loader(self, y: np.ndarray):
+           y_tensor = torch.from_numpy(y).long().to(self.device)
+           ds = torch.utils.data.TensorDataset(torch.arange(len(y_tensor), device=self.device), y_tensor)
+           return torch.utils.data.DataLoader(ds, batch_size=self.batch_size, shuffle=True)
 
-            self.plotter_.plot_gt_distribution(X, is_imputed=False)
-            self.plotter_.plot_gt_distribution(X_imputed, is_imputed=True)
+Step 3 — (Optional) Hyperparameter Tuning
+-----------------------------------------
 
-            return X_imputed
+If your model supports Optuna tuning, mirror the ``ImputeNLPCA`` pattern:
 
-        def _objective(self, trial: optuna.Trial, Model: torch.nn.Module) -> float:
-            """Optimized Objective function for Optuna.
+- ``_objective(self, trial)`` samples hyperparameters → trains quickly → returns a scalar metric (e.g., ``pr_macro``)
+- ``_sample_hyperparameters(self, trial)`` returns a dictionary with both raw choices and a ``model_params`` payload
+- ``_set_best_params(self, best_params)`` converts the winning trial into the final ``model_params``
 
-            This method is used as the objective function for hyperparameter tuning using Optuna. It is used to optimize the hyperparameters of the model.
+Keep the validation logic inside the wrapper so you can reuse PG-SUI's scorers/plotters.
 
-            Args:
-                trial (optuna.Trial): Optuna trial object.
-                Model (torch.nn.Module): Model class to instantiate.
+Registering the Model (Top-Level API & CLI)
+-------------------------------------------
 
-            Returns:
-                float: The metric value to optimize. Which metric to use is based on the `tune_metric` attribute. Defaults to 'pr_macro', which works well with imbalanced classes.
-            """
-            # Efficient hyperparameter sampling
-            latent_dim = trial.suggest_int("latent_dim", 2, 4)
-            dropout_rate = trial.suggest_float("dropout_rate", 0.0, 0.5, step=0.05)
-            learning_rate = trial.suggest_float("learning_rate", 1e-5, 1e-3, log=True)
-            num_hidden_layers = trial.suggest_int("num_hidden_layers", 1, 10)
-            hidden_layer_sizes = [
-                int(x) for x in np.linspace(16, 256, num_hidden_layers)[::-1]
-            ]
-            gamma = trial.suggest_float("gamma", 0.025, 5.0, step=0.025)
-            activation = trial.suggest_categorical(
-                "activation", ["relu", "elu", "selu", "leaky_relu"]
-            )
-
-            # Model parameters
-            model_params = {
-                "n_features": self.num_features_,
-                "num_classes": self.num_classes_,
-                "latent_dim": latent_dim,
-                "dropout_rate": dropout_rate,
-                "hidden_layer_sizes": hidden_layer_sizes,
-                "activation": activation,
-                "gamma": gamma,
-            }
-
-            # Build and initialize model
-            model = self.build_model(Model, model_params)
-            model.apply(self.initialize_weights)
-
-            train_loader = self.get_data_loaders(self.Xsim_enc_, self.X_, latent_dim)
-
-            try:
-                # Train and validate the model
-                _, model = self.train_and_validate_model(
-                    model=model,
-                    loader=train_loader,
-                    l1_penalty=self.l1_penalty,
-                    lr=learning_rate,
-                    trial=trial,
-                )
-
-                if model is None:
-                    self.logger.warning(
-                        f"Trial {trial.number} pruned due to failed model training. Model was NoneType."
-                    )
-                    raise optuna.exceptions.TrialPruned()
-
-                # Efficient evaluation
-                metrics = self.evaluate_model(
-                    objective_mode=True, trial=trial, model=model, loader=train_loader
-                )
-
-                if self.tune_metric not in metrics:
-                    msg = f"Invalid tuning metric: {self.tune_metric}"
-                    self.logger.error(msg)
-                    raise KeyError(msg)
-
-                return metrics[self.tune_metric]
-
-            except Exception as e:
-                self.logger.warning(f"Trial {trial.number} pruned due to exception: {e}")
-                raise optuna.exceptions.TrialPruned()
-
-            finally:
-                self.reset_weights(model.phase1_decoder)
-                self.reset_weights(model.phase23_decoder)
-                self.reset_weights(model)
-
-        def _set_best_params(self, best_params: dict) -> dict:
-            """Set the best hyperparameters.
-
-            This method sets the best hyperparameters for the model after tuning.
-
-            Args:
-                best_params (dict): Dictionary of best hyperparameters.
-
-            Returns:
-                dict: Dictionary of best hyperparameters. The best hyperparameters are set as attributes of the class.
-            """
-            # Load best hyperparameters
-            self.latent_dim = best_params["latent_dim"]
-            self.hidden_layer_sizes = np.linspace(
-                16, 256, best_params["num_hidden_layers"]
-            ).astype(int)[::-1]
-            self.dropout_rate = best_params["dropout_rate"]
-            self.lr_ = best_params["learning_rate"]
-            self.gamma = best_params["gamma"]
-
-            best_params_ = {
-                "n_features": self.num_features_,
-                "latent_dim": self.latent_dim,
-                "hidden_layer_sizes": self.hidden_layer_sizes,
-                "dropout_rate": self.dropout_rate,
-                "activation": self.activation,
-                "gamma": self.gamma,
-            }
-
-            return best_params_
-
-The `ImputeMyNewModel` class inherits from `BaseNNImputer` and defines the model-specific parameters such as latent dimension, hidden layer sizes, dropout rate, and activation function. The `fit` method initializes and trains the model, while the `transform` method imputes the missing values in the input data. The `_objective` method defines the objective function for hyperparameter tuning using Optuna. The `_set_best_params` method sets the best hyperparameters after tuning.
-
-Step 3: Configure and Train the Model
--------------------------------------
-
-You can configure the new model by setting the appropriate parameters during instantiation and call the `fit` and `transform` methods for training and prediction.
-
-Example:
+Expose your model and config in the top-level package so users can import them cleanly:
 
 .. code-block:: python
 
-    from snpio import VCFReader, GenotypeEncoder
+   # pgsui/__init__.py
+   from .impute.unsupervised.imputers.my_new_model import ImputeMyNewModel, MyNewModelConfig
+   __all__ = [..., "ImputeMyNewModel", "MyNewModelConfig"]
 
-    # Load genotype data
-    genotype_data = VCFReader(filename="example.vcf", popmapfile="example.popmap")
+Add the class name to your CLI's ``--models`` registry (mirroring how ``ImputeNLPCA`` and others are discovered).
 
-    # Instantiate and configure the model
-    model = ImputeMyNewModel(
-        genotype_data=genotype_data,
-        model_latent_dim=3,
-        model_hidden_layer_sizes=[256, 128],
-        model_dropout_rate=0.3,
-        model_hidden_activation="relu",
-        model_learning_rate=0.001
-    )
+Usage Examples
+--------------
 
-    # Train the model and impute the missing values.
-    model.fit()
-    imputed_data = model.transform()
-
-
-Step 4: Optional - Hyperparameter Tuning
-----------------------------------------
-
-If you want to enable hyperparameter tuning, define the `objective` method and use Optuna to optimize the hyperparameters by setting the `tune` parameter to `True`. You can also specify the number of trials and the number of parallel jobs for tuning. The `objective` method should return the metric value to optimize during tuning, and the `set_best_params` method should set the best hyperparameters as class attributes after tuning.
-
-Example:
+**Python**
 
 .. code-block:: python
 
-    from pgsui import ImputeMyNewModel
+   from snpio import VCFReader
+   from pgsui import ImputeMyNewModel, MyNewModelConfig
 
-    model = ImputeMyNewModel(
-        genotype_data=genotype_data,
-        model_latent_dim=3,
-        model_hidden_layer_sizes=[256, 128],
-        model_dropout_rate=0.3,
-        model_hidden_activation="relu",
-        model_learning_rate=0.001,
-        tune=True
-        tune_n_trials=100,
-        n_jobs=8,
-    )
-    
-Final Remarks
--------------
+   gd = VCFReader("example.vcf.gz", popmapfile="example.popmap", prefix="demo")
+   cfg = MyNewModelConfig.from_preset("balanced").apply_overrides({"io.prefix": "mymodel_demo"})
+   model = ImputeMyNewModel(genotype_data=gd, config=cfg)
+   model.fit()
+   X_imp = model.transform()
 
-By following these steps, you can define, train, and evaluate a new model using the provided framework. Be sure to implement any custom behavior in the `_objective`, `fit`, `transform`, and `_set_best_params` methods to match the specific needs of your model. Additionally, you can extend the model wrapper class with additional methods for evaluation, visualization, or other tasks as needed. The provided framework is designed to be flexible and extensible, allowing you to implement and integrate new models efficiently.
+**CLI**
+
+.. code-block:: bash
+
+   pg-sui \
+     --vcf example.vcf.gz \
+     --popmap example.popmap \
+     --models ImputeMyNewModel \
+     --preset balanced \
+     --set io.prefix=mymodel_demo
+
+Design Notes & Best Practices
+-----------------------------
+
+- **Shapes**: Keep module output ``(batch, n_features, n_classes)`` to simplify loss computation and downstream reports.
+- **Missing values**: Standardize to **-1** before loss; use ``ignore_index=-1`` in CE/focal variants.
+- **Class imbalance**: Use PG-SUI's weighting helpers (temperature/alpha/normalize) or your own, but store weights on device.
+- **Reproducibility**: Read seeds from ``io.seed``; pass to NumPy, PyTorch, and Optuna where applicable.
+- **Presets**: Ensure ``from_preset`` tunes depth/width/epochs proportionally so ``fast`` is actually fast and ``thorough`` explores more.
+- **Plots/metrics**: Reuse the Base helper methods so your model automatically participates in radar/PR/confusion outputs.
+
+FAQ
+---
+
+**Q: Do I pass arrays to ``fit`` or ``transform``?**  
+A: No. Like ``ImputeNLPCA``, you pass ``genotype_data`` at construction; then call ``fit()`` and ``transform()`` with **no arguments**.
+
+**Q: Can my module use a full autoencoder (encoder+decoder)?**  
+A: Yes. Expose a consistent forward that returns per-SNP logits and adapt the wrapper's latent handling accordingly.
+
+**Q: How do I add Optuna tuning quickly?**  
+A: Implement ``_objective``, ``_sample_hyperparameters``, and ``_set_best_params`` following the NLPCA wrapper. Use ``self.tune_fast`` and smaller subset caps for speed.
+

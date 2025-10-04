@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import copy
+import dataclasses
 import logging
 import os
-from dataclasses import asdict, is_dataclass
+import typing as t
+from dataclasses import MISSING, asdict, fields
+from dataclasses import is_dataclass
+from dataclasses import is_dataclass as _is_dc
 from typing import Any, Callable, Dict, Literal, Type, TypeVar
 
 import yaml
 
 # type variable for dataclass types
+T = t.TypeVar("T")
 T = TypeVar("T")
 
 """
@@ -108,23 +113,6 @@ def save_dataclass_yaml(dc: T, path: str) -> None:
         f.write(dataclass_to_yaml(dc))
 
 
-def _pop_preset(raw: Dict[str, Any]) -> str | None:
-    """Extract and remove 'preset' from raw dict if present.
-
-    Args:
-        raw (Dict[str, Any]): The raw dictionary to inspect.
-
-    Returns:
-        str | None: The preset value if found, otherwise None.
-    """
-    if isinstance(raw.get("preset"), str):
-        return raw.pop("preset")
-    io = raw.get("io")
-    if isinstance(io, dict) and isinstance(io.get("preset"), str):
-        return io.pop("preset")
-    return None
-
-
 def _merge_into_dataclass(inst: Any, payload: Dict[str, Any], path: str = "") -> Any:
     """Recursively merge a nested dict into a dataclass instance in place.
 
@@ -140,9 +128,6 @@ def _merge_into_dataclass(inst: Any, payload: Dict[str, Any], path: str = "") ->
         TypeError: If `inst` is not a dataclass.
         KeyError: If `payload` contains keys not present in `inst`.
     """
-    from dataclasses import fields
-    from dataclasses import is_dataclass as _is_dc
-
     if not _is_dc(inst):
         raise TypeError(
             f"_merge_into_dataclass expects a dataclass at '{path or '<root>'}'"
@@ -242,83 +227,259 @@ def load_yaml_to_dataclass(
     return cfg
 
 
-# ---------------- Dot-key overrides (with ROOT self-heal) ----------------
-def apply_dot_overrides(dc: Any, overrides: Dict[str, Any] | None) -> Any:
-    """Apply overrides like {"io.prefix": "...", "train.batch_size": 64}.
+def _is_dataclass_type(tp: t.Any) -> bool:
+    """Return True if tp is a dataclass type (not instance).
 
     Args:
-        dc (Any): A dataclass instance to update.
-        overrides (Dict[str, Any] | None): A mapping of dot-key paths to values
+        tp (t.Any): A type to check.
 
     Returns:
-        Any: The updated dataclass instance (same as `dc`).
+        bool: True if `tp` is a dataclass type, False otherwise.
+    """
+    try:
+        return isinstance(tp, type) and dataclasses.is_dataclass(tp)
+    except Exception:
+        return False
+
+
+def _unwrap_optional(tp: t.Any) -> t.Any:
+    """If Optional[T] or Union[T, None], return T; else tp."""
+    origin = t.get_origin(tp)
+    if origin is t.Union:
+        args = [a for a in t.get_args(tp) if a is not type(None)]
+        return args[0] if len(args) == 1 else tp
+    return tp
+
+
+def _expected_field_type(dc_type: type, name: str) -> t.Any:
+    """Fetch the annotated type of field `name` on dataclass type `dc_type`.
+
+    Args:
+        dc_type (type): A dataclass type.
+        name (str): The field name to look up.
+
+    Returns:
+        t.Any: The annotated type of the field.
+    """
+    for f in fields(dc_type):
+        if f.name == name:
+            return f.type
+    raise KeyError(f"Unknown config key: '{name}' on {dc_type.__name__}")
+
+
+def _instantiate_field(dc_type: type, name: str):
+    """Create a default instance for nested dataclass field `name`.
+
+    Attempts to use default_factory, then default, then type constructor.
+
+    Args:
+        dc_type (type): A dataclass type.
+        name (str): The field name to instantiate.
+
+    Returns:
+        Any: An instance of the field's type.
+    """
+    for f in fields(dc_type):
+        if f.name == name:
+            # Prefer default_factory → default → type()
+            if f.default_factory is not MISSING:  # type: ignore[attr-defined]
+                return f.default_factory()
+            if f.default is not MISSING:
+                val = f.default
+                # If default is None but type is dataclass, construct it:
+                tp = _unwrap_optional(f.type)
+                if val is None and _is_dataclass_type(tp):
+                    return tp()
+                return val
+            # No default supplied; if it's a dataclass type, construct it.
+            tp = _unwrap_optional(f.type)
+            if _is_dataclass_type(tp):
+                return tp()
+            # Otherwise we cannot guess safely:
+            raise KeyError(
+                f"Cannot create default for '{name}' on {dc_type.__name__}; "
+                "no default/default_factory and not a dataclass field."
+            )
+    raise KeyError(f"Unknown config key: '{name}' on {dc_type.__name__}'")
+
+
+def _merge_mapping_into_dataclass(
+    instance: T, payload: dict, *, path: str = "<root>"
+) -> T:
+    """Recursively merge a dict into a dataclass instance (strict on keys).
+
+    Args:
+        instance (T): A dataclass instance to update.
+        payload (dict): A nested mapping to merge into `instance`.
+        path (str): Internal use only; tracks the current path for error messages.
+
+    Returns:
+        T: The updated dataclass instance (same as `instance`).
+    """
+    if not is_dataclass(instance):
+        raise TypeError(f"Expected dataclass at {path}, got {type(instance)}")
+
+    dc_type = type(instance)
+    for k, v in payload.items():
+        # Ensure field exists
+        exp_type = _expected_field_type(dc_type, k)
+        exp_core = _unwrap_optional(exp_type)
+
+        cur = getattr(instance, k, MISSING)
+        if cur is MISSING:
+            raise KeyError(f"Unknown config key: '{path}.{k}'")
+
+        if _is_dataclass_type(exp_core) and isinstance(v, dict):
+            # Ensure we have a dataclass instance to merge into
+            if cur is None or not is_dataclass(cur):
+                cur = _instantiate_field(dc_type, k)
+                setattr(instance, k, cur)
+            merged = _merge_mapping_into_dataclass(cur, v, path=f"{path}.{k}")
+            setattr(instance, k, merged)
+        else:
+            setattr(instance, k, _coerce_value(v, exp_core, f"{path}.{k}"))
+    return instance
+
+
+def _coerce_value(value: t.Any, tp: t.Any, where: str):
+    """Lightweight coercion for common primitives and Literals.
+
+    Args:
+        value (t.Any): The input value to coerce.
+        tp (t.Any): The target type annotation.
+        where (str): Context string for error messages.
+
+    Returns:
+        t.Any: The coerced value, or the original if no coercion was applied.
+    """
+    origin = t.get_origin(tp)
+    args = t.get_args(tp)
+
+    # Literal[...] → restrict values
+    if origin is t.Literal:
+        allowed = set(args)
+        if value not in allowed:
+            raise ValueError(
+                f"Invalid value for {where}. Expected one of {sorted(allowed)}, got {value!r}."
+            )
+        return value
+
+    # Basic primitives coercion
+    if tp in (int, float, bool, str):
+        try:
+            # Avoid bool('0') → True; handle common string bools
+            if tp is bool and isinstance(value, str):
+                v = value.strip().lower()
+                if v in {"true", "1", "yes", "on"}:
+                    return True
+                if v in {"false", "0", "no", "off"}:
+                    return False
+                raise ValueError
+            return tp(value)
+        except Exception:
+            # Fall through to return as-is; your code may purposely pass arrays, etc.
+            return value
+
+    # Dataclasses or other complex types → trust caller
+    return value
+
+
+def apply_dot_overrides(
+    dc: t.Any,
+    overrides: dict[str, t.Any] | None,
+    *,
+    root_cls: type | None = None,
+    create_missing: bool = False,
+    registry: dict[str, type] | None = None,
+) -> t.Any:
+    """Apply overrides like {'io.prefix': '...', 'train.batch_size': 64} to any \*Config dataclass.
+
+    Args:
+        dc (t.Any): A dataclass instance (or a dict that can be up-cast).
+        overrides (dict[str, t.Any] | None): Mapping of dot-key paths to values.
+        root_cls (type | None): Optional dataclass type to up-cast a root dict into (if `dc` is a dict).
+        create_missing (bool): If True, instantiate missing intermediate dataclass nodes when the schema defines them.
+        registry (dict[str, type] | None): Optional mapping from top-level segment → dataclass type to assist up-casting.
+
+    Returns:
+        t.Any: The updated dataclass instance (same object identity is not guaranteed; a deep copy is made).
 
     Notes:
-        - If `dc` is accidentally a dict (not a dataclass), we up-cast it into an NLPCAConfig instance and continue (so callers survive older code paths).
+        - No hard-coding of NLPCAConfig. Pass `root_cls=NLPCAConfig` (or UBPConfig, etc.) when starting from a dict.
+        - Dict payloads encountered at intermediate nodes are merged into the expected dataclass type using schema introspection.
+        - Enforces unknown-key errors to keep configs honest.
     """
     if not overrides:
         return dc
 
-    # Root self-heal: dict -> NLPCAConfig
+    # Root up-cast if needed
     if not is_dataclass(dc):
         if isinstance(dc, dict):
-            try:
-                # Local import to avoid cycles for general use
-                from pgsui.data_processing.containers import NLPCAConfig
-
-                base = NLPCAConfig()
-                dc = _merge_into_dataclass(base, dc)
-            except Exception as e:
+            if root_cls is None:
                 raise TypeError(
-                    "apply_dot_overrides expects a dataclass instance as `dc` "
-                    "and failed to up-cast from dict payload."
-                ) from e
+                    "Root payload is a dict. Provide `root_cls` to up-cast it into the desired *Config dataclass."
+                )
+            base = root_cls()
+            dc = _merge_mapping_into_dataclass(base, dc)
         else:
-            raise TypeError("apply_dot_overrides expects a dataclass instance as `dc`.")
+            raise TypeError(
+                "apply_dot_overrides expects a dataclass instance or a dict for up-cast."
+            )
 
     updated = copy.deepcopy(dc)
 
-    for dotkey, value in (overrides or {}).items():
+    for dotkey, value in overrides.items():
         parts = dotkey.split(".")
         node = updated
+        node_type = type(node)
 
-        # descend to parent node
+        # Descend to parent
         for idx, seg in enumerate(parts[:-1]):
             if not is_dataclass(node):
                 parent_path = ".".join(parts[:idx]) or "<root>"
                 raise KeyError(
-                    f"Target '{parent_path}' is not a dataclass in the override path; "
-                    "cannot descend into non-dataclass objects."
+                    f"Target '{parent_path}' is not a dataclass in the override path; cannot descend into non-dataclass objects."
                 )
-            if not hasattr(node, seg):
+
+            # Validate field existence and fetch expected type
+            exp_type = _expected_field_type(node_type, seg)
+            exp_core = _unwrap_optional(exp_type)
+
+            # Materialize or up-cast if needed
+            child = getattr(node, seg, MISSING)
+            if child is MISSING:
                 raise KeyError(f"Unknown config key: '{'.'.join(parts[:idx+1])}'")
 
-            child = getattr(node, seg)
+            if isinstance(child, dict) and _is_dataclass_type(exp_core):
+                # Up-cast dict → dataclass of the expected type
+                child = _merge_mapping_into_dataclass(
+                    exp_core(), child, path=".".join(parts[: idx + 1])
+                )
+                setattr(node, seg, child)
 
-            # If child is dict but the field is structured, try to up-cast using a blank sibling
-            if isinstance(child, dict):
-                try:
-                    blank = type(node)()  # new instance of this dataclass
-                    blank_child = getattr(blank, seg)
-                    if is_dataclass(blank_child):
-                        child = _merge_into_dataclass(
-                            blank_child, child, path=".".join(parts[: idx + 1])
-                        )
-                        setattr(node, seg, child)
-                except Exception:
-                    pass  # fall through
+            if child is None and create_missing and _is_dataclass_type(exp_core):
+                child = exp_core()
+                setattr(node, seg, child)
 
             node = getattr(node, seg)
+            node_type = type(node)
 
-        # assign leaf
+        # Assign leaf with light coercion
         if not is_dataclass(node):
             parent_path = ".".join(parts[:-1]) or "<root>"
             raise KeyError(
                 f"Target '{parent_path}' is not a dataclass in the override path; cannot set '{parts[-1]}'."
             )
+
         leaf = parts[-1]
+
+        # Check field exists and coerce to its annotated type
+        exp_type = _expected_field_type(type(node), leaf)
+        exp_core = _unwrap_optional(exp_type)
+
         if not hasattr(node, leaf):
             raise KeyError(f"Unknown config key: '{dotkey}'")
-        setattr(node, leaf, value)
+
+        setattr(node, leaf, _coerce_value(value, exp_core, dotkey))
 
     return updated

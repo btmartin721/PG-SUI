@@ -9,35 +9,45 @@ from pgsui.impute.unsupervised.loss_functions import MaskedFocalLoss
 
 
 class NLPCAModel(nn.Module):
-    """A non-linear Principal Component Analysis (NLPCA) model.
+    r"""A non-linear Principal Component Analysis (NLPCA) model.
 
-    This model serves as a decoder for an autoencoder-based imputation strategy. It's a deep neural network that takes a low-dimensional latent vector as input and reconstructs the high-dimensional allele data. The architecture is a multi-layered, fully-connected network with optional batch normalization and dropout layers. The model is specifically designed for two-channel allele data, predicting allele probabilities for each of the two channels at every SNP.
+    This model serves as a decoder for an autoencoder-based imputation strategy. It's a deep neural network that takes a low-dimensional latent vector as input and reconstructs the high-dimensional allele data. The architecture is a multi-layered, fully connected network with optional batch normalization and dropout layers. The model is specifically designed for two-channel allele data, predicting allele probabilities for each of the two channels at every SNP.
 
-    **Model Architecture:**
-    The model's forward pass, from a latent representation, $z$, to the reconstructed input, $\hat{x}$, can be described as follows:
+    **Model Architecture**
 
-    Let $z \in \mathbb{R}^{d_{latent}}$ be the latent vector.
-    The decoder consists of a series of fully-connected layers with activation functions:
-    $$
-    h_1 = f(W_1 z + b_1)
-    $$
-    $$
-    h_2 = f(W_2 h_1 + b_2)
-    $$
-    $$
-    \vdots
-    $$
-    $$
-    h_L = f(W_L h_{L-1} + b_L)
-    $$
-    The final output layer produces a tensor of shape `(batch_size, n_features, n_channels, n_classes)`:
-    $$
-    \\hat{x} = W_{L+1} h_L + b_{L+1}
-    $$
-    where $f(\cdot)$ is the activation function (e.g., ReLU, ELU), and $W_i$ and $b_i$ are the weights and biases of each layer.
+    The model's forward pass, from a latent representation :math:`z` to the reconstructed input :math:`\hat{x}`, can be described as follows.
 
-    **Loss Function:**
-    The model is trained by minimizing the `MaskedFocalLoss`, which is an extension of the cross-entropy loss that focuses on hard-to-classify examples and handles missing values. The loss is computed on the reconstructed output and the ground truth, using a mask to only consider observed data.
+    Let :math:`z \in \mathbb{R}^{d_{\text{latent}}}` be the latent vector.
+
+    The decoder consists of a series of fully connected layers with activation functions, batch normalization, and dropout. For a network with :math:`L` hidden layers, the transformations are:
+
+    .. math::
+
+        h_1 = f(W_1 z + b_1)
+
+    .. math::
+
+        h_2 = f(W_2 h_1 + b_2)
+
+    .. math::
+
+        \vdots
+
+    .. math::
+
+        h_L = f(W_L h_{L-1} + b_L)
+
+    The final output layer produces a tensor of shape ``(batch_size, n_features, n_channels, n_classes)``:
+
+    .. math::
+
+        \hat{x} = W_{L+1} h_L + b_{L+1}
+
+    where :math:`f(\cdot)` is the activation function (e.g., ReLU, ELU), and :math:`W_i` and :math:`b_i` are the weights and biases of each layer.
+
+    **Loss Function**
+
+    The model is trained by minimizing the ``MaskedFocalLoss``, an extension of cross-entropy that emphasizes hard-to-classify examples and handles missing values via a mask. The loss is computed on the reconstructed output and the ground truth, using a mask to include only observed data.
     """
 
     def __init__(

@@ -13,10 +13,10 @@ Welcome to PG-SUI's documentation!
    about
    install
    tutorial
-   supervised_imputers
    unsupervised_imputers
-   imputer_methods
+   supervised_imputers
    non_ml_imputers
+   imputer_methods
    implement_new_models
    modules
    changelog

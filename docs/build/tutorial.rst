@@ -4,42 +4,44 @@ PG-SUI Tutorial
 Overview
 --------
 
-**PG-SUI** (Population Genomic Supervised & Unsupervised Imputation) performs missing-data imputation on SNP genotype matrices using **Deterministic**, **Unsupervised**, and **Supervised** models. It integrates tightly with `SNPio <https://github.com/btmartin721/SNPio>`_ for reading, filtering, and encoding genotypes, and emphasizes **unsupervised deep learning** methods designed for genomic class imbalance and diploid/variable ploidy data.
+**PG-SUI** (Population Genomic Supervised & Unsupervised Imputation) performs missing-data imputation on SNP genotype matrices using **Deterministic**, **Unsupervised**, and **Supervised** models. It integrates tightly with `SNPio <https://github.com/btmartin721/SNPio>`_ for reading, filtering, and encoding genotypes, and emphasizes **unsupervised deep learning** methods tuned for genomic class imbalance and diploid/variable ploidy data. Unsupervised neural approaches (e.g., non-linear PCA and autoencoding families) are inspired by prior work on representation learning and generative modeling (Scholz et al., 2005; Hinton & Salakhutdinov, 2006; Kingma & Welling, 2013), while the Unsupervised Backpropagation approach follows the imputation framing of Gashler et al. (2016).
 
 What's new
 ----------
 
-- **Dataclass-based configuration** at the API level. Each imputer is configured with a typed ``*Config`` dataclass (e.g., ``VAEConfig``, ``UBPConfig``, ``NLPCAConfig``) instead of arbitrary keyword arguments.
+- **Dataclass-based configuration** at the API level. Each imputer is configured with a typed ``*Config`` dataclass (e.g., ``VAEConfig``, ``UBPConfig``, ``NLPCAConfig``) instead of ad-hoc kwargs.
 - **Presets** (``fast``, ``balanced``, ``thorough``) available via ``*.from_preset("...")`` and the CLI ``--preset`` flag.
 - **YAML configuration files** (``--config path.yaml``) to persist experiments; YAML merges with presets and can be partially specified.
 - **Refactored CLI** with a clear precedence model:
-    - ``code defaults  <  preset (--preset)  <  YAML (--config)  <  explicit CLI flags  <  --set k=v``
-    - where ``--set`` applies deep dot-path overrides (e.g., ``--set training.model_latent_dim=16``).
 
-- **New visualizations**, including a cross-model **radar plot** (spider chart) summarizing key metrics (macro-F1, macro-PR, accuracy, HET-F1), alongside updated confusion matrices, per-class PR curves, zygosity bars, and progress logs.
+  ``code defaults  <  preset (--preset)  <  YAML (--config)  <  explicit CLI flags  <  --set k=v``
+
+  where ``--set`` applies deep dot-path overrides (e.g., ``--set training.model_latent_dim=16``).
+
+- **New visualizations**, including a cross-model **radar (spider) plot** summarizing macro-F1, macro-PR, accuracy, and HET-F1, plus updated confusion matrices, per-class PR curves, zygosity bars, and training curves.
 - **Unified I/O and plotting** via nested config sections (``io``, ``training``, ``tuning``, ``plot``) across all imputers.
-- **Consistent fit/transform contract**: models use the provided ``GenotypeData`` at instantiation; call ``fit()`` then ``transform()`` (no arguments).
+- **Consistent fit/transform contract**: pass a ``GenotypeData`` to the model **at instantiation**, then call ``fit()`` followed by ``transform()`` (no arguments).
 
 Model Families
 --------------
 
 - **Deterministic (Baselines)**
-    - ``ImputeMostFrequent`` — per-locus mode imputation (global or population-aware).
-    - ``ImputeRefAllele`` — fill missing genotypes with the REF genotype (0 in 0/1/2).
+  - ``ImputeMostFrequent`` — per-locus mode imputation (global or population-aware).
+  - ``ImputeRefAllele`` — fills missing diploid genotypes with the REF (0) state.
 
 - **Unsupervised (Deep Learning)**
-    - ``ImputeNLPCA`` — Non-linear PCA with optional latent optimization.
-    - ``ImputeUBP`` — Unsupervised Backpropagation with joint latent + weight training.
-    - ``ImputeAutoencoder`` — Standard autoencoder reconstruction.
-    - ``ImputeVAE`` — Variational Autoencoder with KL regularization.
+  - ``ImputeNLPCA`` — Non-linear PCA with optional latent optimization (Scholz et al., 2005).
+  - ``ImputeUBP`` — Unsupervised Backpropagation with joint latent + weight training (Gashler et al., 2016).
+  - ``ImputeAutoencoder`` — Standard autoencoder reconstruction (Hinton & Salakhutdinov, 2006).
+  - ``ImputeVAE`` — Variational Autoencoder with KL regularization (Kingma & Welling, 2013).
 
 - **Supervised (Machine Learning)**
-    - ``ImputeHistGradientBoosting`` — histogram-based gradient boosting classifier.
-    - ``ImputeRandomForest`` — random forest classifier.
+  - ``ImputeHistGradientBoosting`` — histogram-based gradient boosting classifier.
+  - ``ImputeRandomForest`` — random forest classifier.
 
 .. note::
 
-   **API change:** ``fit()`` and ``transform()`` no longer accept inputs. Each model receives a ``genotype_data`` object **at instantiation** and then exposes ``fit()`` followed by ``transform()`` (no arguments).
+   **API change:** ``fit()`` and ``transform()`` do **not** accept inputs. Each model is constructed with a ``genotype_data`` object and a typed ``*Config``. Then call ``fit()`` and ``transform()`` in sequence.
 
 Installation
 ------------
@@ -52,14 +54,14 @@ Install PG-SUI with pip (ideally in a fresh virtual environment):
 
 PG-SUI expects genotype I/O via **SNPio**. See SNPio docs for VCF/PHYLIP/STRUCTURE/GENEPOP readers and Docker/conda installs.
 
-Data In, Encodings, and Conventions
------------------------------------
+Data Input, Encodings, and Conventions
+--------------------------------------
 
 PG-SUI uses SNPio's ``GenotypeData`` object:
 
-- **Inputs**: VCF, PHYLIP, STRUCTURE, or GENEPOP plus optional ``popmap`` (recommended).
+- **Inputs**: VCF, PHYLIP, STRUCTURE, or GENEPOP, plus optional ``popmap`` (recommended).
 - **Working encoding**: **0/1/2** for diploids (REF/HET/ALT) with **-9** for missing.
-- **Evaluation labels**: ``["REF", "HET", "ALT"]`` for diploids; haploids collapse to 2 classes.
+- **Evaluation labels**: ``["REF", "HET", "ALT"]`` for diploids; haploids collapse to two classes.
 - **IUPAC handling**: decoding/encoding utilities are provided by SNPio.
 
 Quick Start (End-to-End, Dataclass API)
@@ -67,12 +69,11 @@ Quick Start (End-to-End, Dataclass API)
 
 .. code-block:: python
 
-    # --- SNPio: load genotype data ---
+    # SNPio: load genotype data
     from snpio import VCFReader
 
-    # --- PG-SUI: dataclass-configured model (example: VAE) ---
-    from pgsui import VAEConfig  # dataclass
-    from pgsui import ImputeVAE # imputer
+    # PG-SUI: top-level imports for configs and models
+    from pgsui import VAEConfig, ImputeVAE
 
     gd = VCFReader(
         filename="pgsui/example_data/vcf_files/phylogen_nomx.vcf.gz",
@@ -90,33 +91,37 @@ Quick Start (End-to-End, Dataclass API)
     cfg.tuning.n_trials = 100
     cfg.tuning.metric = "pr_macro"
     cfg.plot.show_plots = False
-    cfg.vae.kl_beta = 1.0  # VAE-specific
+    cfg.vae.kl_beta = 1.0  # VAE-specific (Kingma & Welling, 2013)
 
-    vae = ImputeVAE(genotype_data=gd, config=cfg)
-    vae.fit()
-    X012_imputed = vae.transform()  # returns 0/1/2 genotype numpy array
+    model = ImputeVAE(genotype_data=gd, config=cfg)
+    model.fit()
+    X012_imputed = model.transform()  # returns 0/1/2 genotype numpy array
 
 Using Presets Programmatically
 ------------------------------
 
-All ``*Config`` dataclasses provide presets with sensible defaults:
+All ``*Config`` dataclasses provide ``fast``, ``balanced``, and ``thorough`` presets:
 
 .. code-block:: python
 
     from pgsui import NLPCAConfig, ImputeNLPCA, UBPConfig, ImputeUBP
 
-    nlpca_cfg = NLPCAConfig.from_preset("fast")          # smallest, quickest
-    ubp_cfg   = UBPConfig.from_preset("thorough")        # strongest, slower
+    nlpca_cfg = NLPCAConfig.from_preset("fast")       # prioritizes speed
+    ubp_cfg   = UBPConfig.from_preset("thorough")     # prioritizes performance
 
-    # You can override selected fields after preset expansion:
+    # Override selected fields after preset expansion
     ubp_cfg.model.num_hidden_layers = 3
-    ubp_cfg.io.prefix = "ubp_run1"  # output prefix 
+    ubp_cfg.io.prefix = "ubp_run1"
 
     # Instantiate and run
     nlpca = ImputeNLPCA(genotype_data=gd, config=nlpca_cfg)
     ubp   = ImputeUBP(genotype_data=gd, config=ubp_cfg)
-    nlpca.fit(); X_nlpca = nlpca.transform()
-    ubp.fit();   X_ubp   = ubp.transform()
+
+    nlpca.fit()
+    X_nlpca = nlpca.transform()
+
+    ubp.fit()
+    X_ubp   = ubp.transform()
 
 YAML Configuration Files
 ------------------------
@@ -127,21 +132,24 @@ You can store experiments in YAML and load them from the CLI or Python. YAML mer
 
 .. code-block:: yaml
 
-    # Model-specific section (example: VAEConfig)
     io:
       prefix: "vae_demo"
       plot_format: "pdf"
+
     training:
       model_latent_dim: 16
       model_num_hidden_layers: 3
       model_hidden_layer_sizes: [256, 128, 64]
       model_learning_rate: 0.0001
-      model_beta: 1.0        # VAE only
       model_early_stop_gen: 20
       model_min_epochs: 20
       model_validation_split: 0.20
       device: "cpu"
       seed: 42
+
+    vae:
+      kl_beta: 1.0  # VAE-specific hyperparameter
+
     tuning:
       tune: true
       n_trials: 100
@@ -150,6 +158,7 @@ You can store experiments in YAML and load them from the CLI or Python. YAML mer
       weights_temperature: 3.0
       weights_alpha: 1.0
       weights_normalize: true
+
     plot:
       show_plots: false
       dpi: 300
@@ -158,22 +167,23 @@ Loading YAML in Python:
 
 .. code-block:: python
 
-    from pgsui import VAEConfig, load_yaml_to_dataclass
+    from pgsui import VAEConfig, ImputeVAE, load_yaml_to_dataclass
+
     cfg = load_yaml_to_dataclass("vae_balanced.yaml", VAEConfig)
-    vae = ImputeVAE(genotype_data=gd, config=cfg)
-    vae.fit()
-    X_vae = vae.transform()
+    model = ImputeVAE(genotype_data=gd, config=cfg)
+    model.fit()
+    X_vae = model.transform()
 
 Command-Line Interface (CLI)
 ----------------------------
 
-The ``pg-sui`` CLI supports running one or more models with the same dataset and shared precedence rules.
+The ``pg-sui`` CLI supports running one or more models with the same dataset and a shared precedence rule set.
 
 **Precedence model** (highest last):
 
 ``code defaults  <  preset (--preset)  <  YAML (--config)  <  explicit CLI flags  <  --set k=v``
 
-- ``--preset`` chooses a baseline preset.
+- ``--preset`` selects a baseline preset.
 - ``--config`` applies YAML on top of the preset.
 - Explicit CLI flags (if provided) override YAML.
 - ``--set`` applies deep dot-path overrides for final tweaks.
@@ -184,29 +194,29 @@ The ``pg-sui`` CLI supports running one or more models with the same dataset and
 
     # Minimal run with a preset
     pg-sui \
-        --vcf pgsui/example_data/vcf_files/phylogen_nomx.vcf.gz \
-        --popmap pgsui/example_data/popmaps/test.popmap \
-        --models ImputeUBP ImputeVAE \
-        --preset balanced \
-        --prefix demo
+      --vcf pgsui/example_data/vcf_files/phylogen_nomx.vcf.gz \
+      --popmap pgsui/example_data/popmaps/test.popmap \
+      --models ImputeUBP ImputeVAE \
+      --preset balanced \
+      --prefix demo
 
     # Use a YAML config and override a couple fields
     pg-sui \
-        --vcf data.vcf.gz \
-        --popmap pops.popmap \
-        --models ImputeVAE \
-        --preset thorough \
-        --config vae_balanced.yaml \
-        --set io.prefix=vae_vs_ubp \
-        --set training.model_latent_dim=32
+      --vcf data.vcf.gz \
+      --popmap pops.popmap \
+      --models ImputeVAE \
+      --preset thorough \
+      --config vae_balanced.yaml \
+      --set io.prefix=vae_vs_ubp \
+      --set training.model_latent_dim=32
 
-    # Deterministic baseline for a quick yardstick
+    # Deterministic baselines for a quick yardstick
     pg-sui \
-        --vcf data.vcf.gz \
-        --popmap pops.popmap \
-        --models ImputeMostFrequent ImputeRefAllele \
-        --preset fast \
-        --prefix baselines
+      --vcf data.vcf.gz \
+      --popmap pops.popmap \
+      --models ImputeMostFrequent ImputeRefAllele \
+      --preset fast \
+      --prefix baselines
 
 Deterministic Models (Configs)
 ------------------------------
@@ -219,7 +229,7 @@ Deterministic Models (Configs)
 
     cfg = MostFrequentConfig.from_preset("fast")
     cfg.io.prefix = "mode_imp"
-    cfg.algorithm.by_population = True  # make pop-aware if popmap is provided
+    cfg.algorithm.by_population = True  # pop-aware if popmap provided
 
     model = ImputeMostFrequent(genotype_data=gd, config=cfg)
     model.fit()
@@ -229,8 +239,7 @@ Deterministic Models (Configs)
 
 .. code-block:: python
 
-    from pgsui.data_processing.config import RefAlleleConfig
-    from pgsui.impute.deterministic import ImputeRefAllele
+    from pgsui import RefAlleleConfig, ImputeRefAllele
 
     cfg = RefAlleleConfig.from_preset("fast")
     cfg.io.prefix = "ref_imp"
@@ -242,64 +251,59 @@ Deterministic Models (Configs)
 Unsupervised Deep Learning (Configs)
 ------------------------------------
 
-**Non-linear PCA (ImputeNLPCA)**
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+**Non-linear PCA (ImputeNLPCA)** *(Scholz et al., 2005)*
 
 .. code-block:: python
 
-    from pgsui.data_processing.config import NLPCAConfig
-    from pgsui.impute.unsupervised.imputers import ImputeNLPCA
+    from pgsui import NLPCAConfig, ImputeNLPCA
 
     cfg = NLPCAConfig.from_preset("balanced")
     cfg.io.prefix = "nlpca_run"
     model = ImputeNLPCA(genotype_data=gd, config=cfg)
-    model.fit(); X_nlpca = model.transform()
+    model.fit()
+    X_nlpca = model.transform()
 
-**Unsupervised Backpropagation (ImputeUBP)**
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+**Unsupervised Backpropagation (ImputeUBP)** *(Gashler et al., 2016)*
 
 .. code-block:: python
 
-    from pgsui.data_processing.config import UBPConfig
-    from pgsui.impute.unsupervised.imputers import ImputeUBP
+    from pgsui import UBPConfig, ImputeUBP
 
     cfg = UBPConfig.from_preset("thorough")
     cfg.io.prefix = "ubp_run"
     model = ImputeUBP(genotype_data=gd, config=cfg)
-    model.fit(); X_ubp = model.transform()
+    model.fit()
+    X_ubp = model.transform()
 
-**Standard Autoencoder (ImputeAutoencoder)**
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+**Standard Autoencoder (ImputeAutoencoder)** *(Hinton & Salakhutdinov, 2006)*
 
 .. code-block:: python
 
-    from pgsui.data_processing.config import SAEConfig
-    from pgsui.impute.unsupervised.imputers import ImputeAutoencoder
+    from pgsui import SAEConfig, ImputeAutoencoder
 
     cfg = SAEConfig.from_preset("balanced")
     cfg.io.prefix = "sae_run"
     model = ImputeAutoencoder(genotype_data=gd, config=cfg)
-    model.fit(); X_sae = model.transform()
+    model.fit()
+    X_sae = model.transform()
 
-**Variational Autoencoder (ImputeVAE)**
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+**Variational Autoencoder (ImputeVAE)** *(Kingma & Welling, 2013)*
 
 .. code-block:: python
 
-    from pgsui.data_processing.config import VAEConfig
-    from pgsui.impute.unsupervised.imputers import ImputeVAE
+    from pgsui import VAEConfig, ImputeVAE
 
     cfg = VAEConfig.from_preset("balanced")
     cfg.io.prefix = "vae_run"
-    cfg.training.model_beta = 1.0
+    cfg.vae.kl_beta = 1.0
     model = ImputeVAE(genotype_data=gd, config=cfg)
-    model.fit(); X_vae = model.transform()
+    model.fit()
+    X_vae = model.transform()
 
 Supervised Models (Configs)
 ---------------------------
 
 **ImputeHistGradientBoosting**
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 .. code-block:: python
 
@@ -315,7 +319,6 @@ Supervised Models (Configs)
     model.fit(); X_hgb = model.transform()
 
 **ImputeRandomForest**
-^^^^^^^^^^^^^^^^^^^^^^          
 
 .. code-block:: python
 
@@ -352,9 +355,9 @@ After ``fit()``, each model writes plots and metrics under:
 Key figures
 ^^^^^^^^^^^
 
-- **Radar (spider) summary** across models: macro-F1, macro-PR, overall accuracy, HET-F1.
+- **Radar (spider) summary** across models: macro-F1, macro-PR, accuracy, HET-F1.
 - **Confusion matrices** (overall and per-zygosity).
-- **Per-class precision–recall curves** and macro-averaged PR.
+- **Per-class precision-recall curves** and macro-averaged PR.
 - **Zygosity bar charts** (REF/HET/ALT) for error composition.
 - **Training curves** (loss/metric vs. epoch) for deep models.
 - **Feature importances** for supervised tree-based models (if enabled).
@@ -362,14 +365,14 @@ Key figures
 Common Evaluation
 -----------------
 
-Metrics are stratified by zygosity, **REF/HET/ALT** (diploid) or binary classes (haploid), as well as by 10-base IUPAC encodings. Macro-averaged F1 or Precision-Recall are emphasized due to class imbalance. Summary CSV/JSON files accompany figures to facilitate downstream comparison.
+Metrics are stratified by zygosity (REF/HET/ALT for diploids; binary for haploids) and can also be summarized under 10-base IUPAC encodings. Macro-averaged F1 and macro-PR are emphasized to handle class imbalance. Summary CSV/JSON files accompany figures to support downstream comparison and aggregation.
 
 Tips for Performance & Reproducibility
 --------------------------------------
 
 - Enable Optuna with ``tuning.tune = True`` and increase ``tuning.n_trials`` for more robust hyperparameters.
-- Use ``training.device`` set to ``"gpu"`` (CUDA) or ``"mps"`` (Apple Silicon) when available.
-- Prefer ``tuning.metric = "pr_macro"`` on imbalanced datasets.
+- Use ``training.device="gpu"`` (CUDA) or ``"mps"`` (Apple Silicon) when available.
+- Prefer ``tuning.metric="pr_macro"`` on imbalanced datasets.
 - Set ``training.seed`` for reproducibility of splits, latent init, and tuner sampling.
 
 Typical Workflow
@@ -380,7 +383,7 @@ Typical Workflow
 3. **Unsupervised model** (e.g., ``ImputeVAE`` or ``ImputeUBP``) with tuning enabled.
 4. **Optional supervised models** (HGB/RF) to benchmark against deep models.
 5. **Compare reports** (radar summary, macro-PR/F1, zygosity, confusion matrices).
-6. **Decode/Export** final matrices to IUPAC or desired downstream formats.
+6. **Decode/Export** final matrices to IUPAC or downstream formats as needed.
 
 Minimal API Reference
 ---------------------
@@ -390,13 +393,18 @@ All imputers follow the same high-level pattern:
 .. code-block:: python
 
     model = SomeImputer(genotype_data=gd, config=SomeConfig.from_preset("balanced"))
-    model.fit()                 # trains; writes plots/reports
-    X_imputed = model.transform()  # imputes missing alleles
+    model.fit()                      # trains; writes plots/reports
+    X_imputed = model.transform()    # imputes missing alleles (0/1/2; -9 for missing)
 
-Citations & Background
-----------------------
+References
+----------
 
-.. [1] Kingma, D. P., & Welling, M. (2013). Auto-Encoding Variational Bayes. arXiv:1312.6114.
-.. [2] Gashler, M. S., Smith, M. R., Morris, R., & Martinez, T. (2016). Missing value imputation with unsupervised backpropagation. *Computational Intelligence*, 32(2), 196-215.
-.. [3] Hinton, G. E., & Salakhutdinov, R. R. (2006). Reducing the dimensionality of data with neural networks. *Science*, 313(5786), 504-507.
-.. [4] Scholz, M., Kaplan, F., Guy, C. L., Kopka, J., & Selbig, J. (2005). Non-linear PCA: a missing data approach. *Bioinformatics*, 21(20), 3887-3895.
+Chawla, N. V., Bowyer, K. W., Hall, L. O., & Kegelmeyer, W. P. (2002). SMOTE: Synthetic Minority Over-sampling Technique. *Journal of Artificial Intelligence Research*, 16, 321-357.
+
+Gashler, M. S., Smith, M. R., Morris, R., & Martinez, T. (2016). Missing value imputation with unsupervised backpropagation. *Computational Intelligence*, 32(2), 196-215.
+
+Hinton, G. E., & Salakhutdinov, R. R. (2006). Reducing the dimensionality of data with neural networks. *Science*, 313(5786), 504-507.
+
+Kingma, D. P., & Welling, M. (2013). Auto-Encoding Variational Bayes. *arXiv preprint* arXiv:1312.6114.
+
+Scholz, M., Kaplan, F., Guy, C. L., Kopka, J., & Selbig, J. (2005). Non-linear PCA: a missing data approach. *Bioinformatics*, 21(20), 3887-3895.

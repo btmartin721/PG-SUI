@@ -9,7 +9,7 @@ Unsupervised Imputer Models (Neural Networks)
 Non-linear Principal Component Analysis
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-.. autoclass:: pgsui.impute.estimators.ImputeNLPCA
+.. autoclass:: pgsui.impute.unsupervised.imputers.nlpca.ImputeNLPCA
    :members:
    :show-inheritance:
    :noindex:
@@ -17,7 +17,7 @@ Non-linear Principal Component Analysis
 Unsupervised Backpropagation
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-.. autoclass:: pgsui.impute.estimators.ImputeUBP
+.. autoclass:: pgsui.impute.unsupervised.imputers.ubp.ImputeUBP
    :members:
    :show-inheritance:
    :inherited-members:
@@ -26,7 +26,7 @@ Unsupervised Backpropagation
 Standard AutoEncoder
 ^^^^^^^^^^^^^^^^^^^^^
 
-.. autoclass:: pgsui.impute.estimators.ImputeStandardAutoEncoder
+.. autoclass:: pgsui.impute.unsupervised.imputers.autoencoder.ImputeAutoencoder
    :members:
    :show-inheritance:
    :inherited-members:
@@ -35,7 +35,7 @@ Standard AutoEncoder
 Variational AutoEncoder
 ^^^^^^^^^^^^^^^^^^^^^^^^
 
-.. autoclass:: pgsui.impute.estimators.ImputeVAE
+.. autoclass:: pgsui.impute.unsupervised.imputers.vae.ImputeVAE
    :members:
    :show-inheritance:
    :inherited-members:
