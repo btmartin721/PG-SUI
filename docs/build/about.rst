@@ -1,82 +1,77 @@
 About PG-SUI
-=============
+============
 
-**PG-SUI**: Population Genomic Supervised and Unsupervised Imputation
+**PG-SUI**: Population Genomic Supervised & Unsupervised Imputation
 
 PG-SUI Philosophy
 -----------------
 
-PG-SUI is a cutting-edge Python 3 API designed to impute missing values from population genomic SNP datasets using advanced supervised and unsupervised machine learning and deep learning algorithms. The package also includes non-machine learning imputation methods, providing flexibility and robust solutions for handling missing data in genomic SNP datasets.
+PG-SUI is a Python 3 toolkit for imputing missing genotypes in population genomic SNP matrices using **deterministic**, **unsupervised**, and **supervised** approaches. It integrates with SNPio for I/O and encoding, emphasizes robust handling of class imbalance, and follows a refactored design with **typed dataclass configurations**, **presets**, optional **YAML** configs, and a consistent **instantiate → fit() → transform()** workflow. Unsupervised deep models build on representation learning and generative modeling ideas (Hinton & Salakhutdinov, 2006; Kingma & Welling, 2013; Scholz et al., 2005; Gashler et al., 2016).
+
+Key Design (at a glance)
+------------------------
+
+- **Typed configs**: each imputer uses a ``*Config`` dataclass (e.g., ``VAEConfig``, ``NLPCAConfig``, ``UBPConfig``) with presets (``fast``, ``balanced``, ``thorough``).
+- **Workflow**: pass a SNPio ``GenotypeData`` at construction → ``fit()`` → ``transform()`` (no arguments).
+- **Overrides**: presets ⇢ YAML (optional) ⇢ explicit overrides via dot-keys; CLI mirrors the same precedence.
+- **Evaluation**: macro-F1 and macro-PR with zygosity-aware summaries to address genomic class imbalance.
 
 Unsupervised Imputation Methods
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Unsupervised methods in PG-SUI include a suite of custom neural network models optimized for population genomic data:
+Unsupervised models in PG-SUI are purpose-built for genomic data:
 
-	- Variational Autoencoder (VAE) [2]_
-	- Standard Autoencoder [3]_
-	- Non-linear Principal Component Analysis (NLPCA) [4]_
-	- Unsupervised Backpropagation (UBP) [5]_
+- **Variational Autoencoder (VAE)** (Kingma & Welling, 2013) — latent probabilistic modeling with KL regularization.
+- **Standard Autoencoder (SAE)** (Hinton & Salakhutdinov, 2006) — deterministic encoder-decoder reconstruction.
+- **Non-linear PCA (NLPCA)** (Scholz et al., 2005) — decoder-style network with latent optimization.
+- **Unsupervised Backpropagation (UBP)** (Gashler et al., 2016) — joint training of latent vectors and decoder weights.
 
-These methods leverage deep learning to infer missing genotypes by learning patterns and relationships within the data:
+These models learn structure from observed entries and then infer true missing genotypes:
 
-	1. Training on Simulated Missing Data: Real missing values are masked, and simulated missing values are generated during training. Models are trained only on known values to reconstruct complete genotypes.
-	2. Prediction of Real Missing Values: After training, the models predict the actual missing values using the learned patterns.
+1. **Train on observed values**: real missings are masked; optional simulated masking during training improves robustness.
+2. **Predict true missings**: after training, the model predicts the masked cells to yield a complete matrix.
 
 Detailed Neural Network Imputation
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Below is a brief overview of the neural network models available in PG-SUI:
-
-	- Autoencoder: Compresses loci into a reduced-dimensional latent space (e.g., 2-3 dimensions), then reconstructs the original genotype data through a decoder network.
-	- NLPCA (Non-linear PCA): Begins with randomly initialized reduced-dimensional inputs and refines them iteratively by minimizing reconstruction error for known genotypes. NLPCA functions similarly to the decoder phase of an autoencoder.
-	- VAE (Variational Autoencoder): Extends SAE by learning a latent distribution (mean and variance) in the reduced-dimensional space. During training, samples from this distribution are passed into the decoder for reconstruction, ensuring a robust probabilistic framework.
-	- UBP (Unsupervised Backpropagation): Builds upon NLPCA with a three-phase training process. UBP refines the reduced-dimensional input and network weights simultaneously, as with NLPCA. 
-		1. Phase 1 refines reduced-dimensional input (i.e., latent dimension) using backpropagation with a single-layer (i.e., linear) neural network.
-		2. Phase 2 refines network weights using a multi-layer perceptron (MLP). Does not update the latent dimension.
-		3. Phase 3 refines both the latent dimension and MLP weights simultaneously.
-
-These models offer a range of options for researchers to explore and compare with traditional imputation methods.
+- **Autoencoder (SAE)**: compresses loci into a low-dimensional latent space and reconstructs the 0/1/2 matrix through a decoder (Hinton & Salakhutdinov, 2006).
+- **NLPCA**: initializes reduced-dimensional inputs and iteratively refines them by minimizing reconstruction loss on observed entries (Scholz et al., 2005).
+- **VAE**: learns a distribution over the latent space (mean/variance), sampling latents during training for a regularized decoder (Kingma & Welling, 2013).
+- **UBP**: three-phase training that alternates/refines latent vectors and MLP weights for improved imputation on sparse, imbalanced data (Gashler et al., 2016).
 
 Supervised Imputation Methods
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Supervised methods utilize state-of-the-art machine learning approaches to perform imputation. The centerpiece is scikit-learn's IterativeImputer, which applies the MICE (Multivariate Imputation by Chained Equations) algorithm [1]_ to iteratively impute each SNP feature based on the relationships with other features. PG-SUI extends this functionality by allowing the use of the following classifiers to inform imputation:
+Supervised baselines frame imputation as multiclass genotype prediction per locus using tree-based models:
 
-	- Random Forest
-	- Histogram-based Gradient Boosting
+- **Random Forest** (``ImputeRandomForest``)
+- **Histogram-based Gradient Boosting** (``ImputeHistGradientBoosting``)
 
-Users can customize the number of nearest features (neighbors) considered during imputation. The flexibility of these models allows researchers to tailor their approach to the specific properties of their genomic data.
+These models learn from observed genotypes to predict missing states and can be tuned with the same Optuna-driven machinery as the unsupervised models. They provide strong, interpretable comparisons alongside the deep models.
 
-See the scikit-learn documentation <https://scikit-learn.org>_ for additional details on IterativeImputer and the classifiers supported.
+Deterministic (Non-ML) Methods
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Non-Machine Learning (Deterministic) Methods
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Deterministic baselines are simple, fast yardsticks:
 
-PG-SUI also incorporates several non-machine learning approaches to provide robust and interpretable baseline solutions for imputation:
-
-	- Per-population mode per SNP site: The most frequent allele in each population is used to impute missing genotypes.
-	- Global mode per SNP site: The most frequent allele across the entire dataset is used.
-	- Reference allele per SNP site: Imputes missing genotypes using the reference allele.
-	- Phylogeny-informed Imputation: Utilizes an input phylogeny to guide imputation, accounting for evolutionary relationships.
-	- Matrix Factorization: A matrix decomposition-based method for predicting missing values.
-
-These methods offer a range of options for researchers to explore and compare with machine learning-based imputation.
+- **Per-population mode per SNP** (population-aware majority class when a popmap is available).
+- **Global mode per SNP** (dataset-wide majority class).
+- **Reference-allele fill** (fills with REF genotype under the working 0/1/2 scheme).
 
 Why Choose PG-SUI?
 ^^^^^^^^^^^^^^^^^^
 
-PG-SUI is a flexible, efficient, and extensible package that combines classical statistical approaches with cutting-edge machine learning and deep learning models to address missing data in population genomic SNP datasets. Researchers can select from a wide variety of supervised, unsupervised, and non-machine learning methods to best suit their needs.
+PG-SUI combines classical baselines with modern unsupervised and supervised learners tailored to population genomics. The API is **consistent**, **extensible**, and **reproducible** (typed configs, presets, seeds), with evaluation and plotting designed for **class-imbalanced** diploid/haploid data. Users can select quick deterministic baselines, interpretable supervised trees, or higher-capacity unsupervised neural models depending on data scale and goals.
 
 References
 ----------
 
-.. [1] Stef van Buuren, Karin Groothuis-Oudshoorn (2011). mice: Multivariate Imputation by Chained Equations in R. Journal of Statistical Software 45: 1-67.
+Chawla, N. V., Bowyer, K. W., Hall, L. O., & Kegelmeyer, W. P. (2002). SMOTE: Synthetic Minority Over-sampling Technique. *Journal of Artificial Intelligence Research*, 16, 321-357.
 
-.. [2] Kingma, D. P., & Welling, M. (2013). Auto-Encoding Variational Bayes. arXiv preprint arXiv:1312.6114.
+Gashler, M. S., Smith, M. R., Morris, R., & Martinez, T. (2016). Missing value imputation with unsupervised backpropagation. *Computational Intelligence*, 32(2), 196-215.
 
-.. [3] Hinton, G.E., & Salakhutdinov, R.R. (2006). Reducing the dimensionality of data with neural networks. Science, 313(5786), 504-507.
+Hinton, G. E., & Salakhutdinov, R. R. (2006). Reducing the dimensionality of data with neural networks. *Science*, 313(5786), 504-507.
 
-.. [4] Scholz, M., Kaplan, F., Guy, C. L., Kopka, J., & Selbig, J. (2005). Non-linear PCA: a missing data approach. Bioinformatics, 21(20), 3887-3895.
+Kingma, D. P., & Welling, M. (2013). Auto-Encoding Variational Bayes. *arXiv preprint* arXiv:1312.6114.
 
-.. [5] Gashler, M. S., Smith, M. R., Morris, R., & Martinez, T. (2016). Missing value imputation with unsupervised backpropagation. Computational Intelligence, 32(2), 196-215.
+Scholz, M., Kaplan, F., Guy, C. L., Kopka, J., & Selbig, J. (2005). Non-linear PCA: a missing data approach. *Bioinformatics*, 21(20), 3887-3895.
