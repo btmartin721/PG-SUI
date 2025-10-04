@@ -133,6 +133,9 @@ def _args_to_cli_overrides(args: argparse.Namespace) -> dict:
     # IO / top-level controls
     if hasattr(args, "prefix") and args.prefix is not None:
         overrides["io.prefix"] = args.prefix
+    else:
+        overrides["io.prefix"] = str(Path(args.vcf).stem)
+
     if hasattr(args, "verbose"):
         overrides["io.verbose"] = bool(args.verbose)
     if hasattr(args, "n_jobs"):
@@ -186,16 +189,16 @@ def build_genotype_data(
 
 def run_model_safely(model_name: str, builder, *, warn_only: bool = True) -> None:
     """Run model builder + fit/transform with error isolation."""
-    logging.info("▶ Running %s ...", model_name)
+    logging.info(f"▶ Running {model_name} ...")
     try:
         model = builder()
         model.fit()
         X_imputed = model.transform()
-        logging.info("✓ %s completed.", model_name)
+        logging.info(f"✓ {model_name} completed.")
         return X_imputed
     except Exception as e:
         if warn_only:
-            logging.warning("⚠ %s failed: %s", model_name, e, exc_info=True)
+            logging.warning(f"⚠ {model_name} failed: {e}", exc_info=True)
         else:
             raise
 
@@ -236,12 +239,13 @@ def _build_effective_config_for_model(
     if hasattr(args, "preset"):
         preset_name = args.preset
         cfg = cfg_cls.from_preset(preset_name)
-        logging.info("Initialized %s from '%s' preset.", model_name, preset_name)
+        logging.info(f"Initialized {model_name} from '{preset_name}' preset.")
     else:
-        logging.info("Initialized %s from dataclass defaults (no preset).", model_name)
+        logging.info(f"Initialized {model_name} from dataclass defaults (no preset).")
 
     # 2) YAML overlays preset/defaults (boss). Ignore any 'preset' in YAML.
     yaml_path = getattr(args, "config", None)
+
     if yaml_path:
         cfg = load_yaml_to_dataclass(
             yaml_path,
@@ -250,20 +254,33 @@ def _build_effective_config_for_model(
             yaml_preset_behavior="ignore",  # 'preset' key in YAML ignored with warning
         )
         logging.info(
-            "Loaded YAML config for %s from %s (ignored 'preset' in YAML if present).",
-            model_name,
-            yaml_path,
+            f"Loaded YAML config for {model_name} from {yaml_path} (ignored 'preset' in YAML if present)."
         )
 
-    # 3) Explicit CLI flags overlay YAML (boss's boss).
+    # 3) Explicit CLI flags overlay YAML.
     cli_overrides = _args_to_cli_overrides(args)
     if cli_overrides:
         cfg = apply_dot_overrides(cfg, cli_overrides)
 
-    # 4) --set has highest precedence (supreme boss).
+    # 4) --set has highest precedence.
     user_overrides = _parse_overrides(getattr(args, "set", []))
+
     if user_overrides:
-        cfg = apply_dot_overrides(cfg, user_overrides)
+        try:
+            cfg = apply_dot_overrides(cfg, user_overrides)
+        except Exception as e:
+            if model_name in {
+                "ImputeUBP",
+                "ImputeNLPCA",
+                "ImputeAutoencoder",
+                "ImputeVAE",
+            }:
+                logging.error(
+                    f"Error applying --set overrides to {model_name} config: {e}"
+                )
+                raise
+            else:
+                pass  # non-config-driven models ignore --set
 
     return cfg
 
@@ -298,7 +315,7 @@ def _maybe_print_or_dump_configs(
             else:
                 path = f"{dump_base}.{m}.yaml"
             save_dataclass_yaml(cfg, path)
-            logging.info("Saved %s config to %s", m, path)
+            logging.info(f"Saved {m} config to {path}")
         did_io = True
 
     return did_io
@@ -547,16 +564,27 @@ def main(argv: Optional[List[str]] = None) -> int:
         "ImputeRefAllele": build_impute_refallele,
     }
 
-    logging.info("Selected models: %s", ", ".join(selected_models))
+    logging.info(f"Selected models: {', '.join(selected_models)}")
     for name in selected_models:
         X_imputed = run_model_safely(name, model_builders[name], warn_only=True)
         gd_imp = gd.copy()
         gd_imp.snp_data = X_imputed
 
-        pth = Path(f"psgui_output/{Path(vcf_path).stem}_output/imputed")
+        if name in {"ImputeUBP", "ImputeVAE", "ImputeAutoencoder", "ImputeNLPCA"}:
+            family = "Unsupervised"
+        elif name in {"ImputeMostFrequent", "ImputeRefAllele"}:
+            family = "Deterministic"
+        elif name in {"ImputeHistGradientBoosting", "ImputeRandomForest"}:
+            family = "Supervised"
+        else:
+            raise ValueError(f"Unknown model family for {name}")
+
+        prefix = getattr(args, "prefix", str(Path(vcf_path).stem))
+        pth = Path(f"{prefix}_output/{family}/imputed/{name}")
         pth.mkdir(parents=True, exist_ok=True)
-        logging.info("Writing imputed VCF for %s to %s ...", name, pth)
-        gd_imp.write_vcf(pth / f"{name.lower()}.vcf.gz")
+
+        logging.info(f"Writing imputed VCF for {name} to {pth} ...")
+        gd_imp.write_vcf(pth / f"{name.lower()}_imputed.vcf.gz")
 
     logging.info("All requested models processed.")
     return 0
