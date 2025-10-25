@@ -55,6 +55,8 @@ class Scorer:
     def accuracy(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
         """Calculate the accuracy of the model.
 
+        This method calculates the accuracy of the model by comparing the ground truth labels with the predicted labels.
+
         Args:
             y_true (np.ndarray): Ground truth labels.
             y_pred (np.ndarray): Predicted labels.
@@ -66,6 +68,8 @@ class Scorer:
 
     def f1(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
         """Calculate the F1 score of the model.
+
+        This method calculates the F1 score of the model by comparing the ground truth labels with the predicted labels.
 
         Args:
             y_true (np.ndarray): Ground truth labels.
@@ -79,6 +83,8 @@ class Scorer:
     def precision(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
         """Calculate the precision of the model.
 
+        This method calculates the precision of the model by comparing the ground truth labels with the predicted labels.
+
         Args:
             y_true (np.ndarray): Ground truth labels.
             y_pred (np.ndarray): Predicted labels.
@@ -91,6 +97,8 @@ class Scorer:
     def recall(self, y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
         """Calculate the recall of the model.
 
+        This method calculates the recall of the model by comparing the ground truth labels with the predicted labels.
+
         Args:
             y_true (np.ndarray): Ground truth labels.
             y_pred (np.ndarray): Predicted labels.
@@ -102,6 +110,8 @@ class Scorer:
 
     def roc_auc(self, y_true: np.ndarray, y_pred_proba: np.ndarray) -> float:
         """Multiclass ROC-AUC with label targets.
+
+        This method calculates the ROC-AUC score for multiclass classification problems. It handles both 1D integer labels and 2D one-hot/indicator matrices for the ground truth labels.
 
         Args:
             y_true: 1D integer labels (shape: [n]).
@@ -223,8 +233,14 @@ class Scorer:
     def average_precision(self, y_true: np.ndarray, y_pred_proba: np.ndarray) -> float:
         """Average precision with safe multiclass handling.
 
-        If y_true is 1D of class indices, it is binarized against the number of columns in y_pred_proba.
-        If y_true is already one-hot or indicator, it is used as-is.
+        If y_true is 1D of class indices, it is binarized against the number of columns in y_pred_proba. If y_true is already one-hot or indicator, it is used as-is.
+
+        Args:
+            y_true (np.ndarray): Ground truth labels (1D class indices or 2D one-hot/indicator).
+            y_pred_proba (np.ndarray): Predicted probabilities (2D array).
+
+        Returns:
+            float: Average precision score.
         """
         y_true_arr = np.asarray(y_true)
         y_proba_arr = np.asarray(y_pred_proba)
@@ -243,7 +259,15 @@ class Scorer:
         return float(average_precision_score(y_bin, y_proba_arr, average=self.average))
 
     def pr_macro(self, y_true_ohe: np.ndarray, y_pred_proba: np.ndarray) -> float:
-        """Macro-averaged average precision (precision-recall AUC) across classes."""
+        """Macro-averaged average precision (precision-recall AUC) across classes.
+
+        Args:
+            y_true_ohe (np.ndarray): One-hot encoded ground truth labels (2D array).
+            y_pred_proba (np.ndarray): Predicted probabilities (2D array).
+
+        Returns:
+            float: Macro-averaged average precision score.
+        """
         y_true_arr = np.asarray(y_true_ohe)
         y_proba_arr = np.asarray(y_pred_proba)
 
