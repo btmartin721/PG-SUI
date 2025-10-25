@@ -34,8 +34,16 @@ def ensure_refallele_config(
 ) -> RefAlleleConfig:
     """Return a concrete RefAlleleConfig (dataclass, dict, YAML path, or None).
 
+    This function normalizes the input configuration for the RefAllele imputer. It accepts a RefAlleleConfig instance, a dictionary of parameters, a path to a YAML file, or None. If None is provided, it returns a default RefAlleleConfig instance. If a dictionary is provided, it flattens any nested structures and applies the parameters to a base configuration, honoring any top-level 'preset' key. If a string path is provided, it loads the configuration from the specified YAML file.
+
     Args:
         config (Union[RefAlleleConfig, dict, str, None]): Configuration input which can be a RefAlleleConfig instance, a dictionary of parameters, a path to a YAML file, or None.
+
+    Returns:
+        RefAlleleConfig: A concrete RefAlleleConfig instance.
+
+    Raises:
+        TypeError: If the input type is not supported.
     """
     if config is None:
         return RefAlleleConfig()
@@ -68,7 +76,7 @@ def ensure_refallele_config(
 
 
 class ImputeRefAllele:
-    """Deterministic imputer that replaces all missing 0/1/2 genotype values with the REF genotype (0). Evaluation and plotting mirror the deep-learning imputers.
+    """Deterministic imputer that replaces all missing 0/1/2 genotype values with the REF genotype (0).
 
     The imputer works on 0/1/2 with -1 as missing. Evaluation splits samples into TRAIN/TEST once. Masks ALL originally observed cells on TEST rows for eval. Produces: 0/1/2 (zygosity) classification report + confusion matrix 10-class IUPAC classification report (via decode_012) + confusion matrix. Plots genotype distribution before/after imputation.
     """
@@ -81,6 +89,8 @@ class ImputeRefAllele:
         overrides: Optional[dict] = None,
     ) -> None:
         """Initialize the Ref-Allele imputer from a unified config.
+
+        This constructor ensures that the provided configuration is valid and initializes the imputer's internal state. It sets up logging, random number generation, genotype encoding, and various parameters based on the configuration. The imputer is prepared to handle population-specific modes if specified in the configuration.
 
         Args:
             genotype_data (GenotypeData): Backing genotype data.
@@ -160,7 +170,7 @@ class ImputeRefAllele:
         )
 
         # Output dirs
-        dirs = ["models", "plots", "metrics", "optimize"]
+        dirs = ["models", "plots", "metrics", "optimize", "parameters"]
         self._create_model_directories(self.prefix, dirs)
 
     def fit(self) -> "ImputeRefAllele":
@@ -197,6 +207,13 @@ class ImputeRefAllele:
             f"Fit complete. Train rows: {self.train_idx_.size}, Test rows: {self.test_idx_.size}. "
             f"Masked {int(sim_mask.sum())} observed test cells for evaluation."
         )
+
+        params_fp = self.parameters_dir / "best_parameters.json"
+        best_params = self.cfg.to_dict()
+
+        with open(params_fp, "w") as f:
+            json.dump(best_params, f, indent=4)
+
         return self
 
     def transform(self) -> np.ndarray:
@@ -208,10 +225,10 @@ class ImputeRefAllele:
             np.ndarray: The fully imputed genotype matrix in IUPAC string format.
 
         Raises:
-            RuntimeError: If the model has not been fitted yet.
+            NotFittedError: If the model has not been fitted yet.
         """
         if not self.is_fit_:
-            raise RuntimeError("Model is not fitted. Call fit() before transform().")
+            raise NotFittedError("Model is not fitted. Call fit() before transform().")
         assert self.X_train_df_ is not None
 
         # 1) Impute the evaluation-masked copy (compute metrics)
@@ -258,7 +275,7 @@ class ImputeRefAllele:
     def _evaluate_and_report(self) -> None:
         """Evaluate imputed vs. ground truth on masked test cells; produce reports and plots.
 
-        Requires that fit() and transform() have been called.
+        Requires that fit() and transform() have been called. This method evaluates the imputed genotypes against the ground truth for the masked test cells, generating classification reports and confusion matrices for both 0/1/2 zygosity and 10-class IUPAC codes. It logs the results and saves the reports and plots to the designated output directories.
 
         Raises:
             NotFittedError: If fit() and transform() have not been called.
@@ -316,9 +333,6 @@ class ImputeRefAllele:
         Args:
             y_true (np.ndarray): True genotypes (0/1/2) for masked
             y_pred (np.ndarray): Predicted genotypes (0/1/2) for
-
-        Raises:
-            NotFittedError: If fit() and transform() have not been called.
         """
         labels = [0, 1, 2]
         report_names = ["REF", "HET", "ALT"]
@@ -396,11 +410,8 @@ class ImputeRefAllele:
         This method generates a classification report and confusion matrix for genotypes encoded using the 10 IUPAC codes (0-9). The IUPAC codes represent various nucleotide combinations, including ambiguous bases.
 
         Args:
-            y_true (np.ndarray): True genotypes (0-9) for masked
-            y_pred (np.ndarray): Predicted genotypes (0-9) for masked
-
-        Raises:
-            NotFittedError: If fit() and transform() have not been called.
+            y_true (np.ndarray): True genotypes (0-9) for masked test cells.
+            y_pred (np.ndarray): Predicted genotypes (0-9) for masked test cells.
         """
         labels_idx = list(range(10))
         labels_names = ["A", "C", "G", "T", "W", "R", "M", "K", "Y", "S"]

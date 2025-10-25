@@ -1074,9 +1074,17 @@ class VAEConfig:
 
 @dataclass
 class MostFrequentAlgoConfig:
-    """Algorithmic knobs for ImputeMostFrequent."""
+    """Algorithmic knobs for ImputeMostFrequent.
 
-    by_populations: bool = False  # compute per-pop modes when populations are available
+    This class contains configuration options specific to the most frequent genotype imputation algorithm.
+
+    Attributes:
+        by_populations (bool): Whether to compute per-population modes when populations are available.
+        default (int): Fallback mode if no valid entries in a locus.
+        missing (int): Code for missing genotypes in 0/1/2.
+    """
+
+    by_populations: bool = False  # per-pop modes if pops available
     default: int = 0  # fallback mode if no valid entries in a locus
     missing: int = -1  # code for missing genotypes in 0/1/2
 
@@ -1086,6 +1094,10 @@ class DeterministicSplitConfig:
     """Evaluation split configuration shared by deterministic imputers.
 
     This class contains configuration options for splitting data into training and testing sets for deterministic imputation algorithms. The split can be defined by a proportion of the data or by specific indices.
+
+    Attributes:
+        test_size (float): Proportion of data to use as the test set.
+        test_indices (Optional[Sequence[int]]): Specific indices to use as the test set. If provided, this overrides the `test_size` parameter.
     """
 
     test_size: float = 0.2
@@ -1097,11 +1109,13 @@ class DeterministicSplitConfig:
 class MostFrequentConfig:
     """Top-level configuration for ImputeMostFrequent.
 
-    Sections for alignment:
-        - io (IOConfig)
-        - plot (PlotConfig)
-        - split (DeterministicSplitConfig)
-        - algo (MostFrequentAlgoConfig)
+    This class contains all the configuration options for the ImputeMostFrequent model. The configuration is organized into several sections, each represented by a dataclass.
+
+    Attributes:
+        io (IOConfig): I/O configuration.
+        plot (PlotConfig): Plotting configuration.
+        split (DeterministicSplitConfig): Data splitting configuration.
+        algo (MostFrequentAlgoConfig): Algorithmic configuration.
     """
 
     io: IOConfig = field(default_factory=IOConfig)
@@ -1182,11 +1196,11 @@ class RefAlleleConfig:
 
     This class contains all the configuration options for the ImputeRefAllele model. The configuration is organized into several sections, each represented by a dataclass.
 
-    Sections for alignment:
-        - io (IOConfig)
-        - plot (PlotConfig)
-        - split (DeterministicSplitConfig)
-        - algo (RefAlleleAlgoConfig)
+    Attributes:
+        io (IOConfig): I/O configuration.
+        plot (PlotConfig): Plotting configuration.
+        split (DeterministicSplitConfig): Data splitting configuration.
+        algo (RefAlleleAlgoConfig): Algorithmic configuration.
     """
 
     io: IOConfig = field(default_factory=IOConfig)
@@ -1253,6 +1267,16 @@ class RefAlleleConfig:
 def _flatten_dict(
     d: Dict[str, Any], prefix: str = "", out: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
+    """Flatten a nested dictionary into dot-key format.
+
+    Args:
+        d (Dict[str, Any]): The nested dictionary to flatten.
+        prefix (str): The prefix to use for keys (used in recursion).
+        out (Optional[Dict[str, Any]]): The output dictionary to populate.
+
+    Returns:
+        Dict[str, Any]: The flattened dictionary with dot-key format.
+    """
     out = out or {}
     for k, v in d.items():
         kk = f"{prefix}.{k}" if prefix else k
@@ -1397,7 +1421,19 @@ class TuningConfigSupervised:
 
 @dataclass
 class RFModelConfig:
-    """Random Forest hyperparameters."""
+    """Random Forest hyperparameters.
+
+    This class contains configuration options for the Random Forest model used in imputation.
+
+    Attributes:
+        n_estimators (int): Number of trees in the forest.
+        max_depth (Optional[int]): Maximum depth of the trees. If None, nodes are expanded until all leaves are pure or contain less than min_samples_leaf samples.
+        min_samples_split (int): Minimum number of samples required to split an internal node.
+        min_samples_leaf (int): Minimum number of samples required to be at a leaf node.
+        max_features (Literal["sqrt", "log2"] | float | None): Number of features to consider when looking for the best split.
+        criterion (Literal["gini", "entropy", "log_loss"]): Function to measure the quality of a split.
+        class_weight (Literal["balanced", "balanced_subsample", None]): Weights associated with classes. If "balanced", the class weights will be adjusted inversely proportional to class frequencies in the input data. If "balanced_subsample", the weights will be adjusted based on the bootstrap sample for each tree. If None, all classes will have weight of 1.0.
+    """
 
     n_estimators: int = 100
     max_depth: Optional[int] = None
@@ -1434,6 +1470,7 @@ class HGBModelConfig:
 
     # sklearn.HistGradientBoostingClassifier uses 'max_iter'
     # as number of boosting iterations
+    # instead of 'n_estimators'.
     n_estimators: int = 100  # maps to max_iter
     learning_rate: float = 0.1
     max_depth: Optional[int] = None
@@ -1442,8 +1479,11 @@ class HGBModelConfig:
     n_iter_no_change: int = 10
     tol: float = 1e-7
 
-    def __post_init__(self):
-        """Validate max_features if it's a float."""
+    def __post_init__(self) -> None:
+        """Validate max_features if it's a float.
+
+        This method checks if the `max_features` attribute is a float and ensures that it falls within the valid range (0.0, 1.0]. It also validates that `n_estimators` is a positive integer.
+        """
         if isinstance(self.max_features, float):
             if not (0.0 < self.max_features <= 1.0):
                 raise ValueError("max_features as float must be in (0.0, 1.0]")
@@ -1523,6 +1563,8 @@ class RFConfig:
     def from_yaml(cls, path: str) -> "RFConfig":
         """Load from YAML; honors optional top-level 'preset' then merges keys.
 
+        This method allows for easy construction of an RFConfig instance from a YAML file, with support for presets. If the YAML file specifies a top-level 'preset', the corresponding preset values are applied first, and then any additional keys in the YAML file override those preset values.
+
         Args:
             path (str): Path to the YAML configuration file.
 
@@ -1533,6 +1575,8 @@ class RFConfig:
 
     def apply_overrides(self, overrides: Dict[str, Any] | None) -> "RFConfig":
         """Apply flat dot-key overrides (e.g., {'model.n_estimators': 500}).
+
+        This method allows for easy application of overrides to the config instance using a flat dictionary structure.
 
         Args:
             overrides (Dict[str, Any] | None): Mapping of dot-key paths to values to override.
@@ -1547,6 +1591,8 @@ class RFConfig:
     def to_dict(self) -> Dict[str, Any]:
         """Return as nested dictionary.
 
+        This method converts the config instance into a nested dictionary format, which can be useful for serialization or inspection.
+
         Returns:
             Dict[str, Any]: The config as a nested dictionary.
         """
@@ -1554,6 +1600,8 @@ class RFConfig:
 
     def to_imputer_kwargs(self) -> Dict[str, Any]:
         """Map config fields to current ImputeRandomForest ``__init__`` kwargs.
+
+        This method extracts relevant configuration fields and maps them to keyword arguments suitable for initializing the ImputeRandomForest class.
 
         Returns:
             Dict[str, Any]: kwargs compatible with ImputeRandomForest(..., \*\*kwargs).
@@ -1622,10 +1670,7 @@ class HGBConfig:
         This class method allows for easy construction of a HGBConfig instance with sensible defaults based on the chosen preset. Presets adjust both model capacity and training/tuning behavior across speed/quality tradeoffs.
 
         Args:
-            preset: One of {"fast", "balanced", "thorough"}.
-                - fast:      Quick baseline; fewer trees; fewer imputer iters.
-                - balanced:  Balances speed and model performance; moderate trees and imputer iters.
-                - thorough:  Prioritizes model performance; more trees; more imputer iters.
+            preset (Literal["fast", "balanced", "thorough"]): One of {"fast", "balanced", "thorough"}. fast: Quick baseline; fewer trees; fewer imputer iters. balanced: Balances speed and model performance; moderate trees and imputer iters. thorough:  Prioritizes model performance; more trees; more imputer iterations.
 
         Returns:
             HGBConfig: Config with preset values applied.
@@ -1663,6 +1708,8 @@ class HGBConfig:
     def from_yaml(cls, path: str) -> "HGBConfig":
         """Load from YAML; honors optional top-level 'preset' then merges keys.
 
+        This method allows for easy construction of a HGBConfig instance from a YAML file, with support for presets. If the YAML file specifies a top-level 'preset', the corresponding preset values are applied first, and then any additional keys in the YAML file override those preset values.
+
         Args:
             path (str): Path to the YAML configuration file.
 
@@ -1673,6 +1720,8 @@ class HGBConfig:
 
     def apply_overrides(self, overrides: Dict[str, Any] | None) -> "HGBConfig":
         """Apply flat dot-key overrides (e.g., {'model.learning_rate': 0.05}).
+
+        This method allows for easy application of overrides to the configuration fields using a flat dot-key notation.
 
         Args:
             overrides (Dict[str, Any] | None): Mapping of dot-key paths to values to override.
@@ -1687,6 +1736,8 @@ class HGBConfig:
     def to_dict(self) -> Dict[str, Any]:
         """Return as nested dict.
 
+        This method converts the configuration instance into a nested dictionary format, which can be useful for serialization or inspection.
+
         Returns:
             Dict[str, Any]: The config as a nested dictionary.
         """
@@ -1694,6 +1745,8 @@ class HGBConfig:
 
     def to_imputer_kwargs(self) -> Dict[str, Any]:
         """Map config fields to current ImputeHistGradientBoosting ``__init__`` kwargs.
+
+        This method maps the configuration fields to the keyword arguments expected by the ImputeHistGradientBoosting class.
 
         Returns:
             Dict[str, Any]: kwargs compatible with ImputeHistGradientBoosting(..., \*\*kwargs).

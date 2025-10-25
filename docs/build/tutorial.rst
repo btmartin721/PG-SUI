@@ -16,7 +16,7 @@ What's new
 
   ``code defaults  <  preset (--preset)  <  YAML (--config)  <  explicit CLI flags  <  --set k=v``
 
-  where ``--set`` applies deep dot-path overrides (e.g., ``--set training.model_latent_dim=16``).
+  where ``--set`` applies deep dot-path overrides (e.g., ``--set model.latent_dim=16``).
 
 - **New visualizations**, including a cross-model **radar (spider) plot** summarizing macro-F1, macro-PR, accuracy, and HET-F1, plus updated confusion matrices, per-class PR curves, zygosity bars, and training curves.
 - **Unified I/O and plotting** via nested config sections (``io``, ``training``, ``tuning``, ``plot``) across all imputers.
@@ -86,16 +86,16 @@ Quick Start (End-to-End, Dataclass API)
     # Start from a preset, then customize a few fields
     cfg = VAEConfig.from_preset("balanced")
     cfg.io.prefix = "pgsui_demo"
-    cfg.training.model_latent_dim = 16
-    cfg.tuning.tune = True
-    cfg.tuning.n_trials = 100
-    cfg.tuning.metric = "pr_macro"
-    cfg.plot.show_plots = False
+    cfg.model.latent_dim = 16
+    cfg.tune.enabled = True
+    cfg.tune.n_trials = 100
+    cfg.tune.metric = "pr_macro"
+    cfg.plot.show = False
     cfg.vae.kl_beta = 1.0  # VAE-specific (Kingma & Welling, 2013)
 
     model = ImputeVAE(genotype_data=gd, config=cfg)
     model.fit()
-    X012_imputed = model.transform()  # returns 0/1/2 genotype numpy array
+    genotypes_iupac = model.transform()  # returns decoded IUPAC strings
 
 Using Presets Programmatically
 ------------------------------
@@ -136,38 +136,45 @@ You can store experiments in YAML and load them from the CLI or Python. YAML mer
       prefix: "vae_demo"
       plot_format: "pdf"
 
-    training:
-      model_latent_dim: 16
-      model_num_hidden_layers: 3
-      model_hidden_layer_sizes: [256, 128, 64]
-      model_learning_rate: 0.0001
-      model_early_stop_gen: 20
-      model_min_epochs: 20
-      model_validation_split: 0.20
+    model:
+      latent_dim: 16
+      num_hidden_layers: 3
+      layer_scaling_factor: 4.0
+      dropout_rate: 0.20
+      hidden_activation: "relu"
+
+    train:
+      learning_rate: 0.0008
+      early_stop_gen: 15
+      min_epochs: 50
+      max_epochs: 1000
+      validation_split: 0.20
       device: "cpu"
       seed: 42
 
     vae:
-      kl_beta: 1.0  # VAE-specific hyperparameter
+      kl_beta: 1.0
+      kl_warmup: 30
+      kl_ramp: 150
 
-    tuning:
-      tune: true
-      n_trials: 100
+    tune:
+      enabled: true
       metric: "pr_macro"
-      n_jobs: 8
-      weights_temperature: 3.0
-      weights_alpha: 1.0
-      weights_normalize: true
+      n_trials: 100
+      fast: true
+      max_samples: 1024
+      patience: 10
 
     plot:
-      show_plots: false
+      show: false
       dpi: 300
 
 Loading YAML in Python:
 
 .. code-block:: python
 
-    from pgsui import VAEConfig, ImputeVAE, load_yaml_to_dataclass
+    from pgsui import VAEConfig, ImputeVAE
+    from pgsui.data_processing.config import load_yaml_to_dataclass
 
     cfg = load_yaml_to_dataclass("vae_balanced.yaml", VAEConfig)
     model = ImputeVAE(genotype_data=gd, config=cfg)
@@ -208,7 +215,7 @@ The ``pg-sui`` CLI supports running one or more models with the same dataset and
       --preset thorough \
       --config vae_balanced.yaml \
       --set io.prefix=vae_vs_ubp \
-      --set training.model_latent_dim=32
+      --set model.latent_dim=32
 
     # Deterministic baselines for a quick yardstick
     pg-sui \
@@ -229,7 +236,7 @@ Deterministic Models (Configs)
 
     cfg = MostFrequentConfig.from_preset("fast")
     cfg.io.prefix = "mode_imp"
-    cfg.algorithm.by_population = True  # pop-aware if popmap provided
+    cfg.algo.by_populations = True  # pop-aware if popmap provided
 
     model = ImputeMostFrequent(genotype_data=gd, config=cfg)
     model.fit()
@@ -279,13 +286,14 @@ Unsupervised Deep Learning (Configs)
 
 .. code-block:: python
 
-    from pgsui import SAEConfig, ImputeAutoencoder
+    from pgsui import AutoencoderConfig, ImputeAutoencoder
 
-    cfg = SAEConfig.from_preset("balanced")
-    cfg.io.prefix = "sae_run"
+    cfg = AutoencoderConfig.from_preset("balanced")
+    cfg.io.prefix = "ae_run"
+    cfg.model.dropout_rate = 0.15
     model = ImputeAutoencoder(genotype_data=gd, config=cfg)
     model.fit()
-    X_sae = model.transform()
+    X_ae = model.transform()
 
 **Variational Autoencoder (ImputeVAE)** *(Kingma & Welling, 2013)*
 
@@ -311,12 +319,12 @@ Supervised Models (Configs)
 
     cfg = HGBConfig.from_preset("balanced")
     cfg.io.prefix = "hgb_run"
-    cfg.tuning.tune = True
-    cfg.tuning.n_trials = 100
-    cfg.tuning.metric = "pr_macro"
+    cfg.imputer.max_iter = 12
+    cfg.sim.prop_missing = 0.35
 
     model = ImputeHistGradientBoosting(genotype_data=gd, config=cfg)
-    model.fit(); X_hgb = model.transform()
+    model.fit()
+    X_hgb = model.transform()
 
 **ImputeRandomForest**
 
@@ -326,9 +334,8 @@ Supervised Models (Configs)
 
     cfg = RFConfig.from_preset("balanced")
     cfg.io.prefix = "rf_run"
-    cfg.tuning.tune = True
-    cfg.tuning.n_trials = 100
-    cfg.tuning.metric = "pr_macro"
+    cfg.model.n_estimators = 300
+    cfg.imputer.n_nearest_features = 64
 
     model = ImputeRandomForest(genotype_data=gd, config=cfg)
     model.fit()
@@ -337,13 +344,15 @@ Supervised Models (Configs)
 Common Config Sections (Fields at a Glance)
 -------------------------------------------
 
-All ``*Config`` dataclasses share a common structure with nested sections (names may vary slightly by imputer):
+All ``*Config`` dataclasses expose nested sections (names vary a little by family). The essentials:
 
-- ``io``: ``prefix``, ``plot_format``, output directories, artifact toggles.
-- ``training``: architecture and optimization (e.g., ``model_latent_dim``, hidden sizes, learning rate, early stopping, validation split, device, seed).
-- ``tuning``: ``tune``, ``n_trials``, ``metric``, ``n_jobs``, class-weight shaping (``weights_temperature``, ``weights_alpha``, ``weights_normalize``).
-- ``plot``: ``show_plots``, ``dpi``, per-plot toggles.
-- ``algorithm``: method-specific flags (e.g., ``by_population`` for MostFrequent).
+- ``io`` – run prefix, logging verbosity, random seeds, output format.
+- ``model`` – estimator architecture (latent dimension, layer schedule, tree counts, etc.); deterministic configs instead expose ``algo``.
+- ``train`` – optimisation knobs for neural models (batch size, learning rate, early stopping, validation split, device, class-weight limits).
+- ``tune`` – Optuna envelope for the neural stack; retained for supervised configs for API compatibility.
+- ``evaluate`` / ``split`` – latent optimisation controls for unsupervised models or held-out split definitions for deterministic ones.
+- ``imputer`` and ``sim`` – IterativeImputer and simulated-missingness settings unique to supervised models.
+- ``plot`` – export format, DPI, fonts, and whether to display figures interactively.
 
 Visualization & Reports
 -----------------------
@@ -370,10 +379,10 @@ Metrics are stratified by zygosity (REF/HET/ALT for diploids; binary for haploid
 Tips for Performance & Reproducibility
 --------------------------------------
 
-- Enable Optuna with ``tuning.tune = True`` and increase ``tuning.n_trials`` for more robust hyperparameters.
-- Use ``training.device="gpu"`` (CUDA) or ``"mps"`` (Apple Silicon) when available.
-- Prefer ``tuning.metric="pr_macro"`` on imbalanced datasets.
-- Set ``training.seed`` for reproducibility of splits, latent init, and tuner sampling.
+- Enable Optuna with ``tune.enabled = True`` and increase ``tune.n_trials`` for more robust hyperparameters.
+- Use ``train.device="gpu"`` (CUDA) or ``"mps"`` (Apple Silicon) when available.
+- Prefer ``tune.metric="pr_macro"`` on imbalanced datasets.
+- Set ``train.seed`` for reproducible splits, latent initialisation, and Optuna sampling.
 
 Typical Workflow
 ----------------
@@ -394,7 +403,7 @@ All imputers follow the same high-level pattern:
 
     model = SomeImputer(genotype_data=gd, config=SomeConfig.from_preset("balanced"))
     model.fit()                      # trains; writes plots/reports
-    X_imputed = model.transform()    # imputes missing alleles (0/1/2; -9 for missing)
+    X_imputed = model.transform()    # imputes missing alleles and returns IUPAC strings
 
 References
 ----------

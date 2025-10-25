@@ -48,7 +48,7 @@ class BaseNNImputer:
         self.device = self._select_device(device)
 
         # Prepare directory structure
-        outdirs = ["models", "plots", "metrics", "optimize"]
+        outdirs = ["models", "plots", "metrics", "optimize", "parameters"]
         self._create_model_directories(prefix, outdirs)
         self.debug = debug
 
@@ -904,3 +904,21 @@ class BaseNNImputer:
             self._tune_eval_slice = None
 
         self._tune_ready = True
+
+    def _save_best_params(self, best_params: Dict[str, Any]) -> None:
+        """Save the best hyperparameters to a JSON file.
+
+        This method saves the best hyperparameters found during hyperparameter tuning to a JSON file in the optimization directory. The filename includes the model name for easy identification.
+
+        Args:
+            best_params (Dict[str, Any]): A dictionary of the best hyperparameters to save.
+        """
+        if not hasattr(self, "parameters_dir"):
+            msg = "Attribute 'parameters_dir' not found. Ensure _create_model_directories() has been called."
+            self.logger.error(msg)
+            raise AttributeError(msg)
+
+        fout = self.parameters_dir / "best_parameters.json"
+
+        with open(fout, "w") as f:
+            json.dump(best_params, f, indent=4)

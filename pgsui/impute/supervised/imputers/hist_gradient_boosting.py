@@ -1,9 +1,12 @@
 # Standard library
-from typing import TYPE_CHECKING, Generator, List, Literal
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any, Dict, Generator, List
 
 # Third-party
 import numpy as np
 from sklearn.ensemble import HistGradientBoostingClassifier
+from sklearn.exceptions import NotFittedError
 from sklearn.experimental import enable_iterative_imputer  # noqa
 from sklearn.impute import IterativeImputer
 from sklearn.model_selection import train_test_split
@@ -12,7 +15,13 @@ from sklearn.model_selection import train_test_split
 from snpio.analysis.genotype_encoder import GenotypeEncoder
 from snpio.utils.logging import LoggerManager
 
-from pgsui.data_processing.containers import _HGBParams, _ImputerParams, _SimParams
+from pgsui.data_processing.config import apply_dot_overrides, load_yaml_to_dataclass
+from pgsui.data_processing.containers import (
+    HGBConfig,
+    _HGBParams,
+    _ImputerParams,
+    _SimParams,
+)
 from pgsui.data_processing.transformers import SimGenotypeDataTransformer
 from pgsui.impute.supervised.base import BaseImputer
 from pgsui.utils.plotting import Plotting
@@ -22,148 +31,117 @@ if TYPE_CHECKING:
     from snpio.read_input.genotype_data import GenotypeData
 
 
+def ensure_hgb_config(config: HGBConfig | Dict | str | None) -> HGBConfig:
+    """Resolve HGB configuration from dataclass, mapping, or YAML path."""
+
+    if config is None:
+        return HGBConfig()
+    if isinstance(config, HGBConfig):
+        return config
+    if isinstance(config, str):
+        return load_yaml_to_dataclass(
+            config, HGBConfig, preset_builder=HGBConfig.from_preset
+        )
+    if isinstance(config, dict):
+        payload = dict(config)
+        preset = payload.pop("preset", None)
+        base = HGBConfig.from_preset(preset) if preset else HGBConfig()
+
+        def _flatten(prefix: str, data: Dict[str, Any], out: Dict[str, Any]) -> None:
+            for key, value in data.items():
+                dotted = f"{prefix}.{key}" if prefix else key
+                if isinstance(value, dict):
+                    _flatten(dotted, value, out)
+                else:
+                    out[dotted] = value
+
+        flat: Dict[str, Any] = {}
+        _flatten("", payload, flat)
+        return apply_dot_overrides(base, flat)
+
+    raise TypeError("config must be an HGBConfig, dict, YAML path, or None.")
+
+
 class ImputeHistGradientBoosting(BaseImputer):
-    """Supervised imputation with Histogram-based Gradient Boosting on 0/1/2 genotypes.
-
-    This implementation uses the following workflow:
-        - Uses 0/1/2 encoded genotypes (with -9 for missing).
-        - Splits by samples into train/test once (no per-locus CV).
-        - Trains one HistGradientBoosting per locus using all *other* loci as predictors.
-        - Computes the same metrics (accuracy, F1, PR-macro, etc.) and renders the same plots/classification reports (zygosity and IUPAC).
-
-    Compared with allele-wise/iterative imputers, this is simpler and scales well with parallelization across loci.
-
-    Attributes:
-        model_name (str): Name used in logs/paths.
-        genotypes_012_ (np.ndarray): 0/1/2 matrix with -9 for missing.
-        models_ (list[HistGradientBoostingClassifier | None]): One fitted model per locus; None where model couldn't be trained.
-    """
+    """Supervised HGB imputer driven by :class:`HGBConfig`."""
 
     def __init__(
         self,
         genotype_data: "GenotypeData",
         *,
-        # General parameters
-        prefix: str = "pgsui",
-        seed: int | None = None,
-        n_jobs: int = 1,
-        verbose: bool = False,
-        debug: bool = False,
-        # Model hyperparameters
-        model_n_estimators: int = 300,
-        model_learning_rate: float = 0.1,
-        model_n_iter_no_change: int = 10,
-        model_tol: float = 1e-7,
-        model_max_depth: int | None = None,
-        model_min_samples_leaf: int = 1,
-        model_max_features: float = 1.0,
-        model_validation_split: float = 0.2,
-        model_n_nearest_features: int | None = 10,
-        model_max_iter: int = 10,
-        # Simulation parameters
-        sim_prop_missing: float = 0.5,
-        sim_strategy: Literal["random", "random_inv_genotype"] = "random_inv_genotype",
-        sim_het_boost: float = 2.0,
-        # Plotting parameters
-        plot_format: Literal["pdf", "png", "jpg", "jpeg"] = "pdf",
-        plot_fontsize: int = 18,
-        plot_despine: bool = True,
-        plot_dpi: int = 300,
-        plot_show_plots: bool = False,
-    ):
-        """Initialize the HistGradientBoostingClassifier imputer.
-
-        Args:
-            genotype_data (GenotypeData): SNPio genotype container.
-            prefix (str): Output prefix.
-            seed (int | None): RNG seed.
-            n_jobs (int): Parallel jobs for per-locus training/prediction.
-            verbose (bool): Verbose logging.
-            debug (bool): Debug logging.
-            model_n_estimators (int): HGB boosted trees.
-            model_learning_rate (float): HGB learning rate.
-            model_n_iter_no_change (int): Early stopping rounds.
-            model_tol (float): Early stopping tolerance.
-            model_max_depth (int | None): HGB depth.
-            model_min_samples_split (int): Min split.
-            model_min_samples_leaf (int): Min leaf.
-            model_max_features (str|float|None): max_features.
-            model_criterion (str): Split criterion.
-            model_validation_split (float): Test fraction by samples.
-            model_n_nearest_features (int | None): Number of Nearest Neighbors for IterativeImputer. Defaults to 10.
-            model_max_iter (int): Max IterativeImputer iterations.
-            sim_prop_missing (float): Proportion of genotypes to simulate as missing.
-            sim_strategy (str): Strategy for simulating missingness.
-            sim_het_boost (float): Factor to boost heterozygous missingness.
-            plot_format (Literal["pdf", "png", "jpg", "jpeg"]): Plot format.
-            plot_fontsize (int): Font size for plots.
-            plot_despine (bool): Whether to despine plots.
-            plot_dpi (int): DPI for plots.
-            plot_show_plots (bool): Whether to show plots.
-        """
+        config: HGBConfig | Dict | str | None = None,
+        overrides: Dict | None = None,
+    ) -> None:
         self.model_name = "ImputeHistGradientBoosting"
         self.Model = HistGradientBoostingClassifier
 
+        cfg = ensure_hgb_config(config)
+        if overrides:
+            cfg = cfg.apply_overrides(overrides)
+        self.cfg = cfg
+
         self.genotype_data = genotype_data
         self.pgenc = GenotypeEncoder(genotype_data)
-        self.prefix = prefix
-        self.seed = seed
-        self.n_jobs = n_jobs
-        self.verbose = verbose
-        self.debug = debug
 
-        super().__init__(verbose=verbose, debug=debug)
+        self.prefix = cfg.io.prefix
+        self.seed = cfg.io.seed
+        self.n_jobs = cfg.io.n_jobs
+        self.verbose = cfg.io.verbose
+        self.debug = cfg.io.debug
 
-        logman = LoggerManager(__name__, prefix=prefix, verbose=verbose, debug=debug)
+        super().__init__(verbose=self.verbose, debug=self.debug)
+
+        logman = LoggerManager(
+            __name__, prefix=self.prefix, verbose=self.verbose, debug=self.debug
+        )
         self.logger = logman.get_logger()
 
-        # Ensure supervised-family directories (models/plots/metrics/optimize)
         self._create_model_directories(
-            prefix, ["models", "plots", "metrics", "optimize"]
+            self.prefix, ["models", "plots", "metrics", "optimize", "parameters"]
         )
 
-        # Plotting config
-        self.plot_format = plot_format
-        self.plot_dpi = plot_dpi
-        self.plot_fontsize = plot_fontsize
-        self.title_fontsize = plot_fontsize
-        self.despine = plot_despine
-        self.show_plots = plot_show_plots
+        self.plot_format = cfg.plot.fmt
+        if self.plot_format.startswith("."):
+            self.plot_format = self.plot_format.lstrip(".")
+        self.plot_fontsize = cfg.plot.fontsize
+        self.title_fontsize = cfg.plot.fontsize
+        self.plot_dpi = cfg.plot.dpi
+        self.despine = cfg.plot.despine
+        self.show_plots = cfg.plot.show
 
-        # Data/task config
-        self.validation_split = model_validation_split
+        self.validation_split = cfg.train.validation_split
 
-        # HGB params
+        class_weight = getattr(cfg.model, "class_weight", "balanced")
         self.params = _HGBParams(
-            max_iter=model_n_estimators,
-            learning_rate=model_learning_rate,
-            max_depth=model_max_depth,
-            min_samples_leaf=model_min_samples_leaf,
-            max_features=model_max_features,
-            random_state=seed,
-            verbose=debug,
-            n_iter_no_change=model_n_iter_no_change,
-            tol=model_tol,
+            max_iter=cfg.model.n_estimators,
+            learning_rate=cfg.model.learning_rate,
+            max_depth=cfg.model.max_depth,
+            min_samples_leaf=cfg.model.min_samples_leaf,
+            max_features=cfg.model.max_features,
+            n_iter_no_change=cfg.model.n_iter_no_change,
+            tol=cfg.model.tol,
+            class_weight=class_weight,
+            random_state=self.seed,
+            verbose=self.debug,
         )
 
-        # Imputer params
         self.imputer_params = _ImputerParams(
-            n_nearest_features=model_n_nearest_features,
-            max_iter=model_max_iter,
-            random_state=seed,
-            verbose=verbose,
+            n_nearest_features=cfg.imputer.n_nearest_features,
+            max_iter=cfg.imputer.max_iter,
+            random_state=self.seed,
+            verbose=self.verbose,
         )
 
         self.sim_params = _SimParams(
-            prop_missing=sim_prop_missing,
-            strategy=sim_strategy,
-            missing_val=-1,
-            het_boost=sim_het_boost,
-            seed=seed,
+            prop_missing=cfg.sim.prop_missing,
+            strategy=cfg.sim.strategy,
+            missing_val=cfg.sim.missing_val,
+            het_boost=cfg.sim.het_boost,
+            seed=self.seed,
         )
 
-        self.max_iter = model_max_iter
-        self.n_nearest_features = model_n_nearest_features
+        self.max_iter = cfg.imputer.max_iter
+        self.n_nearest_features = cfg.imputer.n_nearest_features
 
         # Will be set in fit()
         self.is_haploid_: bool | None = None
@@ -174,6 +152,8 @@ class ImputeHistGradientBoosting(BaseImputer):
 
     def fit(self) -> "BaseImputer":
         """Fit the imputer using self.genotype_data with no arguments.
+
+        This method prepares the imputer by splitting the data into training and testing sets, and masking all originally observed genotype entries in the test set to facilitate unbiased evaluation. It does not perform any actual imputation since the RefAllele imputer is deterministic.
 
         Steps:
             1) Encode to 0/1/2 with -9/-1 as missing.
@@ -279,18 +259,28 @@ class ImputeHistGradientBoosting(BaseImputer):
         )
         self._evaluate_iupac10_and_plot(y_true_iupac, y_pred_iupac)
 
+        self.best_params_ = self.model_params_
+        self.best_params_.update(self.imputer_params.to_dict())
+        self.best_params_.update(self.sim_params.to_dict())
+        self._save_best_params(self.best_params_)
+
         return self
 
     def transform(self) -> np.ndarray:
         """Impute all samples and return imputed genotypes.
 
+        This method applies the trained imputer to the entire dataset, filling in missing genotype values. It ensures that any remaining missing values after imputation are set to -9, and decodes the imputed 0/1/2 genotypes back to their original format.
+
         Returns:
             np.ndarray: (n_samples, n_loci) integers with no -9/-1/NaN.
+
+        Raises:
+            NotFittedError: If fit() has not been called prior to transform().
         """
         if not self.is_fit_:
             msg = "Imputer has not been fit; call fit() before transform()."
             self.logger.error(msg)
-            raise RuntimeError(msg)
+            raise NotFittedError(msg)
 
         X = self.X012_.copy()
         X_imp = self.imputer_.transform(X)

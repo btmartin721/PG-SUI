@@ -1,4 +1,5 @@
 import copy
+import json
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
 
 import matplotlib.pyplot as plt
@@ -301,6 +302,8 @@ class ImputeAutoencoder(BaseNNImputer):
         # Evaluate on validation set (parity with NLPCA reporting)
         self._evaluate_model(self.X_val_, self.model_, self.best_params_)
         self.plotter_.plot_history(self.history_)
+        self._save_best_params(self.best_params_)
+
         return self
 
     def transform(self) -> np.ndarray:

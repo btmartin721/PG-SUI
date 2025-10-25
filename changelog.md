@@ -28,7 +28,7 @@ An overview of changes to **PG-SUI** by release. This mirrors the Sphinx/RST cha
 
 ### Enhancements - 1.6.1
 
-- Consistent nested config sections across all families: `io`, `training`/`train`, `tuning`/`tune`, `evaluate`, `plot`, `algorithm`/`algo`.
+- Consistent nested config sections across all families: `io`, `model`, `train`, `tune`, `evaluate`/`split`, `plot`, plus `algo`/`imputer`/`sim` where applicable.
 - Optuna tuning flow streamlined (proxy batch option, warm-up pruning, latent-inference hooks for NLPCA-like decoders).
 - Improved logging and directory structure: `{prefix}_output/{Family}/{plots,metrics,models,optimize}/{Model}/`.
 
@@ -37,7 +37,9 @@ An overview of changes to **PG-SUI** by release. This mirrors the Sphinx/RST cha
 - **About PG-SUI**: rewritten with author–year citations; clarifies supervised vs unsupervised vs deterministic.
 - **Deterministic Imputers** page: refactor-aligned; examples, YAML usage, CLI overrides, dataclass API.
 - **Supervised Imputers** page: `RFConfig`/`HGBConfig` added; clarified `IterativeImputer` integration and evaluation protocol.
+- **Unsupervised Imputers** page: expanded workflow overview, config summaries, and usage examples tied to the shared BaseNNImputer stack.
 - **Tutorials**: “Implementing New Models” updated to dataclass + wrapper patterns (NLPCA/UBP/decoder-first examples).
+- **Tutorial** page: quick-start code, YAML sample, and CLI overrides now mirror the current config attributes and IUPAC outputs.
 - Fixed Sphinx issues (e.g., `:noindex:` typos, math blocks, section headings).
 
 ### Breaking Changes - 1.6.1
@@ -48,7 +50,7 @@ An overview of changes to **PG-SUI** by release. This mirrors the Sphinx/RST cha
       model.fit()
       X_imputed = model.transform()
 
-- CLI flags harmonized; prefer dot-path overrides such as `--set training.model_latent_dim=16`.
+- CLI flags harmonized; prefer dot-path overrides such as `--set model.latent_dim=16`.
 
 ---
 
