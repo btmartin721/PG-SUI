@@ -136,3 +136,4 @@ pgsui_output/
 *14K.vcf_output/
 .venv/
 **/node_modules/
+.codex/
