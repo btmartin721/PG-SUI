@@ -4,6 +4,19 @@ Changelog
 
 An overview of changes to **PG-SUI** by release. This file mirrors the GitHub Markdown changelog and reflects the refactor-era docs: dataclass-first configs, presets, unified scikit-learn framework-based ``fit()/transform()`` methods, CLI precedence, and updated deterministic/supervised docs.
 
+1.6.3 - 2025-10-25
+------------------
+
+Changes - v1.6.3
+^^^^^^^^^^^^^^^^
+
+- Fixed typo in ``ImputeRefAllele`` docstring.
+- Added Dockerfile and entrypoint script.
+- Added electron app for GUI usage.
+- Improved startup script for better error handling.
+- Enhanced Dockerfile for multi-stage builds.
+- Updated documentation throughout for clarity and accuracy.
+
 1.6.2 — 2025-10-04
 ------------------
 

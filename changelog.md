@@ -4,6 +4,17 @@ An overview of changes to **PG-SUI** by release. This mirrors the Sphinx/RST cha
 
 ---
 
+## 1.6.3 - 2025-10-25
+
+### Changes - 1.6.3
+
+- Fixed typo in ``ImputeRefAllele`` docstring.
+- Added Dockerfile and entrypoint script.
+- Added electron app for GUI usage.
+- Improved startup script for better error handling.
+- Enhanced Dockerfile for multi-stage builds.
+- Updated documentation throughout for clarity and accuracy.
+
 ## 1.6.2 - 2025-10-04
 
 ### Changes - 1.6.2
