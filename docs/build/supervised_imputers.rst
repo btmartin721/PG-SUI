@@ -4,7 +4,7 @@ Supervised Imputers
 Overview
 --------
 
-PG-SUI's supervised imputers frame genotype imputation as **multiclass prediction** (0 = REF, 1 = HET, 2 = ALT for diploids; haploids collapse to two classes). They use typed ``*Config`` dataclasses with presets (``fast``, ``balanced``, ``thorough``), optional YAML, and a consistent **instantiate → fit() → transform()** workflow:
+PG-SUI's supervised imputers frame genotype imputation as **multiclass prediction** (0 = REF, 1 = HET, 2 = ALT for diploids; haploids collapse to two classes). They use typed ``*Config`` dataclasses with presets (``fast``, ``balanced``, ``thorough``), optional YAML, and a consistent **instantiate → fit() → transform()** workflow. Under the hood each model wraps :class:`sklearn.impute.IterativeImputer` with a tree-based estimator, evaluates on simulated missingness, and reports both 0/1/2 and IUPAC metrics.
 
 .. code-block:: python
 
@@ -23,39 +23,33 @@ PG-SUI's supervised imputers frame genotype imputation as **multiclass predictio
 Shared Arguments
 ----------------
 
-The following options are common across supervised imputers (see the specific
-``*Config`` classes below for full details and defaults).
+The supervised configs expose the following sections (see the specific ``*Config`` definitions below for field-level defaults):
 
-- **I/O (``io``)**:
-  - ``prefix``: run name used for output directories and artifacts.
-  - ``plot_format``, ``verbose``, ``debug``, ``seed``: logging/replicability.
+- **``io``** - run prefix, logging toggles, seeds, and job counts for sklearn.
+- **``model``** - estimator hyperparameters (e.g., tree depth, number of estimators, learning rate).
+- **``train``** - validation split size used when carving out the hold-out set.
+- **``imputer``** - IterativeImputer settings such as ``max_iter`` and ``n_nearest_features``.
+- **``sim``** - controls the :class:`pgsui.data_processing.transformers.SimGenotypeDataTransformer` used to mask additional sites for evaluation (proportion, strategy, missing code).
+- **``plot``** - figure export format, DPI, font size, despine toggle, and interactive display.
+- **``tune``** - retained for API parity; presets disable Optuna for tree models but the structure accepts future tuning hooks.
 
-- **Training (``training``)**:
-  - ``validation_split``: fraction of samples for validation.
-  - ``device``: kept for API consistency; tree models run on CPU.
-  - ``seed``: controls sklearn and any internal shuffles.
-
-- **Tuning (``tuning``)**:
-  - Tuning is not available for supervised imputers, but the dataclass fields are retained for API consistency.
-
-- **Plotting (``plot``)**:
-  - ``show``, ``dpi``: control display and export quality.
-
-- **Evaluation**:
-  - Metrics reported per-zygosity (REF/HET/ALT) and macro-averaged; confusion matrices, PR curves, zygosity bars, and a cross-model radar summary are written to ``{prefix}_output/Supervised/plots/{Model}/`` with matching CSV/JSON metrics.
+Evaluation artefacts (metrics, plots, tuned parameters) land under ``{prefix}_output/Supervised/{plots,metrics,parameters}/`` with one folder per model.
 
 Notes
 ^^^^^
 
-- Inputs are taken from SNPio's ``GenotypeData`` attached at **instantiation**.
-- ``fit()`` trains and writes reports; ``transform()`` returns an imputed 0/1/2 array.
-- Class imbalance is handled via macro metrics and (optionally) class-weight shaping.
+- Inputs are taken from SNPio's ``GenotypeData`` at **instantiation** and encoded to 0/1/2 with ``-9/-1`` treated as missing.
+- ``fit()`` splits with ``train.validation_split``, trains an IterativeImputer that wraps the chosen estimator, simulates extra missingness via ``sim`` settings, and writes macro metrics plus plots.
+- ``transform()`` imputes the full cohort, coerces any residual negatives/NaNs to ``-9``, and returns IUPAC strings in addition to cached plots.
+- Class imbalance can be managed via estimator ``class_weight`` plus the macro-averaged scoring suite reported for every run.
 
 Config Dataclasses (API)
 ------------------------
 
 Random Forest (Config)
 ^^^^^^^^^^^^^^^^^^^^^^
+
+Captures :class:`sklearn.ensemble.RandomForestClassifier` knobs plus IterativeImputer and simulation settings used by :class:`pgsui.impute.supervised.imputers.random_forest.ImputeRandomForest`.
 
 .. autoclass:: pgsui.data_processing.containers.RFConfig
    :members:
@@ -65,6 +59,8 @@ Random Forest (Config)
 
 HistGradientBoosting (Config)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Defines the histogram-based gradient boosting estimator parameters together with IterativeImputer and simulation envelopes consumed by :class:`pgsui.impute.supervised.imputers.hist_gradient_boosting.ImputeHistGradientBoosting`.
 
 .. autoclass:: pgsui.data_processing.containers.HGBConfig
    :members:
@@ -78,6 +74,8 @@ Supervised Imputer Models
 Random Forest
 ^^^^^^^^^^^^^
 
+Wraps :class:`sklearn.impute.IterativeImputer` around a RandomForestClassifier to iteratively fill masked loci; metrics are reported on both 0/1/2 and decoded IUPAC targets using the simulated validation mask.
+
 .. autoclass:: pgsui.impute.supervised.imputers.random_forest.ImputeRandomForest
    :members:
    :show-inheritance:
@@ -86,6 +84,8 @@ Random Forest
 
 HistGradientBoosting
 ^^^^^^^^^^^^^^^^^^^^
+
+Uses :class:`sklearn.ensemble.HistGradientBoostingClassifier` as the IterativeImputer estimator, enabling faster training on wide genotype matrices while sharing the evaluation and plotting stack with the Random Forest variant.
 
 .. autoclass:: pgsui.impute.supervised.imputers.hist_gradient_boosting.ImputeHistGradientBoosting
    :members:
@@ -96,28 +96,29 @@ HistGradientBoosting
 CLI Examples
 ------------
 
-Run both supervised models with a preset and Optuna tuning:
+Run both supervised models with the ``balanced`` preset and a shared prefix:
 
 .. code-block:: bash
 
    pg-sui \
-     --vcf data.vcf.gz \
-     --popmap pops.popmap \
-     --models ImputeRandomForest ImputeHistGradientBoosting \
-     --preset balanced \
-     --set io.prefix=supervised_demo \
+      --vcf data.vcf.gz \
+      --popmap pops.popmap \
+      --models ImputeRandomForest ImputeHistGradientBoosting \
+      --preset balanced \
+      --set io.prefix=supervised_demo
 
 YAML + overrides:
 
 .. code-block:: bash
 
    pg-sui \
-     --vcf data.vcf.gz \
-     --popmap pops.popmap \
-     --models ImputeHistGradientBoosting \
-     --preset thorough \
-     --config hgb.yaml \
-     --set io.prefix=hgb_thorough
+      --vcf data.vcf.gz \
+      --popmap pops.popmap \
+      --models ImputeHistGradientBoosting \
+      --preset thorough \
+      --config hgb.yaml \
+      --set io.prefix=hgb_thorough \
+      --set imputer.max_iter=12 sim.prop_missing=0.4
 
 Outputs
 -------
