@@ -290,6 +290,7 @@ class ImputeVAE(BaseNNImputer):
         # Evaluate (AE-parity reporting)
         self._evaluate_model(self.X_val_, self.model_, self.best_params_)
         self.plotter_.plot_history(self.history_)
+        self._save_best_params(self.best_params_)
         return self
 
     def transform(self) -> np.ndarray:

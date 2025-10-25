@@ -20,14 +20,6 @@ class ClassificationReportVisualizer:
 
     Adds neon cyberpunk aesthetics, a per-class support overlay, and optional bootstrap confidence intervals.
 
-    Methods:
-        - to_dataframe(): standardize sklearn dict -> tidy DataFrame
-        - plot_heatmap(): seaborn heatmap (+ right-hand support strip)
-        - plot_grouped_bars(): grouped bars with support markers and CI error bars
-        - plot_radar(): interactive radar with optional CI bands and top-k classes
-        - compute_ci(): aggregate bootstrap report dicts to CI bounds (per metric)
-        - plot_all(): convenience wrapper
-
     Attributes:
         retro_palette: Hex colors for neon vibe.
         background_hex: Matplotlib/Plotly dark background.
@@ -143,6 +135,8 @@ class ClassificationReportVisualizer:
     # ---------- Palettes & styles ----------
     def _retro_cmap(self, n: int = 256) -> LinearSegmentedColormap:
         """Create a neon gradient colormap.
+
+        This colormap transitions through a series of bright, neon colors.
 
         Args:
             n (int): Number of discrete colors in the colormap. Defaults to 256.
@@ -399,6 +393,8 @@ class ClassificationReportVisualizer:
         ci_df: Optional[pd.DataFrame] = None,
     ) -> go.Figure:
         """Interactive radar chart of averages + top-k classes; optional CI bands.
+
+        This function creates a radar chart using Plotly, displaying the specified metrics for the top-k classes.
 
         Args:
             df (pd.DataFrame): DataFrame from `to_dataframe()`.

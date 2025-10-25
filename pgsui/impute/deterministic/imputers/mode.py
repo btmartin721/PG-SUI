@@ -86,6 +86,8 @@ class ImputeMostFrequent:
     ) -> None:
         """Initialize the Most-Frequent (mode) imputer from a unified config.
 
+        This constructor ensures that the provided configuration is valid and initializes the imputer's internal state. It sets up logging, random number generation, genotype encoding, and various parameters based on the configuration. The imputer is prepared to handle population-specific modes if specified in the configuration.
+
         Args:
             genotype_data (GenotypeData): Backing genotype data.
             config (MostFrequentConfig | dict | str | None): Configuration as a dataclass,
@@ -136,7 +138,7 @@ class ImputeMostFrequent:
         self.default = int(cfg.algo.default)
         self.missing = int(cfg.algo.missing)
 
-        # Populations (only if requested)
+        # Populations (if requested)
         self.pops = None
         if self.by_populations:
             pops = getattr(self.genotype_data, "populations", None)
@@ -190,7 +192,7 @@ class ImputeMostFrequent:
         )
 
         # Output dirs
-        dirs = ["models", "plots", "metrics", "optimize"]
+        dirs = ["models", "plots", "metrics", "optimize", "parameters"]
         self._create_model_directories(self.prefix, dirs)
 
     def fit(self) -> "ImputeMostFrequent":
@@ -199,7 +201,7 @@ class ImputeMostFrequent:
         This method prepares the data for imputation by splitting it into training and testing sets, computing the most frequent genotype (mode) for each locus based on the training set, and creating a mask to simulate missing data in the test set for evaluation purposes.
 
         Returns:
-            ImputeMostFrequent: The fitted imputer instance.s
+            ImputeMostFrequent: The fitted imputer instance.
         """
         self.train_idx_, self.test_idx_ = self._make_train_test_split()
         self.ground_truth012_ = self.X012_.copy()
@@ -241,9 +243,14 @@ class ImputeMostFrequent:
         self.X_train_df_ = df_sim
         self.is_fit_ = True
 
+        best_params = self.cfg.to_dict()
+        params_fp = self.parameters_dir / "best_parameters.json"
+
+        with open(params_fp, "w") as f:
+            json.dump(best_params, f, indent=4)
+
         self.logger.info(
-            f"Fit complete. Train rows: {self.train_idx_.size}, Test rows: {self.test_idx_.size}. "
-            f"Masked {int(sim_mask.sum())} observed test cells for evaluation."
+            f"Fit complete. Train rows: {self.train_idx_.size}, Test rows: {self.test_idx_.size}. Masked {int(sim_mask.sum())} observed test cells for evaluation."
         )
         return self
 
@@ -254,9 +261,14 @@ class ImputeMostFrequent:
 
         Returns:
             np.ndarray: Imputed genotypes as IUPAC strings, shape (n_samples, n_variants).
+
+        Raises:
+            NotFittedError: If fit() has not been called prior to transform().
         """
         if not self.is_fit_:
-            raise RuntimeError("Model is not fitted. Call fit() before transform().")
+            msg = "Model is not fitted. Call fit() before transform()."
+            self.logger.error(msg)
+            raise NotFittedError(msg)
         assert self.X_train_df_ is not None
 
         # 1) Impute the evaluation-masked copy (to compute metrics)
@@ -264,7 +276,7 @@ class ImputeMostFrequent:
         X_imputed_eval = imputed_eval_df.to_numpy(dtype=np.int16)
         self.X_imputed012_ = X_imputed_eval
 
-        # Evaluate like the DL models (first 0/1/2, then 10-class from decoded strings)
+        # Evaluate like DL models (0/1/2, then 10-class from decoded strings)
         self._evaluate_and_report()
 
         # 2) Impute the FULL dataset (only true missings)
@@ -310,10 +322,11 @@ class ImputeMostFrequent:
         Returns:
             pd.DataFrame: DataFrame with missing values imputed.
         """
-        df = df_in.copy()
-        for col in df.columns:
-            if df[col].isnull().any():
-                df[col] = df[col].fillna(self.global_modes_[col])
+        if df_in.isnull().values.any():
+            modes = pd.Series(self.global_modes_)
+            df = df_in.fillna(modes)
+        else:
+            df = df_in.copy()
         return df.astype(np.int16)
 
     def _impute_by_population_mode(self, df_in: pd.DataFrame) -> pd.DataFrame:
@@ -327,21 +340,29 @@ class ImputeMostFrequent:
         Returns:
             pd.DataFrame: DataFrame with missing values imputed.
         """
+        if not df_in.isnull().values.any():
+            return df_in.astype(np.int16)
+
         df = df_in.copy()
-        df["_pops_"] = self.pops
-        out_cols = []
-        for col in df.columns:
-            if col == "_pops_" or not df[col].isnull().any():
-                out_cols.append(df[col])
-                continue
-            pop_to_mode = {
-                pop: self.group_modes_.get(pop, {}).get(col, self.global_modes_[col])
-                for pop in df["_pops_"].unique()
-            }
-            filled_col = df[col].fillna(df["_pops_"].map(pop_to_mode))
-            out_cols.append(filled_col)
-        imputed_df = pd.concat(out_cols, axis=1)
-        return imputed_df.drop(columns=["_pops_"]).astype(np.int16)
+        pops = pd.Series(self.pops, index=df.index)
+        global_modes = pd.Series(self.global_modes_)
+
+        pop_modes = pd.DataFrame.from_dict(self.group_modes_, orient="index")
+        if pop_modes.empty:
+            pop_modes = pd.DataFrame(index=pd.Index([], name="population"), columns=df.columns)
+
+        pop_modes = pop_modes.reindex(columns=df.columns)
+        pop_modes = pop_modes.fillna(global_modes)
+
+        aligned_modes = pop_modes.reindex(pops.to_numpy(), fill_value=np.nan)
+        aligned_modes = aligned_modes.fillna(global_modes)
+
+        values = df.to_numpy(dtype=np.float32)
+        replacements = aligned_modes.to_numpy(dtype=np.float32)
+        mask = np.isnan(values)
+        values[mask] = replacements[mask]
+
+        return pd.DataFrame(values, columns=df.columns, index=df.index).astype(np.int16)
 
     def _series_mode(self, s: pd.Series) -> int:
         """Compute the mode of a pandas Series, ignoring NaNs.
@@ -367,7 +388,7 @@ class ImputeMostFrequent:
     def _evaluate_and_report(self) -> None:
         """Evaluate imputed vs. ground truth on masked test cells; produce reports and plots.
 
-        Requires that fit() and transform() have been called.
+        Requires that fit() and transform() have been called. This method evaluates the imputed genotypes against the ground truth for the masked test cells, generating classification reports and confusion matrices for both 0/1/2 zygosity and 10-class IUPAC codes. It logs the results and saves the reports and plots to the designated output directories.
 
         Raises:
             NotFittedError: If fit() and transform() have not been called.

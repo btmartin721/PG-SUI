@@ -30,9 +30,9 @@ import ast
 import logging
 import sys
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Literal, Optional, Tuple
 
-from snpio import VCFReader
+from snpio import GenePopReader, PhylipReader, StructureReader, VCFReader
 
 from pgsui import (
     ImputeAutoencoder,
@@ -167,22 +167,37 @@ def _args_to_cli_overrides(args: argparse.Namespace) -> dict:
 
 # ------------------------------ Core Runner ------------------------------ #
 def build_genotype_data(
-    vcf_path: str,
+    input_path: str,
+    fmt: Literal["vcf", "phylip", "genepop"],
     popmap_path: str | None,
     force_popmap: bool,
     verbose: bool,
     include_pops: List[str] | None,
-) -> VCFReader:
-    """Load genotype data from VCF/popmap."""
-    logging.info("Loading VCF and popmap data...")
-    gd = VCFReader(
-        filename=vcf_path,
-        popmapfile=popmap_path,
-        force_popmap=force_popmap,
-        verbose=verbose,
-        include_pops=include_pops if include_pops else None,
-        prefix=f"snpio_{Path(vcf_path).stem}",
-    )
+    plot_format: Literal["pdf", "png", "jpg", "jpeg"],
+):
+    """Load genotype data from heterogeneous inputs."""
+    logging.info(f"Loading {fmt.upper()} and popmap data...")
+    fmt = fmt.lower()
+
+    kwargs = {
+        "filename": input_path,
+        "popmapfile": popmap_path,
+        "force_popmap": force_popmap,
+        "verbose": verbose,
+        "include_pops": include_pops if include_pops else None,
+        "prefix": f"snpio_{Path(input_path).stem}",
+        "plot_format": plot_format,
+    }
+
+    if fmt == "vcf":
+        gd = VCFReader(**kwargs)
+    elif fmt == "phylip":
+        gd = PhylipReader(**kwargs)
+    elif fmt == "genepop":
+        gd = GenePopReader(**kwargs)
+    else:
+        raise ValueError(f"Unsupported genotype data format: {fmt}")
+
     logging.info("Loaded genotype data.")
     return gd
 
@@ -329,7 +344,21 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
 
     # ----------------------------- Required I/O ----------------------------- #
-    parser.add_argument("--vcf", required=True, help="Path to input VCF(.gz) file.")
+    parser.add_argument(
+        "--input",
+        default=argparse.SUPPRESS,
+        help="Path to input file (VCF/PHYLIP/STRUCTURE/GENEPOP).",
+    )
+    parser.add_argument(
+        "--format",
+        choices=("vcf", "phylip", "structure", "genepop"),
+        default=argparse.SUPPRESS,
+        help="Input format; defaults to 'vcf' when --vcf is used.",
+    )
+    # Back-compat: --vcf retained; if both provided, --input wins.
+    parser.add_argument(
+        "--vcf", default=argparse.SUPPRESS, help="Path to input VCF(.gz) file."
+    )
     parser.add_argument(
         "--popmap", default=argparse.SUPPRESS, help="Path to population map file."
     )
@@ -465,8 +494,18 @@ def main(argv: Optional[List[str]] = None) -> int:
         parser.error(str(e))
         return 2
 
-    # Data I/O flags
-    vcf_path = args.vcf
+    # Input resolution
+    input_path = getattr(args, "input", None)
+    if input_path is None and hasattr(args, "vcf"):
+        input_path = args.vcf
+        if not hasattr(args, "format"):
+            setattr(args, "format", "vcf")
+
+    if input_path is None:
+        parser.error("You must provide --input (or legacy --vcf).")
+        return 2
+
+    fmt = getattr(args, "format", "vcf").lower()
     popmap_path = getattr(args, "popmap", None)
     include_pops = getattr(args, "include_pops", None)
     verbose_flag = getattr(args, "verbose", False)
@@ -474,11 +513,13 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # Load genotype data
     gd = build_genotype_data(
-        vcf_path=vcf_path,
+        input_path=input_path,
+        fmt=fmt,
         popmap_path=popmap_path,
         force_popmap=force_popmap,
         verbose=verbose_flag,
         include_pops=include_pops,
+        plot_format=getattr(args, "plot_format", "pdf"),
     )
 
     if getattr(args, "dry_run", False):
@@ -579,7 +620,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         else:
             raise ValueError(f"Unknown model family for {name}")
 
-        prefix = getattr(args, "prefix", str(Path(vcf_path).stem))
+        prefix = getattr(args, "prefix", str(Path(input_path).stem))
         pth = Path(f"{prefix}_output/{family}/imputed/{name}")
         pth.mkdir(parents=True, exist_ok=True)
 

@@ -64,6 +64,8 @@ def _interpolate_env(s: str) -> str:
 def _walk_env(obj: Any) -> Any:
     """Recursively interpolate env vars in strings within a nested structure.
 
+    This function traverses the input object and applies environment variable interpolation to any strings it encounters.
+
     Args:
         obj (Any): The input object, which can be a string, dict, list, or other types.
 
@@ -83,11 +85,16 @@ def _walk_env(obj: Any) -> Any:
 def dataclass_to_yaml(dc: T) -> str:
     """Convert a dataclass instance to a YAML string.
 
+    This function uses the `asdict` function from the `dataclasses` module to convert the dataclass instance into a dictionary, which is then serialized to a YAML string using the `yaml` module.
+
     Args:
         dc (T): A dataclass instance.
 
     Returns:
         str: The YAML representation of the dataclass.
+
+    Raises:
+        TypeError: If `dc` is not a dataclass instance.
     """
     if not is_dataclass(dc):
         raise TypeError("dataclass_to_yaml expects a dataclass instance.")
@@ -96,6 +103,8 @@ def dataclass_to_yaml(dc: T) -> str:
 
 def save_dataclass_yaml(dc: T, path: str) -> None:
     """Save a dataclass instance as a YAML file.
+
+    This function uses the `dataclass_to_yaml` function to convert the dataclass instance into a YAML string, which is then written to a file.
 
     Args:
         dc (T): A dataclass instance.
@@ -115,6 +124,8 @@ def save_dataclass_yaml(dc: T, path: str) -> None:
 
 def _merge_into_dataclass(inst: Any, payload: Dict[str, Any], path: str = "") -> Any:
     """Recursively merge a nested dict into a dataclass instance in place.
+
+    This function updates the fields of the dataclass instance with values from the nested mapping. It raises errors for unknown keys and ensures that nested dataclasses are merged recursively.
 
     Args:
         inst (Any): A dataclass instance to update.
@@ -183,6 +194,7 @@ def load_yaml_to_dataclass(
         TypeError: If `base` is not a dataclass, or YAML root isn't a mapping,
             or `overlays` isn't a mapping when provided.
         ValueError: If `yaml_preset_behavior="error"` and YAML contains `preset`.
+        KeyError: If any override path is invalid.
     """
     with open(path, "r", encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
@@ -230,6 +242,8 @@ def load_yaml_to_dataclass(
 def _is_dataclass_type(tp: t.Any) -> bool:
     """Return True if tp is a dataclass type (not instance).
 
+    This function checks if the given type is a dataclass type by verifying its properties and using the `is_dataclass` function from the `dataclasses` module.
+
     Args:
         tp (t.Any): A type to check.
 
@@ -243,7 +257,16 @@ def _is_dataclass_type(tp: t.Any) -> bool:
 
 
 def _unwrap_optional(tp: t.Any) -> t.Any:
-    """If Optional[T] or Union[T, None], return T; else tp."""
+    """If Optional[T] or Union[T, None], return T; else tp.
+
+    This function checks if the given type is an Optional or a Union that includes None, and if so, it returns the non-None type. Otherwise, it returns the original type.
+
+    Args:
+        tp (t.Any): A type annotation.
+
+    Returns:
+        t.Any: The unwrapped type, or the original type if not applicable.
+    """
     origin = t.get_origin(tp)
     if origin is t.Union:
         args = [a for a in t.get_args(tp) if a is not type(None)]
@@ -254,23 +277,35 @@ def _unwrap_optional(tp: t.Any) -> t.Any:
 def _expected_field_type(dc_type: type, name: str) -> t.Any:
     """Fetch the annotated type of field `name` on dataclass type `dc_type`.
 
+    This function retrieves the type annotation for a specific field in a dataclass. If the field is not found, it raises a KeyError.
+
     Args:
         dc_type (type): A dataclass type.
         name (str): The field name to look up.
 
     Returns:
         t.Any: The annotated type of the field.
+
+    Raises:
+        KeyError: If the field is unknown.
     """
     for f in fields(dc_type):
         if f.name == name:
-            return f.type
+            hint = f.type
+            if isinstance(hint, str):
+                try:
+                    resolved = t.get_type_hints(dc_type).get(name, hint)
+                    hint = resolved
+                except Exception:
+                    pass
+            return hint
     raise KeyError(f"Unknown config key: '{name}' on {dc_type.__name__}")
 
 
 def _instantiate_field(dc_type: type, name: str):
     """Create a default instance for nested dataclass field `name`.
 
-    Attempts to use default_factory, then default, then type constructor.
+    Attempts to use default_factory, then default, then type constructor. If none are available, raises KeyError.
 
     Args:
         dc_type (type): A dataclass type.
@@ -278,6 +313,9 @@ def _instantiate_field(dc_type: type, name: str):
 
     Returns:
         Any: An instance of the field's type.
+
+    Raises:
+        KeyError: If the field is unknown or cannot be instantiated.
     """
     for f in fields(dc_type):
         if f.name == name:
@@ -308,6 +346,8 @@ def _merge_mapping_into_dataclass(
 ) -> T:
     """Recursively merge a dict into a dataclass instance (strict on keys).
 
+    This function updates the fields of a dataclass instance with values from a nested mapping (dict). It ensures that all keys in the mapping correspond to fields in the dataclass, and it handles nested dataclass fields as well.
+
     Args:
         instance (T): A dataclass instance to update.
         payload (dict): A nested mapping to merge into `instance`.
@@ -315,6 +355,10 @@ def _merge_mapping_into_dataclass(
 
     Returns:
         T: The updated dataclass instance (same as `instance`).
+
+    Raises:
+        TypeError: If `instance` is not a dataclass.
+        KeyError: If `payload` contains keys not present in `instance`.
     """
     if not is_dataclass(instance):
         raise TypeError(f"Expected dataclass at {path}, got {type(instance)}")
@@ -337,12 +381,20 @@ def _merge_mapping_into_dataclass(
             merged = _merge_mapping_into_dataclass(cur, v, path=f"{path}.{k}")
             setattr(instance, k, merged)
         else:
-            setattr(instance, k, _coerce_value(v, exp_core, f"{path}.{k}"))
+            setattr(
+                instance,
+                k,
+                _coerce_value(v, exp_core, f"{path}.{k}", current=cur),
+            )
     return instance
 
 
-def _coerce_value(value: t.Any, tp: t.Any, where: str):
+def _coerce_value(
+    value: t.Any, tp: t.Any, where: str, *, current: t.Any = MISSING
+):
     """Lightweight coercion for common primitives and Literals.
+
+    This function attempts to coerce a value into a target type, handling common cases like basic primitives (int, float, bool, str) and Literal types. If coercion is not applicable or fails, it returns the original value.
 
     Args:
         value (t.Any): The input value to coerce.
@@ -351,9 +403,27 @@ def _coerce_value(value: t.Any, tp: t.Any, where: str):
 
     Returns:
         t.Any: The coerced value, or the original if no coercion was applied.
+
+    Raises:
+        ValueError: If the value is not valid for a Literal type.
+        TypeError: If the value cannot be coerced to the target type.
     """
     origin = t.get_origin(tp)
     args = t.get_args(tp)
+
+    if tp in {t.Any, object, None}:
+        if current is not MISSING and current is not None:
+            infer_type = type(current)
+            if isinstance(current, bool):
+                tp = bool
+            elif isinstance(current, int) and not isinstance(current, bool):
+                tp = int
+            elif isinstance(current, float):
+                tp = float
+            elif isinstance(current, str):
+                tp = str
+            else:
+                tp = infer_type
 
     # Literal[...] → restrict values
     if origin is t.Literal:
@@ -366,18 +436,31 @@ def _coerce_value(value: t.Any, tp: t.Any, where: str):
 
     # Basic primitives coercion
     if tp in (int, float, bool, str):
-        try:
-            # Avoid bool('0') → True; handle common string bools
-            if tp is bool and isinstance(value, str):
+        if tp is bool:
+            if isinstance(value, str):
                 v = value.strip().lower()
-                if v in {"true", "1", "yes", "on"}:
+                truthy = {"true", "1", "yes", "on"}
+                falsy = {"false", "0", "no", "off"}
+                if v in truthy:
                     return True
-                if v in {"false", "0", "no", "off"}:
+                if v in falsy:
                     return False
-                raise ValueError
+                if v == "" and current is not MISSING:
+                    return bool(current)
+            return bool(value)
+
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped == "":
+                return current if current is not MISSING else value
+            try:
+                return tp(stripped)
+            except Exception:
+                return value
+
+        try:
             return tp(value)
         except Exception:
-            # Fall through to return as-is; your code may purposely pass arrays, etc.
             return value
 
     # Dataclasses or other complex types → trust caller
@@ -394,6 +477,8 @@ def apply_dot_overrides(
 ) -> t.Any:
     """Apply overrides like {'io.prefix': '...', 'train.batch_size': 64} to any \*Config dataclass.
 
+    This function updates the fields of a dataclass instance with values from a nested mapping (dict). It ensures that all keys in the mapping correspond to fields in the dataclass, and it handles nested dataclass fields as well.
+
     Args:
         dc (t.Any): A dataclass instance (or a dict that can be up-cast).
         overrides (dict[str, t.Any] | None): Mapping of dot-key paths to values.
@@ -408,6 +493,10 @@ def apply_dot_overrides(
         - No hard-coding of NLPCAConfig. Pass `root_cls=NLPCAConfig` (or UBPConfig, etc.) when starting from a dict.
         - Dict payloads encountered at intermediate nodes are merged into the expected dataclass type using schema introspection.
         - Enforces unknown-key errors to keep configs honest.
+
+    Raises:
+        TypeError: If `dc` is not a dataclass or dict (for up-cast).
+        KeyError: If any override path is invalid.
     """
     if not overrides:
         return dc
@@ -480,6 +569,8 @@ def apply_dot_overrides(
         if not hasattr(node, leaf):
             raise KeyError(f"Unknown config key: '{dotkey}'")
 
-        setattr(node, leaf, _coerce_value(value, exp_core, dotkey))
+        current = getattr(node, leaf, MISSING)
+        coerced = _coerce_value(value, exp_core, dotkey, current=current)
+        setattr(node, leaf, coerced)
 
     return updated

@@ -1,0 +1,16 @@
+.git
+__pycache__/
+.venv/
+dist/
+build/
+*.egg-info/
+pgsui/electron/app/dist/
+.venv/
+.vscode/
+.pytest_cache/
+.codex/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+

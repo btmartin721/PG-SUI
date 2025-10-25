@@ -296,6 +296,7 @@ class ImputeNLPCA(BaseNNImputer):
         self.is_fit_ = True
         self.plotter_.plot_history(self.history_)
         self._evaluate_model(self.X_test_, self.model_, self.best_params_)
+        self._save_best_params(self.best_params_)
         return self
 
     def transform(self) -> np.ndarray:

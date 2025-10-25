@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Dict, List
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -319,3 +319,21 @@ class BaseImputer:
             json.dump(report_dict, f, indent=4)
 
         self.logger.info(f"{self.model_name} {suffix} report saved to {out_fp}.")
+
+    def _save_best_params(self, best_params: Dict[str, Any]) -> None:
+        """Save the best hyperparameters to a JSON file.
+
+        This method saves the best hyperparameters found during hyperparameter tuning to a JSON file in the optimization directory. The filename includes the model name for easy identification.
+
+        Args:
+            best_params (Dict[str, Any]): A dictionary of the best hyperparameters to save.
+        """
+        if not hasattr(self, "parameters_dir"):
+            msg = "Attribute 'parameters_dir' not found. Ensure _create_model_directories() has been called."
+            self.logger.error(msg)
+            raise AttributeError(msg)
+
+        fout = self.parameters_dir / "best_parameters.json"
+
+        with open(fout, "w") as f:
+            json.dump(best_params, f, indent=4)
