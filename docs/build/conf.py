@@ -24,10 +24,10 @@ copyright = "2021, Bradley T. Martin and Tyler K. Chafin"
 author = "Bradley T. Martin and Tyler K. Chafin"
 
 # The short X.Y version
-version = "1.6.2"
+version = "1.6.3"
 
 # The full version, including alpha/beta/rc tags
-release = "v1.6.2"
+release = "v1.6.3"
 
 
 # -- General configuration ---------------------------------------------------
@@ -107,7 +107,7 @@ html_context = {
     "github_repo": "SNPio",  # GitHub repo
     "github_version": "master",  # Branch to use
     "conf_py_path": "/docs/source/",  # Path to docs in the repo
-    "current_version": "v1.6.2",  # Project version
+    "current_version": "v1.6.3",  # Project version
     "display_version": True,  # Display version number in the theme
     "latest_version": "master",  # Define the latest stable version
     "display_edit_on_github": True,  # Add 'Edit on GitHub' link

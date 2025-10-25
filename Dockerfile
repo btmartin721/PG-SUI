@@ -16,7 +16,7 @@ ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1 PYTHONUNBUFFERED=1 \
 
 # PG-SUI from PyPI with GUI extra
 RUN python3 -m pip install --upgrade pip wheel setuptools && \
-    python3 -m pip install "pg-sui[gui]==1.6.2"
+    python3 -m pip install "pg-sui[gui]==1.6.3"
 
 # Electron app
 WORKDIR /app
