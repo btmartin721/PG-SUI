@@ -15,9 +15,7 @@ maintainers = [
     {name = "Dr. Bradley T. Martin", email = "evobio721@gmail.com"},
 ]
 license = {text = "GNU General Public License v3 (GPLv3)"}
-keywords = [
-    "impute", "imputation", "AI", "deep learning", "machine learning", "neural network", "vae", "autoencoder", "ubp", "nlpca", "population genetics", "unsupervised", "supervised", "bioinformatics", "snp", "genomics", "genotype", "missing data", "data analysis", "data science", "statistics", "data visualization", "python"
-]
+keywords = ["impute","imputation","AI","deep learning","machine learning","neural network","vae","autoencoder","ubp","nlpca","population genetics","unsupervised","supervised","bioinformatics","snp","genomics","genotype","missing data","data analysis","data science","statistics","data visualization","python"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
@@ -59,7 +57,7 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 include = ["pgsui"]
-namespaces = false  # Ensures proper package discovery
+namespaces = false
 
 [project.optional-dependencies]
 intel = ["scikit-learn-intelex"]
@@ -82,9 +80,12 @@ dev = [
     "requests",
     "PyObjC"
 ]
-optional = [
-    "PyObjC"
-]
+optional = ["PyObjC"]
+
+# ---- New: GUI extra ----
+# Keep it empty by default to avoid platform constraints.
+# Users still get the entry points. Node/Electron are resolved at runtime.
+gui = []
 
 [project.urls]
 Homepage = "https://github.com/btmartin721/PG-SUI"
@@ -93,8 +94,13 @@ Source = "https://github.com/btmartin721/PG-SUI.git"
 BugTracker = "https://github.com/btmartin721/PG-SUI/issues"
 
 [tool.setuptools.package-data]
-pgsui = ["example_data/**/*"]
-
+pgsui = [
+    "example_data/**/*",
+    "electron/app/**/*"
+]
 
 [project.scripts]
 pg-sui = "pgsui.cli:main"
+# ---- New: GUI scripts ----
+pgsui-gui = "pgsui.electron.launch:main"
+pgsui-gui-setup = "pgsui.electron.bootstrap:main"
