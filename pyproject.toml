@@ -31,7 +31,6 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Information Analysis",
     "Topic :: Scientific/Engineering :: Visualization",
     "Topic :: Scientific/Engineering :: Machine Learning",
-    "Topic :: Scientific/Engineering :: Data Analysis",
     "Topic :: Scientific/Engineering :: Statistics",
     "Topic :: Software Development :: Libraries :: Application Frameworks",
     "Topic :: Software Development :: Libraries :: Python Modules",
