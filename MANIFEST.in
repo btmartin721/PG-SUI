@@ -1,5 +1,6 @@
 include pgsui/example_data/structure_files/*.str
-include pgsui/example_data/phylip_files/*.phy
-include pgsui/example_data/popmaps/test.popmap
-include pgsui/example_data/trees/test*
-include pgsui/example_data/vcf_files/*
+include pgsui/example_data/phylip_files/test.phy
+include pgsui/example_data/popmaps/phylogen_nomx.popmap
+include pgsui/example_data/vcf_files/phylogen_subset14K.vcf.gz
+include pgsui/example_data/vcf_files/phylogen_subset14K.vcf.gz.tbi
+include README.md LICENSE
