@@ -4,6 +4,21 @@ Changelog
 
 An overview of changes to **PG-SUI** by release. This file mirrors the GitHub Markdown changelog and reflects the refactor-era docs: dataclass-first configs, presets, unified scikit-learn framework-based ``fit()/transform()`` methods, CLI precedence, and updated deterministic/supervised docs.
 
+1.6.4 - 2025-10-26
+------------------
+
+### Bug Fixes - 1.6.4
+^^^^^^^^^^^^^^^^^^^^^
+
+- Fix for import bug where none of the PG-SUI modules could be imported. Incorrect path was specified in ``pyproject.toml``.
+
+Features - 1.6.4
+^^^^^^^^^^^^^^^^
+
+- New Docker image for use with workflow managers like ``Nextflow``.
+- New conda recipe
+- Fixed issues with ``pyproject.toml`` with invalid classifiers when building.
+
 1.6.3 - 2025-10-25
 ------------------
 
