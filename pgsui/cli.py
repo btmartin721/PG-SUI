@@ -48,7 +48,7 @@ from pgsui.data_processing.config import (
     load_yaml_to_dataclass,
     save_dataclass_yaml,
 )
-from pgsui.data_processing.containers import (
+from pgsui import (
     AutoencoderConfig,
     MostFrequentConfig,
     NLPCAConfig,
