@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools", "pip", "wheel"]
+requires = ["setuptools", "setuptools-scm[simple]", "pip", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -53,7 +53,7 @@ dependencies = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["pgsui*"]
-exclude = ["pgsui/electron/app/dist/*", "pgsui/electron/app/node_modules/*"]
+exclude = ["pgsui/electron/app/dist/*", "pgsui/electron/app/node_modules/*", "*.pyc", "__pycache__/*", ".vscode/*", ".github/*", "scripts/*.sh", "docs/**", "simulation/*", "pgsui/figures/**", "conda/**", "bin/**", ".readthedocs.yam*", "notebooks/*", "workflow/**", "img/*.svg", "pgsui/training_data/*.py"]
 
 [project.optional-dependencies]
 intel = ["scikit-learn-intelex"]
@@ -108,5 +108,4 @@ pgsui-gui = "pgsui.electron.launch:main"
 pgsui-gui-setup = "pgsui.electron.bootstrap:main"
 
 [tool.setuptools_scm]
-write_to = "pgsui/_version.py"
-local_scheme = "no-local-version"
+version_file = "pgsui/_version.py"
