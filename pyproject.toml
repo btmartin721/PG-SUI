@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pg-sui"
-version = "1.6.4"
+dynamic = ["version"]
 description = "Python machine and deep learning API to impute missing genotypes"
 readme = "README.md"
 authors = [
@@ -53,6 +53,7 @@ dependencies = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["pgsui*"]
+exclude = ["pgsui/electron/app/dist/*", "pgsui/electron/app/node_modules/*"]
 
 [project.optional-dependencies]
 intel = ["scikit-learn-intelex"]
@@ -91,7 +92,13 @@ BugTracker = "https://github.com/btmartin721/PG-SUI/issues"
 [tool.setuptools.package-data]
 pgsui = [
     "example_data/**/*",
-    "electron/app/**/*"
+    "electron/app/**"
+]
+
+[tool.setuptools.exclude-package-data]
+pgsui = [
+    "electron/app/dist/**",
+    "electron/app/node_modules/**"
 ]
 
 [project.scripts]
@@ -99,3 +106,7 @@ pg-sui = "pgsui.cli:main"
 # ---- New: GUI scripts ----
 pgsui-gui = "pgsui.electron.launch:main"
 pgsui-gui-setup = "pgsui.electron.bootstrap:main"
+
+[tool.setuptools_scm]
+write_to = "pgsui/_version.py"
+local_scheme = "no-local-version"
