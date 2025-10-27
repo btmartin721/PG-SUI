@@ -53,7 +53,7 @@ dependencies = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["pgsui*"]
-exclude = ["pgsui/electron/app/dist/*", "pgsui/electron/app/node_modules/*", "*.pyc", "__pycache__/*", ".vscode/*", ".github/*", "scripts/*.sh", "docs/**", "simulation/*", "pgsui/figures/**", "conda/**", "bin/**", ".readthedocs.yam*", "notebooks/*", "workflow/**", "img/*.svg", "pgsui/training_data/*.py"]
+exclude = ["pgsui/electron/app/dist/*", "pgsui/electron/app/node_modules/*"]
 
 [project.optional-dependencies]
 intel = ["scikit-learn-intelex"]
@@ -91,14 +91,24 @@ BugTracker = "https://github.com/btmartin721/PG-SUI/issues"
 
 [tool.setuptools.package-data]
 pgsui = [
-    "example_data/**/*",
-    "electron/app/**"
+    "example_data/vcf_files/phylogen_subset14K.vcf.gz",
+    "example_data/vcf_files/phylogen_subset14K.vcf.gz.tbi",
+    "example_data/popmaps/phylogen_nomx.popmap",
+    "example_data/structure_files/test.pops.2row.allsites.str",
+    "example_data/phylip_files/test.phy"
 ]
 
 [tool.setuptools.exclude-package-data]
 pgsui = [
     "electron/app/dist/**",
-    "electron/app/node_modules/**"
+    "electron/app/node_modules/**",
+    "figures/*",
+    "example_data/phylip_files/test_*.phy",
+    "example_data/structure_files/test.popmap",
+    "training_data/**",
+    "example_data/vcf_files/*.vcf_sorted.vcf",
+    "example_data/vcf_files/*.vcf_sorted.vcf.gz",
+    "example_data/vcf_files/*.vcf_sorted.vcf.tbi"
 ]
 
 [project.scripts]
