@@ -24,16 +24,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install build twine
 
-      - name: Install version file dependencies
-        run: pip install tomli-w pyyaml
-
-      - name: Extract version from tag
-        id: extract_version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
-
-      - name: Update version files
-        run: python scripts/update_versions.py $VERSION
-
       - name: Clean dist directory
         run: rm -rf dist/
 
