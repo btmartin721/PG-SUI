@@ -2,71 +2,49 @@
   "name": "pgsui-gui",
   "version": "1.0.0",
   "description": "PG-SUI GUI wrapper for the Python CLI",
+  "author": { "name": "Bradley T. Martin", "email": "evobio721@gmail.com" },
+  "homepage": "https://github.com/btmartin721/PG-SUI",
   "main": "main.js",
-  "author": "PG-SUI",
-  "license": "GPL-3.0",
   "type": "commonjs",
   "scripts": {
     "start": "electron .",
-    "pack": "electron-builder --dir",
-    "dist": "electron-builder -mwl",
-    "dist:mac": "electron-builder --mac",
-    "dist:win": "electron-builder --win",
-    "dist:linux": "electron-builder --linux"
-  },
-  "dependencies": {
-    "electron-squirrel-startup": "^1.0.0"
+    "icons": "electron-icon-builder --input=ui/logo.png --output=icons --flatten",
+    "dist": "electron-builder -mwl"
   },
   "devDependencies": {
-    "electron": "^31.0.0",
-    "electron-builder": "^24.13.3"
+    "electron": "^38.4.0",
+    "electron-builder": "^24.13.3",
+    "electron-icon-builder": "^2.0.1"
   },
-  "build": {
+"build": {
     "appId": "io.pgsui.gui",
-    "productName": "PG-SUI",
-    "files": [
-      "main.js",
-      "preload.js",
-      "renderer/**/*",
-      "icons/**/*"
-    ],
-    "asar": true,
     "directories": {
       "buildResources": "icons",
       "output": "dist"
     },
+    "asar": true,
+    "extraResources": [
+      { "from": "../../pgsui/cli.py", "to": "pgsui/cli.py" }
+    ],
+    "files": [
+      "main.js",
+      "preload.js",
+      "ui/**/*",
+      "icons/**/*"
+    ],
     "mac": {
-      "category": "public.app-category.developer-tools",
       "target": ["dmg", "zip"],
-      "hardenedRuntime": true,
-      "entitlements": "entitlements.mac.plist",
-      "entitlementsInherit": "entitlements.mac.inherit.plist",
-      "gatekeeperAssess": false,
-      "icon": "icons/icon.icns",
-      "extendInfo": {
-        "NSCameraUsageDescription": "Not used",
-        "NSMicrophoneUsageDescription": "Not used"
-      }
-    },
-    "dmg": { "sign": true },
-    "win": {
-      "target": ["nsis"],
-      "icon": "icons/icon.ico",
-      "publisherName": "Your Org Name"
-    },
-    "nsis": {
-      "oneClick": true,
-      "perMachine": false,
-      "allowToChangeInstallationDirectory": false
+      "category": "public.app-category.science",
+      "icon": "icons/icon.icns"
     },
     "linux": {
-      "target": ["AppImage"],
+      "target": ["AppImage", "deb"],
       "category": "Science",
       "icon": "icons"
     },
-    "afterSign": "electron-builder-notarize"
-  },
-  "optionalDependencies": {
-    "electron-builder-notarize": "^1.5.0"
+    "win": {
+      "target": ["nsis"],
+      "icon": "icons/icon.ico"
+    }
   }
 }
