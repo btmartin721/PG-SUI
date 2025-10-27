@@ -1,6 +1,13 @@
 ## PG-SUI package by Bradley T. Martin and Tyler K. Chafin
 ## E-mail: evobio721@gmail.com
 
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    __version__ = version("pg-sui")
+except PackageNotFoundError:
+    __version__ = "unknown"  # Default if package is not installed
+
 from pgsui.data_processing.containers import (
     AutoencoderConfig,
     HGBConfig,
@@ -39,4 +46,5 @@ __all__ = [
     "RefAlleleConfig",
     "RFConfig",  # Supervised imputer configs
     "HGBConfig",
+    "__version__",
 ]
