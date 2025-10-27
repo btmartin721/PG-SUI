@@ -4,6 +4,18 @@ An overview of changes to **PG-SUI** by release. This mirrors the Sphinx/RST cha
 
 ---
 
+## 1.6.4 - 2025-10-26
+
+### Bug Fixes - 1.6.4
+
+- Fix for import bug where none of the PG-SUI modules could be imported. Incorrect path was specified in ``pyproject.toml``.
+
+### Features - 1.6.4
+
+- New Docker image for use with workflow managers like ``Nextflow``.
+- New conda recipe
+- Fixed issues with ``pyproject.toml`` with invalid classifiers.
+
 ## 1.6.3 - 2025-10-25
 
 ### Changes - 1.6.3
