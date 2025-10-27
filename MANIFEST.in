@@ -4,3 +4,8 @@ include pgsui/example_data/popmaps/phylogen_nomx.popmap
 include pgsui/example_data/vcf_files/phylogen_subset14K.vcf.gz
 include pgsui/example_data/vcf_files/phylogen_subset14K.vcf.gz.tbi
 include README.md LICENSE
+exclude pgsui/electron/app/dist/*
+exclude pgsui/electron/app/node_modules/*
+global-exclude *.pyc __pycache__ .DS_Store
+prune pgsui/electron/app/node_modules
+prune pgsui/electron/app/dist
