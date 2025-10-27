@@ -1,47 +1,38 @@
-# syntax=docker/dockerfile:1.6
-FROM node:20-bullseye
+# syntax=docker/dockerfile:1.7
+FROM python:3.12-slim
 
-# Electron + Python + noVNC deps
+# ---- Env ----
+ENV TZ=Etc/UTC \
+    LC_ALL=C.UTF-8 \
+    LANG=C.UTF-8 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# ---- OS deps for Nextflow shells and basic tooling ----
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 python3-pip python3-venv \
-    build-essential ca-certificates git curl tini \
-    libgtk-3-0 libnss3 libasound2 libx11-xcb1 libxcomposite1 \
-    libxrandr2 libxdamage1 libxfixes3 libdrm2 libgbm1 libxrender1 \
-    libxi6 libxtst6 \
-    xvfb x11vnc novnc websockify openbox \
-    && rm -rf /var/lib/apt/lists/*
+        python3-pip python3-venv python-is-python3 bash coreutils findutils grep sed gawk curl \
+        ca-certificates tini \
+        && rm -rf /var/lib/apt/lists/*
 
-ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1 PYTHONUNBUFFERED=1 \
-    ELECTRON_DISABLE_SANDBOX=1 ELECTRON_ENABLE_LOGGING=1
+# ---- Non-root user and writable workspace ----
+RUN useradd -r -u 10001 -m appuser
+WORKDIR /workspace
+RUN chown -R appuser:appuser /workspace
+VOLUME ["/workspace"]
 
-# PG-SUI from PyPI with GUI extra
-RUN python3 -m pip install --upgrade pip wheel setuptools && \
-    python3 -m pip install "pg-sui[gui]==1.6.3"
+# ---- Pin versions via build args ----
+ARG PGSUI_VERSION=1.6.4
 
-# Electron app
-WORKDIR /app
-COPY pgsui/electron/app/ /app/
-RUN npm ci || npm install
+# ---- Security ----
+USER appuser
 
-# Start script
-COPY --chmod=755 <<'SH' /usr/local/bin/start.sh
-#!/usr/bin/env bash
-set -euo pipefail
-MODE="${MODE:-novnc}"          # novnc | x11
-export DISPLAY=${DISPLAY:-:0}
-if [[ "$MODE" == "novnc" ]]; then
-    Xvfb "$DISPLAY" -screen 0 1280x800x24 -nolisten tcp &
-    xvfb_pid=$!
-    openbox >/dev/null 2>&1 &
-    x11vnc -display "$DISPLAY" -rfbport 5900 -forever -shared -nopw -quiet &
-    websockify --web=/usr/share/novnc/ 6080 localhost:5900 &
-    (cd /app && npx electron .)
-    kill $xvfb_pid || true
-else
-    # Linux native X11. Run with: -e DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix
-    (cd /app && npx electron .)
-fi
-SH
+SHELL ["/bin/bash", "-c"]
 
-EXPOSE 6080
-ENTRYPOINT ["tini","--","/usr/local/bin/start.sh"]
+RUN python -m venv /home/appuser/venv \
+    && source /home/appuser/venv/bin/activate \
+    && python -m pip install --upgrade pip setuptools wheel \
+    && python -m pip install pg-sui \
+    && pg-sui --version
+
+CMD []
