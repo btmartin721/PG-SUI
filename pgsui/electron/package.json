@@ -1,0 +1,14 @@
+{
+  "name": "pgsui-gui-root",
+  "private": true,
+  "scripts": {
+    "start": "electron app",
+    "dist": "electron-builder -mwl --projectDir app",
+    "icons": "electron-icon-builder --input=app/ui/logo.png --output=app/icons --flatten"
+  },
+  "devDependencies": {
+    "electron": "^38.4.0",
+    "electron-builder": "^24.13.3",
+    "electron-icon-builder": "^2.0.1"
+  }
+}
