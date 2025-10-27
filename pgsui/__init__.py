@@ -1,8 +1,5 @@
 ## PG-SUI package by Bradley T. Martin and Tyler K. Chafin
 ## E-mail: evobio721@gmail.com
-
-from importlib.metadata import PackageNotFoundError, version
-
 from ._version import version as __version__
 
 from pgsui.data_processing.containers import (
