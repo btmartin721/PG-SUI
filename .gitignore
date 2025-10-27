@@ -138,3 +138,4 @@ pgsui_output/
 **/node_modules/
 .codex/
 training_data_2*
+pgsui/electron/app/dist/
