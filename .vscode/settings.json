@@ -6,7 +6,11 @@
     "editor.formatOnPaste": true,
     "editor.formatOnSave": true,
     "git.ignoreLimitWarning": true,
-    "python-envs.defaultEnvManager": "ms-python.python:conda",
-    "python-envs.defaultPackageManager": "ms-python.python:conda",
-    "python-envs.pythonProjects": []
+    "python-envs.defaultEnvManager": "ms-python.python:venv",
+    "python-envs.defaultPackageManager": "ms-python.python:pip",
+    "python-envs.pythonProjects": [],
+    "yaml.schemas": {
+        "https://raw.githubusercontent.com/weaveworks/eksctl/main/pkg/apis/eksctl.io/v1alpha5/assets/schema.json": "*.eksctl.yaml",
+        "https://raw.githubusercontent.com/conda-forge/conda-smithy/main/conda_smithy/data/conda-forge.json": "file:///Users/btm002/Documents/Work/SHU/Research/Ongoing/Repositories/PG-SUI/conda/recipe/meta.yaml"
+    }
 }
