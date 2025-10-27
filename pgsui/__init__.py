@@ -3,10 +3,7 @@
 
 from importlib.metadata import PackageNotFoundError, version
 
-try:
-    __version__ = version("pg-sui")
-except PackageNotFoundError:
-    __version__ = "unknown"  # Default if package is not installed
+from ._version import version as __version__
 
 from pgsui.data_processing.containers import (
     AutoencoderConfig,
