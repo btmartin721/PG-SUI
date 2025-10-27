@@ -1,0 +1,53 @@
+# meta.yaml — pg-sui conda recipe
+package:
+  name: "pg-sui"
+  version: "1.6.4"
+
+source:
+  path: .
+
+build:
+  number: 0
+  script: {{ PYTHON }} -m pip install . -vv
+
+requirements:
+  host:
+    - python >= 3.11
+    - pip
+    - setuptools
+    - wheel
+  run:
+    - python >= 3.11
+    - numpy >=2.1
+    - pandas >=2.2.2
+    - scikit-learn >=1.4
+    - scipy
+    - matplotlib
+    - seaborn
+    - tqdm
+    - toytree
+    - optuna
+    - pytorch
+    - snpio
+
+test:
+  requires:
+    - pip
+  commands:
+    - python -c "import pgsui, sys; print(pgsui.__version__); sys.exit(0)"
+    - pg-sui --help
+
+about:
+  home: https://github.com/btmartin721/PG-SUI
+  summary: "Python machine and deep learning API to impute missing genotypes."
+  description: |
+    "PG-SUI (Phylogenetic-Guided Snp Uncovering and Imputation) is a Python package that leverages machine learning and deep learning techniques to accurately impute missing genotypes in genetic datasets. By incorporating phylogenetic information, PG-SUI enhances the accuracy of genotype imputation, making it a valuable tool for researchers in genomics and bioinformatics."
+  license: GPL-3.0-only
+  license_file:
+    - LICENSE
+  doc_url: https://pg-sui.readthedocs.io/en/latest/
+  dev_url: https://github.com/btmartin721/PG-SUI.git
+
+extra:
+  recipe-maintainers:
+    - btmartin721
