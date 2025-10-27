@@ -139,3 +139,4 @@ pgsui_output/
 .codex/
 training_data_2*
 pgsui/electron/app/dist/
+_version.py
