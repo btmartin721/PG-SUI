@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pg-sui"
-version = "1.6.3"
+version = "1.6.4"
 description = "Python machine and deep learning API to impute missing genotypes"
 readme = "README.md"
 authors = [
@@ -51,8 +51,8 @@ dependencies = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["pgsui"]
-namespaces = false
+where = ["."]
+include = ["pgsui*"]
 
 [project.optional-dependencies]
 intel = ["scikit-learn-intelex"]
