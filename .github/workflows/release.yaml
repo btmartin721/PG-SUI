@@ -1,18 +1,57 @@
-name: release
+# Publish Python package to TestPyPI and PyPI on tag pushes
+
+name: Publish to TestPyPI, PyPI, and DockerHub
+
 on:
   push:
     tags: ["v*"] # e.g., v1.6.4
+
 jobs:
-  build-publish:
+  build-and-publish:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
-        with: { fetch-depth: 0 } # scm needs tags
-      - uses: actions/setup-python@v5
-        with: { python-version: "3.12" }
-      - run: python -m pip install -U build twine
-      - run: python -m build
-      - uses: pypa/gh-action-pypi-publish@v1
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
         with:
-          username: __token__
-          password: ${{ secrets.PYPI_API_TOKEN }}
+          python-version: "3.12"
+
+      - name: Install build tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install build twine
+
+      - name: Install version file dependencies
+        run: pip install tomli-w pyyaml
+
+      - name: Extract version from tag
+        id: extract_version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
+
+      - name: Update version files
+        run: python scripts/update_versions.py $VERSION
+
+      - name: Clean dist directory
+        run: rm -rf dist/
+
+      - name: Build package
+        run: python -m build
+
+      - name: Publish to TestPyPI
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.TEST_PYPI_API_TOKEN }}
+        run: |
+          twine upload --repository testpypi dist/*
+          echo "TestPyPI upload complete."
+
+      - name: Publish to PyPI
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          twine upload dist/*
+          echo "PyPi upload complete."
