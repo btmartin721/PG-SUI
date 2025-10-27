@@ -1,4 +1,4 @@
-include pgsui/example_data/structure_files/*.str
+include pgsui/example_data/structure_files/test.pops.2row.allsites.str
 include pgsui/example_data/phylip_files/test.phy
 include pgsui/example_data/popmaps/phylogen_nomx.popmap
 include pgsui/example_data/vcf_files/phylogen_subset14K.vcf.gz
@@ -6,6 +6,20 @@ include pgsui/example_data/vcf_files/phylogen_subset14K.vcf.gz.tbi
 include README.md LICENSE
 exclude pgsui/electron/app/dist/*
 exclude pgsui/electron/app/node_modules/*
+exclude pgsui/figures/*
+exclude pgsui/training_data/*
+exclude pgsui/example_data/phylip_files/test_*.phy
+exclude pgsui/example_data/popmaps/test.popmap*
+exclude pgsui/example_data/vcf_files/*.vcf_sorted.vcf*
+exclude pgsui/example_data/trees/*
+exclude pgsui/example_data/structure_files/*.1row.*.str
+exclude pgsui/example_data/structure_files/*.2row.10sites.str
+exclude pgsui/example_data/structure_files/*.2row.100sites.str
+exclude pgsui/example_data/structure_files/*.2row.30sites.str
+exclude pgsui/example_data/structure_files/test.nopops*.str
+exclude pgsui/example_data/vcf_files/test.vcf
+exclude pgsui/example_data/vcf_files/test.vcf.gz*
+
 global-exclude *.pyc __pycache__ .DS_Store
 prune pgsui/electron/app/node_modules
 prune pgsui/electron/app/dist
