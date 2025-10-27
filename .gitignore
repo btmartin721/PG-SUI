@@ -137,3 +137,4 @@ pgsui_output/
 .venv/
 **/node_modules/
 .codex/
+training_data_2*
