@@ -2,6 +2,6 @@ name: pgsui
 channels: [btmartin721, conda-forge]
 dependencies:
   - python>=3.11
-  - pg-sui==1.6.4
+  - pg-sui
   - pytorch
   - cpuonly

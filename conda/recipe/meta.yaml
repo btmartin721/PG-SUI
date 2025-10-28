@@ -1,7 +1,7 @@
 # meta.yaml — pg-sui conda recipe
 package:
   name: "pg-sui"
-  version: "1.6.4"
+  version: "1.6.8"
 
 source:
   path: .

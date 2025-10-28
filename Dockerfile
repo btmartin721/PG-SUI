@@ -32,7 +32,6 @@ SHELL ["/bin/bash", "-c"]
 RUN python -m venv /home/appuser/venv \
     && source /home/appuser/venv/bin/activate \
     && python -m pip install --upgrade pip setuptools wheel \
-    && python -m pip install pg-sui \
-    && pg-sui --version
+    && python -m pip install pg-sui
 
 CMD []
