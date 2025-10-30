@@ -21,9 +21,6 @@ WORKDIR /workspace
 RUN chown -R appuser:appuser /workspace
 VOLUME ["/workspace"]
 
-# ---- Pin versions via build args ----
-ARG PGSUI_VERSION=1.6.4
-
 # ---- Security ----
 USER appuser
 

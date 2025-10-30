@@ -4,11 +4,19 @@ Changelog
 
 An overview of changes to **PG-SUI** by release. This file mirrors the GitHub Markdown changelog and reflects the refactor-era docs: dataclass-first configs, presets, unified scikit-learn framework-based ``fit()/transform()`` methods, CLI precedence, and updated deterministic/supervised docs.
 
+1.6.8 - 2025-10-27
+------------------
+
+Enhancements - 1.6.8
+^^^^^^^^^^^^^^^^^^^^
+
+- GitHub Actions release workflows added to auto bump PG-SUI version numbers and push to TestPyPi and PyPi.
+
 1.6.4 - 2025-10-26
 ------------------
 
-### Bug Fixes - 1.6.4
-^^^^^^^^^^^^^^^^^^^^^
+Bug Fixes - 1.6.4
+^^^^^^^^^^^^^^^^^
 
 - Fix for import bug where none of the PG-SUI modules could be imported. Incorrect path was specified in ``pyproject.toml``.
 

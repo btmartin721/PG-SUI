@@ -4,6 +4,12 @@ An overview of changes to **PG-SUI** by release. This mirrors the Sphinx/RST cha
 
 ---
 
+## 1.6.8 - 2025-10-27
+
+### Enhancements
+
+- GitHub Actions release workflows added to auto bump PG-SUI version numbers and push to TestPyPi and PyPi.
+
 ## 1.6.4 - 2025-10-26
 
 ### Bug Fixes - 1.6.4
