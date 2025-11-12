@@ -47,6 +47,8 @@ dependencies = [
     "tqdm",
     "toytree",
     "optuna",
+    "rich",
+    "rich[jupyter]",
     "snpio",
 ]
 
