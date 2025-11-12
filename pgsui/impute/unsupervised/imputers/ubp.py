@@ -1,5 +1,4 @@
 import copy
-import warnings
 from typing import TYPE_CHECKING, Any, Dict, Literal, Tuple
 
 import numpy as np
@@ -11,13 +10,15 @@ from sklearn.exceptions import NotFittedError
 from sklearn.model_selection import train_test_split
 from snpio.analysis.genotype_encoder import GenotypeEncoder
 from snpio.utils.logging import LoggerManager
-from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from pgsui.data_processing.config import apply_dot_overrides, load_yaml_to_dataclass
 from pgsui.data_processing.containers import UBPConfig
+from pgsui.data_processing.transformers import SimMissingTransformer
 from pgsui.impute.unsupervised.base import BaseNNImputer
 from pgsui.impute.unsupervised.callbacks import EarlyStopping
+from pgsui.impute.unsupervised.loss_functions import SafeFocalCELoss
 from pgsui.impute.unsupervised.models.ubp_model import UBPModel
+from pgsui.utils.pretty_metrics import PrettyMetrics
 
 if TYPE_CHECKING:
     from snpio.read_input.genotype_data import GenotypeData
@@ -70,15 +71,13 @@ def ensure_ubp_config(config: UBPConfig | dict | str | None) -> UBPConfig:
 
 
 class ImputeUBP(BaseNNImputer):
-    """UBP imputer for 0/1/2 genotypes with three-phase training.
+    """UBP imputer for 0/1/2 genotypes with a three-phase decoder schedule.
 
-    This imputer uses a three-phase training schedule specific to the UBP model:
+    This imputer follows the training recipe from Unsupervised Backpropagation:
 
-    1. Pre-training: Train the model on the full dataset with a small learning rate.
-    2. Fine-tuning: Train the model on the full dataset with a larger learning rate.
-    3. Evaluation: Evaluate the model on the test set. Optimize latents for test set. Predict 0/1/2. Decode to IUPAC. Plot & report.
-    4. Post-processing: Apply any necessary post-processing steps to the imputed genotypes.
-
+    1. Phase 1 (joint warm start): Learn latent codes and the shallow linear decoder together.
+    2. Phase 2 (deep decoder reset): Reinitialize the deeper decoder, freeze the latent codes, and train only the decoder parameters.
+    3. Phase 3 (joint fine-tune): Unfreeze everything and jointly refine latent codes plus the deep decoder before evaluation/reporting.
 
     References:
         - Gashler, Michael S., Smith, Michael R., Morris, R., and Martinez, T. (2016) Missing Value Imputation with Unsupervised Backpropagation. Computational Intelligence, 32: 196-215. doi: 10.1111/coin.12048.
@@ -90,6 +89,19 @@ class ImputeUBP(BaseNNImputer):
         *,
         config: UBPConfig | dict | str | None = None,
         overrides: dict | None = None,
+        simulate_missing: bool | None = None,
+        sim_strategy: (
+            Literal[
+                "random",
+                "random_weighted",
+                "random_weighted_inv",
+                "nonrandom",
+                "nonrandom_weighted",
+            ]
+            | None
+        ) = None,
+        sim_prop: float | None = None,
+        sim_kwargs: dict | None = None,
     ):
         """Initialize the UBP imputer via dataclass/dict/YAML config with overrides.
 
@@ -137,6 +149,26 @@ class ImputeUBP(BaseNNImputer):
         self.verbose = self.cfg.io.verbose
         self.debug = self.cfg.io.debug
         self.rng = np.random.default_rng(self.seed)
+
+        # Simulated-missing controls (config defaults w/ overrides)
+        sim_cfg = getattr(self.cfg, "sim", None)
+        sim_cfg_kwargs = copy.deepcopy(getattr(sim_cfg, "sim_kwargs", None) or {})
+        if sim_kwargs:
+            sim_cfg_kwargs.update(sim_kwargs)
+        if sim_cfg is None:
+            default_sim_flag = bool(simulate_missing)
+            default_strategy = "random"
+            default_prop = 0.10
+        else:
+            default_sim_flag = sim_cfg.simulate_missing
+            default_strategy = sim_cfg.sim_strategy
+            default_prop = sim_cfg.sim_prop
+        self.simulate_missing = (
+            default_sim_flag if simulate_missing is None else bool(simulate_missing)
+        )
+        self.sim_strategy = sim_strategy or default_strategy
+        self.sim_prop = float(sim_prop if sim_prop is not None else default_prop)
+        self.sim_kwargs = sim_cfg_kwargs
 
         # ---- model hyperparams ----
         self.latent_dim = self.cfg.model.latent_dim
@@ -193,14 +225,16 @@ class ImputeUBP(BaseNNImputer):
         self.is_haploid = None
         self.num_classes_ = None
         self.model_params: Dict[str, Any] = {}
+        self.sim_mask_global_: np.ndarray | None = None
+        self.sim_mask_train_: np.ndarray | None = None
+        self.sim_mask_test_: np.ndarray | None = None
 
     def fit(self) -> "ImputeUBP":
-        """Fit the UBP decoder on 0/1/2 encodings (missing = -1). Three phases.
+        """Fit the UBP decoder on 0/1/2 encodings (missing = -1) via three phases.
 
-        1. Pre-training: Train the model on the full dataset with a small learning rate.
-        2. Fine-tuning: Train the model on the full dataset with a larger learning rate.
-        3. Evaluation: Evaluate the model on the test set. Optimize latents for test set. Predict 0/1/2. Decode to IUPAC. Plot & report.
-        4. Post-processing: Apply any necessary post-processing steps to the imputed genotypes.
+        1. Phase 1 initializes latent vectors alongside the linear decoder.
+        2. Phase 2 resets and trains the deeper decoder while latents remain fixed.
+        3. Phase 3 jointly fine-tunes latents plus the deep decoder before evaluation.
 
         Returns:
             ImputeUBP: Fitted instance.
@@ -211,10 +245,36 @@ class ImputeUBP(BaseNNImputer):
         self.logger.info(f"Fitting {self.model_name} model...")
 
         # --- Use 0/1/2 with -1 for missing ---
-        X = self.pgenc.genotypes_012.astype(np.float32)
-        X[X < 0] = np.nan
-        X[np.isnan(X)] = -1
-        self.ground_truth_ = X.astype(np.int64)
+        X012 = self._get_float_genotypes(copy=True)
+        GT_full = np.nan_to_num(X012, nan=-1.0, copy=True)
+        self.ground_truth_ = GT_full.astype(np.int64, copy=False)
+
+        cache_key = self._sim_mask_cache_key()
+        self.sim_mask_global_ = None
+        if self.simulate_missing:
+            cached_mask = (
+                None if cache_key is None else self._sim_mask_cache.get(cache_key)
+            )
+            if cached_mask is not None:
+                self.sim_mask_global_ = cached_mask.copy()
+            else:
+                tr = SimMissingTransformer(
+                    genotype_data=self.genotype_data,
+                    prop_missing=self.sim_prop,
+                    strategy=self.sim_strategy,
+                    missing_val=-9,
+                    mask_missing=True,
+                    verbose=self.verbose,
+                    **self.sim_kwargs,
+                )
+                tr.fit(X012.copy())
+                self.sim_mask_global_ = tr.sim_missing_mask_.astype(bool)
+                if cache_key is not None:
+                    self._sim_mask_cache[cache_key] = self.sim_mask_global_.copy()
+
+        X_for_model = self.ground_truth_.copy()
+        if self.sim_mask_global_ is not None:
+            X_for_model[self.sim_mask_global_] = -1
 
         # --- Determine ploidy (haploid vs diploid) and classes ---
         self.is_haploid = np.all(
@@ -227,6 +287,7 @@ class ImputeUBP(BaseNNImputer):
         if self.is_haploid:
             self.num_classes_ = 2
             self.ground_truth_[self.ground_truth_ == 2] = 1
+            X_for_model[X_for_model == 2] = 1
             self.logger.info("Haploid data detected. Using 2 classes (REF=0, ALT=1).")
         else:
             self.num_classes_ = 3
@@ -234,7 +295,7 @@ class ImputeUBP(BaseNNImputer):
                 "Diploid data detected. Using 3 classes (REF=0, HET=1, ALT=2)."
             )
 
-        n_samples, self.num_features_ = X.shape
+        n_samples, self.num_features_ = X_for_model.shape
 
         # --- model params (decoder: Z -> L * num_classes) ---
         self.model_params = {
@@ -252,8 +313,17 @@ class ImputeUBP(BaseNNImputer):
             indices, test_size=self.validation_split, random_state=self.seed
         )
         self.train_idx_, self.test_idx_ = train_idx, test_idx
-        self.X_train_ = self.ground_truth_[train_idx]
-        self.X_test_ = self.ground_truth_[test_idx]
+        self.X_train_ = X_for_model[train_idx]
+        self.X_test_ = X_for_model[test_idx]
+        self.GT_train_full_ = self.ground_truth_[train_idx]
+        self.GT_test_full_ = self.ground_truth_[test_idx]
+
+        if self.sim_mask_global_ is not None:
+            self.sim_mask_train_ = self.sim_mask_global_[train_idx]
+            self.sim_mask_test_ = self.sim_mask_global_[test_idx]
+        else:
+            self.sim_mask_train_ = None
+            self.sim_mask_test_ = None
 
         # --- plotting/scorers & tuning ---
         self.plotter_, self.scorers_ = self.initialize_plotting_and_scorers()
@@ -265,7 +335,9 @@ class ImputeUBP(BaseNNImputer):
         )
 
         # --- class weights for 0/1/2 ---
-        self.class_weights_ = self._class_weights_from_zygosity(self.X_train_)
+        self.class_weights_ = self._normalize_class_weights(
+            self._class_weights_from_zygosity(self.X_train_)
+        )
 
         # --- latent init & loader ---
         train_latent_vectors = self._create_latent_space(
@@ -284,14 +356,24 @@ class ImputeUBP(BaseNNImputer):
 
         self.is_fit_ = True
         self.plotter_.plot_history(self.history_)
-        self._evaluate_model(self.X_test_, self.model_, self.best_params_)
+        eval_mask = (
+            self.sim_mask_test_
+            if (self.simulate_missing and self.sim_mask_test_ is not None)
+            else None
+        )
+        self._evaluate_model(
+            self.X_test_,
+            self.model_,
+            self.best_params_,
+            eval_mask_override=eval_mask,
+        )
         self._save_best_params(self.best_params_)
         return self
 
     def transform(self) -> np.ndarray:
         """Impute missing genotypes (0/1/2) and return IUPAC strings.
 
-        This method first checks if the model has been fitted. It then imputes the entire dataset by optimizing latent vectors for the ground truth data and predicting the missing genotypes using the trained UBP model. The imputed genotypes are decoded to IUPAC format, and distributions of original and imputed genotypes are plotted.
+        This method first checks if the model has been fitted. It then imputes the entire dataset by optimizing latent vectors for the ground truth data and predicting the missing genotypes using the trained UBP model. The imputed genotypes are decoded to IUPAC format, and genotype distributions are plotted only when ``self.show_plots`` is enabled.
 
         Returns:
             np.ndarray: IUPAC single-character array (n_samples x L).
@@ -302,7 +384,7 @@ class ImputeUBP(BaseNNImputer):
         if not getattr(self, "is_fit_", False):
             raise NotFittedError("Model is not fitted. Call fit() before transform().")
 
-        self.logger.info("Imputing entire dataset with UBP (0/1/2)...")
+        self.logger.info(f"Imputing entire dataset with {self.model_name}...")
         X_to_impute = self.ground_truth_.copy()
 
         optimized_latents = self._optimize_latents_for_inference(
@@ -314,12 +396,12 @@ class ImputeUBP(BaseNNImputer):
         imputed_array = X_to_impute.copy()
         imputed_array[missing_mask] = pred_labels[missing_mask]
 
-        # Decode to IUPAC for return & plots
+        # Decode to IUPAC for return & optional plots
         imputed_genotypes = self.pgenc.decode_012(imputed_array)
-        original_genotypes = self.pgenc.decode_012(X_to_impute)
-
-        self.plotter_.plot_gt_distribution(original_genotypes, is_imputed=False)
-        self.plotter_.plot_gt_distribution(imputed_genotypes, is_imputed=True)
+        if self.show_plots:
+            original_genotypes = self.pgenc.decode_012(X_to_impute)
+            self.plotter_.plot_gt_distribution(original_genotypes, is_imputed=False)
+            self.plotter_.plot_gt_distribution(imputed_genotypes, is_imputed=True)
         return imputed_genotypes
 
     def _train_step(
@@ -333,77 +415,81 @@ class ImputeUBP(BaseNNImputer):
         class_weights: torch.Tensor,
         phase: int,
     ) -> Tuple[float, torch.nn.Parameter]:
-        """Single epoch over batches for UBP with 0/1/2 focal CE.
-
-        This method handles all three UBP phases:
-
-        1. Pre-training: Train the model on the full dataset with a small learning rate.
-        2. Fine-tuning: Train the model on the full dataset with a larger learning rate.
-        3. Joint training: Train both model and latents.
-
-        Args:
-            loader (torch.utils.data.DataLoader): DataLoader (indices, y_batch).
-            optimizer (torch.optim.Optimizer): Decoder optimizer.
-            latent_optimizer (torch.optim.Optimizer): Latent optimizer.
-            model (torch.nn.Module): UBP model with phase1_decoder & phase23_decoder.
-            l1_penalty (float): L1 regularization weight.
-            latent_vectors (torch.nn.Parameter): Trainable Z.
-            class_weights (torch.Tensor): Class weights for 0/1/2.
-            phase (int): Phase id (1, 2, 3). Phase 1 = warm-up, phase 2 = decoder-only, phase 3 = joint.
+        """One epoch with stable focal CE, grad clipping, and NaN guards.
 
         Returns:
-            Tuple[float, torch.nn.Parameter]: Average loss and updated latents.
+            Tuple[float, torch.nn.Parameter]: Mean loss and updated latents.
         """
         model.train()
-        running = 0.0
+        running, used = 0.0, 0
+
+        if not isinstance(latent_vectors, torch.nn.Parameter):
+            latent_vectors = torch.nn.Parameter(latent_vectors, requires_grad=True)
+
+        gamma = float(getattr(model, "gamma", getattr(self, "gamma", 0.0)))
+        gamma = max(0.0, min(gamma, 10.0))
+        l1_params = tuple(p for p in model.parameters() if p.requires_grad)
+        if class_weights is not None and class_weights.device != self.device:
+            class_weights = class_weights.to(self.device)
+
+        criterion = SafeFocalCELoss(gamma=gamma, weight=class_weights, ignore_index=-1)
+        decoder = model.phase1_decoder if phase == 1 else model.phase23_decoder
 
         for batch_indices, y_batch in loader:
             optimizer.zero_grad(set_to_none=True)
             latent_optimizer.zero_grad(set_to_none=True)
 
-            decoder = model.phase1_decoder if phase == 1 else model.phase23_decoder
-            logits = decoder(latent_vectors[batch_indices]).view(
+            batch_indices = batch_indices.to(latent_vectors.device, non_blocking=True)
+            z = latent_vectors[batch_indices]
+            y = y_batch.to(self.device, non_blocking=True).long()
+
+            logits = decoder(z).view(
                 len(batch_indices), self.num_features_, self.num_classes_
             )
 
-            logits_flat = logits.view(-1, self.num_classes_)
-            targets_flat = y_batch.view(-1)
+            # Guard upstream explosions
+            if not torch.isfinite(logits).all():
+                continue
 
-            ce = F.cross_entropy(
-                logits_flat,
-                targets_flat,
-                weight=class_weights,
-                reduction="none",
-                ignore_index=-1,
-            )
-            pt = torch.exp(-ce)
-            gamma = getattr(model, "gamma", self.gamma)
-            focal = ((1 - pt) ** gamma) * ce
-
-            valid_mask = targets_flat != -1
-            loss = (
-                focal[valid_mask].mean()
-                if valid_mask.any()
-                else torch.tensor(0.0, device=logits.device)
-            )
+            loss = criterion(logits.view(-1, self.num_classes_), y.view(-1))
 
             if l1_penalty > 0:
-                loss = loss + l1_penalty * sum(
-                    p.abs().sum() for p in model.parameters()
-                )
+                l1 = torch.zeros((), device=self.device)
+                for p in l1_params:
+                    l1 = l1 + p.abs().sum()
+                loss = loss + l1_penalty * l1
+
+            if not torch.isfinite(loss):
+                continue
 
             loss.backward()
+
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             torch.nn.utils.clip_grad_norm_([latent_vectors], 1.0)
 
-            optimizer.step()
+            # Skip update on non-finite grads
+            def _bad_grads():
+                for p in model.parameters():
+                    if p.grad is not None and not torch.isfinite(p.grad).all():
+                        return True
+                return (
+                    latent_vectors.grad is not None
+                    and not torch.isfinite(latent_vectors.grad).all()
+                )
 
-            if phase != 2:
+            if _bad_grads():
+                optimizer.zero_grad(set_to_none=True)
+                latent_optimizer.zero_grad(set_to_none=True)
+                continue
+
+            optimizer.step()
+            if phase != 2:  # phase 2: decoder-only
                 latent_optimizer.step()
 
-            running += float(loss.item())
+            running += float(loss.detach().item())
+            used += 1
 
-        return running / len(loader), latent_vectors
+        return (running / used if used > 0 else float("inf")), latent_vectors
 
     def _predict(
         self, model: torch.nn.Module, latent_vectors: torch.nn.Parameter | None = None
@@ -440,6 +526,8 @@ class ImputeUBP(BaseNNImputer):
         params: dict,
         objective_mode: bool = False,
         latent_vectors_val: torch.Tensor | None = None,
+        *,
+        eval_mask_override: np.ndarray | None = None,
     ) -> Dict[str, float]:
         """Evaluate on held-out set with 0/1/2 classes; also IUPAC/10-base reports.
 
@@ -466,8 +554,40 @@ class ImputeUBP(BaseNNImputer):
             model=model, latent_vectors=test_latent_vectors
         )
 
-        eval_mask = X_val != -1
-        y_true_flat = X_val[eval_mask]
+        if (
+            hasattr(self, "X_test_")
+            and getattr(self, "X_test_", None) is not None
+            and X_val.shape == self.X_test_.shape
+        ):
+            GT_ref = getattr(self, "GT_test_full_", self.ground_truth_)
+        elif (
+            hasattr(self, "X_train_")
+            and getattr(self, "X_train_", None) is not None
+            and X_val.shape == self.X_train_.shape
+        ):
+            GT_ref = getattr(self, "GT_train_full_", self.ground_truth_)
+        else:
+            GT_ref = self.ground_truth_
+
+        if GT_ref.shape != X_val.shape:
+            GT_ref = X_val
+
+        if eval_mask_override is not None:
+            if eval_mask_override.shape != X_val.shape:
+                msg = (
+                    f"eval_mask_override shape {eval_mask_override.shape} "
+                    f"does not match X_val shape {X_val.shape}"
+                )
+                self.logger.error(msg)
+                raise ValueError(msg)
+            eval_mask = eval_mask_override.astype(bool)
+        else:
+            eval_mask = X_val != -1
+
+        finite_mask = np.all(np.isfinite(pred_probas), axis=-1)
+        eval_mask = eval_mask & finite_mask & (GT_ref != -1)
+
+        y_true_flat = GT_ref[eval_mask]
         y_pred_flat = pred_labels[eval_mask]
         y_proba_flat = pred_probas[eval_mask]
 
@@ -489,7 +609,9 @@ class ImputeUBP(BaseNNImputer):
         )
 
         if not objective_mode:
-            self.logger.info(f"Validation Metrics (0/1/2): {metrics}")
+            if self.verbose or self.debug:
+                pm = PrettyMetrics(metrics, precision=3, title="Validation Metrics")
+                pm.render()  # prints a command-line table
 
             self._make_class_reports(
                 y_true=y_true_flat,
@@ -500,7 +622,9 @@ class ImputeUBP(BaseNNImputer):
             )
 
             # IUPAC / 10-base auxiliary reports
-            y_true_dec = self.pgenc.decode_012(X_val)
+            y_true_dec = self.pgenc.decode_012(
+                GT_ref.reshape(X_val.shape[0], X_val.shape[1])
+            )
             X_pred = X_val.copy()
             X_pred[eval_mask] = y_pred_flat
 
@@ -527,13 +651,19 @@ class ImputeUBP(BaseNNImputer):
                 y_pred_dec, encodings_dict=encodings_dict
             )
 
-            self._make_class_reports(
-                y_true=y_true_int[eval_mask],
-                y_pred=y_pred_int[eval_mask],
-                metrics=metrics,
-                y_pred_proba=None,
-                labels=["A", "C", "G", "T", "W", "R", "M", "K", "Y", "S"],
-            )
+            valid_iupac_mask = y_true_int[eval_mask] >= 0
+            if valid_iupac_mask.any():
+                self._make_class_reports(
+                    y_true=y_true_int[eval_mask][valid_iupac_mask],
+                    y_pred=y_pred_int[eval_mask][valid_iupac_mask],
+                    metrics=metrics,
+                    y_pred_proba=None,
+                    labels=["A", "C", "G", "T", "W", "R", "M", "K", "Y", "S"],
+                )
+            else:
+                self.logger.warning(
+                    "Skipped IUPAC confusion matrix: No valid ground truths."
+                )
 
         return metrics
 
@@ -548,12 +678,15 @@ class ImputeUBP(BaseNNImputer):
         Returns:
             torch.utils.data.DataLoader: Shuffled mini-batches.
         """
-        y_tensor = torch.from_numpy(y).long().to(self.device)
-        dataset = torch.utils.data.TensorDataset(
-            torch.arange(len(y), device=self.device), y_tensor.to(self.device)
-        )
+        y_tensor = torch.from_numpy(y).long()
+        indices = torch.arange(len(y), dtype=torch.long)
+        dataset = torch.utils.data.TensorDataset(indices, y_tensor)
+        pin_memory = self.device.type == "cuda"
         return torch.utils.data.DataLoader(
-            dataset, batch_size=self.batch_size, shuffle=True
+            dataset,
+            batch_size=self.batch_size,
+            shuffle=True,
+            pin_memory=pin_memory,
         )
 
     def _objective(self, trial: optuna.Trial) -> float:
@@ -561,10 +694,14 @@ class ImputeUBP(BaseNNImputer):
         try:
             params = self._sample_hyperparameters(trial)
 
-            X_train_trial = self.ground_truth_[self.train_idx_]
-            X_test_trial = self.ground_truth_[self.test_idx_]
+            X_train_trial = getattr(
+                self, "X_train_", self.ground_truth_[self.train_idx_]
+            )
+            X_test_trial = getattr(self, "X_test_", self.ground_truth_[self.test_idx_])
 
-            class_weights = self._class_weights_from_zygosity(X_train_trial)
+            class_weights = self._normalize_class_weights(
+                self._class_weights_from_zygosity(X_train_trial)
+            )
             train_loader = self._get_data_loaders(X_train_trial)
 
             train_latent_vectors = self._create_latent_space(
@@ -596,8 +733,20 @@ class ImputeUBP(BaseNNImputer):
                 eval_latent_weight_decay=0.0,
             )
 
+            eval_mask = (
+                self.sim_mask_test_
+                if (
+                    self.simulate_missing
+                    and getattr(self, "sim_mask_test_", None) is not None
+                )
+                else None
+            )
             metrics = self._evaluate_model(
-                X_test_trial, model, params, objective_mode=True
+                X_test_trial,
+                model,
+                params,
+                objective_mode=True,
+                eval_mask_override=eval_mask,
             )
             self._clear_resources(
                 model, train_loader, latent_vectors=train_latent_vectors
@@ -848,7 +997,7 @@ class ImputeUBP(BaseNNImputer):
         Returns:
             Tuple[float, torch.nn.Module, dict, torch.nn.Parameter]: (loss, model, {"Train": history}, latents).
         """
-        self.logger.info("Training the final UBP (0/1/2) model...")
+        self.logger.info(f"Training the final {self.model_name} model...")
 
         model = self.build_model(self.Model, best_params)
         model.n_features = best_params["n_features"]
@@ -890,7 +1039,7 @@ class ImputeUBP(BaseNNImputer):
         lr: float,
         model: torch.nn.Module,
         l1_penalty: float,
-        trial,
+        trial: optuna.Trial | None,
         return_history: bool,
         latent_vectors: torch.nn.Parameter,
         class_weights: torch.Tensor,
@@ -905,20 +1054,21 @@ class ImputeUBP(BaseNNImputer):
         eval_latent_lr: float = 1e-2,
         eval_latent_weight_decay: float = 0.0,
     ) -> Tuple[float, torch.nn.Module, dict, torch.nn.Parameter]:
-        """Three-phase UBP loop with cosine LR, gamma warmup, and pruning hook.
+        """Three-phase UBP with numeric guards, LR warmup, and pruning.
 
-        This method executes the three-phase training loop for the UBP model, which includes pre-training, fine-tuning, and joint training phases. It incorporates a cosine annealing learning rate scheduler, focal loss gamma warmup, and an early stopping mechanism. The method also includes a pruning hook for Optuna trials, allowing for early termination of unpromising trials based on validation performance. The final best loss, best model, training history, and optimized latent vectors are returned.
+        This method executes the three-phase training loop for the UBP model, incorporating numeric stability guards, learning rate warmup, and Optuna pruning. It iterates through three training phases: pre-training the phase 1 decoder, fine-tuning the phase 2 and 3 decoders, and joint training of all components. The method monitors training loss, applies early stopping, and evaluates the model on a validation set for pruning purposes. The final best loss, best model, training history, and optimized latent vectors are returned.
 
         Args:
             loader (torch.utils.data.DataLoader): DataLoader for training data.
-            latent_optimizer (torch.optim.Optimizer): Latent optimizer.
+            latent_optimizer (torch.optim.Optimizer): Optimizer for latent vectors.
             lr (float): Learning rate for decoder.
             model (torch.nn.Module): UBP model with phase1_decoder & phase23_decoder.
             l1_penalty (float): L1 regularization weight.
-            trial: Current trial or None.
+            trial (optuna.Trial | None): Current trial or None.
             return_history (bool): If True, return loss history.
             latent_vectors (torch.nn.Parameter): Trainable Z.
-            class_weights (torch.Tensor): Class weights for 0/1/2.
+            class_weights (torch.Tensor): Class weights for
+                0/1/2.
             X_val (np.ndarray | None): Validation set for pruning/eval.
             params (dict | None): Model params for eval.
             prune_metric (str | None): Metric to monitor for pruning.
@@ -933,23 +1083,30 @@ class ImputeUBP(BaseNNImputer):
             Tuple[float, torch.nn.Module, dict, torch.nn.Parameter]: (best_loss, best_model, history, latents).
 
         Raises:
-            TypeError: If X_val is not provided for evaluation.
-            ValueError: If eval_latent_steps is not positive.
+            ValueError: If X_val is not provided for evaluation.
+            RuntimeError: If eval_latent_steps is not positive.
         """
         history: dict[str, list[float]] = {}
-        final_best_loss = float("inf")
-        final_best_model = None
+        final_best_loss, final_best_model = float("inf"), None
+
+        warm, ramp, gamma_final = 50, 100, self.gamma
 
         # Schema-aware latent cache for eval
         _latent_cache: dict = {}
         nF = getattr(model, "n_features", self.num_features_)
         cache_key_root = f"{self.prefix}_ubp_val_latents_L{nF}_K{self.num_classes_}"
 
-        # Epoch budget; if you later add tune_fast behavior to UBP, wire it here
-        max_epochs = self.epochs
-        warm, ramp, gamma_final = 50, 100, self.gamma
+        E = int(self.epochs)
+        phase_epochs = {
+            1: max(1, int(0.15 * E)),
+            2: max(1, int(0.35 * E)),
+            3: max(1, E - int(0.15 * E) - int(0.35 * E)),
+        }
 
         for phase in (1, 2, 3):
+            steps_this_phase = phase_epochs[phase]
+            warmup_epochs = getattr(self, "lr_warmup_epochs", 5) if phase == 1 else 0
+
             early_stopping = EarlyStopping(
                 patience=self.early_stop_gen,
                 min_epochs=self.min_epochs,
@@ -966,19 +1123,34 @@ class ImputeUBP(BaseNNImputer):
                 if phase == 1
                 else model.phase23_decoder.parameters()
             )
-            optimizer = torch.optim.Adam(decoder_params, lr=lr)
-            scheduler = CosineAnnealingLR(optimizer, T_max=max_epochs)
+            optimizer = torch.optim.AdamW(decoder_params, lr=lr, eps=1e-7)
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer, T_max=steps_this_phase
+            )
+
+            # Cache base LRs for warmup
+            dec_lr0 = optimizer.param_groups[0]["lr"]
+            lat_lr0 = latent_optimizer.param_groups[0]["lr"]
+            dec_lr_min, lat_lr_min = dec_lr0 * 0.1, lat_lr0 * 0.1
 
             phase_hist: list[float] = []
 
-            for epoch in range(max_epochs):
-                # Focal gamma warmup
+            for epoch in range(steps_this_phase):
+                # Focal gamma warm/ramp
                 if epoch < warm:
                     model.gamma = 0.0
                 elif epoch < warm + ramp:
                     model.gamma = gamma_final * ((epoch - warm) / ramp)
                 else:
                     model.gamma = gamma_final
+
+                # Linear warmup for both optimizers
+                if warmup_epochs and epoch < warmup_epochs:
+                    scale = float(epoch + 1) / warmup_epochs
+                    for g in optimizer.param_groups:
+                        g["lr"] = dec_lr_min + (dec_lr0 - dec_lr_min) * scale
+                    for g in latent_optimizer.param_groups:
+                        g["lr"] = lat_lr_min + (lat_lr0 - lat_lr_min) * scale
 
                 train_loss, latent_vectors = self._train_step(
                     loader=loader,
@@ -991,8 +1163,15 @@ class ImputeUBP(BaseNNImputer):
                     phase=phase,
                 )
 
-                if trial and (np.isnan(train_loss) or np.isinf(train_loss)):
-                    raise optuna.exceptions.TrialPruned("Loss is NaN or Inf.")
+                if not np.isfinite(train_loss):
+                    if trial:
+                        raise optuna.exceptions.TrialPruned("Epoch loss non-finite.")
+                    # reduce LRs and continue
+                    for g in optimizer.param_groups:
+                        g["lr"] *= 0.5
+                    for g in latent_optimizer.param_groups:
+                        g["lr"] *= 0.5
+                    continue
 
                 scheduler.step()
                 if return_history:
@@ -1005,15 +1184,23 @@ class ImputeUBP(BaseNNImputer):
                     )
                     break
 
-                # Validation pruning hook
+                # Validation + pruning
                 if (
                     trial is not None
                     and X_val is not None
                     and ((epoch + 1) % eval_interval == 0)
                 ):
                     metric_key = prune_metric or getattr(self, "tune_metric", "f1")
-                    z = self._first_linear_in_features(model)
-                    schema_key = f"{cache_key_root}_z{z}"
+                    zdim = self._first_linear_in_features(model)
+                    schema_key = f"{cache_key_root}_z{zdim}"
+                    mask_override = None
+                    if (
+                        self.simulate_missing
+                        and getattr(self, "sim_mask_test_", None) is not None
+                        and getattr(self, "X_test_", None) is not None
+                        and X_val.shape == self.X_test_.shape
+                    ):
+                        mask_override = self.sim_mask_test_
 
                     metric_val = self._eval_for_pruning(
                         model=model,
@@ -1028,21 +1215,25 @@ class ImputeUBP(BaseNNImputer):
                         latent_seed=(self.seed if self.seed is not None else 123),
                         _latent_cache=_latent_cache,
                         _latent_cache_key=schema_key,
+                        eval_mask_override=mask_override,
                     )
 
-                    with warnings.catch_warnings():
-                        warnings.simplefilter("ignore", category=UserWarning)
+                    if phase == 3:
                         trial.report(metric_val, step=epoch + 1)
-
-                    if (epoch + 1) >= prune_warmup_epochs and trial.should_prune():
-                        raise optuna.exceptions.TrialPruned(
-                            f"Pruned at epoch {epoch + 1} (phase {phase}): "
-                            f"{metric_key}={metric_val:.5f}"
-                        )
+                        if (epoch + 1) >= prune_warmup_epochs and trial.should_prune():
+                            raise optuna.exceptions.TrialPruned(
+                                f"Pruned at epoch {epoch + 1} (phase {phase}): {metric_key}={metric_val:.5f}"
+                            )
 
             history[f"Phase {phase}"] = phase_hist
             final_best_loss = early_stopping.best_score
-            final_best_model = copy.deepcopy(early_stopping.best_model)
+            if early_stopping.best_model is not None:
+                final_best_model = copy.deepcopy(early_stopping.best_model)
+            else:
+                final_best_model = copy.deepcopy(model)
+
+        if final_best_model is None:
+            final_best_model = copy.deepcopy(model)
 
         return final_best_loss, final_best_model, history, latent_vectors
 
@@ -1053,57 +1244,54 @@ class ImputeUBP(BaseNNImputer):
         params: dict,
         inference_epochs: int = 200,
     ) -> torch.Tensor:
-        """Optimize latent vectors for new 0/1/2 data by minimizing masked CE.
+        """Optimize latents for new 0/1/2 data with guards.
 
-        This method optimizes latent vectors for a given genotype matrix using a trained UBP model. It initializes the latent vectors based on the specified strategy (random or PCA) and then refines them through gradient-based optimization to minimize the cross-entropy loss between the model's predictions and the provided genotype data. The optimization process is performed for a specified number of epochs, and the resulting optimized latent vectors are returned.
+        This method optimizes the latent vectors for new genotype data using the trained UBP model. It initializes the latent space based on the provided data and iteratively updates the latent vectors to minimize the cross-entropy loss between the model's predictions and the true genotype values. The optimization process includes numeric stability guards to ensure that gradients and losses remain finite. The optimized latent vectors are returned as a PyTorch tensor.
 
         Args:
-            X_new (np.ndarray): 0/1/2 with -1 for missing.
-            model (torch.nn.Module): Trained model.
-            params (dict): Should include 'latent_dim'.
-            inference_epochs (int): Steps for optimization.
+            X_new (np.ndarray): New 0/1/2 data with -1 for missing.
+            model (torch.nn.Module): Trained UBP model.
+            params (dict): Model params.
+            inference_epochs (int): Number of optimization epochs.
 
         Returns:
             torch.Tensor: Optimized latent vectors.
         """
         model.eval()
-
         nF = getattr(model, "n_features", self.num_features_)
 
-        X_new = X_new.astype(np.int64, copy=False)
-        X_new[X_new < 0] = -1
-
-        # Allow shorter inference when tune_fast is enabled, mirroring NLPCA
         if self.tune and self.tune_fast:
             inference_epochs = min(
                 inference_epochs, getattr(self, "tune_infer_epochs", 20)
             )
 
-        new_latent_vectors = self._create_latent_space(
+        X_new = X_new.astype(np.int64, copy=False)
+        X_new[X_new < 0] = -1
+        y = torch.from_numpy(X_new).long().to(self.device)
+
+        z = self._create_latent_space(
             params, len(X_new), X_new, self.latent_init
+        ).requires_grad_(True)
+        opt = torch.optim.AdamW(
+            [z], lr=self.learning_rate * self.lr_input_factor, eps=1e-7
         )
-        opt = torch.optim.Adam(
-            [new_latent_vectors], lr=self.learning_rate * self.lr_input_factor
-        )
-        y_target = torch.from_numpy(X_new).long().to(self.device)
 
         for _ in range(inference_epochs):
             opt.zero_grad(set_to_none=True)
-            logits = model.phase23_decoder(new_latent_vectors).view(
-                len(X_new), nF, self.num_classes_
-            )
+            logits = model.phase23_decoder(z).view(len(X_new), nF, self.num_classes_)
+            if not torch.isfinite(logits).all():
+                break
             loss = F.cross_entropy(
-                logits.view(-1, self.num_classes_), y_target.view(-1), ignore_index=-1
+                logits.view(-1, self.num_classes_), y.view(-1), ignore_index=-1
             )
-            if torch.isnan(loss) or torch.isinf(loss):
-                self.logger.warning(
-                    "Inference loss is NaN/Inf; stopping latent refinement."
-                )
+            if not torch.isfinite(loss):
                 break
             loss.backward()
+            torch.nn.utils.clip_grad_norm_([z], 1.0)
+            if z.grad is None or not torch.isfinite(z.grad).all():
+                break
             opt.step()
-
-        return new_latent_vectors.detach()
+        return z.detach()
 
     def _create_latent_space(
         self,
@@ -1168,7 +1356,9 @@ class ImputeUBP(BaseNNImputer):
 
             # use deterministic SVD to avoid power-iteration warnings
             pca = PCA(
-                n_components=n_components, svd_solver="full", random_state=self.seed
+                n_components=n_components,
+                svd_solver="randomized",
+                random_state=self.seed,
             )
             initial = pca.fit_transform(X_pca)  # (n_samples, n_components)
 
@@ -1221,22 +1411,22 @@ class ImputeUBP(BaseNNImputer):
         cache: dict | None,
         cache_key: str | None,
     ) -> None:
-        """Freeze weights; refine validation latents only.
+        """Freeze network; refine validation latents only with guards.
 
-        This method optimizes latent vectors for the validation set using a trained UBP model. It refines the latent vectors by minimizing the cross-entropy loss between the model's predictions and the provided genotype data. The optimization process is performed for a specified number of steps, and the resulting optimized latent vectors are stored in a cache for potential reuse. The method ensures that the model's weights remain unchanged during this process by freezing them.
+        This method refines the latent vectors for the validation dataset using the trained UBP model. It freezes the model parameters to prevent updates during this phase and optimizes the latent vectors to minimize the cross-entropy loss between the model's predictions and the true genotype values. The optimization process includes numeric stability checks to ensure that gradients and losses remain finite. If a cache is provided, it stores the optimized latent vectors for future use.
 
         Args:
             model (torch.nn.Module): Trained UBP model.
-            X_val (np.ndarray): Validation 0/1/2 with -1 for missing.
+            X_val (np.ndarray): Validation set 0/1/2 with -1 missing
             steps (int): Number of optimization steps.
             lr (float): Learning rate for latent optimization.
-            weight_decay (float): L2 weight decay on latents.
-            seed (int): RNG seed for determinism across epochs.
-            cache (dict | None): Optional dict to warm-start & persist val latents.
-            cache_key (str | None): Ignored; we build a schema-aware key internally.
+            weight_decay (float): Weight decay for latent optimization.
+            seed (int): Random seed for reproducibility.
+            cache (dict | None): Optional cache for latent vectors.
+            cache_key (str | None): Key for storing/retrieving from cache.
         """
         if seed is None:
-            seed = np.random.randint(0, 999999)
+            seed = np.random.randint(0, 999_999)
         torch.manual_seed(seed)
         np.random.seed(seed)
 
@@ -1245,44 +1435,42 @@ class ImputeUBP(BaseNNImputer):
             p.requires_grad_(False)
 
         nF = getattr(model, "n_features", self.num_features_)
-
         X_val = X_val.astype(np.int64, copy=False)
         X_val[X_val < 0] = -1
-        y_target = torch.from_numpy(X_val).long().to(self.device)
+        y = torch.from_numpy(X_val).long().to(self.device)
 
-        # Infer current model latent size to avoid shape mismatch
-        latent_dim_model = self._first_linear_in_features(model)
-        schema_key = f"{self.prefix}_ubp_val_latents_z{latent_dim_model}_L{nF}_K{self.num_classes_}"
+        zdim = self._first_linear_in_features(model)
+        schema_key = f"{self.prefix}_ubp_val_latents_z{zdim}_L{nF}_K{self.num_classes_}"
 
-        # Warm-start from cache if compatible
         if cache is not None and schema_key in cache:
-            val_latents = cache[schema_key].detach().clone().requires_grad_(True)
+            z = cache[schema_key].detach().clone().requires_grad_(True)
         else:
-            val_latents = self._create_latent_space(
-                {"latent_dim": latent_dim_model},
-                n_samples=X_val.shape[0],
-                X=X_val,
-                latent_init=self.latent_init,
+            z = self._create_latent_space(
+                {"latent_dim": zdim}, X_val.shape[0], X_val, self.latent_init
             ).requires_grad_(True)
 
-        opt = torch.optim.AdamW([val_latents], lr=lr, weight_decay=weight_decay)
+        opt = torch.optim.AdamW([z], lr=lr, weight_decay=weight_decay, eps=1e-7)
 
         for _ in range(max(int(steps), 0)):
             opt.zero_grad(set_to_none=True)
-            logits = model.phase23_decoder(val_latents).view(
+            logits = model.phase23_decoder(z).view(
                 X_val.shape[0], nF, self.num_classes_
             )
+            if not torch.isfinite(logits).all():
+                break
             loss = F.cross_entropy(
-                logits.view(-1, self.num_classes_),
-                y_target.view(-1),
-                ignore_index=-1,
-                reduction="mean",
+                logits.view(-1, self.num_classes_), y.view(-1), ignore_index=-1
             )
+            if not torch.isfinite(loss):
+                break
             loss.backward()
+            torch.nn.utils.clip_grad_norm_([z], 1.0)
+            if z.grad is None or not torch.isfinite(z.grad).all():
+                break
             opt.step()
 
         if cache is not None:
-            cache[schema_key] = val_latents.detach().clone()
+            cache[schema_key] = z.detach().clone()
 
         for p in model.parameters():
             p.requires_grad_(True)
