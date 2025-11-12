@@ -18,6 +18,7 @@ from snpio.utils.logging import LoggerManager
 from pgsui.impute.unsupervised.nn_scorers import Scorer
 from pgsui.utils.classification_viz import ClassificationReportVisualizer
 from pgsui.utils.plotting import Plotting
+from pgsui.utils.pretty_metrics import PrettyMetrics
 
 
 class BaseNNImputer:
@@ -44,7 +45,17 @@ class BaseNNImputer:
             verbose (bool): If True, enables detailed logging output. Defaults to False.
             debug (bool): If True, enables debug mode. Defaults to False.
         """
-        logging.getLogger("fontTools").setLevel(logging.WARNING)
+        # Quiet Matplotlib/fontTools INFO logging when saving PDF/SVG
+        for name in (
+            "fontTools",
+            "fontTools.subset",
+            "fontTools.ttLib",
+            "matplotlib.font_manager",
+        ):
+            lg = logging.getLogger(name)
+            lg.setLevel(logging.WARNING)
+            lg.propagate = False
+
         self.device = self._select_device(device)
 
         # Prepare directory structure
@@ -56,6 +67,8 @@ class BaseNNImputer:
         kwargs = {"prefix": prefix, "verbose": verbose, "debug": debug}
         logman = LoggerManager(__name__, **kwargs)
         self.logger = logman.get_logger()
+        self._float_genotype_cache: np.ndarray | None = None
+        self._sim_mask_cache: dict[tuple, np.ndarray] = {}
 
     def tune_hyperparameters(self) -> None:
         """Tunes model hyperparameters using an Optuna study.
@@ -535,17 +548,6 @@ class BaseNNImputer:
             y_true, y_pred, label_names=labels, prefix=report_name
         )
 
-        self.logger.info(
-            "\n"
-            + classification_report(
-                y_true,
-                y_pred,
-                labels=list(range(len(labels))),
-                target_names=labels,
-                zero_division=0,
-            )
-        )
-
         report = classification_report(
             y_true,
             y_pred,
@@ -554,6 +556,20 @@ class BaseNNImputer:
             zero_division=0,
             output_dict=True,
         )
+
+        if self.verbose or self.debug:
+            report_subset = {}
+            for k, v in report.items():
+                tmp = {}
+                if isinstance(v, dict) and "support" in v:
+                    for k2, v2 in v.items():
+                        if k2 != "support":
+                            tmp[k2] = v2
+                    report_subset[k] = tmp
+            pm = PrettyMetrics(
+                report_subset, precision=3, title=f"{self.model_name} {middle} Report"
+            )
+            pm.render()
 
         with open(self.metrics_dir / f"{report_name}_report.json", "w") as f:
             json.dump(report, f, indent=4)
@@ -712,6 +728,53 @@ class BaseNNImputer:
             mode="allele",  # 1D int vector
         ).to(self.device)
 
+    @staticmethod
+    def _normalize_class_weights(
+        weights: torch.Tensor | None,
+    ) -> torch.Tensor | None:
+        """Normalize class weights once to keep loss scale stable.
+
+        Args:
+            weights (torch.Tensor | None): Class weights to normalize.
+
+        Returns:
+            torch.Tensor | None: Normalized class weights or None if input is None.
+        """
+        if weights is None:
+            return None
+        return weights / weights.mean().clamp_min(1e-8)
+
+    def _get_float_genotypes(self, *, copy: bool = True) -> np.ndarray:
+        """Float32 0/1/2 matrix with NaNs for missing, cached per dataset.
+
+        Args:
+            copy (bool): If True, return a copy of the cached array. Default is True.
+
+        Returns:
+            np.ndarray: Float32 genotype matrix with NaNs for missing values.
+        """
+        cache = self._float_genotype_cache
+        current = self.pgenc.genotypes_012
+        if cache is None or cache.shape != current.shape or cache.dtype != np.float32:
+            arr = np.asarray(current, dtype=np.float32)
+            arr = np.where(arr < 0, np.nan, arr)
+            self._float_genotype_cache = arr
+            cache = arr
+        return cache.copy() if copy else cache
+
+    def _sim_mask_cache_key(self) -> tuple | None:
+        """Key for caching simulated-missing masks."""
+        if not getattr(self, "simulate_missing", False):
+            return None
+        shape = tuple(self.pgenc.genotypes_012.shape)
+        return (
+            id(self.genotype_data),
+            self.sim_strategy,
+            round(float(self.sim_prop), 6),
+            self.seed,
+            shape,
+        )
+
     def _one_hot_encode_012(self, X: np.ndarray | torch.Tensor) -> torch.Tensor:
         """One-hot 0/1/2; -1 rows are all-zeros (B, L, K).
 
@@ -756,6 +819,7 @@ class BaseNNImputer:
         latent_seed: int = 123,
         _latent_cache: dict | None = None,
         _latent_cache_key: str | None = None,
+        eval_mask_override: np.ndarray | None = None,
     ) -> float:
         """Compute a scalar metric (to MAXIMIZE) on a fixed validation set.
 
@@ -774,6 +838,7 @@ class BaseNNImputer:
             latent_seed (int): Random seed for latent inference. Default is 123.
             _latent_cache (dict | None): Optional cache for storing/retrieving optimized latents
             _latent_cache_key (str | None): Key for storing/retrieving in _latent_cache.
+            eval_mask_override (np.ndarray | None): Optional mask to override default evaluation mask.
 
         Returns:
             float: The computed metric value to maximize. Returns -inf on failure.
@@ -796,13 +861,19 @@ class BaseNNImputer:
             if _latent_cache is not None and _latent_cache_key in _latent_cache:
                 optimized_val_latents = _latent_cache[_latent_cache_key]
 
+        if getattr(self, "_tune_eval_slice", None) is not None:
+            X_val = X_val[self._tune_eval_slice]
+            if eval_mask_override is not None:
+                eval_mask_override = eval_mask_override[self._tune_eval_slice]
+
         # Child's evaluator now accepts the pre-computed latents
         metrics = self._evaluate_model(
             X_val=X_val,
             model=model,
             params=params,
             objective_mode=objective_mode,
-            latent_vectors_val=optimized_val_latents,  # Pass them here
+            latent_vectors_val=optimized_val_latents,
+            eval_mask_override=eval_mask_override,
         )
 
         # Prefer the requested metric; fall back to self.tune_metric if needed.
@@ -815,6 +886,8 @@ class BaseNNImputer:
 
     def _first_linear_in_features(self, model: torch.nn.Module) -> int:
         """Return in_features of the model's first Linear layer.
+
+        This method iterates through the modules of the provided PyTorch model to find the first instance of a Linear layer. It then retrieves and returns the `in_features` attribute of that layer, which indicates the number of input features expected by the layer.
 
         Args:
             model (torch.nn.Module): The model to inspect.
@@ -882,7 +955,9 @@ class BaseNNImputer:
         self._tune_X_train = X_small[tr]
         self._tune_X_test = X_small[te]
 
-        self._tune_class_weights = self._class_weights_from_zygosity(self._tune_X_train)
+        self._tune_class_weights = self._normalize_class_weights(
+            self._class_weights_from_zygosity(self._tune_X_train)
+        )
 
         # Temporarily bump batch size only for tuning loader
         orig_bs = self.batch_size
