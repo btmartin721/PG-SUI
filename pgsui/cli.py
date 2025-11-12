@@ -32,7 +32,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Literal, Optional, Tuple
 
-from snpio import GenePopReader, PhylipReader, StructureReader, VCFReader
+from snpio import GenePopReader, PhylipReader, VCFReader
 
 from pgsui import (
     ImputeAutoencoder,
@@ -554,7 +554,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                 if hasattr(args, "preset")
                 else NLPCAConfig()
             )
-        return ImputeNLPCA(genotype_data=gd, config=cfg)
+        return ImputeNLPCA(
+            genotype_data=gd,
+            config=cfg,
+            simulate_missing=cfg.sim.simulate_missing,
+            sim_strategy=cfg.sim.sim_strategy,
+            sim_prop=cfg.sim.sim_prop,
+            sim_kwargs=cfg.sim.sim_kwargs,
+        )
 
     def build_impute_vae():
         cfg = cfgs_by_model.get("ImputeVAE")
@@ -607,7 +614,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     logging.info(f"Selected models: {', '.join(selected_models)}")
     for name in selected_models:
-        X_imputed = run_model_safely(name, model_builders[name], warn_only=True)
+        X_imputed = run_model_safely(name, model_builders[name], warn_only=False)
         gd_imp = gd.copy()
         gd_imp.snp_data = X_imputed
 
