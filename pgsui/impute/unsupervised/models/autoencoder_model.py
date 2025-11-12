@@ -29,7 +29,7 @@ class Encoder(nn.Module):
 
         Args:
             n_features (int): The number of features in the input data (e.g., SNPs).
-            num_classes (int): The number of possible classes for each input element (e.g., 4 alleles).
+            num_classes (int): Number of genotype states per locus (2 for haploid, 3 for diploid in practice).
             latent_dim (int): The dimensionality of the output latent space.
             hidden_layer_sizes (List[int]): A list of integers specifying the size of each hidden layer.
             dropout_rate (float): The dropout rate for regularization in the hidden layers.
@@ -84,7 +84,7 @@ class Decoder(nn.Module):
 
         Args:
             n_features (int): The number of features in the output data (e.g., SNPs).
-            num_classes (int): The number of possible classes for each output element (e.g., 4 alleles).
+            num_classes (int): Number of genotype states per locus (2 or 3 in practice).
             latent_dim (int): The dimensionality of the input latent space.
             hidden_layer_sizes (List[int]): A list of integers specifying the size of each hidden layer (typically the reverse of the encoder's).
             dropout_rate (float): The dropout rate for regularization in the hidden layers.
@@ -160,7 +160,7 @@ class AutoencoderModel(nn.Module):
         Args:
             n_features (int): The number of features in the input data (e.g., SNPs).
             prefix (str): A prefix used for logging.
-            num_classes (int): The number of possible classes for each input element. Defaults to 4.
+            num_classes (int): Number of genotype states per locus. Defaults to 4 for backward compatibility, but the genotype imputers pass 2 (haploid) or 3 (diploid).
             hidden_layer_sizes (List[int] | np.ndarray): A list of integers specifying the size of each hidden layer in the encoder. The decoder will use the reverse of this structure. Defaults to [128, 64].
             latent_dim (int): The dimensionality of the latent space (bottleneck). Defaults to 2.
             dropout_rate (float): The dropout rate for regularization in hidden layers. Defaults to 0.2.
