@@ -140,3 +140,16 @@ pgsui_output/
 training_data_2*
 pgsui/electron/app/dist/
 _version.py
+snpio_simulated_unlinked_output/
+simulation/
+simulation/*
+sim_unlinked_output/
+pgsui_electron_logs/
+BOX_phylogen_dataset_output/
+.venv-test-docker/
+sim_results/
+coala_sims.R
+sim_treeparams.py
+simulate_rad.py
+simulate_wgs.py
+dnasp_summary_plots.cleaned.csv
