@@ -9,40 +9,19 @@ from pgsui.impute.unsupervised.loss_functions import MaskedFocalLoss
 
 
 class UBPModel(nn.Module):
-    """An Unsupervised Backpropagation (UBP) model with a multi-phase decoder.
+    """An Unsupervised Backpropagation (UBP) decoder for genotype logits.
 
-    This class implements a deep neural network that serves as the decoder component in an unsupervised imputation pipeline. It's designed to reconstruct high-dimensional genomic data from a low-dimensional latent representation. The model features a unique multi-phase architecture with two distinct decoding paths:
+    The model reconstructs locus-level genotype probabilities (two states for haploid
+    data or three for diploid data) from a latent vector. It exposes two decoding
+    branches so the training schedule can follow the UBP recipe:
 
-    1.  **Phase 1 Decoder:** A simple, shallow linear network.
-    2.  **Phase 2 & 3 Decoder:** A deeper, multi-layered, fully-connected network with batch normalization and dropout for regularization.
+    1. **Phase 1 decoder** – a shallow linear layer that co-trains with latent codes.
+    2. **Phase 2/3 decoder** – a deeper MLP with batch normalization and dropout that
+       is first trained in isolation and later fine-tuned jointly with the latents.
 
-    This phased approach allows for progressive training strategies. The model is tailored for two-channel allele data, where it learns to predict allele probabilities for each of the two channels at every SNP locus.
-
-    **Model Architecture:**
-
-    The model's forward pass maps a latent vector, $z$, to a reconstructed output, $\hat{x}$, via one of two paths.
-
-    -   **Phase 1 Path (Shallow Decoder):**
-        $$
-        \hat{x}_{p1} = W_{p1} z + b_{p1}
-        $$
-
-    -   **Phase 2/3 Path (Deep Decoder):**
-        This path uses a series of hidden layers with non-linear activations, $f(\cdot)$:
-        $$
-        h_1 = f(W_1 z + b_1)
-        $$
-        $$
-        \dots
-        $$
-        $$
-        h_L = f(W_L h_{L-1} + b_L)
-        $$
-        $$
-        \hat{x}_{p23} = W_{L+1} h_L + b_{L+1}
-        $$
-
-    The final output from either path is reshaped into a tensor of shape `(batch_size, n_features, n_channels, n_classes)`. The model is optimized using a `MaskedFocalLoss` function, which effectively handles the missing data and class imbalance common in genomic datasets.
+    Both paths ultimately reshape their logits to ``(batch_size, n_features, num_classes)``
+    and training uses ``MaskedFocalLoss`` to focus on hard examples while masking
+    missing entries.
     """
 
     def __init__(
@@ -65,7 +44,7 @@ class UBPModel(nn.Module):
         Args:
             n_features (int): The number of features (SNPs) in the input data.
             prefix (str): A prefix used for logging.
-            num_classes (int): The number of possible allele classes (e.g., 3 for 0, 1, 2). Defaults to 3.
+            num_classes (int): Number of genotype states per locus (typically 2 or 3). Defaults to 3.
             hidden_layer_sizes (list[int] | np.ndarray): A list of integers specifying the size of each hidden layer in the deep (Phase 2/3) decoder. Defaults to [128, 64].
             latent_dim (int): The dimensionality of the input latent space. Defaults to 2.
             dropout_rate (float): The dropout rate for regularization in the deep decoder. Defaults to 0.2.
@@ -153,14 +132,16 @@ class UBPModel(nn.Module):
     def forward(self, x: torch.Tensor, phase: int = 1) -> torch.Tensor:
         """Performs the forward pass through the UBP model.
 
-        This method routes the input tensor through the appropriate decoder based on the specified training `phase`. The final output is reshaped to match the target data structure of `(batch_size, n_features, n_channels, n_classes)`.
+        This method routes the input tensor through the appropriate decoder based on
+        the specified training ``phase`` and reshapes the logits to the
+        `(batch_size, n_features, num_classes)` grid expected by the loss.
 
         Args:
             x (torch.Tensor): The input latent tensor of shape `(batch_size, latent_dim)`.
             phase (int): The training phase (1, 2, or 3), which determines which decoder path to use.
 
         Returns:
-            torch.Tensor: The reconstructed output tensor.
+            torch.Tensor: Logits shaped as `(batch_size, n_features, num_classes)`.
 
         Raises:
             ValueError: If an invalid phase is provided.
@@ -190,8 +171,8 @@ class UBPModel(nn.Module):
         This method calculates the loss value, handling class imbalance with weights and ignoring masked (missing) values in the ground truth tensor.
 
         Args:
-            y (torch.Tensor): The ground truth tensor of shape `(batch_size, n_features, n_channels)`.
-            outputs (torch.Tensor): The model's raw output (logits) of shape `(batch_size, n_features, n_channels, n_classes)`.
+            y (torch.Tensor): Integer ground-truth genotypes of shape `(batch_size, n_features)`.
+            outputs (torch.Tensor): Logits of shape `(batch_size, n_features, num_classes)`.
             mask (torch.Tensor | None): An optional boolean mask indicating which elements should be included in the loss calculation.
             class_weights (torch.Tensor | None): An optional tensor of weights for each class to address imbalance.
             gamma (float): The focusing parameter for the focal loss.
