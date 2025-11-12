@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from typing import TYPE_CHECKING, Any, Dict, Literal, Tuple
 
 import matplotlib.pyplot as plt
@@ -16,9 +17,12 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from pgsui.data_processing.config import apply_dot_overrides, load_yaml_to_dataclass
 from pgsui.data_processing.containers import NLPCAConfig
+from pgsui.data_processing.transformers import SimMissingTransformer
 from pgsui.impute.unsupervised.base import BaseNNImputer
 from pgsui.impute.unsupervised.callbacks import EarlyStopping
+from pgsui.impute.unsupervised.loss_functions import SafeFocalCELoss
 from pgsui.impute.unsupervised.models.nlpca_model import NLPCAModel
+from pgsui.utils.pretty_metrics import PrettyMetrics
 
 if TYPE_CHECKING:
     from snpio.read_input.genotype_data import GenotypeData
@@ -107,6 +111,16 @@ class ImputeNLPCA(BaseNNImputer):
         *,
         config: NLPCAConfig | dict | str | None = None,
         overrides: dict | None = None,
+        simulate_missing: bool = False,
+        sim_strategy: Literal[
+            "random",
+            "random_weighted",
+            "random_weighted_inv",
+            "nonrandom",
+            "nonrandom_weighted",
+        ] = "random",
+        sim_prop: float = 0.10,
+        sim_kwargs: dict | None = None,
     ):
         """Initializes the ImputeNLPCA imputer with genotype data and configuration.
 
@@ -116,6 +130,10 @@ class ImputeNLPCA(BaseNNImputer):
             genotype_data (GenotypeData): Backing genotype data.
             config (NLPCAConfig | dict | str | None): Structured configuration as dataclass, nested dict, YAML path, or None.
             overrides (dict | None): Dot-key overrides (e.g. {'model.latent_dim': 4}).
+            simulate_missing (bool): Whether to simulate missing data during training.
+            sim_strategy (Literal["random", "random_weighted", "random_weighted_inv", "nonrandom", "nonrandom_weighted"]): Strategy for simulating missing data.
+            sim_prop (float): Proportion of data to simulate as missing.
+            sim_kwargs (dict | None): Additional keyword arguments for missing data simulation.
         """
         self.model_name = "ImputeNLPCA"
         self.genotype_data = genotype_data
@@ -209,6 +227,11 @@ class ImputeNLPCA(BaseNNImputer):
         self.num_classes_ = None
         self.model_params: Dict[str, Any] = {}
 
+        self.simulate_missing = simulate_missing
+        self.sim_strategy = sim_strategy
+        self.sim_prop = float(sim_prop)
+        self.sim_kwargs = sim_kwargs or {}
+
     def fit(self) -> "ImputeNLPCA":
         """Fits the NLPCA model to the 0/1/2 encoded genotype data.
 
@@ -219,11 +242,40 @@ class ImputeNLPCA(BaseNNImputer):
         """
         self.logger.info(f"Fitting {self.model_name} model...")
 
-        # --- DATA PREPARATION ---
-        X = self.pgenc.genotypes_012.astype(np.float32)
-        X[X < 0] = np.nan  # Ensure missing are NaN
-        X[np.isnan(X)] = -1  # Use -1 for missing, required by loss function
-        self.ground_truth_ = X.astype(np.int64)
+        # --- BASE MATRIX AND GROUND TRUTH ---
+        X012 = self.pgenc.genotypes_012.astype(np.float32)
+        X012[X012 < 0] = np.nan  # NaN = original missing
+
+        # Keep an immutable ground-truth copy in 0/1/2 with -1 for original
+        # missing
+        GT_full = X012.copy()
+        GT_full[np.isnan(GT_full)] = -1
+        self.ground_truth_ = GT_full.astype(np.int64)
+
+        # --- OPTIONAL SIMULATED MISSING VIA SimMissingTransformer ---
+        self.sim_mask_global_ = None
+        if self.simulate_missing:
+            tr = SimMissingTransformer(
+                genotype_data=self.genotype_data,
+                prop_missing=self.sim_prop,
+                strategy=self.sim_strategy,
+                missing_val=-9,
+                mask_missing=True,
+                verbose=self.verbose,
+                tol=None,
+                max_tries=None,
+            )
+            # NOTE: pass NaN-coded missing; transformer handles NaNs correctly
+            tr.fit(X012.copy())
+
+            # Store boolean mask of simulated positions only (excludes original-missing)
+            self.sim_mask_global_ = tr.sim_missing_mask_.astype(bool)
+
+            # Apply simulation to the model’s input copy: encode as -1 for loss
+            X_for_model = self.ground_truth_.copy()
+            X_for_model[self.sim_mask_global_] = -1
+        else:
+            X_for_model = self.ground_truth_.copy()
 
         # --- Determine Ploidy and Number of Classes ---
         self.is_haploid = np.all(
@@ -239,6 +291,7 @@ class ImputeNLPCA(BaseNNImputer):
 
             # Remap labels from {0, 2} to {0, 1}
             self.ground_truth_[self.ground_truth_ == 2] = 1
+            X_for_model[X_for_model == 2] = 1  # <- add this line
             self.logger.info("Haploid data detected. Using 2 classes (REF=0, ALT=1).")
         else:
             self.num_classes_ = 3
@@ -247,7 +300,7 @@ class ImputeNLPCA(BaseNNImputer):
                 "Diploid data detected. Using 3 classes (REF=0, HET=1, ALT=2)."
             )
 
-        n_samples, self.num_features_ = X.shape
+        n_samples, self.num_features_ = X_for_model.shape
 
         self.model_params = {
             "n_features": self.num_features_,
@@ -264,10 +317,21 @@ class ImputeNLPCA(BaseNNImputer):
             indices, test_size=self.validation_split, random_state=self.seed
         )
         self.train_idx_, self.test_idx_ = train_idx, test_idx
-        self.X_train_ = self.ground_truth_[train_idx]
-        self.X_test_ = self.ground_truth_[test_idx]
+        # Subset matrices for training/eval
+        self.X_train_ = X_for_model[train_idx]
+        self.X_test_ = X_for_model[test_idx]
+        self.GT_train_full_ = self.ground_truth_[train_idx]  # pre-mask truth
+        self.GT_test_full_ = self.ground_truth_[test_idx]
 
-        # --- Tuning & Model Setup ---
+        # Slice the simulation mask by split if present
+        if self.sim_mask_global_ is not None:
+            self.sim_mask_train_ = self.sim_mask_global_[train_idx]
+            self.sim_mask_test_ = self.sim_mask_global_[test_idx]
+        else:
+            self.sim_mask_train_ = None
+            self.sim_mask_test_ = None
+
+        # Tuning, model setup, training (unchanged except DataLoader input)
         self.plotter_, self.scorers_ = self.initialize_plotting_and_scorers()
 
         if self.tune:
@@ -280,10 +344,10 @@ class ImputeNLPCA(BaseNNImputer):
         self.class_weights_ = self._class_weights_from_zygosity(self.X_train_)
 
         # Latent vectors for training set
+        self.class_weights_ = self._class_weights_from_zygosity(self.X_train_)
         train_latent_vectors = self._create_latent_space(
             self.best_params_, len(self.X_train_), self.X_train_, self.latent_init
         )
-
         train_loader = self._get_data_loaders(self.X_train_)
 
         # Train the final model
@@ -295,8 +359,21 @@ class ImputeNLPCA(BaseNNImputer):
 
         self.is_fit_ = True
         self.plotter_.plot_history(self.history_)
-        self._evaluate_model(self.X_test_, self.model_, self.best_params_)
+
+        if self.sim_mask_test_ is not None:
+            # Evaluate exactly on simulated-missing sites
+            self.logger.info("Evaluating on simulated-missing positions only.")
+            self._evaluate_model(
+                self.X_test_,
+                self.model_,
+                self.best_params_,
+                eval_mask_override=self.sim_mask_test_,
+            )
+        else:
+            self._evaluate_model(self.X_test_, self.model_, self.best_params_)
+
         self._save_best_params(self.best_params_)
+
         return self
 
     def transform(self) -> np.ndarray:
@@ -313,7 +390,7 @@ class ImputeNLPCA(BaseNNImputer):
         if not getattr(self, "is_fit_", False):
             raise NotFittedError("Model is not fitted. Call fit() before transform().")
 
-        self.logger.info("Imputing entire dataset...")
+        self.logger.info(f"Imputing entire dataset with {self.model_name}...")
         X_to_impute = self.ground_truth_.copy()
 
         # Optimize latents for the full dataset
@@ -331,12 +408,11 @@ class ImputeNLPCA(BaseNNImputer):
 
         # Decode back to IUPAC strings
         imputed_genotypes = self.pgenc.decode_012(imputed_array)
-        original_genotypes = self.pgenc.decode_012(X_to_impute)
-
-        # Plot distributions
-        plt.rcParams.update(self.plotter_.param_dict)  # Ensure consistent style
-        self.plotter_.plot_gt_distribution(original_genotypes, is_imputed=False)
-        self.plotter_.plot_gt_distribution(imputed_genotypes, is_imputed=True)
+        if self.show_plots:
+            original_genotypes = self.pgenc.decode_012(X_to_impute)
+            plt.rcParams.update(self.plotter_.param_dict)  # Ensure consistent style
+            self.plotter_.plot_gt_distribution(original_genotypes, is_imputed=False)
+            self.plotter_.plot_gt_distribution(imputed_genotypes, is_imputed=True)
 
         return imputed_genotypes
 
@@ -350,66 +426,116 @@ class ImputeNLPCA(BaseNNImputer):
         latent_vectors: torch.nn.Parameter,
         class_weights: torch.Tensor,
     ) -> Tuple[float, torch.nn.Parameter]:
-        """Performs one epoch of training.
-
-        This method executes a single training epoch for the NLPCA model. It processes batches of data, computes the focal loss while handling missing values, applies L1 regularization if specified, and updates both the model parameters and latent vectors using their respective optimizers.
+        """One epoch with stable focal CE, latent+weight updates, and NaN guards.
 
         Args:
             loader (torch.utils.data.DataLoader): DataLoader for training data.
             optimizer (torch.optim.Optimizer): Optimizer for model parameters.
             latent_optimizer (torch.optim.Optimizer): Optimizer for latent vectors.
-            model (torch.nn.Module): The NLPCA model.
+            model (torch.nn.Module): NLPCA model.
             l1_penalty (float): L1 regularization penalty.
             latent_vectors (torch.nn.Parameter): Latent vectors for samples.
-            class_weights (torch.Tensor): Class weights for handling class imbalance.
+            class_weights (torch.Tensor): Class weights for focal loss.
 
         Returns:
-            Tuple[float, torch.nn.Parameter]: Average training loss and updated latent vectors.
+            Tuple[float, torch.nn.Parameter]: Average loss and updated latent vectors.
+
+        Notes:
+            - Implements focal cross-entropy loss with class weights.
+            - Applies L1 regularization on model weights.
+            - Includes guards against NaN/infinite values in logits, loss, and gradients.
         """
         model.train()
-        running_loss = 0.0
+        running = 0.0
+        used = 0
+
+        # Ensure latent vectors are trainable
+        if not isinstance(latent_vectors, torch.nn.Parameter):
+            latent_vectors = torch.nn.Parameter(latent_vectors, requires_grad=True)
+
+        # Bound gamma to a sane range
+        gamma = float(getattr(model, "gamma", getattr(self, "gamma", 0.0)))
+        gamma = max(0.0, min(gamma, 10.0))
+
+        # Normalize class weights to mean≈1 to keep loss scale stable
+        if class_weights is not None:
+            cw = class_weights.to(self.device)
+            cw = cw / cw.mean().clamp_min(1e-8)
+        else:
+            cw = None
 
         nF = getattr(model, "n_features", self.num_features_)
+
+        criterion = SafeFocalCELoss(gamma=gamma, weight=cw, ignore_index=-1)
 
         for batch_indices, y_batch in loader:
             optimizer.zero_grad(set_to_none=True)
             latent_optimizer.zero_grad(set_to_none=True)
 
-            logits = model.phase23_decoder(latent_vectors[batch_indices]).view(
+            # Targets
+            y_batch = y_batch.to(self.device, non_blocking=True).long()
+
+            # Forward
+            z = latent_vectors[batch_indices].to(self.device)
+            logits = model.phase23_decoder(z).view(
                 len(batch_indices), nF, self.num_classes_
             )
 
-            # --- Simplified Focal Loss on 0/1/2 Classes ---
+            # Guard upstream explosions
+            if not torch.isfinite(logits).all():
+                # Skip batch if model already produced non-finite values
+                continue
+
             logits_flat = logits.view(-1, self.num_classes_)
             targets_flat = y_batch.view(-1)
 
-            ce_loss = F.cross_entropy(
-                logits_flat,
-                targets_flat,
-                weight=class_weights,
-                reduction="none",
-                ignore_index=-1,
-            )
+            loss = criterion(logits_flat, targets_flat)
 
-            pt = torch.exp(-ce_loss)
-            gamma = getattr(model, "gamma", self.gamma)
-            focal_loss = ((1 - pt) ** gamma) * ce_loss
-
-            valid_mask = targets_flat != -1
-            loss = focal_loss[valid_mask].mean() if valid_mask.any() else 0.0
-
+            # L1 on model weights only (exclude latents)
             if l1_penalty > 0:
-                loss += l1_penalty * sum(p.abs().sum() for p in model.parameters())
+                l1 = torch.stack(
+                    [p.abs().sum() for p in model.parameters() if p.requires_grad]
+                ).sum()
+                loss = loss + l1_penalty * l1
+
+            if not torch.isfinite(loss):
+                # Skip pathological batch
+                continue
 
             loss.backward()
+
+            # Clip both parameter sets to keep grads finite
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             torch.nn.utils.clip_grad_norm_([latent_vectors], max_norm=1.0)
+
+            # If any grad is non-finite, skip updates
+            bad_grad = False
+            for p in model.parameters():
+                if p.grad is not None and not torch.isfinite(p.grad).all():
+                    bad_grad = True
+                    break
+            if (
+                not bad_grad
+                and latent_vectors.grad is not None
+                and not torch.isfinite(latent_vectors.grad).all()
+            ):
+                bad_grad = True
+            if bad_grad:
+                optimizer.zero_grad(set_to_none=True)
+                latent_optimizer.zero_grad(set_to_none=True)
+                continue
+
             optimizer.step()
             latent_optimizer.step()
 
-            running_loss += loss.item()
+            running += float(loss.detach().item())
+            used += 1
 
-        return running_loss / len(loader), latent_vectors
+        if used == 0:
+            # Signal upstream that no safe batches were used
+            return float("inf"), latent_vectors
+
+        return running / used, latent_vectors
 
     def _predict(
         self, model: torch.nn.Module, latent_vectors: torch.nn.Parameter | None = None
@@ -448,6 +574,8 @@ class ImputeNLPCA(BaseNNImputer):
         params: dict,
         objective_mode: bool = False,
         latent_vectors_val: torch.Tensor | None = None,
+        *,
+        eval_mask_override: np.ndarray | None = None,
     ) -> Dict[str, float]:
         """Evaluates the model on a validation set.
 
@@ -459,6 +587,7 @@ class ImputeNLPCA(BaseNNImputer):
             params (dict): Model parameters.
             objective_mode (bool): If True, suppresses logging and reports only the metric.
             latent_vectors_val (torch.Tensor | None): Pre-optimized latent vectors for validation data.
+            eval_mask_override (np.ndarray | None): Boolean mask to specify which entries to evaluate.
 
         Returns:
             Dict[str, float]: Dictionary of evaluation metrics.
@@ -470,13 +599,35 @@ class ImputeNLPCA(BaseNNImputer):
                 X_val, model, params
             )
 
-        # The rest of the function remains the same...
         pred_labels, pred_probas = self._predict(
             model=model, latent_vectors=test_latent_vectors
         )
 
-        eval_mask = X_val != -1
-        y_true_flat = X_val[eval_mask]
+        if eval_mask_override is not None:
+            if eval_mask_override.shape != X_val.shape:
+                msg = (
+                    f"eval_mask_override shape {eval_mask_override.shape} "
+                    f"does not match X_val shape {X_val.shape}"
+                )
+                self.logger.error(msg)
+                raise ValueError(msg)
+
+            # Use caller-supplied boolean mask on the same shape as X_val
+            eval_mask = eval_mask_override.astype(bool)
+        else:
+            # Default: score only observed entries
+            eval_mask = X_val != -1
+
+        # y_true should be drawn from the pre-mask ground truth
+        # Map X_val back to the correct full ground truth slice
+        if X_val.shape == self.X_test_.shape:
+            GT_ref = self.GT_test_full_
+        elif X_val.shape == self.X_train_.shape:
+            GT_ref = self.GT_train_full_
+        else:
+            GT_ref = self.ground_truth_
+
+        y_true_flat = GT_ref[eval_mask]
         pred_labels_flat = pred_labels[eval_mask]
         pred_probas_flat = pred_probas[eval_mask]
 
@@ -499,7 +650,9 @@ class ImputeNLPCA(BaseNNImputer):
         )
 
         if not objective_mode:
-            self.logger.info(f"Validation Metrics: {metrics}")
+            if self.verbose or self.debug:
+                pm = PrettyMetrics(metrics, precision=3, title="Validation Metrics")
+                pm.render()  # prints a command-line table
 
             self._make_class_reports(
                 y_true=y_true_flat,
@@ -509,7 +662,10 @@ class ImputeNLPCA(BaseNNImputer):
                 labels=target_names,
             )
 
-            y_true_dec = self.pgenc.decode_012(X_val)
+            y_true_dec = self.pgenc.decode_012(
+                GT_ref.reshape(X_val.shape[0], X_val.shape[1])
+            )
+
             X_pred = X_val.copy()
             X_pred[eval_mask] = pred_labels_flat
 
@@ -537,13 +693,39 @@ class ImputeNLPCA(BaseNNImputer):
                 y_pred_dec, encodings_dict=encodings_dict
             )
 
-            self._make_class_reports(
-                y_true=y_true_int[eval_mask],
-                y_pred=y_pred_int[eval_mask],
-                metrics=metrics,
-                y_pred_proba=None,
-                labels=["A", "C", "G", "T", "W", "R", "M", "K", "Y", "S"],
-            )
+            # For IUPAC report
+            valid_true = y_true_int[eval_mask]
+            valid_true = valid_true[valid_true >= 0]  # drop -1 (N)
+            iupac_label_set = ["A", "C", "G", "T", "W", "R", "M", "K", "Y", "S"]
+
+            # For numeric report
+            if np.intersect1d(np.unique(y_true_flat), labels_for_scoring).size == 0:
+                if not objective_mode:
+                    self.logger.warning(
+                        "Skipped numeric confusion matrix: no y_true labels present."
+                    )
+            else:
+                self._make_class_reports(
+                    y_true=valid_true,
+                    y_pred=y_pred_int[eval_mask][y_true_int[eval_mask] >= 0],
+                    metrics=metrics,
+                    y_pred_proba=None,
+                    labels=iupac_label_set,
+                )
+
+            if valid_true.size == 0:
+                if not objective_mode:
+                    self.logger.warning(
+                        "Skipped IUPAC confusion matrix: no valid y_true labels present."
+                    )
+            else:
+                self._make_class_reports(
+                    y_true=valid_true,
+                    y_pred=y_pred_int[eval_mask][y_true_int[eval_mask] >= 0],
+                    metrics=metrics,
+                    y_pred_proba=None,
+                    labels=iupac_label_set,
+                )
 
         return metrics
 
@@ -665,7 +847,6 @@ class ImputeNLPCA(BaseNNImputer):
         self._prepare_tuning_artifacts()
         trial_params = self._sample_hyperparameters(trial)
         model_params = dict(trial_params["model_params"])
-
         if self.tune and self.tune_fast:
             model_params["n_features"] = self._tune_num_features
 
@@ -679,17 +860,13 @@ class ImputeNLPCA(BaseNNImputer):
         train_loader = self._tune_loader
 
         train_latents = self._create_latent_space(
-            model_params,
-            len(X_train_trial),
-            X_train_trial,
-            trial_params["latent_init"],
+            model_params, len(X_train_trial), X_train_trial, trial_params["latent_init"]
         )
 
         model = self.build_model(self.Model, model_params)
         model.n_features = model_params["n_features"]
         model.apply(self.initialize_weights)
 
-        # train; pass an explicit flag that we are in tuning + whether to fix latents
         _, model, _ = self._train_and_validate_model(
             model=model,
             loader=train_loader,
@@ -709,8 +886,23 @@ class ImputeNLPCA(BaseNNImputer):
             eval_latent_weight_decay=0.0,
         )
 
+        # --- simulate-only eval mask for tuning ---
+        eval_mask = None
+        if (
+            self.simulate_missing
+            and getattr(self, "sim_mask_global_", None) is not None
+        ):
+            if hasattr(self, "_tune_test_idx"):
+                eval_mask = self.sim_mask_global_[self._tune_test_idx]
+            elif getattr(self, "sim_mask_test_", None) is not None:
+                eval_mask = self.sim_mask_test_
+
         metrics = self._evaluate_model(
-            X_test_trial, model, model_params, objective_mode=True
+            X_test_trial,
+            model,
+            model_params,
+            objective_mode=True,
+            eval_mask_override=eval_mask,
         )
 
         self._clear_resources(model, train_loader, latent_vectors=train_latents)
@@ -957,7 +1149,7 @@ class ImputeNLPCA(BaseNNImputer):
         Raises:
             RuntimeError: If model training fails.
         """
-        self.logger.info(f"Training the final model...")
+        self.logger.info(f"Training the final {self.model_name} model...")
 
         model = self.build_model(self.Model, best_params)
         model.n_features = best_params["n_features"]
@@ -997,7 +1189,7 @@ class ImputeNLPCA(BaseNNImputer):
         loader,
         optimizer,
         latent_optimizer,
-        scheduler,
+        scheduler,  # do not overwrite; honor caller's scheduler
         model,
         l1_penalty,
         return_history,
@@ -1014,39 +1206,10 @@ class ImputeNLPCA(BaseNNImputer):
         eval_latent_lr: float = 1e-2,
         eval_latent_weight_decay: float = 0.0,
     ) -> Tuple[float, torch.nn.Module, list, torch.nn.Parameter]:
-        """Executes the training loop with optional Optuna pruning.
-
-        This method runs the training loop for the NLPCA model, performing multiple epochs of training. It supports optional integration with Optuna for hyperparameter tuning and pruning based on validation performance. The method tracks training history, applies early stopping, and returns the best model and training metrics.
-
-        Args:
-            loader (torch.utils.data.DataLoader): DataLoader for training data.
-            optimizer (torch.optim.Optimizer): Optimizer for model parameters.
-            latent_optimizer (torch.optim.Optimizer): Optimizer for latent vectors.
-            scheduler (torch.optim.lr_scheduler._LRScheduler): Learning rate scheduler.
-            model (torch.nn.Module): The NLPCA model.
-            l1_penalty (float): L1 regularization penalty.
-            return_history (bool): Whether to return training history.
-            latent_vectors (torch.nn.Parameter): Latent vectors for samples.
-            class_weights (torch.Tensor): Class weights for
-            handling class imbalance.
-            trial (optuna.Trial | None): Optuna trial for hyperparameter tuning.
-            X_val (np.ndarray | None): Validation data for pruning.
-            params (dict | None): Model parameters.
-            prune_metric (str | None): Metric to monitor for pruning.
-            prune_warmup_epochs (int): Epochs to wait before pruning.
-            eval_interval (int): Epoch interval for evaluation.
-            eval_latent_steps (int): Steps to refine latents during eval.
-            eval_latent_lr (float): Learning rate for latent refinement during eval.
-            eval_latent_weight_decay (float): Weight decay for latent refinement during eval.
-
-        Returns:
-            Tuple[float, torch.nn.Module, list, torch.nn.Parameter]: Best loss, best model, training history, and optimized latent vectors.
-
-        Raises:
-            optuna.exceptions.TrialPruned: If the trial is pruned based on validation performance.
-        """
+        """Train NLPCA with warmup, pruning, and early stopping."""
         best_model = None
-        train_history = []
+        history: list[float] = []
+
         early_stopping = EarlyStopping(
             patience=self.early_stop_gen,
             min_epochs=self.min_epochs,
@@ -1055,42 +1218,64 @@ class ImputeNLPCA(BaseNNImputer):
             debug=self.debug,
         )
 
-        # compute the epoch budget used by the loop
+        # Epoch budget
         max_epochs = (
             self.tune_epochs if (trial is not None and self.tune_fast) else self.epochs
         )
-        scheduler = CosineAnnealingLR(optimizer, T_max=max_epochs)
 
-        # just above the for-epoch loop
+        # Optional LR warmup for both optimizers
+        warmup_epochs = getattr(self, "lr_warmup_epochs", 5)
+        model_lr0 = optimizer.param_groups[0]["lr"]
+        latent_lr0 = latent_optimizer.param_groups[0]["lr"]
+        model_lr_min = model_lr0 * 0.1
+        latent_lr_min = latent_lr0 * 0.1
+
         _latent_cache: dict = {}
         _latent_cache_key = f"{self.prefix}_{self.model_name}_val_latents"
 
         for epoch in range(max_epochs):
-            train_loss, latent_vectors = self._train_step(
-                loader,
-                optimizer,
-                latent_optimizer,
-                model,
-                l1_penalty,
-                latent_vectors,
-                class_weights,
-            )
-            scheduler.step()
+            # Linear warmup LRs for first few epochs
+            if epoch < warmup_epochs:
+                scale = float(epoch + 1) / warmup_epochs
+                for g in optimizer.param_groups:
+                    g["lr"] = model_lr_min + (model_lr0 - model_lr_min) * scale
+                for g in latent_optimizer.param_groups:
+                    g["lr"] = latent_lr_min + (latent_lr0 - latent_lr_min) * scale
 
-            if np.isnan(train_loss) or np.isinf(train_loss):
-                raise optuna.exceptions.TrialPruned("Loss is NaN or Inf.")
+            train_loss, latent_vectors = self._train_step(
+                loader=loader,
+                optimizer=optimizer,
+                latent_optimizer=latent_optimizer,
+                model=model,
+                l1_penalty=l1_penalty,
+                latent_vectors=latent_vectors,
+                class_weights=class_weights,
+            )
+
+            if not np.isfinite(train_loss):
+                if trial:
+                    raise optuna.exceptions.TrialPruned("Epoch loss non-finite.")
+                # Reduce both LRs and continue
+                for g in optimizer.param_groups:
+                    g["lr"] *= 0.5
+                for g in latent_optimizer.param_groups:
+                    g["lr"] *= 0.5
+                continue
+
+            if scheduler is not None:
+                scheduler.step()
 
             if return_history:
-                train_history.append(train_loss)
+                history.append(train_loss)
 
+            # Optuna prune on validation metric
             if (
                 trial is not None
                 and X_val is not None
                 and ((epoch + 1) % eval_interval == 0)
             ):
                 metric_key = prune_metric or getattr(self, "tune_metric", "f1")
-
-                do_infer = (eval_latent_steps or 0) > 0
+                do_infer = int(eval_latent_steps) > 0
                 metric_val = self._eval_for_pruning(
                     model=model,
                     X_val=X_val,
@@ -1104,12 +1289,32 @@ class ImputeNLPCA(BaseNNImputer):
                     latent_seed=(self.seed if self.seed is not None else None),
                     _latent_cache=_latent_cache,
                     _latent_cache_key=_latent_cache_key,
+                    # NEW:
+                    eval_mask_override=(
+                        self.sim_mask_test_
+                        if (
+                            self.simulate_missing
+                            and getattr(self, "sim_mask_test_", None) is not None
+                            and X_val.shape == self.X_test_.shape
+                        )
+                        else (
+                            self.sim_mask_global_[self._tune_test_idx]
+                            if (
+                                self.simulate_missing
+                                and getattr(self, "sim_mask_global_", None) is not None
+                                and hasattr(self, "_tune_test_idx")
+                                and X_val.shape[0] == len(self._tune_test_idx)
+                            )
+                            else None
+                        )
+                    ),
                 )
 
                 trial.report(metric_val, step=epoch + 1)
+
                 if (epoch + 1) >= prune_warmup_epochs and trial.should_prune():
                     raise optuna.exceptions.TrialPruned(
-                        f"Pruned at epoch {epoch + 1}: {metric_key}={metric_val:.3f}"
+                        f"Pruned at epoch {epoch + 1}: {metric_key}={metric_val:.4f}"
                     )
 
             early_stopping(train_loss, model)
@@ -1118,9 +1323,10 @@ class ImputeNLPCA(BaseNNImputer):
                 break
 
         best_loss = early_stopping.best_score
-        best_model = model  # reuse instance
-        best_model.load_state_dict(early_stopping.best_model.state_dict())
-        return best_loss, best_model, train_history, latent_vectors
+        best_model = copy.deepcopy(early_stopping.best_model)
+        if best_model is None:
+            best_model = copy.deepcopy(model)
+        return best_loss, best_model, history, latent_vectors
 
     def _optimize_latents_for_inference(
         self,
@@ -1129,18 +1335,19 @@ class ImputeNLPCA(BaseNNImputer):
         params: dict,
         inference_epochs: int = 200,
     ) -> torch.Tensor:
-        """Optimizes latent vectors for new, unseen data.
+        """Refine latents for new data with guards.
 
-        This method optimizes latent vectors for new data samples that were not part of the training set. It initializes latent vectors and performs gradient-based optimization to minimize the reconstruction loss using the trained NLPCA model. The optimized latent vectors are returned for further predictions.
+        This method optimizes latent vectors for new data samples by refining them through gradient-based optimization. It initializes the latent space and iteratively updates the latent vectors to minimize the reconstruction loss using cross-entropy. The method includes safeguards to handle non-finite values during optimization.
 
         Args:
-            X_new (np.ndarray): New data in 0/1/2 encoding with -1 for missing values.
+            X_new (np.ndarray): New data in 0/1/2 encoding with -
             model (torch.nn.Module): Trained NLPCA model.
             params (dict): Model parameters.
-            inference_epochs (int): Number of epochs to optimize latent vectors.
+            inference_epochs (int): Number of optimization epochs.
 
         Returns:
             torch.Tensor: Optimized latent vectors for the new data.
+
         """
         if self.tune and self.tune_fast:
             inference_epochs = min(
@@ -1148,32 +1355,42 @@ class ImputeNLPCA(BaseNNImputer):
             )
 
         model.eval()
-
         nF = getattr(model, "n_features", self.num_features_)
 
-        new_latent_vectors = self._create_latent_space(
+        z = self._create_latent_space(
             params, len(X_new), X_new, self.latent_init
+        ).requires_grad_(True)
+        opt = torch.optim.AdamW(
+            [z], lr=self.learning_rate * self.lr_input_factor, eps=1e-7
         )
-        latent_optimizer = torch.optim.Adam(
-            [new_latent_vectors], lr=self.learning_rate * self.lr_input_factor
-        )
-        y_target = torch.from_numpy(X_new).long().to(self.device)
+
+        X_new = X_new.astype(np.int64, copy=False)
+        X_new[X_new < 0] = -1
+        y = torch.from_numpy(X_new).long().to(self.device)
 
         for _ in range(inference_epochs):
-            latent_optimizer.zero_grad()
-            logits = model.phase23_decoder(new_latent_vectors).view(
-                len(X_new), nF, self.num_classes_
-            )
-            loss = F.cross_entropy(
-                logits.view(-1, self.num_classes_), y_target.view(-1), ignore_index=-1
-            )
-            if torch.isnan(loss):
-                self.logger.warning("Inference loss is NaN; stopping.")
-                break
-            loss.backward()
-            latent_optimizer.step()
+            opt.zero_grad(set_to_none=True)
+            logits = model.phase23_decoder(z).view(len(X_new), nF, self.num_classes_)
 
-        return new_latent_vectors.detach()
+            if not torch.isfinite(logits).all():
+                break
+
+            loss = F.cross_entropy(
+                logits.view(-1, self.num_classes_),
+                y.view(-1),
+                ignore_index=-1,
+                reduction="mean",
+            )
+            if not torch.isfinite(loss):
+                break
+
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_([z], max_norm=1.0)
+            if z.grad is None or not torch.isfinite(z.grad).all():
+                break
+            opt.step()
+
+        return z.detach()
 
     def _latent_infer_for_eval(
         self,
@@ -1189,29 +1406,24 @@ class ImputeNLPCA(BaseNNImputer):
     ) -> None:
         """Freeze weights; refine validation latents only (no leakage).
 
-        This method refines latent vectors for validation data by optimizing them while keeping the model weights frozen. It uses gradient-based optimization to minimize the reconstruction loss on the validation set. The optimized latent vectors can be cached for future use.
+        This method refines latent vectors for validation data by optimizing them while keeping the model weights frozen. It initializes the latent space, optionally using cached latent vectors, and iteratively updates the latent vectors to minimize the reconstruction loss using cross-entropy. The method includes safeguards to handle non-finite values during optimization and can store the optimized latent vectors in a cache.
 
         Args:
             model (torch.nn.Module): Trained NLPCA model.
-            X_val (np.ndarray): Validation data in 0/1/2 encoding with - 1 for missing.
-            steps (int): Number of optimization steps for latent refinement.
+            X_val (np.ndarray): Validation data in 0/1/2 encoding with -1 for missing.
+            steps (int): Number of optimization steps.
             lr (float): Learning rate for latent optimization.
             weight_decay (float): Weight decay for latent optimization.
             seed (int): Random seed for reproducibility.
-            cache (dict | None): Cache for storing optimized latents.
-            cache_key (str | None): Key for storing/retrieving latents in/from cache
-
-        Returns:
-            None. Updates cache in place if provided.
+            cache (dict | None): Cache for storing optimized latent vectors.
+            cache_key (str | None): Key for storing/retrieving from cache.
         """
         if seed is None:
-            seed = np.random.randint(0, 999999)
-
+            seed = np.random.randint(0, 999_999)
         torch.manual_seed(seed)
         np.random.seed(seed)
 
         model.eval()
-
         nF = getattr(model, "n_features", self.num_features_)
 
         for p in model.parameters():
@@ -1219,46 +1431,54 @@ class ImputeNLPCA(BaseNNImputer):
 
         X_val = X_val.astype(np.int64, copy=False)
         X_val[X_val < 0] = -1
-        y_target = torch.from_numpy(X_val).long().to(self.device)
+        y = torch.from_numpy(X_val).long().to(self.device)
 
-        # Get latent_dim from the *model actually being evaluated*
-        latent_dim_model = self._first_linear_in_features(model)
+        latent_dim = self._first_linear_in_features(model)
+        cache_key = f"{self.prefix}_nlpca_val_latents_z{latent_dim}_L{self.num_features_}_K{self.num_classes_}"
 
-        # Make a cache key that is specific to this latent size (and feature schema)
-        cache_key = (
-            f"{self.prefix}_nlpca_val_latents_"
-            f"z{latent_dim_model}_L{self.num_features_}_K{self.num_classes_}"
-        )
-
-        # Warm-start from cache if available *and* shape-compatible
         if cache is not None and cache_key in cache:
-            val_latents = cache[cache_key].detach().clone().requires_grad_(True)
+            z = cache[cache_key].detach().clone().requires_grad_(True)
         else:
-            val_latents = self._create_latent_space(
-                {"latent_dim": latent_dim_model},  # use model's latent size
+            z = self._create_latent_space(
+                {"latent_dim": latent_dim},
                 n_samples=X_val.shape[0],
                 X=X_val,
                 latent_init=self.latent_init,
             ).requires_grad_(True)
 
-        opt = torch.optim.AdamW([val_latents], lr=lr, weight_decay=weight_decay)
+        opt = torch.optim.AdamW([z], lr=lr, weight_decay=weight_decay, eps=1e-7)
 
         for _ in range(max(int(steps), 0)):
             opt.zero_grad(set_to_none=True)
-            logits = model.phase23_decoder(val_latents).view(
+
+            logits = model.phase23_decoder(z).view(
                 X_val.shape[0], nF, self.num_classes_
             )
+
+            if not torch.isfinite(logits).all():
+                break
+
             loss = F.cross_entropy(
                 logits.view(-1, self.num_classes_),
-                y_target.view(-1),
+                y.view(-1),
                 ignore_index=-1,
                 reduction="mean",
             )
+
+            if not torch.isfinite(loss):
+                break
+
             loss.backward()
+
+            torch.nn.utils.clip_grad_norm_([z], max_norm=1.0)
+
+            if z.grad is None or not torch.isfinite(z.grad).all():
+                break
+
             opt.step()
 
         if cache is not None:
-            cache[cache_key] = val_latents.detach().clone()
+            cache[cache_key] = z.detach().clone()
 
         for p in model.parameters():
             p.requires_grad_(True)
