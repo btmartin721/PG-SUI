@@ -1,6 +1,6 @@
 import copy
 from pdb import pm
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -19,6 +19,7 @@ from pgsui.impute.unsupervised.base import BaseNNImputer
 from pgsui.impute.unsupervised.callbacks import EarlyStopping
 from pgsui.impute.unsupervised.loss_functions import SafeFocalCELoss
 from pgsui.impute.unsupervised.models.autoencoder_model import AutoencoderModel
+from pgsui.utils.logging_utils import configure_logger
 from pgsui.utils.pretty_metrics import PrettyMetrics
 
 if TYPE_CHECKING:
@@ -44,9 +45,7 @@ def ensure_autoencoder_config(
         return config
     if isinstance(config, str):
         # YAML path — top-level `preset` key is supported
-        return load_yaml_to_dataclass(
-            config, AutoencoderConfig, preset_builder=AutoencoderConfig.from_preset
-        )
+        return load_yaml_to_dataclass(config, AutoencoderConfig)
     if isinstance(config, dict):
         # Flatten dict into dot-keys then overlay onto a fresh instance
         base = AutoencoderConfig()
@@ -107,9 +106,9 @@ class ImputeAutoencoder(BaseNNImputer):
         This initializer sets up the Autoencoder imputer by processing the provided configuration, initializing logging, and preparing the model and data encoder. It supports configuration input as a dataclass, nested dictionary, YAML file path, or None, with optional dot-key overrides for fine-tuning specific parameters.
 
         Args:
-            genotype_data: Backing genotype data object.
-            config: Structured configuration as dataclass, nested dict, YAML path, or None.
-            overrides: Optional dot-key overrides with highest precedence (e.g., {'model.latent_dim': 32}).
+            genotype_data ("GenotypeData"): Backing genotype data object.
+            config (Union["AutoencoderConfig", dict, str] | None): Structured configuration as dataclass, nested dict, YAML path, or None.
+            overrides (dict | None): Optional dot-key overrides with highest precedence (e.g., {'model.latent_dim': 32}).
         """
         self.model_name = "ImputeAutoencoder"
         self.genotype_data = genotype_data
@@ -127,18 +126,25 @@ class ImputeAutoencoder(BaseNNImputer):
             debug=self.cfg.io.debug,
             verbose=self.cfg.io.verbose,
         )
-        self.logger = logman.get_logger()
+        self.logger = configure_logger(
+            logman.get_logger(),
+            verbose=self.cfg.io.verbose,
+            debug=self.cfg.io.debug,
+        )
 
         # BaseNNImputer bootstrapping (device/dirs/logging handled here)
         super().__init__(
+            model_name=self.model_name,
+            genotype_data=self.genotype_data,
             prefix=self.cfg.io.prefix,
             device=self.cfg.train.device,
             verbose=self.cfg.io.verbose,
             debug=self.cfg.io.debug,
         )
 
-        # Model hook & encoder
         self.Model = AutoencoderModel
+
+        # Model hook & encoder
         self.pgenc = GenotypeEncoder(genotype_data)
 
         # IO / global
@@ -175,56 +181,75 @@ class ImputeAutoencoder(BaseNNImputer):
         self.sim_kwargs = sim_cfg_kwargs
 
         # Model hyperparams
-        self.latent_dim = self.cfg.model.latent_dim
-        self.dropout_rate = self.cfg.model.dropout_rate
-        self.num_hidden_layers = self.cfg.model.num_hidden_layers
-        self.layer_scaling_factor = self.cfg.model.layer_scaling_factor
-        self.layer_schedule = self.cfg.model.layer_schedule
-        self.activation = self.cfg.model.hidden_activation
-        self.gamma = self.cfg.model.gamma
+        self.latent_dim = int(self.cfg.model.latent_dim)
+        self.dropout_rate = float(self.cfg.model.dropout_rate)
+        self.num_hidden_layers = int(self.cfg.model.num_hidden_layers)
+        self.layer_scaling_factor = float(self.cfg.model.layer_scaling_factor)
+        self.layer_schedule: str = str(self.cfg.model.layer_schedule)
+        self.activation = str(self.cfg.model.hidden_activation)
+        self.gamma = float(self.cfg.model.gamma)
 
         # Train hyperparams
-        self.batch_size = self.cfg.train.batch_size
-        self.learning_rate = self.cfg.train.learning_rate
-        self.l1_penalty = self.cfg.train.l1_penalty
-        self.early_stop_gen = self.cfg.train.early_stop_gen
-        self.min_epochs = self.cfg.train.min_epochs
-        self.epochs = self.cfg.train.max_epochs
-        self.validation_split = self.cfg.train.validation_split
-        self.beta = self.cfg.train.weights_beta
-        self.max_ratio = self.cfg.train.weights_max_ratio
+        self.batch_size = int(self.cfg.train.batch_size)
+        self.learning_rate = float(self.cfg.train.learning_rate)
+        self.l1_penalty: float = float(self.cfg.train.l1_penalty)
+        self.early_stop_gen = int(self.cfg.train.early_stop_gen)
+        self.min_epochs = int(self.cfg.train.min_epochs)
+        self.epochs = int(self.cfg.train.max_epochs)
+        self.validation_split = float(self.cfg.train.validation_split)
+        self.beta = float(self.cfg.train.weights_beta)
+        self.max_ratio = float(self.cfg.train.weights_max_ratio)
 
         # Tuning
-        self.tune = self.cfg.tune.enabled
-        self.tune_fast = self.cfg.tune.fast
-        self.tune_batch_size = self.cfg.tune.batch_size
-        self.tune_epochs = self.cfg.tune.epochs
-        self.tune_eval_interval = self.cfg.tune.eval_interval
-        self.tune_metric = self.cfg.tune.metric
-        self.n_trials = self.cfg.tune.n_trials
-        self.tune_save_db = self.cfg.tune.save_db
-        self.tune_resume = self.cfg.tune.resume
-        self.tune_max_samples = self.cfg.tune.max_samples
-        self.tune_max_loci = self.cfg.tune.max_loci
-        self.tune_infer_epochs = getattr(self.cfg.tune, "infer_epochs", 0)  # AE unused
-        self.tune_patience = self.cfg.tune.patience
+        self.tune = bool(self.cfg.tune.enabled)
+        self.tune_fast = bool(self.cfg.tune.fast)
+        self.tune_batch_size = int(self.cfg.tune.batch_size)
+        self.tune_epochs = int(self.cfg.tune.epochs)
+        self.tune_eval_interval = int(self.cfg.tune.eval_interval)
+        self.tune_metric: str = self.cfg.tune.metric
+
+        if self.tune_metric is not None:
+            self.tune_metric_: (
+                Literal[
+                    "pr_macro",
+                    "f1",
+                    "accuracy",
+                    "precision",
+                    "recall",
+                    "roc_auc",
+                    "average_precision",
+                ]
+                | None
+            ) = self.cfg.tune.metric
+
+        self.n_trials = int(self.cfg.tune.n_trials)
+        self.tune_save_db = bool(self.cfg.tune.save_db)
+        self.tune_resume = bool(self.cfg.tune.resume)
+        self.tune_max_samples = int(self.cfg.tune.max_samples)
+        self.tune_max_loci = int(self.cfg.tune.max_loci)
+        self.tune_infer_epochs = int(
+            getattr(self.cfg.tune, "infer_epochs", 0)
+        )  # AE unused
+        self.tune_patience = int(self.cfg.tune.patience)
 
         # Evaluate
         # AE does not optimize latents, so these are unused / fixed
-        self.eval_latent_steps = 0
-        self.eval_latent_lr = 0.0
-        self.eval_latent_weight_decay = 0.0
+        self.eval_latent_steps: int = 0
+        self.eval_latent_lr: float = 0.0
+        self.eval_latent_weight_decay: float = 0.0
 
         # Plotting (parity with NLPCA PlotConfig)
-        self.plot_format = self.cfg.plot.fmt
-        self.plot_dpi = self.cfg.plot.dpi
-        self.plot_fontsize = self.cfg.plot.fontsize
-        self.title_fontsize = self.cfg.plot.fontsize
-        self.despine = self.cfg.plot.despine
-        self.show_plots = self.cfg.plot.show
+        self.plot_format: Literal["pdf", "png", "jpg", "jpeg", "svg"] = (
+            self.cfg.plot.fmt
+        )
+        self.plot_dpi = int(self.cfg.plot.dpi)
+        self.plot_fontsize = int(self.cfg.plot.fontsize)
+        self.title_fontsize = int(self.cfg.plot.fontsize)
+        self.despine = bool(self.cfg.plot.despine)
+        self.show_plots = bool(self.cfg.plot.show)
 
         # Core derived at fit-time
-        self.is_haploid: bool | None = None
+        self.is_haploid: bool = False
         self.num_classes_: int | None = None
         self.model_params: Dict[str, Any] = {}
         self.sim_mask_global_: np.ndarray | None = None
@@ -277,11 +302,18 @@ class ImputeAutoencoder(BaseNNImputer):
         else:
             X_for_model = self.ground_truth_.copy()
 
+        if self.genotype_data.snp_data is None:
+            msg = "SNP data is required for Autoencoder imputer."
+            self.logger.error(msg)
+            raise TypeError(msg)
+
         # Ploidy & classes
-        self.is_haploid = np.all(
-            np.isin(
-                self.genotype_data.snp_data,
-                ["A", "C", "G", "T", "N", "-", ".", "?"],
+        self.is_haploid = bool(
+            np.all(
+                np.isin(
+                    self.genotype_data.snp_data,
+                    ["A", "C", "G", "T", "N", "-", ".", "?"],
+                )
             )
         )
         self.ploidy = 1 if self.is_haploid else 2
@@ -374,11 +406,10 @@ class ImputeAutoencoder(BaseNNImputer):
             self.models_dir / f"final_model_{self.model_name}.pt",
         )
 
-        self.best_loss_, self.model_, self.history_ = (
-            loss,
-            trained_model,
-            {"Train": history},
-        )
+        hist: Dict[str, List[float] | Dict[str, List[float]] | None] | None = {
+            "Train": history
+        }
+        self.best_loss_, self.model_, self.history_ = (loss, trained_model, hist)
         self.is_fit_ = True
 
         # Evaluate on validation set (parity with NLPCA reporting)
@@ -464,7 +495,7 @@ class ImputeAutoencoder(BaseNNImputer):
         *,
         X_val: np.ndarray | None = None,
         params: dict | None = None,
-        prune_metric: str | None = None,  # "f1" | "accuracy" | "pr_macro"
+        prune_metric: str = "f1",  # "f1" | "accuracy" | "pr_macro"
         prune_warmup_epochs: int = 3,
         eval_interval: int = 1,
         # Evaluation parameters (AE ignores latent refinement knobs)
@@ -487,7 +518,7 @@ class ImputeAutoencoder(BaseNNImputer):
             class_weights (torch.Tensor | None): Class weights tensor (on device).
             X_val (np.ndarray | None): Validation matrix (0/1/2 with -1 for missing).
             params (dict | None): Model params for evaluation.
-            prune_metric (str | None): Metric for pruning reports.
+            prune_metric (str): Metric for pruning reports.
             prune_warmup_epochs (int): Pruning warmup epochs.
             eval_interval (int): Eval frequency (epochs).
             eval_requires_latents (bool): Ignored for AE (no latent inference).
@@ -539,7 +570,7 @@ class ImputeAutoencoder(BaseNNImputer):
         self,
         loader: torch.utils.data.DataLoader,
         optimizer: torch.optim.Optimizer,
-        scheduler: torch.optim.lr_scheduler._LRScheduler,
+        scheduler: CosineAnnealingLR,
         model: torch.nn.Module,
         l1_penalty: float,
         trial: optuna.Trial | None,
@@ -548,7 +579,7 @@ class ImputeAutoencoder(BaseNNImputer):
         *,
         X_val: np.ndarray | None = None,
         params: dict | None = None,
-        prune_metric: str | None = None,
+        prune_metric: str = "f1",
         prune_warmup_epochs: int = 3,
         eval_interval: int = 1,
         # Evaluation parameters (AE ignores latent refinement knobs)
@@ -572,7 +603,7 @@ class ImputeAutoencoder(BaseNNImputer):
             class_weights (torch.Tensor): Class weights tensor (on device).
             X_val (np.ndarray | None): Validation matrix (0/1/2 with -1 for missing).
             params (dict | None): Model params for evaluation.
-            prune_metric (str | None): Metric for pruning reports.
+            prune_metric (str): Metric for pruning reports.
             prune_warmup_epochs (int): Pruning warmup epochs.
             eval_interval (int): Eval frequency (epochs).
             eval_requires_latents (bool): Ignored for AE (no latent inference).
@@ -595,7 +626,7 @@ class ImputeAutoencoder(BaseNNImputer):
             debug=self.debug,
         )
 
-        warm, ramp, gamma_final = 50, 100, self.gamma
+        warm, ramp, gamma_final = 50, 100, torch.tensor(self.gamma, device=self.device)
 
         # Optional: linear LR warmup for first N epochs
         lr0 = optimizer.param_groups[0]["lr"]
@@ -605,9 +636,11 @@ class ImputeAutoencoder(BaseNNImputer):
         for epoch in range(scheduler.T_max):
             # Gamma warm/ramp
             if epoch < warm:
-                model.gamma = 0.0
+                model.gamma = torch.tensor(0.0, device=self.device)
             elif epoch < warm + ramp:
-                model.gamma = gamma_final * ((epoch - warm) / ramp)
+                model.gamma = torch.tensor(
+                    gamma_final.item() * ((epoch - warm) / ramp), device=self.device
+                )
             else:
                 model.gamma = gamma_final
 
@@ -683,8 +716,9 @@ class ImputeAutoencoder(BaseNNImputer):
                     )
 
         best_loss = early_stopping.best_score
-        best_model = copy.deepcopy(early_stopping.best_model)
-        if best_model is None:
+        if early_stopping.best_model is not None:
+            best_model = copy.deepcopy(early_stopping.best_model)
+        else:
             best_model = copy.deepcopy(model)
         return best_loss, best_model, history
 
@@ -865,6 +899,7 @@ class ImputeAutoencoder(BaseNNImputer):
         y_proba_flat = pred_probas[eval_mask].astype(np.float64, copy=False)
 
         if y_true_flat.size == 0:
+            self.tune_metric = "f1" if self.tune_metric is None else self.tune_metric
             return {self.tune_metric: 0.0}
 
         # ensure valid probability simplex after masking (no NaNs/Infs, sums=1)
@@ -889,19 +924,34 @@ class ImputeAutoencoder(BaseNNImputer):
 
         y_true_ohe = np.eye(len(labels_for_scoring))[y_true_flat]
 
+        tune_metric_tmp: Literal[
+            "pr_macro",
+            "roc_auc",
+            "average_precision",
+            "accuracy",
+            "f1",
+            "precision",
+            "recall",
+        ]
+        if self.tune_metric_ is not None:
+            tune_metric_tmp = self.tune_metric_
+        else:
+            tune_metric_tmp = "f1"  # Default if not tuning
+
         metrics = self.scorers_.evaluate(
             y_true_flat,
             y_pred_flat,
             y_true_ohe,
             y_proba_flat,
             objective_mode,
-            self.tune_metric,
+            tune_metric_tmp,
         )
 
         if not objective_mode:
-            if self.verbose or self.debug:
-                pm = PrettyMetrics(metrics, precision=3, title="Validation Metrics")
-                pm.render()  # prints a command-line table
+            pm = PrettyMetrics(
+                metrics, precision=3, title=f"{self.model_name} Validation Metrics"
+            )
+            pm.render()  # prints a command-line table
 
             # Primary report (REF/HET/ALT or REF/ALT)
             self._make_class_reports(
@@ -985,12 +1035,15 @@ class ImputeAutoencoder(BaseNNImputer):
             model = self.build_model(self.Model, params["model_params"])
             model.apply(self.initialize_weights)
 
+            lr: float = float(params["lr"])
+            l1_penalty: float = float(params["l1_penalty"])
+
             # Train + prune on metric
-            _, model, _ = self._train_and_validate_model(
+            _, model, __ = self._train_and_validate_model(
                 model=model,
                 loader=train_loader,
-                lr=params["lr"],
-                l1_penalty=params["l1_penalty"],
+                lr=lr,
+                l1_penalty=l1_penalty,
                 trial=trial,
                 return_history=False,
                 class_weights=class_weights,
@@ -1013,19 +1066,26 @@ class ImputeAutoencoder(BaseNNImputer):
                 )
                 else None
             )
-            metrics = self._evaluate_model(
-                X_val, model, params, objective_mode=True, eval_mask_override=eval_mask
-            )
-            self._clear_resources(model, train_loader)
+
+            if model is not None:
+                metrics = self._evaluate_model(
+                    X_val,
+                    model,
+                    params,
+                    objective_mode=True,
+                    eval_mask_override=eval_mask,
+                )
+                self._clear_resources(model, train_loader)
+            else:
+                raise TypeError("Model training failed; no model was returned.")
+
             return metrics[self.tune_metric]
 
         except Exception as e:
             # Keep sweeps moving if a trial fails
             raise optuna.exceptions.TrialPruned(f"Trial failed with error: {e}")
 
-    def _sample_hyperparameters(
-        self, trial: optuna.Trial
-    ) -> Dict[str, int | float | str]:
+    def _sample_hyperparameters(self, trial: optuna.Trial) -> Dict[str, Any]:
         """Sample AE hyperparameters and compute hidden sizes for model params.
 
         This method samples hyperparameters for the autoencoder model using Optuna's trial object. It computes the hidden layer sizes based on the sampled parameters and prepares the model parameters dictionary.
@@ -1034,7 +1094,7 @@ class ImputeAutoencoder(BaseNNImputer):
             trial (optuna.Trial): Optuna trial object.
 
         Returns:
-            Dict[str, int | float | str]: Sampled hyperparameters and model_params.
+            Dict[str, int | float | str | bool]: Sampled hyperparameters and model_params.
         """
         params = {
             "latent_dim": trial.suggest_int("latent_dim", 2, 64),
@@ -1053,7 +1113,9 @@ class ImputeAutoencoder(BaseNNImputer):
             ),
         }
 
-        input_dim = self.num_features_ * self.num_classes_
+        nF: int = self.num_features_
+        nC: int = int(self.num_classes_) if self.num_classes_ is not None else 3
+        input_dim = nF * nC
         hidden_layer_sizes = self._compute_hidden_layer_sizes(
             n_inputs=input_dim,
             n_outputs=input_dim,
@@ -1067,46 +1129,72 @@ class ImputeAutoencoder(BaseNNImputer):
         # then the interior hidden widths.
         # If there are no interior widths (very small nets),
         # this still leaves [latent_dim].
-        hidden_only = [hidden_layer_sizes[0]] + hidden_layer_sizes[1:-1]
+        hidden_only: list[int] = [hidden_layer_sizes[0]] + hidden_layer_sizes[1:-1]
 
         params["model_params"] = {
-            "n_features": self.num_features_,
-            "num_classes": self.num_classes_,
-            "latent_dim": params["latent_dim"],
-            "dropout_rate": params["dropout_rate"],
+            "n_features": int(self.num_features_),
+            "num_classes": (
+                int(self.num_classes_) if self.num_classes_ is not None else 3
+            ),
+            "latent_dim": int(params["latent_dim"]),
+            "dropout_rate": float(params["dropout_rate"]),
             "hidden_layer_sizes": hidden_only,
-            "activation": params["activation"],
+            "activation": str(params["activation"]),
         }
         return params
 
     def _set_best_params(
-        self, best_params: Dict[str, int | float | str | list]
-    ) -> Dict[str, int | float | str | list]:
+        self, best_params: Dict[str, int | float | str | List[int]]
+    ) -> Dict[str, int | float | str | List[int]]:
         """Adopt best params (ImputeNLPCA parity) and return model_params.
 
         This method sets the best hyperparameters found during tuning and computes the hidden layer sizes for the autoencoder model. It prepares the final model parameters dictionary to be used for building the model.
 
         Args:
-            best_params (Dict[str, int | float | str | list]): Best hyperparameters from tuning.
+            best_params (Dict[str, int | float | str | List[int]]): Best hyperparameters from tuning.
 
         Returns:
-            Dict[str, int | float | str | list]: Model parameters for building the model.
+            Dict[str, int | float | str | List[int]]: Model parameters for building the model.
         """
-        self.latent_dim = best_params["latent_dim"]
-        self.dropout_rate = best_params["dropout_rate"]
-        self.learning_rate = best_params["learning_rate"]
-        self.l1_penalty = best_params["l1_penalty"]
-        self.activation = best_params["activation"]
-        self.layer_scaling_factor = best_params["layer_scaling_factor"]
-        self.layer_schedule = best_params["layer_schedule"]
+        bp = {}
+        for k, v in best_params.items():
+            if not isinstance(v, list):
+                if k in {"latent_dim", "num_hidden_layers"}:
+                    bp[k] = int(v)
+                elif k in {
+                    "dropout_rate",
+                    "learning_rate",
+                    "l1_penalty",
+                    "layer_scaling_factor",
+                }:
+                    bp[k] = float(v)
+                elif k in {"activation", "layer_schedule"}:
+                    if k == "layer_schedule":
+                        if v not in {"pyramid", "constant", "linear"}:
+                            raise ValueError(f"Invalid layer_schedule: {v}")
+                        bp[k] = v
+                    else:
+                        bp[k] = str(v)
+            else:
+                bp[k] = v  # keep lists as-is
 
+        self.latent_dim: int = bp["latent_dim"]
+        self.dropout_rate: float = bp["dropout_rate"]
+        self.learning_rate: float = bp["learning_rate"]
+        self.l1_penalty: float = bp["l1_penalty"]
+        self.activation: str = bp["activation"]
+        self.layer_scaling_factor: float = bp["layer_scaling_factor"]
+        self.layer_schedule: str = bp["layer_schedule"]
+
+        nF: int = self.num_features_
+        nC: int = int(self.num_classes_) if self.num_classes_ is not None else 3
         hidden_layer_sizes = self._compute_hidden_layer_sizes(
-            n_inputs=self.num_features_ * self.num_classes_,
-            n_outputs=self.num_features_ * self.num_classes_,
+            n_inputs=nF * nC,
+            n_outputs=nF * nC,
             n_samples=len(self.train_idx_),
-            n_hidden=best_params["num_hidden_layers"],
-            alpha=best_params["layer_scaling_factor"],
-            schedule=best_params["layer_schedule"],
+            n_hidden=bp["num_hidden_layers"],
+            alpha=bp["layer_scaling_factor"],
+            schedule=bp["layer_schedule"],
         )
 
         # Keep the latent_dim as the first element,
@@ -1121,7 +1209,7 @@ class ImputeAutoencoder(BaseNNImputer):
             "hidden_layer_sizes": hidden_only,
             "dropout_rate": self.dropout_rate,
             "activation": self.activation,
-            "num_classes": self.num_classes_,
+            "num_classes": nC,
         }
 
     def _default_best_params(self) -> Dict[str, int | float | str | list]:
@@ -1132,13 +1220,20 @@ class ImputeAutoencoder(BaseNNImputer):
         Returns:
             Dict[str, int | float | str | list]: Default model parameters.
         """
+        nF: int = self.num_features_
+        nC: int = int(self.num_classes_) if self.num_classes_ is not None else 3
+        ls = self.layer_schedule
+
+        if ls not in {"pyramid", "constant", "linear"}:
+            raise ValueError(f"Invalid layer_schedule: {ls}")
+
         hidden_layer_sizes = self._compute_hidden_layer_sizes(
-            n_inputs=self.num_features_ * self.num_classes_,
-            n_outputs=self.num_features_ * self.num_classes_,
+            n_inputs=nF * nC,
+            n_outputs=nF * nC,
             n_samples=len(self.ground_truth_),
             n_hidden=self.num_hidden_layers,
             alpha=self.layer_scaling_factor,
-            schedule=self.layer_schedule,
+            schedule=ls,
         )
         return {
             "n_features": self.num_features_,
@@ -1146,5 +1241,5 @@ class ImputeAutoencoder(BaseNNImputer):
             "hidden_layer_sizes": hidden_layer_sizes,
             "dropout_rate": self.dropout_rate,
             "activation": self.activation,
-            "num_classes": self.num_classes_,
+            "num_classes": nC,
         }
