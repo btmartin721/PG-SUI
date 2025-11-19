@@ -18,6 +18,7 @@ from pgsui.impute.unsupervised.base import BaseNNImputer
 from pgsui.impute.unsupervised.callbacks import EarlyStopping
 from pgsui.impute.unsupervised.loss_functions import SafeFocalCELoss
 from pgsui.impute.unsupervised.models.ubp_model import UBPModel
+from pgsui.utils.logging_utils import configure_logger
 from pgsui.utils.pretty_metrics import PrettyMetrics
 
 if TYPE_CHECKING:
@@ -41,11 +42,7 @@ def ensure_ubp_config(config: UBPConfig | dict | str | None) -> UBPConfig:
         return config
     if isinstance(config, str):
         # YAML path — support top-level `preset`
-        return load_yaml_to_dataclass(
-            config,
-            UBPConfig,
-            preset_builder=UBPConfig.from_preset,
-        )
+        return load_yaml_to_dataclass(config, UBPConfig)
     if isinstance(config, dict):
         base = UBPConfig()
 
@@ -128,10 +125,16 @@ class ImputeUBP(BaseNNImputer):
             debug=self.cfg.io.debug,
             verbose=self.cfg.io.verbose,
         )
-        self.logger = logman.get_logger()
+        self.logger = configure_logger(
+            logman.get_logger(),
+            verbose=self.cfg.io.verbose,
+            debug=self.cfg.io.debug,
+        )
 
         # ---- Base init ----
         super().__init__(
+            model_name=self.model_name,
+            genotype_data=self.genotype_data,
             prefix=self.cfg.io.prefix,
             device=self.cfg.train.device,
             verbose=self.cfg.io.verbose,
@@ -176,7 +179,7 @@ class ImputeUBP(BaseNNImputer):
         self.num_hidden_layers = self.cfg.model.num_hidden_layers
         self.layer_scaling_factor = self.cfg.model.layer_scaling_factor
         self.layer_schedule = self.cfg.model.layer_schedule
-        self.latent_init = self.cfg.model.latent_init
+        self.latent_init: Literal["pca", "random"] = self.cfg.model.latent_init
         self.activation = self.cfg.model.hidden_activation
         self.gamma = self.cfg.model.gamma
 
@@ -199,7 +202,15 @@ class ImputeUBP(BaseNNImputer):
         self.tune_batch_size = self.cfg.tune.batch_size
         self.tune_epochs = self.cfg.tune.epochs
         self.tune_eval_interval = self.cfg.tune.eval_interval
-        self.tune_metric = self.cfg.tune.metric
+        self.tune_metric: Literal[
+            "pr_macro",
+            "f1",
+            "accuracy",
+            "average_precision",
+            "precision",
+            "recall",
+            "roc_auc",
+        ] = self.cfg.tune.metric
         self.n_trials = self.cfg.tune.n_trials
         self.tune_save_db = self.cfg.tune.save_db
         self.tune_resume = self.cfg.tune.resume
@@ -222,8 +233,8 @@ class ImputeUBP(BaseNNImputer):
         self.show_plots = self.cfg.plot.show
 
         # ---- core runtime ----
-        self.is_haploid = None
-        self.num_classes_ = None
+        self.is_haploid = False
+        self.num_classes_ = False
         self.model_params: Dict[str, Any] = {}
         self.sim_mask_global_: np.ndarray | None = None
         self.sim_mask_train_: np.ndarray | None = None
@@ -277,9 +288,12 @@ class ImputeUBP(BaseNNImputer):
             X_for_model[self.sim_mask_global_] = -1
 
         # --- Determine ploidy (haploid vs diploid) and classes ---
-        self.is_haploid = np.all(
-            np.isin(
-                self.genotype_data.snp_data, ["A", "C", "G", "T", "N", "-", ".", "?"]
+        self.is_haploid = bool(
+            np.all(
+                np.isin(
+                    self.genotype_data.snp_data,
+                    ["A", "C", "G", "T", "N", "-", ".", "?"],
+                )
             )
         )
         self.ploidy = 1 if self.is_haploid else 2
@@ -390,6 +404,12 @@ class ImputeUBP(BaseNNImputer):
         optimized_latents = self._optimize_latents_for_inference(
             X_to_impute, self.model_, self.best_params_
         )
+
+        if not isinstance(optimized_latents, torch.nn.Parameter):
+            optimized_latents = torch.nn.Parameter(
+                optimized_latents, requires_grad=False
+            )
+
         pred_labels, _ = self._predict(self.model_, latent_vectors=optimized_latents)
 
         missing_mask = X_to_impute == -1
@@ -433,7 +453,14 @@ class ImputeUBP(BaseNNImputer):
             class_weights = class_weights.to(self.device)
 
         criterion = SafeFocalCELoss(gamma=gamma, weight=class_weights, ignore_index=-1)
-        decoder = model.phase1_decoder if phase == 1 else model.phase23_decoder
+        decoder: torch.Tensor | torch.nn.Module = (
+            model.phase1_decoder if phase == 1 else model.phase23_decoder
+        )
+
+        if not isinstance(decoder, torch.nn.Module):
+            msg = f"{self.model_name} Decoder is not a torch.nn.Module."
+            self.logger.error(msg)
+            raise TypeError(msg)
 
         for batch_indices, y_batch in loader:
             optimizer.zero_grad(set_to_none=True)
@@ -511,7 +538,14 @@ class ImputeUBP(BaseNNImputer):
         model.eval()
         nF = getattr(model, "n_features", self.num_features_)
         with torch.no_grad():
-            logits = model.phase23_decoder(latent_vectors.to(self.device)).view(
+            decoder = model.phase23_decoder
+
+            if not isinstance(decoder, torch.nn.Module):
+                msg = f"{self.model_name} decoder is not a valid torch.nn.Module."
+                self.logger.error(msg)
+                raise TypeError(msg)
+
+            logits = decoder(latent_vectors.to(self.device)).view(
                 len(latent_vectors), nF, self.num_classes_
             )
             probas = torch.softmax(logits, dim=-1)
@@ -548,6 +582,11 @@ class ImputeUBP(BaseNNImputer):
         else:
             test_latent_vectors = self._optimize_latents_for_inference(
                 X_val, model, params
+            )
+
+        if not isinstance(test_latent_vectors, torch.nn.Parameter):
+            test_latent_vectors = torch.nn.Parameter(
+                test_latent_vectors, requires_grad=False
             )
 
         pred_labels, pred_probas = self._predict(
@@ -609,9 +648,10 @@ class ImputeUBP(BaseNNImputer):
         )
 
         if not objective_mode:
-            if self.verbose or self.debug:
-                pm = PrettyMetrics(metrics, precision=3, title="Validation Metrics")
-                pm.render()  # prints a command-line table
+            pm = PrettyMetrics(
+                metrics, precision=3, title=f"{self.model_name} Validation Metrics"
+            )
+            pm.render()  # prints a command-line table
 
             self._make_class_reports(
                 y_true=y_true_flat,
@@ -712,7 +752,7 @@ class ImputeUBP(BaseNNImputer):
             model.n_features = params["model_params"]["n_features"]
             model.apply(self.initialize_weights)
 
-            _, model, _ = self._train_and_validate_model(
+            _, model, __ = self._train_and_validate_model(
                 model=model,
                 loader=train_loader,
                 lr=params["lr"],
@@ -755,9 +795,7 @@ class ImputeUBP(BaseNNImputer):
         except Exception as e:
             raise optuna.exceptions.TrialPruned(f"Trial failed with error: {e}")
 
-    def _sample_hyperparameters(
-        self, trial: optuna.Trial
-    ) -> Dict[str, int | float | str | list]:
+    def _sample_hyperparameters(self, trial: optuna.Trial) -> dict:
         """Sample UBP hyperparameters; compute hidden sizes for model_params.
 
         This method samples a set of hyperparameters for the UBP model using the provided Optuna trial object. It defines a search space for various hyperparameters, including latent dimension, learning rate, dropout rate, number of hidden layers, activation function, and others. After sampling the hyperparameters, it computes the sizes of the hidden layers based on the sampled values and constructs the model parameters dictionary. The method returns a dictionary containing all sampled hyperparameters along with the computed model parameters.
@@ -815,18 +853,16 @@ class ImputeUBP(BaseNNImputer):
 
         return params
 
-    def _set_best_params(
-        self, best_params: Dict[str, int | float | str | list]
-    ) -> Dict[str, int | float | str | list]:
+    def _set_best_params(self, best_params: dict) -> dict:
         """Set best params onto instance; return model_params payload.
 
         This method sets the best hyperparameters found during tuning onto the instance attributes of the ImputeUBP class. It extracts the relevant hyperparameters from the provided dictionary and updates the corresponding instance variables. Additionally, it computes the sizes of the hidden layers based on the best hyperparameters and constructs the model parameters dictionary. The method returns a dictionary containing the model parameters that can be used to build the UBP model.
 
         Args:
-            best_params (Dict[str, int | float | str | list]): Best hyperparameters.
+            best_params (dict): Best hyperparameters.
 
         Returns:
-            Dict[str, int | float | str | list]: model_params payload.
+            dict: model_params payload.
 
         Raises:
             ValueError: If best_params is missing required keys.
@@ -861,13 +897,13 @@ class ImputeUBP(BaseNNImputer):
             "num_classes": self.num_classes_,
         }
 
-    def _set_best_params_default(self) -> Dict[str, int | float | str | list]:
+    def _set_best_params_default(self) -> dict:
         """Default (no-tuning) model_params aligned with current attributes.
 
         This method constructs the model parameters dictionary using the current instance attributes of the ImputeUBP class. It computes the sizes of the hidden layers based on the instance's latent dimension, dropout rate, learning rate, and other relevant attributes. The method returns a dictionary containing the model parameters that can be used to build the UBP model when no hyperparameter tuning has been performed.
 
         Returns:
-            Dict[str, int | float | str | list]: model_params payload.
+            dict: model_params payload.
         """
         hidden_layer_sizes = self._compute_hidden_layer_sizes(
             n_inputs=self.latent_dim,
@@ -911,7 +947,7 @@ class ImputeUBP(BaseNNImputer):
         eval_latent_steps: int = 50,
         eval_latent_lr: float = 1e-2,
         eval_latent_weight_decay: float = 0.0,
-    ) -> Tuple[float, torch.nn.Module | None, dict, torch.nn.Parameter | None]:
+    ) -> tuple:
         """Train & validate UBP model with three-phase loop.
 
         This method trains and validates the UBP model using a three-phase training loop. It sets up the latent optimizer and invokes the training loop, which includes pre-training, fine-tuning, and joint training phases. The method ensures that the necessary latent vectors and class weights are provided before proceeding with training. It also incorporates new parameters for evaluation and pruning during training. The final best loss, best model, training history, and optimized latent vectors are returned.
@@ -982,9 +1018,9 @@ class ImputeUBP(BaseNNImputer):
     def _train_final_model(
         self,
         loader: torch.utils.data.DataLoader,
-        best_params: Dict[str, int | float | str | list],
+        best_params: dict,
         initial_latent_vectors: torch.nn.Parameter,
-    ) -> Tuple[float, torch.nn.Module, dict, torch.nn.Parameter]:
+    ) -> tuple:
         """Train final UBP model with best params; save weights to disk.
 
         This method trains the final UBP model using the best hyperparameters found during tuning. It builds the model with the specified parameters, initializes the weights, and invokes the training and validation process. The method saves the trained model's state dictionary to disk and returns the final loss, trained model, training history, and optimized latent vectors.
@@ -1089,7 +1125,7 @@ class ImputeUBP(BaseNNImputer):
         history: dict[str, list[float]] = {}
         final_best_loss, final_best_model = float("inf"), None
 
-        warm, ramp, gamma_final = 50, 100, self.gamma
+        warm, ramp, gamma_final = 50, 100, torch.tensor(self.gamma, device=self.device)
 
         # Schema-aware latent cache for eval
         _latent_cache: dict = {}
@@ -1118,11 +1154,16 @@ class ImputeUBP(BaseNNImputer):
             if phase == 2:
                 self._reset_weights(model)
 
-            decoder_params = (
-                model.phase1_decoder.parameters()
-                if phase == 1
-                else model.phase23_decoder.parameters()
+            decoder: torch.Tensor | torch.nn.Module = (
+                model.phase1_decoder if phase == 1 else model.phase23_decoder
             )
+
+            if not isinstance(decoder, torch.nn.Module):
+                msg = f"{self.model_name} Decoder is not a torch.nn.Module."
+                self.logger.error(msg)
+                raise TypeError(msg)
+
+            decoder_params = decoder.parameters()
             optimizer = torch.optim.AdamW(decoder_params, lr=lr, eps=1e-7)
             scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
                 optimizer, T_max=steps_this_phase
@@ -1134,11 +1175,12 @@ class ImputeUBP(BaseNNImputer):
             dec_lr_min, lat_lr_min = dec_lr0 * 0.1, lat_lr0 * 0.1
 
             phase_hist: list[float] = []
+            gamma_init = torch.tensor(0.0, device=self.device)
 
             for epoch in range(steps_this_phase):
                 # Focal gamma warm/ramp
                 if epoch < warm:
-                    model.gamma = 0.0
+                    model.gamma = gamma_init.cpu().numpy().item()
                 elif epoch < warm + ramp:
                     model.gamma = gamma_final * ((epoch - warm) / ramp)
                 else:
@@ -1277,20 +1319,35 @@ class ImputeUBP(BaseNNImputer):
         )
 
         for _ in range(inference_epochs):
+            decoder = model.phase23_decoder
+
+            if not isinstance(decoder, torch.nn.Module):
+                msg = f"{self.model_name} Decoder is not a torch.nn.Module."
+                self.logger.error(msg)
+                raise TypeError(msg)
+
             opt.zero_grad(set_to_none=True)
-            logits = model.phase23_decoder(z).view(len(X_new), nF, self.num_classes_)
+            logits = decoder(z).view(len(X_new), nF, self.num_classes_)
+
             if not torch.isfinite(logits).all():
                 break
+
             loss = F.cross_entropy(
                 logits.view(-1, self.num_classes_), y.view(-1), ignore_index=-1
             )
+
             if not torch.isfinite(loss):
                 break
+
             loss.backward()
+
             torch.nn.utils.clip_grad_norm_([z], 1.0)
+
             if z.grad is None or not torch.isfinite(z.grad).all():
                 break
+
             opt.step()
+
         return z.detach()
 
     def _create_latent_space(
@@ -1390,9 +1447,16 @@ class ImputeUBP(BaseNNImputer):
             model (torch.nn.Module): The PyTorch model whose parameters are to be reset.
         """
         if hasattr(model, "phase23_decoder"):
+            decoder = model.phase23_decoder
+            if not isinstance(decoder, torch.nn.Module):
+                msg = f"{self.model_name} phase23_decoder is not a torch.nn.Module."
+                self.logger.error(msg)
+                raise TypeError(msg)
             # Iterate through only the modules of the second decoder
-            for layer in model.phase23_decoder.modules():
-                if hasattr(layer, "reset_parameters"):
+            for layer in decoder.modules():
+                if hasattr(layer, "reset_parameters") and isinstance(
+                    layer.reset_parameters, torch.nn.Module
+                ):
                     layer.reset_parameters()
         else:
             self.logger.warning(
@@ -1427,6 +1491,7 @@ class ImputeUBP(BaseNNImputer):
         """
         if seed is None:
             seed = np.random.randint(0, 999_999)
+
         torch.manual_seed(seed)
         np.random.seed(seed)
 
@@ -1453,20 +1518,32 @@ class ImputeUBP(BaseNNImputer):
 
         for _ in range(max(int(steps), 0)):
             opt.zero_grad(set_to_none=True)
-            logits = model.phase23_decoder(z).view(
-                X_val.shape[0], nF, self.num_classes_
-            )
+
+            decoder: torch.Tensor | torch.nn.Module = model.phase23_decoder
+
+            if not isinstance(decoder, torch.nn.Module):
+                msg = f"{self.model_name} Decoder is not a torch.nn.Module."
+                self.logger.error(msg)
+                raise TypeError(msg)
+
+            logits = decoder(z).view(X_val.shape[0], nF, self.num_classes_)
             if not torch.isfinite(logits).all():
                 break
+
             loss = F.cross_entropy(
                 logits.view(-1, self.num_classes_), y.view(-1), ignore_index=-1
             )
+
             if not torch.isfinite(loss):
                 break
+
             loss.backward()
+
             torch.nn.utils.clip_grad_norm_([z], 1.0)
+
             if z.grad is None or not torch.isfinite(z.grad).all():
                 break
+
             opt.step()
 
         if cache is not None:
