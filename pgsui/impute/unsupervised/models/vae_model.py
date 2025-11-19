@@ -8,6 +8,7 @@ from snpio.utils.logging import LoggerManager
 from torch.distributions import Normal
 
 from pgsui.impute.unsupervised.loss_functions import MaskedFocalLoss
+from pgsui.utils.logging_utils import configure_logger
 
 
 class Sampling(nn.Module):
@@ -218,20 +219,22 @@ class VAEModel(nn.Module):
         logman = LoggerManager(
             name=__name__, prefix=prefix, verbose=verbose, debug=debug
         )
-        self.logger = logman.get_logger()
-
-        activation = self._resolve_activation(activation)
-
-        self.encoder = Encoder(
-            n_features,
-            self.num_classes,
-            latent_dim,
-            hidden_layer_sizes,
-            dropout_rate,
-            activation,
+        self.logger = configure_logger(
+            logman.get_logger(), verbose=verbose, debug=debug
         )
 
-        decoder_layer_sizes = list(reversed(hidden_layer_sizes))
+        act = self._resolve_activation(activation)
+
+        if isinstance(hidden_layer_sizes, np.ndarray):
+            hls = hidden_layer_sizes.tolist()
+        else:
+            hls = hidden_layer_sizes
+
+        self.encoder = Encoder(
+            n_features, self.num_classes, latent_dim, hls, dropout_rate, act
+        )
+
+        decoder_layer_sizes = list(reversed(hls))
 
         self.decoder = Decoder(
             n_features,
@@ -239,7 +242,7 @@ class VAEModel(nn.Module):
             latent_dim,
             decoder_layer_sizes,
             dropout_rate,
-            activation,
+            act,
         )
 
     def forward(
@@ -331,18 +334,16 @@ class VAEModel(nn.Module):
             ValueError: If the provided activation name is not supported.
         """
         if isinstance(activation, str):
-            activation = activation.lower()
-            if activation == "relu":
-                return nn.ReLU()
-            elif activation == "elu":
-                return nn.ELU()
-            elif activation in ["leaky_relu", "leakyrelu"]:
-                return nn.LeakyReLU()
-            elif activation == "selu":
-                return nn.SELU()
-            else:
-                msg = f"Activation {activation} not supported."
-                self.logger.error(msg)
-                raise ValueError(msg)
-
-        return activation
+            a = activation.lower()
+        if a == "relu":
+            return nn.ReLU()
+        elif a == "elu":
+            return nn.ELU()
+        elif a in {"leaky_relu", "leakyrelu"}:
+            return nn.LeakyReLU()
+        elif a == "selu":
+            return nn.SELU()
+        else:
+            msg = f"Activation {activation} not supported."
+            self.logger.error(msg)
+            raise ValueError(msg)
