@@ -1,5 +1,7 @@
 from snpio.utils.logging import LoggerManager
 
+from pgsui.utils.logging_utils import configure_logger
+
 
 class EarlyStopping:
     """Class to stop the training when a monitored metric has stopped improving.
@@ -49,14 +51,16 @@ class EarlyStopping:
         self.mode = mode
         self.counter = 0
         self.epoch_count = 0
-        self.best_score = None
+        self.best_score = float("inf") if mode == "min" else 0.0
         self.early_stop = False
         self.best_model = None
         self.min_epochs = min_epochs
 
         is_verbose = verbose >= 2 or debug
         logman = LoggerManager(name=__name__, prefix=prefix, verbose=is_verbose)
-        self.logger = logman.get_logger()
+        self.logger = configure_logger(
+            logman.get_logger(), verbose=is_verbose, debug=debug
+        )
 
         # Define the comparison function for the monitored metric
         if mode == "min":
