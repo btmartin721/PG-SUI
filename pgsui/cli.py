@@ -4,7 +4,7 @@
 """PG-SUI Imputation CLI
 
 Argument-precedence model:
-    code defaults  <  preset (--preset)  <  YAML (--config)  <  explicit CLI flags  <  --set k=v
+    code defaults  <  preset (--preset)  <  YAML (--config)  <  explicit CLI flags  <  --set k=vx
 
 Notes
 -----
@@ -32,15 +32,21 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Literal, Optional, Tuple
 
-from snpio import GenePopReader, PhylipReader, VCFReader
+from snpio import GenePopReader, PhylipReader, VCFReader, SNPioMultiQC
 
 from pgsui import (
+    AutoencoderConfig,
     ImputeAutoencoder,
     ImputeMostFrequent,
     ImputeNLPCA,
     ImputeRefAllele,
     ImputeUBP,
     ImputeVAE,
+    MostFrequentConfig,
+    NLPCAConfig,
+    RefAlleleConfig,
+    UBPConfig,
+    VAEConfig,
 )
 from pgsui.data_processing.config import (
     apply_dot_overrides,
@@ -48,13 +54,15 @@ from pgsui.data_processing.config import (
     load_yaml_to_dataclass,
     save_dataclass_yaml,
 )
-from pgsui import (
-    AutoencoderConfig,
-    MostFrequentConfig,
-    NLPCAConfig,
-    RefAlleleConfig,
-    UBPConfig,
-    VAEConfig,
+
+# Canonical model order used everywhere (default and subset ordering)
+MODEL_ORDER: Tuple[str, ...] = (
+    "ImputeUBP",
+    "ImputeVAE",
+    "ImputeAutoencoder",
+    "ImputeNLPCA",
+    "ImputeMostFrequent",
+    "ImputeRefAllele",
 )
 
 
@@ -63,10 +71,10 @@ def _configure_logging(verbose: bool, log_file: Optional[str] = None) -> None:
     """Configure root logger.
 
     Args:
-        verbose: If True, DEBUG; else INFO.
-        log_file: Optional file to tee logs to.
+        verbose (bool): If True, INFO; else ERROR.
+        log_file (Optional[str]): Optional file to tee logs to.
     """
-    level = logging.DEBUG if verbose else logging.INFO
+    level = logging.INFO if verbose else logging.ERROR
     handlers: List[logging.Handler] = [logging.StreamHandler(sys.stdout)]
     if log_file:
         handlers.append(logging.FileHandler(log_file, mode="w", encoding="utf-8"))
@@ -93,21 +101,27 @@ def _parse_seed(seed_arg: str) -> Optional[int]:
 
 
 def _parse_models(models: Iterable[str]) -> Tuple[str, ...]:
-    """Validate and canonicalize model names."""
-    valid = {
-        "ImputeUBP",
-        "ImputeVAE",
-        "ImputeAutoencoder",
-        "ImputeNLPCA",
-        "ImputeMostFrequent",
-        "ImputeRefAllele",
-    }
-    selected = tuple(models) if models else tuple(valid)
-    unknown = [m for m in selected if m not in valid]
+    """Validate and canonicalize model names in a deterministic order.
+
+    - If no models are provided, returns all in MODEL_ORDER.
+    - If a subset is provided via --models, returns them in MODEL_ORDER order.
+    """
+    models = tuple(models)  # in case it's a generator
+    valid = set(MODEL_ORDER)
+
+    # Validate first
+    unknown = [m for m in models if m not in valid]
     if unknown:
         raise argparse.ArgumentTypeError(
-            f"Unknown model(s): {unknown}. Valid options: {sorted(valid)}"
+            f"Unknown model(s): {unknown}. Valid options: {list(MODEL_ORDER)}"
         )
+
+    # Default: all models in canonical order
+    if not models:
+        return MODEL_ORDER
+
+    # Subset: keep only those requested, but in canonical order
+    selected = tuple(m for m in MODEL_ORDER if m in models)
     return selected
 
 
@@ -134,7 +148,10 @@ def _args_to_cli_overrides(args: argparse.Namespace) -> dict:
     if hasattr(args, "prefix") and args.prefix is not None:
         overrides["io.prefix"] = args.prefix
     else:
-        overrides["io.prefix"] = str(Path(args.vcf).stem)
+        # Note: we don't know input_path here; prefix default is handled later.
+        # This fallback is preserved to avoid changing semantics.
+        if hasattr(args, "vcf"):
+            overrides["io.prefix"] = str(Path(args.vcf).stem)
 
     if hasattr(args, "verbose"):
         overrides["io.verbose"] = bool(args.verbose)
@@ -177,7 +194,6 @@ def build_genotype_data(
 ):
     """Load genotype data from heterogeneous inputs."""
     logging.info(f"Loading {fmt.upper()} and popmap data...")
-    fmt = fmt.lower()
 
     kwargs = {
         "filename": input_path,
@@ -339,7 +355,7 @@ def _maybe_print_or_dump_configs(
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         prog="pgsui-cli",
-        description="Run PG-SUI imputation models on a VCF with minimal fuss.",
+        description="Run PG-SUI imputation models on a VCF file. Handle config via presets, YAML, and CLI flags.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
@@ -430,7 +446,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     parser.add_argument(
         "--plot-format",
-        choices=("png", "pdf", "svg"),
+        choices=("png", "pdf", "svg", "jpg", "jpeg"),
         default=argparse.SUPPRESS,
         help="Figure format for model plots.",
     )
@@ -441,7 +457,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         default=argparse.SUPPRESS,
         help="Random seed: 'random', 'deterministic', or an integer.",
     )
-    parser.add_argument("--verbose", action="store_true", help="Debug-level logging.")
+    parser.add_argument("--verbose", action="store_true", help="Info-level logging.")
     parser.add_argument(
         "--log-file", default=argparse.SUPPRESS, help="Also write logs to a file."
     )
@@ -466,10 +482,33 @@ def main(argv: Optional[List[str]] = None) -> int:
         nargs="+",
         default=argparse.SUPPRESS,
         help=(
-            "Which models to run. Choices: "
-            "ImputeUBP ImputeVAE ImputeAutoencoder ImputeNLPCA "
-            "ImputeMostFrequent ImputeRefAllele. Default is all."
+            "Which models to run. Choices: ImputeUBP ImputeVAE ImputeAutoencoder ImputeNLPCA ImputeMostFrequent ImputeRefAllele. Default is all."
         ),
+    )
+
+    # -------------------------- MultiQC integration ------------------------ #
+    parser.add_argument(
+        "--multiqc",
+        action="store_true",
+        help=(
+            "Build a MultiQC HTML report at the end of the run, combining SNPio and PG-SUI plots (requires SNPio's MultiQC module)."
+        ),
+    )
+    parser.add_argument(
+        "--multiqc-title",
+        default=argparse.SUPPRESS,
+        help="Optional title for the MultiQC report (default: 'PG-SUI MultiQC Report - <prefix>').",
+    )
+    parser.add_argument(
+        "--multiqc-output-dir",
+        default=argparse.SUPPRESS,
+        help="Optional output directory for the MultiQC report (default: '<prefix>_output/multiqc').",
+    )
+    parser.add_argument(
+        "--multiqc-overwrite",
+        action="store_true",
+        default=False,
+        help="Overwrite an existing MultiQC report if present.",
     )
 
     # ------------------------------ Safety/UX ------------------------------ #
@@ -505,11 +544,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         parser.error("You must provide --input (or legacy --vcf).")
         return 2
 
-    fmt = getattr(args, "format", "vcf").lower()
+    fmt: Literal["vcf", "phylip", "genepop"] = getattr(args, "format", "vcf")
     popmap_path = getattr(args, "popmap", None)
     include_pops = getattr(args, "include_pops", None)
     verbose_flag = getattr(args, "verbose", False)
     force_popmap = bool(getattr(args, "force_popmap", False))
+
+    # Canonical prefix for this run (used for outputs and MultiQC)
+    prefix: str = getattr(args, "prefix", str(Path(input_path).stem))
 
     # Load genotype data
     gd = build_genotype_data(
@@ -627,7 +669,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         else:
             raise ValueError(f"Unknown model family for {name}")
 
-        prefix = getattr(args, "prefix", str(Path(input_path).stem))
         pth = Path(f"{prefix}_output/{family}/imputed/{name}")
         pth.mkdir(parents=True, exist_ok=True)
 
@@ -635,6 +676,28 @@ def main(argv: Optional[List[str]] = None) -> int:
         gd_imp.write_vcf(pth / f"{name.lower()}_imputed.vcf.gz")
 
     logging.info("All requested models processed.")
+
+    # -------------------------- MultiQC builder ---------------------------- #
+
+    mqc_output_dir = getattr(args, "multiqc_output_dir", f"{prefix}_output/multiqc")
+    mqc_title = getattr(args, "multiqc_title", f"PG-SUI MultiQC Report - {prefix}")
+    overwrite = bool(getattr(args, "multiqc_overwrite", False))
+
+    logging.info(
+        f"Building MultiQC report in '{mqc_output_dir}' (title={mqc_title}, overwrite={overwrite})..."
+    )
+
+    try:
+        SNPioMultiQC.build(
+            prefix=prefix,
+            output_dir=mqc_output_dir,
+            title=mqc_title,
+            overwrite=overwrite,
+        )
+        logging.info("MultiQC report successfully built.")
+    except Exception as exc2:  # pragma: no cover
+        logging.error(f"Failed to build MultiQC report: {exc2}", exc_info=True)
+
     return 0
 
 
