@@ -1,9 +1,11 @@
 import json
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import TYPE_CHECKING, Any, Dict, List
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.figure import Figure
+from plotly.graph_objs._figure import Figure as PlotlyFigure
 from sklearn.exceptions import NotFittedError
 from sklearn.experimental import enable_iterative_imputer  # noqa
 from sklearn.metrics import (
@@ -44,6 +46,16 @@ class BaseImputer:
         """
         self.verbose = verbose
         self.debug = debug
+
+        self.prefix: str  # Must be set by child class after super().__init__()
+        self.metrics_dir: Path  # Must be set by child class after super().__init__()
+        self.plots_dir: Path  # Must be set by child class after super().__init__()
+        self.parameters_dir: Path  # Must be set by child class after super().__init__()
+        self.model_name: str  # Must be set by child class after super().__init__()
+        self.plotter_: Any  # Must be set by child class after super().__init__()
+        self.plot_format: str  # Must be set by child class after super().__init__()
+        self.is_haploid_: bool  # Must be set by child class after super().__init__()
+        self.is_fit_: bool  # Must be set by child class after super().__init__()
 
         logman = LoggerManager(
             __name__, prefix=self.prefix, verbose=self.verbose, debug=self.debug
@@ -106,17 +118,6 @@ class BaseImputer:
             y_true, y_pred, label_names=labels, prefix=report_name
         )
 
-        self.logger.info(
-            "\n"
-            + classification_report(
-                y_true,
-                y_pred,
-                labels=list(range(len(labels))),
-                target_names=labels,
-                zero_division=0,
-            )
-        )
-
         report = classification_report(
             y_true,
             y_pred,
@@ -132,7 +133,7 @@ class BaseImputer:
         viz = ClassificationReportVisualizer(reset_kwargs=self.plotter_.param_dict)
 
         plots = viz.plot_all(
-            report,
+            report,  # type: ignore
             title_prefix=f"{self.model_name} {middle} Report",
             show=getattr(self, "show_plots", False),
             heatmap_classes_only=True,
@@ -140,10 +141,10 @@ class BaseImputer:
 
         for name, fig in plots.items():
             fout = self.plots_dir / f"{report_name}_report_{name}.{self.plot_format}"
-            if hasattr(fig, "savefig"):
+            if hasattr(fig, "savefig") and isinstance(fig, Figure):
                 fig.savefig(fout, dpi=300, facecolor="#111122")
                 plt.close(fig)
-            else:
+            elif hasattr(fig, "write_html") and isinstance(fig, PlotlyFigure):
                 fig.write_html(file=fout.with_suffix(".html"))
 
         viz._reset_mpl_style()
@@ -201,7 +202,7 @@ class BaseImputer:
         viz = ClassificationReportVisualizer(reset_kwargs=self.plotter_.param_dict)
 
         plots = viz.plot_all(
-            report,
+            report,  # type: ignore
             title_prefix=f"{self.model_name} Zygosity Report",
             show=getattr(self, "show_plots", False),
             heatmap_classes_only=True,
@@ -209,16 +210,16 @@ class BaseImputer:
 
         for name, fig in plots.items():
             fout = self.plots_dir / f"zygosity_report_{name}.{self.plot_format}"
-            if hasattr(fig, "savefig"):
+            if hasattr(fig, "savefig") and isinstance(fig, Figure):
                 fig.savefig(fout, dpi=300, facecolor="#111122")
                 plt.close(fig)
-            else:
+            elif hasattr(fig, "write_html") and isinstance(fig, PlotlyFigure):
                 fig.write_html(file=fout.with_suffix(".html"))
 
         viz._reset_mpl_style()
 
         # Save JSON
-        self._save_report(report, suffix="zygosity")
+        self._save_report(report, suffix="zygosity")  # type: ignore
 
         # Confusion matrix
         self.plotter_.plot_confusion_matrix(
@@ -272,7 +273,7 @@ class BaseImputer:
         viz = ClassificationReportVisualizer(reset_kwargs=self.plotter_.param_dict)
 
         plots = viz.plot_all(
-            report,
+            report,  # type: ignore
             title_prefix=f"{self.model_name} IUPAC Report",
             show=getattr(self, "show_plots", False),
             heatmap_classes_only=True,
@@ -283,17 +284,17 @@ class BaseImputer:
 
         for name, fig in plots.items():
             fout = self.plots_dir / f"iupac_report_{name}.{self.plot_format}"
-            if hasattr(fig, "savefig"):
+            if hasattr(fig, "savefig") and isinstance(fig, Figure):
                 fig.savefig(fout, dpi=300, facecolor="#111122")
                 plt.close(fig)
-            else:
+            elif hasattr(fig, "write_html") and isinstance(fig, PlotlyFigure):
                 fig.write_html(file=fout.with_suffix(".html"))
 
         # Reset the style
         viz._reset_mpl_style()
 
         # Save JSON
-        self._save_report(report, suffix="iupac")
+        self._save_report(report, suffix="iupac")  # type: ignore
 
         # Confusion matrix
         self.plotter_.plot_confusion_matrix(
