@@ -2,28 +2,7 @@
     // Use IntelliSense to learn about possible attributes.
     // Hover to view descriptions of existing attributes.
     // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
-    "version": "0.2.0",
     "configurations": [
-        {
-            "name": "Python: pg_sui.py",
-            "type": "python",
-            "python": "${command:python.interpreterPath}",
-            "request": "launch",
-            "program": "${workspaceFolder}/pgsui/pg_sui.py",
-            "justMyCode": true,
-            "console": "integratedTerminal",
-            "args": [
-                "-p",
-                "pgsui/example_data/phylip_files/test_n100.phy",
-                "-m",
-                "pgsui/example_data/popmaps/test.popmap",
-                "-t",
-                "pgsui/example_data/trees/test.tre",
-                "-i",
-                "pgsui/example_data/trees/test.iqtree",
-                "--site_rate",
-                "pgsui/example_data/trees/test_n100.rate"
-            ]
-        }
+        { "name": "Python Debugger: Current File with Arguments", "type": "debugpy", "request": "launch", "program": "${file}", "console": "integratedTerminal", "args": "${command:pickArgs}" },
     ]
 }
