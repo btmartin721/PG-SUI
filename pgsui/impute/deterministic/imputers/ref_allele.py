@@ -1,7 +1,7 @@
 # Standard library
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union
 
 # Third-party
 import matplotlib.pyplot as plt
@@ -92,6 +92,16 @@ class ImputeRefAllele:
         *,
         config: Optional[Union[RefAlleleConfig, dict, str]] = None,
         overrides: Optional[dict] = None,
+        simulate_missing: bool = True,
+        sim_strategy: Literal[
+            "random",
+            "random_weighted",
+            "random_weighted_inv",
+            "nonrandom",
+            "nonrandom_weighted",
+        ] = "random",
+        sim_prop: float = 0.2,
+        sim_kwargs: Optional[dict] = None,
     ) -> None:
         """Initialize the Ref-Allele imputer from a unified config.
 
@@ -101,6 +111,10 @@ class ImputeRefAllele:
             genotype_data (GenotypeData): Backing genotype data.
             config (RefAlleleConfig | dict | str | None): Configuration as a dataclass, nested dict, or YAML path. If None, defaults are used.
             overrides (dict | None): Flat dot-key overrides applied last with highest precedence, e.g. {'split.test_size': 0.25, 'algo.missing': -1}.
+            simulate_missing (bool): Whether to simulate missing data during evaluation. Default is True.
+            sim_strategy (Literal): Strategy for simulating missing data if enabled in config.
+            sim_prop (float): Proportion of data to simulate as missing if enabled in config.
+            sim_kwargs (Optional[dict]): Additional keyword arguments for the simulated missing data transformer.
         """
         # Normalize config then apply highest-precedence overrides
         cfg = ensure_refallele_config(config)
@@ -115,12 +129,23 @@ class ImputeRefAllele:
         self.debug = cfg.io.debug
 
         # Simulation knobs (shared with other deterministic imputers)
-        sim_cfg = cfg.sim
-        self.simulate_missing = bool(sim_cfg.simulate_missing)
-        self.sim_strategy = sim_cfg.sim_strategy
-        self.sim_prop = float(sim_cfg.sim_prop)
-        self.sim_kwargs: Dict[str, Any] = dict(sim_cfg.sim_kwargs or {})
+        if cfg.sim is None:
+            self.simulate_missing = simulate_missing
+            self.sim_strategy = sim_strategy
+            self.sim_prop = sim_prop
+            self.sim_kwargs = sim_kwargs or {}
+        else:
+            sim_cfg = cfg.sim
+            self.simulate_missing = getattr(
+                sim_cfg, "simulate_missing", simulate_missing
+            )
+            self.sim_strategy = getattr(sim_cfg, "sim_strategy", sim_strategy)
+            self.sim_prop = float(getattr(sim_cfg, "sim_prop", sim_prop))
+            self.sim_kwargs: Dict[str, Any] = dict(
+                getattr(sim_cfg, "sim_kwargs", sim_kwargs) or {}
+            )
 
+        # Output dirs
         self.plots_dir: Path
         self.metrics_dir: Path
         self.parameters_dir: Path
@@ -419,11 +444,6 @@ class ImputeRefAllele:
         }
         self.metrics_.update({f"zygosity_{k}": v for k, v in metrics.items()})
 
-        # Log report
-        self.logger.info(
-            f"\n{classification_report(y_true, y_pred, labels=labels, target_names=report_names, zero_division=0)}"
-        )
-
         report: str | dict = classification_report(
             y_true,
             y_pred,
@@ -438,10 +458,23 @@ class ImputeRefAllele:
             self.logger.error(msg)
             raise TypeError(msg)
 
-        pm = PrettyMetrics(
-            report, precision=3, title=f"{self.model_name} Zygosity Report"
-        )
-        pm.render()
+        report_subset = {}
+        for k, v in report.items():
+            tmp = {}
+            if isinstance(v, dict) and "support" in v:
+                for k2, v2 in v.items():
+                    if k2 != "support":
+                        tmp[k2] = v2
+                if tmp:
+                    report_subset[k] = tmp
+
+        if report_subset:
+            pm = PrettyMetrics(
+                report_subset,
+                precision=3,
+                title=f"{self.model_name} Zygosity Report",
+            )
+            pm.render()
 
         viz = ClassificationReportVisualizer(reset_kwargs=self.plotter_.param_dict)
 
@@ -519,10 +552,23 @@ class ImputeRefAllele:
             self.logger.error(msg)
             raise TypeError(msg)
 
-        pm = PrettyMetrics(
-            report, precision=3, title=f"{self.model_name} IUPAC 10-Class Report"
-        )
-        pm.render()
+        report_subset = {}
+        for k, v in report.items():
+            tmp = {}
+            if isinstance(v, dict) and "support" in v:
+                for k2, v2 in v.items():
+                    if k2 != "support":
+                        tmp[k2] = v2
+                if tmp:
+                    report_subset[k] = tmp
+
+        if report_subset:
+            pm = PrettyMetrics(
+                report_subset,
+                precision=3,
+                title=f"{self.model_name} IUPAC 10-Class Report",
+            )
+            pm.render()
 
         self._save_report(report, suffix="iupac")
 
