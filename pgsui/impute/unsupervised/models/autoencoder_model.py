@@ -6,6 +6,7 @@ import torch.nn as nn
 from snpio.utils.logging import LoggerManager
 
 from pgsui.impute.unsupervised.loss_functions import MaskedFocalLoss
+from pgsui.utils.logging_utils import configure_logger
 
 
 class Encoder(nn.Module):
@@ -178,20 +179,27 @@ class AutoencoderModel(nn.Module):
         logman = LoggerManager(
             name=__name__, prefix=prefix, verbose=verbose, debug=debug
         )
-        self.logger = logman.get_logger()
+        self.logger = configure_logger(
+            logman.get_logger(), verbose=verbose, debug=debug
+        )
 
         activation_module = self._resolve_activation(activation)
+
+        if isinstance(hidden_layer_sizes, np.ndarray):
+            hls = hidden_layer_sizes.tolist()
+        else:
+            hls = hidden_layer_sizes
 
         self.encoder = Encoder(
             n_features,
             self.num_classes,
             latent_dim,
-            hidden_layer_sizes,
+            hls,
             dropout_rate,
             activation_module,
         )
 
-        decoder_layer_sizes = list(reversed(hidden_layer_sizes))
+        decoder_layer_sizes = list(reversed(hls))
         self.decoder = Decoder(
             n_features,
             self.num_classes,
@@ -269,14 +277,15 @@ class AutoencoderModel(nn.Module):
         Raises:
             ValueError: If the provided activation name is not supported.
         """
-        activation = activation.lower()
-        if activation == "relu":
+        act: str = activation.lower()
+
+        if act == "relu":
             return nn.ReLU()
-        elif activation == "elu":
+        elif act == "elu":
             return nn.ELU()
-        elif activation in ("leaky_relu", "leakyrelu"):
+        elif act in ("leaky_relu", "leakyrelu"):
             return nn.LeakyReLU()
-        elif activation == "selu":
+        elif act == "selu":
             return nn.SELU()
         else:
             msg = f"Activation {activation} not supported."
