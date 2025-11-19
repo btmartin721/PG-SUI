@@ -16,6 +16,7 @@ from sklearn.metrics import (
 from snpio.utils.logging import LoggerManager
 
 from pgsui.utils.classification_viz import ClassificationReportVisualizer
+from pgsui.utils.logging_utils import configure_logger
 
 
 class BaseImputer:
@@ -47,7 +48,9 @@ class BaseImputer:
         logman = LoggerManager(
             __name__, prefix=self.prefix, verbose=self.verbose, debug=self.debug
         )
-        self.logger = logman.get_logger()
+        self.logger = configure_logger(
+            logman.get_logger(), verbose=self.verbose, debug=self.debug
+        )
 
     def _create_model_directories(self, prefix: str, outdirs: List[str]) -> None:
         """Creates the output directory structure for the imputer.
