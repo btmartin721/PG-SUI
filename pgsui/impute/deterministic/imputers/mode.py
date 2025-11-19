@@ -1,7 +1,7 @@
 # Standard library imports
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Tuple, Union
 
 # Third-party imports
 import matplotlib.pyplot as plt
@@ -86,6 +86,16 @@ class ImputeMostFrequent:
         *,
         config: Optional[Union[MostFrequentConfig, dict, str]] = None,
         overrides: Optional[dict] = None,
+        simulate_missing: bool = True,
+        sim_strategy: Literal[
+            "random",
+            "random_weighted",
+            "random_weighted_inv",
+            "nonrandom",
+            "nonrandom_weighted",
+        ] = "random",
+        sim_prop: float = 0.2,
+        sim_kwargs: Optional[dict] = None,
     ) -> None:
         """Initialize the Most-Frequent (mode) imputer from a unified config.
 
@@ -96,6 +106,10 @@ class ImputeMostFrequent:
             config (MostFrequentConfig | dict | str | None): Configuration as a dataclass,
                 nested dict, or YAML path. If None, defaults are used.
             overrides (dict | None): Flat dot-key overrides applied last with highest precedence, e.g. {'algo.by_populations': True, 'split.test_size': 0.3}.
+            simulate_missing (bool): Whether to simulate missing data if enabled in config. Defaults to True.
+            sim_strategy (Literal): Strategy for simulating missing data if enabled in config.
+            sim_prop (float): Proportion of data to simulate as missing if enabled in config.
+            sim_kwargs (Optional[dict]): Additional keyword arguments for the simulated missing data transformer.
 
         Notes:
             - This mirrors other config-driven models (AE/VAE/NLPCA/UBP).
@@ -147,16 +161,19 @@ class ImputeMostFrequent:
         self.sim_prop: float
         self.sim_kwargs: dict
 
+        # Missing simulation config
         if sim_cfg is None:
             # Fallback defaults if MostFrequentConfig has no .sim block
-            self.simulate_missing = False
-            self.sim_strategy = "random"
-            self.sim_prop = 0.10
+            self.simulate_missing = simulate_missing
+            self.sim_strategy = sim_strategy
+            self.sim_prop = sim_prop
         else:
-            self.simulate_missing = bool(getattr(sim_cfg, "simulate_missing", False))
-            self.sim_strategy = getattr(sim_cfg, "sim_strategy", "random")
-            self.sim_prop = float(getattr(sim_cfg, "sim_prop", 0.10))
-            if getattr(sim_cfg, "sim_kwargs", None):
+            self.simulate_missing = bool(
+                getattr(sim_cfg, "simulate_missing", simulate_missing)
+            )
+            self.sim_strategy = getattr(sim_cfg, "sim_strategy", sim_strategy)
+            self.sim_prop = float(getattr(sim_cfg, "sim_prop", sim_prop))
+            if getattr(sim_cfg, "sim_kwargs", sim_kwargs):
                 sim_cfg_kwargs.update(sim_cfg.sim_kwargs)
 
         self.sim_kwargs = sim_cfg_kwargs
@@ -570,10 +587,6 @@ class ImputeMostFrequent:
 
         report_names = ["REF", "HET"] if self.is_haploid_ else ["REF", "HET", "ALT"]
 
-        self.logger.info(
-            f"\n{classification_report(y_true, y_pred, labels=labels, target_names=report_names, zero_division=0)}"
-        )
-
         report: dict | str = classification_report(
             y_true,
             y_pred,
@@ -586,7 +599,25 @@ class ImputeMostFrequent:
         if not isinstance(report, dict):
             msg = "classification_report did not return a dict as expected."
             self.logger.error(msg)
-            raise ValueError(msg)
+            raise TypeError(msg)
+
+        report_subset = {}
+        for k, v in report.items():
+            tmp = {}
+            if isinstance(v, dict) and "support" in v:
+                for k2, v2 in v.items():
+                    if k2 != "support":
+                        tmp[k2] = v2
+                if tmp:
+                    report_subset[k] = tmp
+
+        if report_subset:
+            pm = PrettyMetrics(
+                report_subset,
+                precision=3,
+                title=f"{self.model_name} Zygosity Report",
+            )
+            pm.render()
 
         viz = ClassificationReportVisualizer(reset_kwargs=self.plotter_.param_dict)
 
@@ -646,7 +677,7 @@ class ImputeMostFrequent:
         }
         self.metrics_.update({f"iupac_{k}": v for k, v in metrics.items()})
 
-        report = classification_report(
+        report: dict | str = classification_report(
             y_true,
             y_pred,
             labels=labels_idx,
@@ -660,10 +691,23 @@ class ImputeMostFrequent:
             self.logger.error(msg)
             raise TypeError(msg)
 
-        pm = PrettyMetrics(
-            report, precision=3, title=f"{self.model_name} IUPAC 10-Class Report"
-        )
-        pm.render()
+        report_subset = {}
+        for k, v in report.items():
+            tmp = {}
+            if isinstance(v, dict) and "support" in v:
+                for k2, v2 in v.items():
+                    if k2 != "support":
+                        tmp[k2] = v2
+                if tmp:
+                    report_subset[k] = tmp
+
+        if report_subset:
+            pm = PrettyMetrics(
+                report_subset,
+                precision=3,
+                title=f"{self.model_name} IUPAC 10-Class Report",
+            )
+            pm.render()
 
         viz = ClassificationReportVisualizer(reset_kwargs=self.plotter_.param_dict)
 
