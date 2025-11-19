@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Iterable, Mapping, Sequence, Tuple, Optional, List
 import math
+from typing import Any, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 try:
     import numpy as np
@@ -43,8 +43,7 @@ class PrettyMetrics:
         """Initialize the printer.
 
         Args:
-            metrics (Mapping[str, Any]): Mapping of metric names to values. Values can be
-                scalars, 1D sequences (lists or 1D numpy arrays), or nested dicts.
+            metrics (Mapping[str, Any]): Mapping of metric names to values. Values can be scalars, 1D sequences (lists or 1D numpy arrays), or nested dicts.
             precision (int): Decimal places for numeric formatting.
             title (Optional[str]): Optional table title shown when rendering.
         """
@@ -69,7 +68,9 @@ class PrettyMetrics:
             table.add_column("Value", justify="right")
             for metric, value, last_val in rows:
                 table.add_row(metric, self._color_val_rich(metric, value, last_val))
-            _CONSOLE.print(table)
+
+            if _CONSOLE is not None:
+                _CONSOLE.print(table)
             return
 
         # ASCII fallback
