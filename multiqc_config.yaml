@@ -1,0 +1,79 @@
+# multiqc_config.yaml
+# Global MultiQC configuration for PG-SUI + SNPio
+
+##############################################################################
+# Basic report metadata
+##############################################################################
+title: "PG-SUI / SNPio MultiQC Report"
+subtitle: "Genotype Imputation & SNP QC Summary"
+intro_text: >
+  This report summarizes genotype quality control and imputation performance
+  from the PG-SUI (Population Genomic Supervised & Unsupervised Imputation)
+  pipeline, using SNPio for upstream SNP handling and MultiQC for aggregation.
+
+# Show where & when the analysis was run
+show_analysis_path: true
+show_analysis_time: true
+
+##############################################################################
+# Branding / logo
+##############################################################################
+# NOTE: At runtime, your Python helper `_build_snpio_report()` already patches
+# `custom_logo` with the absolute path to `snpio/img/snpio_logo.png`. This
+# value is a safe default for CLI-based MultiQC runs.
+# custom_logo: "snpio/img/snpio_logo.png"
+# custom_logo_url: "https://github.com/btmartin721/SNPio"
+# custom_logo_title: "SNPio / PG-SUI"
+
+##############################################################################
+# Output structure
+##############################################################################
+# Filename for the HTML report if running MultiQC from the CLI.
+# Your in-code builder already uses 'multiqc_report.html', so keep this aligned.
+filename: "multiqc_report_pgsui.html"
+
+##############################################################################
+# File name handling / sample name parsing
+##############################################################################
+# Additional filename extensions to strip when inferring sample names
+extra_fn_clean_exts:
+  - ".vcf"
+  - ".vcf.gz"
+  - ".bcf"
+  - ".bcf.gz"
+  - ".tsv"
+  - ".tsv.gz"
+  - ".txt"
+  - ".txt.gz"
+
+# Ignore obvious non-data files in the run directories
+fn_ignore:
+  - "*.log"
+  - "*.stderr"
+  - "*.stdout"
+  - "multiqc_*"
+  - "*_summary_stats_long.csv"
+
+# Optional per-project sample name cleaning rules.
+# This helps convert paths like 'run1_output/Unsupervised/imputed/ImputeVAE/sample1' into clean sample labels.
+sp:
+  pgsui:
+    # Strip the standard PG-SUI output prefix directory
+    - search: "_output/"
+      replace: ""
+    # Remove model subdirectories from the inferred sample name
+    - search: "Unsupervised/imputed/"
+      replace: ""
+    - search: "Deterministic/imputed/"
+      replace: ""
+    - search: "Supervised/imputed/"
+      replace: ""
+
+##############################################################################
+# Table & plot defaults
+##############################################################################
+# Global plot theme tweaks (MultiQC-level; your Plotting class controls matplotlib)
+plot_config:
+  general:
+    dpi: 300
+    log_scale_min: 0.001
