@@ -5,16 +5,13 @@ import dataclasses
 import logging
 import os
 import typing as t
-from dataclasses import MISSING, asdict, fields
-from dataclasses import is_dataclass
-from dataclasses import is_dataclass as _is_dc
-from typing import Any, Callable, Dict, Literal, Type, TypeVar
+from dataclasses import MISSING, asdict, fields, is_dataclass
+from typing import Any, Dict, Literal, Type
 
 import yaml
 
-# type variable for dataclass types
 T = t.TypeVar("T")
-T = TypeVar("T")
+
 
 """
 Config utilities for PG-SUI.
@@ -82,13 +79,13 @@ def _walk_env(obj: Any) -> Any:
 
 
 # ---------------- YAML helpers ----------------
-def dataclass_to_yaml(dc: T) -> str:
+def dataclass_to_yaml(dc: t.Any) -> str:
     """Convert a dataclass instance to a YAML string.
 
     This function uses the `asdict` function from the `dataclasses` module to convert the dataclass instance into a dictionary, which is then serialized to a YAML string using the `yaml` module.
 
     Args:
-        dc (T): A dataclass instance.
+        dc (t.Any): A dataclass instance.
 
     Returns:
         str: The YAML representation of the dataclass.
@@ -96,12 +93,12 @@ def dataclass_to_yaml(dc: T) -> str:
     Raises:
         TypeError: If `dc` is not a dataclass instance.
     """
-    if not is_dataclass(dc):
+    if not is_dataclass(dc) or isinstance(dc, type):
         raise TypeError("dataclass_to_yaml expects a dataclass instance.")
     return yaml.safe_dump(asdict(dc), sort_keys=False)
 
 
-def save_dataclass_yaml(dc: T, path: str) -> None:
+def save_dataclass_yaml(dc: t.Any, path: str) -> None:
     """Save a dataclass instance as a YAML file.
 
     This function uses the `dataclass_to_yaml` function to convert the dataclass instance into a YAML string, which is then written to a file.
@@ -113,10 +110,8 @@ def save_dataclass_yaml(dc: T, path: str) -> None:
     Raises:
         TypeError: If `dc` is not a dataclass instance.
     """
-    if not is_dataclass(dc):
-        raise TypeError(
-            "save_dataclass_yaml expects a dataclass or dataclass instance."
-        )
+    if not is_dataclass(dc) or isinstance(dc, type):
+        raise TypeError("save_dataclass_yaml expects a dataclass instance.")
 
     with open(path, "w", encoding="utf-8") as f:
         f.write(dataclass_to_yaml(dc))
@@ -139,7 +134,7 @@ def _merge_into_dataclass(inst: Any, payload: Dict[str, Any], path: str = "") ->
         TypeError: If `inst` is not a dataclass.
         KeyError: If `payload` contains keys not present in `inst`.
     """
-    if not _is_dc(inst):
+    if not is_dataclass(inst):
         raise TypeError(
             f"_merge_into_dataclass expects a dataclass at '{path or '<root>'}'"
         )
@@ -150,7 +145,7 @@ def _merge_into_dataclass(inst: Any, payload: Dict[str, Any], path: str = "") ->
             full = f"{path + '.' if path else ''}{k}"
             raise KeyError(f"Unknown key '{full}'")
         cur = getattr(inst, k)
-        if _is_dc(cur) and isinstance(v, dict):
+        if is_dataclass(cur) and isinstance(v, dict):
             _merge_into_dataclass(cur, v, path=(f"{path}.{k}" if path else k))
         else:
             setattr(inst, k, v)
@@ -163,7 +158,6 @@ def load_yaml_to_dataclass(
     *,
     base: T | None = None,
     overlays: Dict[str, Any] | None = None,
-    preset_builder: Callable[[str], T] | None = None,
     yaml_preset_behavior: Literal["ignore", "error"] = "ignore",
 ) -> T:
     """Load a YAML file and merge into a dataclass instance with strict precedence.
@@ -182,13 +176,11 @@ def load_yaml_to_dataclass(
             over any other starting point.
         overlays (Dict[str, Any] | None): A nested mapping to apply **after** the
             YAML (e.g., derived CLI flags). These win over YAML values.
-        preset_builder (Callable[[str], T] | None): Retained for backward
-            compatibility. Not used when enforcing CLI-only presets.
         yaml_preset_behavior (Literal["ignore","error"]): What to do if the YAML
             contains a `preset` key. Default: "ignore".
 
     Returns:
-        T: The merged dataclass instance.
+        Type[T]: The merged dataclass instance.
 
     Raises:
         TypeError: If `base` is not a dataclass, or YAML root isn't a mapping,
@@ -221,7 +213,6 @@ def load_yaml_to_dataclass(
             raise TypeError("`base` must be a dataclass instance.")
         cfg = copy.deepcopy(base)
     else:
-        # Do NOT call preset_builder here; presets are CLI-only.
         cfg = dc_type()  # defaults
 
     if not isinstance(raw, dict):
@@ -302,13 +293,13 @@ def _expected_field_type(dc_type: type, name: str) -> t.Any:
     raise KeyError(f"Unknown config key: '{name}' on {dc_type.__name__}")
 
 
-def _instantiate_field(dc_type: type, name: str):
+def _instantiate_field(dc_type: t.Any, name: str):
     """Create a default instance for nested dataclass field `name`.
 
     Attempts to use default_factory, then default, then type constructor. If none are available, raises KeyError.
 
     Args:
-        dc_type (type): A dataclass type.
+        dc_type (Any): A dataclass type.
         name (str): The field name to instantiate.
 
     Returns:
@@ -354,7 +345,7 @@ def _merge_mapping_into_dataclass(
         path (str): Internal use only; tracks the current path for error messages.
 
     Returns:
-        T: The updated dataclass instance (same as `instance`).
+        Type[T]: The updated dataclass instance (same as `instance`).
 
     Raises:
         TypeError: If `instance` is not a dataclass.
@@ -389,9 +380,7 @@ def _merge_mapping_into_dataclass(
     return instance
 
 
-def _coerce_value(
-    value: t.Any, tp: t.Any, where: str, *, current: t.Any = MISSING
-):
+def _coerce_value(value: t.Any, tp: t.Any, where: str, *, current: t.Any = MISSING):
     """Lightweight coercion for common primitives and Literals.
 
     This function attempts to coerce a value into a target type, handling common cases like basic primitives (int, float, bool, str) and Literal types. If coercion is not applicable or fails, it returns the original value.
@@ -475,7 +464,7 @@ def apply_dot_overrides(
     create_missing: bool = False,
     registry: dict[str, type] | None = None,
 ) -> t.Any:
-    """Apply overrides like {'io.prefix': '...', 'train.batch_size': 64} to any \*Config dataclass.
+    """Apply overrides like {'io.prefix': '...', 'train.batch_size': 64} to any Config dataclass.
 
     This function updates the fields of a dataclass instance with values from a nested mapping (dict). It ensures that all keys in the mapping correspond to fields in the dataclass, and it handles nested dataclass fields as well.
 
