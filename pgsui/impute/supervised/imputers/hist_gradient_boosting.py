@@ -1,7 +1,7 @@
 # Standard library
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Dict, Generator, List
+from typing import TYPE_CHECKING, Any, Dict, List, Literal
 
 # Third-party
 import numpy as np
@@ -24,6 +24,7 @@ from pgsui.data_processing.containers import (
 )
 from pgsui.data_processing.transformers import SimGenotypeDataTransformer
 from pgsui.impute.supervised.base import BaseImputer
+from pgsui.utils.logging_utils import configure_logger
 from pgsui.utils.plotting import Plotting
 from pgsui.utils.scorers import Scorer
 
@@ -39,9 +40,7 @@ def ensure_hgb_config(config: HGBConfig | Dict | str | None) -> HGBConfig:
     if isinstance(config, HGBConfig):
         return config
     if isinstance(config, str):
-        return load_yaml_to_dataclass(
-            config, HGBConfig, preset_builder=HGBConfig.from_preset
-        )
+        return load_yaml_to_dataclass(config, HGBConfig)
     if isinstance(config, dict):
         payload = dict(config)
         preset = payload.pop("preset", None)
@@ -94,15 +93,16 @@ class ImputeHistGradientBoosting(BaseImputer):
         logman = LoggerManager(
             __name__, prefix=self.prefix, verbose=self.verbose, debug=self.debug
         )
-        self.logger = logman.get_logger()
+        self.logger = configure_logger(
+            logman.get_logger(), verbose=self.verbose, debug=self.debug
+        )
 
         self._create_model_directories(
             self.prefix, ["models", "plots", "metrics", "optimize", "parameters"]
         )
 
-        self.plot_format = cfg.plot.fmt
-        if self.plot_format.startswith("."):
-            self.plot_format = self.plot_format.lstrip(".")
+        self.plot_format: Literal["png", "pdf", "svg", "jpg", "jpeg"] = cfg.plot.fmt
+
         self.plot_fontsize = cfg.plot.fontsize
         self.title_fontsize = cfg.plot.fontsize
         self.plot_dpi = cfg.plot.dpi
@@ -111,13 +111,29 @@ class ImputeHistGradientBoosting(BaseImputer):
 
         self.validation_split = cfg.train.validation_split
 
-        class_weight = getattr(cfg.model, "class_weight", "balanced")
+        if cfg.model.max_features is None:
+            max_feat = None
+        else:
+            max_feat = cfg.model.max_features
+
+        class_weight: Literal["balanced", "balanced_subsample", None] = getattr(
+            cfg.model, "class_weight", "balanced"
+        )
+
+        if class_weight not in {"balanced", "balanced_subsample", None}:
+            msg = (
+                f"Invalid class_weight '{class_weight}'; "
+                "must be one of: 'balanced', 'balanced_subsample', or None."
+            )
+            self.logger.error(msg)
+            raise ValueError(msg)
+
         self.params = _HGBParams(
             max_iter=cfg.model.n_estimators,
             learning_rate=cfg.model.learning_rate,
             max_depth=cfg.model.max_depth,
             min_samples_leaf=cfg.model.min_samples_leaf,
-            max_features=cfg.model.max_features,
+            max_features=max_feat,
             n_iter_no_change=cfg.model.n_iter_no_change,
             tol=cfg.model.tol,
             class_weight=class_weight,
@@ -168,6 +184,14 @@ class ImputeHistGradientBoosting(BaseImputer):
         self.scorers_ = Scorer(
             prefix=self.prefix, average="macro", verbose=self.verbose, debug=self.debug
         )
+
+        if self.plot_format not in {"png", "pdf", "svg", "jpg", "jpeg"}:
+            msg = (
+                f"Invalid plot format '{self.plot_format}'; "
+                "must be one of: png, pdf, svg, jpg, jpeg."
+            )
+            self.logger.error(msg)
+            raise ValueError(msg)
 
         self.plotter_ = Plotting(
             self.model_name,
