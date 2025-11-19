@@ -251,7 +251,7 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
             TypeError: ``SimGenotypeDataTreeTransformer.tree`` must not be NoneType when using strategy="nonrandom" or "nonrandom_weighted".
             ValueError: Invalid ``strategy`` parameter provided.
         """
-        X = validate_input_type(X, return_type="array").astype("float32")
+        X = np.asarray(validate_input_type(X, return_type="array")).astype("float32")
 
         self.logger.info(
             f"Adding {self.prop_missing} missing data per column using strategy: {self.strategy}"
@@ -456,7 +456,7 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
         Returns:
             np.ndarray: Transformed data with missing data added.
         """
-        X = validate_input_type(X, return_type="array")
+        X = np.asarray(validate_input_type(X, return_type="array")).astype("float32")
 
         # mask 012-encoded and one-hot encoded genotypes.
         return self._mask_snps(X)
@@ -609,12 +609,12 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
             s = w.sum()
             keys = list(node_dict.keys())
             if s <= 0.0:
-                chosen_key = rng.choice(keys)
+                chosen_key = rng.choice(np.array(keys, dtype=object))
             else:
                 p = w / s
-                chosen_key = rng.choice(keys, p=p)
+                chosen_key = rng.choice(np.array(keys, dtype=object), p=p)
         else:
-            chosen_key = rng.choice(list(node_dict.keys()))
+            chosen_key = rng.choice(np.array(list(node_dict.keys()), dtype=object))
 
         # Retrieve descendant tips for the chosen node
         if hasattr(self.genotype_data.tree, "get_tip_labels"):
