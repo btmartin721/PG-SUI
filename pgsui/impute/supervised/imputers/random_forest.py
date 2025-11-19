@@ -1,7 +1,7 @@
 # Standard library
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Dict, List
+from typing import TYPE_CHECKING, Any, Dict, List, Literal
 
 # Third-party
 import numpy as np
@@ -24,6 +24,7 @@ from pgsui.data_processing.containers import (
 )
 from pgsui.data_processing.transformers import SimGenotypeDataTransformer
 from pgsui.impute.supervised.base import BaseImputer
+from pgsui.utils.logging_utils import configure_logger
 from pgsui.utils.plotting import Plotting
 from pgsui.utils.scorers import Scorer
 
@@ -39,9 +40,7 @@ def ensure_rf_config(config: RFConfig | Dict | str | None) -> RFConfig:
     if isinstance(config, RFConfig):
         return config
     if isinstance(config, str):
-        return load_yaml_to_dataclass(
-            config, RFConfig, preset_builder=RFConfig.from_preset
-        )
+        return load_yaml_to_dataclass(config, RFConfig)
     if isinstance(config, dict):
         payload = dict(config)
         preset = payload.pop("preset", None)
@@ -94,15 +93,16 @@ class ImputeRandomForest(BaseImputer):
         logman = LoggerManager(
             __name__, prefix=self.prefix, verbose=self.verbose, debug=self.debug
         )
-        self.logger = logman.get_logger()
+        self.logger = configure_logger(
+            logman.get_logger(), verbose=self.verbose, debug=self.debug
+        )
 
         self._create_model_directories(
             self.prefix, ["models", "plots", "metrics", "optimize", "parameters"]
         )
 
-        self.plot_format = cfg.plot.fmt
-        if self.plot_format.startswith("."):
-            self.plot_format = self.plot_format.lstrip(".")
+        self.plot_format: Literal["png", "pdf", "svg", "jpg", "jpeg"] = cfg.plot.fmt
+
         self.plot_fontsize = cfg.plot.fontsize
         self.title_fontsize = cfg.plot.fontsize
         self.plot_dpi = cfg.plot.dpi
@@ -165,10 +165,12 @@ class ImputeRandomForest(BaseImputer):
             prefix=self.prefix, average="macro", verbose=self.verbose, debug=self.debug
         )
 
+        pf: Literal["png", "pdf", "svg", "jpg", "jpeg"] = self.plot_format
+
         self.plotter_ = Plotting(
             self.model_name,
             prefix=self.prefix,
-            plot_format=self.plot_format,
+            plot_format=pf,
             plot_dpi=self.plot_dpi,
             plot_fontsize=self.plot_fontsize,
             title_fontsize=self.title_fontsize,
@@ -176,6 +178,8 @@ class ImputeRandomForest(BaseImputer):
             show_plots=self.show_plots,
             verbose=self.verbose,
             debug=self.debug,
+            multiqc=True,
+            multiqc_section=f"PG-SUI: {self.model_name} Model Imputation",
         )
 
         X_int = self.pgenc.genotypes_012
