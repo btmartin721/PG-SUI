@@ -131,7 +131,7 @@ class _HGBParams:
         min_samples_leaf (int): Minimum number of samples required to be at a leaf node.
         n_iter_no_change (int): Number of iterations with no improvement to wait before early stopping
         tol (float): Tolerance for the early stopping.
-        max_features (float): The fraction of features to consider when looking for the best split.
+        max_features (float | None): The fraction of features to consider when looking for the best split.
         class_weight (Literal["balanced", "balanced_subsample", None]): Weights associated with classes.
         random_state (int | None): Random seed for reproducibility.
         verbose (bool): If True, enables verbose logging during training.
@@ -146,7 +146,7 @@ class _HGBParams:
     min_samples_leaf: int = 1
     n_iter_no_change: int = 10
     tol: float = 1e-7
-    max_features: float = 1.0
+    max_features: float | None = 1.0
     class_weight: Literal["balanced", "balanced_subsample", None] = "balanced"
     random_state: int | None = None
     verbose: bool = False
@@ -253,7 +253,15 @@ class TuneConfig:
     """
 
     enabled: bool = False
-    metric: Literal["f1", "accuracy", "pr_macro"] = "f1"
+    metric: Literal[
+        "f1",
+        "accuracy",
+        "pr_macro",
+        "average_precision",
+        "roc_auc",
+        "precision",
+        "recall",
+    ] = "f1"
     n_trials: int = 100
     resume: bool = False
     save_db: bool = False
@@ -405,7 +413,7 @@ class NLPCAConfig:
         cfg = cls()
 
         # Common baselines
-        cfg.io.verbose = True
+        cfg.io.verbose = False
         cfg.train.validation_split = 0.20
         cfg.model.hidden_activation = "relu"
         cfg.model.layer_schedule = "pyramid"
@@ -595,7 +603,7 @@ class UBPConfig:
         cfg = cls()
 
         # Common baselines
-        cfg.io.verbose = True
+        cfg.io.verbose = False
         cfg.model.hidden_activation = "relu"
         cfg.model.layer_schedule = "pyramid"
         cfg.model.latent_init = "random"
@@ -710,7 +718,7 @@ class UBPConfig:
         Returns:
             UBPConfig: This instance after applying overrides.
         """
-        if overrides is None or not overrides:
+        if not overrides:
             return self
 
         for k, v in overrides.items():
@@ -731,7 +739,7 @@ class UBPConfig:
         This method uses `asdict` from the `dataclasses` module to convert the dataclass instance into a dictionary.
 
         Returns:
-            Dict[str, Any]: Nested dictionary.
+            Dict[str, Any]: The config as a nested dictionary.
         """
         return asdict(self)
 
@@ -786,7 +794,7 @@ class AutoencoderConfig:
         cfg = cls()
 
         # Common baselines (no latent refinement at eval)
-        cfg.io.verbose = True
+        cfg.io.verbose = False
         cfg.train.validation_split = 0.20
         cfg.model.hidden_activation = "relu"
         cfg.model.layer_schedule = "pyramid"
@@ -979,7 +987,7 @@ class VAEConfig:
         cfg = cls()
 
         # Common baselines (match AE; no latent refinement at eval)
-        cfg.io.verbose = True
+        cfg.io.verbose = False
         cfg.train.validation_split = 0.20
         cfg.model.hidden_activation = "relu"
         cfg.model.layer_schedule = "pyramid"
@@ -1017,6 +1025,7 @@ class VAEConfig:
             cfg.tune.max_loci = 0
             cfg.tune.eval_interval = 5
             cfg.tune.patience = 5
+            cfg.tune.proxy_metric_batch = 0
             if hasattr(cfg.tune, "infer_epochs"):
                 cfg.tune.infer_epochs = 0
 
@@ -1042,6 +1051,7 @@ class VAEConfig:
             cfg.tune.max_loci = 0
             cfg.tune.eval_interval = 5
             cfg.tune.patience = 10
+            cfg.tune.proxy_metric_batch = 0
             if hasattr(cfg.tune, "infer_epochs"):
                 cfg.tune.infer_epochs = 0
 
@@ -1067,6 +1077,7 @@ class VAEConfig:
             cfg.tune.max_loci = 0
             cfg.tune.eval_interval = 5
             cfg.tune.patience = 20
+            cfg.tune.proxy_metric_batch = 0
             if hasattr(cfg.tune, "infer_epochs"):
                 cfg.tune.infer_epochs = 0
 
@@ -1128,6 +1139,7 @@ class DeterministicSplitConfig:
     """
 
     test_size: float = 0.2
+
     # If provided, overrides test_size.
     test_indices: Optional[Sequence[int]] = None
 
@@ -1136,33 +1148,43 @@ class DeterministicSplitConfig:
 class MostFrequentConfig:
     """Top-level configuration for ImputeMostFrequent.
 
-    This class contains all the configuration options for the ImputeMostFrequent model. The configuration is organized into several sections, each represented by a dataclass.
+    This class contains all the configuration options for the
+    ImputeMostFrequent model. The configuration is organized into several
+    sections, each represented by a dataclass.
 
     Attributes:
         io (IOConfig): I/O configuration.
         plot (PlotConfig): Plotting configuration.
         split (DeterministicSplitConfig): Data splitting configuration.
         algo (MostFrequentAlgoConfig): Algorithmic configuration.
-        tune (TuneConfig): Hyperparameter tuning configuration. For compatibility only. Ignored for deterministic imputers.
+        sim (SimConfig): Simulation configuration controlling how
+            missing values are synthetically introduced for evaluation.
+        tune (TuneConfig): Hyperparameter tuning configuration. For
+            compatibility only. Ignored for deterministic imputers.
+        train (TrainConfig): Training configuration. Present for interface
+            symmetry with NN-based imputers; typically unused here.
     """
 
     io: IOConfig = field(default_factory=IOConfig)
     plot: PlotConfig = field(default_factory=PlotConfig)
     split: DeterministicSplitConfig = field(default_factory=DeterministicSplitConfig)
     algo: MostFrequentAlgoConfig = field(default_factory=MostFrequentAlgoConfig)
+    sim: SimConfig = field(default_factory=SimConfig)
     tune: TuneConfig = field(default_factory=TuneConfig)
     train: TrainConfig = field(default_factory=TrainConfig)
 
     @classmethod
     def from_preset(
-        cls, preset: Literal["fast", "balanced", "thorough"] = "balanced"
+        cls,
+        preset: Literal["fast", "balanced", "thorough"] = "balanced",
     ) -> "MostFrequentConfig":
-        """Presets mainly keep parity with logging/IO and split test_size.
+        """Construct a preset configuration.
 
         Deterministic imputers don't have model/train knobs; presets exist for interface symmetry and minor UX defaults.
 
         Args:
-            preset (Literal["fast", "balanced", "thorough"]): One of {"fast", "balanced", "thorough"}.
+            preset (Literal["fast", "balanced", "thorough"]): One of
+                {"fast", "balanced", "thorough"}.
 
         Returns:
             MostFrequentConfig: Populated config instance.
@@ -1171,15 +1193,22 @@ class MostFrequentConfig:
             raise ValueError(f"Unknown preset: {preset}")
 
         cfg = cls()
-        cfg.io.verbose = True
+        cfg.io.verbose = False
         cfg.split.test_size = 0.2  # keep stable across presets
+        cfg.sim.simulate_missing = True  # simulate for evaluation
+        cfg.sim.sim_strategy = "random"
+        cfg.sim.sim_prop = 0.2
+
         return cfg
 
     def apply_overrides(self, overrides: Dict[str, Any] | None) -> "MostFrequentConfig":
         """Apply dot-key overrides (e.g., {'algo.by_populations': True}).
 
+        This method allows for easy modification of the configuration by specifying the keys to change in a flat dictionary format.
+
         Args:
-            overrides (Dict[str, Any]): Mapping of dot-key paths to values to override.
+            overrides (Dict[str, Any] | None): Mapping of dot-key paths to
+                values to override.
 
         Returns:
             MostFrequentConfig: This instance after applying overrides.
@@ -1195,6 +1224,7 @@ class MostFrequentConfig:
             if hasattr(node, last):
                 setattr(node, last, v)
             else:
+                # Unknown override field; silently ignore for now.
                 pass
         return self
 
@@ -1231,13 +1261,19 @@ class RefAlleleConfig:
         plot (PlotConfig): Plotting configuration.
         split (DeterministicSplitConfig): Data splitting configuration.
         algo (RefAlleleAlgoConfig): Algorithmic configuration.
-        tune (TuneConfig): Hyperparameter tuning configuration. For compatibility only. Ignored for deterministic imputers.
+        sim (SimConfig): Simulation configuration controlling how missing
+            values are synthetically introduced for evaluation.
+        tune (TuneConfig): Hyperparameter tuning configuration. For
+            compatibility only. Ignored for deterministic imputers.
+        train (TrainConfig): Training configuration. Present for interface
+            symmetry with NN-based imputers; typically unused here.
     """
 
     io: IOConfig = field(default_factory=IOConfig)
     plot: PlotConfig = field(default_factory=PlotConfig)
     split: DeterministicSplitConfig = field(default_factory=DeterministicSplitConfig)
     algo: RefAlleleAlgoConfig = field(default_factory=RefAlleleAlgoConfig)
+    sim: SimConfig = field(default_factory=SimConfig)
     tune: TuneConfig = field(default_factory=TuneConfig)
     train: TrainConfig = field(default_factory=TrainConfig)
 
@@ -1247,10 +1283,12 @@ class RefAlleleConfig:
     ) -> "RefAlleleConfig":
         """Presets mainly keep parity with logging/IO and split test_size.
 
-        Deterministic imputers don't have model/train knobs; presets exist for interface symmetry and minor UX defaults.
+        Deterministic imputers don't have model/train knobs; presets exist
+        for interface symmetry and minor UX defaults.
 
         Args:
-            preset (Literal["fast", "balanced", "thorough"]): One of {"fast", "balanced", "thorough"}.
+            preset (Literal["fast", "balanced", "thorough"]): One of
+                {"fast", "balanced", "thorough"}.
 
         Returns:
             RefAlleleConfig: Populated config instance.
@@ -1259,8 +1297,11 @@ class RefAlleleConfig:
             raise ValueError(f"Unknown preset: {preset}")
 
         cfg = cls()
-        cfg.io.verbose = True
+        cfg.io.verbose = False
         cfg.split.test_size = 0.2
+        cfg.sim.simulate_missing = True  # simulate for evaluation
+        cfg.sim.sim_strategy = "random"
+        cfg.sim.sim_prop = 0.2
         return cfg
 
     def apply_overrides(self, overrides: Dict[str, Any] | None) -> "RefAlleleConfig":
@@ -1269,7 +1310,8 @@ class RefAlleleConfig:
         This method allows for easy modification of the configuration by specifying the keys to change in a flat dictionary format.
 
         Args:
-            overrides (Dict[str, Any] | None): A mapping of dot-key paths to values to override.
+            overrides (Dict[str, Any] | None): A mapping of dot-key paths
+                to values to override.
 
         Returns:
             RefAlleleConfig: The updated config instance (same as `self`).
@@ -1285,6 +1327,7 @@ class RefAlleleConfig:
             if hasattr(node, last):
                 setattr(node, last, v)
             else:
+                # Unknown override; ignore for forward compatibility.
                 pass
         return self
 
@@ -1550,9 +1593,7 @@ class RFConfig:
     tune: TuningConfigSupervised = field(default_factory=TuningConfigSupervised)
 
     @classmethod
-    def from_preset(
-        cls, preset: Literal["fast", "balanced", "thorough"] = "balanced"
-    ) -> "RFConfig":
+    def from_preset(cls, preset: str = "balanced") -> "RFConfig":
         """Build a config from a named preset.
 
         This method allows for easy construction of an RFConfig instance with sensible defaults based on the chosen preset. Presets adjust both model capacity and training/tuning behavior across speed/quality tradeoffs.
@@ -1604,7 +1645,7 @@ class RFConfig:
         Returns:
             RFConfig: Config instance populated from the YAML file.
         """
-        return load_yaml_to_dataclass(path, cls, preset_builder=cls.from_preset)
+        return load_yaml_to_dataclass(path, cls)
 
     def apply_overrides(self, overrides: Dict[str, Any] | None) -> "RFConfig":
         """Apply flat dot-key overrides (e.g., {'model.n_estimators': 500}).
@@ -1637,7 +1678,7 @@ class RFConfig:
         This method extracts relevant configuration fields and maps them to keyword arguments suitable for initializing the ImputeRandomForest class.
 
         Returns:
-            Dict[str, Any]: kwargs compatible with ImputeRandomForest(..., \*\*kwargs).
+            Dict[str, Dict[str, Any]]: kwargs compatible with ImputeRandomForest(..., kwargs).
         """
         return {
             # General
@@ -1695,9 +1736,7 @@ class HGBConfig:
     tune: TuningConfigSupervised = field(default_factory=TuningConfigSupervised)
 
     @classmethod
-    def from_preset(
-        cls, preset: Literal["fast", "balanced", "thorough"] = "balanced"
-    ) -> "HGBConfig":
+    def from_preset(cls, preset: str = "balanced") -> "HGBConfig":
         """Build a config from a named preset.
 
         This class method allows for easy construction of a HGBConfig instance with sensible defaults based on the chosen preset. Presets adjust both model capacity and training/tuning behavior across speed/quality tradeoffs.
@@ -1749,7 +1788,7 @@ class HGBConfig:
         Returns:
             HGBConfig: Config instance populated from the YAML file.
         """
-        return load_yaml_to_dataclass(path, cls, preset_builder=cls.from_preset)
+        return load_yaml_to_dataclass(path, cls)
 
     def apply_overrides(self, overrides: Dict[str, Any] | None) -> "HGBConfig":
         """Apply flat dot-key overrides (e.g., {'model.learning_rate': 0.05}).
@@ -1782,7 +1821,7 @@ class HGBConfig:
         This method maps the configuration fields to the keyword arguments expected by the ImputeHistGradientBoosting class.
 
         Returns:
-            Dict[str, Any]: kwargs compatible with ImputeHistGradientBoosting(..., \*\*kwargs).
+            Dict[str, Dict[str, Any]]: kwargs compatible with ImputeHistGradientBoosting(..., kwargs).
         """
         return {
             # General
