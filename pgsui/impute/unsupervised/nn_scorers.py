@@ -1,6 +1,7 @@
-from typing import Dict, Literal
+from typing import TYPE_CHECKING, Dict, Literal
 
 import numpy as np
+import pandas as pd
 from sklearn.metrics import (
     accuracy_score,
     average_precision_score,
@@ -12,6 +13,7 @@ from sklearn.metrics import (
 from snpio.utils.logging import LoggerManager
 from torch import Tensor
 
+from pgsui.utils.logging_utils import configure_logger
 from pgsui.utils.misc import validate_input_type
 
 
@@ -41,14 +43,16 @@ class Scorer:
         logman = LoggerManager(
             name=__name__, prefix=prefix, debug=debug, verbose=verbose
         )
-        self.logger = logman.get_logger()
+        self.logger = configure_logger(
+            logman.get_logger(), verbose=verbose, debug=debug
+        )
 
-        if average not in {"micro", "macro", "weighted"}:
+        if average not in {"weighted", "micro", "macro"}:
             msg = f"Invalid average parameter: {average}. Must be one of 'micro', 'macro', or 'weighted'."
             self.logger.error(msg)
             raise ValueError(msg)
 
-        self.average = average
+        self.average: Literal["micro", "macro", "weighted"] = average
 
     def accuracy(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
         """Compute the accuracy score.
@@ -60,7 +64,7 @@ class Scorer:
         Returns:
             float: The accuracy score.
         """
-        return accuracy_score(y_true, y_pred)
+        return float(accuracy_score(y_true, y_pred))
 
     def f1(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
         """Compute the F1 score.
@@ -72,7 +76,7 @@ class Scorer:
         Returns:
             float: The F1 score.
         """
-        return f1_score(y_true, y_pred, average=self.average, zero_division=0.0)
+        return float(f1_score(y_true, y_pred, average=self.average, zero_division=0))
 
     def precision(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
         """Compute the precision score.
@@ -84,7 +88,9 @@ class Scorer:
         Returns:
             float: The precision score.
         """
-        return precision_score(y_true, y_pred, average=self.average, zero_division=0.0)
+        return float(
+            precision_score(y_true, y_pred, average=self.average, zero_division=0)
+        )
 
     def recall(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
         """Compute the recall score.
@@ -96,7 +102,9 @@ class Scorer:
         Returns:
             float: The recall score.
         """
-        return recall_score(y_true, y_pred, average=self.average, zero_division=0.0)
+        return float(
+            recall_score(y_true, y_pred, average=self.average, zero_division=0)
+        )
 
     def roc_auc(self, y_true: np.ndarray, y_pred_proba: np.ndarray) -> float:
         """Compute the ROC AUC score.
@@ -110,8 +118,8 @@ class Scorer:
         """
         if len(np.unique(y_true)) < 2:
             return 0.5
-        return roc_auc_score(
-            y_true, y_pred_proba, average=self.average, multi_class="ovr"
+        return float(
+            roc_auc_score(y_true, y_pred_proba, average=self.average, multi_class="ovr")
         )
 
     # This method now correctly expects one-hot encoded true labels
@@ -127,7 +135,9 @@ class Scorer:
         Returns:
             float: The average precision score.
         """
-        return average_precision_score(y_true_ohe, y_pred_proba, average=self.average)
+        return float(
+            average_precision_score(y_true_ohe, y_pred_proba, average=self.average)
+        )
 
     def pr_macro(self, y_true_ohe: np.ndarray, y_pred_proba: np.ndarray) -> float:
         """Compute the macro-average precision score.
@@ -139,14 +149,14 @@ class Scorer:
         Returns:
             float: The macro-average precision score.
         """
-        return average_precision_score(y_true_ohe, y_pred_proba, average="macro")
+        return float(average_precision_score(y_true_ohe, y_pred_proba, average="macro"))
 
     def evaluate(
         self,
-        y_true: np.ndarray | Tensor | list,
-        y_pred: np.ndarray | Tensor | list,
-        y_true_ohe: np.ndarray | Tensor | list,
-        y_pred_proba: np.ndarray | Tensor | list,
+        y_true: pd.DataFrame | np.ndarray | Tensor | list,
+        y_pred: pd.DataFrame | np.ndarray | Tensor | list,
+        y_true_ohe: pd.DataFrame | np.ndarray | Tensor | list,
+        y_pred_proba: pd.DataFrame | np.ndarray | Tensor | list,
         objective_mode: bool = False,
         tune_metric: Literal[
             "pr_macro",
@@ -174,7 +184,9 @@ class Scorer:
 
         # NOTE: This is redundant because it's handled in the calling class
         # TODO: Remove redundancy
-        valid_mask = np.logical_and(y_true >= 0, ~np.isnan(y_true))
+        valid_mask = np.logical_and(
+            np.asarray(y_true) >= 0, ~np.isnan(np.asarray(y_true))
+        )
 
         if not np.any(valid_mask):
             return {tune_metric: 0.0} if objective_mode else {}
@@ -186,15 +198,23 @@ class Scorer:
 
         if objective_mode:
             metric_calculators = {
-                "pr_macro": lambda: self.pr_macro(y_true_ohe, y_pred_proba),
-                "roc_auc": lambda: self.roc_auc(y_true, y_pred_proba),
-                "average_precision": lambda: self.average_precision(
-                    y_true_ohe, y_pred_proba
+                "pr_macro": lambda: self.pr_macro(
+                    np.asarray(y_true_ohe), np.asarray(y_pred_proba)
                 ),
-                "accuracy": lambda: self.accuracy(y_true, y_pred),
-                "f1": lambda: self.f1(y_true, y_pred),
-                "precision": lambda: self.precision(y_true, y_pred),
-                "recall": lambda: self.recall(y_true, y_pred),
+                "roc_auc": lambda: self.roc_auc(
+                    np.asarray(y_true), np.asarray(y_pred_proba)
+                ),
+                "average_precision": lambda: self.average_precision(
+                    np.asarray(y_true_ohe), np.asarray(y_pred_proba)
+                ),
+                "accuracy": lambda: self.accuracy(
+                    np.asarray(y_true), np.asarray(y_pred)
+                ),
+                "f1": lambda: self.f1(np.asarray(y_true), np.asarray(y_pred)),
+                "precision": lambda: self.precision(
+                    np.asarray(y_true), np.asarray(y_pred)
+                ),
+                "recall": lambda: self.recall(np.asarray(y_true), np.asarray(y_pred)),
             }
             if tune_metric not in metric_calculators:
                 msg = f"Invalid tune_metric provided: '{tune_metric}'."
@@ -204,12 +224,16 @@ class Scorer:
             metrics = {tune_metric: metric_calculators[tune_metric]()}
         else:
             metrics = {
-                "accuracy": self.accuracy(y_true, y_pred),
-                "f1": self.f1(y_true, y_pred),
-                "precision": self.precision(y_true, y_pred),
-                "recall": self.recall(y_true, y_pred),
-                "roc_auc": self.roc_auc(y_true, y_pred_proba),
-                "average_precision": self.average_precision(y_true_ohe, y_pred_proba),
-                "pr_macro": self.pr_macro(y_true_ohe, y_pred_proba),
+                "accuracy": self.accuracy(np.asarray(y_true), np.asarray(y_pred)),
+                "f1": self.f1(np.asarray(y_true), np.asarray(y_pred)),
+                "precision": self.precision(np.asarray(y_true), np.asarray(y_pred)),
+                "recall": self.recall(np.asarray(y_true), np.asarray(y_pred)),
+                "roc_auc": self.roc_auc(np.asarray(y_true), np.asarray(y_pred_proba)),
+                "average_precision": self.average_precision(
+                    np.asarray(y_true_ohe), np.asarray(y_pred_proba)
+                ),
+                "pr_macro": self.pr_macro(
+                    np.asarray(y_true_ohe), np.asarray(y_pred_proba)
+                ),
             }
         return {k: float(v) for k, v in metrics.items()}
