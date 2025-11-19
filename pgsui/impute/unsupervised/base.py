@@ -3,22 +3,34 @@ import gc
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
 import optuna
 import pandas as pd
+import plotly.graph_objects as go
 import torch
 import torch.nn.functional as F
+from matplotlib.figure import Figure
 from sklearn.metrics import classification_report
 from sklearn.model_selection import train_test_split
+from snpio import SNPioMultiQC
 from snpio.utils.logging import LoggerManager
 
 from pgsui.impute.unsupervised.nn_scorers import Scorer
 from pgsui.utils.classification_viz import ClassificationReportVisualizer
+from pgsui.utils.logging_utils import configure_logger
 from pgsui.utils.plotting import Plotting
 from pgsui.utils.pretty_metrics import PrettyMetrics
+
+if TYPE_CHECKING:
+    from snpio.read_input.genotype_data import GenotypeData
+
+    from pgsui.impute.unsupervised.models.autoencoder_model import AutoencoderModel
+    from pgsui.impute.unsupervised.models.nlpca_model import NLPCAModel
+    from pgsui.impute.unsupervised.models.ubp_model import UBPModel
+    from pgsui.impute.unsupervised.models.vae_model import VAEModel
 
 
 class BaseNNImputer:
@@ -29,6 +41,8 @@ class BaseNNImputer:
 
     def __init__(
         self,
+        model_name: str,
+        genotype_data: "GenotypeData",
         prefix: str,
         *,
         device: Literal["gpu", "cpu", "mps"] = "cpu",
@@ -37,7 +51,7 @@ class BaseNNImputer:
     ):
         """Initializes the base class for neural network imputers.
 
-        This constructor sets up the device (CPU, GPU, or MPS), creates the necessary output directories for models and results, and configures a logger. It also initializes a genotype encoder for handling genotype data.
+        This constructor sets up the device (CPU, GPU, or MPS), creates the necessary output directories for models and results, and a logger. It also initializes a genotype encoder for handling genotype data.
 
         Args:
             prefix (str): A prefix used to name the output directory (e.g., 'pgsui_output').
@@ -45,6 +59,13 @@ class BaseNNImputer:
             verbose (bool): If True, enables detailed logging output. Defaults to False.
             debug (bool): If True, enables debug mode. Defaults to False.
         """
+        self.model_name = model_name
+        self.genotype_data = genotype_data
+
+        self.prefix = prefix
+        self.verbose = verbose
+        self.debug = debug
+
         # Quiet Matplotlib/fontTools INFO logging when saving PDF/SVG
         for name in (
             "fontTools",
@@ -61,14 +82,58 @@ class BaseNNImputer:
         # Prepare directory structure
         outdirs = ["models", "plots", "metrics", "optimize", "parameters"]
         self._create_model_directories(prefix, outdirs)
-        self.debug = debug
 
         # Initialize loggers
         kwargs = {"prefix": prefix, "verbose": verbose, "debug": debug}
         logman = LoggerManager(__name__, **kwargs)
-        self.logger = logman.get_logger()
+        self.logger = configure_logger(
+            logman.get_logger(), verbose=self.verbose, debug=self.debug
+        )
         self._float_genotype_cache: np.ndarray | None = None
         self._sim_mask_cache: dict[tuple, np.ndarray] = {}
+
+        # To be initialized by child classes or fit method
+        self.tune_save_db: bool = False
+        self.tune_resume: bool = False
+        self.n_trials: int = 100
+        self.model_params: Dict[str, Any] = {}
+        self.tune_metric: str = "val_f1_macro"
+        self.learning_rate: float = 1e-3
+        self.plotter_: "Plotting"
+        self.num_features_: int = 0
+        self.num_classes_: int = 3
+        self.plot_format: Literal["pdf", "png", "jpg", "jpeg", "svg"] = "pdf"
+        self.plot_fontsize: int = 10
+        self.plot_dpi: int = 300
+        self.title_fontsize: int = 12
+        self.despine: bool = True
+        self.show_plots: bool = False
+        self.scoring_averaging: Literal["macro", "micro", "weighted"] = "macro"
+        self.pgenc: Any = None
+        self.is_haploid: bool = False
+        self.ploidy: int = 2
+        self.beta: float = 0.9999
+        self.max_ratio: float = 5.0
+        self.sim_strategy: str = "mcar"
+        self.sim_prop: float = 0.1
+        self.seed: int | None = 42
+        self.rng: np.random.Generator = np.random.default_rng(self.seed)
+        self.ground_truth_: np.ndarray
+        self.tune_fast: bool = False
+        self.tune_max_samples: int = 1000
+        self.tune_max_loci: int = 500
+        self.validation_split: float = 0.2
+        self.tune_batch_size: int = 64
+        self.tune_proxy_metric_batch: int = 512
+        self.batch_size: int = 64
+        self.best_params_: Dict[str, Any] = {}
+
+        self.optimize_dir: Path
+        self.models_dir: Path
+        self.plots_dir: Path
+        self.metrics_dir: Path
+        self.parameters_dir: Path
+        self.study_db: Path
 
     def tune_hyperparameters(self) -> None:
         """Tunes model hyperparameters using an Optuna study.
@@ -79,6 +144,9 @@ class BaseNNImputer:
             NotImplementedError: If the `_objective` or `_set_best_params` methods are not implemented in the inheriting child class.
         """
         self.logger.info("Tuning hyperparameters. This might take a while...")
+
+        if not self.verbose or not self.debug:
+            optuna.logging.set_verbosity(optuna.logging.ERROR)
 
         study_db = None
         load_if_exists = False
@@ -140,19 +208,17 @@ class BaseNNImputer:
         best_params_tmp = copy.deepcopy(best_params)
         best_params_tmp["learning_rate"] = self.learning_rate
 
-        self.logger.info(best_params_tmp)
+        title = f"{self.model_name} Optimized Parameters"
+        pm = PrettyMetrics(best_params_tmp, precision=6, title=title)
+        pm.render()
 
         # Save best parameters to a JSON file.
-        fn = self.optimize_dir / "parameters" / "best_params.json"
-
-        if not fn.parent.exists():
-            fn.parent.mkdir(parents=True, exist_ok=True)
-
-        with open(fn, "w") as fp:
-            json.dump(best_params, fp, indent=4)
+        self._save_best_params(best_params)
 
         tn = f"{self.tune_metric} Value"
-        self.plotter_.plot_tuning(study, self.model_name, target_name=tn)
+        self.plotter_.plot_tuning(
+            study, self.model_name, self.optimize_dir / "plots", target_name=tn
+        )
 
     @staticmethod
     def initialize_weights(module: torch.nn.Module) -> None:
@@ -172,7 +238,15 @@ class BaseNNImputer:
                 torch.nn.init.zeros_(module.bias)
 
     def build_model(
-        self, Model: torch.nn.Module, model_params: Dict[str, Any]
+        self,
+        Model: (
+            torch.nn.Module
+            | type["AutoencoderModel"]
+            | type["NLPCAModel"]
+            | type["UBPModel"]
+            | type["VAEModel"]
+        ),
+        model_params: Dict[str, int | float | str | bool],
     ) -> torch.nn.Module:
         """Builds and initializes a neural network model instance.
 
@@ -224,11 +298,13 @@ class BaseNNImputer:
         Returns:
             Tuple[Plotting, Scorer]: A tuple containing the initialized Plotting and Scorer objects.
         """
+        fmt = self.plot_format
+
         # Initialize plotter.
         plotter = Plotting(
             model_name=self.model_name,
             prefix=self.prefix,
-            plot_format=self.plot_format,
+            plot_format=fmt,
             plot_fontsize=self.plot_fontsize,
             plot_dpi=self.plot_dpi,
             title_fontsize=self.title_fontsize,
@@ -236,6 +312,8 @@ class BaseNNImputer:
             show_plots=self.show_plots,
             verbose=self.verbose,
             debug=self.debug,
+            multiqc=True,
+            multiqc_section=f"PG-SUI: {self.model_name} Model Imputation",
         )
 
         # Metrics
@@ -394,11 +472,22 @@ class BaseNNImputer:
         return torch.tensor(w.astype(np.float32), device=self.device)
 
     def _select_device(self, device: Literal["gpu", "cpu", "mps"]) -> torch.device:
-        device = device.lower().strip()
-        if device == "cpu":
+        """Selects the appropriate PyTorch device based on user preference and availability.
+
+        This method checks the user's device preference ('gpu', 'cpu', or 'mps') and verifies if the requested hardware is available. If the preferred device is not available, it falls back to CPU and logs a warning.
+
+        Args:
+            device (Literal["gpu", "cpu", "mps"]): The preferred device type for PyTorch operations.
+
+        Returns:
+            torch.device: The selected PyTorch device.
+        """
+        dvc: str = device
+        dvc = dvc.lower().strip()
+        if dvc == "cpu":
             self.logger.info("Using PyTorch device: CPU.")
             return torch.device("cpu")
-        if device == "mps":
+        if dvc == "mps":
             if torch.backends.mps.is_available():
                 self.logger.info("Using PyTorch device: mps.")
                 return torch.device("mps")
@@ -526,7 +615,7 @@ class BaseNNImputer:
             y_pred (np.ndarray): Predicted labels (1D array).
             metrics (Dict[str, float]): Computed metrics.
             y_pred_proba (np.ndarray | None): Predicted probabilities (2D array). Defaults to None.
-            labels (List[str], optional): Class label names
+            labels (List[str]): Class label names
                 (default: ["REF", "HET", "ALT"] for 3-class).
         """
         report_name = "zygosity" if len(labels) == 3 else "iupac"
@@ -548,7 +637,7 @@ class BaseNNImputer:
             y_true, y_pred, label_names=labels, prefix=report_name
         )
 
-        report = classification_report(
+        report: str | dict = classification_report(
             y_true,
             y_pred,
             labels=list(range(len(labels))),
@@ -557,17 +646,26 @@ class BaseNNImputer:
             output_dict=True,
         )
 
-        if self.verbose or self.debug:
-            report_subset = {}
-            for k, v in report.items():
-                tmp = {}
-                if isinstance(v, dict) and "support" in v:
-                    for k2, v2 in v.items():
-                        if k2 != "support":
-                            tmp[k2] = v2
+        if not isinstance(report, dict):
+            msg = "Expected classification_report to return a dict."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        report_subset = {}
+        for k, v in report.items():
+            tmp = {}
+            if isinstance(v, dict) and "support" in v:
+                for k2, v2 in v.items():
+                    if k2 != "support":
+                        tmp[k2] = v2
+                if tmp:
                     report_subset[k] = tmp
+
+        if report_subset:
             pm = PrettyMetrics(
-                report_subset, precision=3, title=f"{self.model_name} {middle} Report"
+                report_subset,
+                precision=3,
+                title=f"{self.model_name} {middle} Report",
             )
             pm.render()
 
@@ -577,7 +675,7 @@ class BaseNNImputer:
         viz = ClassificationReportVisualizer(reset_kwargs=self.plotter_.param_dict)
 
         plots = viz.plot_all(
-            report,
+            report,  # type: ignore
             title_prefix=f"{self.model_name} {middle} Report",
             show=getattr(self, "show_plots", False),
             heatmap_classes_only=True,
@@ -585,11 +683,21 @@ class BaseNNImputer:
 
         for name, fig in plots.items():
             fout = self.plots_dir / f"{report_name}_report_{name}.{self.plot_format}"
-            if hasattr(fig, "savefig"):
+            if hasattr(fig, "savefig") and isinstance(fig, Figure):
                 fig.savefig(fout, dpi=300, facecolor="#111122")
                 plt.close(fig)
-            else:
-                fig.write_html(file=fout.with_suffix(".html"))
+            elif hasattr(fig, "write_html") and isinstance(fig, go.Figure):
+                fout_html = fout.with_suffix(".html")
+                fig.write_html(file=fout_html)
+
+                SNPioMultiQC.queue_html(
+                    fout_html,
+                    panel_id=f"pgsui_{self.model_name.lower()}_{report_name}_radar",
+                    section=f"PG-SUI: {self.model_name} Model Imputation",
+                    title=f"{self.model_name} {middle} Radar Plot",
+                    index_label=name,
+                    description=f"{self.model_name} {middle} {len(labels)}-base Radar Plot. This radar plot visualizes model performance for three metrics per-class: precision, recall, and F1-score. Each axis represents one of these metrics, allowing for a quick visual assessment of the model's strengths and weaknesses. Higher values towards the outer edge indicate better performance.",
+                )
 
             if not self.is_haploid:
                 msg = f"Ploidy: {self.ploidy}. Evaluating per allele."
@@ -605,7 +713,7 @@ class BaseNNImputer:
         n_hidden: int,
         *,
         alpha: float = 4.0,
-        schedule: Literal["pyramid", "constant", "linear"] = "pyramid",
+        schedule: str = "pyramid",
         min_size: int = 16,
         max_size: int | None = None,
         multiple_of: int = 8,
@@ -646,6 +754,11 @@ class BaseNNImputer:
             self.logger.error(msg)
             raise ValueError(msg)
 
+        if schedule not in {"pyramid", "constant", "linear"}:
+            msg = f"Unknown schedule '{schedule}'. Use 'pyramid', 'constant', or 'linear'."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
         if n_hidden == 0:
             return []
 
@@ -681,12 +794,12 @@ class BaseNNImputer:
                 if decay is None:
                     target = max(min_size, base // 4)
                     if base <= 0 or target <= 0:
-                        decay = 1.0
+                        dcy = 1.0
                     else:
-                        decay = (target / float(base)) ** (1.0 / (n_hidden - 1))
-                        decay = float(np.clip(decay, 0.25, 0.99))
+                        dcy = (target / float(base)) ** (1.0 / (n_hidden - 1))
+                        dcy = float(np.clip(dcy, 0.25, 0.99))
                 exponents = np.arange(n_hidden, dtype=float)
-                sizes = base * (decay**exponents)
+                sizes = base * (dcy**exponents)
 
         else:
             msg = f"Unknown schedule '{schedule}'. Use 'pyramid', 'constant', or 'linear'."
@@ -847,7 +960,7 @@ class BaseNNImputer:
 
         # Optional latent inference path for models that need it.
         if do_latent_infer and hasattr(self, "_latent_infer_for_eval"):
-            self._latent_infer_for_eval(
+            optimized_val_latents = self._latent_infer_for_eval(  # type: ignore
                 model=model,
                 X_val=X_val,
                 steps=latent_steps,
@@ -867,7 +980,7 @@ class BaseNNImputer:
                 eval_mask_override = eval_mask_override[self._tune_eval_slice]
 
         # Child's evaluator now accepts the pre-computed latents
-        metrics = self._evaluate_model(
+        metrics = self._evaluate_model(  # type: ignore
             X_val=X_val,
             model=model,
             params=params,
@@ -962,7 +1075,7 @@ class BaseNNImputer:
         # Temporarily bump batch size only for tuning loader
         orig_bs = self.batch_size
         self.batch_size = self.tune_batch_size
-        self._tune_loader = self._get_data_loaders(self._tune_X_train)
+        self._tune_loader = self._get_data_loaders(self._tune_X_train)  # type: ignore
         self.batch_size = orig_bs
 
         self._tune_num_features = self._tune_X_train.shape[1]
@@ -997,3 +1110,7 @@ class BaseNNImputer:
 
         with open(fout, "w") as f:
             json.dump(best_params, f, indent=4)
+
+    def _set_best_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """An abstract method for setting best parameters."""
+        raise NotImplementedError
