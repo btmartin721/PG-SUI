@@ -153,3 +153,6 @@ sim_treeparams.py
 simulate_rad.py
 simulate_wgs.py
 dnasp_summary_plots.cleaned.csv
+test_output/
+BOX.vcf
+BOX2.vcf
