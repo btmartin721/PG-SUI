@@ -20,6 +20,7 @@ from pgsui.impute.unsupervised.base import BaseNNImputer
 from pgsui.impute.unsupervised.callbacks import EarlyStopping
 from pgsui.impute.unsupervised.loss_functions import compute_vae_loss
 from pgsui.impute.unsupervised.models.vae_model import VAEModel
+from pgsui.utils.logging_utils import configure_logger
 from pgsui.utils.pretty_metrics import PrettyMetrics
 
 if TYPE_CHECKING:
@@ -40,9 +41,7 @@ def ensure_vae_config(config: Union[VAEConfig, dict, str, None]) -> VAEConfig:
     if isinstance(config, VAEConfig):
         return config
     if isinstance(config, str):
-        return load_yaml_to_dataclass(
-            config, VAEConfig, preset_builder=VAEConfig.from_preset
-        )
+        return load_yaml_to_dataclass(config, VAEConfig)
     if isinstance(config, dict):
         base = VAEConfig()
         # Respect top-level preset
@@ -117,10 +116,16 @@ class ImputeVAE(BaseNNImputer):
             debug=self.cfg.io.debug,
             verbose=self.cfg.io.verbose,
         )
-        self.logger = logman.get_logger()
+        self.logger = configure_logger(
+            logman.get_logger(),
+            verbose=self.cfg.io.verbose,
+            debug=self.cfg.io.debug,
+        )
 
         # BaseNNImputer bootstraps device/dirs/log formatting
         super().__init__(
+            model_name=self.model_name,
+            genotype_data=self.genotype_data,
             prefix=self.cfg.io.prefix,
             device=self.cfg.train.device,
             verbose=self.cfg.io.verbose,
@@ -177,7 +182,7 @@ class ImputeVAE(BaseNNImputer):
         # Train hyperparams (AE-parity)
         self.batch_size = self.cfg.train.batch_size
         self.learning_rate = self.cfg.train.learning_rate
-        self.l1_penalty = self.cfg.train.l1_penalty
+        self.l1_penalty: float = self.cfg.train.l1_penalty
         self.early_stop_gen = self.cfg.train.early_stop_gen
         self.min_epochs = self.cfg.train.min_epochs
         self.epochs = self.cfg.train.max_epochs
@@ -191,7 +196,15 @@ class ImputeVAE(BaseNNImputer):
         self.tune_batch_size = self.cfg.tune.batch_size
         self.tune_epochs = self.cfg.tune.epochs
         self.tune_eval_interval = self.cfg.tune.eval_interval
-        self.tune_metric = self.cfg.tune.metric
+        self.tune_metric: Literal[
+            "pr_macro",
+            "f1",
+            "accuracy",
+            "average_precision",
+            "precision",
+            "recall",
+            "roc_auc",
+        ] = self.cfg.tune.metric
         self.n_trials = self.cfg.tune.n_trials
         self.tune_save_db = self.cfg.tune.save_db
         self.tune_resume = self.cfg.tune.resume
@@ -208,8 +221,8 @@ class ImputeVAE(BaseNNImputer):
         self.show_plots = self.cfg.plot.show
 
         # Derived at fit-time
-        self.is_haploid: bool | None = None
-        self.num_classes_: int | None = None
+        self.is_haploid: bool = False
+        self.num_classes_: int = 3  # diploid default
         self.model_params: Dict[str, Any] = {}
         self.sim_mask_global_: np.ndarray | None = None
         self.sim_mask_train_: np.ndarray | None = None
@@ -263,10 +276,12 @@ class ImputeVAE(BaseNNImputer):
             X_for_model = self.ground_truth_.copy()
 
         # Ploidy/classes
-        self.is_haploid = np.all(
-            np.isin(
-                self.genotype_data.snp_data,
-                ["A", "C", "G", "T", "N", "-", ".", "?"],
+        self.is_haploid = bool(
+            np.all(
+                np.isin(
+                    self.genotype_data.snp_data,
+                    ["A", "C", "G", "T", "N", "-", ".", "?"],
+                )
             )
         )
         self.ploidy = 1 if self.is_haploid else 2
@@ -359,11 +374,8 @@ class ImputeVAE(BaseNNImputer):
             self.models_dir / f"final_model_{self.model_name}.pt",
         )
 
-        self.best_loss_, self.model_, self.history_ = (
-            loss,
-            trained_model,
-            {"Train": history},
-        )
+        hist: dict = {"Train": history}
+        self.best_loss_, self.model_, self.history_ = (loss, trained_model, hist)
         self.is_fit_ = True
 
         # Evaluate (AE-parity reporting)
@@ -378,6 +390,7 @@ class ImputeVAE(BaseNNImputer):
             self.best_params_,
             eval_mask_override=eval_mask,
         )
+
         self.plotter_.plot_history(self.history_)
         self._save_best_params(self.best_params_)
         return self
@@ -408,11 +421,11 @@ class ImputeVAE(BaseNNImputer):
 
         # Decode to IUPAC & optionally plot
         imputed_genotypes = self.pgenc.decode_012(imputed_array)
-        if self.show_plots:
-            original_genotypes = self.pgenc.decode_012(X_to_impute)
-            plt.rcParams.update(self.plotter_.param_dict)
-            self.plotter_.plot_gt_distribution(original_genotypes, is_imputed=False)
-            self.plotter_.plot_gt_distribution(imputed_genotypes, is_imputed=True)
+        original_genotypes = self.pgenc.decode_012(X_to_impute)
+
+        plt.rcParams.update(self.plotter_.param_dict)
+        self.plotter_.plot_gt_distribution(original_genotypes, is_imputed=False)
+        self.plotter_.plot_gt_distribution(imputed_genotypes, is_imputed=True)
 
         return imputed_genotypes
 
@@ -525,7 +538,7 @@ class ImputeVAE(BaseNNImputer):
         self,
         loader: torch.utils.data.DataLoader,
         optimizer: torch.optim.Optimizer,
-        scheduler: torch.optim.lr_scheduler._LRScheduler,
+        scheduler: CosineAnnealingLR,
         model: torch.nn.Module,
         l1_penalty: float,
         trial: optuna.Trial | None,
@@ -580,11 +593,17 @@ class ImputeVAE(BaseNNImputer):
         )
 
         # Schedules
-        gamma_warm, gamma_ramp, gamma_final = 50, 100, float(self.gamma)
+        kl = self.kl_beta_final
+        if isinstance(kl, list):
+            kl = float(kl[0])
+
+        gma = torch.tensor(self.gamma, device=self.device)
+
+        gamma_warm, gamma_ramp, gamma_final = 50, 100, gma
         beta_warm, beta_ramp, beta_final = (
             int(self.kl_warmup),
             int(self.kl_ramp),
-            float(self.kl_beta_final),
+            torch.tensor(kl, device=self.device),
         )
 
         # Optional LR warmup
@@ -595,18 +614,22 @@ class ImputeVAE(BaseNNImputer):
         # Epoch budget mirrors scheduler.T_max if present
         max_epochs = getattr(scheduler, "T_max", getattr(self, "epochs", 100))
 
+        init_gamma = torch.tensor(0.0, device=self.device)
+        init_beta = torch.tensor(0.0, device=self.device)
+
         for epoch in range(max_epochs):
             # focal γ schedule
             if epoch < gamma_warm:
-                model.gamma = 0.0
+                model.gamma = init_gamma.numpy().item()
             elif epoch < gamma_warm + gamma_ramp:
-                model.gamma = gamma_final * ((epoch - gamma_warm) / gamma_ramp)
+                model.gamma = gamma_final.numpy().item() * (
+                    (epoch - gamma_warm) / gamma_ramp
+                )
             else:
-                model.gamma = gamma_final
-
+                model.gamma = gamma_final.numpy().item()
             # KL β schedule
             if epoch < beta_warm:
-                model.beta = 0.0
+                model.beta = init_beta.numpy().item()
             elif epoch < beta_warm + beta_ramp:
                 model.beta = beta_final * ((epoch - beta_warm) / beta_ramp)
             else:
@@ -922,9 +945,10 @@ class ImputeVAE(BaseNNImputer):
         )
 
         if not objective_mode:
-            if self.verbose or self.debug:
-                pm = PrettyMetrics(metrics, precision=3, title="Validation Metrics")
-                pm.render()
+            pm = PrettyMetrics(
+                metrics, precision=3, title=f"{self.model_name} Validation Metrics"
+            )
+            pm.render()
 
             # Primary report
             self._make_class_reports(
@@ -1006,12 +1030,15 @@ class ImputeVAE(BaseNNImputer):
             model = self.build_model(self.Model, params["model_params"])
             model.apply(self.initialize_weights)
 
+            lr: float = params["lr"]
+            l1_penalty: float = params["l1_penalty"]
+
             # Train + prune on metric
-            _, model, _ = self._train_and_validate_model(
+            _, model, __ = self._train_and_validate_model(
                 model=model,
                 loader=train_loader,
-                lr=params["lr"],
-                l1_penalty=params["l1_penalty"],
+                lr=lr,
+                l1_penalty=l1_penalty,
                 trial=trial,
                 return_history=False,
                 class_weights=class_weights,
@@ -1034,6 +1061,10 @@ class ImputeVAE(BaseNNImputer):
                 )
                 else None
             )
+
+            if model is None:
+                raise RuntimeError("Model training failed; no model was returned.")
+
             metrics = self._evaluate_model(
                 X_val, model, params, objective_mode=True, eval_mask_override=eval_mask
             )
@@ -1047,9 +1078,7 @@ class ImputeVAE(BaseNNImputer):
                 f"Trial failed with error. Enable debug logging for details."
             )
 
-    def _sample_hyperparameters(
-        self, trial: optuna.Trial
-    ) -> Dict[str, int | float | str]:
+    def _sample_hyperparameters(self, trial: optuna.Trial) -> dict:
         """Sample VAE hyperparameters; hidden sizes mirror AE/NLPCA helper.
 
         Args:
@@ -1105,16 +1134,14 @@ class ImputeVAE(BaseNNImputer):
         }
         return params
 
-    def _set_best_params(
-        self, best_params: Dict[str, int | float | str | list]
-    ) -> Dict[str, int | float | str | list]:
+    def _set_best_params(self, best_params: dict) -> dict:
         """Adopt best params and return VAE model_params.
 
         Args:
-            best_params (Dict[str, int | float | str | list]): Best hyperparameters from tuning.
+            best_params (dict): Best hyperparameters from tuning.
 
         Returns:
-            Dict[str, int | float | str | list]: VAE model parameters.
+            dict: VAE model parameters.
         """
         self.latent_dim = best_params["latent_dim"]
         self.dropout_rate = best_params["dropout_rate"]
