@@ -13,6 +13,9 @@ from sklearn.preprocessing import label_binarize
 from snpio.utils.logging import LoggerManager
 from torch import Tensor
 
+from pgsui.utils.logging_utils import configure_logger
+from pgsui.utils.misc import validate_input_type
+
 
 class Scorer:
     """Class for evaluating the performance of a model using various metrics.
@@ -43,14 +46,16 @@ class Scorer:
         logman = LoggerManager(
             name=__name__, prefix=prefix, debug=debug, verbose=verbose >= 1
         )
-        self.logger = logman.get_logger()
+        self.logger = configure_logger(
+            logman.get_logger(), verbose=verbose >= 1, debug=debug
+        )
 
         if average not in {"micro", "macro", "weighted"}:
             msg = f"Invalid average parameter: {average}. Must be one of 'micro', 'macro', or 'weighted'."
             self.logger.error(msg)
             raise ValueError(msg)
 
-        self.average = average
+        self.average: Literal["micro", "macro", "weighted"] = average
 
     def accuracy(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
         """Calculate the accuracy of the model.
@@ -64,7 +69,7 @@ class Scorer:
         Returns:
             float: Accuracy score.
         """
-        return accuracy_score(y_true, y_pred)
+        return float(accuracy_score(y_true, y_pred))
 
     def f1(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
         """Calculate the F1 score of the model.
@@ -78,7 +83,8 @@ class Scorer:
         Returns:
             float: F1 score.
         """
-        return f1_score(y_true, y_pred, average=self.average, zero_division=0.0)
+        avg: str = self.average
+        return float(f1_score(y_true, y_pred, average=avg, zero_division=0))
 
     def precision(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
         """Calculate the precision of the model.
@@ -92,9 +98,10 @@ class Scorer:
         Returns:
             float: Precision score.
         """
-        return precision_score(y_true, y_pred, average=self.average, zero_division=0.0)
+        avg: str = self.average
+        return float(precision_score(y_true, y_pred, average=avg, zero_division=0))
 
-    def recall(self, y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
+    def recall(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
         """Calculate the recall of the model.
 
         This method calculates the recall of the model by comparing the ground truth labels with the predicted labels.
@@ -106,7 +113,8 @@ class Scorer:
         Returns:
             float: Recall score.
         """
-        return recall_score(y_true, y_pred, average=self.average, zero_division=0.0)
+        avg: str = self.average
+        return float(recall_score(y_true, y_pred, average=avg, zero_division=0))
 
     def roc_auc(self, y_true: np.ndarray, y_pred_proba: np.ndarray) -> float:
         """Multiclass ROC-AUC with label targets.
@@ -157,7 +165,7 @@ class Scorer:
             "precision",
             "recall",
         ] = "pr_macro",
-    ) -> Dict[str, float]:
+    ) -> Dict[str, float] | None:
         """Evaluate the model using various metrics.
 
         This method evaluates the performance of a model using various metrics, such as accuracy, F1 score, precision, recall, average precision, and ROC AUC. The method can be used to evaluate the performance of a model on a dataset with ground truth labels. The method can also be used to evaluate the performance of a model in objective mode for hyperparameter tuning.
@@ -177,6 +185,13 @@ class Scorer:
             ValueError: If the input data is invalid.
             ValueError: If an invalid tune_metric is provided.
         """
+        y_true = np.asarray(validate_input_type(y_true, return_type="array"))
+        y_pred = np.asarray(validate_input_type(y_pred, return_type="array"))
+        y_true_ohe = np.asarray(validate_input_type(y_true_ohe, return_type="array"))
+        y_pred_proba = np.asarray(
+            validate_input_type(y_pred_proba, return_type="array")
+        )
+
         if not y_true.ndim < 3:
             msg = "y_true must have 1 or 2 dimensions."
             self.logger.error(msg)
