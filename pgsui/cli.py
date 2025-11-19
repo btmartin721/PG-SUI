@@ -65,6 +65,15 @@ MODEL_ORDER: Tuple[str, ...] = (
     "ImputeRefAllele",
 )
 
+# Strategies supported by SimMissingTransformer + SimConfig.
+SIM_STRATEGY_CHOICES: Tuple[str, ...] = (
+    "random",
+    "random_weighted",
+    "random_weighted_inv",
+    "nonrandom",
+    "nonrandom_weighted",
+)
+
 
 # ----------------------------- CLI Utilities ----------------------------- #
 def _configure_logging(verbose: bool, log_file: Optional[str] = None) -> None:
@@ -172,6 +181,14 @@ def _args_to_cli_overrides(args: argparse.Namespace) -> dict:
     # Plot
     if hasattr(args, "plot_format"):
         overrides["plot.fmt"] = args.plot_format
+
+    # Simulation overrides (shared across config-driven models)
+    if hasattr(args, "sim_strategy"):
+        overrides["sim.sim_strategy"] = args.sim_strategy
+    if hasattr(args, "sim_prop"):
+        overrides["sim.sim_prop"] = float(args.sim_prop)
+    if hasattr(args, "simulate_missing"):
+        overrides["sim.simulate_missing"] = bool(args.simulate_missing)
 
     # Tuning
     if hasattr(args, "tune"):
@@ -450,6 +467,25 @@ def main(argv: Optional[List[str]] = None) -> int:
         default=argparse.SUPPRESS,
         help="Figure format for model plots.",
     )
+    # ------------------------- Simulation Controls ------------------------ #
+    parser.add_argument(
+        "--sim-strategy",
+        choices=SIM_STRATEGY_CHOICES,
+        default=argparse.SUPPRESS,
+        help="Override the missing-data simulation strategy for all config-driven models.",
+    )
+    parser.add_argument(
+        "--sim-prop",
+        type=float,
+        default=argparse.SUPPRESS,
+        help="Override the proportion of observed entries to mask during simulation (0-1).",
+    )
+    parser.add_argument(
+        "--simulate-missing",
+        action="store_false",
+        default=argparse.SUPPRESS,
+        help="Disable missing-data simulation regardless of preset/config (when provided).",
+    )
 
     # --------------------------- Seed & logging ---------------------------- #
     parser.add_argument(
@@ -586,7 +622,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                 if hasattr(args, "preset")
                 else UBPConfig()
             )
-        return ImputeUBP(genotype_data=gd, config=cfg)
+        return ImputeUBP(
+            genotype_data=gd,
+            config=cfg,
+            simulate_missing=cfg.sim.simulate_missing,
+            sim_strategy=cfg.sim.sim_strategy,
+            sim_prop=cfg.sim.sim_prop,
+            sim_kwargs=cfg.sim.sim_kwargs,
+        )
 
     def build_impute_nlpca():
         cfg = cfgs_by_model.get("ImputeNLPCA")
@@ -613,7 +656,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                 if hasattr(args, "preset")
                 else VAEConfig()
             )
-        return ImputeVAE(genotype_data=gd, config=cfg)
+        return ImputeVAE(
+            genotype_data=gd,
+            config=cfg,
+            simulate_missing=cfg.sim.simulate_missing,
+            sim_strategy=cfg.sim.sim_strategy,
+            sim_prop=cfg.sim.sim_prop,
+            sim_kwargs=cfg.sim.sim_kwargs,
+        )
 
     def build_impute_autoencoder():
         cfg = cfgs_by_model.get("ImputeAutoencoder")
@@ -623,7 +673,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                 if hasattr(args, "preset")
                 else AutoencoderConfig()
             )
-        return ImputeAutoencoder(genotype_data=gd, config=cfg)
+        return ImputeAutoencoder(
+            genotype_data=gd,
+            config=cfg,
+            simulate_missing=cfg.sim.simulate_missing,
+            sim_strategy=cfg.sim.sim_strategy,
+            sim_prop=cfg.sim.sim_prop,
+            sim_kwargs=cfg.sim.sim_kwargs,
+        )
 
     def build_impute_mostfreq():
         cfg = cfgs_by_model.get("ImputeMostFrequent")
@@ -633,7 +690,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                 if hasattr(args, "preset")
                 else MostFrequentConfig()
             )
-        return ImputeMostFrequent(gd, config=cfg)
+        return ImputeMostFrequent(
+            gd,
+            config=cfg,
+            simulate_missing=cfg.sim.simulate_missing,
+            sim_strategy=cfg.sim.sim_strategy,
+            sim_prop=cfg.sim.sim_prop,
+            sim_kwargs=cfg.sim.sim_kwargs,
+        )
 
     def build_impute_refallele():
         cfg = cfgs_by_model.get("ImputeRefAllele")
@@ -643,7 +707,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                 if hasattr(args, "preset")
                 else RefAlleleConfig()
             )
-        return ImputeRefAllele(gd, config=cfg)
+        return ImputeRefAllele(
+            gd,
+            config=cfg,
+            simulate_missing=cfg.sim.simulate_missing,
+            sim_strategy=cfg.sim.sim_strategy,
+            sim_prop=cfg.sim.sim_prop,
+            sim_kwargs=cfg.sim.sim_kwargs,
+        )
 
     model_builders = {
         "ImputeUBP": build_impute_ubp,
