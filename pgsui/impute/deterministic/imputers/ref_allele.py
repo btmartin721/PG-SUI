@@ -1,12 +1,14 @@
 # Standard library
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 # Third-party
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.figure import Figure
+from plotly.graph_objs import Figure as PlotlyFigure
 from sklearn.exceptions import NotFittedError
 from sklearn.metrics import (
     accuracy_score,
@@ -22,8 +24,11 @@ from snpio.utils.logging import LoggerManager
 
 from pgsui.data_processing.config import apply_dot_overrides, load_yaml_to_dataclass
 from pgsui.data_processing.containers import RefAlleleConfig
+from pgsui.data_processing.transformers import SimMissingTransformer
 from pgsui.utils.classification_viz import ClassificationReportVisualizer
+from pgsui.utils.logging_utils import configure_logger
 from pgsui.utils.plotting import Plotting
+from pgsui.utils.pretty_metrics import PrettyMetrics
 
 if TYPE_CHECKING:
     from snpio.read_input.genotype_data import GenotypeData
@@ -50,9 +55,7 @@ def ensure_refallele_config(
     if isinstance(config, RefAlleleConfig):
         return config
     if isinstance(config, str):
-        return load_yaml_to_dataclass(
-            config, RefAlleleConfig, preset_builder=RefAlleleConfig.from_preset
-        )
+        return load_yaml_to_dataclass(config, RefAlleleConfig)
     if isinstance(config, dict):
         base = RefAlleleConfig()
         # honor optional top-level 'preset'
@@ -72,7 +75,9 @@ def ensure_refallele_config(
         flat = _flatten("", config, {})
         return apply_dot_overrides(base, flat)
 
-    raise TypeError("config must be a RefAlleleConfig, dict, YAML path, or None.")
+    raise TypeError(
+        f"config must be RefAlleleConfig, dict, YAML path, or None, but got: {type(config)}."
+    )
 
 
 class ImputeRefAllele:
@@ -109,11 +114,26 @@ class ImputeRefAllele:
         self.verbose = cfg.io.verbose
         self.debug = cfg.io.debug
 
+        # Simulation knobs (shared with other deterministic imputers)
+        sim_cfg = cfg.sim
+        self.simulate_missing = bool(sim_cfg.simulate_missing)
+        self.sim_strategy = sim_cfg.sim_strategy
+        self.sim_prop = float(sim_cfg.sim_prop)
+        self.sim_kwargs: Dict[str, Any] = dict(sim_cfg.sim_kwargs or {})
+
+        self.plots_dir: Path
+        self.metrics_dir: Path
+        self.parameters_dir: Path
+        self.model_dir: Path
+        self.optimize_dir: Path
+
         # Logger
         logman = LoggerManager(
             __name__, prefix=self.prefix, verbose=self.verbose, debug=self.debug
         )
-        self.logger = logman.get_logger()
+        self.logger = configure_logger(
+            logman.get_logger(), verbose=self.verbose, debug=self.debug
+        )
 
         # RNG / encoder
         self.rng = np.random.default_rng(cfg.io.seed)
@@ -167,6 +187,8 @@ class ImputeRefAllele:
             show_plots=self.show_plots,
             verbose=self.verbose,
             debug=self.debug,
+            multiqc=True,
+            multiqc_section=f"PG-SUI: {self.model_name} Model Imputation",
         )
 
         # Output dirs
@@ -174,13 +196,14 @@ class ImputeRefAllele:
         self._create_model_directories(self.prefix, dirs)
 
     def fit(self) -> "ImputeRefAllele":
-        """Create TRAIN/TEST split and mask ALL observed cells on TEST rows for eval.
+        """Create TRAIN/TEST split and build eval mask, with optional sim-missing.
 
-        This method prepares the imputer by splitting the data into training and testing sets, and masking all originally observed genotype entries in the test set to facilitate unbiased evaluation. It does not perform any actual imputation since the RefAllele imputer is deterministic.
+        This method prepares the imputer by splitting the data into training and testing sets and constructing an evaluation mask. If `cfg.sim.simulate_missing` is False (default), it masks all originally observed genotype entries on TEST rows. If `cfg.sim.simulate_missing` is True, it uses SimMissingTransformer to select a subset of observed cells as simulated-missing, then restricts that mask to TEST rows only. Evaluation is then performed only on these simulated-missing cells, mirroring the deep learning models.
 
         Returns:
             ImputeRefAllele: The fitted imputer instance.
         """
+        # Train/test split indices
         self.train_idx_, self.test_idx_ = self._make_train_test_split()
         self.ground_truth012_ = self.X012_.copy()
 
@@ -189,28 +212,59 @@ class ImputeRefAllele:
         df_all = df_all.replace(self.missing, np.nan)
         df_all = df_all.replace(-9, np.nan)  # Just in case
 
-        # Build evaluation mask: mask all originally observed entries on TEST rows
-        obs_mask = df_all.notna().to_numpy()
-        test_rows_mask = np.zeros(obs_mask.shape[0], dtype=bool)
-        if self.test_idx_.size > 0:
-            test_rows_mask[self.test_idx_] = True
-        sim_mask = obs_mask & test_rows_mask[:, None]
+        # Observed mask in the ORIGINAL data (before any simulated-missing)
+        obs_mask = df_all.notna().to_numpy()  # shape (n_samples, n_loci)
 
+        # TEST row selector
+        test_rows_mask = np.zeros(obs_mask.shape[0], dtype=bool)
+        if self.test_idx_ is not None and self.test_idx_.size > 0:
+            test_rows_mask[self.test_idx_] = True
+
+        # Decide how to build the sim mask: legacy vs simulated-missing
+        if getattr(self, "simulate_missing", False):
+            # Simulate missing on the full matrix; we only use the mask.
+            tr = SimMissingTransformer(
+                genotype_data=self.genotype_data,
+                prop_missing=self.sim_prop,
+                strategy=self.sim_strategy,
+                missing_val=-9,
+                mask_missing=True,
+                verbose=self.verbose,
+                **(self.sim_kwargs or {}),
+            )
+            tr.fit(self.ground_truth012_.copy())
+            sim_mask_global = tr.sim_missing_mask_.astype(bool)
+
+            # Only consider cells that were originally observed
+            sim_mask_global = sim_mask_global & obs_mask
+
+            # Restrict evaluation to TEST rows only
+            sim_mask = sim_mask_global & test_rows_mask[:, None]
+            mode_desc = "simulated missing on TEST rows"
+        else:
+            # Legacy behavior: mask ALL originally observed TEST cells
+            sim_mask = obs_mask & test_rows_mask[:, None]
+            mode_desc = "all originally observed cells on TEST rows"
+
+        # Apply eval mask: set these cells to NaN in the eval DataFrame
         df_sim = df_all.copy()
         df_sim.values[sim_mask] = np.nan
 
+        # Store state
         self.sim_mask_ = sim_mask
         self.X_train_df_ = df_sim
         self.is_fit_ = True
 
+        n_masked = int(sim_mask.sum())
         self.logger.info(
-            f"Fit complete. Train rows: {self.train_idx_.size}, Test rows: {self.test_idx_.size}. "
-            f"Masked {int(sim_mask.sum())} observed test cells for evaluation."
+            f"Fit complete. Train rows: {self.train_idx_.size}, "
+            f"Test rows: {self.test_idx_.size}. "
+            f"Masked {n_masked} cells for evaluation ({mode_desc})."
         )
 
+        # Persist config for reproducibility
         params_fp = self.parameters_dir / "best_parameters.json"
         best_params = self.cfg.to_dict()
-
         with open(params_fp, "w") as f:
             json.dump(best_params, f, indent=4)
 
@@ -248,6 +302,12 @@ class ImputeRefAllele:
         X_imputed_full_012 = imputed_full_df.to_numpy(dtype=np.int16)
 
         # Plot distributions (like DL .transform())
+
+        if self.ground_truth012_ is None:
+            msg = "ground_truth012_ is None; cannot plot distributions."
+            self.logger.error(msg)
+
+            raise NotFittedError("ground_truth012_ is None; cannot plot distributions.")
         gt_decoded = self.encoder.decode_012(self.ground_truth012_)
         imp_decoded = self.encoder.decode_012(X_imputed_full_012)
         self.plotter_.plot_gt_distribution(gt_decoded, is_imputed=False)
@@ -364,7 +424,7 @@ class ImputeRefAllele:
             f"\n{classification_report(y_true, y_pred, labels=labels, target_names=report_names, zero_division=0)}"
         )
 
-        report = classification_report(
+        report: str | dict = classification_report(
             y_true,
             y_pred,
             labels=labels,
@@ -373,7 +433,22 @@ class ImputeRefAllele:
             output_dict=True,
         )
 
+        if not isinstance(report, dict):
+            msg = "classification_report did not return a dict as expected."
+            self.logger.error(msg)
+            raise TypeError(msg)
+
+        pm = PrettyMetrics(
+            report, precision=3, title=f"{self.model_name} Zygosity Report"
+        )
+        pm.render()
+
         viz = ClassificationReportVisualizer(reset_kwargs=self.plotter_.param_dict)
+
+        if not isinstance(report, dict):
+            msg = "classification_report did not return a dict as expected."
+            self.logger.error(msg)
+            raise TypeError(msg)
 
         plots = viz.plot_all(
             report,
@@ -387,10 +462,10 @@ class ImputeRefAllele:
 
         for name, fig in plots.items():
             fout = self.plots_dir / f"zygosity_report_{name}.{self.plot_format}"
-            if hasattr(fig, "savefig"):
+            if hasattr(fig, "savefig") and isinstance(fig, Figure):
                 fig.savefig(fout, dpi=300, facecolor="#111122")
                 plt.close(fig)
-            else:
+            elif isinstance(fig, PlotlyFigure):
                 fig.write_html(file=fout.with_suffix(".html"))
 
         viz._reset_mpl_style()
@@ -430,9 +505,6 @@ class ImputeRefAllele:
         }
         self.metrics_.update({f"iupac_{k}": v for k, v in metrics.items()})
 
-        self.logger.info(
-            f"\n + {classification_report(y_true, y_pred, labels=labels_idx, target_names=labels_names, zero_division=0)}"
-        )
         report = classification_report(
             y_true,
             y_pred,
@@ -441,6 +513,17 @@ class ImputeRefAllele:
             zero_division=0,
             output_dict=True,
         )
+
+        if not isinstance(report, dict):
+            msg = "classification_report did not return a dict as expected."
+            self.logger.error(msg)
+            raise TypeError(msg)
+
+        pm = PrettyMetrics(
+            report, precision=3, title=f"{self.model_name} IUPAC 10-Class Report"
+        )
+        pm.render()
+
         self._save_report(report, suffix="iupac")
 
         # Confusion matrix
