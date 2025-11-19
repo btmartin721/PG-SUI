@@ -1,5 +1,6 @@
 # Standard library imports
-from typing import TYPE_CHECKING, Dict, Optional, Sequence, Tuple, Union
+import logging
+from typing import TYPE_CHECKING, Dict, Literal, Optional, Sequence, Tuple
 
 # Third-party imports
 import numpy as np
@@ -50,6 +51,7 @@ class ImputeAlleleFreq:
         test_size: float = 0.2,
         test_indices: Optional[Sequence[int]] = None,
         stratify_by_populations: bool = False,
+        logger: logging.Logger | None = None,
     ) -> None:
         """Initialize ImputeAlleleFreq.
 
@@ -67,32 +69,32 @@ class ImputeAlleleFreq:
             test_indices: Explicit test row indices. Overrides `test_size` if given.
             stratify_by_populations: If True and populations are available, create a stratified test split per population.
         """
-        self.genotype_data = genotype_data
-        self.prefix = prefix
-        self.by_populations = by_populations
-        self.default = int(default)
-        self.missing = int(missing)
-        self.verbose = verbose
-        self.sim_prop_missing = float(sim_prop_missing)
-        self.debug = debug
+        self.genotype_data: "GenotypeData" = genotype_data
+        self.prefix: str = prefix
+        self.by_populations: bool = by_populations
+        self.default: int = int(default)
+        self.missing: int = int(missing)
+        self.sim_prop_missing: float = float(sim_prop_missing)
+        self.verbose: bool = verbose
+        self.debug: bool = debug
+        self.logger: logging.Logger = logger or logging.getLogger(__name__)
 
         if not (0.0 <= self.sim_prop_missing <= 0.95):
             raise ValueError("sim_prop_missing must be in [0, 0.95].")
 
-        self.rng = np.random.default_rng(seed)
-        self.encoder = GenotypeEncoder(self.genotype_data)
-        self.X_ = np.asarray(self.encoder.genotypes_int, dtype=np.int8)
-        self.num_features_ = self.X_.shape[1]
+        self.rng: np.random.Generator = np.random.default_rng(seed)
+        self.encoder: GenotypeEncoder = GenotypeEncoder(self.genotype_data)
+        self.X_: np.ndarray = np.asarray(self.encoder.genotypes_int, dtype=np.int8)
+        self.num_features_: int = self.X_.shape[1]
 
         # --- split controls ---
-        self.test_size = float(test_size)
-        self.test_indices = (
+        self.test_size: float = float(test_size)
+        self.test_indices: np.ndarray | None = (
             None if test_indices is None else np.asarray(test_indices, dtype=int)
         )
 
-        self.stratify_by_populations = bool(stratify_by_populations)
-
-        self.pops = None
+        self.stratify_by_populations: bool = bool(stratify_by_populations)
+        self.pops: np.ndarray | None = None
         if self.by_populations:
             pops = getattr(self.genotype_data, "populations", None)
             if pops is None:
@@ -106,9 +108,9 @@ class ImputeAlleleFreq:
                 )
 
         self.is_fit_: bool = False
-        self.global_dist_: Dict[int, Tuple[np.ndarray, np.ndarray]] = {}
+        self.global_dist_: Dict[int | str, Tuple[np.ndarray, np.ndarray]] = {}
         self.group_dist_: Dict[
-            Union[str, int], Dict[int, Tuple[np.ndarray, np.ndarray]]
+            str | int, Dict[int | str, Tuple[np.ndarray, np.ndarray]]
         ] = {}
         self.sim_mask_: Optional[np.ndarray] = None
         self.train_idx_: Optional[np.ndarray] = None
@@ -123,10 +125,14 @@ class ImputeAlleleFreq:
         self.alt_mask_: Optional[np.ndarray] = None  # (nF,4) bool
         self._iupac_presence_lut_: Optional[np.ndarray] = None  # (10,4) bool
 
+        plot_fmt: Literal["pdf", "png", "jpg", "jpeg"] = getattr(
+            genotype_data, "plot_format", "png"
+        )
+
         self.plotter = Plotting(
             "ImputeAlleleFreq",
             prefix=self.prefix,
-            plot_format=genotype_data.plot_format,
+            plot_format=plot_fmt,
             plot_fontsize=genotype_data.plot_fontsize,
             plot_dpi=genotype_data.plot_dpi,
             title_fontsize=genotype_data.plot_fontsize,
@@ -139,11 +145,11 @@ class ImputeAlleleFreq:
     # ------------------------------------------
     # Helpers for VCF ref/alt and IUPAC mapping
     # ------------------------------------------
-    def _map_base_to_int(self, arr) -> np.ndarray | None:
+    def _map_base_to_int(self, arr: np.ndarray | None) -> np.ndarray | None:
         """Map bases to A/C/G/T -> 0/1/2/3; pass integers through; others -> -1.
 
         Args:
-            arr: Array-like of bases (str) or integer codes.
+            arr (np.ndarray | None): Array-like of bases (str) or integer codes.
 
         Returns:
             np.ndarray | None: Mapped integer array, or None if input is None or invalid.
@@ -321,10 +327,13 @@ class ImputeAlleleFreq:
         self.group_dist_.clear()
         if self.by_populations:
             tmp = df_train.copy()
-            tmp["_pops_"] = self.pops[self.train_idx_]
+
+            if self.pops is not None:
+                tmp["_pops_"] = self.pops[self.train_idx_]
             for pop, grp in tmp.groupby("_pops_"):
+                pop_key = str(pop)
                 gdf = grp.drop(columns=["_pops_"])
-                self.group_dist_[pop] = {
+                self.group_dist_[pop_key] = {
                     col: self._series_distribution(gdf[col]) for col in gdf.columns
                 }
 
@@ -403,15 +412,21 @@ class ImputeAlleleFreq:
             labels = sorted(np.unique(np.concatenate([y_true, y_pred])))
             self.metrics_ = {
                 "n_masked_test": int(y_true.size),
-                "accuracy": accuracy_score(y_true, y_pred),
-                "f1": f1_score(
-                    y_true, y_pred, average="macro", labels=labels, zero_division=0
+                "accuracy": float(accuracy_score(y_true, y_pred)),
+                "f1": float(
+                    f1_score(
+                        y_true, y_pred, average="macro", labels=labels, zero_division=0
+                    )
                 ),
-                "precision": precision_score(
-                    y_true, y_pred, average="macro", labels=labels, zero_division=0
+                "precision": float(
+                    precision_score(
+                        y_true, y_pred, average="macro", labels=labels, zero_division=0
+                    )
                 ),
-                "recall": recall_score(
-                    y_true, y_pred, average="macro", labels=labels, zero_division=0
+                "recall": float(
+                    recall_score(
+                        y_true, y_pred, average="macro", labels=labels, zero_division=0
+                    )
                 ),
             }
             if self.verbose:
@@ -459,12 +474,22 @@ class ImputeAlleleFreq:
                 pred_codes = pred_codes[keep_nm]
                 f_k = f_idx[keep_nm]
 
+                if self.ref_codes_ is None or self.alt_mask_ is None:
+                    raise RuntimeError(
+                        "VCF ref/alt codes not cached; cannot compute zygosity metrics."
+                    )
+
                 ref_k = self.ref_codes_[f_k]  # (n,)
                 alt_rows = self.alt_mask_[f_k, :]  # (n,4)
                 ra_mask = alt_rows.copy()
                 ra_mask[np.arange(ref_k.size), ref_k] = True
 
                 lut = self._iupac_presence_lut_
+
+                if lut is None:
+                    raise RuntimeError(
+                        "IUPAC presence LUT not cached; cannot compute zygosity metrics."
+                    )
                 valid_true = (true_codes >= 0) & (true_codes < lut.shape[0])
                 valid_pred = (pred_codes >= 0) & (pred_codes < lut.shape[0])
                 keep_valid = valid_true & valid_pred
@@ -511,27 +536,35 @@ class ImputeAlleleFreq:
                         self.metrics_.update(
                             {
                                 "zyg_n_test": int(n),
-                                "zyg_accuracy": accuracy_score(y_true_3, y_pred_3),
-                                "zyg_f1": f1_score(
-                                    y_true_3,
-                                    y_pred_3,
-                                    average="macro",
-                                    labels=labels_3,
-                                    zero_division=0,
+                                "zyg_accuracy": float(
+                                    accuracy_score(y_true_3, y_pred_3)
                                 ),
-                                "zyg_precision": precision_score(
-                                    y_true_3,
-                                    y_pred_3,
-                                    average="macro",
-                                    labels=labels_3,
-                                    zero_division=0,
+                                "zyg_f1": float(
+                                    f1_score(
+                                        y_true_3,
+                                        y_pred_3,
+                                        average="macro",
+                                        labels=labels_3,
+                                        zero_division=0,
+                                    )
                                 ),
-                                "zyg_recall": recall_score(
-                                    y_true_3,
-                                    y_pred_3,
-                                    average="macro",
-                                    labels=labels_3,
-                                    zero_division=0,
+                                "zyg_precision": float(
+                                    precision_score(
+                                        y_true_3,
+                                        y_pred_3,
+                                        average="macro",
+                                        labels=labels_3,
+                                        zero_division=0,
+                                    )
+                                ),
+                                "zyg_recall": float(
+                                    recall_score(
+                                        y_true_3,
+                                        y_pred_3,
+                                        average="macro",
+                                        labels=labels_3,
+                                        zero_division=0,
+                                    )
                                 ),
                             }
                         )
@@ -676,8 +709,9 @@ class ImputeAlleleFreq:
         df = df_in.copy()
         df["_pops_"] = getattr(self, "pops", None)
         for pop, grp in df.groupby("_pops_"):
+            pop_key = str(pop)
             grp_imputed = grp.copy()
-            per_pop_dist = self.group_dist_.get(pop, {})
+            per_pop_dist = self.group_dist_.get(pop_key, {})
             for col in grp.columns:
                 if col == "_pops_":
                     continue
