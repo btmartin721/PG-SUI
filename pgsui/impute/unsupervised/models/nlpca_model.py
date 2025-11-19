@@ -6,6 +6,7 @@ import torch.nn as nn
 from snpio.utils.logging import LoggerManager
 
 from pgsui.impute.unsupervised.loss_functions import MaskedFocalLoss
+from pgsui.utils.logging_utils import configure_logger
 
 
 class NLPCAModel(nn.Module):
@@ -82,7 +83,9 @@ class NLPCAModel(nn.Module):
         logman = LoggerManager(
             name=__name__, prefix=prefix, verbose=verbose, debug=debug
         )
-        self.logger = logman.get_logger()
+        self.logger = configure_logger(
+            logman.get_logger(), verbose=verbose, debug=debug
+        )
 
         self.n_features = n_features
         self.num_classes = num_classes
@@ -127,17 +130,18 @@ class NLPCAModel(nn.Module):
         Raises:
             ValueError: If the provided activation name is not supported.
         """
-        activation = activation.lower()
-        if activation == "relu":
+        act: str = activation.lower()
+
+        if act == "relu":
             return nn.ReLU()
-        elif activation == "elu":
+        elif act == "elu":
             return nn.ELU()
-        elif activation == "leaky_relu":
+        elif act == "leaky_relu":
             return nn.LeakyReLU()
-        elif activation == "selu":
+        elif act == "selu":
             return nn.SELU()
         else:
-            msg = f"Activation function {activation} not supported."
+            msg = f"Activation function {act} not supported."
             self.logger.error(msg)
             raise ValueError(msg)
 
