@@ -8,7 +8,7 @@ import torch
 def validate_input_type(
     X: pd.DataFrame | np.ndarray | list | torch.Tensor,
     return_type: Literal["array", "df", "list", "tensor"] = "array",
-):
+) -> pd.DataFrame | np.ndarray | list | torch.Tensor:
     """Validate input type and return as numpy array.
 
     This method validates the input type and returns the input data as a numpy array, pandas DataFrame, 2D list, or torch.Tensor.
