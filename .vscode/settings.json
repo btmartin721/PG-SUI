@@ -2,15 +2,84 @@
     "[python]": {
         "editor.defaultFormatter": "ms-python.black-formatter"
     },
-    "python.formatting.provider": "none",
     "editor.formatOnPaste": true,
-    "editor.formatOnSave": true,
     "git.ignoreLimitWarning": true,
     "python-envs.defaultEnvManager": "ms-python.python:conda",
     "python-envs.defaultPackageManager": "ms-python.python:conda",
-    "python-envs.pythonProjects": [],
+    "python-envs.pythonProjects": [ ],
     "yaml.schemas": {
         "https://raw.githubusercontent.com/weaveworks/eksctl/main/pkg/apis/eksctl.io/v1alpha5/assets/schema.json": "*.eksctl.yaml",
-        "https://raw.githubusercontent.com/conda-forge/conda-smithy/main/conda_smithy/data/conda-forge.json": "file:///Users/btm002/Documents/Work/SHU/Research/Ongoing/Repositories/PG-SUI/conda/recipe/meta.yaml"
+        "https://raw.githubusercontent.com/conda-forge/conda-smithy/main/conda_smithy/data/conda-forge.json": "conda/recipe/meta.yaml"
+    },
+    "files.exclude": {
+        "**/__pycache__": true,
+        "**/*.pyc": true,
+        "**/.DS_Store": true
+    },
+    "search.exclude": {
+        "**/__pycache__": true,
+        "**/*.pyc": true,
+        "**/.DS_Store": true
+    },
+    "python.analysis.typeCheckingMode": "basic",
+    "python.analysis.autoSearchPaths": true,
+    "python.analysis.useLibraryCodeForTypes": true,
+    "python.testing.pytestArgs": [
+        "tests"
+    ],
+    "python.testing.unittestEnabled": false,
+    "python.testing.pytestEnabled": true,
+    "editor.fontFamily": "Fira Code,Operator Mono, Fira Code, Monaco, 'Courier New', monospace",
+    "terminal.integrated.fontFamily": "'Fira Code', 'Inconsolata for Powerline', monospace",
+    "editor.letterSpacing": 0.5,
+    "editor.fontWeight": "400",
+    "files.insertFinalNewline": false,
+    "editor.quickSuggestionsDelay": 0,
+    "editor.fontLigatures": true,
+    "editor.cursorStyle": "line",
+    "editor.cursorWidth": 5,
+    "editor.cursorBlinking": "solid",
+    "editor.renderWhitespace": "all",
+    "editor.snippetSuggestions": "top",
+    "workbench.startupEditor": "newUntitledFile",
+    "editor.glyphMargin": true,
+    "workbench.editor.enablePreview": false,
+    "explorer.confirmDragAndDrop": false,
+    "files.trimTrailingWhitespace": true,
+    "files.trimFinalNewlines": true,
+    "explorer.openEditors.visible": 2,
+    // Formatting Optional.
+    "editor.formatOnSave": true,
+    //eslint and tslint
+    "prettier.printWidth": 100,
+    "eslint.run": "onType",
+    "eslint.enable": false,
+    // MacOS Only Settings.
+    "terminal.integrated.macOptionIsMeta": true,
+    //Markdown settings
+    "[markdown]": {
+        "editor.wordWrap": "on",
+        "editor.quickSuggestions": {
+            "other": "on",
+            "comments": "on",
+            "strings": "on"
+        },
+        "editor.formatOnSave": false
+    },
+    "editor.quickSuggestions": {
+        "strings": true
+    },
+    // SOP's Import Cost Extension Settings.
+    "workbench.panel.defaultLocation": "right",
+    "workbench.settings.editor": "json",
+    "editor.minimap.enabled": false,
+    "window.zoomLevel": 0.8,
+    "javascript.updateImportsOnFileMove.enabled": "always",
+    "[javascript]": {
+        "editor.defaultFormatter": "esbenp.prettier-vscode"
+    },
+    "workbench.colorCustomizations": { },
+    "editor.codeActionsOnSave": {
+        "source.fixAll.eslint": "always"
     }
 }
