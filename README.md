@@ -8,13 +8,13 @@ Population Genomic Supervised and Unsupervised Imputation.
 
 ## About PG-SUI
 
-PG-SUI is a Python 3 API that uses machine learning to impute missing values from population genomic SNP data. There are several supervised and unsupervised machine learning algorithms available to impute missing data, as well as some non-machine learning imputers that are useful. 
+PG-SUI is a Python 3 API that uses machine learning to impute missing values from population genomic SNP data. There are several supervised and unsupervised machine learning algorithms available to impute missing data, as well as some non-machine learning imputers that are useful.
 
 Below is some general information and a basic tutorial. For more detailed information, see our [API Documentation](https://pg-sui.readthedocs.io/en/latest/).
 
 ### Supervised Imputation Methods
 
-Supervised methods utilze the scikit-learn's IterativeImputer, which is based on the MICE (Multivariate Imputation by Chained Equations) algorithm ([1](#1)), and iterates over each SNP site (i.e., feature) while uses the N nearest neighbor features to inform the imputation. The number of nearest features can be adjusted by users. IterativeImputer currently works with any of the following scikit-learn classifiers: 
+Supervised methods utilze the scikit-learn's IterativeImputer, which is based on the MICE (Multivariate Imputation by Chained Equations) algorithm ([1](#1)), and iterates over each SNP site (i.e., feature) while uses the N nearest neighbor features to inform the imputation. The number of nearest features can be adjusted by users. IterativeImputer currently works with any of the following scikit-learn classifiers:
 
 + K-Nearest Neighbors
 + Random Forest
@@ -142,7 +142,7 @@ You can read your input files as a GenotypeData object from the [SNPio](https://
 ```
 
 # Import snpio. Automatically installed with pgsui when using pip.
-from snpio import GenotypeData 
+from snpio import GenotypeData
 
 # Read in PHYLIP, VCF, or STRUCTURE-formatted alignments.
 data = GenotypeData(
@@ -208,12 +208,39 @@ mf = ImputeMF(*args) # Matrix factorization
 
 ### Unsupervised Neural Networks
 
-```
+``` python
 vae = ImputeVAE(data) # Variational autoencoder
 nlpca = ImputeNLPCA(data) # Nonlinear PCA
 ubp = ImputeUBP(data) # Unsupervised backpropagation
 sae = ImputeStandardAutoEncoder(data) # standard autoencoder
 ```
+
+## Command-Line Interface
+
+Run the PG-SUI CLI with ``pg-sui`` (installed alongside the library). The CLI follows the same precedence model as the Python API:
+
+``code defaults  <  preset (--preset)  <  YAML (--config)  <  explicit CLI flags  <  --set key=value``.
+
+Recent releases add explicit switches for the simulated-missingness workflow shared by the neural and supervised models:
+
+- ``--sim-strategy`` selects one of ``random``, ``random_weighted``, ``random_weighted_inv``, ``nonrandom``, ``nonrandom_weighted``.
+- ``--sim-prop`` sets the proportion of observed calls to temporarily mask when building the evaluation set.
+- ``--simulate-missing`` disables simulated masking entirely (store-false flag); omit it to inherit preset/YAML defaults or re-enable via ``--set sim.simulate_missing=True``.
+
+Example:
+
+```
+pg-sui \
+  --vcf data.vcf.gz \
+  --popmap pops.popmap \
+  --models ImputeUBP ImputeVAE \
+  --preset balanced \
+  --sim-strategy random_weighted_inv \
+  --sim-prop 0.25 \
+  --set io.prefix=vae_vs_ubp
+```
+
+CLI overrides cascade into every selected model, so a single invocation can evaluate multiple imputers with a consistent simulation strategy and output prefix.
 
 ## To-Dos
 
@@ -221,7 +248,7 @@ sae = ImputeStandardAutoEncoder(data) # standard autoencoder
 - Documentation
 
 ## References:
-   
+
 <a name="1">1. </a>Stef van Buuren, Karin Groothuis-Oudshoorn (2011). mice: Multivariate Imputation by Chained Equations in R. Journal of Statistical Software 45: 1-67.
 
 <a name="2">2. </a>Kingma, D.P. & Welling, M. (2013). Auto-encoding variational bayes. In: Proceedings  of  the  International Conference on Learning Representations (ICLR). arXiv:1312.6114 [stat.ML].
@@ -229,5 +256,5 @@ sae = ImputeStandardAutoEncoder(data) # standard autoencoder
 <a name="3">3. </a>Hinton, G.E., & Salakhutdinov, R.R. (2006). Reducing the dimensionality of data with neural networks. Science, 313(5786), 504-507.
 
 <a name="4">4. </a>Scholz, M., Kaplan, F., Guy, C. L., Kopka, J., & Selbig, J. (2005). Non-linear PCA: a missing data approach. Bioinformatics, 21(20), 3887-3895.
-    
+
 <a name="5">5. </a>Gashler, M. S., Smith, M. R., Morris, R., & Martinez, T. (2016). Missing value imputation with unsupervised backpropagation. Computational Intelligence, 32(2), 196-215.

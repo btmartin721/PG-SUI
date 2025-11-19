@@ -14,6 +14,7 @@ Key Design (at a glance)
 - **Typed configs**: each imputer uses a ``*Config`` dataclass (e.g., ``VAEConfig``, ``NLPCAConfig``, ``UBPConfig``) with presets (``fast``, ``balanced``, ``thorough``).
 - **Workflow**: pass a SNPio ``GenotypeData`` at construction → ``fit()`` → ``transform()`` (no arguments).
 - **Overrides**: presets ⇢ YAML (optional) ⇢ explicit overrides via dot-keys; CLI mirrors the same precedence.
+- **CLI overrides**: ``pg-sui`` exposes ``--sim-strategy``, ``--sim-prop``, and ``--simulate-missing`` so you can globally control missing-data simulation per run without editing YAML.
 - **Evaluation**: macro-F1 and macro-PR with zygosity-aware summaries to address genomic class imbalance.
 
 Unsupervised Imputation Methods

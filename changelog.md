@@ -4,9 +4,19 @@ An overview of changes to **PG-SUI** by release. This mirrors the Sphinx/RST cha
 
 ---
 
+## 1.6.9 - 2025-10-29
+
+### Enhancements - v1.6.9
+
+- The `pg-sui` CLI now exposes explicit simulation overrides: `--sim-strategy`, `--sim-prop`, and `--simulate-missing` (store-false) so evaluation masks can be aligned across models without editing YAML files.
+
+### Documentation - v1.6.9
+
+- Updated README, tutorial, and Sphinx RST pages (About, Unsupervised, Supervised, Deterministic, Implement New Models) to describe the new CLI switches, with fresh command examples that highlight how they interact with presets and dot-key overrides.
+
 ## 1.6.8 - 2025-10-27
 
-### Enhancements
+### Enhancements - v1.6.8
 
 - GitHub Actions release workflows added to auto bump PG-SUI version numbers and push to TestPyPi and PyPi.
 

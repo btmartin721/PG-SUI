@@ -420,7 +420,11 @@ Usage Examples
      --popmap example.popmap \
      --models ImputeMyNewModel \
      --preset balanced \
+     --sim-strategy random_weighted \
+     --sim-prop 0.25 \
      --set io.prefix=mymodel_demo
+
+The CLI propagates ``--sim-strategy``/``--sim-prop`` choices to every selected model, so new implementations participate automatically; add ``--simulate-missing`` if you need to benchmark against runs that rely solely on naturally missing cells.
 
 Design Notes & Best Practices
 -----------------------------
@@ -443,4 +447,3 @@ A: Yes. Expose a consistent forward that returns per-SNP logits and adapt the wr
 
 **Q: How do I add Optuna tuning quickly?**  
 A: Implement ``_objective``, ``_sample_hyperparameters``, and ``_set_best_params`` following the NLPCA wrapper. Use ``self.tune_fast`` and smaller subset caps for speed.
-

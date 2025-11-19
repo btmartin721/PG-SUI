@@ -4,6 +4,19 @@ Changelog
 
 An overview of changes to **PG-SUI** by release. This file mirrors the GitHub Markdown changelog and reflects the refactor-era docs: dataclass-first configs, presets, unified scikit-learn framework-based ``fit()/transform()`` methods, CLI precedence, and updated deterministic/supervised docs.
 
+1.6.9 - 2025-10-29
+------------------
+
+Enhancements
+^^^^^^^^^^^^
+
+- Added explicit CLI flags for simulated-missingness control: ``--sim-strategy``, ``--sim-prop``, and ``--simulate-missing`` (store-false) so users can align evaluation masks across models without modifying YAML configs.
+
+Documentation
+^^^^^^^^^^^^^
+
+- README plus key RST pages (Tutorial, About, Unsupervised, Supervised, Deterministic, Implement New Models) now describe the new CLI switches with updated command snippets covering common workflows.
+
 1.6.8 - 2025-10-27
 ------------------
 

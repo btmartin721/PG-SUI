@@ -105,6 +105,8 @@ Run both supervised models with the ``balanced`` preset and a shared prefix:
       --popmap pops.popmap \
       --models ImputeRandomForest ImputeHistGradientBoosting \
       --preset balanced \
+      --sim-strategy random_weighted_inv \
+      --sim-prop 0.35 \
       --set io.prefix=supervised_demo
 
 YAML + overrides:
@@ -118,7 +120,10 @@ YAML + overrides:
       --preset thorough \
       --config hgb.yaml \
       --set io.prefix=hgb_thorough \
-      --set imputer.max_iter=12 sim.prop_missing=0.4
+      --set imputer.max_iter=12 \
+      --sim-prop 0.40
+
+Use ``--simulate-missing`` to temporarily disable simulated masking for diagnostics or ablation studies; omit it to honour the preset/YAML defaults.
 
 Outputs
 -------

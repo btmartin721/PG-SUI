@@ -195,6 +195,12 @@ The ``pg-sui`` CLI supports running one or more models with the same dataset and
 - Explicit CLI flags (if provided) override YAML.
 - ``--set`` applies deep dot-path overrides for final tweaks.
 
+**Simulation controls**
+
+- ``--sim-strategy``: choose how simulated masking selects loci (``random``, ``random_weighted``, ``random_weighted_inv``, ``nonrandom``, ``nonrandom_weighted``).
+- ``--sim-prop``: set the proportion of observed entries to hide when creating the evaluation mask.
+- ``--simulate-missing``: disable simulated masking entirely for the run (store-false flag). Leave it unset to inherit the preset/YAML choice or force a value via ``--set sim.simulate_missing=True``.
+
 **Typical CLI usage**
 
 .. code-block:: bash
@@ -224,6 +230,23 @@ The ``pg-sui`` CLI supports running one or more models with the same dataset and
       --models ImputeMostFrequent ImputeRefAllele \
       --preset fast \
       --prefix baselines
+
+    # Override simulated-missingness globally from the CLI
+    pg-sui \
+      --vcf cohort.vcf.gz \
+      --popmap pops.popmap \
+      --models ImputeUBP ImputeNLPCA \
+      --preset balanced \
+      --sim-strategy random_weighted_inv \
+      --sim-prop 0.30 \
+      --set io.prefix=balanced_sim_override
+
+    # Temporarily disable simulated masking (store_false flag)
+    pg-sui \
+      --vcf cohort.vcf.gz \
+      --models ImputeVAE \
+      --simulate-missing \
+      --set io.prefix=vae_observed_only
 
 Deterministic Models (Configs)
 ------------------------------
@@ -353,6 +376,7 @@ All ``*Config`` dataclasses expose nested sections (names vary a little by famil
 - ``evaluate`` / ``split`` – latent optimisation controls for unsupervised models or held-out split definitions for deterministic ones.
 - ``imputer`` and ``sim`` – IterativeImputer and simulated-missingness settings unique to supervised models.
 - ``plot`` – export format, DPI, fonts, and whether to display figures interactively.
+- ``sim`` – simulated-missingness controls (strategy, proportion, enable/disable).
 
 Visualization & Reports
 -----------------------

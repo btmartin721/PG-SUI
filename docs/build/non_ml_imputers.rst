@@ -136,6 +136,8 @@ These deterministic models follow the same CLI precedence model as the rest of P
      --preset fast \
      --set io.prefix=ref_cli
 
+Even deterministic runs honour ``--sim-strategy``/``--sim-prop``/``--simulate-missing`` so you can align their evaluation masks with neural/supervised models for cross-family comparisons.
+
 Configuration dataclasses
 -------------------------
 
