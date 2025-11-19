@@ -203,7 +203,7 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
     Args:
         genotype_data (GenotypeData object): GenotypeData instance.
         prop_missing (float, optional): Proportion of missing data desired in output. Must be in the interval [0, 1]. Defaults to 0.1
-        strategy (Literal["nonrandom", "nonrandom_weighted", "random_weighted", "random_weighted_inv", "random"]): Strategy for simulating missing data. May be one of: "nonrandom", "nonrandom_weighted", "random_weighted", "random_weighted_inv", or "random". The "random" setting randomly replaces known genotypes as missing. "random_weighted". When set to "nonrandom", branches from GenotypeData.tree will be randomly sampled to generate missing data on descendant nodes. For "nonrandom_weighted", missing data will be placed on nodes proportionally to their branch lengths (e.g., to generate data as might be the case with mutation-disruption of RAD sites). Defaults to "random"
+        strategy (Literal["nonrandom", "nonrandom_weighted", "random_weighted", "random_weighted_inv", "random"]): Strategy for simulating missing data. "random": Uniformly masks genotypes at random among eligible entries until the target missing proportion is reached. "random_weighted": Masks genotypes at random with probabilities proportional to their observed genotype frequencies in each column (more common genotypes are more likely to be masked). "random_weighted_inv": Masks genotypes at random with probabilities inversely proportional to their observed genotype frequencies in each column (rarer genotypes are more likely to be masked). "nonrandom": Uses the supplied genotype tree to place missing data on clades that are sampled uniformly from internal and/or tip nodes, producing phylogenetically clustered missingness. "nonrandom_weighted": As in "nonrandom", but clades are sampled with probabilities proportional to their branch lengths, concentrating missingness on longer branches (e.g., mimicking locus dropout tied to evolutionary divergence). Defaults to "random".
         missing_val (int, optional): Value that represents missing data. Defaults to -9.
         mask_missing (bool, optional): True if you want to skip original missing values when simulating new missing data, False otherwise. Defaults to True.
         verbose (bool, optional): Verbosity level. Defaults to 0.
@@ -481,6 +481,21 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
         rng: np.random.Generator | None = None,
         target_rate: float | None = None,  # if None, use realized draw
     ) -> np.ndarray:
+        """Simulate missing data proportional or inversely proportional to genotype frequencies.
+
+        This method simulates missing data in a genotype matrix based on genotype frequencies. It allows for different transformation functions to be applied to the base probabilities, and can optionally use inverse genotype frequencies.
+
+        Args:
+            X (np.ndarray): Input genotype matrix.
+            transform_fn (Literal["sqrt", "exp"]): Transformation function to apply to base probabilities.
+            power (float): Exponent to raise transformed probabilities.
+            inv (bool): If True, use inverse genotype frequencies. If False, use direct frequencies to weight missingness.
+            rng (np.random.Generator | None): Optional NumPy Generator for reproducibility.
+            target_rate (float | None): If provided, scales the probabilities to achieve this target missing rate.
+
+        Returns:
+            np.ndarray: Simulated missing mask.
+        """
         tf = transform_fn.lower()
         if tf not in {"sqrt", "exp"}:
             msg = f"transform_fn must be 'sqrt' or 'exp', got: {transform_fn}"
@@ -548,6 +563,8 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
         rng: np.random.Generator | None = None,
     ) -> list[str]:
         """Sample a node and return descendant tip labels.
+
+        This method samples a node from the genotype tree and retrieves the tip labels of all descendant nodes. The sampling can be restricted to internal nodes, tip nodes, or can exclude the root node. Additionally, the sampling can be weighted by branch lengths.
 
         Args:
             internal_only: Sample only internal nodes.
