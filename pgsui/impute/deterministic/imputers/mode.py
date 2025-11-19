@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.figure import Figure
+from plotly.graph_objs import Figure as PlotlyFigure
 from sklearn.exceptions import NotFittedError
 from sklearn.metrics import (
     accuracy_score,
@@ -20,10 +22,13 @@ from snpio.utils.logging import LoggerManager
 
 from pgsui.data_processing.config import apply_dot_overrides, load_yaml_to_dataclass
 from pgsui.data_processing.containers import MostFrequentConfig
+from pgsui.data_processing.transformers import SimMissingTransformer
 from pgsui.utils.classification_viz import ClassificationReportVisualizer
+from pgsui.utils.logging_utils import configure_logger
 
 # Local imports
 from pgsui.utils.plotting import Plotting
+from pgsui.utils.pretty_metrics import PrettyMetrics
 
 # Type checking imports
 if TYPE_CHECKING:
@@ -46,9 +51,7 @@ def ensure_mostfrequent_config(
     if isinstance(config, MostFrequentConfig):
         return config
     if isinstance(config, str):
-        return load_yaml_to_dataclass(
-            config, MostFrequentConfig, preset_builder=MostFrequentConfig.from_preset
-        )
+        return load_yaml_to_dataclass(config, MostFrequentConfig)
     if isinstance(config, dict):
         base = MostFrequentConfig()
         # honor optional top-level 'preset'
@@ -111,11 +114,19 @@ class ImputeMostFrequent:
         self.verbose = cfg.io.verbose
         self.debug = cfg.io.debug
 
+        self.parameters_dir: Path
+        self.metrics_dir: Path
+        self.plots_dir: Path
+        self.models_dir: Path
+        self.optimize_dir: Path
+
         # Logger
         logman = LoggerManager(
             __name__, prefix=self.prefix, verbose=self.verbose, debug=self.debug
         )
-        self.logger = logman.get_logger()
+        self.logger = configure_logger(
+            logman.get_logger(), verbose=self.verbose, debug=self.debug
+        )
 
         # RNG / encoder
         self.rng = np.random.default_rng(cfg.io.seed)
@@ -126,6 +137,33 @@ class ImputeMostFrequent:
         X012[X012 < 0] = -1
         self.X012_ = X012
         self.num_features_ = X012.shape[1]
+
+        # Simulated-missing controls (mirror VAE/AE/NLPCA semantics where possible)
+        sim_cfg = getattr(self.cfg, "sim", None)
+        sim_cfg_kwargs = dict(getattr(sim_cfg, "sim_kwargs", {}) or {})
+
+        self.simulate_missing: bool
+        self.sim_strategy: str
+        self.sim_prop: float
+        self.sim_kwargs: dict
+
+        if sim_cfg is None:
+            # Fallback defaults if MostFrequentConfig has no .sim block
+            self.simulate_missing = False
+            self.sim_strategy = "random"
+            self.sim_prop = 0.10
+        else:
+            self.simulate_missing = bool(getattr(sim_cfg, "simulate_missing", False))
+            self.sim_strategy = getattr(sim_cfg, "sim_strategy", "random")
+            self.sim_prop = float(getattr(sim_cfg, "sim_prop", 0.10))
+            if getattr(sim_cfg, "sim_kwargs", None):
+                sim_cfg_kwargs.update(sim_cfg.sim_kwargs)
+
+        self.sim_kwargs = sim_cfg_kwargs
+
+        # Simulated-missing masks (global + test-only)
+        self.sim_mask_global_: Optional[np.ndarray] = None  # shape (N, L), bool
+        self.sim_mask_test_only_: Optional[np.ndarray] = None
 
         # Split & algo knobs
         self.test_size = float(cfg.split.test_size)
@@ -154,8 +192,8 @@ class ImputeMostFrequent:
 
         # State
         self.is_fit_: bool = False
-        self.global_modes_: Dict[int, int] = {}
-        self.group_modes_: Dict[str | int, Dict[int, int]] = {}
+        self.global_modes_: Dict[str, int] = {}
+        self.group_modes_: dict = {}
         self.sim_mask_: Optional[np.ndarray] = None
         self.train_idx_: Optional[np.ndarray] = None
         self.test_idx_: Optional[np.ndarray] = None
@@ -189,6 +227,8 @@ class ImputeMostFrequent:
             show_plots=self.show_plots,
             verbose=self.verbose,
             debug=self.debug,
+            multiqc=True,
+            multiqc_section=f"PG-SUI: {self.model_name} Model Imputation",
         )
 
         # Output dirs
@@ -196,9 +236,9 @@ class ImputeMostFrequent:
         self._create_model_directories(self.prefix, dirs)
 
     def fit(self) -> "ImputeMostFrequent":
-        """Learn per-locus modes on TRAIN rows; mask all observed cells on TEST rows.
+        """Learn per-locus modes on TRAIN rows; mask simulated cells on TEST rows.
 
-        This method prepares the data for imputation by splitting it into training and testing sets, computing the most frequent genotype (mode) for each locus based on the training set, and creating a mask to simulate missing data in the test set for evaluation purposes.
+        This method computes the most frequent genotype (mode) for each locus based on the training set and prepares the evaluation masks for the test set. It supports both global modes and population-specific modes if population data is provided. The method sets up the internal state required for imputation and evaluation.
 
         Returns:
             ImputeMostFrequent: The fitted imputer instance.
@@ -213,7 +253,6 @@ class ImputeMostFrequent:
 
         # Modes from TRAIN rows only (per-locus)
         df_train = df_all.iloc[self.train_idx_].copy()
-
         self.global_modes_ = {
             col: self._series_mode(df_train[col]) for col in df_train.columns
         }
@@ -221,36 +260,84 @@ class ImputeMostFrequent:
         self.group_modes_.clear()
         if self.by_populations:
             tmp = df_train.copy()
-            tmp["_pops_"] = self.pops[self.train_idx_]
-            for pop, grp in tmp.groupby("_pops_"):
-                gdf = grp.drop(columns=["_pops_"])
-                self.group_modes_[pop] = {
-                    col: self._series_mode(gdf[col]) for col in gdf.columns
-                }
+            if self.pops is not None:
+                tmp["_pops_"] = self.pops[self.train_idx_]
+                for pop, grp in tmp.groupby("_pops_"):
+                    gdf = grp.drop(columns=["_pops_"])
+                    self.group_modes_[pop] = {
+                        col: self._series_mode(gdf[col]) for col in gdf.columns
+                    }
+            else:
+                msg = "Population data is required when by_populations=True."
+                self.logger.error(msg)
+                raise ValueError(msg)
 
-        # Mask ALL observed cells on TEST rows (evaluation protocol parity)
+        # ------------------------------
+        # Simulated-missing mask (global → test-only)
+        # ------------------------------
         obs_mask = df_all.notna().to_numpy()  # observed = not NaN
-        test_rows_mask = np.zeros(obs_mask.shape[0], dtype=bool)
+        n_samples, n_loci = obs_mask.shape
 
-        if self.test_idx_.size > 0:
-            test_rows_mask[self.test_idx_] = True
-        sim_mask = obs_mask & test_rows_mask[:, None]  # cells to mask for eval
+        if self.simulate_missing:
+            # Use the same transformer as VAE
+            tr = SimMissingTransformer(
+                genotype_data=self.genotype_data,
+                prop_missing=self.sim_prop,
+                strategy=self.sim_strategy,
+                missing_val=-9,
+                mask_missing=True,
+                verbose=self.verbose,
+                **self.sim_kwargs,
+            )
+            # Fit on 0/1/2 with -1 for missing, like VAE
+            X_for_sim = self.ground_truth012_.astype(float, copy=True)
+            X_for_sim[X_for_sim < 0] = np.nan
+            tr.fit(X_for_sim)
 
+            sim_mask_global = tr.sim_missing_mask_.astype(bool)
+
+            # Don't simulate on already-missing cells
+            sim_mask_global &= obs_mask
+
+            # Restrict evaluation to TEST rows only
+            test_rows_mask = np.zeros(n_samples, dtype=bool)
+            if self.test_idx_.size > 0:
+                test_rows_mask[self.test_idx_] = True
+
+            sim_mask = sim_mask_global & test_rows_mask[:, None]
+
+            self.sim_mask_global_ = sim_mask_global
+            self.sim_mask_test_only_ = sim_mask
+        else:
+            # Fallback: current behavior – mask all observed cells on TEST rows
+            test_rows_mask = np.zeros(n_samples, dtype=bool)
+            if self.test_idx_.size > 0:
+                test_rows_mask[self.test_idx_] = True
+            sim_mask = obs_mask & test_rows_mask[:, None]
+
+            self.sim_mask_global_ = None
+            self.sim_mask_test_only_ = sim_mask
+
+        # Apply the mask to create the evaluation DataFrame
         df_sim = df_all.copy()
-        df_sim.values[sim_mask] = np.nan
+        df_sim.values[self.sim_mask_test_only_] = np.nan
 
-        self.sim_mask_ = sim_mask
+        self.sim_mask_ = self.sim_mask_test_only_
         self.X_train_df_ = df_sim
         self.is_fit_ = True
 
+        # Save parameters (unchanged)
         best_params = self.cfg.to_dict()
         params_fp = self.parameters_dir / "best_parameters.json"
-
         with open(params_fp, "w") as f:
             json.dump(best_params, f, indent=4)
 
+        n_masked = int(self.sim_mask_test_only_.sum())
         self.logger.info(
-            f"Fit complete. Train rows: {self.train_idx_.size}, Test rows: {self.test_idx_.size}. Masked {int(sim_mask.sum())} observed test cells for evaluation."
+            f"Fit complete. Train rows: {self.train_idx_.size}, "
+            f"Test rows: {self.test_idx_.size}. "
+            f"Masked {n_masked} test cells for evaluation "
+            f"({'simulated' if self.simulate_missing else 'all observed'})."
         )
         return self
 
@@ -286,6 +373,11 @@ class ImputeMostFrequent:
         X_imputed_full_012 = imputed_full_df.to_numpy(dtype=np.int16)
 
         # Plot distributions (parity with DL transform())
+        if self.ground_truth012_ is None:
+            raise NotFittedError(
+                "ground_truth012_ is not set; cannot plot distributions."
+            )
+
         gt_decoded = self.encoder.decode_012(self.ground_truth012_)
         imp_decoded = self.encoder.decode_012(X_imputed_full_012)
         self.plotter_.plot_gt_distribution(gt_decoded, is_imputed=False)
@@ -349,7 +441,9 @@ class ImputeMostFrequent:
 
         pop_modes = pd.DataFrame.from_dict(self.group_modes_, orient="index")
         if pop_modes.empty:
-            pop_modes = pd.DataFrame(index=pd.Index([], name="population"), columns=df.columns)
+            pop_modes = pd.DataFrame(
+                index=pd.Index([], name="population"), columns=df.columns
+            )
 
         pop_modes = pop_modes.reindex(columns=df.columns)
         pop_modes = pop_modes.fillna(global_modes)
@@ -480,7 +574,7 @@ class ImputeMostFrequent:
             f"\n{classification_report(y_true, y_pred, labels=labels, target_names=report_names, zero_division=0)}"
         )
 
-        report = classification_report(
+        report: dict | str = classification_report(
             y_true,
             y_pred,
             labels=labels,
@@ -488,6 +582,11 @@ class ImputeMostFrequent:
             zero_division=0,
             output_dict=True,
         )
+
+        if not isinstance(report, dict):
+            msg = "classification_report did not return a dict as expected."
+            self.logger.error(msg)
+            raise ValueError(msg)
 
         viz = ClassificationReportVisualizer(reset_kwargs=self.plotter_.param_dict)
 
@@ -500,10 +599,10 @@ class ImputeMostFrequent:
 
         for name, fig in plots.items():
             fout = self.plots_dir / f"zygosity_report_{name}.{self.plot_format}"
-            if hasattr(fig, "savefig"):
+            if hasattr(fig, "savefig") and isinstance(fig, Figure):
                 fig.savefig(fout, dpi=300, facecolor="#111122")
                 plt.close(fig)
-            else:
+            elif isinstance(fig, PlotlyFigure):
                 fig.write_html(file=fout.with_suffix(".html"))
 
         viz._reset_mpl_style()
@@ -547,10 +646,6 @@ class ImputeMostFrequent:
         }
         self.metrics_.update({f"iupac_{k}": v for k, v in metrics.items()})
 
-        self.logger.info(
-            f"\n{classification_report(y_true, y_pred, labels=labels_idx, target_names=labels_names, zero_division=0)}"
-        )
-
         report = classification_report(
             y_true,
             y_pred,
@@ -559,6 +654,16 @@ class ImputeMostFrequent:
             zero_division=0,
             output_dict=True,
         )
+
+        if not isinstance(report, dict):
+            msg = "classification_report did not return a dict as expected."
+            self.logger.error(msg)
+            raise TypeError(msg)
+
+        pm = PrettyMetrics(
+            report, precision=3, title=f"{self.model_name} IUPAC 10-Class Report"
+        )
+        pm.render()
 
         viz = ClassificationReportVisualizer(reset_kwargs=self.plotter_.param_dict)
 
@@ -574,10 +679,10 @@ class ImputeMostFrequent:
 
         for name, fig in plots.items():
             fout = self.plots_dir / f"iupac_report_{name}.{self.plot_format}"
-            if hasattr(fig, "savefig"):
+            if hasattr(fig, "savefig") and isinstance(fig, Figure):
                 fig.savefig(fout, dpi=300, facecolor="#111122")
                 plt.close(fig)
-            else:
+            elif isinstance(fig, PlotlyFigure):
                 fig.write_html(file=fout.with_suffix(".html"))
 
         # Reset the style
