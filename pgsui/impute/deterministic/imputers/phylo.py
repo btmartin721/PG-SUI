@@ -1,3 +1,5 @@
+# type: ignore
+
 import copy
 import random
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union
