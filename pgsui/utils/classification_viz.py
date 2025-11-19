@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -12,6 +12,9 @@ import plotly.graph_objects as go
 import seaborn as sns
 from matplotlib.colors import LinearSegmentedColormap
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+
+if TYPE_CHECKING:
+    from matplotlib.figure import Figure
 
 
 @dataclass
@@ -63,9 +66,13 @@ class ClassificationReportVisualizer:
         if "accuracy" in df.index:
             # sklearn puts accuracy scalar in "accuracy" row, usually in 'precision'
             try:
-                df.attrs["accuracy"] = float(df.loc["accuracy", "precision"])
+                acc_val = df.loc["accuracy", "precision"]
+                if pd.api.types.is_number(acc_val):
+                    df.attrs["accuracy"] = float(str(acc_val))
             except Exception:
-                df.attrs["accuracy"] = float(df.loc["accuracy"].squeeze())
+                squeezed_val = df.loc["accuracy"].squeeze()
+                if pd.api.types.is_number(squeezed_val):
+                    df.attrs["accuracy"] = float(str(squeezed_val))
             df = df.drop(index="accuracy", errors="ignore")
 
         df.index = df.index.astype(str)
@@ -124,12 +131,14 @@ class ClassificationReportVisualizer:
         mean = np.nanmean(arr, axis=0)  # (C, M)
 
         out = pd.DataFrame(index=common_index)
+        column_tuples = []
         for j, m in enumerate(metrics):
             out[(m, "lower")] = lower[:, j]
             out[(m, "upper")] = upper[:, j]
             out[(m, "mean")] = mean[:, j]
+            column_tuples.extend([(m, "lower"), (m, "upper"), (m, "mean")])
 
-        out.columns = pd.MultiIndex.from_tuples(out.columns)
+        out.columns = pd.MultiIndex.from_tuples(column_tuples)
         return out
 
     # ---------- Palettes & styles ----------
@@ -172,8 +181,8 @@ class ClassificationReportVisualizer:
 
     def _reset_mpl_style(self) -> None:
         """Reset Matplotlib rcParams to default."""
-        plt.rcParams.update(plt.rcParamsDefault)
-        mpl.rcParams.update(plt.rcParamsDefault)
+        plt.rcParams.update(mpl.rcParamsDefault)
+        mpl.rcParams.update(mpl.rcParamsDefault)
 
         if self.reset_kwargs is not None:
             plt.rcParams.update(self.reset_kwargs)
@@ -236,7 +245,7 @@ class ClassificationReportVisualizer:
 
         # Optional support strip (normalized 0..1) as an inset axis
         if show_support_strip and "support" in work.columns:
-            supports = work["support"].astype(float).fillna(0.0).values
+            supports = work["support"].astype(float).fillna(0.0).to_numpy()
             sup_norm = (supports - supports.min()) / (np.ptp(supports) + 1e-9)
             ax_strip = inset_axes(
                 ax,
@@ -324,7 +333,7 @@ class ClassificationReportVisualizer:
 
         ax2.plot(
             x,
-            supports,
+            np.asarray(supports),
             linestyle="None",
             marker="o",
             markersize=6,
@@ -345,8 +354,9 @@ class ClassificationReportVisualizer:
 
             yerr = None
             if ci_df is not None and (m, "lower") in ci_df.columns:
-                lows = ci_df.loc[classes, (m, "lower")].to_numpy(dtype=float)
-                ups = ci_df.loc[classes, (m, "upper")].to_numpy(dtype=float)
+                ci_reindexed = ci_df.reindex(classes)
+                lows = ci_reindexed[(m, "lower")].to_numpy(dtype=float)
+                ups = ci_reindexed[(m, "upper")].to_numpy(dtype=float)
 
                 # Convert to symmetric error around the point estimate
                 center = vals
@@ -354,7 +364,7 @@ class ClassificationReportVisualizer:
 
             ax.bar(
                 x + offsets[i],
-                vals,
+                np.asarray(vals),
                 width=width * 0.95,
                 label=m.title(),
                 color=palette[i % len(palette)],
@@ -375,7 +385,7 @@ class ClassificationReportVisualizer:
         # Configure secondary (support) axis
         ax2.set_ylabel("Support")
         ax2.grid(False)
-        ax2.set_ylim(0, max(1.0, supports.max() * 1.15))
+        ax2.set_ylim(0, max(1.0, np.asarray(supports).max() * 1.15))
         ax2.legend(loc="upper right", frameon=True)
 
         ax.grid(axis="y", linestyle="--", alpha=0.6)
@@ -435,8 +445,14 @@ class ClassificationReportVisualizer:
                 return
             if name not in ci_df.index:
                 return
-            lows = [float(ci_df.loc[name, (m, "lower")]) for m in metrics]
-            ups = [float(ci_df.loc[name, (m, "upper")]) for m in metrics]
+            lows = [
+                float(pd.to_numeric(ci_df.loc[name, (m, "lower")], errors="coerce"))
+                for m in metrics
+            ]
+            ups = [
+                float(pd.to_numeric(ci_df.loc[name, (m, "upper")], errors="coerce"))
+                for m in metrics
+            ]
             lows.append(lows[0])
             ups.append(ups[0])
 
@@ -528,6 +544,7 @@ class ClassificationReportVisualizer:
                 xanchor="center",
             ),
         )
+
         return fig
 
     def plot_all(
@@ -535,11 +552,11 @@ class ClassificationReportVisualizer:
         report: Dict[str, Dict[str, float]],
         title_prefix: str = "Classification Report",
         heatmap_classes_only: bool = True,
-        radar_top_k: int = 5,
+        radar_top_k: int = 10,
         boot_reports: Optional[List[Dict[str, Dict[str, float]]]] = None,
         ci: float = 0.95,
         show: bool = True,
-    ) -> Dict[str, Union[plt.Figure, go.Figure]]:
+    ) -> Dict[str, Union["Figure", go.Figure]]:
         """Generate all visuals, with optional CI from bootstrap reports.
 
         Args:
