@@ -693,7 +693,7 @@ class ImputeVAE(BaseNNImputer):
                     latent_steps=0,
                     latent_lr=0.0,
                     latent_weight_decay=0.0,
-                    latent_seed=(self.seed if self.seed is not None else 123),
+                    latent_seed=self.seed,  # type: ignore
                     _latent_cache=None,
                     _latent_cache_key=None,
                     eval_mask_override=mask_override,
