@@ -735,24 +735,13 @@ class ImputeNLPCA(BaseNNImputer):
             iupac_label_set = ["A", "C", "G", "T", "W", "R", "M", "K", "Y", "S"]
 
             # For numeric report
-            if np.intersect1d(np.unique(y_true_flat), labels_for_scoring).size == 0:
+            if (
+                np.intersect1d(np.unique(y_true_flat), labels_for_scoring).size == 0
+                or valid_true.size == 0
+            ):
                 if not objective_mode:
                     self.logger.warning(
                         "Skipped numeric confusion matrix: no y_true labels present."
-                    )
-            else:
-                self._make_class_reports(
-                    y_true=valid_true,
-                    y_pred=y_pred_int[eval_mask][y_true_int[eval_mask] >= 0],
-                    metrics=metrics,
-                    y_pred_proba=None,
-                    labels=iupac_label_set,
-                )
-
-            if valid_true.size == 0:
-                if not objective_mode:
-                    self.logger.warning(
-                        "Skipped IUPAC confusion matrix: no valid y_true labels present."
                     )
             else:
                 self._make_class_reports(
@@ -919,9 +908,9 @@ class ImputeNLPCA(BaseNNImputer):
             prune_metric=self.tune_metric,
             prune_warmup_epochs=5,
             eval_interval=self.tune_eval_interval,
-            eval_latent_steps=0,
-            eval_latent_lr=0.0,
-            eval_latent_weight_decay=0.0,
+            eval_latent_steps=self.eval_latent_steps,
+            eval_latent_lr=self.eval_latent_lr,
+            eval_latent_weight_decay=self.eval_latent_weight_decay,
         )
 
         # --- simulate-only eval mask for tuning ---
@@ -1210,9 +1199,9 @@ class ImputeNLPCA(BaseNNImputer):
             prune_metric=self.tune_metric,
             prune_warmup_epochs=5,
             eval_interval=1,
-            eval_latent_steps=50,
-            eval_latent_lr=self.learning_rate * self.lr_input_factor,
-            eval_latent_weight_decay=0.0,
+            eval_latent_steps=self.eval_latent_steps,
+            eval_latent_lr=self.eval_latent_lr,
+            eval_latent_weight_decay=self.eval_latent_weight_decay,
         )
 
         if trained_model is None:
@@ -1333,7 +1322,6 @@ class ImputeNLPCA(BaseNNImputer):
                     latent_seed=seed,
                     _latent_cache=_latent_cache,
                     _latent_cache_key=_latent_cache_key,
-                    # NEW:
                     eval_mask_override=(
                         self.sim_mask_test_
                         if (
