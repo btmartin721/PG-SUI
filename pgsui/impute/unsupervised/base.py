@@ -145,8 +145,10 @@ class BaseNNImputer:
         """
         self.logger.info("Tuning hyperparameters. This might take a while...")
 
-        if not self.verbose or not self.debug:
-            optuna.logging.set_verbosity(optuna.logging.ERROR)
+        if self.verbose or self.debug:
+            optuna.logging.set_verbosity(optuna.logging.INFO)
+        else:
+            optuna.logging.set_verbosity(optuna.logging.WARNING)
 
         study_db = None
         load_if_exists = False
