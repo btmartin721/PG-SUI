@@ -4,6 +4,17 @@ An overview of changes to **PG-SUI** by release. This mirrors the Sphinx/RST cha
 
 ---
 
+## 1.6.11 - 2025-11-21
+
+### Enhancements - v1.6.11
+
+- Added execution time for each model to the CLI logging output. Each model run now logs its total execution time upon completion, providing users with insights into performance and efficiency.
+
+### Bug Fixes - v1.6.11
+
+- Corrected an issue in all unsupervised imputers where the latent seed was not being set properly during evaluation. This fix ensures consistent and reproducible results.
+- Fixed a bug where some CLI settings were not being applied correctly when using the ``--set`` flag. Specifically, the ``eval_latent_steps`` and ``tune.infer_eval`` options were not respecting user overrides correctly in ImputeUBP and ImputeNLPCA.
+
 ## 1.6.10 - 2025-11-20
 
 ### Bug Fixes - v1.6.10
