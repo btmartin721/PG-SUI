@@ -156,3 +156,5 @@ dnasp_summary_plots.cleaned.csv
 test_output/
 BOX.vcf
 BOX2.vcf
+vcf_attributes.h5
+monomorphic_sites_mqc.txt

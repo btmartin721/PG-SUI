@@ -4,6 +4,12 @@ An overview of changes to **PG-SUI** by release. This mirrors the Sphinx/RST cha
 
 ---
 
+## 1.6.10 - 2025-11-20
+
+### Bug Fixes - v1.6.10
+
+- Fixed a bug with GPU training in ImputeVAE and ImputeAutoencoder. This bug was introduced in v1.6.9 where the gamma and beta parameters were incorrectly converted from tensors to numpy arrays in these models and failed only when using GPU. CPU training was unaffected.
+
 ## 1.6.9 - 2025-10-29
 
 ### Enhancements - v1.6.9

@@ -592,49 +592,49 @@ class ImputeVAE(BaseNNImputer):
             debug=self.debug,
         )
 
-        # Schedules
+        # ---- scalarize schedule endpoints up front ----
         kl = self.kl_beta_final
-        if isinstance(kl, list):
-            kl = float(kl[0])
+        if isinstance(kl, (list, tuple)):
+            if len(kl) == 0:
+                msg = "kl_beta_final list is empty."
+                self.logger.error(msg)
+                raise ValueError(msg)
+            kl = kl[0]
+        beta_final = float(kl)
 
-        gma = torch.tensor(self.gamma, device=self.device)
+        gamma_val = self.gamma
+        if isinstance(gamma_val, (list, tuple)):
+            if len(gamma_val) == 0:
+                raise ValueError("gamma list is empty.")
+            gamma_val = gamma_val[0]
+        gamma_final = float(gamma_val)
 
-        gamma_warm, gamma_ramp, gamma_final = 50, 100, gma
-        beta_warm, beta_ramp, beta_final = (
-            int(self.kl_warmup),
-            int(self.kl_ramp),
-            torch.tensor(kl, device=self.device),
-        )
+        gamma_warm, gamma_ramp = 50, 100
+        beta_warm, beta_ramp = int(self.kl_warmup), int(self.kl_ramp)
 
         # Optional LR warmup
-        warmup_epochs = getattr(self, "lr_warmup_epochs", 5)
-        base_lr = optimizer.param_groups[0]["lr"]
+        warmup_epochs = int(getattr(self, "lr_warmup_epochs", 5))
+        base_lr = float(optimizer.param_groups[0]["lr"])
         min_lr = base_lr * 0.1
 
-        # Epoch budget mirrors scheduler.T_max if present
-        max_epochs = getattr(scheduler, "T_max", getattr(self, "epochs", 100))
-
-        init_gamma = torch.tensor(0.0, device=self.device)
-        init_beta = torch.tensor(0.0, device=self.device)
+        max_epochs = int(getattr(scheduler, "T_max", getattr(self, "epochs", 100)))
 
         for epoch in range(max_epochs):
             # focal γ schedule
             if epoch < gamma_warm:
-                model.gamma = init_gamma.numpy().item()
+                model.gamma = 0.0  # type: ignore[attr-defined]
             elif epoch < gamma_warm + gamma_ramp:
-                model.gamma = gamma_final.numpy().item() * (
-                    (epoch - gamma_warm) / gamma_ramp
-                )
+                model.gamma = gamma_final * ((epoch - gamma_warm) / gamma_ramp)  # type: ignore[attr-defined]
             else:
-                model.gamma = gamma_final.numpy().item()
-            # KL β schedule
-            if epoch < beta_warm:
-                model.beta = init_beta.numpy().item()
-            elif epoch < beta_warm + beta_ramp:
-                model.beta = beta_final * ((epoch - beta_warm) / beta_ramp)
-            else:
-                model.beta = beta_final
+                model.gamma = gamma_final  # type: ignore[attr-defined]
 
+            # KL β schedule (float throughout + ramp guard)
+            if epoch < beta_warm:
+                model.beta = 0.0  # type: ignore[attr-defined]
+            elif beta_ramp > 0 and epoch < beta_warm + beta_ramp:
+                model.beta = beta_final * ((epoch - beta_warm) / beta_ramp)  # type: ignore[attr-defined]
+            else:
+                model.beta = beta_final  # type: ignore[attr-defined]
             # LR warmup
             if epoch < warmup_epochs:
                 scale = float(epoch + 1) / warmup_epochs

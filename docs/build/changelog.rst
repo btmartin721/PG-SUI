@@ -4,6 +4,14 @@ Changelog
 
 An overview of changes to **PG-SUI** by release. This file mirrors the GitHub Markdown changelog and reflects the refactor-era docs: dataclass-first configs, presets, unified scikit-learn framework-based ``fit()/transform()`` methods, CLI precedence, and updated deterministic/supervised docs.
 
+1.6.10 - 2025-11-20
+-------------------
+
+Bug Fixes - v1.6.10
+^^^^^^^^^^^^^^^^^^^
+
+- Fixed a bug with GPU training in ImputeVAE and ImputeAutoencoder. This bug was introduced in v1.6.9 where the gamma and beta parameters were incorrectly converted from tensors to numpy arrays in these models and failed only when using GPU. CPU training was unaffected.
+
 1.6.9 - 2025-10-29
 ------------------
 
