@@ -29,10 +29,24 @@ import argparse
 import ast
 import logging
 import sys
+import time
+from functools import wraps
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Literal, Optional, Tuple
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Literal,
+    Optional,
+    ParamSpec,
+    Tuple,
+    TypeVar,
+    cast,
+)
 
-from snpio import GenePopReader, PhylipReader, VCFReader, SNPioMultiQC
+from snpio import GenePopReader, PhylipReader, SNPioMultiQC, VCFReader
 
 from pgsui import (
     AutoencoderConfig,
@@ -73,6 +87,9 @@ SIM_STRATEGY_CHOICES: Tuple[str, ...] = (
     "nonrandom",
     "nonrandom_weighted",
 )
+
+P = ParamSpec("P")
+R = TypeVar("R")
 
 
 # ----------------------------- CLI Utilities ----------------------------- #
@@ -199,6 +216,42 @@ def _args_to_cli_overrides(args: argparse.Namespace) -> dict:
     return overrides
 
 
+def _format_seconds(seconds: float) -> str:
+    total = int(round(seconds))
+    minutes, secs = divmod(total, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours:d}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:d}:{secs:02d}"
+
+
+def log_model_time(fn: Callable[P, R]) -> Callable[P, R]:
+    """Decorator to time run_model_safely; assumes model_name is first arg."""
+
+    @wraps(fn)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+        model_name = str(args[0]) if args else "<unknown model>"
+        start = time.perf_counter()
+        try:
+            result = fn(*args, **kwargs)
+        except Exception:
+            elapsed = time.perf_counter() - start
+            logging.error(
+                f"{model_name} failed after {elapsed:0.2f}s "
+                f"({_format_seconds(elapsed)}).",
+                exc_info=True,
+            )
+            raise
+        elapsed = time.perf_counter() - start
+        logging.info(
+            f"{model_name} finished in {elapsed:0.2f}s "
+            f"({_format_seconds(elapsed)})."
+        )
+        return result
+
+    return cast(Callable[P, R], wrapper)
+
+
 # ------------------------------ Core Runner ------------------------------ #
 def build_genotype_data(
     input_path: str,
@@ -235,6 +288,7 @@ def build_genotype_data(
     return gd
 
 
+@log_model_time
 def run_model_safely(model_name: str, builder, *, warn_only: bool = True) -> None:
     """Run model builder + fit/transform with error isolation."""
     logging.info(f"▶ Running {model_name} ...")
