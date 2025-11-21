@@ -626,29 +626,36 @@ class ImputeAutoencoder(BaseNNImputer):
             debug=self.debug,
         )
 
-        warm, ramp, gamma_final = 50, 100, torch.tensor(self.gamma, device=self.device)
+        gamma_val = self.gamma
+        if isinstance(gamma_val, (list, tuple)):
+            if len(gamma_val) == 0:
+                raise ValueError("gamma list is empty.")
+            gamma_val = gamma_val[0]
 
-        # Optional: linear LR warmup for first N epochs
-        lr0 = optimizer.param_groups[0]["lr"]
-        warmup_epochs = getattr(self, "lr_warmup_epochs", 5)
-        min_lr = lr0 * 0.1  # start at 10% of target LR
+        gamma_final = float(gamma_val)
+        gamma_warm, gamma_ramp = 50, 100
 
-        for epoch in range(scheduler.T_max):
-            # Gamma warm/ramp
-            if epoch < warm:
-                model.gamma = torch.tensor(0.0, device=self.device)
-            elif epoch < warm + ramp:
-                model.gamma = torch.tensor(
-                    gamma_final.item() * ((epoch - warm) / ramp), device=self.device
-                )
+        # Optional LR warmup
+        warmup_epochs = int(getattr(self, "lr_warmup_epochs", 5))
+        base_lr = float(optimizer.param_groups[0]["lr"])
+        min_lr = base_lr * 0.1
+
+        max_epochs = int(getattr(scheduler, "T_max", getattr(self, "epochs", 100)))
+
+        for epoch in range(max_epochs):
+            # focal γ schedule (for stable training)
+            if epoch < gamma_warm:
+                model.gamma = 0.0  # type: ignore
+            elif epoch < gamma_warm + gamma_ramp:
+                model.gamma = gamma_final * ((epoch - gamma_warm) / gamma_ramp)  # type: ignore
             else:
-                model.gamma = gamma_final
+                model.gamma = gamma_final  # type: ignore
 
-            # LR warmup before stepping the main scheduler
+            # LR warmup
             if epoch < warmup_epochs:
-                new_lr = min_lr + (lr0 - min_lr) * (epoch + 1) / warmup_epochs
+                scale = float(epoch + 1) / warmup_epochs
                 for g in optimizer.param_groups:
-                    g["lr"] = new_lr
+                    g["lr"] = min_lr + (base_lr - min_lr) * scale
 
             train_loss = self._train_step(
                 loader=loader,
