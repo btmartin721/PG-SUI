@@ -768,9 +768,9 @@ class ImputeUBP(BaseNNImputer):
                 prune_warmup_epochs=5,
                 eval_interval=1,
                 eval_requires_latents=True,
-                eval_latent_steps=50,
-                eval_latent_lr=params["lr"] * params["lr_input_factor"],
-                eval_latent_weight_decay=0.0,
+                eval_latent_steps=self.eval_latent_steps,
+                eval_latent_lr=self.eval_latent_lr,
+                eval_latent_weight_decay=self.eval_latent_weight_decay,
             )
 
             eval_mask = (
@@ -1054,9 +1054,9 @@ class ImputeUBP(BaseNNImputer):
             prune_warmup_epochs=5,
             eval_interval=1,
             eval_requires_latents=True,
-            eval_latent_steps=50,
-            eval_latent_lr=self.learning_rate * self.lr_input_factor,
-            eval_latent_weight_decay=0.0,
+            eval_latent_steps=self.eval_latent_steps,
+            eval_latent_lr=self.eval_latent_lr,
+            eval_latent_weight_decay=self.eval_latent_weight_decay,
         )
 
         if trained_model is None:
@@ -1254,7 +1254,7 @@ class ImputeUBP(BaseNNImputer):
                         latent_steps=eval_latent_steps,
                         latent_lr=eval_latent_lr,
                         latent_weight_decay=eval_latent_weight_decay,
-                        latent_seed=(self.seed if self.seed is not None else 123),
+                        latent_seed=self.seed,  # type: ignore
                         _latent_cache=_latent_cache,
                         _latent_cache_key=schema_key,
                         eval_mask_override=mask_override,
