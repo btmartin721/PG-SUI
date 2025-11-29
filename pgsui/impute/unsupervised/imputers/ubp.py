@@ -1,5 +1,5 @@
 import copy
-from typing import TYPE_CHECKING, Any, Dict, Literal, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
 
 import numpy as np
 import optuna
@@ -22,6 +22,7 @@ from pgsui.utils.logging_utils import configure_logger
 from pgsui.utils.pretty_metrics import PrettyMetrics
 
 if TYPE_CHECKING:
+    from snpio import TreeParser
     from snpio.read_input.genotype_data import GenotypeData
 
 
@@ -84,6 +85,7 @@ class ImputeUBP(BaseNNImputer):
         self,
         genotype_data: "GenotypeData",
         *,
+        tree_parser: Optional["TreeParser"] = None,
         config: UBPConfig | dict | str | None = None,
         overrides: dict | None = None,
         simulate_missing: bool | None = None,
@@ -106,11 +108,17 @@ class ImputeUBP(BaseNNImputer):
 
         Args:
             genotype_data (GenotypeData): Backing genotype data object.
+            tree_parser: "TreeParser" | None = None, Optional SNPio phylogenetic tree parser for nonrandom sim_strategy modes.
             config (UBPConfig | dict | str | None): UBP configuration.
             overrides (dict | None): Flat dot-key overrides applied after `config`.
+            simulate_missing (bool | None): Whether to simulate missing data during training.
+            sim_strategy (Literal[...] | None): Simulated missing strategy if simulating.
+            sim_prop (float | None): Proportion of data to simulate as missing if simulating.
+            sim_kwargs (dict | None): Additional kwargs for SimMissingTransformer.
         """
         self.model_name = "ImputeUBP"
         self.genotype_data = genotype_data
+        self.tree_parser = tree_parser
 
         # ---- normalize config, then apply overrides ----
         cfg = ensure_ubp_config(config)
@@ -240,6 +248,11 @@ class ImputeUBP(BaseNNImputer):
         self.sim_mask_train_: np.ndarray | None = None
         self.sim_mask_test_: np.ndarray | None = None
 
+        if self.tree_parser is None and self.sim_strategy.startswith("nonrandom"):
+            msg = "tree_parser is required for nonrandom and nonrandom_weighted simulated missing strategies."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
     def fit(self) -> "ImputeUBP":
         """Fit the UBP decoder on 0/1/2 encodings (missing = -1) via three phases.
 
@@ -271,6 +284,7 @@ class ImputeUBP(BaseNNImputer):
             else:
                 tr = SimMissingTransformer(
                     genotype_data=self.genotype_data,
+                    tree_parser=self.tree_parser,
                     prop_missing=self.sim_prop,
                     strategy=self.sim_strategy,
                     missing_val=-9,
@@ -491,27 +505,20 @@ class ImputeUBP(BaseNNImputer):
 
             loss.backward()
 
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            torch.nn.utils.clip_grad_norm_([latent_vectors], 1.0)
+            # Clip returns the Total Norm
+            model_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            latent_norm = torch.nn.utils.clip_grad_norm_([latent_vectors], 1.0)
 
             # Skip update on non-finite grads
-            def _bad_grads():
-                for p in model.parameters():
-                    if p.grad is not None and not torch.isfinite(p.grad).all():
-                        return True
-                return (
-                    latent_vectors.grad is not None
-                    and not torch.isfinite(latent_vectors.grad).all()
-                )
-
-            if _bad_grads():
+            # Check norms instead of iterating all parameters
+            if torch.isfinite(model_norm) and torch.isfinite(latent_norm):
+                optimizer.step()
+                if phase != 2:
+                    latent_optimizer.step()
+            else:
+                # Logic to handle bad grads (zero out, skip, etc)
                 optimizer.zero_grad(set_to_none=True)
                 latent_optimizer.zero_grad(set_to_none=True)
-                continue
-
-            optimizer.step()
-            if phase != 2:  # phase 2: decoder-only
-                latent_optimizer.step()
 
             running += float(loss.detach().item())
             used += 1
@@ -519,7 +526,9 @@ class ImputeUBP(BaseNNImputer):
         return (running / used if used > 0 else float("inf")), latent_vectors
 
     def _predict(
-        self, model: torch.nn.Module, latent_vectors: torch.nn.Parameter | None = None
+        self,
+        model: torch.nn.Module,
+        latent_vectors: Optional[torch.nn.Parameter | torch.Tensor] = None,
     ) -> Tuple[np.ndarray, np.ndarray]:
         """Predict 0/1/2 labels & probabilities from latents via phase23 decoder. This method requires a trained model and latent vectors.
 
@@ -563,19 +572,20 @@ class ImputeUBP(BaseNNImputer):
         *,
         eval_mask_override: np.ndarray | None = None,
     ) -> Dict[str, float]:
-        """Evaluate on held-out set with 0/1/2 classes; also IUPAC/10-base reports.
+        """Evaluates the model on a validation set.
 
-        This method evaluates the trained UBP model on a held-out validation set. It optimizes latent vectors for the validation data if they are not provided, predicts 0/1/2 labels and probabilities, and computes various performance metrics. If not in objective mode, it generates detailed classification reports and confusion matrices for both 0/1/2 genotypes and their IUPAC/10-base representations. The method returns a dictionary of evaluation metrics.
+        This method evaluates the trained UBP model on a validation dataset by optimizing latent vectors for the validation samples, predicting genotypes, and computing various performance metrics. It can operate in an objective mode that suppresses logging for automated evaluations.
 
         Args:
-            X_val (np.ndarray): 0/1/2 with -1 for missing.
-            model (torch.nn.Module): Trained model.
-            params (dict): Model params.
-            objective_mode (bool): If True, return only tuned metric.
-            latent_vectors_val (torch.Tensor | None): Optional pre-optimized latents.
+            X_val (np.ndarray): Validation data in 0/1/2 encoding with -1 for missing.
+            model (torch.nn.Module): Trained UBP model.
+            params (dict): Model parameters.
+            objective_mode (bool): If True, suppresses logging and reports only the metric.
+            latent_vectors_val (torch.Tensor | None): Pre-optimized latent vectors for validation data.
+            eval_mask_override (np.ndarray | None): Boolean mask to specify which entries to evaluate.
 
         Returns:
-            Metrics dict.
+            Dict[str, float]: Dictionary of evaluation metrics.
         """
         if latent_vectors_val is not None:
             test_latent_vectors = latent_vectors_val
@@ -584,55 +594,55 @@ class ImputeUBP(BaseNNImputer):
                 X_val, model, params
             )
 
-        if not isinstance(test_latent_vectors, torch.nn.Parameter):
-            test_latent_vectors = torch.nn.Parameter(
-                test_latent_vectors, requires_grad=False
-            )
-
         pred_labels, pred_probas = self._predict(
             model=model, latent_vectors=test_latent_vectors
         )
 
-        if (
-            hasattr(self, "X_test_")
-            and getattr(self, "X_test_", None) is not None
-            and X_val.shape == self.X_test_.shape
-        ):
-            GT_ref = getattr(self, "GT_test_full_", self.ground_truth_)
-        elif (
-            hasattr(self, "X_train_")
-            and getattr(self, "X_train_", None) is not None
-            and X_val.shape == self.X_train_.shape
-        ):
-            GT_ref = getattr(self, "GT_train_full_", self.ground_truth_)
-        else:
-            GT_ref = self.ground_truth_
-
-        if GT_ref.shape != X_val.shape:
-            GT_ref = X_val
-
         if eval_mask_override is not None:
-            if eval_mask_override.shape != X_val.shape:
+            # Validate row counts to allow feature subsetting during tuning
+            if eval_mask_override.shape[0] != X_val.shape[0]:
                 msg = (
-                    f"eval_mask_override shape {eval_mask_override.shape} "
-                    f"does not match X_val shape {X_val.shape}"
+                    f"eval_mask_override rows {eval_mask_override.shape[0]} "
+                    f"does not match X_val rows {X_val.shape[0]}"
                 )
                 self.logger.error(msg)
                 raise ValueError(msg)
-            eval_mask = eval_mask_override.astype(bool)
+
+            # FIX: Slice mask columns if override is wider than current X_val (tune_fast)
+            if eval_mask_override.shape[1] > X_val.shape[1]:
+                eval_mask = eval_mask_override[:, : X_val.shape[1]].astype(bool)
+            else:
+                eval_mask = eval_mask_override.astype(bool)
         else:
+            # Default: score only observed entries
             eval_mask = X_val != -1
 
-        finite_mask = np.all(np.isfinite(pred_probas), axis=-1)
-        eval_mask = eval_mask & finite_mask & (GT_ref != -1)
+        # y_true should be drawn from the pre-mask ground truth
+        # Map X_val back to the correct full ground truth slice
+        # FIX: Check shape[0] (n_samples) only.
+        if X_val.shape[0] == self.X_test_.shape[0]:
+            GT_ref = self.GT_test_full_
+        elif X_val.shape[0] == self.X_train_.shape[0]:
+            GT_ref = self.GT_train_full_
+        else:
+            GT_ref = self.ground_truth_
+
+        # FIX: Slice Ground Truth columns if it is wider than X_val (tune_fast)
+        if GT_ref.shape[1] > X_val.shape[1]:
+            GT_ref = GT_ref[:, : X_val.shape[1]]
+
+        # Fallback safeguard
+        if GT_ref.shape != X_val.shape:
+            GT_ref = X_val
 
         y_true_flat = GT_ref[eval_mask]
-        y_pred_flat = pred_labels[eval_mask]
-        y_proba_flat = pred_probas[eval_mask]
+        pred_labels_flat = pred_labels[eval_mask]
+        pred_probas_flat = pred_probas[eval_mask]
 
         if y_true_flat.size == 0:
             return {self.tune_metric: 0.0}
 
+        # For haploids, remap class 2 to 1 for scoring (e.g., f1-score)
         labels_for_scoring = [0, 1] if self.is_haploid else [0, 1, 2]
         target_names = ["REF", "ALT"] if self.is_haploid else ["REF", "HET", "ALT"]
 
@@ -640,9 +650,9 @@ class ImputeUBP(BaseNNImputer):
 
         metrics = self.scorers_.evaluate(
             y_true_flat,
-            y_pred_flat,
+            pred_labels_flat,
             y_true_ohe,
-            y_proba_flat,
+            pred_probas_flat,
             objective_mode,
             self.tune_metric,
         )
@@ -655,21 +665,23 @@ class ImputeUBP(BaseNNImputer):
 
             self._make_class_reports(
                 y_true=y_true_flat,
-                y_pred_proba=y_proba_flat,
-                y_pred=y_pred_flat,
+                y_pred_proba=pred_probas_flat,
+                y_pred=pred_labels_flat,
                 metrics=metrics,
                 labels=target_names,
             )
 
-            # IUPAC / 10-base auxiliary reports
+            # FIX: Use X_val dimensions for reshaping, not self.num_features_
             y_true_dec = self.pgenc.decode_012(
                 GT_ref.reshape(X_val.shape[0], X_val.shape[1])
             )
-            X_pred = X_val.copy()
-            X_pred[eval_mask] = y_pred_flat
 
-            nF_eval = X_val.shape[1]
-            y_pred_dec = self.pgenc.decode_012(X_pred.reshape(X_val.shape[0], nF_eval))
+            X_pred = X_val.copy()
+            X_pred[eval_mask] = pred_labels_flat
+
+            y_pred_dec = self.pgenc.decode_012(
+                X_pred.reshape(X_val.shape[0], X_val.shape[1])
+            )
 
             encodings_dict = {
                 "A": 0,
@@ -684,6 +696,7 @@ class ImputeUBP(BaseNNImputer):
                 "S": 9,
                 "N": -1,
             }
+
             y_true_int = self.pgenc.convert_int_iupac(
                 y_true_dec, encodings_dict=encodings_dict
             )
@@ -691,18 +704,27 @@ class ImputeUBP(BaseNNImputer):
                 y_pred_dec, encodings_dict=encodings_dict
             )
 
-            valid_iupac_mask = y_true_int[eval_mask] >= 0
-            if valid_iupac_mask.any():
+            # For IUPAC report
+            valid_true = y_true_int[eval_mask]
+            valid_true = valid_true[valid_true >= 0]  # drop -1 (N)
+            iupac_label_set = ["A", "C", "G", "T", "W", "R", "M", "K", "Y", "S"]
+
+            # For numeric report
+            if (
+                np.intersect1d(np.unique(y_true_flat), labels_for_scoring).size == 0
+                or valid_true.size == 0
+            ):
+                if not objective_mode:
+                    self.logger.warning(
+                        "Skipped numeric confusion matrix: no y_true labels present."
+                    )
+            else:
                 self._make_class_reports(
-                    y_true=y_true_int[eval_mask][valid_iupac_mask],
-                    y_pred=y_pred_int[eval_mask][valid_iupac_mask],
+                    y_true=valid_true,
+                    y_pred=y_pred_int[eval_mask][y_true_int[eval_mask] >= 0],
                     metrics=metrics,
                     y_pred_proba=None,
-                    labels=["A", "C", "G", "T", "W", "R", "M", "K", "Y", "S"],
-                )
-            else:
-                self.logger.warning(
-                    "Skipped IUPAC confusion matrix: No valid ground truths."
+                    labels=iupac_label_set,
                 )
 
         return metrics
