@@ -32,6 +32,7 @@ from pgsui.utils.pretty_metrics import PrettyMetrics
 
 # Type checking imports
 if TYPE_CHECKING:
+    from snpio import TreeParser
     from snpio.read_input.genotype_data import GenotypeData
 
 
@@ -84,6 +85,7 @@ class ImputeMostFrequent:
         self,
         genotype_data: "GenotypeData",
         *,
+        tree_parser: Optional["TreeParser"] = None,
         config: Optional[Union[MostFrequentConfig, dict, str]] = None,
         overrides: Optional[dict] = None,
         simulate_missing: bool = True,
@@ -103,6 +105,7 @@ class ImputeMostFrequent:
 
         Args:
             genotype_data (GenotypeData): Backing genotype data.
+            tree_parser (TreeParser | None): Optional SNPio phylogenetic tree parser for nonrandom sim_strategy modes.
             config (MostFrequentConfig | dict | str | None): Configuration as a dataclass,
                 nested dict, or YAML path. If None, defaults are used.
             overrides (dict | None): Flat dot-key overrides applied last with highest precedence, e.g. {'algo.by_populations': True, 'split.test_size': 0.3}.
@@ -124,6 +127,7 @@ class ImputeMostFrequent:
 
         # Basic fields
         self.genotype_data = genotype_data
+        self.tree_parser = tree_parser
         self.prefix = cfg.io.prefix
         self.verbose = cfg.io.verbose
         self.debug = cfg.io.debug
@@ -147,7 +151,12 @@ class ImputeMostFrequent:
         self.encoder = GenotypeEncoder(self.genotype_data)
 
         # Work in 0/1/2 with -1 for missing (parity with DL modules)
-        X012 = self.encoder.genotypes_012.astype(np.int16, copy=True)
+        X012 = self.encoder.genotypes_012.astype(np.int16, copy=False)
+
+        # 2. In-place replacement of NaNs
+        # NOTE: X012 will be consumed to make ground_truth_
+        np.nan_to_num(X012, nan=-1.0, copy=False)
+
         X012[X012 < 0] = -1
         self.X012_ = X012
         self.num_features_ = X012.shape[1]
@@ -252,6 +261,11 @@ class ImputeMostFrequent:
         dirs = ["models", "plots", "metrics", "optimize", "parameters"]
         self._create_model_directories(self.prefix, dirs)
 
+        if self.tree_parser is None and self.sim_strategy.startswith("nonrandom"):
+            msg = "tree_parser is required for nonrandom and nonrandom_weighted simulated missing strategies."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
     def fit(self) -> "ImputeMostFrequent":
         """Learn per-locus modes on TRAIN rows; mask simulated cells on TEST rows.
 
@@ -299,6 +313,7 @@ class ImputeMostFrequent:
             # Use the same transformer as VAE
             tr = SimMissingTransformer(
                 genotype_data=self.genotype_data,
+                tree_parser=self.tree_parser,
                 prop_missing=self.sim_prop,
                 strategy=self.sim_strategy,
                 missing_val=-9,
