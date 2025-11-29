@@ -24,6 +24,7 @@ from pgsui.utils.logging_utils import configure_logger
 from pgsui.utils.pretty_metrics import PrettyMetrics
 
 if TYPE_CHECKING:
+    from snpio import TreeParser
     from snpio.read_input.genotype_data import GenotypeData
 
 
@@ -75,6 +76,7 @@ class ImputeVAE(BaseNNImputer):
         self,
         genotype_data: "GenotypeData",
         *,
+        tree_parser: Optional["TreeParser"] = None,
         config: Optional[Union["VAEConfig", dict, str]] = None,
         overrides: dict | None = None,
         simulate_missing: bool | None = None,
@@ -97,11 +99,17 @@ class ImputeVAE(BaseNNImputer):
 
         Args:
             genotype_data (GenotypeData): Backing genotype data object.
+            tree_parser (TreeParser | None): Optional SNPio phylogenetic tree parser for nonrandom sim_strategy modes.
             config (Union[VAEConfig, dict, str, None]): VAEConfig, nested dict, YAML path, or None (defaults).
             overrides (dict | None): Optional dot-key overrides with highest precedence.
+            simulate_missing (bool | None): Whether to simulate missing data during training.
+            sim_strategy (Literal[...] | None): Simulated missing strategy if simulating.
+            sim_prop (float | None): Proportion of data to simulate as missing if simulating.
+            sim_kwargs (dict | None): Additional kwargs for SimMissingTransformer.
         """
         self.model_name = "ImputeVAE"
         self.genotype_data = genotype_data
+        self.tree_parser = tree_parser
 
         # Normalize configuration and apply top-precedence overrides
         cfg = ensure_vae_config(config)
@@ -228,6 +236,11 @@ class ImputeVAE(BaseNNImputer):
         self.sim_mask_train_: np.ndarray | None = None
         self.sim_mask_test_: np.ndarray | None = None
 
+        if self.tree_parser is None and self.sim_strategy.startswith("nonrandom"):
+            msg = "tree_parser is required for nonrandom and nonrandom_weighted simulated missing strategies."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
     # -------------------- Fit -------------------- #
     def fit(self) -> "ImputeVAE":
         """Fit the VAE on 0/1/2 encoded genotypes (missing -> -1).
@@ -258,6 +271,7 @@ class ImputeVAE(BaseNNImputer):
             else:
                 tr = SimMissingTransformer(
                     genotype_data=self.genotype_data,
+                    tree_parser=self.tree_parser,
                     prop_missing=self.sim_prop,
                     strategy=self.sim_strategy,
                     missing_val=-9,
@@ -862,6 +876,7 @@ class ImputeVAE(BaseNNImputer):
             params (dict): Current hyperparameters (for logging).
             objective_mode (bool): If True, minimize logging for Optuna.
             latent_vectors_val (np.ndarray | None): Not used by VAE.
+            eval_mask_override (np.ndarray | None): Optional mask to override default eval mask.
 
         Returns:
             Dict[str, float]: Computed metrics.
@@ -875,33 +890,45 @@ class ImputeVAE(BaseNNImputer):
 
         finite_mask = np.all(np.isfinite(pred_probas), axis=-1)  # (N, L)
 
+        # FIX 1: Match rows (shape[0]) only to allow feature subsets (tune_fast)
         if (
             hasattr(self, "X_val_")
             and getattr(self, "X_val_", None) is not None
-            and X_val.shape == self.X_val_.shape
+            and X_val.shape[0] == self.X_val_.shape[0]
         ):
             GT_ref = getattr(self, "GT_test_full_", self.ground_truth_)
         elif (
             hasattr(self, "X_train_")
             and getattr(self, "X_train_", None) is not None
-            and X_val.shape == self.X_train_.shape
+            and X_val.shape[0] == self.X_train_.shape[0]
         ):
             GT_ref = getattr(self, "GT_train_full_", self.ground_truth_)
         else:
             GT_ref = self.ground_truth_
 
+        # FIX 2: Handle Feature Mismatch
+        # If GT has more columns than X_val, slice it to match.
+        if GT_ref.shape[1] > X_val.shape[1]:
+            GT_ref = GT_ref[:, : X_val.shape[1]]
+
+        # Fallback safeguard
         if GT_ref.shape != X_val.shape:
             GT_ref = X_val
 
+        # FIX 3: Allow override mask to be sliced if it's too wide
         if eval_mask_override is not None:
-            if eval_mask_override.shape != X_val.shape:
+            if eval_mask_override.shape[0] != X_val.shape[0]:
                 msg = (
-                    f"eval_mask_override shape {eval_mask_override.shape} "
-                    f"does not match X_val shape {X_val.shape}"
+                    f"eval_mask_override rows {eval_mask_override.shape[0]} "
+                    f"does not match X_val rows {X_val.shape[0]}"
                 )
                 self.logger.error(msg)
                 raise ValueError(msg)
-            eval_mask = eval_mask_override.astype(bool)
+
+            if eval_mask_override.shape[1] > X_val.shape[1]:
+                eval_mask = eval_mask_override[:, : X_val.shape[1]].astype(bool)
+            else:
+                eval_mask = eval_mask_override.astype(bool)
         else:
             eval_mask = X_val != -1
 
@@ -960,13 +987,14 @@ class ImputeVAE(BaseNNImputer):
             )
 
             # IUPAC decode & 10-base integer report
+            # FIX 4: Use current shape (X_val.shape) not self.num_features_
             y_true_dec = self.pgenc.decode_012(
                 GT_ref.reshape(X_val.shape[0], X_val.shape[1])
             )
             X_pred = X_val.copy()
             X_pred[eval_mask] = y_pred_flat
             y_pred_dec = self.pgenc.decode_012(
-                X_pred.reshape(X_val.shape[0], self.num_features_)
+                X_pred.reshape(X_val.shape[0], X_val.shape[1])
             )
 
             encodings_dict = {
