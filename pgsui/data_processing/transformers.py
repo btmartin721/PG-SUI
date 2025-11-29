@@ -2,19 +2,16 @@
 import copy
 import logging
 from pathlib import Path
-from typing import Literal, Tuple
+from typing import TYPE_CHECKING, Literal, Optional, Tuple
 
 # Third-party imports
 import numpy as np
 from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.metrics import (
-    average_precision_score,
-    precision_recall_fscore_support,
-    roc_auc_score,
-)
-from sklearn.preprocessing import label_binarize
 
 from pgsui.utils.misc import validate_input_type
+
+if TYPE_CHECKING:
+    from snpio import TreeParser
 
 
 class SimGenotypeDataTransformer:
@@ -220,6 +217,7 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
         self,
         genotype_data,
         *,
+        tree_parser: Optional["TreeParser"] = None,
         prop_missing=0.1,
         strategy="random",
         missing_val=-9,
@@ -230,6 +228,7 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
         logger: logging.Logger | None = None,
     ) -> None:
         self.genotype_data = genotype_data
+        self.tree_parser = tree_parser
         self.prop_missing = prop_missing
         self.strategy = strategy
         self.missing_val = missing_val
@@ -297,7 +296,7 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
                 self.logger.error(msg)
                 raise ValueError(msg)
 
-            if self.genotype_data.tree is None:
+            if self.tree_parser is None or not hasattr(self.tree_parser, "tree"):
                 msg = "SimMissingTransformer.tree cannot be NoneType when strategy='nonrandom' or strategy='nonrandom_weighted'"
                 self.logger.error(msg)
                 raise TypeError(msg)
@@ -588,16 +587,21 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
 
         node_dict: dict[int | object, float] = {}
 
+        if self.tree_parser is None or not hasattr(self.tree_parser, "tree"):
+            msg = "SimMissingTransformer.tree cannot be NoneType when strategy='nonrandom' or strategy='nonrandom_weighted'"
+            self.logger.error(msg)
+            raise TypeError(msg)
+
         # Traverse using the tree backend you have; be tolerant of API differences.
-        for node in self.genotype_data.tree.treenode.traverse("preorder"):
+        for node in self.tree_parser.tree.treenode.traverse("preorder"):
             # Robust root detection: prefer is_root(), then fall back to parent None, finally fall back to idx==nnodes-1 only if needed.
             is_root = False
             if hasattr(node, "is_root"):
                 is_root = bool(node.is_root())
             elif getattr(node, "up", None) is None:
                 is_root = True
-            elif hasattr(self.genotype_data.tree, "nnodes") and hasattr(node, "idx"):
-                is_root = node.idx == self.genotype_data.tree.nnodes - 1
+            elif hasattr(self.tree_parser.tree, "nnodes") and hasattr(node, "idx"):
+                is_root = node.idx == self.tree_parser.tree.nnodes - 1
 
             if skip_root and is_root:
                 continue
@@ -617,7 +621,9 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
             node_dict[key] = dist
 
         if not node_dict:
-            raise ValueError("No eligible nodes found to sample from the tree.")
+            msg = "No eligible nodes found to sample from the tree."
+            self.logger.error(msg)
+            raise ValueError(msg)
 
         # Choose a node
         if weighted:
@@ -633,33 +639,40 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
         else:
             chosen_key = rng.choice(np.array(list(node_dict.keys()), dtype=object))
 
-        # Retrieve descendant tips for the chosen node
-        if hasattr(self.genotype_data.tree, "get_tip_labels"):
-            # If API expects idx, pass idx; if not, pass the key as needed.
-            if isinstance(chosen_key, (int, np.integer)):
-                tips = self.genotype_data.tree.get_tip_labels(idx=int(chosen_key))
-            else:
-                # Fallback if your API can accept a node object
-                tips = self.genotype_data.tree.get_tip_labels(node=chosen_key)
+        tree = self.tree_parser.tree
+
+        # 1. Resolve chosen_key to a Node object
+        if isinstance(chosen_key, (int, np.integer)):
+            # ToyTree supports direct indexing: tree[idx] returns the Node object
+            try:
+                node = tree[int(chosen_key)]
+            except IndexError:
+                msg = f"Node index {chosen_key} not found in tree."
+                self.logger.error(msg)
+                raise ValueError(msg)
         else:
-            # Generic fallback: walk leaves from a node handle
-            node = chosen_key if not isinstance(chosen_key, (int, np.integer)) else None
-            if node is None:
-                # If only idx is available, you need a resolver from idx -> node
-                # Provide a resolver in your tree wrapper if this path can happen.
-                raise ValueError(
-                    "Tree API lacks get_tip_labels and node handle resolution by idx."
-                )
-            tips = [t.name for t in node.iter_leaves()]
+            # Assume chosen_key is already a Node object
+            node = chosen_key
+
+        # 2. Retrieve leaves for this specific node
+        # .get_leaves() returns a list of Node objects representing the tips
+        if hasattr(node, "get_leaves"):
+            tips = [leaf.name for leaf in node.get_leaves()]
+        else:
+            # Fallback if the object passed isn't a valid ToyTree Node
+            msg = f"Object {type(node)} does not have a get_leaves method."
+            self.logger.error(msg)
+            raise TypeError(msg)
 
         # Filter to sample IDs present in the matrix
         sample_set = set(self.genotype_data.samples)
         tips = [t for t in tips if t in sample_set]
+
         if not tips:
-            # You may want to resample instead of erroring; here we error to avoid silent empties.
-            raise ValueError(
-                "Sampled clade contains no tips present in genotype_data.samples."
-            )
+            # TODO: resample instead of erroring;  here we error to avoid silent empties.
+            msg = "Sampled clade contains no tips present in genotype_data.samples."
+            self.logger.error(msg)
+            raise ValueError(msg)
 
         return tips
 

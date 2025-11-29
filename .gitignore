@@ -1,160 +1,195 @@
-# Byte-compiled / optimized / DLL files
+# ======================================================
+# Python: bytecode / caches / compiled artifacts
+# ======================================================
 __pycache__/
 *.py[cod]
 *$py.class
-
-# C extensions
 *.so
 
-# Distribution / packaging
+# ======================================================
+# Python: packaging / build artifacts
+# ======================================================
 .Python
 *.egg-info/
 *.egg
 dist/
-*.whl
+build/
 build/lib/
-html/
-*.doctree
-doctrees/
-*_build/
+*.whl
+*.manifest
+*.spec
+_version.py
 
-# Jupyter Notebook
-.ipynb_checkpoints/
+# ======================================================
+# Python: virtual environments
+# ======================================================
+.venv/
+.venv-test-docker/
 
-# Pyre type checker
-.pyre/
-
-# mypy
+# ======================================================
+# Python: type checkers
+# ======================================================
 .mypy_cache/
 dmypy.json
 dmypy.log
+.pyre/
+.pytype/
 
-# PyTorch
-*.pt
-*.pth
-
-# Pytest
+# ======================================================
+# Python: testing / coverage
+# ======================================================
 .cache/
-
-# PyCharm
-.idea/
-
-# PyInstaller
-*.manifest
-*.spec
-
-# Unit test / coverage reports
+.pytest_cache/
 htmlcov/
 .tox/
 .nox/
 .coverage
 .coverage.*
-.cache
 nosetests.xml
 coverage.xml
 *.cover
 *.py,cover
 .hypothesis/
+old_tests/
+test_output/
 
-# Translations
-*.mo
-*.pot
+# ======================================================
+# Python / ML frameworks
+# ======================================================
+*.pt
+*.pth
 
-# Django stuff:
+# ======================================================
+# Notebooks / interactive environments
+# ======================================================
+.ipynb_checkpoints/
+profile_default/
+ipython_config.py
+
+# ======================================================
+# Documentation / site builds
+# ======================================================
+# Sphinx
+docs/_build/
+docs/build/_build/
+pgsui/docs/_build/
+**/doctrees/
+*.doctree
+doctrees/
+*_build/
+.buildinfo
+
+# mkdocs
+/site
+
+# Other doc/html outputs
+html/
+*.html
+
+# ======================================================
+# Web / Node / Electron
+# ======================================================
+**/node_modules/
+pgsui/electron/app/dist/
+pgsui_electron_logs/
+.codex/
+
+# ======================================================
+# IDEs / editors
+# ======================================================
+.idea/
+.spyderproject
+.spyproject
+.ropeproject
+
+# ======================================================
+# OS / misc
+# ======================================================
+.DS_Store
 *.log
+*.zip
+
+# ======================================================
+# Framework-specific leftovers (kept from template)
+# ======================================================
+# Django
 local_settings.py
 db.sqlite3
 
-# Flask stuff:
+# Flask
 instance/
 .webassets-cache
 
-# Scrapy stuff:
+# Scrapy
 .scrapy
-
-# Sphinx documentation
-docs/_build/
-pgsui/docs/_build/
 
 # PyBuilder
 target/
 
-# Jupyter Notebook
-.ipynb_checkpoints/
-
-# IPython
-profile_default/
-ipython_config.py
-
-# Spyder project settings
-.spyderproject
-.spyproject
-
-# Rope project settings
-.ropeproject
-
-# mkdocs documentation
-/site
-
-# mypy
-.mypy_cache/
-dmypy.json
-dmypy.log
-
-# Pyre type checker
-.pyre/
-
-# pytype static type analyzer
-.pytype/
-
-# Cython debug symbols
-cython_debug/
-
-# Custom
+# ======================================================
+# Project-specific outputs
+# ======================================================
 pgsui_output/
 snpio_output/
+pgsui_*_output/
 autoencoder_*_output/
-*.zip
-*.html
-DEPRECATED*.py
-.DS_Store
-BOX_concat_goodOnly_N214.nex
-box_scf.cf.tree
-partitioned_all.contree
-partitioned_all.iqtree
-docs/build/_build/doctrees/environment.pickle
-docs/build/_build/doctrees/pgsui.data_processing.doctree
-**/doctrees/
-.buildinfo
+snpio_simulated_unlinked_output/
+sim_unlinked_output/
+sim_results/
+sim_results/*
+summarize/
+simulation/
+simulation/*
+sim_results/
+*14K.vcf_output/
+
+# Training / data folders
 ./training_data/
 .training_data.nosync/
 training_data_2
-pgsui_*_output/
-summarize/
-old_tests/
-pgsui_output/
-*14K.vcf_output/
-.venv/
-**/node_modules/
-.codex/
 training_data_2*
-pgsui/electron/app/dist/
-_version.py
-snpio_simulated_unlinked_output/
-simulation/
-simulation/*
-sim_unlinked_output/
-pgsui_electron_logs/
+
+# Other tool outputs / one-offs
+monomorphic_sites_mqc.txt
+vcf_attributes.h5
+dnasp_summary_plots.cleaned.csv
+
+# ======================================================
+# Project-specific files to ignore (one-off inputs/trees)
+# ======================================================
+DEPRECATED*.py
+BOX.vcf
+BOX2.vcf
+BOX_concat_goodOnly_N214.nex
 BOX_phylogen_dataset_output/
-.venv-test-docker/
-sim_results/
+box_scf.cf.tree
+partitioned_all.contree
+partitioned_all.iqtree
 coala_sims.R
 sim_treeparams.py
 simulate_rad.py
 simulate_wgs.py
-dnasp_summary_plots.cleaned.csv
-test_output/
-BOX.vcf
-BOX2.vcf
-vcf_attributes.h5
-monomorphic_sites_mqc.txt
+summarize_results.zsh
+run_sumstats.zsh
+run_52.zsh
+training_data/
+validation_inputs/
+validation_inputs_phylip/
+validation_inputs_phylip_max150k/
+validation_inputs.tar
+iqtree_results/
+iqtree_results_GTR/
+subset_distributions.png
+subset_dimensions.csv
+subset_filenames.txt
+subset_metadata_summary.csv
+subset_metadata.csv
+subset_phylip.tar.gz
+subset_files.zsh
+subset_phylip/
+snpio_results23*_output/
+results23_test_output/
+pgsui_validation/
+iqtree_results_unique/
+iqtree_results_GTR/
+dataset_stats_output/

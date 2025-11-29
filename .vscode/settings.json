@@ -81,5 +81,6 @@
     "workbench.colorCustomizations": { },
     "editor.codeActionsOnSave": {
         "source.fixAll.eslint": "always"
-    }
+    },
+    "python.REPL.enableREPLSmartSend": false
 }

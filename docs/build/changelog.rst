@@ -4,6 +4,21 @@ Changelog
 
 An overview of changes to **PG-SUI** by release. This file mirrors the GitHub Markdown changelog and reflects the refactor-era docs: dataclass-first configs, presets, unified scikit-learn framework-based ``fit()/transform()`` methods, CLI precedence, and updated deterministic/supervised docs.
 
+1.6.12 - 2025-11-28
+-------------------
+
+Bug Fixes - v1.6.12
+^^^^^^^^^^^^^^^^^^^
+
+- Fixed bugs where ``SimMissingTransformer`` was not accessing the ``tree`` attribute from the correct object. It was supposed to access a SNPio ``TreeParser`` object but was trying to get the ``tree`` attribute from a ``GenotypeData`` object.
+- Fixed bugs with ``sim_strategy='nonrandom'`` and ``sim_strategy='nonrandom_weighted'``.
+
+Enhancements - v1.6.12
+^^^^^^^^^^^^^^^^^^^^^^
+
+- Improved ImputeUBP performance marginally by eliminating a python loop and using a vectorized ``torch.Tensor`` solution.
+- Updated and optimized preset configurations to reduce potential wasted computational efforts.
+
 1.6.11 - 2025-11-21
 -------------------
 

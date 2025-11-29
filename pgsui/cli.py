@@ -46,7 +46,7 @@ from typing import (
     cast,
 )
 
-from snpio import GenePopReader, PhylipReader, SNPioMultiQC, VCFReader
+from snpio import GenePopReader, PhylipReader, SNPioMultiQC, VCFReader, TreeParser
 
 from pgsui import (
     AutoencoderConfig,
@@ -255,8 +255,11 @@ def log_model_time(fn: Callable[P, R]) -> Callable[P, R]:
 # ------------------------------ Core Runner ------------------------------ #
 def build_genotype_data(
     input_path: str,
-    fmt: Literal["vcf", "phylip", "genepop"],
+    fmt: Literal["vcf", "vcf.gz", "phy", "phylip", "genepop", "gen"],
     popmap_path: str | None,
+    treefile: str | None,
+    qmatrix: str | None,
+    siterates: str | None,
     force_popmap: bool,
     verbose: bool,
     include_pops: List[str] | None,
@@ -284,8 +287,16 @@ def build_genotype_data(
     else:
         raise ValueError(f"Unsupported genotype data format: {fmt}")
 
+    tp = None
+    if treefile is not None:
+        logging.info("Parsing phylogenetic tree...")
+
+        tp = TreeParser(
+            gd, treefile=treefile, qmatrix=qmatrix, siterates=siterates, verbose=True
+        )
+
     logging.info("Loaded genotype data.")
-    return gd
+    return gd, tp
 
 
 @log_model_time
@@ -438,7 +449,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     parser.add_argument(
         "--format",
-        choices=("vcf", "phylip", "structure", "genepop"),
+        choices=(
+            "infer",
+            "vcf",
+            "vcf.gz",
+            "phy",
+            "phylip",
+            "str",
+            "structure",
+            "genepop",
+            "gen",
+        ),
         default=argparse.SUPPRESS,
         help="Input format; defaults to 'vcf' when --vcf is used.",
     )
@@ -448,6 +469,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     parser.add_argument(
         "--popmap", default=argparse.SUPPRESS, help="Path to population map file."
+    )
+    parser.add_argument(
+        "--treefile", default=argparse.SUPPRESS, help="Path to phylogenetic tree file."
+    )
+    parser.add_argument(
+        "--qmatrix",
+        default=argparse.SUPPRESS,
+        help="Path to IQ-TREE output file (has .iqtree extension).",
+    )
+    parser.add_argument(
+        "--siterates",
+        default=argparse.SUPPRESS,
+        help="Path to SNP site rates file (has .rates extension).",
     )
     parser.add_argument(
         "--prefix",
@@ -634,7 +668,25 @@ def main(argv: Optional[List[str]] = None) -> int:
         parser.error("You must provide --input (or legacy --vcf).")
         return 2
 
-    fmt: Literal["vcf", "phylip", "genepop"] = getattr(args, "format", "vcf")
+    fmt: Literal["infer", "vcf", "vcf.gz", "phy", "phylip", "genepop", "gen"] = getattr(
+        args, "format", "infer"
+    )
+
+    if fmt == "infer":
+        if input_path.endswith((".vcf", ".vcf.gz")):
+            fmt_final = "vcf"
+        elif input_path.endswith((".phy", ".phylip")):
+            fmt_final = "phylip"
+        elif input_path.endswith((".genepop", ".gen")):
+            fmt_final = "genepop"
+        else:
+            parser.error(
+                "Could not infer input format from file extension. Please provide --format."
+            )
+            return 2
+    else:
+        fmt_final = fmt
+
     popmap_path = getattr(args, "popmap", None)
     include_pops = getattr(args, "include_pops", None)
     verbose_flag = getattr(args, "verbose", False)
@@ -644,10 +696,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     prefix: str = getattr(args, "prefix", str(Path(input_path).stem))
 
     # Load genotype data
-    gd = build_genotype_data(
+    gd, tp = build_genotype_data(
         input_path=input_path,
-        fmt=fmt,
+        fmt=fmt_final,
         popmap_path=popmap_path,
+        treefile=getattr(args, "treefile", None),
+        qmatrix=getattr(args, "qmatrix", None),
+        siterates=getattr(args, "siterates", None),
         force_popmap=force_popmap,
         verbose=verbose_flag,
         include_pops=include_pops,
@@ -678,6 +733,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             )
         return ImputeUBP(
             genotype_data=gd,
+            tree_parser=tp,
             config=cfg,
             simulate_missing=cfg.sim.simulate_missing,
             sim_strategy=cfg.sim.sim_strategy,
@@ -695,6 +751,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             )
         return ImputeNLPCA(
             genotype_data=gd,
+            tree_parser=tp,
             config=cfg,
             simulate_missing=cfg.sim.simulate_missing,
             sim_strategy=cfg.sim.sim_strategy,
@@ -712,6 +769,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             )
         return ImputeVAE(
             genotype_data=gd,
+            tree_parser=tp,
             config=cfg,
             simulate_missing=cfg.sim.simulate_missing,
             sim_strategy=cfg.sim.sim_strategy,
@@ -729,6 +787,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             )
         return ImputeAutoencoder(
             genotype_data=gd,
+            tree_parser=tp,
             config=cfg,
             simulate_missing=cfg.sim.simulate_missing,
             sim_strategy=cfg.sim.sim_strategy,
@@ -746,6 +805,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             )
         return ImputeMostFrequent(
             gd,
+            tree_parser=tp,
             config=cfg,
             simulate_missing=cfg.sim.simulate_missing,
             sim_strategy=cfg.sim.sim_strategy,
@@ -763,6 +823,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             )
         return ImputeRefAllele(
             gd,
+            tree_parser=tp,
             config=cfg,
             simulate_missing=cfg.sim.simulate_missing,
             sim_strategy=cfg.sim.sim_strategy,

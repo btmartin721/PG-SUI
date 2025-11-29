@@ -1,252 +1,589 @@
-import json
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""Harvest Dryad dataset metadata via the Dryad v2 API, with robust backoff.
+
+This script:
+1. Queries Dryad's /search endpoint for multiple terms.
+2. Paginates through all results per term.
+3. Deduplicates datasets across terms.
+4. Extracts title, keywords, abstract, DOI, and authors into a CSV.
+5. Optionally downloads all public files for each unique dataset.
+6. Filters a subset of "genomic" datasets based on keyword/field matching.
+
+Authentication:
+- Authorization: Bearer <token>
+"""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import os
+import time
+import random
+from collections import deque
 from pathlib import Path
+from typing import Any, Deque, Dict, Iterable, List, Optional
+from urllib.parse import unquote_plus, urljoin, urlparse
 
 import pandas as pd
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from tqdm import tqdm
 
-
-def curl(origin, page, term):
-
-    Bheaders = {"Content-Type": "application/json"}
-
-    PCurl = origin + "search?page={}&per_page=100&q={}".format(page, term)
-
-    # GET request
-    r = requests.get(PCurl, headers=Bheaders)
-
-    # create json object
-    jsondata = json.loads(r.text)
-
-    return jsondata
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
+)
+LOGGER = logging.getLogger("dryad_harvest")
 
 
-def get_metadata(origin, doi, title, keywords, num, abstract, authors):
+class RateLimiter:
+    """Strict Rate Limiter with absolute spacing."""
 
-    root = f"training_data/metadata/results{num}"
-    Path(root).mkdir(parents=True, exist_ok=True)
+    def __init__(self, max_calls_per_minute: int = 20) -> None:
+        """
+        Args:
+            max_calls_per_minute: Max RPM.
+        """
+        self.interval = 60.0 / float(max_calls_per_minute)
+        self.last_call = 0.0
 
-    kw = ";".join(keywords)
-    title = title.replace("\n", " ")
-
-    header = "dataset,doi,title,keywords"
-    record = f"results{num},{doi},{title},{kw}"
-
-    try:
-        with open(f"{root}/metadata.txt", "w") as fout:
-            fout.write(f"{header}\n")
-            fout.write(f"{record}")
-
-    except UnicodeEncodeError:
-        with open(f"{root}/metadata.txt", "w", encoding="utf-8") as fout:
-            fout.write(f"{header}\n")
-            fout.write(f"{record}")
+    def acquire(self) -> None:
+        """Block until a new request is permitted."""
+        now = time.time()
+        elapsed = now - self.last_call
+        if elapsed < self.interval:
+            sleep_time = self.interval - elapsed
+            time.sleep(sleep_time)
+        self.last_call = time.time()
 
 
-def search(origin, page, term, count, pbar, total, df):
-    jsondata = curl(origin, page, term)
+class DryadClient:
+    """Dryad API v2 client with exponential backoff and strict rate limiting."""
 
-    if int(jsondata["count"]) == 0:
-        return count, df
-    else:
-        for i in range(len(jsondata["_embedded"]["stash:datasets"])):
+    def __init__(
+        self,
+        base_url: str = "https://datadryad.org/api/v2/",
+        per_page: int = 100,
+        timeout: int = 60,
+        max_requests_per_minute: int = 10,
+        user_agent: str = "dryad-harvest-script/2.1 (academic use)",
+        api_token: Optional[str] = None,
+    ) -> None:
+        self.base_url = base_url.rstrip("/") + "/"
+        self.per_page = per_page
+        self.timeout = timeout
 
-            pbar.update()
+        self.session = requests.Session()
+        retries = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=[500, 502, 503, 504],
+            allowed_methods=["GET"],
+        )
+        self.session.mount("https://", HTTPAdapter(max_retries=retries))
 
-            record_num = f"results{count}"
+        self.headers = {
+            "Accept": "application/json",
+            "User-Agent": user_agent,
+        }
+
+        if api_token:
+            self.headers["Authorization"] = f"Bearer {api_token}"
+
+        self.rate_limiter = RateLimiter(max_calls_per_minute=max_requests_per_minute)
+
+    def _make_url(self, endpoint_or_url: str | None) -> str:
+        if endpoint_or_url is None:
+            raise ValueError("Cannot make URL from None")
+        if endpoint_or_url.startswith("http"):
+            return endpoint_or_url
+
+        root = f"{urlparse(self.base_url).scheme}://{urlparse(self.base_url).netloc}/"
+        if endpoint_or_url.startswith("/"):
+            return urljoin(root, endpoint_or_url)
+        if endpoint_or_url.startswith("api/"):
+            return urljoin(root, endpoint_or_url)
+        return urljoin(self.base_url, endpoint_or_url)
+
+    def _request(
+        self, endpoint_or_url: str, params: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """GET JSON with exponential backoff for 429s."""
+        url = self._make_url(endpoint_or_url)
+        params = params or {}
+
+        attempt = 0
+        max_attempts = 5
+
+        while attempt < max_attempts:
+            self.rate_limiter.acquire()
 
             try:
-                tmp = jsondata["_embedded"]["stash:datasets"][i]["_links"][
-                    "stash:download"
-                ]["href"].split("/")[-3:]
-
-            except KeyError:
-                count += 1
-                pbar.update()
-                col_list = list()
-                col_list.append(record_num)
-                col_list.append(pd.NA)
-                col_list.append(pd.NA)
-                col_list.append(pd.NA)
-                col_list.append(pd.NA)
-                col_list.extend([pd.NA, pd.NA, pd.NA, pd.NA, pd.NA])
-
-                cols = ["DatasetID", "DOI", "Title", "Keywords", "Abstract"]
-                cols.extend(
-                    [
-                        "firstName_1",
-                        "lastName_1",
-                        "email_1",
-                        "affiliation_1",
-                        "affiliationROR_1",
-                    ]
+                r = self.session.get(
+                    url,
+                    params=params,
+                    headers=self.headers,
+                    timeout=self.timeout,
                 )
 
-                dfrow = pd.DataFrame([col_list], columns=cols)
-                df = pd.concat([df, dfrow], ignore_index=True)
-                continue
+                if r.status_code == 429:
+                    LOGGER.warning(
+                        f"Received 429 Too Many Requests. Waiting for {int(r.headers['Retry-After']) + 1} duration..."
+                    )
 
-            doi = "/".join(tmp)
-            doi = doi.replace("%3A", ":")
-            doi = doi.replace("%2", "/")
+                    if r.headers.get("Retry-After") is not None:
+                        time.sleep(int(r.headers["Retry-After"]) + 1)
+                        continue
+                    else:
+                        attempt += 1
+                        # Exponential backoff: 5s, 10s, 20s...
+                        wait_time = (5 * (2 ** (attempt - 1))) + random.uniform(0, 1)
+                        LOGGER.warning(
+                            f"429 Too Many Requests. Sleeping {wait_time:.1f}s..."
+                        )
+                        time.sleep(wait_time)
+                        continue
 
-            try:
-                title = jsondata["_embedded"]["stash:datasets"][i]["title"]
-            except KeyError:
-                title = pd.NA
+                if r.status_code in {401, 403}:
+                    # If this happens, your token is likely bad
+                    raise RuntimeError(f"Auth failed (401/403): {r.text}")
 
-            try:
-                keywords = jsondata["_embedded"]["stash:datasets"][i]["keywords"]
-                kw = ",".join(keywords)
+                r.raise_for_status()
+                return r.json()
 
-            except KeyError:
-                kw = pd.NA
+            except requests.exceptions.RequestException as e:
+                LOGGER.warning(f"Request failed: {e}. Retrying...")
+                attempt += 1
+                time.sleep(5)
 
-            try:
-                abstract = jsondata["_embedded"]["stash:datasets"][i]["abstract"]
-            except KeyError:
-                abstract = pd.NA
+        raise RuntimeError(f"Failed to fetch {url} after {max_attempts} attempts.")
 
-            try:
-                tmp_authors = jsondata["_embedded"]["stash:datasets"][i]["authors"]
+    def search_page(self, term: str, page: int) -> Dict[str, Any]:
+        return self._request(
+            "search", {"q": term, "page": page, "per_page": self.per_page}
+        )
 
-                authors_keys = list()
-                authors_values = list()
-                all_author_keys = list()
-                all_author_values = list()
-                for cnt, auth in enumerate(tmp_authors, start=1):
-                    auth_keys = list(auth.keys())
-                    auth_vals = list(auth.values())
+    def term_total(self, term: str) -> int:
+        data = self.search_page(term, 1)
+        return int(data.get("total", 0))
 
-                    authors_keys.append(([f"{x}_{cnt}" for x in auth_keys]))
-                    authors_values.append(auth_vals)
-
-                # Flatten 2d list to 1d
-                all_author_keys = sum(authors_keys, [])
-                all_author_values = sum(authors_values, [])
-
-            except KeyError:
-                authors_keys = [
-                    "firstName_1",
-                    "lastName_1",
-                    "email_1",
-                    "affiliation_1",
-                    "affiliationROR_1",
-                ]
-                authors_values = [pd.NA, pd.NA, pd.NA, pd.NA, pd.NA]
-
-            cols = ["DatasetID", "DOI", "Title", "Keywords", "Abstract"]
-            cols.extend(all_author_keys)
-
-            # Code adapted from:
-            # https://stackoverflow.com/questions/51720306/creating-a-dataframe-from-multiple-lists-with-list-names-as-column-names
-
-            col_list = list()
-            col_list.append(record_num)
-            col_list.append(doi)
-            col_list.append(title)
-            col_list.append(kw)
-            col_list.append(abstract)
-            col_list.extend(all_author_values)
-
-            dfrow = pd.DataFrame([col_list], columns=cols)
-            df = pd.concat([df, dfrow], ignore_index=True)
-
-            count += 1
-
-        page += 1
-
-        count, df = search(origin, page, term, count, pbar, total, df)
-
-        return count, df
-
-
-def get_term_count(origin, page, term, count, total):
-    jsondata = curl(origin, page, term)
-    total = int(jsondata["total"])
-    return total
-
-
-origin = "https://datadryad.org/api/v2/"
-
-searches = [
-    "bfd",
-    "ddrad*",
-    "ipyrad",
-    "pyrad",
-    "species%20delimitation",
-    "unlinked%20loci",
-    "unlinked%20snps",
-    "population%20genomic",
-    "population%20genetic",
-    "phylogenomics",
-    "phylogenetics",
-    "phylogeography",
-    "phylogenetic%20analysis",
-    "phylogenetic%20tree",
-    "phylogenetic%20inference",
-    "snp%20data",
-    "RADseq*",
-    "RAD-seq*",
-]
-counter = 1
-total = 0
-df = pd.DataFrame()
-for term in searches:
-    page = 1
-    total += get_term_count(origin, page, term, counter, total)
-
-print(f"Parsing {total} datasets...")
-
-with tqdm(desc="Fetching Metadata: ", total=total, position=0, leave=True) as pbar:
-
-    for term in searches:
+    def iter_datasets(self, term: str) -> Iterable[Dict[str, Any]]:
         page = 1
-        counter, df = search(origin, page, term, counter, pbar, total, df)
+        while True:
+            data = self.search_page(term, page)
+            datasets = data.get("_embedded", {}).get("stash:datasets", [])
+            if not datasets:
+                break
+            yield from datasets
+            page += 1
 
-Path("training_data/metadata").mkdir(parents=True, exist_ok=True)
-df.to_csv("training_data/metadata/metadata.csv", sep=",", header=True, index=False)
+    def get_full_dataset(self, summary_ds: Dict[str, Any]) -> Dict[str, Any]:
+        self_href = summary_ds.get("_links", {}).get("self", {}).get("href")
+        if not self_href:
+            return summary_ds
+        try:
+            return self._request(self_href)
+        except Exception as e:
+            LOGGER.warning("Failed to fetch full dataset %s: %s", self_href, str(e))
+            return summary_ds
 
-contains_list = [
-    "ddrad",
-    "radseq",
-    "rad sequencing",
-    "bfd",
-    "snp",
-    "snps",
-    "genomic",
-    "genomics",
-    "genome",
-    "genomes",
-    "pyrad",
-    "ipyrad",
-    "species delimitation",
-    "stacks",
-    "phylogenomic",
-    "phylogenomics",
-    "population genomic",
-    "population genomics",
-    "landscape genomics",
-    "hybrid zone",
-    "contact zone",
-    "introgression",
-    "introgress",
-    "structure",
-    "admixture",
-]
-contains_list = "|".join(contains_list)
+    def iter_files_for_dataset(
+        self, ds_full: Dict[str, Any]
+    ) -> Iterable[Dict[str, Any]]:
+        """
+        Robustly find files by checking:
+        1. Embedded files (rare but possible)
+        2. Direct 'stash:files' link
+        3. 'stash:currentVersion' link -> files
+        4. 'stash:versions' link -> latest version -> files
+        """
 
-genomic_df = df[
-    df.apply(
-        lambda r: r.str.lower().str.contains(contains_list, case=False).any(), axis=1
+        def fetch_files_from_href(href):
+            if not href:
+                return []
+            try:
+                # Handle pagination of files
+                next_url = href
+                while next_url:
+                    d = self._request(next_url)
+                    yield from d.get("_embedded", {}).get("stash:files", [])
+                    next_url = d.get("_links", {}).get("next", {}).get("href")
+            except Exception:
+                return []
+
+        # Strategy 1: Already embedded?
+        embedded = ds_full.get("_embedded", {}).get("stash:files", [])
+        if embedded:
+            yield from embedded
+            return
+
+        # Strategy 2: Direct file link
+        files_href = ds_full.get("_links", {}).get("stash:files", {}).get("href")
+        if files_href:
+            yield from fetch_files_from_href(files_href)
+            return
+
+        # Strategy 3: Current Version
+        curr_ver_href = (
+            ds_full.get("_links", {}).get("stash:currentVersion", {}).get("href")
+        )
+        if curr_ver_href:
+            try:
+                ver_data = self._request(curr_ver_href)
+                v_files_href = (
+                    ver_data.get("_links", {}).get("stash:files", {}).get("href")
+                )
+                if v_files_href:
+                    yield from fetch_files_from_href(v_files_href)
+                    return
+            except Exception:
+                pass
+
+        # Strategy 4: Version List (Find the latest one)
+        versions_href = ds_full.get("_links", {}).get("stash:versions", {}).get("href")
+        if versions_href:
+            try:
+                v_list_data = self._request(versions_href)
+                versions = v_list_data.get("_embedded", {}).get("stash:versions", [])
+
+                # Sort versions by versionNumber just in case
+                def get_vnum(v):
+                    return int(v.get("versionNumber", 0))
+
+                if versions:
+                    latest = sorted(versions, key=get_vnum)[-1]
+                    latest_self = latest.get("_links", {}).get("self", {}).get("href")
+                    if latest_self:
+                        latest_data = self._request(latest_self)
+                        l_files_href = (
+                            latest_data.get("_links", {})
+                            .get("stash:files", {})
+                            .get("href")
+                        )
+                        if l_files_href:
+                            yield from fetch_files_from_href(l_files_href)
+                            return
+            except Exception:
+                pass
+
+        return
+
+    def download_file(
+        self,
+        file_obj: Dict[str, Any],
+        out_dir: Path,
+        overwrite: bool = False,
+    ) -> Optional[Path]:
+        links = file_obj.get("_links", {}) or {}
+        download_href = links.get("stash:file-download", {}).get("href") or links.get(
+            "stash:download", {}
+        ).get("href")
+
+        if not download_href:
+            return None
+
+        filename = (
+            file_obj.get("path")
+            or file_obj.get("filename")
+            or file_obj.get("name")
+            or "dryad_file"
+        )
+        filename = Path(str(filename)).name
+
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / filename
+
+        # This is where overwrite is checked.
+        # If overwrite is False and file exists, we return success immediately.
+        if out_path.exists() and not overwrite:
+            return out_path
+
+        url = self._make_url(download_href)
+
+        self.rate_limiter.acquire()
+        try:
+            with self.session.get(url, stream=True, timeout=self.timeout) as r:
+                r.raise_for_status()
+                with open(out_path, "wb") as fout:
+                    for chunk in r.iter_content(chunk_size=8192):
+                        if chunk:
+                            fout.write(chunk)
+            return out_path
+        except Exception as e:
+            LOGGER.error(f"Failed download {filename}: {e}")
+            return None
+
+
+def normalize_term(term: str) -> str:
+    return unquote_plus(term)
+
+
+def extract_dataset_row(ds: Dict[str, Any], record_num: str) -> Dict[str, Any]:
+    row: Dict[str, Any] = {"DatasetID": record_num}
+
+    identifier = ds.get("identifier")
+    doi: Optional[str] = None
+    if isinstance(identifier, str):
+        doi = identifier[4:] if identifier.lower().startswith("doi:") else identifier
+
+    if doi is None:
+        href = ds.get("_links", {}).get("stash:download", {}).get("href")
+        if isinstance(href, str):
+            doi = "/".join(href.split("/")[-3:])
+
+    row["DOI"] = doi if doi else pd.NA
+    row["Title"] = ds.get("title", pd.NA)
+
+    keywords = ds.get("keywords") or []
+    if isinstance(keywords, list):
+        row["Keywords"] = ",".join([str(k) for k in keywords])
+    else:
+        row["Keywords"] = str(keywords) if keywords else pd.NA
+
+    row["Abstract"] = ds.get("abstract", pd.NA)
+
+    authors = ds.get("authors") or []
+    if isinstance(authors, list) and authors:
+        for i, auth in enumerate(authors, start=1):
+            if not isinstance(auth, dict):
+                continue
+            for k, v in auth.items():
+                row[f"{k}_{i}"] = v
+    else:
+        # Fill first author blanks
+        for col in ["firstName_1", "lastName_1", "email_1", "affiliation_1"]:
+            row[col] = pd.NA
+
+    return row
+
+
+def filter_genomic_datasets(df: pd.DataFrame) -> pd.DataFrame:
+    contains_list = [
+        "vcf",
+        "phylip",
+        "phy",
+        "genepop",
+        "rad-seq",
+        "ddrad",
+        "double-digest-rad",
+        "genotyping-by-sequencing",
+        "stacks",
+        "ipyrad",
+        "pyrad",
+        "radseq",
+        "gbs",
+    ]
+    pattern = "|".join(contains_list)
+
+    # Vectorized string search
+    mask = df.apply(
+        lambda r: r.astype(str)
+        .str.lower()
+        .str.contains(pattern.lower(), regex=True)
+        .any(),
+        axis=1,
     )
-]
+    return df[mask].copy()
 
-genomic_df.to_csv(
-    "training_data/metadata/metadata_genomic_data.csv",
-    sep=",",
-    header=True,
-    index=False,
-)
 
-print(f"Found {len(genomic_df.index)} genomic datasets")
+def should_skip_file(
+    file_obj: Dict[str, Any],
+    max_size_mb: Optional[float],
+    allowed_ext: Optional[List[str]],
+) -> tuple[bool, str]:
+    """Return (True, reason) if file should be skipped."""
+    name = (
+        file_obj.get("path") or file_obj.get("filename") or file_obj.get("name") or ""
+    )
+
+    if allowed_ext:
+        ext = Path(str(name)).suffix.lower()
+        # Handle .vcf.gz double extension if needed, but simple suffix matches standard usage
+        if not ext:
+            return True, "No Extension"
+        if ext not in allowed_ext:
+            return True, f"Bad Extension ({ext})"
+
+    if max_size_mb is not None:
+        size_bytes = file_obj.get("size")
+        if size_bytes is not None:
+            try:
+                size_mb = float(size_bytes) / (1024.0 * 1024.0)
+                if size_mb > max_size_mb:
+                    return True, f"Too Large ({size_mb:.2f} MB)"
+            except (TypeError, ValueError):
+                pass
+
+    return False, ""
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Harvest Dryad metadata and optionally download dataset files."
+    )
+    parser.add_argument("--download-files", action="store_true")
+    parser.add_argument("--files-outdir", type=str, default="training_data/files")
+    parser.add_argument("--max-file-mb", type=float, default=None)
+    parser.add_argument(
+        "--allowed-ext",
+        type=str,
+        default=None,
+        help="Comma-separated extensions, e.g. .vcf,.vcf.gz,.phylip",
+    )
+    parser.add_argument("--overwrite-files", action="store_true")
+    parser.add_argument("--rpm", type=int, default=10)
+    parser.add_argument(
+        "--resume-from",
+        type=int,
+        default=1,
+        help="Resume at this results index (e.g., 2500 means start at results2500).",
+    )
+    parser.add_argument(
+        "--api-token",
+        type=str,
+        default=None,
+    )
+    # Retained for compatibility but unused due to exponential backoff
+    parser.add_argument("--fixed-wait", type=float, default=5.0)
+
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+
+    api_token = args.api_token or os.environ.get("DRYAD_API_TOKEN")
+    if not api_token:
+        LOGGER.warning(
+            "No API Token provided. Rate limits will be strict and downloads may fail."
+        )
+
+    searches = [
+        "vcf",
+        "phylip",
+        "phy",
+        "genepop",
+        "rad-seq",
+        "ddrad",
+        "double-digest-rad",
+        "genotyping-by-sequencing",
+        "stacks",
+        "ipyrad",
+        "pyrad",
+        "radseq",
+        "gbs",
+    ]
+    terms = [normalize_term(t) for t in searches]
+
+    client = DryadClient(
+        max_requests_per_minute=args.rpm,
+        api_token=api_token,
+    )
+
+    allowed_ext = None
+    if args.allowed_ext:
+        allowed_ext = [
+            e.strip().lower() for e in args.allowed_ext.split(",") if e.strip()
+        ]
+
+    # Estimate total
+    print("Estimating totals per term...")
+    total_raw = sum(client.term_total(term) for term in terms)
+    print(f"Parsing approximately {total_raw} datasets (before deduplication)...")
+
+    rows: List[Dict[str, Any]] = []
+    seen: set = set()
+
+    # Resume logic
+    counter = 1
+    resume_target = args.resume_from
+
+    files_base = Path(args.files_outdir)
+    if args.download_files:
+        files_base.mkdir(parents=True, exist_ok=True)
+
+    with tqdm(total=total_raw, unit="ds") as pbar:
+        for term in terms:
+            for ds_summary in client.iter_datasets(term):
+                pbar.update(1)
+
+                unique_key = (
+                    ds_summary.get("id")
+                    or ds_summary.get("identifier")
+                    or ds_summary.get("_links", {}).get("self", {}).get("href")
+                )
+                if unique_key in seen:
+                    continue
+                seen.add(unique_key)
+
+                # Resume Check
+                if counter < resume_target:
+                    counter += 1
+                    continue
+
+                record_num = f"results{counter}"
+
+                # 1. Fetch Full Metadata (Cost: 1 API Call)
+                try:
+                    ds_full = client.get_full_dataset(ds_summary)
+                    rows.append(extract_dataset_row(ds_full, record_num))
+                except Exception as e:
+                    LOGGER.error(f"Skipping metadata for {record_num}: {e}")
+                    counter += 1
+                    continue
+
+                # 2. Download Files (Cost: N API Calls)
+                if args.download_files:
+                    dataset_dir = files_base / record_num
+
+                    # We pass ds_full to avoid re-fetching
+                    files_iter = client.iter_files_for_dataset(ds_full)
+                    files = list(files_iter)
+
+                    if files:
+                        LOGGER.info(f"Dataset {record_num}: Found {len(files)} files.")
+                        for fobj in files:
+                            skip, reason = should_skip_file(
+                                fobj, args.max_file_mb, allowed_ext
+                            )
+                            if skip:
+                                LOGGER.info(
+                                    f"  Skipped {fobj.get('path', 'unknown')}: {reason}"
+                                )
+                                continue
+
+                            try:
+                                out = client.download_file(
+                                    fobj, dataset_dir, args.overwrite_files
+                                )
+                                if out:
+                                    LOGGER.info(f"  Downloaded: {out.name}")
+                            except Exception as e:
+                                LOGGER.warning(f"  Failed {record_num}: {e}")
+                    else:
+                        LOGGER.info(f"Dataset {record_num}: No accessible files found.")
+
+                counter += 1
+
+    df = pd.DataFrame(rows)
+    out_dir = Path("training_data/metadata")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    metadata_path = out_dir / "metadata.csv"
+    df.to_csv(metadata_path, index=False, encoding="utf-8")
+
+    genomic_df = filter_genomic_datasets(df)
+    genomic_df.to_csv(
+        out_dir / "metadata_genomic_data.csv", index=False, encoding="utf-8"
+    )
+
+    print(f"Done. Saved {len(df)} total records, {len(genomic_df)} genomic records.")
+    if args.download_files:
+        print(f"Files saved to: {files_base.resolve()}")
+
+
+if __name__ == "__main__":
+    main()
