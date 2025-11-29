@@ -31,6 +31,7 @@ from pgsui.utils.plotting import Plotting
 from pgsui.utils.pretty_metrics import PrettyMetrics
 
 if TYPE_CHECKING:
+    from snpio import TreeParser
     from snpio.read_input.genotype_data import GenotypeData
 
 
@@ -90,6 +91,7 @@ class ImputeRefAllele:
         self,
         genotype_data: "GenotypeData",
         *,
+        tree_parser: Optional["TreeParser"] = None,
         config: Optional[Union[RefAlleleConfig, dict, str]] = None,
         overrides: Optional[dict] = None,
         simulate_missing: bool = True,
@@ -109,6 +111,7 @@ class ImputeRefAllele:
 
         Args:
             genotype_data (GenotypeData): Backing genotype data.
+            tree_parser (Optional[TreeParser]): Optional SNPio phylogenetic tree parser for population-specific modes.
             config (RefAlleleConfig | dict | str | None): Configuration as a dataclass, nested dict, or YAML path. If None, defaults are used.
             overrides (dict | None): Flat dot-key overrides applied last with highest precedence, e.g. {'split.test_size': 0.25, 'algo.missing': -1}.
             simulate_missing (bool): Whether to simulate missing data during evaluation. Default is True.
@@ -124,6 +127,7 @@ class ImputeRefAllele:
 
         # Basic fields
         self.genotype_data = genotype_data
+        self.tree_parser = tree_parser
         self.prefix = cfg.io.prefix
         self.verbose = cfg.io.verbose
         self.debug = cfg.io.debug
@@ -159,6 +163,11 @@ class ImputeRefAllele:
         self.logger = configure_logger(
             logman.get_logger(), verbose=self.verbose, debug=self.debug
         )
+
+        if self.tree_parser is None and self.sim_strategy.startswith("nonrandom"):
+            msg = "tree_parser is required for nonrandom and nonrandom_weighted simulated missing strategies."
+            self.logger.error(msg)
+            raise ValueError(msg)
 
         # RNG / encoder
         self.rng = np.random.default_rng(cfg.io.seed)
@@ -250,6 +259,7 @@ class ImputeRefAllele:
             # Simulate missing on the full matrix; we only use the mask.
             tr = SimMissingTransformer(
                 genotype_data=self.genotype_data,
+                tree_parser=self.tree_parser,
                 prop_missing=self.sim_prop,
                 strategy=self.sim_strategy,
                 missing_val=-9,
