@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import copy
-from typing import TYPE_CHECKING, Any, Dict, Literal, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -26,6 +26,7 @@ from pgsui.utils.logging_utils import configure_logger
 from pgsui.utils.pretty_metrics import PrettyMetrics
 
 if TYPE_CHECKING:
+    from snpio import TreeParser
     from snpio.read_input.genotype_data import GenotypeData
 
 
@@ -106,6 +107,7 @@ class ImputeNLPCA(BaseNNImputer):
         self,
         genotype_data: "GenotypeData",
         *,
+        tree_parser: Optional["TreeParser"] = None,
         config: NLPCAConfig | dict | str | None = None,
         overrides: dict | None = None,
         simulate_missing: bool = False,
@@ -125,6 +127,7 @@ class ImputeNLPCA(BaseNNImputer):
 
         Args:
             genotype_data (GenotypeData): Backing genotype data.
+            tree_parser (TreeParser | None): Optional SNPio phylogenetic tree parser for population-specific modes.
             config (NLPCAConfig | dict | str | None): Structured configuration as dataclass, nested dict, YAML path, or None.
             overrides (dict | None): Dot-key overrides (e.g. {'model.latent_dim': 4}).
             simulate_missing (bool): Whether to simulate missing data during training.
@@ -134,6 +137,7 @@ class ImputeNLPCA(BaseNNImputer):
         """
         self.model_name = "ImputeNLPCA"
         self.genotype_data = genotype_data
+        self.tree_parser = tree_parser
 
         # Normalize config first, then apply overrides (highest precedence)
         cfg = ensure_nlpca_config(config)
@@ -243,6 +247,11 @@ class ImputeNLPCA(BaseNNImputer):
         self.sim_prop = float(sim_prop)
         self.sim_kwargs = sim_kwargs or {}
 
+        if self.tree_parser is None and self.sim_strategy.startswith("nonrandom"):
+            msg = "tree_parser is required for nonrandom and nonrandom_weighted simulated missing strategies."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
     def fit(self) -> "ImputeNLPCA":
         """Fits the NLPCA model to the 0/1/2 encoded genotype data.
 
@@ -268,6 +277,7 @@ class ImputeNLPCA(BaseNNImputer):
         if self.simulate_missing:
             tr = SimMissingTransformer(
                 genotype_data=self.genotype_data,
+                tree_parser=self.tree_parser,
                 prop_missing=self.sim_prop,
                 strategy=self.sim_strategy,
                 missing_val=-9,
@@ -639,28 +649,41 @@ class ImputeNLPCA(BaseNNImputer):
         )
 
         if eval_mask_override is not None:
-            if eval_mask_override.shape != X_val.shape:
+            # Validate row counts to allow feature subsetting during tuning
+            if eval_mask_override.shape[0] != X_val.shape[0]:
                 msg = (
-                    f"eval_mask_override shape {eval_mask_override.shape} "
-                    f"does not match X_val shape {X_val.shape}"
+                    f"eval_mask_override rows {eval_mask_override.shape[0]} "
+                    f"does not match X_val rows {X_val.shape[0]}"
                 )
                 self.logger.error(msg)
                 raise ValueError(msg)
 
-            # Use caller-supplied boolean mask on the same shape as X_val
-            eval_mask = eval_mask_override.astype(bool)
+            # Slice mask columns if override is wider than current X_val (tune_fast)
+            if eval_mask_override.shape[1] > X_val.shape[1]:
+                eval_mask = eval_mask_override[:, : X_val.shape[1]].astype(bool)
+            else:
+                eval_mask = eval_mask_override.astype(bool)
         else:
             # Default: score only observed entries
             eval_mask = X_val != -1
 
         # y_true should be drawn from the pre-mask ground truth
         # Map X_val back to the correct full ground truth slice
-        if X_val.shape == self.X_test_.shape:
+        # FIX: Check shape[0] (n_samples) only.
+        if X_val.shape[0] == self.X_test_.shape[0]:
             GT_ref = self.GT_test_full_
-        elif X_val.shape == self.X_train_.shape:
+        elif X_val.shape[0] == self.X_train_.shape[0]:
             GT_ref = self.GT_train_full_
         else:
             GT_ref = self.ground_truth_
+
+        # FIX: Slice Ground Truth columns if it is wider than X_val (tune_fast)
+        if GT_ref.shape[1] > X_val.shape[1]:
+            GT_ref = GT_ref[:, : X_val.shape[1]]
+
+        # Fallback safeguard
+        if GT_ref.shape != X_val.shape:
+            GT_ref = X_val
 
         y_true_flat = GT_ref[eval_mask]
         pred_labels_flat = pred_labels[eval_mask]
@@ -698,6 +721,7 @@ class ImputeNLPCA(BaseNNImputer):
                 labels=target_names,
             )
 
+            # FIX: Use X_val dimensions for reshaping, not self.num_features_
             y_true_dec = self.pgenc.decode_012(
                 GT_ref.reshape(X_val.shape[0], X_val.shape[1])
             )
@@ -705,8 +729,9 @@ class ImputeNLPCA(BaseNNImputer):
             X_pred = X_val.copy()
             X_pred[eval_mask] = pred_labels_flat
 
-            nF_eval = X_val.shape[1]
-            y_pred_dec = self.pgenc.decode_012(X_pred.reshape(X_val.shape[0], nF_eval))
+            y_pred_dec = self.pgenc.decode_012(
+                X_pred.reshape(X_val.shape[0], X_val.shape[1])
+            )
 
             encodings_dict = {
                 "A": 0,
