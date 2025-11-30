@@ -118,9 +118,17 @@ class Scorer:
         """
         if len(np.unique(y_true)) < 2:
             return 0.5
-        return float(
+
+        if y_pred_proba.shape[-1] == 2:
+            # Binary classification case
+            # Use probabilities for the positive class
+            # Otherwise it throws an error.
+            y_pred_proba = y_pred_proba[:, 1]
+
+        try:
             roc_auc_score(y_true, y_pred_proba, average=self.average, multi_class="ovr")
-        )
+        except Exception as e:
+            return float(roc_auc_score(y_true, y_pred_proba, average=self.average))
 
     # This method now correctly expects one-hot encoded true labels
     def average_precision(
@@ -135,6 +143,15 @@ class Scorer:
         Returns:
             float: The average precision score.
         """
+        if y_pred_proba.shape[-1] == 2:
+            # Binary classification case
+            # Use probabilities for the positive class
+            y_pred_proba = y_pred_proba[:, 1]
+
+        if y_true_ohe.shape[1] == 2:
+            # Binary classification case
+            y_true_ohe = y_true_ohe[:, 1]
+
         return float(
             average_precision_score(y_true_ohe, y_pred_proba, average=self.average)
         )
@@ -149,6 +166,15 @@ class Scorer:
         Returns:
             float: The macro-average precision score.
         """
+        if y_pred_proba.shape[-1] == 2:
+            # Binary classification case
+            # Use probabilities for the positive class
+            y_pred_proba = y_pred_proba[:, 1]
+
+        if y_true_ohe.shape[1] == 2:
+            # Binary classification case
+            y_true_ohe = y_true_ohe[:, 1]
+
         return float(average_precision_score(y_true_ohe, y_pred_proba, average="macro"))
 
     def evaluate(

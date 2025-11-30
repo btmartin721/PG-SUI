@@ -436,9 +436,10 @@ def _maybe_print_or_dump_configs(
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="pgsui-cli",
-        description="Run PG-SUI imputation models on a VCF file. Handle config via presets, YAML, and CLI flags.",
+        prog="pg-sui",
+        description="Run PG-SUI imputation models on an input file. Handle configuration via presets, YAML, and CLI flags. The default is to run all models.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        usage="%(prog)s [options]",
     )
 
     # ----------------------------- Required I/O ----------------------------- #
@@ -461,32 +462,38 @@ def main(argv: Optional[List[str]] = None) -> int:
             "gen",
         ),
         default=argparse.SUPPRESS,
-        help="Input format; defaults to 'vcf' when --vcf is used.",
+        help="Input format. If 'infer', deduced from file extension. The default is 'infer'.",
     )
     # Back-compat: --vcf retained; if both provided, --input wins.
     parser.add_argument(
-        "--vcf", default=argparse.SUPPRESS, help="Path to input VCF(.gz) file."
+        "--vcf",
+        default=argparse.SUPPRESS,
+        help="Path to input VCF file. Can be bgzipped or uncompressed.",
     )
     parser.add_argument(
-        "--popmap", default=argparse.SUPPRESS, help="Path to population map file."
+        "--popmap",
+        default=argparse.SUPPRESS,
+        help="Path to population map file. This is a two-column tab-delimited file with sample IDs and population IDs.",
     )
     parser.add_argument(
-        "--treefile", default=argparse.SUPPRESS, help="Path to phylogenetic tree file."
+        "--treefile",
+        default=argparse.SUPPRESS,
+        help="Path to phylogenetic tree file. Can be in Newick (recommended) or Nexus format.",
     )
     parser.add_argument(
         "--qmatrix",
         default=argparse.SUPPRESS,
-        help="Path to IQ-TREE output file (has .iqtree extension).",
+        help="Path to IQ-TREE output file (has .iqtree extension) that contains Rate Matrix Q. Used with --treefile and --siterates.",
     )
     parser.add_argument(
         "--siterates",
         default=argparse.SUPPRESS,
-        help="Path to SNP site rates file (has .rates extension).",
+        help="Path to SNP site rates file (has .rate extension). Used with --treefile and --qmatrix.",
     )
     parser.add_argument(
         "--prefix",
         default=argparse.SUPPRESS,
-        help="Run/output prefix; overrides config if provided.",
+        help="Output file prefix.",
     )
 
     # ---------------------- Generic Config Inputs -------------------------- #
@@ -695,14 +702,25 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Canonical prefix for this run (used for outputs and MultiQC)
     prefix: str = getattr(args, "prefix", str(Path(input_path).stem))
 
+    treefile = getattr(args, "treefile", None)
+    qmatrix = getattr(args, "qmatrix", None)
+    siterates = getattr(args, "siterates", None)
+
+    if any(x is not None for x in (treefile, qmatrix, siterates)):
+        if not all(x is not None for x in (treefile, qmatrix, siterates)):
+            parser.error(
+                "--treefile, --qmatrix, and --siterates must all be provided together or they should all be omitted."
+            )
+            return 2
+
     # Load genotype data
     gd, tp = build_genotype_data(
         input_path=input_path,
         fmt=fmt_final,
         popmap_path=popmap_path,
-        treefile=getattr(args, "treefile", None),
-        qmatrix=getattr(args, "qmatrix", None),
-        siterates=getattr(args, "siterates", None),
+        treefile=treefile,
+        qmatrix=qmatrix,
+        siterates=siterates,
         force_popmap=force_popmap,
         verbose=verbose_flag,
         include_pops=include_pops,
