@@ -77,3 +77,9 @@ plot_config:
   general:
     dpi: 300
     log_scale_min: 0.001
+    plots_export_font_scale: 1.5
+
+custom_plot_config:
+  effect_size_plot:
+    font_scale: 1.5
+    dpi: 300
