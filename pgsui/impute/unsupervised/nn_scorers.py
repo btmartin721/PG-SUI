@@ -126,8 +126,12 @@ class Scorer:
             y_pred_proba = y_pred_proba[:, 1]
 
         try:
-            roc_auc_score(y_true, y_pred_proba, average=self.average, multi_class="ovr")
-        except Exception as e:
+            return float(
+                roc_auc_score(
+                    y_true, y_pred_proba, average=self.average, multi_class="ovr"
+                )
+            )
+        except Exception:
             return float(roc_auc_score(y_true, y_pred_proba, average=self.average))
 
     # This method now correctly expects one-hot encoded true labels
@@ -207,20 +211,6 @@ class Scorer:
         y_true, y_pred, y_true_ohe, y_pred_proba = [
             validate_input_type(x) for x in (y_true, y_pred, y_true_ohe, y_pred_proba)
         ]
-
-        # NOTE: This is redundant because it's handled in the calling class
-        # TODO: Remove redundancy
-        valid_mask = np.logical_and(
-            np.asarray(y_true) >= 0, ~np.isnan(np.asarray(y_true))
-        )
-
-        if not np.any(valid_mask):
-            return {tune_metric: 0.0} if objective_mode else {}
-
-        y_true = y_true[valid_mask]
-        y_pred = y_pred[valid_mask]
-        y_true_ohe = y_true_ohe[valid_mask]
-        y_pred_proba = y_pred_proba[valid_mask]
 
         if objective_mode:
             metric_calculators = {
