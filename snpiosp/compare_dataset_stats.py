@@ -771,6 +771,7 @@ def run_multiqc_integration(
 def main() -> None:
     args = parse_args()
     root: Path = args.root.resolve()
+    root.mkdir(parents=True, exist_ok=True)
 
     # Setup Output Directory
     if args.output_dir is not None:
