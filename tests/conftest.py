@@ -109,12 +109,16 @@ def example_genotype_data(
     def _patched_init(self, genotype_data):
         orig_init(self, genotype_data)
         if not hasattr(self, "_ref") or self._ref is None or len(getattr(self, "_ref", [])) == 0:  # type: ignore[attr-defined]
-            ref_local, alt_local, extra = genotype_data.get_ref_alt_alleles(
-                genotype_data.snp_data
-            )
-            self._ref = ref_local.tolist()  # type: ignore[attr-defined]
-            self._alt = alt_local.tolist()  # type: ignore[attr-defined]
-            self._alt2 = extra  # type: ignore[attr-defined]
+            alleles = genotype_data.get_ref_alt_alleles(genotype_data.snp_data)
+
+            if isinstance(alleles[0], np.ndarray):
+                self._ref = alleles[0].tolist()  # type: ignore[attr-defined]
+            else:
+                self._ref = alleles[0]  # type: ignore[attr-defined]
+
+            alts = [x for i, x in enumerate(alleles) if i > 0]
+            self._alt = alts.tolist() if isinstance(alts, np.ndarray) else alts  # type: ignore[attr-defined]
+
         # Force a known filetype branch in decode_012.
         self.filetype = "vcf"
 
