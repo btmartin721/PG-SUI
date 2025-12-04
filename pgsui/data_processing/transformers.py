@@ -625,56 +625,60 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
             self.logger.error(msg)
             raise ValueError(msg)
 
-        # Choose a node
-        if weighted:
-            w = np.asarray(list(node_dict.values()), dtype=float)
-            w[~np.isfinite(w)] = 0.0
-            s = w.sum()
-            keys = list(node_dict.keys())
-            if s <= 0.0:
-                chosen_key = rng.choice(np.array(keys, dtype=object))
-            else:
-                p = w / s
-                chosen_key = rng.choice(np.array(keys, dtype=object), p=p)
-        else:
-            chosen_key = rng.choice(np.array(list(node_dict.keys()), dtype=object))
+        keys = np.array(list(node_dict.keys()), dtype=object)
+        weights = np.asarray(list(node_dict.values()), dtype=float)
+        weights[~np.isfinite(weights)] = 0.0
+        sample_set = set(self.genotype_data.samples)
+
+        def _choose_key() -> object:
+            if weighted and weights.sum() > 0.0:
+                p = weights / weights.sum()
+                return rng.choice(keys, p=p)
+            return rng.choice(keys)
 
         tree = self.tree_parser.tree
+        last_error: Optional[Exception] = None
+        max_attempts = max(1, len(keys) * 3)
 
-        # 1. Resolve chosen_key to a Node object
-        if isinstance(chosen_key, (int, np.integer)):
-            # ToyTree supports direct indexing: tree[idx] returns the Node object
+        for _ in range(max_attempts):
+            chosen_key = _choose_key()
+
+            # 1. Resolve chosen_key to a Node object
             try:
-                node = tree[int(chosen_key)]
-            except IndexError:
-                msg = f"Node index {chosen_key} not found in tree."
-                self.logger.error(msg)
-                raise ValueError(msg)
-        else:
-            # Assume chosen_key is already a Node object
-            node = chosen_key
+                if isinstance(chosen_key, (int, np.integer)):
+                    node = tree[int(chosen_key)]
+                else:
+                    node = chosen_key
+            except Exception as e:
+                last_error = e
+                continue
 
-        # 2. Retrieve leaves for this specific node
-        # .get_leaves() returns a list of Node objects representing the tips
-        if hasattr(node, "get_leaves"):
-            tips = [leaf.name for leaf in node.get_leaves()]
-        else:
-            # Fallback if the object passed isn't a valid ToyTree Node
-            msg = f"Object {type(node)} does not have a get_leaves method."
-            self.logger.error(msg)
-            raise TypeError(msg)
+            # 2. Retrieve leaves for this specific node
+            if not hasattr(node, "get_leaves"):
+                last_error = TypeError(
+                    f"Object {type(node)} does not have a get_leaves method."
+                )
+                continue
 
-        # Filter to sample IDs present in the matrix
-        sample_set = set(self.genotype_data.samples)
-        tips = [t for t in tips if t in sample_set]
+            try:
+                tips = [leaf.name for leaf in node.get_leaves()]  # type: ignore
+            except Exception as e:
+                last_error = e
+                continue
 
-        if not tips:
-            # TODO: resample instead of erroring;  here we error to avoid silent empties.
-            msg = "Sampled clade contains no tips present in genotype_data.samples."
-            self.logger.error(msg)
-            raise ValueError(msg)
+            # Filter to sample IDs present in the matrix
+            tips = [t for t in tips if t in sample_set]
+            if tips:
+                return tips
 
-        return tips
+        msg = (
+            "No sampled clades contain tips present in genotype_data.samples. "
+            "Check that tree tip names match the genotype_data samples."
+        )
+        self.logger.error(msg)
+        if last_error:
+            raise ValueError(msg) from last_error
+        raise ValueError(msg)
 
     def _validate_mask(self, use_non_original_only: bool = False) -> None:
         """Ensure no column is entirely masked on observed entries.
