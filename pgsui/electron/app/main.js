@@ -1,7 +1,7 @@
 const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const readline = require('readline');
 
 app.disableHardwareAcceleration();
@@ -9,6 +9,32 @@ app.commandLine.appendSwitch('disable-gpu');
 
 let win = null;
 let currentChild = null;
+
+function resolveBundledPython() {
+  const candidates = [
+    path.join(process.resourcesPath || '', 'extras', 'venv', 'bin', 'python3'),
+    path.join(process.resourcesPath || '', 'extras', 'venv', 'bin', 'python'),
+    path.join(process.resourcesPath || '', 'extras', 'venv', 'Scripts', 'python.exe'),
+    path.resolve(__dirname, 'extras', 'venv', 'bin', 'python3'),
+    path.resolve(__dirname, 'extras', 'venv', 'bin', 'python'),
+    path.resolve(__dirname, 'extras', 'venv', 'Scripts', 'python.exe'),
+  ];
+  for (const pth of candidates) {
+    if (pth && fs.existsSync(pth)) return pth;
+  }
+  return null;
+}
+
+function pickFirstWorkingPython(candidates) {
+  for (const exe of candidates) {
+    if (!exe) continue;
+    try {
+      const res = spawnSync(exe, ['--version'], { env: process.env });
+      if (res.status === 0 || res.stdout.length || res.stderr.length) return exe;
+    } catch { /* try next */ }
+  }
+  return 'python3';
+}
 
 function createWindow() {
   win = new BrowserWindow({
@@ -51,6 +77,7 @@ function buildArgs(p) {
   kv('--config', p.yamlPath);
   kv('--dump-config', p.dumpConfigPath);
   kv('--preset', p.preset || 'fast');
+  kv('--sim-strategy', p.simStrategy);
   if (Array.isArray(p.models) && p.models.length) a.push('--models', ...p.models);
   if (Array.isArray(p.includePops) && p.includePops.length) a.push('--include-pops', ...p.includePops);
   fl('--tune', !!p.tune);
@@ -99,7 +126,16 @@ ipcMain.handle('pgsui:start', async (evt, payload) => {
     fullArgv = [cmd, ...args];
     currentChild = spawn(cmd, args, { cwd, env: process.env });
   } else {
-    const pythonExe = payload.pythonPath || 'python3';
+    const pythonExe = pickFirstWorkingPython([
+      resolveBundledPython(),
+      payload.pythonPath,
+      process.env.PGSUI_PYTHON,
+      '/opt/homebrew/bin/python3.12',
+      '/usr/local/bin/python3.12',
+      'python3.12',
+      'python3',
+      'python',
+    ]);
     let cliPath = payload.cliPath;
     if (!cliPath) {
       const r = await resolveDefaultCli();
@@ -142,9 +178,11 @@ ipcMain.handle('pgsui:stop', async () => {
 });
 
 function resolveDefaultCliPathCandidates() {
+  const pkgRoot = path.resolve(__dirname, '..', '..'); // <repo>/pgsui
+  const repoRoot = path.resolve(pkgRoot, '..');        // <repo>
   return [
-    path.resolve(process.cwd(), '..', 'pgsui', 'cli.py'),
-    path.resolve(__dirname, '..', '..', '..', 'pgsui', 'cli.py'),
+    path.join(pkgRoot, 'cli.py'),
+    path.join(repoRoot, 'pgsui', 'cli.py'),
     path.join(process.resourcesPath, 'pgsui', 'cli.py'),
   ];
 }
