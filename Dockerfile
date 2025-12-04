@@ -26,10 +26,11 @@ USER appuser
 
 SHELL ["/bin/bash", "-c"]
 
+ARG GIT_REF=main
 RUN python -m venv /home/appuser/venv \
     && source /home/appuser/venv/bin/activate \
     && python -m pip install --upgrade pip setuptools wheel \
-    && python -m pip install pg-sui
+    && python -m pip install "git+https://github.com/btmartin721/PG-SUI.git@${GIT_REF}"
 
 ENV PATH="/home/appuser/venv/bin:${PATH}"
 
