@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
+import shutil
 from pathlib import Path
 
 from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
@@ -34,6 +35,7 @@ def _build_args(p: dict[str, str | int | bool | list[str] | None]) -> list[str]:
     kv("--config", p.get("yamlPath"))
     kv("--dump-config", p.get("dumpConfigPath"))
     kv("--preset", p.get("preset") or "fast")
+    kv("--sim-strategy", p.get("simStrategy"))
     m = p.get("models") or []
     if m:
         a.extend(["--models", *m])
@@ -94,7 +96,16 @@ async def start(payload: dict):
     if use_pg:
         cmd = ["pg-sui", *args]
     else:
-        py = payload.get("pythonPath") or "python3"
+        py_candidates = [
+            payload.get("pythonPath"),
+            os.environ.get("PGSUI_PYTHON"),
+            "/opt/homebrew/bin/python3.12",
+            "/usr/local/bin/python3.12",
+            "python3.12",
+            "python3",
+            "python",
+        ]
+        py = next((c for c in py_candidates if c and shutil.which(c)), "python3")
         cli = payload.get("cliPath")
         if not cli:
             return {"ok": False, "error": "cli_path_required"}
