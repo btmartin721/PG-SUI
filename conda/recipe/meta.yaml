@@ -1,7 +1,9 @@
 # meta.yaml — pg-sui conda recipe
+{% set version = environ.get("PKG_VERSION", "1.6.8") %}
+
 package:
   name: "pg-sui"
-  version: "1.6.8"
+  version: "{{ version }}"
 
 source:
   path: .
