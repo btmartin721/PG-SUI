@@ -11,9 +11,41 @@ env:
   IMAGE_NAME: btmartin721/pgsui
 
 jobs:
+  tests:
+    name: Unit tests (pip)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Clean test artifacts
+        run: rm -rf dist build .pytest_cache tmp_test_output
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        env:
+          MPLCONFIGDIR: ${{ runner.temp }}/mpl
+        run: |
+          python -m pip install -U pip
+          python -m pip install ".[dev]"
+
+      - name: Run tests
+        env:
+          MPLCONFIGDIR: ${{ runner.temp }}/mpl
+        run: pytest -q
+
   build:
     name: Build Docker image
     runs-on: ubuntu-latest
+    needs: tests
     permissions:
       contents: read
       packages: write
@@ -24,39 +56,6 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Wait for PyPI and conda publishes
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          workflows=("publish-pypi" "conda")
-          for wf in "${workflows[@]}"; do
-            echo "Waiting for workflow '$wf' to succeed for $GITHUB_SHA"
-            success=0
-            for i in {1..30}; do
-              run=$(gh run list --workflow "$wf" --json headSha,status,conclusion,event --limit 30 --jq \
-                'map(select(.headSha=="'"$GITHUB_SHA"'" and .event=="push"))[0]')
-              status=$(echo "$run" | jq -r '.status // empty')
-              conclusion=$(echo "$run" | jq -r '.conclusion // empty')
-              if [[ "$conclusion" == "success" ]]; then
-                echo "✔ $wf completed successfully."
-                success=1
-                break
-              fi
-              if [[ "$conclusion" == "failure" || "$conclusion" == "cancelled" || "$status" == "" ]]; then
-                echo "✖ $wf not successful (status=$status, conclusion=$conclusion)."
-                exit 1
-              fi
-              echo "… still waiting for $wf (status=$status). Sleeping 20s."
-              sleep 20
-            done
-            if [[ $success -ne 1 ]]; then
-              echo "Timed out waiting for $wf to succeed."
-              exit 1
-            fi
-          done
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
