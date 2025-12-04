@@ -7,9 +7,6 @@ on:
   pull_request:
   workflow_dispatch:
 
-env:
-  MPLCONFIGDIR: ${{ runner.temp }}/mpl
-
 jobs:
   tests:
     name: conda tests (py${{ matrix.python-version }})
@@ -20,6 +17,8 @@ jobs:
     defaults:
       run:
         shell: bash -l {0}
+    env:
+      MPLCONFIGDIR: ${{ runner.temp }}/mpl
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -53,6 +52,8 @@ jobs:
     defaults:
       run:
         shell: bash -l {0}
+    env:
+      MPLCONFIGDIR: ${{ runner.temp }}/mpl
     steps:
       - name: Checkout
         uses: actions/checkout@v4
