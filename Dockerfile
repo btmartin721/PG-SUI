@@ -31,4 +31,6 @@ RUN python -m venv /home/appuser/venv \
     && python -m pip install --upgrade pip setuptools wheel \
     && python -m pip install pg-sui
 
+ENV PATH="/home/appuser/venv/bin:${PATH}"
+
 CMD []
