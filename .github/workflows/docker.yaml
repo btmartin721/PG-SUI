@@ -50,9 +50,64 @@ jobs:
       contents: read
       packages: write
     steps:
-      - name: Free up Disk Space
+      - name: Maximize disk space
         run: |
-          docker system prune -f || true
+          set -euxo pipefail
+          echo "Disk usage before cleanup:"
+          df -h
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /home/linuxbrew/.linuxbrew || true
+          sudo apt-get clean
+          docker system prune -af || true
+          echo "Disk usage after cleanup:"
+          df -h
+
+      - name: Wait for conda workflow (tag pushes)
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          workflow_id=$(gh api repos/${{ github.repository }}/actions/workflows --jq '.workflows[] | select(.name=="conda") | .id' | head -n 1)
+          if [[ -z "${workflow_id:-}" ]]; then
+            echo "Could not find conda workflow id in repository workflows."
+            exit 1
+          fi
+
+          echo "Waiting for conda workflow (id: $workflow_id) to finish for SHA $TARGET_SHA"
+
+          for attempt in {1..40}; do
+            run_info=$(gh api "repos/${{ github.repository }}/actions/workflows/${workflow_id}/runs" \
+              --jq 'first(.workflow_runs[] | select(.head_sha=="'"${TARGET_SHA}"'"))')
+
+            if [[ -z "${run_info:-}" || "$run_info" == "null" ]]; then
+              echo "No matching conda run yet (attempt $attempt/40); sleeping 30s..."
+              sleep 30
+              continue
+            fi
+
+            status=$(echo "$run_info" | jq -r '.status')
+            conclusion=$(echo "$run_info" | jq -r '.conclusion // ""')
+            url=$(echo "$run_info" | jq -r '.html_url')
+
+            echo "Conda workflow run: $url (status=$status, conclusion=$conclusion)"
+
+            if [[ "$status" == "completed" ]]; then
+              if [[ "$conclusion" == "success" ]]; then
+                echo "Conda workflow completed successfully."
+                exit 0
+              else
+                echo "Conda workflow finished with conclusion=$conclusion"
+                exit 1
+              fi
+            fi
+
+            sleep 30
+          done
+
+          echo "Timed out waiting for conda workflow to complete."
+          exit 1
 
       - name: Checkout
         uses: actions/checkout@v4
