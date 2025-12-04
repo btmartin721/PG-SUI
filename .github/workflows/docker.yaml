@@ -18,6 +18,10 @@ jobs:
       contents: read
       packages: write
     steps:
+      - name: Free up Disk Space
+        run: |
+          docker system prune -f || true
+
       - name: Checkout
         uses: actions/checkout@v4
 
