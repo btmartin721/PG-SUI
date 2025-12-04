@@ -26,10 +26,8 @@ def main() -> int:
     npx = shutil.which("npx")
 
     env = os.environ.copy()
-    # Provide defaults the renderer can read if desired
-    # Your GUI already lets users browse for cli.py and vcf paths.
-    # You can prefill CLI path here if you want:
-    # env["PGSUI_CLI_DEFAULT"] = str(Path(__file__).resolve().parents[1] / "cli.py")
+    env.setdefault("PGSUI_PYTHON", sys.executable)
+    env.setdefault("PGSUI_CLI_DEFAULT", str(Path(__file__).resolve().parents[1] / "cli.py"))
 
     try:
         if local_electron.exists():
