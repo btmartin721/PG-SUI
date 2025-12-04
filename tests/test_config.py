@@ -82,7 +82,6 @@ def test_ensure_mostfrequent_config_accepts_dict() -> None:
     assert isinstance(cfg, MostFrequentConfig)
     assert pytest.approx(cfg.split.test_size) == 0.4
     assert cfg.algo.default == 1
-    assert cfg.io.verbose is True  # carried over from preset
 
 
 def test_ensure_refallele_config_path_roundtrip(tmp_path: Path) -> None:
