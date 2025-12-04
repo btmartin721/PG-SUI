@@ -13,8 +13,6 @@ __pycache__/
 *.egg-info/
 *.egg
 dist/
-build/
-build/lib/
 conda/dist/
 conda-bld/
 *.whl
