@@ -358,9 +358,9 @@ class ImputeUBP(BaseNNImputer):
         if self.tune:
             self.tune_hyperparameters()
 
-        self.best_params_ = getattr(
-            self, "best_params_", self._set_best_params_default()
-        )
+        # Fall back to default model params when none have been selected yet.
+        if not getattr(self, "best_params_", None):
+            self.best_params_ = self._set_best_params_default()
 
         # --- class weights for 0/1/2 ---
         self.class_weights_ = self._normalize_class_weights(
