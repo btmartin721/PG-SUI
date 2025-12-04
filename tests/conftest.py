@@ -3,8 +3,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import numpy as np
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Compatibility shims for older snpio versions (missing SNPioMultiQC)
@@ -13,6 +13,7 @@ try:  # pragma: no cover - defensive guard
     import snpio  # type: ignore
 
     if not hasattr(snpio, "SNPioMultiQC"):
+
         class _DummyMQC:
             @staticmethod
             def queue_html(*args, **kwargs):
@@ -89,10 +90,9 @@ def example_genotype_data(
     )
 
     # Ensure ref/alt alleles are populated for downstream decoding.
-    ref, alt, extra_alt = gd.get_ref_alt_alleles(gd.snp_data)
+    ref, alt = gd.get_ref_alt_alleles(gd.snp_data)
     gd.ref = ref.tolist()
-    gd.alt = alt.tolist()
-    gd._alt2 = extra_alt  # type: ignore[attr-defined]
+    gd.alt = np.asarray(alt).tolist()
 
     # Patch GenotypeEncoder to carry ref/alt into the encoder instance and
     # avoid file-writing paths that expect VCF/PHYLIP context.
@@ -102,7 +102,9 @@ def example_genotype_data(
     def _patched_init(self, genotype_data):
         orig_init(self, genotype_data)
         if not hasattr(self, "_ref") or self._ref is None or len(getattr(self, "_ref", [])) == 0:  # type: ignore[attr-defined]
-            ref_local, alt_local, extra = genotype_data.get_ref_alt_alleles(genotype_data.snp_data)
+            ref_local, alt_local, extra = genotype_data.get_ref_alt_alleles(
+                genotype_data.snp_data
+            )
             self._ref = ref_local.tolist()  # type: ignore[attr-defined]
             self._alt = alt_local.tolist()  # type: ignore[attr-defined]
             self._alt2 = extra  # type: ignore[attr-defined]
@@ -112,8 +114,20 @@ def example_genotype_data(
     def _patched_decode(self, X, write_output: bool = True, is_nuc: bool = False):  # type: ignore[override]
         # Bypass file writing and use a simple safe mapping for test assertions.
         arr = pytest.importorskip("numpy").asarray(X)
-        mapper = {0: "A", 1: "C", 2: "G", -9: "A", "0": "A", "1": "C", "2": "G", "-9": "A"}
-        flat = [mapper.get(int(x), "A") if not isinstance(x, str) else mapper.get(x, "A") for x in arr.ravel()]
+        mapper = {
+            0: "A",
+            1: "C",
+            2: "G",
+            -9: "A",
+            "0": "A",
+            "1": "C",
+            "2": "G",
+            "-9": "A",
+        }
+        flat = [
+            mapper.get(int(x), "A") if not isinstance(x, str) else mapper.get(x, "A")
+            for x in arr.ravel()
+        ]
         return pytest.importorskip("numpy").array(flat, dtype="<U1").reshape(arr.shape)
 
     GenotypeEncoder.__init__ = _patched_init  # type: ignore[assignment]
