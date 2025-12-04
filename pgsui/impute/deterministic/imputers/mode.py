@@ -57,6 +57,7 @@ def ensure_mostfrequent_config(
         base = MostFrequentConfig()
         # honor optional top-level 'preset'
         preset = config.pop("preset", None)
+
         if preset:
             base = MostFrequentConfig.from_preset(preset)
 

@@ -131,4 +131,4 @@ CLI usage mirrors the Python API:
       --sim-strategy random_weighted \
       --sim-prop 0.20
 
-``--sim-strategy`` and ``--sim-prop`` apply to every selected neural model, ensuring the same simulated-missingness mask is used throughout evaluation. Pass ``--simulate-missing`` if you want to rely solely on organically missing calls for a diagnostic run.
+``--sim-strategy`` and ``--sim-prop`` apply to every selected neural model, ensuring the same simulated-missingness mask is used throughout evaluation. Pass ``--simulate-missing`` if you want to rely solely on organically missing calls for a diagnostic run. See :ref:`simulated_missingness` for how each strategy behaves.

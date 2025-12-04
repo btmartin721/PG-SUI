@@ -25,14 +25,14 @@ from __future__ import annotations
 import argparse
 import copy
 import re
-import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Sequence, Dict, Any
+from typing import List, Mapping, Optional, Sequence
 
+import matplotlib as mpl
 import matplotlib.cm as cm
-import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
@@ -44,6 +44,60 @@ from statsmodels.stats.oneway import anova_oneway
 plt.switch_backend("Agg")
 
 _RESULTS_KEY_RE = re.compile(r"(results\d+)", flags=re.IGNORECASE)
+SIM_STRATEGY_LABELS = [
+    ("random_output", "Random"),
+    ("random_weighted_output", "Random Weighted"),
+    ("random_weighted_inv_output", "Random Weighted Inv"),
+    ("nonrandom_weighted_output", "Nonrandom Weighted"),
+    ("nonrandom_output", "Nonrandom"),
+]
+
+PLOT_FONTSIZE = 14
+PLOT_TITLESIZE = 16
+mpl_params = {
+    "xtick.labelsize": PLOT_FONTSIZE,
+    "ytick.labelsize": PLOT_FONTSIZE,
+    "legend.fontsize": PLOT_FONTSIZE,
+    "figure.titlesize": PLOT_TITLESIZE,
+    "figure.facecolor": "white",
+    "figure.dpi": 300,
+    "font.size": PLOT_FONTSIZE,
+    "axes.titlesize": PLOT_FONTSIZE,
+    "axes.labelsize": PLOT_FONTSIZE,
+    "axes.grid": False,
+    "axes.edgecolor": "black",
+    "axes.facecolor": "white",
+    "axes.spines.left": True,
+    "axes.spines.bottom": True,
+    "axes.spines.top": False,
+    "axes.spines.right": False,
+    "axes.facecolor": "white",
+    "savefig.facecolor": "white",
+    "savefig.dpi": 300,
+    "savefig.bbox": "tight",
+    "pdf.fonttype": 42,
+    "ps.fonttype": 42,
+}
+
+mpl.rcParams.update(mpl_params)
+plt.rcParams.update(mpl_params)
+
+METRIC_MAP = {
+    "F_inbreeding": "Inbreeding Coefficient ($F_{IS}$)",
+    "ThetaWatt": "Watterson's θ",
+    "Pi": "Nucleotide Diversity (π)",
+    "TajimaD": "Tajima's D",
+    "Missingness": "Missingness Prop.",
+    "Ho": "Observed Heterozygosity",
+    "He": "Expected Heterozygosity",
+    "HetzPositions": "Heterozygous Sites",
+    "SegSites": "Segregating Sites",
+    "Singletons": "Singleton Prop.",
+    "Hap": "Number of Haplotypes",
+    "Hd": "Haplotype Diversity",
+    "Sample_Size": "Sample Size",
+    "MAF": "Minor Allele Frequency",
+}
 
 
 @dataclass
@@ -168,19 +222,22 @@ def plot_effectsize_summary(anova_res: pd.DataFrame, outpath: Path) -> None:
     """Plot Eta-squared as a bar plot, sorted by magnitude."""
     # Filter for valid eta_sq values and sort
     sub = anova_res.dropna(subset=["eta_sq"]).copy()
+
     if sub.empty:
         return
+
     sub = sub.sort_values("eta_sq", ascending=False)
 
-    fig, ax = plt.subplots(figsize=(10, 6))
+    # Map metric codes to human-readable labels
+    sub["metric"] = sub["metric"].map(METRIC_MAP).fillna(sub["metric"])
 
-    # --- COLORS: Viridis Reversed (Dark = High) ---
-    cmap = sns.color_palette("viridis_r", as_cmap=True)
-
+    # Define a consistent colormap and normalize
+    cmap = sns.color_palette("viridis", as_cmap=True, n_colors=len(sub))
     norm = mcolors.Normalize(
         vmin=min(sub["eta_sq"].min(), 0), vmax=max(sub["eta_sq"].max(), 1)
     )
-    colors = [cmap(norm(val)) for val in sub["eta_sq"]]
+
+    fig, ax = plt.subplots(figsize=(10, 6))
 
     # Create the bar plot
     ax = sns.barplot(
@@ -188,7 +245,8 @@ def plot_effectsize_summary(anova_res: pd.DataFrame, outpath: Path) -> None:
         x="metric",
         y="eta_sq",
         hue="eta_sq",
-        palette=colors,
+        hue_norm=norm,
+        palette=cmap,
         edgecolor="k",
         linewidth=0.7,
         ax=ax,
@@ -197,31 +255,21 @@ def plot_effectsize_summary(anova_res: pd.DataFrame, outpath: Path) -> None:
     )
 
     # Customize axes and title
-    ax.set_ylabel("η² (Effect Size)", fontsize=12)
-    ax.set_xlabel("Metric", fontsize=12)
-    ax.set_title(
-        "Metric Differentiation Power (η²-squared from Welch's ANOVA)",
-        fontsize=14,
-        pad=15,
-    )
+    ax.set_ylabel("η² (Effect Size)")
+    ax.set_xlabel("Summary Statistic")
+    ax.set_title("Metric Differentiation Power (from Welch's ANOVA)", pad=15)
 
     # Add y-axis grid for easier reading
     ax.grid(True, axis="y", linestyle="--", alpha=0.7)
 
     # Rotate x-axis labels to prevent overlap
-    plt.setp(
-        ax.get_xticklabels(),
-        rotation=45,
-        ha="right",
-        rotation_mode="anchor",
-        fontsize=10,
-    )
+    plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
 
     # Add a colorbar to act as a legend for the bar colors
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
     sm.set_array([])  # Required for ScalarMappable
     cbar = fig.colorbar(sm, ax=ax)
-    cbar.set_label("η² (Eta-squared) Value", fontsize=10)
+    cbar.set_label("η² (Eta-squared) Value")
 
     fig.tight_layout()
     fig.savefig(outpath, dpi=300)
@@ -266,16 +314,14 @@ def plot_dataset_metric_heatmap(
     im = ax.imshow(masked_mat, aspect="auto", interpolation="nearest", cmap=cmap)
 
     ax.set_title(
-        f"Per-dataset Mean Profiles ({'Z-scored' if zscore else 'Raw'})",
-        fontsize=14,
-        pad=20,
+        f"Per-dataset Mean Profiles ({'Z-scored' if zscore else 'Raw'})", pad=20
     )
     ax.set_xticks(np.arange(n_metrics))
-    ax.set_xticklabels(mat.columns, rotation=45, ha="right", fontsize=10)
+    ax.set_xticklabels(mat.columns, rotation=45, ha="right")
     ax.set_yticks(np.arange(n_datasets))
 
     y_fontsize = 8 if n_datasets < 60 else 6 if n_datasets < 120 else 4
-    ax.set_yticklabels(mat.index, fontsize=y_fontsize)
+    ax.set_yticklabels(mat.index)
 
     cbar = fig.colorbar(im, ax=ax, shrink=0.5)
     cbar.set_label("Z-score" if zscore else "Raw Mean")
@@ -304,7 +350,8 @@ def find_dataset_files(root: Path) -> List[DatasetFiles]:
 
 def read_locus_stats(dset: DatasetFiles) -> pd.DataFrame:
     df = pd.read_csv(dset.locus_csv)
-    df["dataset"] = dset.dataset_id
+    # Keep dataset_id (includes path context such as sim strategy) and a short key
+    df["dataset_raw"] = dset.dataset_id
     dataset_key = dset.dataset_id
     if "Filename" in df.columns:
         first_fn = df["Filename"].dropna().astype(str)
@@ -313,20 +360,47 @@ def read_locus_stats(dset: DatasetFiles) -> pd.DataFrame:
             if extracted:
                 dataset_key = extracted
     df["dataset_key"] = dataset_key
+
+    def infer_sim_strategy(path: Path) -> str:
+        parts = [p.lower() for p in path.parts]
+        for slug, label in SIM_STRATEGY_LABELS:
+            if any(slug in part for part in parts):
+                return label
+        return "Unknown"
+
+    sim_strategy = infer_sim_strategy(dset.locus_csv)
+    label_base = dataset_key if dataset_key else dset.dataset_id
+    df["sim_strategy"] = sim_strategy
+    df["dataset"] = (
+        f"{label_base}__{sim_strategy}" if sim_strategy != "Unknown" else label_base
+    )
     return df
 
 
 def deduplicate_datasets_by_key(df: pd.DataFrame) -> pd.DataFrame:
     if "dataset_key" not in df.columns:
         return df
-    counts = df.groupby(["dataset_key", "dataset"]).size().reset_index(name="n_loci")
-    keep = counts.sort_values(
-        ["dataset_key", "n_loci"], ascending=[True, False]
-    ).drop_duplicates("dataset_key")
-    kept_pairs = keep[["dataset_key", "dataset"]]
-    df_keep = df.merge(kept_pairs, on=["dataset_key", "dataset"], how="inner")
-    df_keep["dataset"] = df_keep["dataset_key"]
-    return df_keep
+    # Deduplicate within each dataset_key + sim_strategy to keep the richest entry,
+    # but do not collapse across simulation strategies.
+    group_cols = ["dataset_key"]
+    if "sim_strategy" in df.columns:
+        group_cols.append("sim_strategy")
+
+    counts = (
+        df.groupby(group_cols + ["dataset"])
+        .size()
+        .reset_index(name="n_loci")
+        .sort_values(
+            group_cols + ["n_loci"],
+            ascending=[True] * len(group_cols) + [False],
+        )
+    )
+    keep = counts.drop_duplicates(group_cols)
+    return df.merge(
+        keep[group_cols + ["dataset"]],
+        on=group_cols + ["dataset"],
+        how="inner",
+    )
 
 
 def extract_dataset_key_from_filename(filename: str) -> Optional[str]:
@@ -697,6 +771,7 @@ def run_multiqc_integration(
 def main() -> None:
     args = parse_args()
     root: Path = args.root.resolve()
+    root.mkdir(parents=True, exist_ok=True)
 
     # Setup Output Directory
     if args.output_dir is not None:

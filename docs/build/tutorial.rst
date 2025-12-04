@@ -22,6 +22,12 @@ What's new
 - **Unified I/O and plotting** via nested config sections (``io``, ``training``, ``tuning``, ``plot``) across all imputers.
 - **Consistent fit/transform contract**: pass a ``GenotypeData`` to the model **at instantiation**, then call ``fit()`` followed by ``transform()`` (no arguments).
 
+How to run PG-SUI
+-----------------
+
+- **Command line** — run ``pg-sui`` directly for scripted, reproducible workflows. This tutorial includes a copy/paste CLI quickstart and the full precedence model.
+- **Desktop GUI (Electron)** — launch ``pgsui-gui`` for a point-and-click wrapper around the CLI. The GUI writes the exact CLI command it executes; see :doc:`gui` for a guided walkthrough.
+
 Model Families
 --------------
 
@@ -46,13 +52,15 @@ Model Families
 Installation
 ------------
 
-Install PG-SUI with pip (ideally in a fresh virtual environment):
+Install PG-SUI with pip (ideally in a fresh virtual environment). Add the GUI extras if you want the Electron desktop app:
 
 .. code-block:: bash
 
-    pip install pg-sui
+    pip install pg-sui            # CLI + Python API
+    pip install "pg-sui[gui]"     # optional desktop GUI
+    pgsui-gui-setup               # one-time Electron dependency install
 
-PG-SUI expects genotype I/O via **SNPio**. See SNPio docs for VCF/PHYLIP/STRUCTURE/GENEPOP readers and Docker/conda installs.
+See :doc:`install` for more detail. PG-SUI expects genotype I/O via **SNPio**. See SNPio docs for VCF/PHYLIP/STRUCTURE/GENEPOP readers and Docker/conda installs.
 
 Data Input, Encodings, and Conventions
 --------------------------------------
@@ -63,6 +71,73 @@ PG-SUI uses SNPio's ``GenotypeData`` object:
 - **Working encoding**: **0/1/2** for diploids (REF/HET/ALT) with **-9** for missing.
 - **Evaluation labels**: ``["REF", "HET", "ALT"]`` for diploids; haploids collapse to two classes.
 - **IUPAC handling**: decoding/encoding utilities are provided by SNPio.
+
+CLI Quickstart (copy/paste)
+---------------------------
+
+1. Place your VCF/PHYLIP/STRUCTURE/GENEPOP file and optional popmap in a working directory.
+2. Run a preset with two deep models (edit paths/models as needed):
+
+.. code-block:: bash
+
+    pg-sui \
+      --vcf pgsui/example_data/vcf_files/phylogen_nomx.vcf.gz \
+      --popmap pgsui/example_data/popmaps/test.popmap \
+      --models ImputeUBP ImputeVAE \
+      --preset balanced \
+      --prefix demo
+
+3. Optional: add a YAML config (``--config vae_balanced.yaml``), apply quick tweaks with ``--set key=value``, or disable simulated missingness with ``--simulate-missing``.
+4. Outputs and plots are written under ``<prefix>_output/``. The CLI prints paths as it runs.
+
+Prefer a visual workflow? Launch the desktop app with ``pgsui-gui`` and follow :doc:`gui`.
+
+.. _simulated_missingness:
+
+Simulated missingness strategies
+--------------------------------
+
+PG-SUI evaluates imputers on a **simulated masking** of observed genotypes so every model sees the same held-out entries. The mask is created once per run and reused across selected models. Control it via YAML (``sim`` section) or the CLI flags ``--sim-strategy`` and ``--sim-prop``; disable entirely with ``--simulate-missing``.
+
+- ``random`` — Uniform masking across eligible cells until the target proportion is reached (baseline).
+- ``random_weighted`` — Column-wise masking weighted by observed genotype frequencies; common genotypes are masked more often.
+- ``random_weighted_inv`` — Column-wise masking weighted inversely by observed genotype frequencies; rarer genotypes are masked more often.
+- ``nonrandom`` — Phylogenetically clustered masking. Requires a SNPio genotype tree; clades are sampled uniformly (tips/internal) and masked together.
+- ``nonrandom_weighted`` — Phylogenetically clustered masking with clades sampled proportional to branch length (emphasizes longer, more diverged branches).
+
+Use ``--sim-prop`` (0–1) to set the proportion of observed entries to hide. For diagnostics that rely only on organically missing calls, pass ``--simulate-missing`` (store-false flag) to skip simulated masking.
+
+Summary table
+^^^^^^^^^^^^^
+
+.. list-table:: Summary of missing data simulation strategies
+   :header-rows: 1
+   :widths: auto
+
+   * - Strategy
+     - Selection logic
+     - Biologically mimics
+     - Expected Difficulty
+   * - Random
+     - Uniform coin flip per cell
+     - Random sequencing errors; random read-depth fluctuations
+     - Easy
+   * - Random weighted
+     - Probability proportional to genotype frequency (masks common)
+     - Reference bias: common allele captured more; technical artifacts
+     - Moderate
+   * - Random weighted inv
+     - Probability inversely proportional to genotype frequency (masks rare)
+     - Allelic dropout / minor-allele loss; ascertainment bias
+     - Hard
+   * - Nonrandom
+     - Pick a random clade, mask the locus in that clade (tree required)
+     - PCR failure from primer-site mutation within a clade
+     - Hard
+   * - Nonrandom weighted
+     - Pick clade proportional to branch length (tree required)
+     - Divergence-driven dropout on long, isolated branches
+     - Very hard
 
 Quick Start (End-to-End, Dataclass API)
 ---------------------------------------
@@ -184,7 +259,7 @@ Loading YAML in Python:
 Command-Line Interface (CLI)
 ----------------------------
 
-The ``pg-sui`` CLI supports running one or more models with the same dataset and a shared precedence rule set.
+Use the CLI for automation or to mirror runs configured in the GUI (the desktop app assembles these same flags under the hood). The ``pg-sui`` CLI supports running one or more models with the same dataset and a shared precedence rule set.
 
 **Precedence model** (highest last):
 
@@ -195,9 +270,9 @@ The ``pg-sui`` CLI supports running one or more models with the same dataset and
 - Explicit CLI flags (if provided) override YAML.
 - ``--set`` applies deep dot-path overrides for final tweaks.
 
-**Simulation controls**
+**Simulation controls** (see :ref:`simulated_missingness` for option details)
 
-- ``--sim-strategy``: choose how simulated masking selects loci (``random``, ``random_weighted``, ``random_weighted_inv``, ``nonrandom``, ``nonrandom_weighted``).
+- ``--sim-strategy``: choose how simulated masking selects loci.
 - ``--sim-prop``: set the proportion of observed entries to hide when creating the evaluation mask.
 - ``--simulate-missing``: disable simulated masking entirely for the run (store-false flag). Leave it unset to inherit the preset/YAML choice or force a value via ``--set sim.simulate_missing=True``.
 
@@ -369,14 +444,14 @@ Common Config Sections (Fields at a Glance)
 
 All ``*Config`` dataclasses expose nested sections (names vary a little by family). The essentials:
 
-- ``io`` – run prefix, logging verbosity, random seeds, output format.
-- ``model`` – estimator architecture (latent dimension, layer schedule, tree counts, etc.); deterministic configs instead expose ``algo``.
-- ``train`` – optimisation knobs for neural models (batch size, learning rate, early stopping, validation split, device, class-weight limits).
-- ``tune`` – Optuna envelope for the neural stack; retained for supervised configs for API compatibility.
-- ``evaluate`` / ``split`` – latent optimisation controls for unsupervised models or held-out split definitions for deterministic ones.
-- ``imputer`` and ``sim`` – IterativeImputer and simulated-missingness settings unique to supervised models.
-- ``plot`` – export format, DPI, fonts, and whether to display figures interactively.
-- ``sim`` – simulated-missingness controls (strategy, proportion, enable/disable).
+- **io** -- run prefix, logging verbosity, random seeds, output format.
+- **model** -- estimator architecture (latent dimension, layer schedule, tree counts, etc.); deterministic configs instead expose ``algo``.
+- **train** -- optimisation knobs for neural models (batch size, learning rate, early stopping, validation split, device, class-weight limits).
+- **tune** -- Optuna envelope for the neural stack; retained for supervised configs for API compatibility.
+- **evaluate** / **split** -- latent optimisation controls for unsupervised models or held-out split definitions for deterministic ones.
+- **imputer** and **sim** -- IterativeImputer and simulated-missingness settings unique to supervised models.
+- **plot** -- export format, DPI, fonts, and whether to display figures interactively.
+- **sim** -- simulated-missingness controls (strategy, proportion, enable/disable).
 
 Visualization & Reports
 -----------------------

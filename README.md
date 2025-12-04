@@ -64,6 +64,19 @@ If you have an Intel CPU and want to use the sklearn-genetic-intelex package to 
 pip install pg-sui[intel]
 ```
 
+### Optional GUI (Electron)
+
+PG-SUI ships an Electron GUI wrapper around the Python CLI.
+
+1. Install the Python-side extras (FastAPI/uvicorn helper) if you want to serve from Python:  
+   `pip install pg-sui[gui]`
+2. Install Node.js (https://nodejs.org) and fetch the app dependencies once:  
+   `pgsui-gui-setup`
+3. Launch the GUI:  
+   `pgsui-gui`
+
+The GUI shells out to the same CLI underneath, so presets/overrides and YAML configs behave identically.
+
 ## Manual Installation
 
 ### Dependencies

@@ -28,6 +28,7 @@ function collectPayload() {
     yamlPath: $('yamlPath').value.trim() || undefined,
     dumpConfigPath: $('dumpConfigPath').value.trim() || undefined,
     preset: $('preset').value || 'fast',
+    simStrategy: $('simStrategy').value || 'random',
     models: modelsSel,
     includePops,
     device: $('device').value || undefined,

@@ -24,7 +24,8 @@
     },
     "asar": true,
     "extraResources": [
-      { "from": "../../pgsui/cli.py", "to": "pgsui/cli.py" }
+      { "from": "../../cli.py", "to": "pgsui/cli.py" },
+      { "from": "extra-resources", "to": "extras" }
     ],
     "files": [
       "main.js",

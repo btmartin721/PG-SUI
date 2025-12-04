@@ -123,7 +123,7 @@ YAML + overrides:
       --set imputer.max_iter=12 \
       --sim-prop 0.40
 
-Use ``--simulate-missing`` to temporarily disable simulated masking for diagnostics or ablation studies; omit it to honour the preset/YAML defaults.
+Use ``--simulate-missing`` to temporarily disable simulated masking for diagnostics or ablation studies; omit it to honour the preset/YAML defaults. Strategy definitions are listed in :ref:`simulated_missingness`.
 
 Outputs
 -------

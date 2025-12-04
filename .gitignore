@@ -13,8 +13,8 @@ __pycache__/
 *.egg-info/
 *.egg
 dist/
-build/
-build/lib/
+conda/dist/
+conda-bld/
 *.whl
 *.manifest
 *.spec
@@ -193,3 +193,13 @@ pgsui_validation/
 iqtree_results_unique/
 iqtree_results_GTR/
 dataset_stats_output/
+pgsui_validation.nosync/
+iqtree_results_GTR.nosync/
+iqtree_results_unique.nosync/
+summarize.nosync/
+subset_phylip.nosync/
+simulation.nosync/
+validation_inputs_phylip_max150k.nosync/
+gui_test_output/
+*.dmg
+tmp_test_output/
