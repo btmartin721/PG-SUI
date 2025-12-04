@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from curses.ascii import alt
 import os
 from pathlib import Path
 
@@ -90,9 +91,15 @@ def example_genotype_data(
     )
 
     # Ensure ref/alt alleles are populated for downstream decoding.
-    ref, alt = gd.get_ref_alt_alleles(gd.snp_data)
-    gd.ref = ref.tolist()
-    gd.alt = np.asarray(alt).tolist()
+    alleles = gd.get_ref_alt_alleles(gd.snp_data)
+
+    gd.ref = alleles[0].tolist() if isinstance(alleles[0], np.ndarray) else alleles[0]
+    alts = [x for i, x in enumerate(alleles) if i > 0]
+
+    if isinstance(alts, np.ndarray):
+        gd.alt = alts.tolist()
+    else:
+        gd.alt = alts
 
     # Patch GenotypeEncoder to carry ref/alt into the encoder instance and
     # avoid file-writing paths that expect VCF/PHYLIP context.
