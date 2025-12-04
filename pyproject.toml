@@ -83,7 +83,10 @@ optional = ["PyObjC"]
 # ---- New: GUI extra ----
 # Keep it empty by default to avoid platform constraints.
 # Users still get the entry points. Node/Electron are resolved at runtime.
-gui = []
+gui = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.23",
+]
 
 [project.urls]
 Homepage = "https://github.com/btmartin721/PG-SUI"
