@@ -1,37 +1,72 @@
-# syntax=docker/dockerfile:1.7
-FROM python:3.12-slim
+# Base image with Conda
+FROM continuumio/miniconda3
 
-# ---- Env ----
-ENV TZ=Etc/UTC \
-    LC_ALL=C.UTF-8 \
-    LANG=C.UTF-8 \
-    PYTHONDONTWRITEBYTECODE=1 \
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    CONDA_ENV=pgsuienv
 
-# ---- OS deps for Nextflow shells and basic tooling ----
+# Install system-level dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        python3-pip python3-venv python-is-python3 bash coreutils findutils grep sed gawk curl \
-        ca-certificates tini \
-        && rm -rf /var/lib/apt/lists/*
+    build-essential \
+    gcc \
+    git \
+    curl \
+    wget \
+    libbz2-dev \
+    liblzma-dev \
+    libz-dev \
+    libcurl4-openssl-dev \
+    libssl-dev \
+    libncurses-dev \
+    libhdf5-dev \
+    ca-certificates \
+    unzip \
+    procps \
+    && rm -rf /var/lib/apt/lists/*
 
-# ---- Non-root user and writable workspace ----
-RUN useradd -r -u 10001 -m appuser
-WORKDIR /workspace
-RUN chown -R appuser:appuser /workspace
-VOLUME ["/workspace"]
+# Create a new Conda environment and install dependencies
+RUN conda create -y -n $CONDA_ENV -c conda-forge -c btmartin721 \
+    python=3.12 \
+    numpy=2.2.6 \
+    pandas=2.2.3 \
+    pip && \
+    conda clean -afy && \
+    conda init bash && \
+    echo "conda activate $CONDA_ENV" > ~/.bashrc
 
-# ---- Security ----
-USER appuser
+ENV PATH /opt/conda/envs/$CONDA_ENV/bin:$PATH
 
-SHELL ["/bin/bash", "-c"]
+RUN conda run -n $CONDA_ENV pip install --no-cache-dir \
+    pg-sui \
+    pytest \
+    jupyterlab && \
+    conda clean -afy
 
-ARG GIT_REF=main
-RUN python -m venv /home/appuser/venv \
-    && source /home/appuser/venv/bin/activate \
-    && python -m pip install --upgrade pip setuptools wheel \
-    && python -m pip install "git+https://github.com/btmartin721/PG-SUI.git@${GIT_REF}"
+# Create a non-root user and set home directory
+RUN useradd -ms /bin/bash pgsuiuser && \
+    mkdir -p /home/pgsuiuser/.config/matplotlib /app/results /app/docs /app/example_data && \
+    chown -R pgsuiuser:pgsuiuser /app /home/pgsuiuser
 
-ENV PATH="/home/appuser/venv/bin:${PATH}"
+# Set working directory
+WORKDIR /app
 
-CMD []
+# Copy application files with correct permissions
+COPY --chown=pgsuiuser:pgsuiuser tests/ tests/
+COPY --chown=pgsuiuser:pgsuiuser pgsui/example_data/ example_data/
+COPY --chown=pgsuiuser:pgsuiuser README.md docs/README.md
+COPY --chown=pgsuiuser:pgsuiuser configs/ configs/
+COPY --chown=pgsuiuser:pgsuiuser workflow/ workflow/
+COPY --chown=pgsuiuser:pgsuiuser scripts/ scripts/
+
+# Switch to non-root user
+USER pgsuiuser
+ENV HOME=/home/pgsuiuser
+ENV MPLCONFIGDIR=$HOME/.config/matplotlib
+RUN chmod -R u+w $HOME/.config/matplotlib
+
+# Run tests (non-blocking; allows image to build even if tests fail)
+RUN conda run -n $CONDA_ENV pytest tests/ || echo "Tests failed during build; continuing..."
+
+# Default container command
+CMD ["bash"]
