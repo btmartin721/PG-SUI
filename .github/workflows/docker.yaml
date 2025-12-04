@@ -61,7 +61,7 @@ jobs:
           echo "Disk usage after cleanup:"
           df -h
 
-      - name: Wait for conda workflow (tag pushes)
+      - name: Wait for PyPI publish workflow (tag pushes)
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
@@ -69,13 +69,13 @@ jobs:
         run: |
           set -euo pipefail
 
-          workflow_id=$(gh api repos/${{ github.repository }}/actions/workflows --jq '.workflows[] | select(.name=="conda") | .id' | head -n 1)
+          workflow_id=$(gh api repos/${{ github.repository }}/actions/workflows --jq '.workflows[] | select(.name=="publish-pypi") | .id' | head -n 1)
           if [[ -z "${workflow_id:-}" ]]; then
-            echo "Could not find conda workflow id in repository workflows."
+            echo "Could not find publish-pypi workflow id in repository workflows."
             exit 1
           fi
 
-          echo "Waiting for conda workflow (id: $workflow_id) to finish for SHA $TARGET_SHA"
+          echo "Waiting for publish-pypi workflow (id: $workflow_id) to finish for SHA $TARGET_SHA"
 
           for attempt in {1..40}; do
             run_info=$(gh api "repos/${{ github.repository }}/actions/workflows/${workflow_id}/runs" \
@@ -91,14 +91,14 @@ jobs:
             conclusion=$(echo "$run_info" | jq -r '.conclusion // ""')
             url=$(echo "$run_info" | jq -r '.html_url')
 
-            echo "Conda workflow run: $url (status=$status, conclusion=$conclusion)"
+            echo "publish-pypi workflow run: $url (status=$status, conclusion=$conclusion)"
 
             if [[ "$status" == "completed" ]]; then
               if [[ "$conclusion" == "success" ]]; then
-                echo "Conda workflow completed successfully."
+                echo "publish-pypi workflow completed successfully."
                 exit 0
               else
-                echo "Conda workflow finished with conclusion=$conclusion"
+                echo "publish-pypi workflow finished with conclusion=$conclusion"
                 exit 1
               fi
             fi
@@ -106,7 +106,7 @@ jobs:
             sleep 30
           done
 
-          echo "Timed out waiting for conda workflow to complete."
+          echo "Timed out waiting for publish-pypi workflow to complete."
           exit 1
 
       - name: Checkout

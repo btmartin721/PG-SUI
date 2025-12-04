@@ -65,8 +65,5 @@ ENV HOME=/home/pgsuiuser
 ENV MPLCONFIGDIR=$HOME/.config/matplotlib
 RUN chmod -R u+w $HOME/.config/matplotlib
 
-# Run tests (non-blocking; allows image to build even if tests fail)
-RUN conda run -n $CONDA_ENV pytest tests/ || echo "Tests failed during build; continuing..."
-
 # Default container command
 CMD ["bash"]
