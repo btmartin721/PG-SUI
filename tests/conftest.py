@@ -6,6 +6,40 @@ from pathlib import Path
 import pytest
 
 
+# ---------------------------------------------------------------------------
+# Compatibility shims for older snpio versions (missing SNPioMultiQC)
+# ---------------------------------------------------------------------------
+try:  # pragma: no cover - defensive guard
+    import snpio  # type: ignore
+
+    if not hasattr(snpio, "SNPioMultiQC"):
+        class _DummyMQC:
+            @staticmethod
+            def queue_html(*args, **kwargs):
+                return None
+
+            @staticmethod
+            def queue_linegraph(*args, **kwargs):
+                return None
+
+            @staticmethod
+            def queue_table(*args, **kwargs):
+                return None
+
+            @staticmethod
+            def queue_heatmap(*args, **kwargs):
+                return None
+
+            @staticmethod
+            def build(*args, **kwargs):
+                return None
+
+        snpio.SNPioMultiQC = _DummyMQC  # type: ignore[attr-defined]
+except Exception:
+    # Let importorskip handle truly missing snpio installations.
+    snpio = None  # type: ignore
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _configure_matplotlib_cache(tmp_path_factory: pytest.TempPathFactory) -> None:
     """Ensure Matplotlib uses a writable cache during tests."""
