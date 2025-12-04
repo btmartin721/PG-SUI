@@ -88,10 +88,13 @@ jobs:
           path: conda/dist/**/*.tar.bz2
 
       - name: Publish to Anaconda
-        if: secrets.CONDA_UPLOAD_TOKEN != ''
         env:
           ANACONDA_API_TOKEN: ${{ secrets.CONDA_UPLOAD_TOKEN }}
         run: |
           set -euo pipefail
+          if [[ -z "${ANACONDA_API_TOKEN:-}" ]]; then
+            echo "CONDA_UPLOAD_TOKEN not set; skipping upload."
+            exit 0
+          fi
           files=$(find conda/dist -type f \( -name '*.tar.bz2' -o -name '*.conda' \))
           anaconda -t "$ANACONDA_API_TOKEN" upload --label main --user btmartin721 $files
