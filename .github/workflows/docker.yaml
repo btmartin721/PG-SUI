@@ -62,7 +62,8 @@ jobs:
         with:
           context: .
           file: Dockerfile
-          platforms: linux/amd64,linux/arm64
+          # Build single-arch when loading for PRs; multi-arch only for tag pushes.
+          platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
           push: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
           load: ${{ github.event_name == 'pull_request' }}
           builder: ${{ steps.buildx.outputs.name }}
