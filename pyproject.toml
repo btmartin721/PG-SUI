@@ -76,7 +76,6 @@ dev = [
     "sphinxcontrib-napoleon",
     "sphinxcontrib-programoutput",
     "requests",
-    "PyObjC"
 ]
 optional = ["PyObjC"]
 
