@@ -12,6 +12,7 @@ Welcome to PG-SUI's documentation!
 
    about
    install
+   gui
    tutorial
    unsupervised_imputers
    supervised_imputers
