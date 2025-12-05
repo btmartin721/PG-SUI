@@ -48,6 +48,9 @@ jobs:
     permissions:
       contents: read
       packages: write
+    env:
+      DOCKERHUB_PASSWORD: ${{ secrets.DOCKERHUB_BTMARTIN721 }}
+      DOCKERHUB_USERNAME_SECRET: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
       - name: Maximize disk space
         run: |
@@ -112,8 +115,8 @@ jobs:
         id: dockerhub-creds
         if: github.event_name != 'pull_request'
         run: |
-          if [[ -n "${{ secrets.DOCKERHUB_USERNAME }}" ]]; then
-            echo "username=${{ secrets.DOCKERHUB_USERNAME }}" >> "$GITHUB_OUTPUT"
+          if [[ -n "${DOCKERHUB_USERNAME_SECRET}" ]]; then
+            echo "username=${DOCKERHUB_USERNAME_SECRET}" >> "$GITHUB_OUTPUT"
           elif [[ -n "${{ vars.DOCKERHUB_USERNAME }}" ]]; then
             echo "username=${{ vars.DOCKERHUB_USERNAME }}" >> "$GITHUB_OUTPUT"
           else
@@ -153,14 +156,14 @@ jobs:
             type=sha,format=short
 
       - name: Log in to Docker Hub
-        if: github.event_name != 'pull_request' && steps.dockerhub-creds.outputs.username != '' && secrets.DOCKERHUB_BTMARTIN721 != ''
+        if: github.event_name != 'pull_request' && steps.dockerhub-creds.outputs.username != '' && env.DOCKERHUB_PASSWORD != ''
         uses: docker/login-action@v3
         with:
           username: ${{ steps.dockerhub-creds.outputs.username }}
-          password: ${{ secrets.DOCKERHUB_BTMARTIN721 }}
+          password: ${{ env.DOCKERHUB_PASSWORD }}
 
       - name: Warn about missing Docker Hub credentials
-        if: github.event_name != 'pull_request' && (steps.dockerhub-creds.outputs.username == '' || secrets.DOCKERHUB_BTMARTIN721 == '')
+        if: github.event_name != 'pull_request' && (steps.dockerhub-creds.outputs.username == '' || env.DOCKERHUB_PASSWORD == '')
         run: |
           echo "Docker Hub credentials not provided; skipping login. Push will fail without credentials."
 
@@ -171,7 +174,7 @@ jobs:
           file: Dockerfile
           # Build single-arch when loading for PRs; multi-arch only for tag pushes.
           platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
-          push: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && secrets.DOCKERHUB_BTMARTIN721 != '' && steps.dockerhub-creds.outputs.username != '' }}
+          push: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && env.DOCKERHUB_PASSWORD != '' && steps.dockerhub-creds.outputs.username != '' }}
           load: ${{ github.event_name == 'pull_request' }}
           builder: ${{ steps.buildx.outputs.name }}
           tags: ${{ steps.meta.outputs.tags }}
