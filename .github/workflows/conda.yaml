@@ -71,8 +71,8 @@ jobs:
         shell: bash -l {0}
     env:
       MPLCONFIGDIR: /tmp/mpl
-      ANACONDA_API_TOKEN: ${{ secrets.CONDA_UPLOAD_TOKEN }}
-      CONDA_UPLOAD_TOKEN: ${{ secrets.CONDA_UPLOAD_TOKEN }}
+      # Resolve token from common secret names to avoid misconfiguration
+      UPLOAD_TOKEN: ${{ secrets.CONDA_UPLOAD_TOKEN || secrets.ANACONDA_API_TOKEN || secrets.ANACONDA_TOKEN || secrets.ANACONDA_UPLOAD_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -119,11 +119,11 @@ jobs:
       - name: Verify upload token
         run: |
           set -euo pipefail
-          if [[ -z "${CONDA_UPLOAD_TOKEN:-}" ]]; then
-            echo "CONDA_UPLOAD_TOKEN secret is missing; set it in the repository or organization secrets."
+          if [[ -z "${UPLOAD_TOKEN:-}" ]]; then
+            echo "No Anaconda token available. Set one of the secrets: CONDA_UPLOAD_TOKEN, ANACONDA_API_TOKEN, ANACONDA_TOKEN, or ANACONDA_UPLOAD_TOKEN."
             exit 1
           fi
-          echo "::add-mask::${CONDA_UPLOAD_TOKEN}"
+          echo "::add-mask::${UPLOAD_TOKEN}"
 
       - name: Publish to Anaconda
         run: |
@@ -133,4 +133,4 @@ jobs:
             echo "No conda artifacts found to upload."
             exit 1
           fi
-          anaconda -t "$CONDA_UPLOAD_TOKEN" upload --label main --user btmartin721 "${files[@]}"
+          anaconda -t "$UPLOAD_TOKEN" upload --label main --user btmartin721 "${files[@]}"
