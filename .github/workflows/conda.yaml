@@ -71,6 +71,8 @@ jobs:
         shell: bash -l {0}
     env:
       MPLCONFIGDIR: /tmp/mpl
+      ANACONDA_API_TOKEN: ${{ secrets.CONDA_UPLOAD_TOKEN }}
+      CONDA_UPLOAD_TOKEN: ${{ secrets.CONDA_UPLOAD_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -114,14 +116,21 @@ jobs:
           name: conda-packages
           path: conda/dist/**/*.tar.bz2
 
-      - name: Publish to Anaconda
-        env:
-          ANACONDA_API_TOKEN: ${{ secrets.CONDA_UPLOAD_TOKEN }}
+      - name: Verify upload token
         run: |
           set -euo pipefail
-          if [[ -z "${ANACONDA_API_TOKEN:-}" ]]; then
-            echo "CONDA_UPLOAD_TOKEN not set; skipping upload."
-            exit 0
+          if [[ -z "${CONDA_UPLOAD_TOKEN:-}" ]]; then
+            echo "CONDA_UPLOAD_TOKEN secret is missing; set it in the repository or organization secrets."
+            exit 1
           fi
-          files=$(find conda/dist -type f \( -name '*.tar.bz2' -o -name '*.conda' \))
-          anaconda -t "$ANACONDA_API_TOKEN" upload --label main --user btmartin721 $files
+          echo "::add-mask::${CONDA_UPLOAD_TOKEN}"
+
+      - name: Publish to Anaconda
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(find conda/dist -type f \( -name '*.tar.bz2' -o -name '*.conda' \))
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "No conda artifacts found to upload."
+            exit 1
+          fi
+          anaconda -t "$CONDA_UPLOAD_TOKEN" upload --label main --user btmartin721 "${files[@]}"
