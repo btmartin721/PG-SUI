@@ -16,19 +16,19 @@ build:
 
 requirements:
   host:
-    - python >=3.11
+    - python {{ python }}
     - pip
     - setuptools
     - wheel
   run:
-    - python >=3.11
+    - python {{ python }}
     - matplotlib
-    - numpy >=2.1
+    - numpy {{ numpy }}
     - pandas >=2.2.2
     - scikit-learn >=1.4
     - scipy
     - seaborn
-    - torch
+    - pytorch
     - tqdm
     - toytree
     - optuna
