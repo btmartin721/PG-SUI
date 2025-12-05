@@ -1,5 +1,6 @@
 # meta.yaml — pg-sui conda recipe
-{% set version = environ.get("PKG_VERSION", "1.6.8") %}
+# Normalize PKG_VERSION to conda-friendly format (convert hyphens to dots)
+{% set version = environ.get("PKG_VERSION", "1.6.8").replace("-", ".") %}
 
 package:
   name: "pg-sui"
