@@ -95,9 +95,15 @@ jobs:
         env:
           PKG_VERSION: ${{ github.ref_name }}
         run: |
-          export PKG_VERSION=${PKG_VERSION#v}
-          # Conda versions cannot contain hyphens; normalize to dots (e.g., 1.6.14-dev2 -> 1.6.14.dev2)
-          PKG_VERSION=${PKG_VERSION//-/.}
+          set -euo pipefail
+          RAW_VERSION=${PKG_VERSION:-}
+          CLEAN_VERSION=${RAW_VERSION#v}
+          # Conda versions cannot contain hyphens or plus signs; normalize to dots (e.g., v1.6.14-dev2 -> 1.6.14.dev2)
+          CLEAN_VERSION=${CLEAN_VERSION//-/.}
+          CLEAN_VERSION=${CLEAN_VERSION//+/.}
+          export PKG_VERSION=${CLEAN_VERSION:-1.6.8}
+          export SETUPTOOLS_SCM_PRETEND_VERSION=${PKG_VERSION}
+          echo "Building conda package version: ${PKG_VERSION}"
           conda build conda/recipe --output-folder conda/dist -c btmartin721 -c conda-forge -c defaults
 
       - name: Upload conda artifacts
