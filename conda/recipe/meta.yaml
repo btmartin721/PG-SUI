@@ -8,7 +8,8 @@ package:
   version: "{{ version }}"
 
 source:
-  path: .
+  # Point to repo root (recipe lives in conda/recipe)
+  path: ../..
 
 build:
   number: 0
