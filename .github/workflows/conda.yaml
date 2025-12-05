@@ -2,9 +2,8 @@ name: conda
 
 on:
   push:
-    branches: [main, master]
-    tags: ["v*"]
-  pull_request:
+    tags:
+      - "v*.*.*"
   workflow_dispatch:
     inputs:
       run_conda_build:
