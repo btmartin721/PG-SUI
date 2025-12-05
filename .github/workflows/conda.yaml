@@ -103,6 +103,8 @@ jobs:
           CLEAN_VERSION=${CLEAN_VERSION//+/.}
           export PKG_VERSION=${CLEAN_VERSION:-1.6.8}
           export SETUPTOOLS_SCM_PRETEND_VERSION=${PKG_VERSION}
+          # Help conda/jinja resolve version even if .git metadata is absent
+          export GIT_DESCRIBE_TAG=${PKG_VERSION}
           echo "Building conda package version: ${PKG_VERSION}"
           conda build conda/recipe --output-folder conda/dist -c btmartin721 -c conda-forge -c bioconda -c pytorch -c defaults
 

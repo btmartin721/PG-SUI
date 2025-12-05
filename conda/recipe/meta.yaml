@@ -1,6 +1,6 @@
 # meta.yaml - pg-sui conda recipe
-# Normalize PKG_VERSION to conda-friendly format (strip leading "v", replace hyphens/plus with dots)
-{% set raw_version = environ.get("PKG_VERSION") | default("1.6.8", true) %}
+# Normalize version from CI/exported variables (PKG_VERSION/SETUPTOOLS_SCM_PRETEND_VERSION/GIT_DESCRIBE_TAG), fallback to default.
+{% set raw_version = environ.get("SETUPTOOLS_SCM_PRETEND_VERSION") or environ.get("PKG_VERSION") or environ.get("GIT_DESCRIBE_TAG") or "1.6.8" %}
 {% set version = raw_version.lstrip("v").replace("-", ".").replace("+", ".") %}
 
 package:
@@ -21,6 +21,7 @@ requirements:
     - pip
     - setuptools
     - wheel
+    - setuptools-scm
   run:
     - python {{ python }}
     - matplotlib
