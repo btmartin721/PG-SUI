@@ -1,10 +1,18 @@
 PG-SUI Desktop GUI
 ==================
 
-PG-SUI ships with an Electron desktop app that wraps the ``pg-sui`` CLI. Every control in the GUI maps directly to a CLI flag, so presets, YAML configs, and ``--set`` overrides behave the same way you would expect on the command line.
+PG-SUI ships with a MacOS desktop app that wraps the ``pg-sui`` CLI. Every control in the GUI maps directly to a CLI flag, so presets, YAML configs, and ``--set`` overrides behave the same way you would expect on the command line.
 
 Install & launch
 ----------------
+
+.. note::
+
+   The GUI is MacOS-only. Linux users can run PG-SUI via the CLI.
+
+.. tip::
+
+   Install PG-SUI into a fresh virtual environment to keep dependencies isolated.
 
 1. Install the Python package with the GUI extras:
 
@@ -12,8 +20,8 @@ Install & launch
 
       pip install "pg-sui[gui]"
 
-2. Install Node.js (https://nodejs.org) so ``npm`` is available.
-3. Fetch the Electron dependencies (one-time):
+2. Install `Node.js <https://nodejs.org>__` so ``npm`` is available.
+3. Fetch the Electron dependencies (one-time, for initial setup):
 
    .. code-block:: bash
 
@@ -25,7 +33,7 @@ Install & launch
 
       pgsui-gui
 
-The GUI uses the active Python environment, so it will run against the same PG-SUI version and configuration you use on the CLI.
+The GUI uses the active Python environment, so it will run against the same PG-SUI version and configuration you use on the CLI. The ``pgsui-gui-setup`` step only needs to be run once (or after updating PG-SUI) to refresh Electron dependencies.
 
 First run walkthrough
 ---------------------
@@ -36,7 +44,7 @@ First run walkthrough
 4. **Apply configs or overrides** -- Supply a YAML config, dump the effective config to a file, and add one-per-line ``--set`` overrides (``model.latent_dim=16``) for quick tweaks. Use include-pops, device, batch size, sim strategy, plot format, and other toggles as needed.
 5. **Run** -- Click **Start** to launch. Logs stream live and show the exact CLI command that was executed. Use **Stop** to gracefully terminate a run.
 
-Outputs land in the same layout as the CLI: ``<prefix>_output/<Family>/plots/<Model>/`` and ``<prefix>_output/<Family>/metrics/<Model>/`` plus MultiQC if enabled from the CLI.
+Outputs land in the same layout as the CLI: ``<prefix>_output/<Family>/plots/<Model>/`` and ``<prefix>_output/<Family>/metrics/<Model>/``, plus the ``MultiQC`` report.
 
 How GUI controls map to CLI flags
 ---------------------------------
@@ -50,12 +58,15 @@ How GUI controls map to CLI flags
 - **Device**/``batch size``/``n_jobs``/``plot format``/``seed`` → matching CLI flags
 - **--set overrides** (one per line) → repeated ``--set key=value`` on the CLI
 - **Tune**/``Trials`` → ``--tune`` and ``--tune-n-trials``
-- **Dry run** → ``--dry-run`` to validate inputs/config without training
-- **Log file** → ``--log-file``; **Verbose** → ``--verbose``
+- **Dry run** → ``--dry-run`` to validate inputs/config without training or imputing
+- **Verbose** → ``--verbose``
 
-Troubleshooting tips
---------------------
+Troubleshooting & Tips
+----------------------
 
 - Run ``pgsui-gui-setup`` after updating the repository to refresh Electron dependencies.
 - If the GUI cannot find ``pgsui/cli.py``, ensure PG-SUI is installed in the current environment or set ``PGSUI_CLI_DEFAULT`` to the path of ``cli.py``.
-- The log panel shows the exact command executed. Copy it to reproduce the run in a terminal or for debugging.
+
+.. tip::
+
+   The log panel shows the exact command executed. Copy it to reproduce the run in a terminal or for debugging.
