@@ -139,9 +139,10 @@ jobs:
       - name: Publish to Anaconda
         run: |
           set -euo pipefail
-          mapfile -t files < <(find conda/dist -type f \( -name '*.tar.bz2' -o -name '*.conda' \))
-          if [[ ${#files[@]} -eq 0 ]]; then
+          files=$(find conda/dist -type f \( -name '*.tar.bz2' -o -name '*.conda' \))
+          if [[ -z "${files}" ]]; then
             echo "No conda artifacts found to upload."
             exit 1
           fi
-          anaconda -t "$UPLOAD_TOKEN" upload --label main --user btmartin721 "${files[@]}"
+          # macOS bash (3.2) lacks mapfile/readarray, so rely on word splitting
+          anaconda -t "$UPLOAD_TOKEN" upload --label main --user btmartin721 $files
