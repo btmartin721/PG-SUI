@@ -6,7 +6,7 @@ This page describes the mathematical formulations and methodologies behind the i
 Unsupervised Backpropagation (UBP) for SNP Imputation
 -----------------------------------------------------
 
-**Unsupervised Backpropagation (UBP)** is a non-linear, iterative method that refines missing values through a **three-phase training process**. Like VAE, it uses the **MaskedFocalLoss criterion** to mask real missing values during optimization.
+**Unsupervised Backpropagation (UBP)** is a non-linear, iterative method that refines missing values through a **three-phase training process**. Like VAE, it uses a masked focal loss criterion to mask real missing values during optimization.
 
 Model Overview
 ~~~~~~~~~~~~~~
@@ -78,12 +78,12 @@ where:
 The overall loss is computed as:
 
 .. math::
-    
+
     \mathcal{L} = \frac{1}{|M|} \sum_{(i,j) \in M} \mathcal{L}_{\text{focal}}(p_t)
 
 where:
 
-- :math:`M` is the set of valid (unmasked) samples.  
+- :math:`M` is the set of valid (unmasked) samples.
 - :math:`|M|` is the number of valid samples.
 
 Training Procedure
@@ -160,7 +160,7 @@ To ignore missing values, a masking operation is applied:
 
 where:
 
-- :math:`M` is the set of valid (unmasked) samples.  
+- :math:`M` is the set of valid (unmasked) samples.
 - :math:`|M|` is the number of valid samples.
 
 Training Procedure
@@ -213,7 +213,7 @@ Encoder Network
 The encoder network transforms the input data through several hidden layers:
 
 .. math::
-    
+
     \mathbf{H}_{1} = \sigma(\mathbf{W}_{1} \mathbf{X} + \mathbf{b}_{1})
 
     \mathbf{H}_{2} = \sigma(\mathbf{W}_{2} \mathbf{H}_{1} + \mathbf{b}_{2})
@@ -304,7 +304,7 @@ Encoder Network
 The encoder maps the input :math:`\mathbf{X}` to the parameters of a Gaussian distribution over the latent space:
 
 .. math::
-    
+
     \mu = f_{\mu}(\mathbf{X})
 
     \log \sigma^{2} = f_{\sigma}(\mathbf{X})
@@ -321,7 +321,7 @@ Latent Space Sampling
 The model samples a latent variable :math:`\mathbf{z}` using the reparameterization trick:
 
 .. math::
-    
+
     \mathbf{z} = \mu + \epsilon \cdot \sigma, \quad \epsilon \sim \mathcal{N}(0, \mathbf{I})
 
 This allows the model to backpropagate through the sampling step during training.
@@ -344,7 +344,7 @@ The VAE loss consists of two components:
 1. **Reconstruction Loss:** Measures the difference between the original and reconstructed inputs using a masked focal loss:
 
 .. math::
-    
+
     \mathcal{L}_{\text{recon}} = \frac{1}{|M|} \sum_{(i,j) \in M} \alpha_t (1 - p_t)^{\gamma} \log(p_t)
 
 where:
