@@ -1,8 +1,6 @@
-
-<img src="https://github.com/btmartin721/PG-SUI/blob/master/img/pgsui-logo-faded.png" alt="PG-SUI Logo" width="50%" height="50%">
-
-
 # PG-SUI
+
+![PG-SUI Logo](https://github.com/btmartin721/PG-SUI/blob/master/img/pgsui-logo-faded.png)
 
 Population Genomic Supervised and Unsupervised Imputation.
 
@@ -12,220 +10,172 @@ PG-SUI is a Python 3 API that uses machine learning to impute missing values fro
 
 Below is some general information and a basic tutorial. For more detailed information, see our [API Documentation](https://pg-sui.readthedocs.io/en/latest/).
 
-### Supervised Imputation Methods
-
-Supervised methods utilze the scikit-learn's IterativeImputer, which is based on the MICE (Multivariate Imputation by Chained Equations) algorithm ([1](#1)), and iterates over each SNP site (i.e., feature) while uses the N nearest neighbor features to inform the imputation. The number of nearest features can be adjusted by users. IterativeImputer currently works with any of the following scikit-learn classifiers:
-
-+ K-Nearest Neighbors
-+ Random Forest
-+ XGBoost
-
-See the scikit-learn documentation (https://scikit-learn.org) for more information on IterativeImputer and each of the classifiers.
-
 ### Unsupervised Imputation Methods
 
 Unsupervised imputers include three custom neural network models:
 
-+ Variational Autoencoder (VAE) ([2](#2))
-+ Standard Autoencoder (SAE) ([3](#3))
-+ Non-linear Principal Component Analysis (NLPCA) ([4](#4))
-+ Unsupervised Backpropagation (UBP) ([5](#5))
++ Variational Autoencoder (VAE) [1](#1)
+  + VAE models train themselves to reconstruct their input (i.e., the genotypes) [1](#1). To use VAE for imputation, the missing values are masked and the VAE model gets trained to reconstruct only on known values. Once the model is trained, it is then used to predict the missing values.
++ Autoencoder [2](#2)
+  + A standard autoencoder that trains the input to predict itself [2](#2). As with VAE, missing values are masked and the model gets trained only on known values. Predictions are then made on the missing values.
++ Non-linear Principal Component Analysis (NLPCA) [3](#3)
+  + NLPCA initializes random, reduced-dimensional input, then trains itself by using the known values (i.e., genotypes) as targets and refining the random input until it accurately predicts the genotype output [3](#3). The trained model can then predict the missing values.
++ Unsupervised Backpropagation (UBP) [4](#4)
+  + UBP is an extension of NLPCA that runs over three phases [4](#4). Phase 1 refines the randomly generated, reduced-dimensional input in a single layer perceptron neural network to obtain good initial input values. Phase 2 uses the refined reduced-dimensional input from phase 1 as input into a multi-layer perceptron (MLP), but in Phase 2 only the neural network weights are refined. Phase three uses an MLP to refine both the weights and the reduced-dimensional input. Once the model is trained, it can be used to predict the missing values.
 
-VAE models train themselves to reconstruct their input (i.e., the genotypes). To use VAE for imputation, the missing values are masked and the VAE model gets trained to reconstruct only on known values. Once the model is trained, it is then used to predict the missing values.
+### Supervised Imputation Methods
 
-SAE is a standard autoencoder that trains the input to predict itself. As with VAE, missing values are masked and the model gets trained only on known values. Predictions are then made on the missing values.
+Supervised methods utilze the scikit-learn's ``IterativeImputer``, which is based on the MICE (Multivariate Imputation by Chained Equations) algorithm [5](#5), and iterates over each SNP site (i.e., feature) while uses the N nearest neighbor features to inform the imputation. The number of nearest features can be adjusted by users. IterativeImputer currently works with the following scikit-learn classifiers:
 
-NLPCA initializes random, reduced-dimensional input, then trains itself by using the known values (i.e., genotypes) as targets and refining the random input until it accurately predicts the genotype output. The trained model can then predict the missing values.
++ ImputeRandomForest
++ ImputeHistGradientBoosting
 
-UBP is an extension of NLPCA that runs over three phases. Phase 1 refines the randomly generated, reduced-dimensional input in a single layer perceptron neural network to obtain good initial input values. Phase 2 uses the refined reduced-dimensional input from phase 1 as input into a multi-layer perceptron (MLP), but in Phase 2 only the neural network weights are refined. Phase three uses an MLP to refine both the weights and the reduced-dimensional input. Once the model is trained, it can be used to predict the missing values.
+See the [scikit-learn documentation](https://scikit-learn.org) for more information on IterativeImputer and each of the classifiers.
 
-### Non-Machine Learning Methods
+### Non-Machine Learning (Deterministic) Methods
 
-We also include several non-machine learning options for imputing missing data, including:
+We also include several deterministic options for imputing missing data, including:
 
 + Per-population mode per SNP site
-+ Global mode per SNP site
-+ Using a phylogeny as input to inform the imputation
-+ Matrix Factorization
-
-These four "simple" imputation methods can be used as standalone imputers, as the initial imputation strategy for IterativeImputer (at least one method is required to be chosen), and to validate the accuracy of both IterativeImputer and the neural network models.
++ Overall mode per SNP site
 
 ## Installing PG-SUI
 
-The easiest way to install PG-SUI is to use pip:
+PG-SUI supports both pip and conda distributions. Both are kept current with up-to-date releases.
 
-```
+### Installation with Pip
+
+To install PG-SUI with pip, do the following. It is strongly recommended to install pg-sui in a virtual environment.
+
+``` shell
+python3 -m venv .pgsui-venv
+source .pgsui-venv/bin/activate
 pip install pg-sui
 ```
 
-If you have an Intel CPU and want to use the sklearn-genetic-intelex package to speed up scikit-learn computations, you can do:
+### Installation with Anaconda
 
+To install PG-SUI with Anaconda, do the following:
+
+``` shell
+conda create -n pgsui-env python=3.12
+conda activate pgsui-env
+conda install -c btmartin721 pg-sui
 ```
-pip install pg-sui[intel]
+
+### Docker Container
+
+We also maintains a Docker image that comes with PG-SUI preinstalled. This can be useful for automated worklows such as Nextflow or Snakemake.
+
+``` shell
+docker pull pg-sui
 ```
 
-### Optional GUI (Electron)
+### Optional MacOS GUI
 
-PG-SUI ships an Electron GUI wrapper around the Python CLI.
+PG-SUI ships an optional Electron GUI (Graphical User Interface) wrapper around the Python CLI. Currently for the GUI, only MacOS is supported.
 
-1. Install the Python-side extras (FastAPI/uvicorn helper) if you want to serve from Python:  
+1. Install the Python-side extras (FastAPI/ uvicorn helper) if you want to serve from Python:
    `pip install pg-sui[gui]`
-2. Install Node.js (https://nodejs.org) and fetch the app dependencies once:  
+2. Install [Node.js](https://nodejs.org) and fetch the app dependencies:
    `pgsui-gui-setup`
-3. Launch the GUI:  
+3. Launch the graphical interface:
    `pgsui-gui`
 
-The GUI shells out to the same CLI underneath, so presets/overrides and YAML configs behave identically.
-
-## Manual Installation
-
-### Dependencies
-
-+ python >= 3.11
-+ pandas
-+ numpy
-+ scipy
-+ matplotlib
-+ seaborn
-+ plotly
-+ kaleido
-+ tqdm
-+ toytree
-+ scikit-learn
-+ xgboost
-+ snpio
-+ optuna
-
-#### Installation troubleshooting
-
-##### "use_2to3 is invalid" error
-
-Users running setuptools v58 may encounter this error during the last step of installation, using pip to install sklearn-genetic-opt:
-
-```
-ERROR: Command errored out with exit status 1:
-   command: /Users/tyler/miniforge3/envs/pg-sui/bin/python3.8 -c 'import io, os, sys, setuptools, tokenize; sys.argv[0] = '"'"'/private/var/folders/6x/t6g4kn711z5cxmc2_tvq0mlw0000gn/T/pip-install-6y5g_mhs/deap_1d32f65d60a44056bd7031f3aad44571/setup.py'"'"'; __file__='"'"'/private/var/folders/6x/t6g4kn711z5cxmc2_tvq0mlw0000gn/T/pip-install-6y5g_mhs/deap_1d32f65d60a44056bd7031f3aad44571/setup.py'"'"';f = getattr(tokenize, '"'"'open'"'"', open)(__file__) if os.path.exists(__file__) else io.StringIO('"'"'from setuptools import setup; setup()'"'"');code = f.read().replace('"'"'\r\n'"'"', '"'"'\n'"'"');f.close();exec(compile(code, __file__, '"'"'exec'"'"'))' egg_info --egg-base /private/var/folders/6x/t6g4kn711z5cxmc2_tvq0mlw0000gn/T/pip-pip-egg-info-7hg3hcq2
-       cwd: /private/var/folders/6x/t6g4kn711z5cxmc2_tvq0mlw0000gn/T/pip-install-6y5g_mhs/deap_1d32f65d60a44056bd7031f3aad44571/
-  Complete output (1 lines):
-  error in deap setup command: use_2to3 is invalid.
-```
-
-This occurs during the installation of DEAP, one of the dependencies for sklearn-genetic-opt. As a workaround, first downgrade setuptools, and then proceed with the installation as normal:
-```
-pip install setuptools==57
-pip install sklearn-genetic-opt[all]
-
-```
-
-##### Mac ARM architecture
-
-PG-SUI has been tested on the new Mac M1 chips and is working fine, but some changes to the installation process were necessary as of 9-December-21. Installation was successful using the following:
-
-```
-### Install Miniforge3 instead of Miniconda3
-### Download: https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-MacOSX-arm64.sh
-bash ~/Downloads/Miniforge3-MacOSX-arm64.sh
-
-# Close and re-open terminal #
-
-#create and activate conda environment
-conda create -n pg-sui python
-
-#activate environment
-conda activate pg-sui
-
-#install packages
-conda install -c conda-forge matplotlib seaborn jupyterlab scikit-learn tqdm pandas numpy scipy xgboost lightgbm tensorflow keras sklearn-genetic-opt toytree
-conda install -c bioconda pyvolve
-
-#downgrade setuptools (may or may not be necessary)
-pip install setuptools==57
-
-#install sklearn-genetic-opt and mlflow
-pip install sklearn-genetic-opt mlflow
-
-```
-
-Any other problems we run into testing on the Mac ARM architecture will be adjusted here. Note that the step installing scikit-learn-intelex was skipped here. PG-SUI will automatically detect the CPU architecture you are running, and forgo importing this package (which will only work on Intel processors)
+The GUI shells out to the same CLI underneath, so presets, overrides, and YAML configs behave identically.
 
 ## Input Data
 
-You can read your input files as a GenotypeData object from the [SNPio](https://snpio.readthedocs.io/en/latest/) package:
+You can read your input files as a GenotypeData object from the [SNPio](https://snpio.readthedocs.io/en/latest/) package. SNPio supports the VCF, PHYLIP, STRUCTURE, and GENEPOP input file formats.
 
-```
+``` python
+# Import snpio. Automatically installed with pg-sui.
+from snpio import VCFReader
 
-# Import snpio. Automatically installed with pgsui when using pip.
-from snpio import GenotypeData
-
-# Read in PHYLIP, VCF, or STRUCTURE-formatted alignments.
-data = GenotypeData(
-    filename="example_data/phylip_files/phylogen_nomx.u.snps.phy",
-    popmapfile="example_data/popmaps/phylogen_nomx.popmap",
-    force_popmap=True,
-    filetype="auto",
-    qmatrix_iqtree="example_data/trees/test.qmat",
-    siterates_iqtree="example_data/trees/test.rate",
-    guidetree="example_data/trees/test.tre",
-    include_pops=["EA", "TT", "GU"], # Only include these populations. There's also an exclude_pops option that will exclude the provided populations.
+# Read in VCF alignment.
+# SNPio also supports PHYLIP, STRUCTURE, and GENEPOP input file formats.
+data = VCFReader(
+    filename="pgsui/example_data/phylogen_subset14K.vcf.gz,
+    popmapfile="pgsui/example_data/popmaps/phylogen_nomx.popmap", # optional
+    force_popmap=True, # optional
 )
 ```
 
 ## Supported Imputation Methods
 
-There are numerous supported algorithms to impute missing data. Each one can be run by calling the corresponding class. You must provide a GenotypeData instance as the first positional argument.
+There are several supported algorithms PG-SUI uses to impute missing data. Each one can be run by calling the corresponding class. You must provide a GenotypeData instance as the first positional argument.
 
-You can import all the supported methods with:
+You can import all the supported methods with the following:
 
-```
-from pgsui import *
+``` python
+from pgsui import ImputeUBP, ImputeVAE, ImputeNLPCA, ImputeAutoencoder, ImputeRefAllele, ImputeMostFrequent, ImputeRandomForest, ImputeHistGradientBoosting
 ```
 
-Or you can import them one at a time.
+### Unsupervised Imputers
 
+The four unsupervised imputers can be run by initializing them with the SNPio ``GenotypeData`` object and then calling ``fit()`` and ``transform()``.
+
+``` python
+# Initialize the models, then fit and impute
+vae = ImputeVAE(data) # Variational autoencoder
+vae.fit()
+vae_imputed = vae.transform()
+
+nlpca = ImputeNLPCA(data) # Nonlinear PCA
+nlpca.fit()
+nlpca_imputed = nlpca.transform()
+
+ubp = ImputeUBP(data) # Unsupervised backpropagation
+ubp.fit()
+ubp_imputed = ubp.transform()
+
+ae = ImputeAutoencoder(data) # standard autoencoder
+ae.fit()
+ae_imputed = ae.transform()
 ```
-from pgsui import ImputeVAE
-```
+
+The ``*_imputed`` objects will be NumPy arrays that are compatible with SNPio's ``GenotypeData`` objects.
 
 ### Supervised Imputers
 
-Various supervised imputation options are supported:
+Various supervised imputation options are supported, and these use the same API design.
 
-```
+``` python
 # Supervised IterativeImputer classifiers
-knn = ImputeKNN(data) # K-Nearest Neighbors
-rf = ImputeRandomForest(data) # Random Forest or Extra Trees
-xgb = ImputeXGBoost(data) # XGBoost
+
+# Random Forest
+rf = ImputeRandomForest(data)
+rf.fit()
+imputed_rf = rf.transform()
+
+# HistGradientBoosting
+hgb = ImputeHistGradientBoosting(data)
+hgb.fit()
+imputed_hgb = hgb.transform()
 ```
 
 ### Non-machine learning methods
 
-Use phylogeny to inform imputation:
-
-```
-phylo = ImputePhylo(data)
-```
-
-Use by-population or global allele frequency to inform imputation
-
-```
-pop_af = ImputeAlleleFreq(data, by_populations=True)
-global_af = ImputeAlleleFreq(data, by_populations=False)
-ref_af = ImputeRefAllele(data)
-```
-
-Non-matrix factorization:
-
-```
-mf = ImputeMF(*args) # Matrix factorization
-```
-
-### Unsupervised Neural Networks
+The following deterministic methods are supported. ``ImputeMostFrequent`` supports the mode-per-population or overall (global) mode options to inform imputation.
 
 ``` python
-vae = ImputeVAE(data) # Variational autoencoder
-nlpca = ImputeNLPCA(data) # Nonlinear PCA
-ubp = ImputeUBP(data) # Unsupervised backpropagation
-sae = ImputeStandardAutoEncoder(data) # standard autoencoder
+# Per-population, per-locus mode
+pop_mode = ImputeMostFrequent(data, by_populations=True)
+pop_mode.fit()
+imputed_pop_mode = pop_mode.transform()
+
+# Per-locus mode
+mode = ImputeMostFrequent(data, by_populations=False)
+mode.fit()
+imputed_mode = mode.transform()
+```
+
+Or, always replace missing values with the reference allele.
+
+``` python
+ref = ImputeRefAllele(data)
+ref.fit()
+imputed_ref = ref.transform()
 ```
 
 ## Command-Line Interface
@@ -236,13 +186,13 @@ Run the PG-SUI CLI with ``pg-sui`` (installed alongside the library). The CLI fo
 
 Recent releases add explicit switches for the simulated-missingness workflow shared by the neural and supervised models:
 
-- ``--sim-strategy`` selects one of ``random``, ``random_weighted``, ``random_weighted_inv``, ``nonrandom``, ``nonrandom_weighted``.
-- ``--sim-prop`` sets the proportion of observed calls to temporarily mask when building the evaluation set.
-- ``--simulate-missing`` disables simulated masking entirely (store-false flag); omit it to inherit preset/YAML defaults or re-enable via ``--set sim.simulate_missing=True``.
++ ``--sim-strategy`` selects one of ``random``, ``random_weighted``, ``random_weighted_inv``, ``nonrandom``, ``nonrandom_weighted``.
++ ``--sim-prop`` sets the proportion of observed calls to temporarily mask when building the evaluation set.
++ ``--simulate-missing`` disables simulated masking entirely (store-false flag); omit it to inherit preset/YAML defaults or re-enable via ``--set sim.simulate_missing=True``.
 
 Example:
 
-```
+``` shell
 pg-sui \
   --vcf data.vcf.gz \
   --popmap pops.popmap \
@@ -250,24 +200,22 @@ pg-sui \
   --preset balanced \
   --sim-strategy random_weighted_inv \
   --sim-prop 0.25 \
-  --set io.prefix=vae_vs_ubp
+  --prefix ubp_and_vae \
+  --n-jobs 4 \
+  --tune-n-trials 100 \
+  --set tune.enabled=True
 ```
 
 CLI overrides cascade into every selected model, so a single invocation can evaluate multiple imputers with a consistent simulation strategy and output prefix.
 
-## To-Dos
+## References
 
-- simulations
-- Documentation
+1. Kingma, D.P. & Welling, M. (2013). Auto-encoding variational bayes. In: Proceedings  of  the  International Conference on Learning Representations (ICLR). arXiv:1312.6114 [stat.ML].
 
-## References:
+2. Hinton, G.E., & Salakhutdinov, R.R. (2006). Reducing the dimensionality of data with neural networks. Science, 313(5786), 504-507.
 
-<a name="1">1. </a>Stef van Buuren, Karin Groothuis-Oudshoorn (2011). mice: Multivariate Imputation by Chained Equations in R. Journal of Statistical Software 45: 1-67.
+3. Scholz, M., Kaplan, F., Guy, C. L., Kopka, J., & Selbig, J. (2005). Non-linear PCA: a missing data approach. Bioinformatics, 21(20), 3887-3895.
 
-<a name="2">2. </a>Kingma, D.P. & Welling, M. (2013). Auto-encoding variational bayes. In: Proceedings  of  the  International Conference on Learning Representations (ICLR). arXiv:1312.6114 [stat.ML].
+4. Gashler, M. S., Smith, M. R., Morris, R., & Martinez, T. (2016). Missing value imputation with unsupervised backpropagation. Computational Intelligence, 32(2), 196-215.
 
-<a name="3">3. </a>Hinton, G.E., & Salakhutdinov, R.R. (2006). Reducing the dimensionality of data with neural networks. Science, 313(5786), 504-507.
-
-<a name="4">4. </a>Scholz, M., Kaplan, F., Guy, C. L., Kopka, J., & Selbig, J. (2005). Non-linear PCA: a missing data approach. Bioinformatics, 21(20), 3887-3895.
-
-<a name="5">5. </a>Gashler, M. S., Smith, M. R., Morris, R., & Martinez, T. (2016). Missing value imputation with unsupervised backpropagation. Computational Intelligence, 32(2), 196-215.
+5. Stef van Buuren, Karin Groothuis-Oudshoorn (2011). mice: Multivariate Imputation by Chained Equations in R. Journal of Statistical Software 45: 1-67.
