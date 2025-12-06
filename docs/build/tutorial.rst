@@ -6,6 +6,8 @@ Overview
 
 **PG-SUI** (Population Genomic Supervised & Unsupervised Imputation) performs missing-data imputation on SNP genotype matrices using **Deterministic**, **Unsupervised**, and **Supervised** models. It integrates tightly with `SNPio <https://github.com/btmartin721/SNPio>`_ for reading, filtering, and encoding genotypes, and emphasizes **unsupervised deep learning** methods tuned for genomic class imbalance and diploid/variable ploidy data. Unsupervised neural approaches (e.g., non-linear PCA and autoencoding families) are inspired by prior work on representation learning and generative modeling (Scholz et al., 2005; Hinton & Salakhutdinov, 2006; Kingma & Welling, 2013), while the Unsupervised Backpropagation approach follows the imputation framing of Gashler et al. (2016).
 
+Supervised baselines include histogram-based gradient boosting and random forests. PG-SUI supports both a command-line interface (CLI) for scripted workflows and a desktop GUI (MacOS only) for point-and-click operation. The Python API enables custom pipelines and programmatic control.
+
 What's new
 ----------
 
@@ -57,10 +59,29 @@ Install PG-SUI with pip (ideally in a fresh virtual environment). Add the GUI ex
 .. code-block:: bash
 
     pip install pg-sui            # CLI + Python API
-    pip install "pg-sui[gui]"     # optional desktop GUI
-    pgsui-gui-setup               # one-time Electron dependency install
+    pip install "pg-sui[gui]"     # optional MacOS GUI
+    pgsui-gui-setup               # one-time dependency install
 
-See :doc:`install` for more detail. PG-SUI expects genotype I/O via **SNPio**. See SNPio docs for VCF/PHYLIP/STRUCTURE/GENEPOP readers and Docker/conda installs.
+An Anaconda package is also available on `Anaconda Cloud <https://anaconda.org/btmartin721/pg-sui>`__.
+
+..  code-block:: bash
+
+    conda create -n pgsui-env python=3.12
+    conda activate pgsui-env
+    conda install -c btmartin721 pg-sui
+
+Finally, a Docker image is available on `Docker Hub <https://hub.docker.com/r/btmartin721/pg-sui>`__:
+
+.. code-block:: bash
+
+    docker pull btmartin721/pg-sui:latest
+    docker run -it --rm btmartin721/pg-sui:latest pg-sui --help
+
+.. tip::
+
+  Use the GUI for an interactive experience, or the CLI for scripted workflows. The Python API supports custom pipelines and programmatic control. The Docker image includes the CLI and API only, but can be used as a base for custom containerized workflows such as Nextflow or Snakemake.
+
+See :doc:`install` for more detail. PG-SUI expects genotype I/O via `SNPio <https://snpio.readthedocs.io/en/latest/>__`. See SNPio docs for VCF/PHYLIP/STRUCTURE/GENEPOP readers and Docker/conda installs.
 
 Data Input, Encodings, and Conventions
 --------------------------------------
@@ -68,9 +89,9 @@ Data Input, Encodings, and Conventions
 PG-SUI uses SNPio's ``GenotypeData`` object:
 
 - **Inputs**: VCF, PHYLIP, STRUCTURE, or GENEPOP, plus optional ``popmap`` (recommended).
-- **Working encoding**: **0/1/2** for diploids (REF/HET/ALT) with **-9** for missing.
+- **Working encoding**: ``0/1/2`` for diploids (REF/HET/ALT) with ``-9`` for missing.
 - **Evaluation labels**: ``["REF", "HET", "ALT"]`` for diploids; haploids collapse to two classes.
-- **IUPAC handling**: decoding/encoding utilities are provided by SNPio.
+- **IUPAC handling**: decoding/encoding utilities are provided by SNPio. PG-SUI imputers return decoded IUPAC strings from ``transform()``.
 
 CLI Quickstart (copy/paste)
 ---------------------------
@@ -86,11 +107,15 @@ CLI Quickstart (copy/paste)
       --models ImputeUBP ImputeVAE \
       --preset balanced \
       --prefix demo
+      --sim-strategy random_weighted_inv \
+      --sim-prop 0.30 \
+      --tune-n-trials 100 \
+      --n-jobs 4
 
 3. Optional: add a YAML config (``--config vae_balanced.yaml``), apply quick tweaks with ``--set key=value``, or disable simulated missingness with ``--simulate-missing``.
 4. Outputs and plots are written under ``<prefix>_output/``. The CLI prints paths as it runs.
 
-Prefer a visual workflow? Launch the desktop app with ``pgsui-gui`` and follow :doc:`gui` (currently MacOS only).
+Prefer a visual workflow? Launch the desktop app with ``pgsui-gui`` and follow :doc:`gui` (currently for MacOS only).
 
 .. _simulated_missingness:
 
@@ -107,8 +132,8 @@ PG-SUI evaluates imputers on a **simulated masking** of observed genotypes so ev
 
 Use ``--sim-prop`` (0-1) to set the proportion of observed entries to hide. For diagnostics that rely only on organically missing calls, pass ``--simulate-missing`` (store-false flag) to skip simulated masking.
 
-Summary table
-^^^^^^^^^^^^^
+Simulation Strategy Summary Table
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 .. list-table:: Summary of missing data simulation strategies
    :header-rows: 1
@@ -139,7 +164,7 @@ Summary table
      - Divergence-driven dropout on long, isolated branches
      - Very hard
 
-Quick Start (End-to-End, Dataclass API)
+Quick Start (End-to-End VAE Example)
 ---------------------------------------
 
 .. code-block:: python
@@ -203,7 +228,8 @@ YAML Configuration Files
 
 You can store experiments in YAML and load them from the CLI or Python. YAML merges with presets and only needs to include fields you want to override.
 
-**Example YAML (``vae_balanced.yaml``)**
+Example YAML - ``vae_balanced.yaml``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 .. code-block:: yaml
 
@@ -244,7 +270,8 @@ You can store experiments in YAML and load them from the CLI or Python. YAML mer
       show: false
       dpi: 300
 
-Loading YAML in Python:
+Loading YAML with Python
+^^^^^^^^^^^^^^^^^^^^^^^^
 
 .. code-block:: python
 
@@ -261,7 +288,8 @@ Command-Line Interface (CLI)
 
 Use the CLI for automation or to mirror runs configured in the GUI (the desktop app assembles these same flags under the hood). The ``pg-sui`` CLI supports running one or more models with the same dataset and a shared precedence rule set.
 
-**Precedence model** (highest last):
+Precedence model (highest last)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 ``code defaults  <  preset (--preset)  <  YAML (--config)  <  explicit CLI flags  <  --set k=v``
 
@@ -270,13 +298,17 @@ Use the CLI for automation or to mirror runs configured in the GUI (the desktop 
 - Explicit CLI flags (if provided) override YAML.
 - ``--set`` applies deep dot-path overrides for final tweaks.
 
-**Simulation controls** (see :ref:`simulated_missingness` for option details)
+Simulation controls
+^^^^^^^^^^^^^^^^^^^
+
+see :ref:`simulated_missingness` for option details)
 
 - ``--sim-strategy``: choose how simulated masking selects loci.
 - ``--sim-prop``: set the proportion of observed entries to hide when creating the evaluation mask.
 - ``--simulate-missing``: disable simulated masking entirely for the run (store-false flag). Leave it unset to inherit the preset/YAML choice or force a value via ``--set sim.simulate_missing=True``.
 
-**Typical CLI usage**
+Typical CLI usage
+^^^^^^^^^^^^^^^^^
 
 .. code-block:: bash
 
@@ -287,6 +319,10 @@ Use the CLI for automation or to mirror runs configured in the GUI (the desktop 
       --models ImputeUBP ImputeVAE \
       --preset balanced \
       --prefix demo
+      --sim-strategy random_weighted_inv \
+      --sim-prop 0.30 \
+      --tune-n-trials 100 \
+      --n-jobs 4
 
     # Use a YAML config and override a couple fields
     pg-sui \
@@ -314,19 +350,20 @@ Use the CLI for automation or to mirror runs configured in the GUI (the desktop 
       --preset balanced \
       --sim-strategy random_weighted_inv \
       --sim-prop 0.30 \
-      --set io.prefix=balanced_sim_override
+      --prefix demo_runs
 
     # Temporarily disable simulated masking (store_false flag)
     pg-sui \
       --vcf cohort.vcf.gz \
       --models ImputeVAE \
       --simulate-missing \
-      --set io.prefix=vae_observed_only
+      --prefix vae_observed_only
 
 Deterministic Models (Configs)
 ------------------------------
 
-**ImputeMostFrequent**
+Mode Imputation - ImputeMostFrequent
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 .. code-block:: python
 
@@ -340,7 +377,8 @@ Deterministic Models (Configs)
     model.fit()
     X_mode = model.transform()
 
-**ImputeRefAllele**
+REF Allele Imputation - ImputeRefAllele
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 .. code-block:: python
 
@@ -356,7 +394,8 @@ Deterministic Models (Configs)
 Unsupervised Deep Learning (Configs)
 ------------------------------------
 
-**Non-linear PCA (ImputeNLPCA)** *(Scholz et al., 2005)*
+Non-linear PCA - ImputeNLPCA
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 .. code-block:: python
 
@@ -368,7 +407,8 @@ Unsupervised Deep Learning (Configs)
     model.fit()
     X_nlpca = model.transform()
 
-**Unsupervised Backpropagation (ImputeUBP)** *(Gashler et al., 2016)*
+Unsupervised Backpropagation - ImputeUBP
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 .. code-block:: python
 
@@ -380,7 +420,8 @@ Unsupervised Deep Learning (Configs)
     model.fit()
     X_ubp = model.transform()
 
-**Standard Autoencoder (ImputeAutoencoder)** *(Hinton & Salakhutdinov, 2006)*
+Standard Autoencoder - ImputeAutoencoder
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 .. code-block:: python
 
@@ -393,7 +434,8 @@ Unsupervised Deep Learning (Configs)
     model.fit()
     X_ae = model.transform()
 
-**Variational Autoencoder (ImputeVAE)** *(Kingma & Welling, 2013)*
+Variational Autoencoder - ImputeVAE
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 .. code-block:: python
 
@@ -406,10 +448,11 @@ Unsupervised Deep Learning (Configs)
     model.fit()
     X_vae = model.transform()
 
-Supervised Models (Configs)
----------------------------
+Supervised Models
+-----------------
 
-**ImputeHistGradientBoosting**
+Histogram Gradient Boosting - ImputeHistGradientBoosting
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 .. code-block:: python
 
@@ -424,7 +467,8 @@ Supervised Models (Configs)
     model.fit()
     X_hgb = model.transform()
 
-**ImputeRandomForest**
+Random Forest - ImputeRandomForest
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 .. code-block:: python
 
@@ -439,8 +483,11 @@ Supervised Models (Configs)
     model.fit()
     X_rf = model.transform()
 
-Common Config Sections (Fields at a Glance)
--------------------------------------------
+Common Config Sections
+----------------------
+
+Fields at a Glance
+^^^^^^^^^^^^^^^^^^
 
 All ``*Config`` dataclasses expose nested sections (names vary a little by family). The essentials:
 
@@ -496,7 +543,7 @@ Typical Workflow
 Minimal API Reference
 ---------------------
 
-All imputers follow the same high-level pattern:
+All imputers follow the same high-level pattern.
 
 .. code-block:: python
 
