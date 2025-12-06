@@ -90,7 +90,7 @@ CLI Quickstart (copy/paste)
 3. Optional: add a YAML config (``--config vae_balanced.yaml``), apply quick tweaks with ``--set key=value``, or disable simulated missingness with ``--simulate-missing``.
 4. Outputs and plots are written under ``<prefix>_output/``. The CLI prints paths as it runs.
 
-Prefer a visual workflow? Launch the desktop app with ``pgsui-gui`` and follow :doc:`gui`.
+Prefer a visual workflow? Launch the desktop app with ``pgsui-gui`` and follow :doc:`gui` (currently MacOS only).
 
 .. _simulated_missingness:
 
@@ -105,7 +105,7 @@ PG-SUI evaluates imputers on a **simulated masking** of observed genotypes so ev
 - ``nonrandom`` — Phylogenetically clustered masking. Requires a SNPio genotype tree; clades are sampled uniformly (tips/internal) and masked together.
 - ``nonrandom_weighted`` — Phylogenetically clustered masking with clades sampled proportional to branch length (emphasizes longer, more diverged branches).
 
-Use ``--sim-prop`` (0–1) to set the proportion of observed entries to hide. For diagnostics that rely only on organically missing calls, pass ``--simulate-missing`` (store-false flag) to skip simulated masking.
+Use ``--sim-prop`` (0-1) to set the proportion of observed entries to hide. For diagnostics that rely only on organically missing calls, pass ``--simulate-missing`` (store-false flag) to skip simulated masking.
 
 Summary table
 ^^^^^^^^^^^^^
@@ -463,7 +463,7 @@ After ``fit()``, each model writes plots and metrics under:
 Key figures
 ^^^^^^^^^^^
 
-- **Radar (spider) summary** across models: macro-F1, macro-PR, accuracy, HET-F1.
+- **Radar summary** across models: macro-F1, macro-PR, accuracy, HET-F1.
 - **Confusion matrices** (overall and per-zygosity).
 - **Per-class precision-recall curves** and macro-averaged PR.
 - **Zygosity bar charts** (REF/HET/ALT) for error composition.
