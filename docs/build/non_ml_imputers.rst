@@ -8,14 +8,14 @@ The deterministic imputers provide fast, interpretable baselines that mirror the
 **fit/transform** contract used across PG-SUI:
 
 - You **instantiate** with a `GenotypeData` and a **dataclass config** (or YAML path).
-- Call :py:meth:`fit()` with **no arguments** to set up evaluation (TRAIN/TEST split, masking).
+- Call :py:meth:`fit()` with **no arguments** to set up evaluation (TRAIN/TEST split with simulated masking).
 - Call :py:meth:`transform()` with **no arguments** to impute and write plots/metrics.
 
-Both imputers operate on SNPio’s 0/1/2 working encoding (with ``-1`` or ``-9`` as missing),
+Both imputers operate on SNPio's 0/1/2 working encoding (with ``-1`` or ``-9`` as missing),
 and produce the same evaluation artifacts as the deep models (zygosity reports,
 IUPAC-10 reports, confusion matrices, and distribution plots).
 
-What’s included
+What's included
 ---------------
 
 - **ImputeMostFrequent** — per-locus mode imputation. Supports global modes and
@@ -38,38 +38,38 @@ Quick start (Python)
 
 .. code-block:: python
 
-   from snpio import VCFReader
-   from pgsui.data_processing.containers import MostFrequentConfig, RefAlleleConfig
-   from pgsui.impute.deterministic.imputers.mode import ImputeMostFrequent
-   from pgsui.impute.deterministic.imputers.ref_allele import ImputeRefAllele
+    from snpio import VCFReader
+    from pgsui.data_processing.containers import MostFrequentConfig, RefAlleleConfig
+    from pgsui.impute.deterministic.imputers.mode import ImputeMostFrequent
+    from pgsui.impute.deterministic.imputers.ref_allele import ImputeRefAllele
 
-   gd = VCFReader(
-       filename="data.vcf.gz",
-       popmapfile="pops.popmap",   # optional but recommended
-       prefix="demo"
-   )
+    gd = VCFReader(
+        filename="data.vcf.gz",
+        popmapfile="pops.popmap",   # optional but recommended
+        prefix="demo"
+    )
 
-   # Most-frequent (global)
-   mf_cfg = MostFrequentConfig.from_preset("fast")
-   mf_cfg.io.prefix = "mf_demo"
-   mf = ImputeMostFrequent(genotype_data=gd, config=mf_cfg)
-   mf.fit()
-   X_mf = mf.transform()   # IUPAC array (n_samples, n_loci)
+    # Most-frequent (global)
+    mf_cfg = MostFrequentConfig.from_preset("fast")
+    mf_cfg.io.prefix = "mf_demo"
+    mf = ImputeMostFrequent(genotype_data=gd, config=mf_cfg)
+    mf.fit()
+    X_mf = mf.transform()   # IUPAC array (n_samples, n_loci)
 
-   # Most-frequent (population-aware)
-   mf_pop = MostFrequentConfig.from_preset("balanced")
-   mf_pop.io.prefix = "mf_perpop"
-   mf_pop.algo.by_populations = True
-   mf2 = ImputeMostFrequent(genotype_data=gd, config=mf_pop)
-   mf2.fit()
-   X_mf_perpop = mf2.transform()
+    # Most-frequent (population-aware)
+    mf_pop = MostFrequentConfig.from_preset("balanced")
+    mf_pop.io.prefix = "mf_perpop"
+    mf_pop.algo.by_populations = True
+    mf2 = ImputeMostFrequent(genotype_data=gd, config=mf_pop)
+    mf2.fit()
+    X_mf_perpop = mf2.transform()
 
-   # Reference-allele filler
-   ra_cfg = RefAlleleConfig.from_preset("fast")
-   ra_cfg.io.prefix = "ref_demo"
-   ra = ImputeRefAllele(genotype_data=gd, config=ra_cfg)
-   ra.fit()
-   X_ref = ra.transform()
+    # Reference-allele filler
+    ra_cfg = RefAlleleConfig.from_preset("fast")
+    ra_cfg.io.prefix = "ref_demo"
+    ra = ImputeRefAllele(genotype_data=gd, config=ra_cfg)
+    ra.fit()
+    X_ref = ra.transform()
 
 YAML configuration
 ------------------
