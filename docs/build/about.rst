@@ -28,7 +28,7 @@ Unsupervised Imputation Methods
 Unsupervised models in PG-SUI are purpose-built for genomic data:
 
 - **Variational Autoencoder (VAE)** (Kingma & Welling, 2013) — latent probabilistic modeling with KL (Kullback-Leibler) regularization.
-- **Standard Autoencoder** (Hinton & Salakhutdinov, 2006) — standard encoder-decoder reconstruction, without using a latent distribution.
+- **Autoencoder** (Hinton & Salakhutdinov, 2006) — standard encoder-decoder reconstruction, without using a latent distribution.
 - **Non-linear PCA (NLPCA)** (Scholz et al., 2005) — decoder-style network with latent optimization.
 - **Unsupervised Backpropagation (UBP)** (Gashler et al., 2016) — joint training of latent vectors and decoder weights.
 
