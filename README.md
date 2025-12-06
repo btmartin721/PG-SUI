@@ -68,7 +68,7 @@ conda install -c btmartin721 pg-sui
 We also maintains a Docker image that comes with PG-SUI preinstalled. This can be useful for automated worklows such as Nextflow or Snakemake.
 
 ``` shell
-docker pull pg-sui
+docker pull pg-sui:latest
 ```
 
 ### Optional MacOS GUI
