@@ -72,7 +72,7 @@ jobs:
     env:
       MPLCONFIGDIR: /tmp/mpl
       # Resolve token from common secret names to avoid misconfiguration
-      UPLOAD_TOKEN: ${{ secrets.CONDA_UPLOAD_TOKEN || secrets.ANACONDA_API_TOKEN || secrets.ANACONDA_TOKEN || secrets.ANACONDA_UPLOAD_TOKEN }}
+      UPLOAD_TOKEN: ${{ secrets.PGSUI_UPLOAD_TOKEN || secrets.CONDA_UPLOAD_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -120,7 +120,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -z "${UPLOAD_TOKEN:-}" ]]; then
-            echo "No Anaconda token available. Set one of the secrets: CONDA_UPLOAD_TOKEN, ANACONDA_API_TOKEN, ANACONDA_TOKEN, or ANACONDA_UPLOAD_TOKEN."
+            echo "No Anaconda token available. Set one of the secrets: PGSUI_UPLOAD_TOKEN, CONDA_UPLOAD_TOKEN, to enable uploads."
             exit 1
           fi
           echo "::add-mask::${UPLOAD_TOKEN}"
