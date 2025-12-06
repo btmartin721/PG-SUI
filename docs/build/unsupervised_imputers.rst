@@ -82,8 +82,8 @@ Unsupervised Backpropagation (ImputeUBP)
 - ``transform()`` re-optimises latent vectors for the full cohort before predicting, then saves IUPAC outputs plus genotype distribution plots.
 - Tunable through Optuna with the same search surface as NLPCA (``tune.*`` fields).
 
-Standard Autoencoder (ImputeAutoencoder)
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Autoencoder (ImputeAutoencoder)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 - Feed-forward encoder/decoder with symmetric hidden layers (``model.layer_schedule``) and dropout; no latent refinement is performed during evaluation.
 - Uses focal cross-entropy weighted by observed zygosity (``train.weights_beta``) and early stopping controlled by ``train.early_stop_gen`` / ``train.min_epochs``.
