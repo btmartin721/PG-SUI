@@ -61,11 +61,19 @@ jobs:
 
   conda-package:
     name: Build conda package
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     needs: [tests, clean]
     if: |
       startsWith(github.ref, 'refs/tags/v') ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.run_conda_build == 'true')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            subdir: linux-64
+          - os: macos-latest
+            subdir: osx-arm64
     defaults:
       run:
         shell: bash -l {0}
@@ -73,6 +81,7 @@ jobs:
       MPLCONFIGDIR: /tmp/mpl
       # Resolve token from common secret names to avoid misconfiguration
       UPLOAD_TOKEN: ${{ secrets.PGSUI_UPLOAD_TOKEN || secrets.CONDA_UPLOAD_TOKEN }}
+      CONDA_SUBDIR: ${{ matrix.subdir }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -107,20 +116,22 @@ jobs:
           export SETUPTOOLS_SCM_PRETEND_VERSION=${PKG_VERSION}
           # Help conda/jinja resolve version even if .git metadata is absent
           export GIT_DESCRIBE_TAG=${PKG_VERSION}
-          echo "Building conda package version: ${PKG_VERSION}"
+          echo "Building conda package version: ${PKG_VERSION} for ${CONDA_SUBDIR}"
           conda build conda/recipe --output-folder conda/dist -c btmartin721 -c conda-forge -c bioconda -c pytorch -c defaults
 
       - name: Upload conda artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: conda-packages
-          path: conda/dist/**/*.tar.bz2
+          name: conda-packages-${{ matrix.subdir }}
+          path: |
+            conda/dist/**/*.tar.bz2
+            conda/dist/**/*.conda
 
       - name: Verify upload token
         run: |
           set -euo pipefail
           if [[ -z "${UPLOAD_TOKEN:-}" ]]; then
-            echo "No Anaconda token available. Set one of the secrets: PGSUI_UPLOAD_TOKEN, CONDA_UPLOAD_TOKEN, to enable uploads."
+            echo "No Anaconda token available. Set one of the secrets: PGSUI_UPLOAD_TOKEN, CONDA_UPLOAD_TOKEN, ANACONDA_API_TOKEN, ANACONDA_TOKEN, or ANACONDA_UPLOAD_TOKEN."
             exit 1
           fi
           echo "::add-mask::${UPLOAD_TOKEN}"

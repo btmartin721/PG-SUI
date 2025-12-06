@@ -14,6 +14,8 @@ source:
 build:
   number: 0
   script: {{ PYTHON }} -m pip install . -vv
+  # Build only on linux-64 and macOS arm64 runners
+  skip: true  # [not (linux64 or (osx and arm64))]
 
 requirements:
   host:
