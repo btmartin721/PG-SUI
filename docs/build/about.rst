@@ -6,7 +6,7 @@ About PG-SUI
 PG-SUI Philosophy
 -----------------
 
-PG-SUI is a Python 3 toolkit for imputing missing genotypes in population genomic SNP matrices using **deterministic**, **unsupervised**, and **supervised** approaches. It integrates with SNPio for I/O and encoding, emphasizes robust handling of class imbalance, and follows a refactored design with **typed dataclass configurations**, **presets**, optional **YAML** configs, and a consistent **instantiate → fit() → transform()** workflow. Unsupervised deep models build on representation learning and generative modeling ideas (Hinton & Salakhutdinov, 2006; Kingma & Welling, 2013; Scholz et al., 2005; Gashler et al., 2016).
+PG-SUI is a Python 3 toolkit for imputing missing genotypes in population genomic SNP matrices using **deterministic**, **unsupervised**, and **supervised** approaches. PG-SUI integrates with `SNPio <https://snpio.readthedocs.io/en/latest/>__` for I/O (file input/ output) and encoding, emphasizes robust handling of class imbalance, and follows a logical design with easy-to-use configurations and presets, optional **YAML** configs, and a consistent **instantiate → fit() → transform()** workflow. Unsupervised deep models build on representation learning and generative modeling ideas (Hinton & Salakhutdinov, 2006; Kingma & Welling, 2013; Scholz et al., 2005; Gashler et al., 2016).
 
 Key Design (at a glance)
 ------------------------
@@ -16,14 +16,19 @@ Key Design (at a glance)
 - **Overrides**: presets ⇢ YAML (optional) ⇢ explicit overrides via dot-keys; CLI mirrors the same precedence.
 - **CLI overrides**: ``pg-sui`` exposes ``--sim-strategy``, ``--sim-prop``, and ``--simulate-missing`` so you can globally control missing-data simulation per run without editing YAML.
 - **Evaluation**: macro-F1 and macro-PR with zygosity-aware summaries to address genomic class imbalance.
+- **Plotting**: confusion matrices, PR curves, and imputation accuracy stratified by MAF bins.
+- **Hyperparameter tuning**: built-in support for automated hyperparameter optimization with flexible search spaces.
+- **Reproducibility**: random seeds for data splits, model initialization, and training procedures.
+- **Extensibility**: base classes for unsupervised and supervised imputers make it easy to implement new models.
+- **Documentation**: detailed usage instructions, API references, and developer guides.
 
 Unsupervised Imputation Methods
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Unsupervised models in PG-SUI are purpose-built for genomic data:
 
-- **Variational Autoencoder (VAE)** (Kingma & Welling, 2013) — latent probabilistic modeling with KL regularization.
-- **Standard Autoencoder (SAE)** (Hinton & Salakhutdinov, 2006) — deterministic encoder-decoder reconstruction.
+- **Variational Autoencoder (VAE)** (Kingma & Welling, 2013) — latent probabilistic modeling with KL (Kullback-Leibler) regularization.
+- **Standard Autoencoder** (Hinton & Salakhutdinov, 2006) — standard encoder-decoder reconstruction, without using a latent distribution.
 - **Non-linear PCA (NLPCA)** (Scholz et al., 2005) — decoder-style network with latent optimization.
 - **Unsupervised Backpropagation (UBP)** (Gashler et al., 2016) — joint training of latent vectors and decoder weights.
 
@@ -32,12 +37,12 @@ These models learn structure from observed entries and then infer true missing g
 1. **Train on observed values**: real missings are masked; optional simulated masking during training improves robustness.
 2. **Predict true missings**: after training, the model predicts the masked cells to yield a complete matrix.
 
-Detailed Neural Network Imputation
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Detailed Unsupervised Deep Learning Imputation
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-- **Autoencoder (SAE)**: compresses loci into a low-dimensional latent space and reconstructs the 0/1/2 matrix through a decoder (Hinton & Salakhutdinov, 2006).
+- **Autoencoder**: compresses loci into a low-dimensional embedding and reconstructs the 0/1/2 matrix through a decoder (Hinton & Salakhutdinov, 2006).
+- **VAE**: learns (i.e., encodes) a distribution over the latent space (mean/variance), sampling latents during training for a regularized decoder (Kingma & Welling, 2013).
 - **NLPCA**: initializes reduced-dimensional inputs and iteratively refines them by minimizing reconstruction loss on observed entries (Scholz et al., 2005).
-- **VAE**: learns a distribution over the latent space (mean/variance), sampling latents during training for a regularized decoder (Kingma & Welling, 2013).
 - **UBP**: three-phase training that alternates/refines latent vectors and MLP weights for improved imputation on sparse, imbalanced data (Gashler et al., 2016).
 
 Supervised Imputation Methods
@@ -53,11 +58,11 @@ These models learn from observed genotypes to predict missing states and can be 
 Deterministic (Non-ML) Methods
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Deterministic baselines are simple, fast yardsticks:
+Deterministic baselines are simple, quick baselines that impute missing genotypes without machine learning (ML):
 
-- **Per-population mode per SNP** (population-aware majority class when a popmap is available).
-- **Global mode per SNP** (dataset-wide majority class).
-- **Reference-allele fill** (fills with REF genotype under the working 0/1/2 scheme).
+- **Per-population mode per SNP** (population-aware majority class per site; when a population map, or popmap, is available).
+- **Overall mode per SNP** (overall majority class per site).
+- **Reference-allele fill** (fills missing bases with REF genotype only).
 
 Why Choose PG-SUI?
 ^^^^^^^^^^^^^^^^^^
