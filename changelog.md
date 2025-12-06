@@ -4,6 +4,16 @@ An overview of changes to **PG-SUI** by release. This mirrors the Sphinx/RST cha
 
 ---
 
+## 1.6.14-alpha - 2025-12-05
+
+### Enhancements - v1.6.14-alpha
+
+- Support for conda installation via the btmartin721 channel has been added to the installation instructions.
+- Support for a Docker installation method has been included, providing users with an alternative way to run PG-SUI in containerized environments.
+- The MacOS GUI add-on section has been updated to include instructions for installing the optional Electron wrapper, which provides a point-and-click interface for PG-SUI users on MacOS.
+- Updated the README.md file to reflect the latest changes and enhancements in PG-SUI.
+- Updated CI/CD workflows to streamline the release process and ensure smooth deployment of new versions. Now automatically bumps version numbers and pushes to TestPyPi and PyPi, conda channel, and Docker Hub on newly tagged pushes.
+
 ## 1.6.12 - 2025-11-28
 
 ### Bug Fixes - v1.6.12
