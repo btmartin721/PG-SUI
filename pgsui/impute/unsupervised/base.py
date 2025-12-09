@@ -91,6 +91,7 @@ class BaseNNImputer:
         )
         self._float_genotype_cache: np.ndarray | None = None
         self._sim_mask_cache: dict[tuple, np.ndarray] = {}
+        self._tune_ready: bool = False
 
         # To be initialized by child classes or fit method
         self.tune_save_db: bool = False
