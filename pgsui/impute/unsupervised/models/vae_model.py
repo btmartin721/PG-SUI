@@ -333,8 +333,10 @@ class VAEModel(nn.Module):
         Raises:
             ValueError: If the provided activation name is not supported.
         """
-        if isinstance(activation, str):
-            a = activation.lower()
+        if isinstance(activation, nn.Module):
+            return activation
+
+        a = activation.lower()
         if a == "relu":
             return nn.ReLU()
         elif a == "elu":
