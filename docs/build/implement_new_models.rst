@@ -335,7 +335,7 @@ Mirror the pattern in ``ImputeNLPCA``:
                 X_val=X_val,
                 params=self.best_params_,
                 prune_metric=self.tune_metric,
-                prune_warmup_epochs=5,
+                prune_warmup_epochs=10,
                 eval_interval=1,
                 eval_latent_steps=0,
                 eval_latent_lr=0.0,
