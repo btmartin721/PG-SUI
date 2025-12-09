@@ -529,7 +529,7 @@ class ImputeNLPCA(BaseNNImputer):
         else:
             cw = None
 
-        nF = getattr(model, "n_features", self.num_features_)
+        nF = int(getattr(model, "n_features", self.num_features_))
 
         criterion = SafeFocalCELoss(gamma=gamma, weight=cw, ignore_index=-1)
 
@@ -539,6 +539,19 @@ class ImputeNLPCA(BaseNNImputer):
 
             # Targets
             y_batch = y_batch.to(self.device, non_blocking=True).long()
+
+            if y_batch.dim() != 2:
+                msg = f"Training batch expected 2D targets, got shape {tuple(y_batch.shape)}."
+                self.logger.error(msg)
+                raise ValueError(msg)
+
+            if y_batch.shape[1] != nF:
+                msg = (
+                    f"Model expects {nF} loci but batch has {y_batch.shape[1]}. "
+                    "Ensure tuning subsets and masks use matching loci columns."
+                )
+                self.logger.error(msg)
+                raise ValueError(msg)
 
             decoder: torch.Tensor | torch.nn.Module = model.phase23_decoder
 
@@ -1047,7 +1060,14 @@ class ImputeNLPCA(BaseNNImputer):
                 model,
                 model_params,
                 objective_mode=True,
-                eval_mask_override=eval_mask,
+                eval_mask_override=(
+                    eval_mask[:, : X_test_trial.shape[1]]
+                    if (
+                        eval_mask is not None
+                        and eval_mask.shape[1] > X_test_trial.shape[1]
+                    )
+                    else eval_mask
+                ),
             )
 
             self._clear_resources(model, train_loader, latent_vectors=train_latents)
