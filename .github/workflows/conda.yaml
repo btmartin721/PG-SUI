@@ -36,7 +36,7 @@ jobs:
           MPLCONFIGDIR: ${{ runner.temp }}/mpl
         run: |
           python -m pip install -U pip
-          python -m pip install ".[dev]"
+          python -m pip install ".[dev,gui]"
 
       - name: Run tests
         env:
