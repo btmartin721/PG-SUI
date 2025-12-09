@@ -343,19 +343,19 @@ class NLPCAConfig:
             cfg.model.dropout_rate = 0.10
             cfg.model.gamma = 1.5
             # Train
-            cfg.train.batch_size = 128
-            cfg.train.learning_rate = 1e-3
+            cfg.train.batch_size = 256
+            cfg.train.learning_rate = 2e-3
             cfg.train.early_stop_gen = 5
             cfg.train.min_epochs = 10
-            cfg.train.max_epochs = 120
-            cfg.train.weights_beta = 0.9999
-            cfg.train.weights_max_ratio = 2.0
+            cfg.train.max_epochs = 150
+            cfg.train.weights_beta = 0.999
+            cfg.train.weights_max_ratio = 5.0
             # Tuning
             cfg.tune.enabled = True
             cfg.tune.fast = True
-            cfg.tune.n_trials = 25
-            cfg.tune.epochs = 120
-            cfg.tune.batch_size = 128
+            cfg.tune.n_trials = 20
+            cfg.tune.epochs = 150
+            cfg.tune.batch_size = 256
             cfg.tune.max_samples = 512
             cfg.tune.max_loci = 0
             cfg.tune.eval_interval = 20
@@ -374,26 +374,26 @@ class NLPCAConfig:
             cfg.model.gamma = 2.0
             # Train
             cfg.train.batch_size = 128
-            cfg.train.learning_rate = 8e-4
+            cfg.train.learning_rate = 1e-3
             cfg.train.early_stop_gen = 15
             cfg.train.min_epochs = 50
             cfg.train.max_epochs = 600
             cfg.train.weights_beta = 0.9999
-            cfg.train.weights_max_ratio = 2.0
+            cfg.train.weights_max_ratio = 5.0
             # Tuning
             cfg.tune.enabled = True
-            cfg.tune.fast = True
-            cfg.tune.n_trials = 75
-            cfg.tune.epochs = 300
+            cfg.tune.fast = False
+            cfg.tune.n_trials = 60
+            cfg.tune.epochs = 200
             cfg.tune.batch_size = 128
             cfg.tune.max_samples = 2048
             cfg.tune.max_loci = 0
-            cfg.tune.eval_interval = 20
-            cfg.tune.infer_epochs = 40
+            cfg.tune.eval_interval = 10
+            cfg.tune.infer_epochs = 50
             cfg.tune.patience = 10
             cfg.tune.proxy_metric_batch = 0
             # Eval
-            cfg.evaluate.eval_latent_steps = 30
+            cfg.evaluate.eval_latent_steps = 40
 
         else:  # thorough
             # Model
@@ -404,26 +404,26 @@ class NLPCAConfig:
             cfg.model.gamma = 2.5
             # Train
             cfg.train.batch_size = 64
-            cfg.train.learning_rate = 6e-4
-            cfg.train.early_stop_gen = 20  # Reduced from 30
+            cfg.train.learning_rate = 5e-4
+            cfg.train.early_stop_gen = 30
             cfg.train.min_epochs = 100
-            cfg.train.max_epochs = 800  # Reduced from 1200
+            cfg.train.max_epochs = 2000
             cfg.train.weights_beta = 0.9999
-            cfg.train.weights_max_ratio = 2.0
+            cfg.train.weights_max_ratio = 5.0
             # Tuning
             cfg.tune.enabled = True
-            cfg.tune.fast = False
-            cfg.tune.n_trials = 150
+            cfg.tune.fast = False  # Full search
+            cfg.tune.n_trials = 100
             cfg.tune.epochs = 600
             cfg.tune.batch_size = 64
-            cfg.tune.max_samples = 5000  # Capped from 0
+            cfg.tune.max_samples = 0  # No limit
             cfg.tune.max_loci = 0
             cfg.tune.eval_interval = 10
             cfg.tune.infer_epochs = 80
-            cfg.tune.patience = 15  # Reduced from 20
+            cfg.tune.patience = 20
             cfg.tune.proxy_metric_batch = 0
             # Eval
-            cfg.evaluate.eval_latent_steps = 50
+            cfg.evaluate.eval_latent_steps = 100
 
         return cfg
 
@@ -496,19 +496,19 @@ class UBPConfig:
             cfg.model.dropout_rate = 0.10
             cfg.model.gamma = 1.5
             # Train
-            cfg.train.batch_size = 128
-            cfg.train.learning_rate = 1e-3
+            cfg.train.batch_size = 256
+            cfg.train.learning_rate = 2e-3
             cfg.train.early_stop_gen = 5
             cfg.train.min_epochs = 10
-            cfg.train.max_epochs = 120
-            cfg.train.weights_beta = 0.9999
-            cfg.train.weights_max_ratio = 2.0
+            cfg.train.max_epochs = 150
+            cfg.train.weights_beta = 0.999
+            cfg.train.weights_max_ratio = 5.0
             # Tuning
             cfg.tune.enabled = True
             cfg.tune.fast = True
-            cfg.tune.n_trials = 25
-            cfg.tune.epochs = 120
-            cfg.tune.batch_size = 128
+            cfg.tune.n_trials = 20
+            cfg.tune.epochs = 150
+            cfg.tune.batch_size = 256
             cfg.tune.max_samples = 512
             cfg.tune.max_loci = 0
             cfg.tune.eval_interval = 20
@@ -529,26 +529,26 @@ class UBPConfig:
             cfg.model.gamma = 2.0
             # Train
             cfg.train.batch_size = 128
-            cfg.train.learning_rate = 8e-4
+            cfg.train.learning_rate = 1e-3
             cfg.train.early_stop_gen = 15
             cfg.train.min_epochs = 50
             cfg.train.max_epochs = 600
             cfg.train.weights_beta = 0.9999
-            cfg.train.weights_max_ratio = 2.0
+            cfg.train.weights_max_ratio = 5.0
             # Tuning
             cfg.tune.enabled = True
-            cfg.tune.fast = True
-            cfg.tune.n_trials = 75
-            cfg.tune.epochs = 300
+            cfg.tune.fast = False
+            cfg.tune.n_trials = 60
+            cfg.tune.epochs = 200
             cfg.tune.batch_size = 128
             cfg.tune.max_samples = 2048
             cfg.tune.max_loci = 0
-            cfg.tune.eval_interval = 20
-            cfg.tune.infer_epochs = 40
+            cfg.tune.eval_interval = 10
+            cfg.tune.infer_epochs = 50
             cfg.tune.patience = 10
             cfg.tune.proxy_metric_batch = 0
             # Eval
-            cfg.evaluate.eval_latent_steps = 30
+            cfg.evaluate.eval_latent_steps = 40
             cfg.evaluate.eval_latent_lr = 1e-2
             cfg.evaluate.eval_latent_weight_decay = 0.0
 
@@ -561,26 +561,26 @@ class UBPConfig:
             cfg.model.gamma = 2.5
             # Train
             cfg.train.batch_size = 64
-            cfg.train.learning_rate = 6e-4
-            cfg.train.early_stop_gen = 20  # Reduced from 30
+            cfg.train.learning_rate = 5e-4
+            cfg.train.early_stop_gen = 30
             cfg.train.min_epochs = 100
-            cfg.train.max_epochs = 800  # Reduced from 1200
+            cfg.train.max_epochs = 2000
             cfg.train.weights_beta = 0.9999
-            cfg.train.weights_max_ratio = 2.0
+            cfg.train.weights_max_ratio = 5.0
             # Tuning
             cfg.tune.enabled = True
             cfg.tune.fast = False
-            cfg.tune.n_trials = 150
+            cfg.tune.n_trials = 100
             cfg.tune.epochs = 600
             cfg.tune.batch_size = 64
-            cfg.tune.max_samples = 5000  # Capped from 0
+            cfg.tune.max_samples = 0
             cfg.tune.max_loci = 0
             cfg.tune.eval_interval = 10
             cfg.tune.infer_epochs = 80
-            cfg.tune.patience = 15  # Reduced from 20
+            cfg.tune.patience = 20
             cfg.tune.proxy_metric_batch = 0
             # Eval
-            cfg.evaluate.eval_latent_steps = 50
+            cfg.evaluate.eval_latent_steps = 100
             cfg.evaluate.eval_latent_lr = 1e-2
             cfg.evaluate.eval_latent_weight_decay = 0.0
 
@@ -657,18 +657,18 @@ class AutoencoderConfig:
             cfg.model.layer_scaling_factor = 2.0
             cfg.model.dropout_rate = 0.10
             cfg.model.gamma = 1.5
-            cfg.train.batch_size = 128
-            cfg.train.learning_rate = 1e-3
+            cfg.train.batch_size = 256
+            cfg.train.learning_rate = 2e-3
             cfg.train.early_stop_gen = 5
             cfg.train.min_epochs = 10
-            cfg.train.max_epochs = 120
-            cfg.train.weights_beta = 0.9999
-            cfg.train.weights_max_ratio = 2.0
+            cfg.train.max_epochs = 150
+            cfg.train.weights_beta = 0.999
+            cfg.train.weights_max_ratio = 5.0
             cfg.tune.enabled = True
             cfg.tune.fast = True
-            cfg.tune.n_trials = 25
-            cfg.tune.epochs = 120
-            cfg.tune.batch_size = 128
+            cfg.tune.n_trials = 20
+            cfg.tune.epochs = 150
+            cfg.tune.batch_size = 256
             cfg.tune.max_samples = 512
             cfg.tune.max_loci = 0
             cfg.tune.eval_interval = 20
@@ -684,20 +684,20 @@ class AutoencoderConfig:
             cfg.model.dropout_rate = 0.20
             cfg.model.gamma = 2.0
             cfg.train.batch_size = 128
-            cfg.train.learning_rate = 8e-4
+            cfg.train.learning_rate = 1e-3
             cfg.train.early_stop_gen = 15
             cfg.train.min_epochs = 50
             cfg.train.max_epochs = 600
             cfg.train.weights_beta = 0.9999
-            cfg.train.weights_max_ratio = 2.0
+            cfg.train.weights_max_ratio = 5.0
             cfg.tune.enabled = True
-            cfg.tune.fast = True
-            cfg.tune.n_trials = 75
-            cfg.tune.epochs = 300
+            cfg.tune.fast = False
+            cfg.tune.n_trials = 60
+            cfg.tune.epochs = 200
             cfg.tune.batch_size = 128
             cfg.tune.max_samples = 2048
             cfg.tune.max_loci = 0
-            cfg.tune.eval_interval = 20
+            cfg.tune.eval_interval = 10
             cfg.tune.patience = 10
             cfg.tune.proxy_metric_batch = 0
             if hasattr(cfg.tune, "infer_epochs"):
@@ -710,21 +710,21 @@ class AutoencoderConfig:
             cfg.model.dropout_rate = 0.30
             cfg.model.gamma = 2.5
             cfg.train.batch_size = 64
-            cfg.train.learning_rate = 6e-4
-            cfg.train.early_stop_gen = 20  # Reduced from 30
+            cfg.train.learning_rate = 5e-4
+            cfg.train.early_stop_gen = 30
             cfg.train.min_epochs = 100
-            cfg.train.max_epochs = 800  # Reduced from 1200
+            cfg.train.max_epochs = 2000
             cfg.train.weights_beta = 0.9999
-            cfg.train.weights_max_ratio = 2.0
+            cfg.train.weights_max_ratio = 5.0
             cfg.tune.enabled = True
             cfg.tune.fast = False
-            cfg.tune.n_trials = 150
+            cfg.tune.n_trials = 100
             cfg.tune.epochs = 600
             cfg.tune.batch_size = 64
-            cfg.tune.max_samples = 5000  # Capped from 0
+            cfg.tune.max_samples = 0
             cfg.tune.max_loci = 0
             cfg.tune.eval_interval = 10
-            cfg.tune.patience = 15  # Reduced from 20
+            cfg.tune.patience = 20
             cfg.tune.proxy_metric_batch = 0
             if hasattr(cfg.tune, "infer_epochs"):
                 cfg.tune.infer_epochs = 0
@@ -812,30 +812,30 @@ class VAEConfig:
         cfg.sim.sim_strategy = "random"
         cfg.sim.sim_prop = 0.2
 
-        # VAE KL schedules, shortened for speed
-        cfg.vae.kl_beta = 1.0
-        cfg.vae.kl_warmup = 25
-        cfg.vae.kl_ramp = 100
-
         if preset == "fast":
             cfg.model.latent_dim = 4
             cfg.model.num_hidden_layers = 1
             cfg.model.layer_scaling_factor = 2.0
             cfg.model.dropout_rate = 0.10
             cfg.model.gamma = 1.5
-            cfg.vae.kl_beta = 0.5  # Lower beta for fast training
-            cfg.train.batch_size = 128
-            cfg.train.learning_rate = 1e-3
+            # VAE specifics
+            cfg.vae.kl_beta = 0.5
+            cfg.vae.kl_warmup = 10
+            cfg.vae.kl_ramp = 40
+            # Train
+            cfg.train.batch_size = 256
+            cfg.train.learning_rate = 2e-3
             cfg.train.early_stop_gen = 5
             cfg.train.min_epochs = 10
-            cfg.train.max_epochs = 120
-            cfg.train.weights_beta = 0.9999
-            cfg.train.weights_max_ratio = 2.0
+            cfg.train.max_epochs = 150
+            cfg.train.weights_beta = 0.999
+            cfg.train.weights_max_ratio = 5.0
+            # Tune
             cfg.tune.enabled = True
             cfg.tune.fast = True
-            cfg.tune.n_trials = 25
-            cfg.tune.epochs = 120
-            cfg.tune.batch_size = 128
+            cfg.tune.n_trials = 20
+            cfg.tune.epochs = 150
+            cfg.tune.batch_size = 256
             cfg.tune.max_samples = 512
             cfg.tune.max_loci = 0
             cfg.tune.eval_interval = 20
@@ -850,21 +850,27 @@ class VAEConfig:
             cfg.model.layer_scaling_factor = 3.0
             cfg.model.dropout_rate = 0.20
             cfg.model.gamma = 2.0
+            # VAE specifics
+            cfg.vae.kl_beta = 1.0
+            cfg.vae.kl_warmup = 50
+            cfg.vae.kl_ramp = 150
+            # Train
             cfg.train.batch_size = 128
-            cfg.train.learning_rate = 8e-4
+            cfg.train.learning_rate = 1e-3
             cfg.train.early_stop_gen = 15
             cfg.train.min_epochs = 50
             cfg.train.max_epochs = 600
             cfg.train.weights_beta = 0.9999
-            cfg.train.weights_max_ratio = 2.0
+            cfg.train.weights_max_ratio = 5.0
+            # Tune
             cfg.tune.enabled = True
-            cfg.tune.fast = True
-            cfg.tune.n_trials = 75
-            cfg.tune.epochs = 300
+            cfg.tune.fast = False
+            cfg.tune.n_trials = 60
+            cfg.tune.epochs = 200
             cfg.tune.batch_size = 128
             cfg.tune.max_samples = 2048
             cfg.tune.max_loci = 0
-            cfg.tune.eval_interval = 20
+            cfg.tune.eval_interval = 10
             cfg.tune.patience = 10
             cfg.tune.proxy_metric_batch = 0
             if hasattr(cfg.tune, "infer_epochs"):
@@ -876,22 +882,28 @@ class VAEConfig:
             cfg.model.layer_scaling_factor = 5.0
             cfg.model.dropout_rate = 0.30
             cfg.model.gamma = 2.5
+            # VAE specifics
+            cfg.vae.kl_beta = 1.0
+            cfg.vae.kl_warmup = 100
+            cfg.vae.kl_ramp = 400
+            # Train
             cfg.train.batch_size = 64
-            cfg.train.learning_rate = 6e-4
-            cfg.train.early_stop_gen = 20  # Reduced from 30
+            cfg.train.learning_rate = 5e-4
+            cfg.train.early_stop_gen = 30
             cfg.train.min_epochs = 100
-            cfg.train.max_epochs = 800  # Reduced from 1200
+            cfg.train.max_epochs = 2000
             cfg.train.weights_beta = 0.9999
-            cfg.train.weights_max_ratio = 2.0
+            cfg.train.weights_max_ratio = 5.0
+            # Tune
             cfg.tune.enabled = True
             cfg.tune.fast = False
-            cfg.tune.n_trials = 150
+            cfg.tune.n_trials = 100
             cfg.tune.epochs = 600
             cfg.tune.batch_size = 64
-            cfg.tune.max_samples = 5000  # Capped from 0
+            cfg.tune.max_samples = 0
             cfg.tune.max_loci = 0
             cfg.tune.eval_interval = 10
-            cfg.tune.patience = 15  # Reduced from 20
+            cfg.tune.patience = 20
             cfg.tune.proxy_metric_batch = 0
             if hasattr(cfg.tune, "infer_epochs"):
                 cfg.tune.infer_epochs = 0
@@ -1264,13 +1276,13 @@ class RFConfig:
         """Build a config from a named preset."""
         cfg = cls()
         if preset == "fast":
-            cfg.model.n_estimators = 100  # Increased from 50
+            cfg.model.n_estimators = 50
             cfg.model.max_depth = None
             cfg.imputer.max_iter = 5
             cfg.io.n_jobs = 1
             cfg.tune.enabled = False
         elif preset == "balanced":
-            cfg.model.n_estimators = 200  # Increased from 100
+            cfg.model.n_estimators = 200
             cfg.model.max_depth = None
             cfg.imputer.max_iter = 10
             cfg.io.n_jobs = 1
@@ -1279,7 +1291,7 @@ class RFConfig:
         elif preset == "thorough":
             cfg.model.n_estimators = 500
             cfg.model.max_depth = 50  # Added safety cap
-            cfg.imputer.max_iter = 15
+            cfg.imputer.max_iter = 20
             cfg.io.n_jobs = 1
             cfg.tune.enabled = False
             cfg.tune.n_trials = 250
@@ -1357,14 +1369,14 @@ class HGBConfig:
         cfg = cls()
         if preset == "fast":
             cfg.model.n_estimators = 50
-            cfg.model.learning_rate = 0.15
+            cfg.model.learning_rate = 0.2
             cfg.model.max_depth = None
             cfg.imputer.max_iter = 5
             cfg.io.n_jobs = 1
             cfg.tune.enabled = False
             cfg.tune.n_trials = 50
         elif preset == "balanced":
-            cfg.model.n_estimators = 100
+            cfg.model.n_estimators = 150
             cfg.model.learning_rate = 0.1
             cfg.model.max_depth = None
             cfg.imputer.max_iter = 10
@@ -1373,10 +1385,10 @@ class HGBConfig:
             cfg.tune.n_trials = 100
         elif preset == "thorough":
             cfg.model.n_estimators = 500
-            cfg.model.learning_rate = 0.05  # Reduced from 0.08
+            cfg.model.learning_rate = 0.05
             cfg.model.n_iter_no_change = 20  # Increased patience
             cfg.model.max_depth = None
-            cfg.imputer.max_iter = 15
+            cfg.imputer.max_iter = 20
             cfg.io.n_jobs = 1
             cfg.tune.enabled = False
             cfg.tune.n_trials = 250

@@ -203,3 +203,6 @@ validation_inputs_phylip_max150k.nosync/
 gui_test_output/
 *.dmg
 tmp_test_output/
+test_all_output/
+test_nlpca_output/
+*.slurm

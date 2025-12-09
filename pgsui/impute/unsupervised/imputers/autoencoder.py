@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import optuna
 import torch
+import torch.nn.functional as F
 from sklearn.exceptions import NotFittedError
 from sklearn.model_selection import train_test_split
 from snpio.analysis.genotype_encoder import GenotypeEncoder
@@ -162,6 +163,7 @@ class ImputeAutoencoder(BaseNNImputer):
         self.verbose = self.cfg.io.verbose
         self.debug = self.cfg.io.debug
         self.rng = np.random.default_rng(self.seed)
+        self.pos_weights_: torch.Tensor | None = None
 
         # Simulated-missing controls (config defaults with ctor overrides)
         sim_cfg = getattr(self.cfg, "sim", None)
@@ -330,10 +332,12 @@ class ImputeAutoencoder(BaseNNImputer):
             )
         )
         self.ploidy = 1 if self.is_haploid else 2
+        # Scoring still uses 3 labels for diploid (REF/HET/ALT); model head uses 2 logits
         self.num_classes_ = 2 if self.is_haploid else 3
+        self.output_classes_ = 2
         self.logger.info(
             f"Data is {'haploid' if self.is_haploid else 'diploid'}; "
-            f"using {self.num_classes_} classes."
+            f"using {self.num_classes_} classes for scoring and {self.output_classes_} output channels."
         )
 
         if self.is_haploid:
@@ -345,7 +349,7 @@ class ImputeAutoencoder(BaseNNImputer):
         # Model params (decoder outputs L * K logits)
         self.model_params = {
             "n_features": self.num_features_,
-            "num_classes": self.num_classes_,
+            "num_classes": self.output_classes_,
             "latent_dim": self.latent_dim,
             "dropout_rate": self.dropout_rate,
             "activation": self.activation,
@@ -368,6 +372,12 @@ class ImputeAutoencoder(BaseNNImputer):
         else:
             self.sim_mask_train_ = None
             self.sim_mask_test_ = None
+
+        # Pos weights for diploid multilabel path (must exist before tuning)
+        if not self.is_haploid:
+            self.pos_weights_ = self._compute_pos_weights(self.X_train_)
+        else:
+            self.pos_weights_ = None
 
         # Plotters/scorers (shared utilities)
         self.plotter_, self.scorers_ = self.initialize_plotting_and_scorers()
@@ -401,7 +411,7 @@ class ImputeAutoencoder(BaseNNImputer):
             X_val=self.X_val_,
             params=self.best_params_,
             prune_metric=self.tune_metric,
-            prune_warmup_epochs=5,
+            prune_warmup_epochs=10,
             eval_interval=1,
             eval_requires_latents=False,
             eval_latent_steps=0,
@@ -509,7 +519,7 @@ class ImputeAutoencoder(BaseNNImputer):
         X_val: np.ndarray | None = None,
         params: dict | None = None,
         prune_metric: str = "f1",  # "f1" | "accuracy" | "pr_macro"
-        prune_warmup_epochs: int = 3,
+        prune_warmup_epochs: int = 10,
         eval_interval: int = 1,
         # Evaluation parameters (AE ignores latent refinement knobs)
         eval_requires_latents: bool = False,  # AE: always False
@@ -593,7 +603,7 @@ class ImputeAutoencoder(BaseNNImputer):
         X_val: np.ndarray | None = None,
         params: dict | None = None,
         prune_metric: str = "f1",
-        prune_warmup_epochs: int = 3,
+        prune_warmup_epochs: int = 10,
         eval_interval: int = 1,
         # Evaluation parameters (AE ignores latent refinement knobs)
         eval_requires_latents: bool = False,  # AE: False
@@ -761,24 +771,35 @@ class ImputeAutoencoder(BaseNNImputer):
         # Use model.gamma if present, else self.gamma
         gamma = float(getattr(model, "gamma", getattr(self, "gamma", 0.0)))
         gamma = float(torch.tensor(gamma).clamp(min=0.0, max=10.0))  # sane bound
-        criterion = SafeFocalCELoss(gamma=gamma, weight=class_weights, ignore_index=-1)
+        ce_criterion = SafeFocalCELoss(
+            gamma=gamma, weight=class_weights, ignore_index=-1
+        )
 
         for _, y_batch in loader:
             optimizer.zero_grad(set_to_none=True)
             y_batch = y_batch.to(self.device, non_blocking=True)
 
             # Inputs: one-hot with zeros for missing; Targets: long ints with -1 for missing
-            x_ohe = self._one_hot_encode_012(y_batch)  # (B, L, K)
-            logits = model(x_ohe).view(-1, self.num_features_, self.num_classes_)
-            logits_flat = logits.view(-1, self.num_classes_)
-            targets_flat = y_batch.view(-1).long()
-
-            # Upfront guards on inputs
-            if not torch.isfinite(logits_flat).all():
-                # Skip this batch if model already produced non-finite
-                continue
-
-            loss = criterion(logits_flat, targets_flat)
+            if self.is_haploid:
+                x_in = self._one_hot_encode_012(y_batch)  # (B, L, 2)
+                logits = model(x_in).view(-1, self.num_features_, self.output_classes_)
+                logits_flat = logits.view(-1, self.output_classes_)
+                targets_flat = y_batch.view(-1).long()
+                if not torch.isfinite(logits_flat).all():
+                    continue
+                loss = ce_criterion(logits_flat, targets_flat)
+            else:
+                x_in = self._encode_multilabel_inputs(y_batch)  # (B, L, 2)
+                logits = model(x_in).view(-1, self.num_features_, self.output_classes_)
+                if not torch.isfinite(logits).all():
+                    continue
+                pos_w = getattr(self, "pos_weights_", None)
+                targets = self._multi_hot_targets(y_batch)  # float, same shape
+                bce = F.binary_cross_entropy_with_logits(
+                    logits, targets, pos_weight=pos_w, reduction="none"
+                )
+                mask = (y_batch != -1).unsqueeze(-1).float()
+                loss = (bce * mask).sum() / mask.sum().clamp_min(1e-8)
 
             if l1_penalty > 0:
                 l1 = torch.zeros((), device=self.device)
@@ -842,15 +863,68 @@ class ImputeAutoencoder(BaseNNImputer):
         with torch.no_grad():
             X_tensor = torch.from_numpy(X) if isinstance(X, np.ndarray) else X
             X_tensor = X_tensor.to(self.device).long()
-            x_ohe = self._one_hot_encode_012(X_tensor)
-            logits = model(x_ohe).view(-1, self.num_features_, self.num_classes_)
-            probas = torch.softmax(logits, dim=-1)
-            labels = torch.argmax(probas, dim=-1)
+            if self.is_haploid:
+                x_ohe = self._one_hot_encode_012(X_tensor)
+                logits = model(x_ohe).view(-1, self.num_features_, self.output_classes_)
+                probas = torch.softmax(logits, dim=-1)
+                labels = torch.argmax(probas, dim=-1)
+            else:
+                x_in = self._encode_multilabel_inputs(X_tensor)
+                logits = model(x_in).view(-1, self.num_features_, self.output_classes_)
+                probas_2 = torch.sigmoid(logits)
+                p_ref = probas_2[..., 0]
+                p_alt = probas_2[..., 1]
+                p_het = p_ref * p_alt
+                p_ref_only = p_ref * (1 - p_alt)
+                p_alt_only = p_alt * (1 - p_ref)
+                stacked = torch.stack([p_ref_only, p_het, p_alt_only], dim=-1)
+                stacked = stacked / stacked.sum(dim=-1, keepdim=True).clamp_min(1e-8)
+                probas = stacked
+                labels = torch.argmax(stacked, dim=-1)
 
         if return_proba:
             return labels.cpu().numpy(), probas.cpu().numpy()
 
         return labels.cpu().numpy()
+
+    def _encode_multilabel_inputs(self, y: torch.Tensor) -> torch.Tensor:
+        """Two-channel multi-hot for diploid: REF-only, ALT-only; HET sets both."""
+        if self.is_haploid:
+            return self._one_hot_encode_012(y)
+        y = y.to(self.device)
+        shape = y.shape + (2,)
+        out = torch.zeros(shape, device=self.device, dtype=torch.float32)
+        valid = y != -1
+        ref_mask = valid & (y != 2)
+        alt_mask = valid & (y != 0)
+        out[ref_mask, 0] = 1.0
+        out[alt_mask, 1] = 1.0
+        return out
+
+    def _multi_hot_targets(self, y: torch.Tensor) -> torch.Tensor:
+        """Targets aligned with _encode_multilabel_inputs for diploid training."""
+        if self.is_haploid:
+            # One-hot CE path expects integer targets; handled upstream.
+            raise RuntimeError("_multi_hot_targets called for haploid data.")
+        y = y.to(self.device)
+        out = torch.zeros(y.shape + (2,), device=self.device, dtype=torch.float32)
+        valid = y != -1
+        ref_mask = valid & (y != 2)
+        alt_mask = valid & (y != 0)
+        out[ref_mask, 0] = 1.0
+        out[alt_mask, 1] = 1.0
+        return out
+
+    def _compute_pos_weights(self, X: np.ndarray) -> torch.Tensor:
+        """Balance REF/ALT channels for multilabel BCE."""
+        ref_pos = np.count_nonzero((X == 0) | (X == 1))
+        alt_pos = np.count_nonzero((X == 2) | (X == 1))
+        total_valid = np.count_nonzero(X != -1)
+        pos_counts = np.array([ref_pos, alt_pos], dtype=np.float32)
+        neg_counts = np.maximum(total_valid - pos_counts, 1.0)
+        pos_counts = np.maximum(pos_counts, 1.0)
+        weights = neg_counts / pos_counts
+        return torch.tensor(weights, device=self.device, dtype=torch.float32)
 
     def _evaluate_model(
         self,
@@ -1090,7 +1164,7 @@ class ImputeAutoencoder(BaseNNImputer):
                 X_val=X_val,
                 params=params,
                 prune_metric=self.tune_metric,
-                prune_warmup_epochs=5,
+                prune_warmup_epochs=10,
                 eval_interval=self.tune_eval_interval,
                 eval_requires_latents=False,
                 eval_latent_steps=0,
@@ -1137,24 +1211,24 @@ class ImputeAutoencoder(BaseNNImputer):
             Dict[str, int | float | str | bool]: Sampled hyperparameters and model_params.
         """
         params = {
-            "latent_dim": trial.suggest_int("latent_dim", 2, 64),
-            "lr": trial.suggest_float("learning_rate", 1e-5, 1e-2, log=True),
-            "dropout_rate": trial.suggest_float("dropout_rate", 0.0, 0.6),
-            "num_hidden_layers": trial.suggest_int("num_hidden_layers", 1, 8),
+            "latent_dim": trial.suggest_int("latent_dim", 4, 16, step=2),
+            "lr": trial.suggest_float("learning_rate", 3e-4, 1e-3, log=True),
+            "dropout_rate": trial.suggest_float("dropout_rate", 0.0, 0.30, step=0.05),
+            "num_hidden_layers": trial.suggest_int("num_hidden_layers", 1, 6),
             "activation": trial.suggest_categorical(
-                "activation", ["relu", "elu", "selu"]
+                "activation", ["relu", "elu", "selu", "leaky_relu"]
             ),
-            "l1_penalty": trial.suggest_float("l1_penalty", 1e-7, 1e-2, log=True),
+            "l1_penalty": trial.suggest_float("l1_penalty", 1e-6, 1e-3, log=True),
             "layer_scaling_factor": trial.suggest_float(
-                "layer_scaling_factor", 2.0, 10.0
+                "layer_scaling_factor", 2.0, 4.0, step=0.5
             ),
             "layer_schedule": trial.suggest_categorical(
-                "layer_schedule", ["pyramid", "constant", "linear"]
+                "layer_schedule", ["pyramid", "linear"]
             ),
         }
 
         nF: int = self.num_features_
-        nC: int = int(self.num_classes_) if self.num_classes_ is not None else 3
+        nC: int = int(getattr(self, "output_classes_", self.num_classes_ or 3))
         input_dim = nF * nC
         hidden_layer_sizes = self._compute_hidden_layer_sizes(
             n_inputs=input_dim,
@@ -1173,8 +1247,8 @@ class ImputeAutoencoder(BaseNNImputer):
 
         params["model_params"] = {
             "n_features": int(self.num_features_),
-            "num_classes": (
-                int(self.num_classes_) if self.num_classes_ is not None else 3
+            "num_classes": int(
+                getattr(self, "output_classes_", self.num_classes_ or 3)
             ),
             "latent_dim": int(params["latent_dim"]),
             "dropout_rate": float(params["dropout_rate"]),
@@ -1227,7 +1301,7 @@ class ImputeAutoencoder(BaseNNImputer):
         self.layer_schedule: str = bp["layer_schedule"]
 
         nF: int = self.num_features_
-        nC: int = int(self.num_classes_) if self.num_classes_ is not None else 3
+        nC: int = int(getattr(self, "output_classes_", self.num_classes_ or 3))
         hidden_layer_sizes = self._compute_hidden_layer_sizes(
             n_inputs=nF * nC,
             n_outputs=nF * nC,
