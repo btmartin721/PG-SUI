@@ -469,6 +469,10 @@ class ImputeUBP(BaseNNImputer):
         if not isinstance(latent_vectors, torch.nn.Parameter):
             latent_vectors = torch.nn.Parameter(latent_vectors, requires_grad=True)
 
+        # Keep target width in sync with model output width to avoid silent shape
+        # mismatches that surface later as mask errors.
+        nF_model = int(getattr(model, "n_features", self.num_features_))
+
         gamma = float(getattr(model, "gamma", getattr(self, "gamma", 0.0)))
         gamma = max(0.0, min(gamma, 10.0))
         l1_params = tuple(p for p in model.parameters() if p.requires_grad)
@@ -493,8 +497,21 @@ class ImputeUBP(BaseNNImputer):
             z = latent_vectors[batch_indices]
             y = y_batch.to(self.device, non_blocking=True).long()
 
+            if y.dim() != 2:
+                msg = f"Training batch expected 2D targets, got shape {tuple(y.shape)}."
+                self.logger.error(msg)
+                raise ValueError(msg)
+
+            if y.shape[1] != nF_model:
+                msg = (
+                    f"Model expects {nF_model} loci but batch has {y.shape[1]}. "
+                    "Ensure tuning subsets and masks use the same loci columns."
+                )
+                self.logger.error(msg)
+                raise ValueError(msg)
+
             logits = decoder(z).view(
-                len(batch_indices), self.num_features_, self.output_classes_
+                len(batch_indices), nF_model, self.output_classes_
             )
 
             # Guard upstream explosions
@@ -793,10 +810,16 @@ class ImputeUBP(BaseNNImputer):
             if self.tune and self.tune_fast:
                 model_params["n_features"] = nfeat
 
-            X_train_trial = getattr(
-                self, "X_train_", self.ground_truth_[self.train_idx_]
-            )
-            X_test_trial = getattr(self, "X_test_", self.ground_truth_[self.test_idx_])
+            if self.tune and self.tune_fast and getattr(self, "_tune_ready", False):
+                X_train_trial = self._tune_X_train
+                X_test_trial = self._tune_X_test
+            else:
+                X_train_trial = getattr(
+                    self, "X_train_", self.ground_truth_[self.train_idx_]
+                )
+                X_test_trial = getattr(
+                    self, "X_test_", self.ground_truth_[self.test_idx_]
+                )
 
             class_weights = self._normalize_class_weights(
                 self._class_weights_from_zygosity(X_train_trial)
@@ -852,7 +875,14 @@ class ImputeUBP(BaseNNImputer):
                 model,
                 model_params,
                 objective_mode=True,
-                eval_mask_override=eval_mask,
+                eval_mask_override=(
+                    eval_mask[:, : X_test_trial.shape[1]]
+                    if (
+                        eval_mask is not None
+                        and eval_mask.shape[1] > X_test_trial.shape[1]
+                    )
+                    else eval_mask
+                ),
             )
             self._clear_resources(
                 model, train_loader, latent_vectors=train_latent_vectors
