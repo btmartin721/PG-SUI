@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import optuna
 import torch
+import torch.nn.functional as F
 from sklearn.exceptions import NotFittedError
 from sklearn.model_selection import train_test_split
 from snpio.analysis.genotype_encoder import GenotypeEncoder
@@ -152,6 +153,7 @@ class ImputeVAE(BaseNNImputer):
         self.verbose = self.cfg.io.verbose
         self.debug = self.cfg.io.debug
         self.rng = np.random.default_rng(self.seed)
+        self.pos_weights_: torch.Tensor | None = None
 
         # Simulated-missing controls (config defaults + ctor overrides)
         sim_cfg = getattr(self.cfg, "sim", None)
@@ -300,9 +302,10 @@ class ImputeVAE(BaseNNImputer):
         )
         self.ploidy = 1 if self.is_haploid else 2
         self.num_classes_ = 2 if self.is_haploid else 3
+        self.output_classes_ = 2
         self.logger.info(
             f"Data is {'haploid' if self.is_haploid else 'diploid'}; "
-            f"using {self.num_classes_} classes."
+            f"using {self.num_classes_} classes for scoring and {self.output_classes_} output channels."
         )
 
         if self.is_haploid:
@@ -314,7 +317,7 @@ class ImputeVAE(BaseNNImputer):
         # Model params (decoder outputs L*K logits)
         self.model_params = {
             "n_features": self.num_features_,
-            "num_classes": self.num_classes_,
+            "num_classes": self.output_classes_,
             "latent_dim": self.latent_dim,
             "dropout_rate": self.dropout_rate,
             "activation": self.activation,
@@ -352,6 +355,10 @@ class ImputeVAE(BaseNNImputer):
         self.class_weights_ = self._normalize_class_weights(
             self._class_weights_from_zygosity(self.X_train_)
         )
+        if not self.is_haploid:
+            self.pos_weights_ = self._compute_pos_weights(self.X_train_)
+        else:
+            self.pos_weights_ = None
 
         # DataLoader
         train_loader = self._get_data_loader(self.X_train_)
@@ -370,7 +377,7 @@ class ImputeVAE(BaseNNImputer):
             X_val=self.X_val_,
             params=self.best_params_,
             prune_metric=self.tune_metric,
-            prune_warmup_epochs=5,
+            prune_warmup_epochs=10,
             eval_interval=1,
             eval_requires_latents=False,  # no latent refinement for eval
             eval_latent_steps=0,
@@ -480,7 +487,7 @@ class ImputeVAE(BaseNNImputer):
         X_val: np.ndarray | None = None,
         params: dict | None = None,
         prune_metric: str | None = None,  # "f1" | "accuracy" | "pr_macro"
-        prune_warmup_epochs: int = 3,
+        prune_warmup_epochs: int = 10,
         eval_interval: int = 1,
         eval_requires_latents: bool = False,  # VAE: no latent eval refinement
         eval_latent_steps: int = 0,
@@ -562,7 +569,7 @@ class ImputeVAE(BaseNNImputer):
         X_val: np.ndarray | None = None,
         params: dict | None = None,
         prune_metric: str | None = None,
-        prune_warmup_epochs: int = 3,
+        prune_warmup_epochs: int = 10,
         eval_interval: int = 1,
         eval_requires_latents: bool = False,
         eval_latent_steps: int = 0,
@@ -755,14 +762,14 @@ class ImputeVAE(BaseNNImputer):
         for _, y_batch in loader:
             optimizer.zero_grad(set_to_none=True)
 
-            # targets: (B, L) int in {0,1,2,-1}
             y_int = y_batch.to(self.device, non_blocking=True).long()
 
-            # inputs: one-hot with zeros for missing
-            x_ohe = self._one_hot_encode_012(y_int)  # (B, L, K)
+            if self.is_haploid:
+                x_in = self._one_hot_encode_012(y_int)  # (B, L, 2)
+            else:
+                x_in = self._encode_multilabel_inputs(y_int)  # (B, L, 2)
 
-            # Forward. Expect model to return recon_logits, mu, logvar, ...
-            out = model(x_ohe)
+            out = model(x_in)
             if isinstance(out, (list, tuple)):
                 recon_logits, mu, logvar = out[0], out[1], out[2]
             else:
@@ -780,15 +787,30 @@ class ImputeVAE(BaseNNImputer):
             beta = float(getattr(model, "beta", getattr(self, "kl_beta_final", 0.0)))
             gamma = max(0.0, min(gamma, 10.0))
 
-            loss = compute_vae_loss(
-                recon_logits=recon_logits,
-                targets=y_int,
-                mu=mu,
-                logvar=logvar,
-                class_weights=class_weights,
-                gamma=gamma,
-                beta=beta,
-            )
+            if self.is_haploid:
+                loss = compute_vae_loss(
+                    recon_logits=recon_logits,
+                    targets=y_int,
+                    mu=mu,
+                    logvar=logvar,
+                    class_weights=class_weights,
+                    gamma=gamma,
+                    beta=beta,
+                )
+            else:
+                targets = self._multi_hot_targets(y_int)
+                pos_w = getattr(self, "pos_weights_", None)
+                bce = F.binary_cross_entropy_with_logits(
+                    recon_logits, targets, pos_weight=pos_w, reduction="none"
+                )
+                mask = (y_int != -1).unsqueeze(-1).float()
+                recon_loss = (bce * mask).sum() / mask.sum().clamp_min(1e-8)
+                kl = (
+                    -0.5
+                    * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+                    / (y_int.shape[0] + 1e-8)
+                )
+                loss = recon_loss + beta * kl
 
             if l1_penalty > 0:
                 l1 = torch.zeros((), device=self.device)
@@ -845,11 +867,25 @@ class ImputeVAE(BaseNNImputer):
         with torch.no_grad():
             X_tensor = torch.from_numpy(X) if isinstance(X, np.ndarray) else X
             X_tensor = X_tensor.to(self.device).long()
-            x_ohe = self._one_hot_encode_012(X_tensor)
-            outputs = model(x_ohe)  # first element must be recon logits
-            logits = outputs[0].view(-1, self.num_features_, self.num_classes_)
-            probas = torch.softmax(logits, dim=-1)
-            labels = torch.argmax(probas, dim=-1)
+            if self.is_haploid:
+                x_ohe = self._one_hot_encode_012(X_tensor)
+                outputs = model(x_ohe)
+                logits = outputs[0].view(-1, self.num_features_, self.output_classes_)
+                probas = torch.softmax(logits, dim=-1)
+                labels = torch.argmax(probas, dim=-1)
+            else:
+                x_in = self._encode_multilabel_inputs(X_tensor)
+                outputs = model(x_in)
+                logits = outputs[0].view(-1, self.num_features_, self.output_classes_)
+                probas2 = torch.sigmoid(logits)
+                p_ref = probas2[..., 0]
+                p_alt = probas2[..., 1]
+                p_het = p_ref * p_alt
+                p_ref_only = p_ref * (1 - p_alt)
+                p_alt_only = p_alt * (1 - p_ref)
+                probas = torch.stack([p_ref_only, p_het, p_alt_only], dim=-1)
+                probas = probas / probas.sum(dim=-1, keepdim=True).clamp_min(1e-8)
+                labels = torch.argmax(probas, dim=-1)
 
         if return_proba:
             return labels.cpu().numpy(), probas.cpu().numpy()
@@ -1047,12 +1083,21 @@ class ImputeVAE(BaseNNImputer):
         try:
             params = self._sample_hyperparameters(trial)
 
-            X_train = getattr(self, "X_train_", self.ground_truth_[self.train_idx_])
-            X_val = getattr(self, "X_val_", self.ground_truth_[self.test_idx_])
+            # Use tune subsets when available (tune_fast)
+            X_train = getattr(self, "_tune_X_train", None)
+            X_val = getattr(self, "_tune_X_test", None)
+            if X_train is None or X_val is None:
+                X_train = getattr(self, "X_train_", self.ground_truth_[self.train_idx_])
+                X_val = getattr(self, "X_val_", self.ground_truth_[self.test_idx_])
 
             class_weights = self._normalize_class_weights(
                 self._class_weights_from_zygosity(X_train)
             )
+            # Pos weights for diploid multilabel BCE during tuning
+            if not self.is_haploid:
+                self.pos_weights_ = self._compute_pos_weights(X_train)
+            else:
+                self.pos_weights_ = None
             train_loader = self._get_data_loader(X_train)
 
             model = self.build_model(self.Model, params["model_params"])
@@ -1073,7 +1118,7 @@ class ImputeVAE(BaseNNImputer):
                 X_val=X_val,
                 params=params,
                 prune_metric=self.tune_metric,
-                prune_warmup_epochs=5,
+                prune_warmup_epochs=10,
                 eval_interval=self.tune_eval_interval,
                 eval_requires_latents=False,
                 eval_latent_steps=0,
@@ -1116,27 +1161,32 @@ class ImputeVAE(BaseNNImputer):
             Dict[str, int | float | str]: Sampled hyperparameters.
         """
         params = {
-            "latent_dim": trial.suggest_int("latent_dim", 2, 64),
-            "lr": trial.suggest_float("learning_rate", 1e-5, 1e-2, log=True),
-            "dropout_rate": trial.suggest_float("dropout_rate", 0.0, 0.6),
-            "num_hidden_layers": trial.suggest_int("num_hidden_layers", 1, 8),
+            "latent_dim": trial.suggest_int("latent_dim", 4, 16, step=2),
+            "lr": trial.suggest_float("learning_rate", 3e-4, 1e-3, log=True),
+            "dropout_rate": trial.suggest_float("dropout_rate", 0.0, 0.30, step=0.05),
+            "num_hidden_layers": trial.suggest_int("num_hidden_layers", 1, 6),
             "activation": trial.suggest_categorical(
-                "activation", ["relu", "elu", "selu"]
+                "activation", ["relu", "elu", "selu", "leaky_relu"]
             ),
-            "l1_penalty": trial.suggest_float("l1_penalty", 1e-7, 1e-2, log=True),
+            "l1_penalty": trial.suggest_float("l1_penalty", 1e-6, 1e-3, log=True),
             "layer_scaling_factor": trial.suggest_float(
-                "layer_scaling_factor", 2.0, 10.0
+                "layer_scaling_factor", 2.0, 4.0, step=0.5
             ),
             "layer_schedule": trial.suggest_categorical(
-                "layer_schedule", ["pyramid", "constant", "linear"]
+                "layer_schedule", ["pyramid", "linear"]
             ),
             # VAE-specific β (final value after anneal)
-            "beta": trial.suggest_float("beta", 0.25, 4.0),
+            "beta": trial.suggest_float("beta", 0.5, 2.0, step=0.5),
             # focal gamma (if used in VAE recon CE)
-            "gamma": trial.suggest_float("gamma", 0.0, 5.0),
+            "gamma": trial.suggest_float("gamma", 0.5, 3.0, step=0.5),
         }
 
-        input_dim = self.num_features_ * self.num_classes_
+        use_n_features = (
+            self._tune_num_features
+            if (self.tune and self.tune_fast and hasattr(self, "_tune_num_features"))
+            else self.num_features_
+        )
+        input_dim = use_n_features * self.output_classes_
         hidden_layer_sizes = self._compute_hidden_layer_sizes(
             n_inputs=input_dim,
             n_outputs=input_dim,
@@ -1150,8 +1200,8 @@ class ImputeVAE(BaseNNImputer):
         hidden_only = [hidden_layer_sizes[0]] + hidden_layer_sizes[1:-1]
 
         params["model_params"] = {
-            "n_features": self.num_features_,
-            "num_classes": self.num_classes_,
+            "n_features": use_n_features,
+            "num_classes": self.output_classes_,
             "latent_dim": params["latent_dim"],
             "dropout_rate": params["dropout_rate"],
             "hidden_layer_sizes": hidden_only,
@@ -1182,8 +1232,8 @@ class ImputeVAE(BaseNNImputer):
         self.gamma = best_params.get("gamma", self.gamma)
 
         hidden_layer_sizes = self._compute_hidden_layer_sizes(
-            n_inputs=self.num_features_ * self.num_classes_,
-            n_outputs=self.num_features_ * self.num_classes_,
+            n_inputs=self.num_features_ * self.output_classes_,
+            n_outputs=self.num_features_ * self.output_classes_,
             n_samples=len(self.train_idx_),
             n_hidden=best_params["num_hidden_layers"],
             alpha=best_params["layer_scaling_factor"],
@@ -1197,7 +1247,7 @@ class ImputeVAE(BaseNNImputer):
             "hidden_layer_sizes": hidden_only,
             "dropout_rate": self.dropout_rate,
             "activation": self.activation,
-            "num_classes": self.num_classes_,
+            "num_classes": self.output_classes_,
             "beta": self.kl_beta_final,
             "gamma": self.gamma,
         }
@@ -1209,8 +1259,8 @@ class ImputeVAE(BaseNNImputer):
             Dict[str, int | float | str | list]: VAE model parameters.
         """
         hidden_layer_sizes = self._compute_hidden_layer_sizes(
-            n_inputs=self.num_features_ * self.num_classes_,
-            n_outputs=self.num_features_ * self.num_classes_,
+            n_inputs=self.num_features_ * self.output_classes_,
+            n_outputs=self.num_features_ * self.output_classes_,
             n_samples=len(self.ground_truth_),
             n_hidden=self.num_hidden_layers,
             alpha=self.layer_scaling_factor,
@@ -1222,7 +1272,45 @@ class ImputeVAE(BaseNNImputer):
             "hidden_layer_sizes": hidden_layer_sizes,
             "dropout_rate": self.dropout_rate,
             "activation": self.activation,
-            "num_classes": self.num_classes_,
+            "num_classes": self.output_classes_,
             "beta": self.kl_beta_final,
             "gamma": self.gamma,
         }
+
+    def _encode_multilabel_inputs(self, y: torch.Tensor) -> torch.Tensor:
+        """Two-channel multi-hot for diploid: REF-only, ALT-only; HET sets both."""
+        if self.is_haploid:
+            return self._one_hot_encode_012(y)
+        y = y.to(self.device)
+        shape = y.shape + (2,)
+        out = torch.zeros(shape, device=self.device, dtype=torch.float32)
+        valid = y != -1
+        ref_mask = valid & (y != 2)
+        alt_mask = valid & (y != 0)
+        out[ref_mask, 0] = 1.0
+        out[alt_mask, 1] = 1.0
+        return out
+
+    def _multi_hot_targets(self, y: torch.Tensor) -> torch.Tensor:
+        """Targets aligned with _encode_multilabel_inputs for diploid training."""
+        if self.is_haploid:
+            raise RuntimeError("_multi_hot_targets called for haploid data.")
+        y = y.to(self.device)
+        out = torch.zeros(y.shape + (2,), device=self.device, dtype=torch.float32)
+        valid = y != -1
+        ref_mask = valid & (y != 2)
+        alt_mask = valid & (y != 0)
+        out[ref_mask, 0] = 1.0
+        out[alt_mask, 1] = 1.0
+        return out
+
+    def _compute_pos_weights(self, X: np.ndarray) -> torch.Tensor:
+        """Balance REF/ALT channels for multilabel BCE."""
+        ref_pos = np.count_nonzero((X == 0) | (X == 1))
+        alt_pos = np.count_nonzero((X == 2) | (X == 1))
+        total_valid = np.count_nonzero(X != -1)
+        pos_counts = np.array([ref_pos, alt_pos], dtype=np.float32)
+        neg_counts = np.maximum(total_valid - pos_counts, 1.0)
+        pos_counts = np.maximum(pos_counts, 1.0)
+        weights = neg_counts / pos_counts
+        return torch.tensor(weights, device=self.device, dtype=torch.float32)
