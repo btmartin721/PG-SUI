@@ -185,6 +185,8 @@ def _args_to_cli_overrides(args: argparse.Namespace) -> dict:
         overrides["io.n_jobs"] = int(args.n_jobs)
     if hasattr(args, "seed"):
         overrides["io.seed"] = _parse_seed(args.seed)
+    if hasattr(args, "debug"):
+        overrides["io.debug"] = bool(args.debug)
 
     # Train
     if hasattr(args, "batch_size"):
@@ -589,6 +591,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="Random seed: 'random', 'deterministic', or an integer.",
     )
     parser.add_argument("--verbose", action="store_true", help="Info-level logging.")
+    parser.add_argument("--debug", action="store_true", help="Debug-level logging.")
     parser.add_argument(
         "--log-file", default=argparse.SUPPRESS, help="Also write logs to a file."
     )
@@ -877,7 +880,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         pth.mkdir(parents=True, exist_ok=True)
 
         logging.info(f"Writing imputed VCF for {name} to {pth} ...")
-        gd_imp.write_vcf(pth / f"{name.lower()}_imputed.vcf.gz")
+
+        if fmt_final == "vcf":
+            gd_imp.write_vcf(pth / f"{name.lower()}_imputed.vcf.gz")
+        elif fmt_final == "phylip":
+            gd_imp.write_phylip(pth / f"{name.lower()}_imputed.phy")
+        elif fmt_final == "genepop":
+            gd_imp.write_genepop(pth / f"{name.lower()}_imputed.gen")
+        else:
+            logging.warning(
+                f"Output format {fmt_final} not supported for imputed data export."
+            )
 
     logging.info("All requested models processed.")
 
