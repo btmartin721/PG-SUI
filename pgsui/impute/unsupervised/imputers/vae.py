@@ -474,6 +474,10 @@ class ImputeVAE(BaseNNImputer):
             pin_memory=pin_memory,
         )
 
+    # Alias to satisfy BaseNNImputer tuning helper
+    def _get_data_loaders(self, y: np.ndarray) -> torch.utils.data.DataLoader:  # type: ignore[override]
+        return self._get_data_loader(y)
+
     def _train_and_validate_model(
         self,
         model: torch.nn.Module,
@@ -759,10 +763,25 @@ class ImputeVAE(BaseNNImputer):
         if class_weights is not None and class_weights.device != self.device:
             class_weights = class_weights.to(self.device)
 
+        nF_model = int(getattr(model, "n_features", self.num_features_))
+
         for _, y_batch in loader:
             optimizer.zero_grad(set_to_none=True)
 
             y_int = y_batch.to(self.device, non_blocking=True).long()
+
+            if y_int.dim() != 2:
+                msg = f"Training batch expected 2D targets, got shape {tuple(y_int.shape)}."
+                self.logger.error(msg)
+                raise ValueError(msg)
+
+            if y_int.shape[1] != nF_model:
+                msg = (
+                    f"Model expects {nF_model} loci but batch has {y_int.shape[1]}. "
+                    "Ensure tuning subsets and masks use matching loci columns."
+                )
+                self.logger.error(msg)
+                raise ValueError(msg)
 
             if self.is_haploid:
                 x_in = self._one_hot_encode_012(y_int)  # (B, L, 2)
@@ -1081,6 +1100,7 @@ class ImputeVAE(BaseNNImputer):
             float: Value of the tuning metric to be optimized.
         """
         try:
+            self._prepare_tuning_artifacts()
             params = self._sample_hyperparameters(trial)
 
             # Use tune subsets when available (tune_fast)
@@ -1090,15 +1110,22 @@ class ImputeVAE(BaseNNImputer):
                 X_train = getattr(self, "X_train_", self.ground_truth_[self.train_idx_])
                 X_val = getattr(self, "X_val_", self.ground_truth_[self.test_idx_])
 
-            class_weights = self._normalize_class_weights(
-                self._class_weights_from_zygosity(X_train)
-            )
+            if self.tune and self.tune_fast and getattr(self, "_tune_ready", False):
+                train_loader = self._tune_loader
+                class_weights = self._tune_class_weights
+                X_train = self._tune_X_train
+                X_val = self._tune_X_test
+            else:
+                class_weights = self._normalize_class_weights(
+                    self._class_weights_from_zygosity(X_train)
+                )
+                train_loader = self._get_data_loader(X_train)
+
             # Pos weights for diploid multilabel BCE during tuning
             if not self.is_haploid:
                 self.pos_weights_ = self._compute_pos_weights(X_train)
             else:
                 self.pos_weights_ = None
-            train_loader = self._get_data_loader(X_train)
 
             model = self.build_model(self.Model, params["model_params"])
             model.apply(self.initialize_weights)
@@ -1139,7 +1166,18 @@ class ImputeVAE(BaseNNImputer):
                 raise RuntimeError("Model training failed; no model was returned.")
 
             metrics = self._evaluate_model(
-                X_val, model, params, objective_mode=True, eval_mask_override=eval_mask
+                X_val,
+                model,
+                params,
+                objective_mode=True,
+                eval_mask_override=(
+                    eval_mask[:, : X_val.shape[1]]
+                    if (
+                        eval_mask is not None
+                        and eval_mask.shape[1] > X_val.shape[1]
+                    )
+                    else eval_mask
+                ),
             )
             self._clear_resources(model, train_loader)
             return metrics[self.tune_metric]
@@ -1190,7 +1228,11 @@ class ImputeVAE(BaseNNImputer):
         hidden_layer_sizes = self._compute_hidden_layer_sizes(
             n_inputs=input_dim,
             n_outputs=input_dim,
-            n_samples=len(self.train_idx_),
+            n_samples=(
+                len(self._tune_train_idx)
+                if (self.tune and self.tune_fast and hasattr(self, "_tune_train_idx"))
+                else len(self.train_idx_)
+            ),
             n_hidden=params["num_hidden_layers"],
             alpha=params["layer_scaling_factor"],
             schedule=params["layer_schedule"],
