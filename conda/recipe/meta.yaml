@@ -13,7 +13,8 @@ source:
 
 build:
   number: 0
-  script: {{ PYTHON }} -m pip install . -vv
+  # Prevent pip from re-resolving deps during conda-build (downloads can fail on large wheels)
+  script: {{ PYTHON }} -m pip install . -vv --no-deps --no-build-isolation
   # Build only on linux-64 and macOS arm64 runners
   skip: true  # [not (linux64 or (osx and arm64))]
 
