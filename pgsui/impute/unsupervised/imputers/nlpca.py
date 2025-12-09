@@ -110,15 +110,18 @@ class ImputeNLPCA(BaseNNImputer):
         tree_parser: Optional["TreeParser"] = None,
         config: NLPCAConfig | dict | str | None = None,
         overrides: dict | None = None,
-        simulate_missing: bool = False,
-        sim_strategy: Literal[
-            "random",
-            "random_weighted",
-            "random_weighted_inv",
-            "nonrandom",
-            "nonrandom_weighted",
-        ] = "random",
-        sim_prop: float = 0.10,
+        simulate_missing: bool | None = None,
+        sim_strategy: (
+            Literal[
+                "random",
+                "random_weighted",
+                "random_weighted_inv",
+                "nonrandom",
+                "nonrandom_weighted",
+            ]
+            | None
+        ) = None,
+        sim_prop: float | None = None,
         sim_kwargs: dict | None = None,
     ):
         """Initializes the ImputeNLPCA imputer with genotype data and configuration.
@@ -130,10 +133,10 @@ class ImputeNLPCA(BaseNNImputer):
             tree_parser (TreeParser | None): Optional SNPio phylogenetic tree parser for population-specific modes.
             config (NLPCAConfig | dict | str | None): Structured configuration as dataclass, nested dict, YAML path, or None.
             overrides (dict | None): Dot-key overrides (e.g. {'model.latent_dim': 4}).
-            simulate_missing (bool): Whether to simulate missing data during training.
-            sim_strategy (Literal["random", "random_weighted", "random_weighted_inv", "nonrandom", "nonrandom_weighted"]): Strategy for simulating missing data.
-            sim_prop (float): Proportion of data to simulate as missing.
-            sim_kwargs (dict | None): Additional keyword arguments for missing data simulation.
+            simulate_missing (bool | None): Whether to simulate missing data during training. If None, uses config defaults.
+            sim_strategy (Literal["random", "random_weighted", "random_weighted_inv", "nonrandom", "nonrandom_weighted"] | None): Strategy for simulating missing data. If None, uses config default.
+            sim_prop (float | None): Proportion of data to simulate as missing. If None, uses config default.
+            sim_kwargs (dict | None): Additional keyword arguments for missing data simulation (overrides config kwargs).
         """
         self.model_name = "ImputeNLPCA"
         self.genotype_data = genotype_data
@@ -141,6 +144,7 @@ class ImputeNLPCA(BaseNNImputer):
 
         # Normalize config first, then apply overrides (highest precedence)
         cfg = ensure_nlpca_config(config)
+
         if overrides:
             cfg = apply_dot_overrides(cfg, overrides)
 
@@ -153,9 +157,7 @@ class ImputeNLPCA(BaseNNImputer):
             verbose=self.cfg.io.verbose,
         )
         self.logger = configure_logger(
-            logman.get_logger(),
-            verbose=self.cfg.io.verbose,
-            debug=self.cfg.io.debug,
+            logman.get_logger(), verbose=self.cfg.io.verbose, debug=self.cfg.io.debug
         )
 
         # Initialize BaseNNImputer with device/dirs/logging from config
@@ -178,6 +180,7 @@ class ImputeNLPCA(BaseNNImputer):
         self.debug = self.cfg.io.debug
 
         self.rng = np.random.default_rng(self.seed)
+        self.pos_weights_: torch.Tensor | None = None
 
         # Model/train hyperparams
         self.latent_dim = self.cfg.model.latent_dim
@@ -242,10 +245,31 @@ class ImputeNLPCA(BaseNNImputer):
         self.num_classes_ = 3
         self.model_params: Dict[str, Any] = {}
 
-        self.simulate_missing = simulate_missing
-        self.sim_strategy = sim_strategy
-        self.sim_prop = float(sim_prop)
-        self.sim_kwargs = sim_kwargs or {}
+        sim_cfg = getattr(self.cfg, "sim", None)
+        sim_cfg_kwargs = copy.deepcopy(getattr(sim_cfg, "sim_kwargs", None) or {})
+
+        if sim_kwargs:
+            sim_cfg_kwargs.update(sim_kwargs)
+
+        if sim_cfg is None:
+            default_strategy = "random"
+            default_prop = 0.10
+        else:
+            default_strategy = sim_cfg.sim_strategy
+            default_prop = sim_cfg.sim_prop
+
+        self.simulate_missing = (
+            (
+                sim_cfg.simulate_missing
+                if simulate_missing is None
+                else bool(simulate_missing)
+            )
+            if sim_cfg is not None
+            else bool(simulate_missing)
+        )
+        self.sim_strategy = sim_strategy or default_strategy
+        self.sim_prop = float(sim_prop if sim_prop is not None else default_prop)
+        self.sim_kwargs = sim_cfg_kwargs
 
         if self.tree_parser is None and self.sim_strategy.startswith("nonrandom"):
             msg = "tree_parser is required for nonrandom and nonrandom_weighted simulated missing strategies."
@@ -319,10 +343,11 @@ class ImputeNLPCA(BaseNNImputer):
             self.logger.info("Haploid data detected. Using 2 classes (REF=0, ALT=1).")
         else:
             self.num_classes_ = 3
-
-            self.logger.info(
-                "Diploid data detected. Using 3 classes (REF=0, HET=1, ALT=2)."
-            )
+        # Model head uses two channels; scoring uses num_classes_
+        self.output_classes_ = 2
+        self.logger.info(
+            "Diploid data detected. Using 3 classes (REF=0, HET=1, ALT=2) for scoring; 2 output channels with sigmoid for training."
+        )
 
         n_samples, self.num_features_ = X_for_model.shape
 
@@ -332,7 +357,7 @@ class ImputeNLPCA(BaseNNImputer):
             "dropout_rate": self.dropout_rate,
             "activation": self.activation,
             "gamma": self.gamma,
-            "num_classes": self.num_classes_,
+            "num_classes": self.output_classes_,
         }
 
         # --- Train/Test Split ---
@@ -354,6 +379,11 @@ class ImputeNLPCA(BaseNNImputer):
         else:
             self.sim_mask_train_ = None
             self.sim_mask_test_ = None
+        # pos weights for multilabel diploid path
+        if not self.is_haploid:
+            self.pos_weights_ = self._compute_pos_weights(self.X_train_)
+        else:
+            self.pos_weights_ = None
 
         # Tuning, model setup, training (unchanged except DataLoader input)
         self.plotter_, self.scorers_ = self.initialize_plotting_and_scorers()
@@ -519,17 +549,24 @@ class ImputeNLPCA(BaseNNImputer):
 
             # Forward
             z = latent_vectors[batch_indices].to(self.device)
-            logits = decoder(z).view(len(batch_indices), nF, self.num_classes_)
+            logits = decoder(z).view(len(batch_indices), nF, self.output_classes_)
 
             # Guard upstream explosions
             if not torch.isfinite(logits).all():
                 # Skip batch if model already produced non-finite values
                 continue
 
-            logits_flat = logits.view(-1, self.num_classes_)
-            targets_flat = y_batch.view(-1)
-
-            loss = criterion(logits_flat, targets_flat)
+            if self.is_haploid:
+                logits_flat = logits.view(-1, self.output_classes_)
+                targets_flat = y_batch.view(-1)
+                loss = criterion(logits_flat, targets_flat)
+            else:
+                targets = self._multi_hot_targets(y_batch)
+                bce = F.binary_cross_entropy_with_logits(
+                    logits, targets, pos_weight=self.pos_weights_, reduction="none"
+                )
+                mask = (y_batch != -1).unsqueeze(-1).float()
+                loss = (bce * mask).sum() / mask.sum().clamp_min(1e-8)
 
             # L1 on model weights only (exclude latents)
             if l1_penalty > 0:
@@ -605,10 +642,21 @@ class ImputeNLPCA(BaseNNImputer):
 
         with torch.no_grad():
             logits = model.phase23_decoder(latent_vectors.to(self.device)).view(
-                len(latent_vectors), nF, self.num_classes_
+                len(latent_vectors), nF, self.output_classes_
             )
-            probas = torch.softmax(logits, dim=-1)
-            labels = torch.argmax(probas, dim=-1)
+            if self.is_haploid:
+                probas = torch.softmax(logits, dim=-1)
+                labels = torch.argmax(probas, dim=-1)
+            else:
+                probas2 = torch.sigmoid(logits)
+                p_ref = probas2[..., 0]
+                p_alt = probas2[..., 1]
+                p_het = p_ref * p_alt
+                p_ref_only = p_ref * (1 - p_alt)
+                p_alt_only = p_alt * (1 - p_ref)
+                probas = torch.stack([p_ref_only, p_het, p_alt_only], dim=-1)
+                probas = probas / probas.sum(dim=-1, keepdim=True).clamp_min(1e-8)
+                labels = torch.argmax(probas, dim=-1)
 
         return labels.cpu().numpy(), probas.cpu().numpy()
 
@@ -798,6 +846,44 @@ class ImputeNLPCA(BaseNNImputer):
             dataset, batch_size=self.batch_size, shuffle=True
         )
 
+    def _encode_multilabel_inputs(self, y: torch.Tensor) -> torch.Tensor:
+        """Two-channel multi-hot for diploid: REF-only, ALT-only; HET sets both."""
+        if self.is_haploid:
+            return self._one_hot_encode_012(y)
+        y = y.to(self.device)
+        shape = y.shape + (2,)
+        out = torch.zeros(shape, device=self.device, dtype=torch.float32)
+        valid = y != -1
+        ref_mask = valid & (y != 2)
+        alt_mask = valid & (y != 0)
+        out[ref_mask, 0] = 1.0
+        out[alt_mask, 1] = 1.0
+        return out
+
+    def _multi_hot_targets(self, y: torch.Tensor) -> torch.Tensor:
+        """Targets aligned with _encode_multilabel_inputs for diploid training."""
+        if self.is_haploid:
+            raise RuntimeError("_multi_hot_targets called for haploid data.")
+        y = y.to(self.device)
+        out = torch.zeros(y.shape + (2,), device=self.device, dtype=torch.float32)
+        valid = y != -1
+        ref_mask = valid & (y != 2)
+        alt_mask = valid & (y != 0)
+        out[ref_mask, 0] = 1.0
+        out[alt_mask, 1] = 1.0
+        return out
+
+    def _compute_pos_weights(self, X: np.ndarray) -> torch.Tensor:
+        """Balance REF/ALT channels for multilabel BCE."""
+        ref_pos = np.count_nonzero((X == 0) | (X == 1))
+        alt_pos = np.count_nonzero((X == 2) | (X == 1))
+        total_valid = np.count_nonzero(X != -1)
+        pos_counts = np.array([ref_pos, alt_pos], dtype=np.float32)
+        neg_counts = np.maximum(total_valid - pos_counts, 1.0)
+        pos_counts = np.maximum(pos_counts, 1.0)
+        weights = neg_counts / pos_counts
+        return torch.tensor(weights, device=self.device, dtype=torch.float32)
+
     def _create_latent_space(
         self,
         params: dict,
@@ -894,71 +980,80 @@ class ImputeNLPCA(BaseNNImputer):
         Returns:
             float: The value of the tuning metric to be minimized or maximized.
         """
-        self._prepare_tuning_artifacts()
-        trial_params = self._sample_hyperparameters(trial)
-        model_params = trial_params["model_params"]
+        try:
+            self._prepare_tuning_artifacts()
+            trial_params = self._sample_hyperparameters(trial)
+            model_params = trial_params["model_params"]
 
-        nfeat = self._tune_num_features
-        if self.tune and self.tune_fast:
-            model_params["n_features"] = nfeat
+            nfeat = self._tune_num_features
+            if self.tune and self.tune_fast:
+                model_params["n_features"] = nfeat
 
-        lr = trial_params["lr"]
-        l1_penalty = trial_params["l1_penalty"]
-        lr_input_fac = trial_params["lr_input_factor"]
+            lr = trial_params["lr"]
+            l1_penalty = trial_params["l1_penalty"]
+            lr_input_fac = trial_params["lr_input_factor"]
 
-        X_train_trial = self._tune_X_train
-        X_test_trial = self._tune_X_test
-        class_weights = self._tune_class_weights
-        train_loader = self._tune_loader
+            X_train_trial = self._tune_X_train
+            X_test_trial = self._tune_X_test
+            class_weights = self._tune_class_weights
+            train_loader = self._tune_loader
 
-        train_latents = self._create_latent_space(
-            model_params, len(X_train_trial), X_train_trial, trial_params["latent_init"]
-        )
+            train_latents = self._create_latent_space(
+                model_params,
+                len(X_train_trial),
+                X_train_trial,
+                trial_params["latent_init"],
+            )
 
-        model = self.build_model(self.Model, model_params)
-        model.n_features = model_params["n_features"]
-        model.apply(self.initialize_weights)
+            model = self.build_model(self.Model, model_params)
+            model.n_features = model_params["n_features"]
+            model.apply(self.initialize_weights)
 
-        _, model, __ = self._train_and_validate_model(
-            model=model,
-            loader=train_loader,
-            lr=lr,
-            l1_penalty=l1_penalty,
-            trial=trial,
-            latent_vectors=train_latents,
-            lr_input_factor=lr_input_fac,
-            class_weights=class_weights,
-            X_val=X_test_trial,
-            params=model_params,
-            prune_metric=self.tune_metric,
-            prune_warmup_epochs=5,
-            eval_interval=self.tune_eval_interval,
-            eval_latent_steps=self.eval_latent_steps,
-            eval_latent_lr=self.eval_latent_lr,
-            eval_latent_weight_decay=self.eval_latent_weight_decay,
-        )
+            _, model, __ = self._train_and_validate_model(
+                model=model,
+                loader=train_loader,
+                lr=lr,
+                l1_penalty=l1_penalty,
+                trial=trial,
+                latent_vectors=train_latents,
+                lr_input_factor=lr_input_fac,
+                class_weights=class_weights,
+                X_val=X_test_trial,
+                params=model_params,
+                prune_metric=self.tune_metric,
+                prune_warmup_epochs=10,
+                eval_interval=self.tune_eval_interval,
+                eval_latent_steps=self.eval_latent_steps,
+                eval_latent_lr=self.eval_latent_lr,
+                eval_latent_weight_decay=self.eval_latent_weight_decay,
+            )
 
-        # --- simulate-only eval mask for tuning ---
-        eval_mask = None
-        if (
-            self.simulate_missing
-            and getattr(self, "sim_mask_global_", None) is not None
-        ):
-            if hasattr(self, "_tune_test_idx") and self.sim_mask_global_ is not None:
-                eval_mask = self.sim_mask_global_[self._tune_test_idx]
-            elif getattr(self, "sim_mask_test_", None) is not None:
-                eval_mask = self.sim_mask_test_
+            # --- simulate-only eval mask for tuning ---
+            eval_mask = None
+            if (
+                self.simulate_missing
+                and getattr(self, "sim_mask_global_", None) is not None
+            ):
+                if (
+                    hasattr(self, "_tune_test_idx")
+                    and self.sim_mask_global_ is not None
+                ):
+                    eval_mask = self.sim_mask_global_[self._tune_test_idx]
+                elif getattr(self, "sim_mask_test_", None) is not None:
+                    eval_mask = self.sim_mask_test_
 
-        metrics = self._evaluate_model(
-            X_test_trial,
-            model,
-            model_params,
-            objective_mode=True,
-            eval_mask_override=eval_mask,
-        )
+            metrics = self._evaluate_model(
+                X_test_trial,
+                model,
+                model_params,
+                objective_mode=True,
+                eval_mask_override=eval_mask,
+            )
 
-        self._clear_resources(model, train_loader, latent_vectors=train_latents)
-        return metrics[self.tune_metric]
+            self._clear_resources(model, train_loader, latent_vectors=train_latents)
+            return metrics[self.tune_metric]
+        except Exception as e:
+            raise optuna.exceptions.TrialPruned(f"Trial failed with error: {e}")
 
     def _sample_hyperparameters(self, trial: optuna.Trial) -> Dict[str, Any]:
         """Samples hyperparameters for the simplified NLPCA model.
@@ -972,23 +1067,23 @@ class ImputeNLPCA(BaseNNImputer):
             Dict[str, int | float | str | list]: A dictionary of sampled hyperparameters.
         """
         params = {
-            "latent_dim": trial.suggest_int("latent_dim", 2, 32),
-            "lr": trial.suggest_float("learning_rate", 1e-5, 1e-3, log=True),
-            "dropout_rate": trial.suggest_float("dropout_rate", 0.0, 0.5, step=0.05),
-            "num_hidden_layers": trial.suggest_int("num_hidden_layers", 1, 16),
+            "latent_dim": trial.suggest_int("latent_dim", 4, 16, step=2),
+            "lr": trial.suggest_float("learning_rate", 3e-4, 1e-3, log=True),
+            "dropout_rate": trial.suggest_float("dropout_rate", 0.0, 0.30),
+            "num_hidden_layers": trial.suggest_int("num_hidden_layers", 1, 4),
             "activation": trial.suggest_categorical(
-                "activation", ["relu", "elu", "selu", "leaky_relu"]
+                "activation", ["relu", "elu", "selu"]
             ),
-            "gamma": trial.suggest_float("gamma", 0.1, 5.0, step=0.1),
+            "gamma": trial.suggest_float("gamma", 0.5, 3.0, step=0.5),
             "lr_input_factor": trial.suggest_float(
-                "lr_input_factor", 0.1, 10.0, log=True
+                "lr_input_factor", 0.3, 3.0, log=True
             ),
             "l1_penalty": trial.suggest_float("l1_penalty", 1e-6, 1e-3, log=True),
             "layer_scaling_factor": trial.suggest_float(
-                "layer_scaling_factor", 2.0, 10.0
+                "layer_scaling_factor", 2.0, 4.0, step=0.5
             ),
             "layer_schedule": trial.suggest_categorical(
-                "layer_schedule", ["pyramid", "constant", "linear"]
+                "layer_schedule", ["pyramid", "linear"]
             ),
             "latent_init": trial.suggest_categorical("latent_init", ["random", "pca"]),
         }
@@ -1006,7 +1101,7 @@ class ImputeNLPCA(BaseNNImputer):
 
         hidden_layer_sizes = self._compute_hidden_layer_sizes(
             n_inputs=params["latent_dim"],
-            n_outputs=use_n_features * self.num_classes_,
+            n_outputs=use_n_features * self.output_classes_,
             n_samples=use_n_samples,
             n_hidden=params["num_hidden_layers"],
             alpha=params["layer_scaling_factor"],
@@ -1015,7 +1110,7 @@ class ImputeNLPCA(BaseNNImputer):
 
         params["model_params"] = {
             "n_features": use_n_features,
-            "num_classes": self.num_classes_,
+            "num_classes": self.output_classes_,
             "latent_dim": params["latent_dim"],
             "dropout_rate": params["dropout_rate"],
             "hidden_layer_sizes": hidden_layer_sizes,
@@ -1043,10 +1138,11 @@ class ImputeNLPCA(BaseNNImputer):
         self.lr_input_factor = best_params["lr_input_factor"]
         self.l1_penalty = best_params["l1_penalty"]
         self.activation = best_params["activation"]
+        self.latent_init = best_params["latent_init"]
 
         hidden_layer_sizes = self._compute_hidden_layer_sizes(
             n_inputs=self.latent_dim,
-            n_outputs=self.num_features_ * self.num_classes_,
+            n_outputs=self.num_features_ * self.output_classes_,
             n_samples=len(self.train_idx_),
             n_hidden=best_params["num_hidden_layers"],
             alpha=best_params["layer_scaling_factor"],
@@ -1060,7 +1156,7 @@ class ImputeNLPCA(BaseNNImputer):
             "dropout_rate": self.dropout_rate,
             "activation": self.activation,
             "gamma": self.gamma,
-            "num_classes": self.num_classes_,
+            "num_classes": self.output_classes_,
         }
 
     def _set_best_params_default(self) -> Dict[str, int | float | str | list]:
@@ -1073,7 +1169,7 @@ class ImputeNLPCA(BaseNNImputer):
         """
         hidden_layer_sizes = self._compute_hidden_layer_sizes(
             n_inputs=self.latent_dim,
-            n_outputs=self.num_features_ * self.num_classes_,
+            n_outputs=self.num_features_ * self.output_classes_,
             n_samples=len(self.ground_truth_),
             n_hidden=self.num_hidden_layers,
             alpha=self.layer_scaling_factor,
@@ -1087,7 +1183,7 @@ class ImputeNLPCA(BaseNNImputer):
             "dropout_rate": self.dropout_rate,
             "activation": self.activation,
             "gamma": self.gamma,
-            "num_classes": self.num_classes_,
+            "num_classes": self.output_classes_,
         }
 
     def _train_and_validate_model(
@@ -1105,7 +1201,7 @@ class ImputeNLPCA(BaseNNImputer):
         X_val: np.ndarray | None = None,
         params: dict | None = None,
         prune_metric: str | None = None,  # "f1" | "accuracy" | "pr_macro"
-        prune_warmup_epochs: int = 3,
+        prune_warmup_epochs: int = 10,
         eval_interval: int = 1,
         eval_latent_steps: int = 50,
         eval_latent_lr: float = 1e-2,
@@ -1222,7 +1318,7 @@ class ImputeNLPCA(BaseNNImputer):
             X_val=self.X_test_,
             params=best_params,
             prune_metric=self.tune_metric,
-            prune_warmup_epochs=5,
+            prune_warmup_epochs=10,
             eval_interval=1,
             eval_latent_steps=self.eval_latent_steps,
             eval_latent_lr=self.eval_latent_lr,
@@ -1255,7 +1351,7 @@ class ImputeNLPCA(BaseNNImputer):
         X_val: np.ndarray | None = None,
         params: dict | None = None,
         prune_metric: str | None = None,
-        prune_warmup_epochs: int = 3,
+        prune_warmup_epochs: int = 10,
         eval_interval: int = 1,
         eval_latent_steps: int = 50,
         eval_latent_lr: float = 1e-2,
@@ -1435,17 +1531,25 @@ class ImputeNLPCA(BaseNNImputer):
                 self.logger.error(msg)
                 raise TypeError(msg)
 
-            logits = decoder(z).view(len(X_new), nF, self.num_classes_)
+            logits = decoder(z).view(len(X_new), nF, self.output_classes_)
 
             if not torch.isfinite(logits).all():
                 break
 
-            loss = F.cross_entropy(
-                logits.view(-1, self.num_classes_),
-                y.view(-1),
-                ignore_index=-1,
-                reduction="mean",
-            )
+            if self.is_haploid:
+                loss = F.cross_entropy(
+                    logits.view(-1, self.output_classes_),
+                    y.view(-1),
+                    ignore_index=-1,
+                    reduction="mean",
+                )
+            else:
+                targets = self._multi_hot_targets(y)
+                bce = F.binary_cross_entropy_with_logits(
+                    logits, targets, pos_weight=self.pos_weights_, reduction="none"
+                )
+                mask = (y != -1).unsqueeze(-1).float()
+                loss = (bce * mask).sum() / mask.sum().clamp_min(1e-8)
             if not torch.isfinite(loss):
                 break
 
@@ -1499,7 +1603,7 @@ class ImputeNLPCA(BaseNNImputer):
         y = torch.from_numpy(X_val).long().to(self.device)
 
         latent_dim = self._first_linear_in_features(model)
-        cache_key = f"{self.prefix}_nlpca_val_latents_z{latent_dim}_L{self.num_features_}_K{self.num_classes_}"
+        cache_key = f"{self.prefix}_nlpca_val_latents_z{latent_dim}_L{self.num_features_}_K{self.output_classes_}"
 
         if cache is not None and cache_key in cache:
             z = cache[cache_key].detach().clone().requires_grad_(True)
@@ -1523,17 +1627,25 @@ class ImputeNLPCA(BaseNNImputer):
                 self.logger.error(msg)
                 raise TypeError(msg)
 
-            logits = decoder(z).view(X_val.shape[0], nF, self.num_classes_)
+            logits = decoder(z).view(X_val.shape[0], nF, self.output_classes_)
 
             if not torch.isfinite(logits).all():
                 break
 
-            loss = F.cross_entropy(
-                logits.view(-1, self.num_classes_),
-                y.view(-1),
-                ignore_index=-1,
-                reduction="mean",
-            )
+            if self.is_haploid:
+                loss = F.cross_entropy(
+                    logits.view(-1, self.output_classes_),
+                    y.view(-1),
+                    ignore_index=-1,
+                    reduction="mean",
+                )
+            else:
+                targets = self._multi_hot_targets(y)
+                bce = F.binary_cross_entropy_with_logits(
+                    logits, targets, pos_weight=self.pos_weights_, reduction="none"
+                )
+                mask = (y != -1).unsqueeze(-1).float()
+                loss = (bce * mask).sum() / mask.sum().clamp_min(1e-8)
 
             if not torch.isfinite(loss):
                 break
