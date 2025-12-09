@@ -278,10 +278,13 @@ class BaseNNImputer:
             raise AttributeError(msg)
 
         # Start with a base set of fixed (non-tuned) parameters.
+        base_num_classes = getattr(self, "output_classes_", None)
+        if base_num_classes is None:
+            base_num_classes = self.num_classes_
         all_params = {
             "n_features": self.num_features_,
             "prefix": self.prefix,
-            "num_classes": self.num_classes_,
+            "num_classes": base_num_classes,
             "verbose": self.verbose,
             "debug": self.debug,
             "device": self.device,

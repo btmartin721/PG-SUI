@@ -1335,7 +1335,9 @@ class ImputeAutoencoder(BaseNNImputer):
             Dict[str, int | float | str | list]: Default model parameters.
         """
         nF: int = self.num_features_
-        nC: int = int(self.num_classes_) if self.num_classes_ is not None else 3
+        # Use the number of output channels passed to the model (2 for diploid multilabel)
+        # instead of the scoring classes (3) to keep layer shapes aligned.
+        nC: int = int(getattr(self, "output_classes_", self.num_classes_ or 3))
         ls = self.layer_schedule
 
         if ls not in {"pyramid", "constant", "linear"}:
