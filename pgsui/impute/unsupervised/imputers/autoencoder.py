@@ -768,6 +768,8 @@ class ImputeAutoencoder(BaseNNImputer):
         if class_weights is not None and class_weights.device != self.device:
             class_weights = class_weights.to(self.device)
 
+        nF_model = int(getattr(model, "n_features", self.num_features_))
+
         # Use model.gamma if present, else self.gamma
         gamma = float(getattr(model, "gamma", getattr(self, "gamma", 0.0)))
         gamma = float(torch.tensor(gamma).clamp(min=0.0, max=10.0))  # sane bound
@@ -779,10 +781,23 @@ class ImputeAutoencoder(BaseNNImputer):
             optimizer.zero_grad(set_to_none=True)
             y_batch = y_batch.to(self.device, non_blocking=True)
 
+            if y_batch.dim() != 2:
+                msg = f"Training batch expected 2D targets, got shape {tuple(y_batch.shape)}."
+                self.logger.error(msg)
+                raise ValueError(msg)
+
+            if y_batch.shape[1] != nF_model:
+                msg = (
+                    f"Model expects {nF_model} loci but batch has {y_batch.shape[1]}. "
+                    "Ensure tuning subsets and masks use matching loci columns."
+                )
+                self.logger.error(msg)
+                raise ValueError(msg)
+
             # Inputs: one-hot with zeros for missing; Targets: long ints with -1 for missing
             if self.is_haploid:
                 x_in = self._one_hot_encode_012(y_batch)  # (B, L, 2)
-                logits = model(x_in).view(-1, self.num_features_, self.output_classes_)
+                logits = model(x_in).view(-1, nF_model, self.output_classes_)
                 logits_flat = logits.view(-1, self.output_classes_)
                 targets_flat = y_batch.view(-1).long()
                 if not torch.isfinite(logits_flat).all():
@@ -790,7 +805,7 @@ class ImputeAutoencoder(BaseNNImputer):
                 loss = ce_criterion(logits_flat, targets_flat)
             else:
                 x_in = self._encode_multilabel_inputs(y_batch)  # (B, L, 2)
-                logits = model(x_in).view(-1, self.num_features_, self.output_classes_)
+                logits = model(x_in).view(-1, nF_model, self.output_classes_)
                 if not torch.isfinite(logits).all():
                     continue
                 pos_w = getattr(self, "pos_weights_", None)
@@ -1134,17 +1149,28 @@ class ImputeAutoencoder(BaseNNImputer):
             float: Value of the tuning metric (maximize).
         """
         try:
+            # Prepare tuning subsets (for tune_fast) once
+            self._prepare_tuning_artifacts()
+
             # Sample hyperparameters (existing helper; unchanged signature)
             params = self._sample_hyperparameters(trial)
 
             # Optionally sub-sample for fast tuning (same keys used by NLPCA if you adopt them)
-            X_train = getattr(self, "X_train_", self.ground_truth_[self.train_idx_])
-            X_val = getattr(self, "X_val_", self.ground_truth_[self.test_idx_])
+            if self.tune and self.tune_fast and getattr(self, "_tune_ready", False):
+                X_train = self._tune_X_train
+                X_val = self._tune_X_test
+                train_loader = self._tune_loader
+                class_weights = self._tune_class_weights
+                # Ensure model aligns with subset width
+                params["model_params"]["n_features"] = self._tune_num_features
+            else:
+                X_train = getattr(self, "X_train_", self.ground_truth_[self.train_idx_])
+                X_val = getattr(self, "X_val_", self.ground_truth_[self.test_idx_])
 
-            class_weights = self._normalize_class_weights(
-                self._class_weights_from_zygosity(X_train)
-            )
-            train_loader = self._get_data_loaders(X_train)
+                class_weights = self._normalize_class_weights(
+                    self._class_weights_from_zygosity(X_train)
+                )
+                train_loader = self._get_data_loaders(X_train)
 
             model = self.build_model(self.Model, params["model_params"])
             model.apply(self.initialize_weights)
@@ -1187,7 +1213,14 @@ class ImputeAutoencoder(BaseNNImputer):
                     model,
                     params,
                     objective_mode=True,
-                    eval_mask_override=eval_mask,
+                    eval_mask_override=(
+                        eval_mask[:, : X_val.shape[1]]
+                        if (
+                            eval_mask is not None
+                            and eval_mask.shape[1] > X_val.shape[1]
+                        )
+                        else eval_mask
+                    ),
                 )
                 self._clear_resources(model, train_loader)
             else:
@@ -1227,13 +1260,21 @@ class ImputeAutoencoder(BaseNNImputer):
             ),
         }
 
-        nF: int = self.num_features_
+        nF = (
+            self._tune_num_features
+            if (self.tune and self.tune_fast and getattr(self, "_tune_ready", False))
+            else self.num_features_
+        )
         nC: int = int(getattr(self, "output_classes_", self.num_classes_ or 3))
         input_dim = nF * nC
         hidden_layer_sizes = self._compute_hidden_layer_sizes(
             n_inputs=input_dim,
             n_outputs=input_dim,
-            n_samples=len(self.train_idx_),
+            n_samples=(
+                len(self._tune_train_idx)
+                if (self.tune and self.tune_fast and getattr(self, "_tune_ready", False))
+                else len(self.train_idx_)
+            ),
             n_hidden=params["num_hidden_layers"],
             alpha=params["layer_scaling_factor"],
             schedule=params["layer_schedule"],
@@ -1246,7 +1287,7 @@ class ImputeAutoencoder(BaseNNImputer):
         hidden_only: list[int] = [hidden_layer_sizes[0]] + hidden_layer_sizes[1:-1]
 
         params["model_params"] = {
-            "n_features": int(self.num_features_),
+            "n_features": int(nF),
             "num_classes": int(
                 getattr(self, "output_classes_", self.num_classes_ or 3)
             ),
