@@ -83,20 +83,20 @@ mpl.rcParams.update(mpl_params)
 plt.rcParams.update(mpl_params)
 
 METRIC_MAP = {
-    "F_inbreeding": "Inbreeding Coefficient ($F_{IS}$)",
-    "ThetaWatt": "Watterson's θ",
-    "Pi": "Nucleotide Diversity (π)",
-    "TajimaD": "Tajima's D",
+    "F_inbreeding": r"$F_{IS}$",
+    "ThetaWatt": r"Watterson's $\theta$",
+    "Pi": r"Nucleotide Diversity ($\pi$)",
+    "TajimaD": r"Tajima's $D$",
     "Missingness": "Missingness Prop.",
-    "Ho": "Observed Heterozygosity",
-    "He": "Expected Heterozygosity",
-    "HetzPositions": "Heterozygous Sites",
-    "SegSites": "Segregating Sites",
-    "Singletons": "Singleton Prop.",
-    "Hap": "Number of Haplotypes",
-    "Hd": "Haplotype Diversity",
-    "Sample_Size": "Sample Size",
-    "MAF": "Minor Allele Frequency",
+    "Ho": r"$H_o$",
+    "He": r"$H_e$",
+    "HetzPositions": r"Heterozygous Sites",
+    "SegSites": r"$S$ (Seg. Sites)",
+    "Singletons": r"Singleton Prop.",
+    "Hap": r"Haplotype Count",
+    "Hd": r"Haplotype Diversity ($H_d$)",
+    "Sample_Size": r"Sample Size",
+    "MAF": r"Minor Allele Frequency",
 }
 
 
@@ -110,10 +110,7 @@ class DatasetFiles:
 def analyze_deviations(
     desc: pd.DataFrame, metrics: Sequence[str], out_dir: Path, out_prefix: str
 ) -> pd.DataFrame:
-    """
-    Post-hoc "Analysis of Means" to identify which datasets contribute most to variance.
-    Calculates Z-scores of dataset means.
-    """
+    """Post-hoc "Analysis of Means" to identify which datasets contribute most to variance. Calculates Z-scores of dataset means."""
     deviation_rows = []
 
     for m in metrics:
@@ -139,7 +136,8 @@ def analyze_deviations(
                 {
                     "dataset": dataset,
                     "metric": m,
-                    "dataset_mean": series[dataset],
+                    # Explicitly use .loc[index] to keep type-checkers happy
+                    "dataset_mean": series.loc[series.index == dataset].iloc[0],
                     "global_mean_of_means": grand_mean,
                     "z_score": z,
                     "abs_z_score": abs(z),
@@ -246,7 +244,7 @@ def plot_effectsize_summary(anova_res: pd.DataFrame, outpath: Path) -> None:
         y="eta_sq",
         hue="eta_sq",
         hue_norm=norm,
-        palette=cmap,
+        palette=cmap,  # type: ignore
         edgecolor="k",
         linewidth=0.7,
         ax=ax,
@@ -308,7 +306,7 @@ def plot_dataset_metric_heatmap(
     try:
         cmap = copy.copy(plt.get_cmap("viridis"))
     except:
-        cmap = copy.copy(cm.viridis)
+        cmap = copy.copy(cm.get_cmap("viridis"))
     cmap.set_bad(color="lightgrey")
 
     im = ax.imshow(masked_mat, aspect="auto", interpolation="nearest", cmap=cmap)
@@ -473,7 +471,19 @@ def welch_anova_by_metric(
             continue
 
         with np.errstate(invalid="ignore", divide="ignore"):
-            welch_res = anova_oneway(groups, use_var="unequal", welch_correction=True)
+            # anova_oneway returns a statsmodels HolderTuple which is dynamically
+            # populated with result attributes (e.g., statistic, pvalue,
+            # n_groups, nobs_t). These attributes are not declared on the
+            # HolderTuple stub, which confuses static type checkers. Access
+            # via a plain object and use getattr with fallbacks to keep
+            # type-checkers satisfied while preserving runtime behavior.
+            res_obj = anova_oneway(groups, use_var="unequal", welch_correction=True)
+
+        # Extract fields from the result using getattr to avoid static-analysis errors.
+        F_val = float(getattr(res_obj, "statistic", np.nan))
+        p_val = float(getattr(res_obj, "pvalue", np.nan))
+        n_groups = int(getattr(res_obj, "n_groups", len(groups)))
+        nobs_t = int(getattr(res_obj, "nobs_t", sum(len(g) for g in groups)))
 
         all_vals = np.concatenate(groups)
         grand_mean = all_vals.mean()
@@ -484,11 +494,11 @@ def welch_anova_by_metric(
         results.append(
             {
                 "metric": metric,
-                "welch_F": float(welch_res.statistic),
-                "p_raw": float(welch_res.pvalue),
+                "welch_F": F_val,
+                "p_raw": p_val,
                 "eta_sq": float(eta_sq),
-                "n_datasets": int(welch_res.n_groups),
-                "n_loci_total": int(welch_res.nobs_t),
+                "n_datasets": n_groups,
+                "n_loci_total": nobs_t,
                 "transform": transform,
             }
         )
