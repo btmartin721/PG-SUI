@@ -39,6 +39,9 @@ requirements:
     - rich
     - rich[jupyter]
     - snpio
+    # GUI / server components
+    - fastapi >=0.110
+    - uvicorn-standard >=0.23
 
 test:
   requires:
