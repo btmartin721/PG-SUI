@@ -1,6 +1,7 @@
 import copy
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
 
+from fastapi import params
 import numpy as np
 import optuna
 import torch
@@ -160,6 +161,7 @@ class ImputeUBP(BaseNNImputer):
         self.verbose = self.cfg.io.verbose
         self.debug = self.cfg.io.debug
         self.rng = np.random.default_rng(self.seed)
+        self.pos_weights_: torch.Tensor | None = None
 
         # Simulated-missing controls (config defaults w/ overrides)
         sim_cfg = getattr(self.cfg, "sim", None)
@@ -320,15 +322,17 @@ class ImputeUBP(BaseNNImputer):
         else:
             self.num_classes_ = 3
             self.logger.info(
-                "Diploid data detected. Using 3 classes (REF=0, HET=1, ALT=2)."
+                "Diploid data detected. Using 3 classes (REF=0, HET=1, ALT=2) for scoring."
             )
+        # Model head always uses two channels; scoring uses num_classes_
+        self.output_classes_ = 2
 
         n_samples, self.num_features_ = X_for_model.shape
 
         # --- model params (decoder: Z -> L * num_classes) ---
         self.model_params = {
             "n_features": self.num_features_,
-            "num_classes": self.num_classes_,
+            "num_classes": self.output_classes_,
             "latent_dim": self.latent_dim,
             "dropout_rate": self.dropout_rate,
             "activation": self.activation,
@@ -352,6 +356,12 @@ class ImputeUBP(BaseNNImputer):
         else:
             self.sim_mask_train_ = None
             self.sim_mask_test_ = None
+
+        # pos weights for diploid multilabel path
+        if not self.is_haploid:
+            self.pos_weights_ = self._compute_pos_weights(self.X_train_)
+        else:
+            self.pos_weights_ = None
 
         # --- plotting/scorers & tuning ---
         self.plotter_, self.scorers_ = self.initialize_plotting_and_scorers()
@@ -485,14 +495,22 @@ class ImputeUBP(BaseNNImputer):
             y = y_batch.to(self.device, non_blocking=True).long()
 
             logits = decoder(z).view(
-                len(batch_indices), self.num_features_, self.num_classes_
+                len(batch_indices), self.num_features_, self.output_classes_
             )
 
             # Guard upstream explosions
             if not torch.isfinite(logits).all():
                 continue
 
-            loss = criterion(logits.view(-1, self.num_classes_), y.view(-1))
+            if self.is_haploid:
+                loss = criterion(logits.view(-1, self.output_classes_), y.view(-1))
+            else:
+                targets = self._multi_hot_targets(y)
+                bce = F.binary_cross_entropy_with_logits(
+                    logits, targets, pos_weight=self.pos_weights_, reduction="none"
+                )
+                mask = (y != -1).unsqueeze(-1).float()
+                loss = (bce * mask).sum() / mask.sum().clamp_min(1e-8)
 
             if l1_penalty > 0:
                 l1 = torch.zeros((), device=self.device)
@@ -555,10 +573,21 @@ class ImputeUBP(BaseNNImputer):
                 raise TypeError(msg)
 
             logits = decoder(latent_vectors.to(self.device)).view(
-                len(latent_vectors), nF, self.num_classes_
+                len(latent_vectors), nF, self.output_classes_
             )
-            probas = torch.softmax(logits, dim=-1)
-            labels = torch.argmax(probas, dim=-1)
+            if self.is_haploid:
+                probas = torch.softmax(logits, dim=-1)
+                labels = torch.argmax(probas, dim=-1)
+            else:
+                probas2 = torch.sigmoid(logits)
+                p_ref = probas2[..., 0]
+                p_alt = probas2[..., 1]
+                p_het = p_ref * p_alt
+                p_ref_only = p_ref * (1 - p_alt)
+                p_alt_only = p_alt * (1 - p_ref)
+                probas = torch.stack([p_ref_only, p_het, p_alt_only], dim=-1)
+                probas = probas / probas.sum(dim=-1, keepdim=True).clamp_min(1e-8)
+                labels = torch.argmax(probas, dim=-1)
 
         return labels.cpu().numpy(), probas.cpu().numpy()
 
@@ -752,9 +781,18 @@ class ImputeUBP(BaseNNImputer):
         )
 
     def _objective(self, trial: optuna.Trial) -> float:
-        """Optuna objective using the UBP training loop."""
+        """Optuna objective using the UBP training loop.
+
+        This method defines the objective function for hyperparameter tuning using Optuna. It prepares the necessary artifacts for tuning, samples a set of hyperparameters for the current trial, and trains the UBP model using these hyperparameters. The model is evaluated on a validation set, and the specified tuning metric is returned as the objective value. If any exception occurs during the process, the trial is pruned.
+        """
         try:
-            params = self._sample_hyperparameters(trial)
+            self._prepare_tuning_artifacts()
+            trial_params = self._sample_hyperparameters(trial)
+            model_params = trial_params["model_params"]
+
+            nfeat = self._tune_num_features
+            if self.tune and self.tune_fast:
+                model_params["n_features"] = nfeat
 
             X_train_trial = getattr(
                 self, "X_train_", self.ground_truth_[self.train_idx_]
@@ -764,31 +802,38 @@ class ImputeUBP(BaseNNImputer):
             class_weights = self._normalize_class_weights(
                 self._class_weights_from_zygosity(X_train_trial)
             )
+            if not self.is_haploid:
+                self.pos_weights_ = self._compute_pos_weights(X_train_trial)
+            else:
+                self.pos_weights_ = None
             train_loader = self._get_data_loaders(X_train_trial)
 
             train_latent_vectors = self._create_latent_space(
-                params, len(X_train_trial), X_train_trial, params["latent_init"]
+                model_params,
+                len(X_train_trial),
+                X_train_trial,
+                trial_params["latent_init"],
             )
 
-            model = self.build_model(self.Model, params["model_params"])
-            model.n_features = params["model_params"]["n_features"]
+            model = self.build_model(self.Model, model_params)
+            model.n_features = model_params["n_features"]
             model.apply(self.initialize_weights)
 
             _, model, __ = self._train_and_validate_model(
                 model=model,
                 loader=train_loader,
-                lr=params["lr"],
-                l1_penalty=params["l1_penalty"],
+                lr=trial_params["lr"],
+                l1_penalty=trial_params["l1_penalty"],
                 trial=trial,
                 return_history=False,
                 latent_vectors=train_latent_vectors,
-                lr_input_factor=params["lr_input_factor"],
+                lr_input_factor=trial_params["lr_input_factor"],
                 class_weights=class_weights,
                 X_val=X_test_trial,
-                params=params,
+                params=model_params,
                 prune_metric=self.tune_metric,
-                prune_warmup_epochs=5,
-                eval_interval=1,
+                prune_warmup_epochs=10,
+                eval_interval=self.tune_eval_interval,
                 eval_requires_latents=True,
                 eval_latent_steps=self.eval_latent_steps,
                 eval_latent_lr=self.eval_latent_lr,
@@ -806,7 +851,7 @@ class ImputeUBP(BaseNNImputer):
             metrics = self._evaluate_model(
                 X_test_trial,
                 model,
-                params,
+                model_params,
                 objective_mode=True,
                 eval_mask_override=eval_mask,
             )
@@ -829,30 +874,30 @@ class ImputeUBP(BaseNNImputer):
             Dict[str, int | float | str | list]: Sampled hyperparameters.
         """
         params = {
-            "latent_dim": trial.suggest_int("latent_dim", 2, 32),
-            "lr": trial.suggest_float("learning_rate", 1e-5, 1e-2, log=True),
-            "dropout_rate": trial.suggest_float("dropout_rate", 0.0, 0.6),
-            "num_hidden_layers": trial.suggest_int("num_hidden_layers", 1, 8),
+            "latent_dim": trial.suggest_int("latent_dim", 4, 16, step=2),
+            "lr": trial.suggest_float("learning_rate", 3e-4, 1e-3, log=True),
+            "dropout_rate": trial.suggest_float("dropout_rate", 0.0, 0.30, step=0.05),
+            "num_hidden_layers": trial.suggest_int("num_hidden_layers", 1, 6),
             "activation": trial.suggest_categorical(
-                "activation", ["relu", "elu", "selu"]
+                "activation", ["relu", "elu", "selu", "leaky_relu"]
             ),
-            "gamma": trial.suggest_float("gamma", 0.0, 5.0),
+            "gamma": trial.suggest_float("gamma", 0.5, 3.0, step=0.5),
             "lr_input_factor": trial.suggest_float(
-                "lr_input_factor", 0.1, 10.0, log=True
+                "lr_input_factor", 0.3, 3.0, log=True
             ),
-            "l1_penalty": trial.suggest_float("l1_penalty", 1e-7, 1e-2, log=True),
+            "l1_penalty": trial.suggest_float("l1_penalty", 1e-6, 1e-3, log=True),
             "layer_scaling_factor": trial.suggest_float(
-                "layer_scaling_factor", 2.0, 10.0
+                "layer_scaling_factor", 2.0, 4.0, step=0.5
             ),
             "layer_schedule": trial.suggest_categorical(
-                "layer_schedule", ["pyramid", "constant", "linear"]
+                "layer_schedule", ["pyramid", "linear"]
             ),
             "latent_init": trial.suggest_categorical("latent_init", ["random", "pca"]),
         }
 
         hidden_layer_sizes = self._compute_hidden_layer_sizes(
             n_inputs=params["latent_dim"],
-            n_outputs=self.num_features_ * self.num_classes_,
+            n_outputs=self.num_features_ * self.output_classes_,
             n_samples=len(self.train_idx_),
             n_hidden=params["num_hidden_layers"],
             alpha=params["layer_scaling_factor"],
@@ -866,7 +911,7 @@ class ImputeUBP(BaseNNImputer):
 
         params["model_params"] = {
             "n_features": self.num_features_,
-            "num_classes": self.num_classes_,
+            "num_classes": self.output_classes_,
             "latent_dim": params["latent_dim"],
             "dropout_rate": params["dropout_rate"],
             "hidden_layer_sizes": hidden_only,
@@ -900,7 +945,7 @@ class ImputeUBP(BaseNNImputer):
 
         hidden_layer_sizes = self._compute_hidden_layer_sizes(
             n_inputs=self.latent_dim,
-            n_outputs=self.num_features_ * self.num_classes_,
+            n_outputs=self.num_features_ * self.output_classes_,
             n_samples=len(self.train_idx_),
             n_hidden=best_params["num_hidden_layers"],
             alpha=best_params["layer_scaling_factor"],
@@ -916,7 +961,7 @@ class ImputeUBP(BaseNNImputer):
             "dropout_rate": self.dropout_rate,
             "activation": self.activation,
             "gamma": self.gamma,
-            "num_classes": self.num_classes_,
+            "num_classes": self.output_classes_,
         }
 
     def _set_best_params_default(self) -> dict:
@@ -929,7 +974,7 @@ class ImputeUBP(BaseNNImputer):
         """
         hidden_layer_sizes = self._compute_hidden_layer_sizes(
             n_inputs=self.latent_dim,
-            n_outputs=self.num_features_ * self.num_classes_,
+            n_outputs=self.num_features_ * self.output_classes_,
             n_samples=len(self.ground_truth_),
             n_hidden=self.num_hidden_layers,
             alpha=self.layer_scaling_factor,
@@ -945,7 +990,7 @@ class ImputeUBP(BaseNNImputer):
             "dropout_rate": self.dropout_rate,
             "activation": self.activation,
             "gamma": self.gamma,
-            "num_classes": self.num_classes_,
+            "num_classes": self.output_classes_,
         }
 
     def _train_and_validate_model(
@@ -963,7 +1008,7 @@ class ImputeUBP(BaseNNImputer):
         X_val: np.ndarray | None = None,
         params: dict | None = None,
         prune_metric: str | None = None,  # "f1" | "accuracy" | "pr_macro"
-        prune_warmup_epochs: int = 3,
+        prune_warmup_epochs: int = 10,
         eval_interval: int = 1,
         eval_requires_latents: bool = True,  # UBP needs latent eval
         eval_latent_steps: int = 50,
@@ -1073,7 +1118,7 @@ class ImputeUBP(BaseNNImputer):
             X_val=self.X_test_,
             params=best_params,
             prune_metric=self.tune_metric,
-            prune_warmup_epochs=5,
+            prune_warmup_epochs=10,
             eval_interval=1,
             eval_requires_latents=True,
             eval_latent_steps=self.eval_latent_steps,
@@ -1105,7 +1150,7 @@ class ImputeUBP(BaseNNImputer):
         X_val: np.ndarray | None = None,
         params: dict | None = None,
         prune_metric: str | None = None,
-        prune_warmup_epochs: int = 3,
+        prune_warmup_epochs: int = 10,
         eval_interval: int = 1,
         eval_requires_latents: bool = True,
         eval_latent_steps: int = 50,
@@ -1152,7 +1197,7 @@ class ImputeUBP(BaseNNImputer):
         # Schema-aware latent cache for eval
         _latent_cache: dict = {}
         nF = getattr(model, "n_features", self.num_features_)
-        cache_key_root = f"{self.prefix}_ubp_val_latents_L{nF}_K{self.num_classes_}"
+        cache_key_root = f"{self.prefix}_ubp_val_latents_L{nF}_K{self.output_classes_}"
 
         E = int(self.epochs)
         phase_epochs = {
@@ -1349,14 +1394,22 @@ class ImputeUBP(BaseNNImputer):
                 raise TypeError(msg)
 
             opt.zero_grad(set_to_none=True)
-            logits = decoder(z).view(len(X_new), nF, self.num_classes_)
+            logits = decoder(z).view(len(X_new), nF, self.output_classes_)
 
             if not torch.isfinite(logits).all():
                 break
 
-            loss = F.cross_entropy(
-                logits.view(-1, self.num_classes_), y.view(-1), ignore_index=-1
-            )
+            if self.is_haploid:
+                loss = F.cross_entropy(
+                    logits.view(-1, self.output_classes_), y.view(-1), ignore_index=-1
+                )
+            else:
+                targets = self._multi_hot_targets(y)
+                bce = F.binary_cross_entropy_with_logits(
+                    logits, targets, pos_weight=self.pos_weights_, reduction="none"
+                )
+                mask = (y != -1).unsqueeze(-1).float()
+                loss = (bce * mask).sum() / mask.sum().clamp_min(1e-8)
 
             if not torch.isfinite(loss):
                 break
@@ -1457,8 +1510,31 @@ class ImputeUBP(BaseNNImputer):
         else:
             latents = torch.empty(n_samples, latent_dim, device=self.device)
             torch.nn.init.xavier_uniform_(latents)
+            return torch.nn.Parameter(latents, requires_grad=True)
 
-        return torch.nn.Parameter(latents, requires_grad=True)
+    def _multi_hot_targets(self, y: torch.Tensor) -> torch.Tensor:
+        """Two-channel multi-hot for diploid: REF-only, ALT-only; HET sets both."""
+        if self.is_haploid:
+            raise RuntimeError("_multi_hot_targets called for haploid data.")
+        y = y.to(self.device)
+        out = torch.zeros(y.shape + (2,), device=self.device, dtype=torch.float32)
+        valid = y != -1
+        ref_mask = valid & (y != 2)
+        alt_mask = valid & (y != 0)
+        out[ref_mask, 0] = 1.0
+        out[alt_mask, 1] = 1.0
+        return out
+
+    def _compute_pos_weights(self, X: np.ndarray) -> torch.Tensor:
+        """Balance REF/ALT channels for multilabel BCE."""
+        ref_pos = np.count_nonzero((X == 0) | (X == 1))
+        alt_pos = np.count_nonzero((X == 2) | (X == 1))
+        total_valid = np.count_nonzero(X != -1)
+        pos_counts = np.array([ref_pos, alt_pos], dtype=np.float32)
+        neg_counts = np.maximum(total_valid - pos_counts, 1.0)
+        pos_counts = np.maximum(pos_counts, 1.0)
+        weights = neg_counts / pos_counts
+        return torch.tensor(weights, device=self.device, dtype=torch.float32)
 
     def _reset_weights(self, model: torch.nn.Module) -> None:
         """Selectively resets only the weights of the phase 2/3 decoder.
@@ -1527,7 +1603,9 @@ class ImputeUBP(BaseNNImputer):
         y = torch.from_numpy(X_val).long().to(self.device)
 
         zdim = self._first_linear_in_features(model)
-        schema_key = f"{self.prefix}_ubp_val_latents_z{zdim}_L{nF}_K{self.num_classes_}"
+        schema_key = (
+            f"{self.prefix}_ubp_val_latents_z{zdim}_L{nF}_K{self.output_classes_}"
+        )
 
         if cache is not None and schema_key in cache:
             z = cache[schema_key].detach().clone().requires_grad_(True)
@@ -1548,13 +1626,20 @@ class ImputeUBP(BaseNNImputer):
                 self.logger.error(msg)
                 raise TypeError(msg)
 
-            logits = decoder(z).view(X_val.shape[0], nF, self.num_classes_)
+            logits = decoder(z).view(X_val.shape[0], nF, self.output_classes_)
             if not torch.isfinite(logits).all():
                 break
-
-            loss = F.cross_entropy(
-                logits.view(-1, self.num_classes_), y.view(-1), ignore_index=-1
-            )
+            if self.is_haploid:
+                loss = F.cross_entropy(
+                    logits.view(-1, self.output_classes_), y.view(-1), ignore_index=-1
+                )
+            else:
+                targets = self._multi_hot_targets(y)
+                bce = F.binary_cross_entropy_with_logits(
+                    logits, targets, pos_weight=self.pos_weights_, reduction="none"
+                )
+                mask = (y != -1).unsqueeze(-1).float()
+                loss = (bce * mask).sum() / mask.sum().clamp_min(1e-8)
 
             if not torch.isfinite(loss):
                 break
