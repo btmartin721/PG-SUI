@@ -998,16 +998,13 @@ class ImputeNLPCA(BaseNNImputer):
             trial_params = self._sample_hyperparameters(trial)
             model_params = trial_params["model_params"]
 
-            nfeat = self._tune_num_features
-            if self.tune and self.tune_fast:
-                model_params["n_features"] = nfeat
-
             lr = trial_params["lr"]
             l1_penalty = trial_params["l1_penalty"]
             lr_input_fac = trial_params["lr_input_factor"]
 
             X_train_trial = self._tune_X_train
             X_test_trial = self._tune_X_test
+            model_params["n_features"] = int(X_train_trial.shape[1])
             class_weights = self._tune_class_weights
             train_loader = self._tune_loader
 
@@ -1492,7 +1489,7 @@ class ImputeNLPCA(BaseNNImputer):
 
             early_stopping(train_loss, model)
             if early_stopping.early_stop:
-                self.logger.info(f"Early stopping at epoch {epoch + 1}.")
+                self.logger.debug(f"Early stopping at epoch {epoch + 1}.")
                 break
 
         best_loss = early_stopping.best_score
