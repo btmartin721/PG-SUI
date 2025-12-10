@@ -510,9 +510,7 @@ class ImputeUBP(BaseNNImputer):
                 self.logger.error(msg)
                 raise ValueError(msg)
 
-            logits = decoder(z).view(
-                len(batch_indices), nF_model, self.output_classes_
-            )
+            logits = decoder(z).view(len(batch_indices), nF_model, self.output_classes_)
 
             # Guard upstream explosions
             if not torch.isfinite(logits).all():
@@ -806,10 +804,7 @@ class ImputeUBP(BaseNNImputer):
             trial_params = self._sample_hyperparameters(trial)
             model_params = trial_params["model_params"]
 
-            nfeat = self._tune_num_features
-            if self.tune and self.tune_fast:
-                model_params["n_features"] = nfeat
-
+            # Always align model width to the data actually used this trial
             if self.tune and self.tune_fast and getattr(self, "_tune_ready", False):
                 X_train_trial = self._tune_X_train
                 X_test_trial = self._tune_X_test
@@ -820,6 +815,7 @@ class ImputeUBP(BaseNNImputer):
                 X_test_trial = getattr(
                     self, "X_test_", self.ground_truth_[self.test_idx_]
                 )
+            model_params["n_features"] = int(X_train_trial.shape[1])
 
             class_weights = self._normalize_class_weights(
                 self._class_weights_from_zygosity(X_train_trial)
@@ -1317,7 +1313,7 @@ class ImputeUBP(BaseNNImputer):
 
                 early_stopping(train_loss, model)
                 if early_stopping.early_stop:
-                    self.logger.info(
+                    self.logger.debug(
                         f"Early stopping at epoch {epoch + 1} (phase {phase})."
                     )
                     break
