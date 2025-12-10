@@ -690,7 +690,7 @@ class ImputeVAE(BaseNNImputer):
 
             early_stopping(train_loss, model)
             if early_stopping.early_stop:
-                self.logger.info(f"Early stopping at epoch {epoch + 1}.")
+                self.logger.debug(f"Early stopping at epoch {epoch + 1}.")
                 break
 
             # Optional Optuna pruning on a validation metric
@@ -1121,6 +1121,9 @@ class ImputeVAE(BaseNNImputer):
                 )
                 train_loader = self._get_data_loader(X_train)
 
+            # Always align model width to the data used in this trial
+            params["model_params"]["n_features"] = int(X_train.shape[1])
+
             # Pos weights for diploid multilabel BCE during tuning
             if not self.is_haploid:
                 self.pos_weights_ = self._compute_pos_weights(X_train)
@@ -1172,10 +1175,7 @@ class ImputeVAE(BaseNNImputer):
                 objective_mode=True,
                 eval_mask_override=(
                     eval_mask[:, : X_val.shape[1]]
-                    if (
-                        eval_mask is not None
-                        and eval_mask.shape[1] > X_val.shape[1]
-                    )
+                    if (eval_mask is not None and eval_mask.shape[1] > X_val.shape[1])
                     else eval_mask
                 ),
             )
