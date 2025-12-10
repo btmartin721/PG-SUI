@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import importlib.metadata
 import logging
 import sys
 import time
@@ -46,7 +47,7 @@ from typing import (
     cast,
 )
 
-from snpio import GenePopReader, PhylipReader, SNPioMultiQC, VCFReader, TreeParser
+from snpio import GenePopReader, PhylipReader, SNPioMultiQC, TreeParser, VCFReader
 
 from pgsui import (
     AutoencoderConfig,
@@ -93,6 +94,13 @@ R = TypeVar("R")
 
 
 # ----------------------------- CLI Utilities ----------------------------- #
+def _print_version() -> None:
+    """Print PG-SUI version and exit."""
+    from pgsui import __version__ as version
+
+    logging.info(f"Using PG-SUI version: {version}")
+
+
 def _configure_logging(verbose: bool, log_file: Optional[str] = None) -> None:
     """Configure root logger.
 
@@ -651,14 +659,24 @@ def main(argv: Optional[List[str]] = None) -> int:
         action="store_true",
         help="Parse args and load data, but skip model training.",
     )
+    parser.add_argument(
+        "--version", action="store_true", help="Print PG-SUI version and exit."
+    )
 
     args = parser.parse_args(argv)
+
+    if getattr(args, "version", False):
+        _print_version()
+        return 0
 
     # Logging (verbose default is False unless passed)
     _configure_logging(
         verbose=getattr(args, "verbose", False),
         log_file=getattr(args, "log_file", None),
     )
+
+    logging.info("Starting PG-SUI imputation...")
+    _print_version()
 
     # Models selection (default to all if not explicitly provided)
     try:
