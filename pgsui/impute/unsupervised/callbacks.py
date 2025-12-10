@@ -111,6 +111,6 @@ class EarlyStopping:
                 self.early_stop = True
 
                 if self.verbose:
-                    self.logger.info(
+                    self.logger.debug(
                         f"Early stopping triggered at epoch {self.epoch_count}"
                     )
