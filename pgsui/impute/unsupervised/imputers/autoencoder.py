@@ -706,7 +706,7 @@ class ImputeAutoencoder(BaseNNImputer):
 
             early_stopping(train_loss, model)
             if early_stopping.early_stop:
-                self.logger.info(f"Early stopping at epoch {epoch + 1}.")
+                self.logger.debug(f"Early stopping at epoch {epoch + 1}.")
                 break
 
             # Optuna report/prune on validation metric
@@ -1172,6 +1172,9 @@ class ImputeAutoencoder(BaseNNImputer):
                 )
                 train_loader = self._get_data_loaders(X_train)
 
+            # Always align model width to the data used in this trial
+            params["model_params"]["n_features"] = int(X_train.shape[1])
+
             model = self.build_model(self.Model, params["model_params"])
             model.apply(self.initialize_weights)
 
@@ -1272,7 +1275,9 @@ class ImputeAutoencoder(BaseNNImputer):
             n_outputs=input_dim,
             n_samples=(
                 len(self._tune_train_idx)
-                if (self.tune and self.tune_fast and getattr(self, "_tune_ready", False))
+                if (
+                    self.tune and self.tune_fast and getattr(self, "_tune_ready", False)
+                )
                 else len(self.train_idx_)
             ),
             n_hidden=params["num_hidden_layers"],
