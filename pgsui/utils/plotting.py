@@ -1,7 +1,7 @@
 import logging
 import warnings
 from pathlib import Path
-from typing import Dict, List, Literal, Optional, Sequence, cast
+from typing import Dict, List, Literal, Optional, Sequence, Mapping, cast
 
 import matplotlib as mpl
 
@@ -294,6 +294,10 @@ class Plotting:
             ValueError: If model_name is not recognized (legacy guard).
         """
         num_classes = y_pred_proba.shape[1]
+        if num_classes < 2:
+            msg = "plot_metrics: num_classes must be >= 2 for ROC/PR curves."
+            self.logger.error(msg)
+            raise ValueError(msg)
 
         # Validate/normalize label names
         if label_names is not None and len(label_names) != num_classes:
@@ -465,16 +469,13 @@ class Plotting:
             except Exception as exc:  # pragma: no cover - defensive
                 self.logger.warning(f"Failed to queue MultiQC ROC/PR curves: {exc}")
 
-    def plot_history(
-        self,
-        history: Dict[str, List[float] | Dict[str, List[float]] | None] | None,
-    ) -> None:
+    def plot_history(self, history: dict[str, list[float]]) -> None:
         """Plot model history traces. Will be saved to file.
 
         This method plots the deep learning model history traces. The plot is saved to disk as a ``<plot_format>`` file.
 
         Args:
-            history (Dict[str, List[float]]): Dictionary with lists of history objects. Keys should be "Train" and "Validation".
+            history (dict[str, list[float]]): Dictionary with lists of history objects. Keys should be "Train" and "Validation".
 
         Raises:
             ValueError: nn_method must be either 'ImputeNLPCA', 'ImputeUBP', 'ImputeAutoencoder', 'ImputeVAE'.
@@ -490,17 +491,34 @@ class Plotting:
             raise ValueError(msg)
 
         if self.model_name != "ImputeUBP":
-            fig, ax = plt.subplots(1, 1, figsize=(12, 8))
-            df = pd.DataFrame(history)
-            df = df.iloc[1:]
+            if history:
+                if not isinstance(history, dict) or "Train" not in history:
+                    msg = "history must be a dict containing at least a 'Train' key."
+                    self.logger.error(msg)
+                    raise TypeError(msg)
 
-            # Plot train accuracy
-            ax.plot(df["Train"], c="blue", lw=3)
+                fig, ax = plt.subplots(1, 1, figsize=(12, 8))
+                df_train = pd.Series(history["Train"])
+                df_train = df_train.iloc[1:]  # ignore first epoch
 
-            ax.set_title(f"{self.model_name} Loss per Epoch")
-            ax.set_ylabel("Loss")
-            ax.set_xlabel("Epoch")
-            ax.legend(["Train"], loc="best", shadow=True, fancybox=True)
+                ax.plot(df_train, c="blue", lw=3)
+
+                if "Val" in history:
+                    val_vals = pd.Series(history["Val"])
+                    val_vals = val_vals.iloc[1:]  # ignore first epoch
+
+                    ax.plot(val_vals, c="orange", lw=3)
+                    ax.set_title(f"{self.model_name} Loss per Epoch")
+                    ax.set_ylabel("Loss")
+                    ax.set_xlabel("Epoch")
+                    ax.legend(
+                        ["Train", "Validation"], loc="best", shadow=True, fancybox=True
+                    )
+                else:
+                    ax.set_title(f"{self.model_name} Loss per Epoch")
+                    ax.set_ylabel("Loss")
+                    ax.set_xlabel("Epoch")
+                    ax.legend(["Train"], loc="best", shadow=True, fancybox=True)
 
         else:
             fig, ax = plt.subplots(3, 1, figsize=(12, 8))
@@ -516,7 +534,8 @@ class Plotting:
                 raise TypeError(msg)
 
             for i, phase in enumerate(range(1, 4)):
-                train = pd.Series(history["Train"][f"Phase {phase}"])
+                train_dict = cast(Dict[str, List[float]], history["Train"])
+                train = pd.Series(train_dict[f"Phase {phase}"])
                 train = train.iloc[1:]  # ignore first epoch
 
                 # Plot train accuracy
@@ -763,19 +782,19 @@ class Plotting:
         if df_trials.empty or "value" not in df_trials:
             return
 
-        data: Dict[str, Dict[int, int]] = {
+        history_data: Dict[str, Dict[int, float]] = {
             model_name: {
-                row["number"]: row["value"]
+                int(row["number"]): float(row["value"])
                 for _, row in df_trials.iterrows()
                 if row["value"] is not None
             }
         }
 
-        if not data[model_name]:
+        if not history_data[model_name]:
             return
 
         SNPioMultiQC.queue_linegraph(
-            data=data,
+            data=cast(Dict[str, Dict[int, int]], history_data),
             panel_id=f"{self.model_name}_optuna_history",
             section=self.multiqc_section,
             title=f"{self.model_name} Optuna Optimization History",
@@ -792,8 +811,16 @@ class Plotting:
             return
 
         if best_params:
-            series = pd.Series(best_params, name="Best Value")
-            series["objective"] = best_value
+            # Build a single dict so static type checkers don't infer a
+            # mismatched dtype for the Series and complain about assigning
+            # a float value after creation.
+            best_param_data: Dict[str, float | int | str] = {
+                **{str(k): cast(float | int | str, v) for k, v in best_params.items()},
+                "objective": float(best_value),
+            }
+
+            series = pd.Series(best_param_data, name="Best Value")
+
             SNPioMultiQC.queue_table(
                 df=series,
                 panel_id=f"{self.model_name}_optuna_best_params",
@@ -992,7 +1019,7 @@ class Plotting:
     def _queue_multiqc_history(
         self,
         *,
-        history: Dict[str, List[float] | Dict[str, List[float]] | None] | None,
+        history: Mapping[str, List[float] | Dict[str, List[float]] | None] | None,
     ) -> None:
         """Queue training history (loss vs epoch) for MultiQC.
 
