@@ -106,18 +106,23 @@ class Scorer:
             recall_score(y_true, y_pred, average=self.average, zero_division=0)
         )
 
-    def roc_auc(self, y_true: np.ndarray, y_pred_proba: np.ndarray) -> float:
+    def roc_auc(self, y_true_ohe: np.ndarray, y_pred_proba: np.ndarray) -> float:
         """Compute the ROC AUC score.
 
         Args:
-            y_true (np.ndarray): Ground truth (correct) target values.
+            y_true_ohe (np.ndarray): One-hot encoded ground truth (correct) target values.
             y_pred_proba (np.ndarray): Predicted probabilities.
 
         Returns:
             float: The ROC AUC score.
         """
-        if len(np.unique(y_true)) < 2:
-            return 0.5
+        if np.all(np.count_nonzero(y_true_ohe[..., 1]) == 0) or np.all(
+            np.count_nonzero(y_true_ohe[..., 2]) == 0
+        ):
+            # ROC AUC is not defined in that case
+            msg = "No positive samples in y_true; ROC AUC score is undefined. Setting to 0.5 (random classification chance)."
+            self.logger.warning(msg)
+            return 0.5  # Return a neutral score
 
         if y_pred_proba.shape[-1] == 2:
             # Binary classification case
@@ -125,14 +130,11 @@ class Scorer:
             # Otherwise it throws an error.
             y_pred_proba = y_pred_proba[:, 1]
 
-        try:
-            return float(
-                roc_auc_score(
-                    y_true, y_pred_proba, average=self.average, multi_class="ovr"
-                )
+        return float(
+            roc_auc_score(
+                y_true_ohe, y_pred_proba, average=self.average, multi_class="ovr"
             )
-        except Exception:
-            return float(roc_auc_score(y_true, y_pred_proba, average=self.average))
+        )
 
     # This method now correctly expects one-hot encoded true labels
     def average_precision(
@@ -218,7 +220,7 @@ class Scorer:
                     np.asarray(y_true_ohe), np.asarray(y_pred_proba)
                 ),
                 "roc_auc": lambda: self.roc_auc(
-                    np.asarray(y_true), np.asarray(y_pred_proba)
+                    np.asarray(y_true_ohe), np.asarray(y_pred_proba)
                 ),
                 "average_precision": lambda: self.average_precision(
                     np.asarray(y_true_ohe), np.asarray(y_pred_proba)
@@ -244,7 +246,9 @@ class Scorer:
                 "f1": self.f1(np.asarray(y_true), np.asarray(y_pred)),
                 "precision": self.precision(np.asarray(y_true), np.asarray(y_pred)),
                 "recall": self.recall(np.asarray(y_true), np.asarray(y_pred)),
-                "roc_auc": self.roc_auc(np.asarray(y_true), np.asarray(y_pred_proba)),
+                "roc_auc": self.roc_auc(
+                    np.asarray(y_true_ohe), np.asarray(y_pred_proba)
+                ),
                 "average_precision": self.average_precision(
                     np.asarray(y_true_ohe), np.asarray(y_pred_proba)
                 ),
