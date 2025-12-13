@@ -5,16 +5,14 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from snpio.utils.logging import LoggerManager
-from torch.distributions import Normal
 
-from pgsui.impute.unsupervised.loss_functions import MaskedFocalLoss
 from pgsui.utils.logging_utils import configure_logger
 
 
 class Sampling(nn.Module):
     """A layer that samples from a latent distribution using the reparameterization trick.
 
-    This layer is a core component of a Variational Autoencoder (VAE). It takes the mean and log-variance of a latent distribution as input and generates a sample from that distribution. By using the reparameterization trick ($z = \mu + \sigma \cdot \epsilon$), it allows gradients to be backpropagated through the random sampling process, making the VAE trainable.
+    This layer is a core component of a Variational Autoencoder (VAE). It takes the mean and log-variance of a latent distribution as input and generates a sample from that distribution. By using the reparameterization trick ($z = \\mu + \\sigma \\cdot \\epsilon$), it allows gradients to be backpropagated through the random sampling process, making the VAE trainable.
     """
 
     def forward(self, z_mean: torch.Tensor, z_log_var: torch.Tensor) -> torch.Tensor:
@@ -174,7 +172,7 @@ class VAEModel(nn.Module):
     $$
     \\mathcal{L}(\\theta, \\phi; x) = \\underbrace{\\mathbb{E}_{q_{\\phi}(z|x)}[\\log p_{\\theta}(x|z)]}_{\\text{Reconstruction Loss}} - \\underbrace{D_{KL}(q_{\\phi}(z|x) || p(z))}_{\\text{KL Divergence}}
     $$
-    -   The **Reconstruction Loss** encourages the decoder to accurately reconstruct the input data from its latent representation. This implementation uses a `MaskedFocalLoss`.
+    -   The **Reconstruction Loss** encourages the decoder to accurately reconstruct the input data from its latent representation. This implementation uses a `SafeFocalCELoss`.
     -   The **KL Divergence** acts as a regularizer, forcing the approximate posterior distribution $q_{\\phi}(z|x)$ learned by the encoder to be close to a prior distribution $p(z)$ (typically a standard normal distribution).
     """
 
@@ -211,10 +209,11 @@ class VAEModel(nn.Module):
             debug (bool): If True, enables debug mode. Defaults to False.
         """
         super(VAEModel, self).__init__()
-        self.num_classes = num_classes
-        self.gamma = gamma
-        self.beta = beta
-        self.device = device
+        self.n_features = int(n_features)
+        self.num_classes = int(num_classes)
+        self.gamma = float(gamma)
+        self.beta = float(beta)
+        self.torch_device = torch.device(device)
 
         logman = LoggerManager(
             name=__name__, prefix=prefix, verbose=verbose, debug=debug
@@ -259,65 +258,6 @@ class VAEModel(nn.Module):
         z_mean, z_log_var, z = self.encoder(x)
         reconstruction = self.decoder(z)
         return reconstruction, z_mean, z_log_var
-
-    def compute_loss(
-        self,
-        outputs: Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
-        y: torch.Tensor,
-        mask: torch.Tensor | None = None,
-        class_weights: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        """Computes the VAE loss function (negative ELBO).
-
-        The loss is the sum of a reconstruction term and a regularizing KL divergence term. The reconstruction loss is calculated using a masked focal loss, and the KL divergence measures the difference between the learned latent distribution and a standard normal prior.
-
-        Args:
-            outputs (Tuple[torch.Tensor, torch.Tensor, torch.Tensor]): The tuple of (reconstruction, z_mean, z_log_var) from the model's forward pass.
-            y (torch.Tensor): The target data tensor, expected to be one-hot encoded. This is converted to class indices internally for the loss function.
-            mask (torch.Tensor | None): A boolean mask to exclude missing values from the reconstruction loss.
-            class_weights (torch.Tensor | None): Weights to apply to each class in the reconstruction loss to handle imbalance.
-
-        Returns:
-            torch.Tensor: The computed scalar loss value.
-        """
-        reconstruction, z_mean, z_log_var = outputs
-
-        # 1. KL Divergence Calculation
-        prior = Normal(torch.zeros_like(z_mean), torch.ones_like(z_log_var))
-        posterior = Normal(z_mean, torch.exp(0.5 * z_log_var))
-        kl_loss = (
-            torch.distributions.kl.kl_divergence(posterior, prior).sum(dim=1).mean()
-        )
-
-        if class_weights is None:
-            class_weights = torch.ones(self.num_classes, device=y.device)
-
-        # 2. Reconstruction Loss Calculation
-        # Reverting to the robust method of flattening tensors and using the
-        # custom loss function.
-        n_classes = reconstruction.shape[-1]
-        logits_flat = reconstruction.reshape(-1, n_classes)
-
-        # Convert one-hot `y` to class indices for the loss function.
-        targets_flat = torch.argmax(y, dim=-1).reshape(-1)
-
-        if mask is None:
-            # If no mask is provided, all targets are considered valid.
-            mask_flat = torch.ones_like(targets_flat, dtype=torch.bool)
-        else:
-            # The mask needs to be reshaped to match the flattened targets.
-            mask_flat = mask.reshape(-1)
-
-        # Logits, class-index targets, and the valid mask.
-        criterion = MaskedFocalLoss(alpha=class_weights, gamma=self.gamma)
-
-        reconstruction_loss = criterion(
-            logits_flat.to(self.device),
-            targets_flat.to(self.device),
-            valid_mask=mask_flat.to(self.device),
-        )
-
-        return reconstruction_loss + self.beta * kl_loss
 
     def _resolve_activation(
         self, activation: Literal["relu", "elu", "leaky_relu", "selu"]
