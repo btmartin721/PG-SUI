@@ -253,6 +253,7 @@ class IOConfig:
 
     Attributes:
         prefix (str): Prefix for output files. Default is "pgsui".
+        ploidy (int): Ploidy level of the organism. Default is 2.
         verbose (bool): If True, enables verbose logging. Default is False.
         debug (bool): If True, enables debug mode. Default is False.
         seed (int | None): Random seed for reproducibility. Default is None.
@@ -261,6 +262,7 @@ class IOConfig:
     """
 
     prefix: str = "pgsui"
+    ploidy: int = 2
     verbose: bool = False
     debug: bool = False
     seed: int | None = None
@@ -325,6 +327,7 @@ class NLPCAConfig:
 
         # Common baselines
         cfg.io.verbose = False
+        cfg.io.ploidy = 2
         cfg.train.validation_split = 0.20
         cfg.model.hidden_activation = "relu"
         cfg.model.layer_schedule = "pyramid"
@@ -481,6 +484,7 @@ class UBPConfig:
 
         # Common baselines
         cfg.io.verbose = False
+        cfg.io.ploidy = 2
         cfg.model.hidden_activation = "relu"
         cfg.model.layer_schedule = "pyramid"
         cfg.model.latent_init = "random"
@@ -641,6 +645,7 @@ class AutoencoderConfig:
 
         # Common baselines (no latent refinement at eval)
         cfg.io.verbose = False
+        cfg.io.ploidy = 2
         cfg.train.validation_split = 0.20
         cfg.model.hidden_activation = "relu"
         cfg.model.layer_schedule = "pyramid"
@@ -802,6 +807,7 @@ class VAEConfig:
 
         # Common baselines (match AE; no latent refinement at eval)
         cfg.io.verbose = False
+        cfg.io.ploidy = 2
         cfg.train.validation_split = 0.20
         cfg.model.hidden_activation = "relu"
         cfg.model.layer_schedule = "pyramid"
@@ -991,6 +997,7 @@ class MostFrequentConfig:
 
         cfg = cls()
         cfg.io.verbose = False
+        cfg.io.ploidy = 2
         cfg.split.test_size = 0.2
         cfg.sim.simulate_missing = True
         cfg.sim.sim_strategy = "random"
@@ -1061,6 +1068,7 @@ class RefAlleleConfig:
 
         cfg = cls()
         cfg.io.verbose = False
+        cfg.io.ploidy = 2
         cfg.split.test_size = 0.2
         cfg.sim.simulate_missing = True
         cfg.sim.sim_strategy = "random"
