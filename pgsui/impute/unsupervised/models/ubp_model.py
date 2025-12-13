@@ -5,7 +5,6 @@ import torch
 import torch.nn as nn
 from snpio.utils.logging import LoggerManager
 
-from pgsui.impute.unsupervised.loss_functions import MaskedFocalLoss
 from pgsui.utils.logging_utils import configure_logger
 
 
@@ -17,7 +16,7 @@ class UBPModel(nn.Module):
     1. **Phase 1 decoder** - a shallow linear layer that co-trains with latent codes.
     2. **Phase 2/3 decoder** - a deeper MLP with batch normalization and dropout that is first trained in isolation and later fine-tuned jointly with the latents.
 
-    Both paths ultimately reshape their logits to ``(batch_size, n_features, num_classes)`` and training uses ``MaskedFocalLoss`` to focus on hard examples while masking missing entries.
+    Both paths ultimately reshape their logits to ``(batch_size, n_features, num_classes)`` and training uses ``SafeFocalCELoss`` to focus on hard examples while masking missing entries.
     """
 
     def __init__(
@@ -155,46 +154,3 @@ class UBPModel(nn.Module):
             msg = f"Invalid phase: {phase}. Expected 1, 2, or 3."
             self.logger.error(msg)
             raise ValueError(msg)
-
-    def compute_loss(
-        self,
-        y: torch.Tensor,
-        outputs: torch.Tensor,
-        mask: torch.Tensor | None = None,
-        class_weights: torch.Tensor | None = None,
-        gamma: float = 2.0,
-    ) -> torch.Tensor:
-        """Computes the masked focal loss between model outputs and ground truth.
-
-        This method calculates the loss value, handling class imbalance with weights and ignoring masked (missing) values in the ground truth tensor.
-
-        Args:
-            y (torch.Tensor): Integer ground-truth genotypes of shape `(batch_size, n_features)`.
-            outputs (torch.Tensor): Logits of shape `(batch_size, n_features, num_classes)`.
-            mask (torch.Tensor | None): An optional boolean mask indicating which elements should be included in the loss calculation.
-            class_weights (torch.Tensor | None): An optional tensor of weights for each class to address imbalance.
-            gamma (float): The focusing parameter for the focal loss.
-
-        Returns:
-            torch.Tensor: The computed scalar loss value.
-        """
-        if class_weights is None:
-            class_weights = torch.ones(self.num_classes, device=outputs.device)
-
-        if mask is None:
-            mask = torch.ones_like(y, dtype=torch.bool)
-
-        # Explicitly flatten all tensors to the (N, C) and (N,) format.
-        # This creates a clear contract with the new MaskedFocalLoss function.
-        n_classes = outputs.shape[-1]
-        logits_flat = outputs.reshape(-1, n_classes)
-        targets_flat = y.reshape(-1)
-        mask_flat = mask.reshape(-1)
-
-        criterion = MaskedFocalLoss(gamma=gamma, alpha=class_weights)
-
-        return criterion(
-            logits_flat.to(self.device),
-            targets_flat.to(self.device),
-            valid_mask=mask_flat.to(self.device),
-        )
