@@ -1,7 +1,8 @@
 # Standard library imports
+import copy
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union
 
 # Third-party imports
 import matplotlib.pyplot as plt
@@ -54,6 +55,7 @@ def ensure_mostfrequent_config(
     if isinstance(config, str):
         return load_yaml_to_dataclass(config, MostFrequentConfig)
     if isinstance(config, dict):
+        config = copy.deepcopy(config)  # copy
         base = MostFrequentConfig()
         # honor optional top-level 'preset'
         preset = config.pop("preset", None)
@@ -151,16 +153,17 @@ class ImputeMostFrequent:
         self.rng = np.random.default_rng(cfg.io.seed)
         self.encoder = GenotypeEncoder(self.genotype_data)
 
-        # Work in 0/1/2 with -1 for missing (parity with DL modules)
-        X012 = self.encoder.genotypes_012.astype(np.int16, copy=False)
+        self.missing_internal = -1
 
-        # 2. In-place replacement of NaNs
-        # NOTE: X012 will be consumed to make ground_truth_
-        np.nan_to_num(X012, nan=-1.0, copy=False)
+        # include common missing value aliases
+        self.missing_aliases = {int(cfg.algo.missing), -9, -1}
 
-        X012[X012 < 0] = -1
-        self.X012_ = X012
-        self.num_features_ = X012.shape[1]
+        X = np.asarray(self.encoder.genotypes_012)
+        Xf = X.astype(np.float32, copy=False)
+        Xf = np.where(np.isnan(Xf), -1.0, Xf)
+        Xf[Xf < 0] = -1.0
+        self.X012_ = Xf.astype(np.int16, copy=False)
+        self.num_features_ = self.X012_.shape[1]
 
         # Simulated-missing controls (mirror VAE/AE/NLPCA semantics where possible)
         sim_cfg = getattr(self.cfg, "sim", None)
@@ -230,8 +233,8 @@ class ImputeMostFrequent:
         self.X_imputed012_: Optional[np.ndarray] = None
 
         # Ploidy heuristic for 0/1/2 scoring parity
-        uniq = np.unique(self.X012_[self.X012_ != -1])
-        self.is_haploid_ = np.array_equal(np.sort(uniq), np.array([0, 2]))
+        self.ploidy = self.cfg.io.ploidy
+        self.is_haploid_ = self.ploidy == 1
 
         # Plotting (use config, not genotype_data fields)
         self.plot_format = cfg.plot.fmt
@@ -243,6 +246,11 @@ class ImputeMostFrequent:
         self.model_name = (
             "ImputeMostFrequentPerPop" if self.by_populations else "ImputeMostFrequent"
         )
+
+        # Output dirs
+        dirs = ["models", "plots", "metrics", "optimize", "parameters"]
+        self._create_model_directories(self.prefix, dirs)
+
         self.plotter_ = Plotting(
             self.model_name,
             prefix=self.prefix,
@@ -257,10 +265,6 @@ class ImputeMostFrequent:
             multiqc=True,
             multiqc_section=f"PG-SUI: {self.model_name} Model Imputation",
         )
-
-        # Output dirs
-        dirs = ["models", "plots", "metrics", "optimize", "parameters"]
-        self._create_model_directories(self.prefix, dirs)
 
         if self.tree_parser is None and self.sim_strategy.startswith("nonrandom"):
             msg = "tree_parser is required for nonrandom and nonrandom_weighted simulated missing strategies."
@@ -285,9 +289,17 @@ class ImputeMostFrequent:
 
         # Modes from TRAIN rows only (per-locus)
         df_train = df_all.iloc[self.train_idx_].copy()
-        self.global_modes_ = {
-            col: self._series_mode(df_train[col]) for col in df_train.columns
-        }
+
+        modes = {}
+        for col in df_train.columns:
+            s = df_train[col].dropna()
+            if s.empty:
+                modes[col] = self.default
+            else:
+                vc = s.value_counts()
+                # deterministic tie-break: smallest genotype among ties
+                modes[col] = int(vc.index[vc.to_numpy() == vc.to_numpy().max()].min())
+        self.global_modes_ = modes
 
         self.group_modes_.clear()
         if self.by_populations:
@@ -311,6 +323,9 @@ class ImputeMostFrequent:
         n_samples, n_loci = obs_mask.shape
 
         if self.simulate_missing:
+            X_for_sim = self.ground_truth012_.astype(np.float32, copy=True)
+            X_for_sim[X_for_sim < 0] = -9.0
+
             # Use the same transformer as VAE
             tr = SimMissingTransformer(
                 genotype_data=self.genotype_data,
@@ -322,11 +337,7 @@ class ImputeMostFrequent:
                 verbose=self.verbose,
                 **self.sim_kwargs,
             )
-            # Fit on 0/1/2 with -1 for missing, like VAE
-            X_for_sim = self.ground_truth012_.astype(float, copy=True)
-            X_for_sim[X_for_sim < 0] = np.nan
             tr.fit(X_for_sim)
-
             sim_mask_global = tr.sim_missing_mask_.astype(bool)
 
             # Don't simulate on already-missing cells
@@ -565,6 +576,15 @@ class ImputeMostFrequent:
 
         y_true_10 = y_true_int[self.sim_mask_]
         y_pred_10 = y_pred_int[self.sim_mask_]
+
+        m = (y_true_10 >= 0) & (y_pred_10 >= 0)
+        y_true_10, y_pred_10 = y_true_10[m], y_pred_10[m]
+        if y_true_10.size == 0:
+            self.logger.warning(
+                "No valid IUPAC test cells; skipping 10-class evaluation."
+            )
+            return
+
         self._evaluate_iupac10_and_plot(y_true_10, y_pred_10)
 
     def _evaluate_012_and_plot(self, y_true: np.ndarray, y_pred: np.ndarray) -> None:
@@ -601,7 +621,7 @@ class ImputeMostFrequent:
         }
         self.metrics_.update({f"zygosity_{k}": v for k, v in metrics.items()})
 
-        report_names = ["REF", "HET"] if self.is_haploid_ else ["REF", "HET", "ALT"]
+        report_names = ["REF", "ALT"] if self.is_haploid_ else ["REF", "HET", "ALT"]
 
         report: dict | str = classification_report(
             y_true,
@@ -780,14 +800,14 @@ class ImputeMostFrequent:
             buckets = []
             for pop in np.unique(self.pops):
                 rows = np.where(self.pops == pop)[0]
-                k = int(round(self.test_size * rows.size))
+                k = max(1, int(round(self.test_size * rows.size)))
                 if k > 0:
                     buckets.append(self.rng.choice(rows, size=k, replace=False))
             test_idx = (
                 np.sort(np.concatenate(buckets)) if buckets else np.array([], dtype=int)
             )
         else:
-            k = int(round(self.test_size * n))
+            k = max(1, int(round(self.test_size * n)))
             test_idx = (
                 self.rng.choice(n, size=k, replace=False)
                 if k > 0
@@ -797,13 +817,13 @@ class ImputeMostFrequent:
         train_idx = np.setdiff1d(all_idx, test_idx, assume_unique=False)
         return train_idx, test_idx
 
-    def _save_report(self, report_dict: Dict[str, float], suffix: str) -> None:
+    def _save_report(self, report_dict: Dict[str, Any], suffix: str) -> None:
         """Save classification report dictionary as a JSON file.
 
         This method saves the provided classification report dictionary to a JSON file in the metrics directory, appending the specified suffix to the filename.
 
         Args:
-            report_dict (Dict[str, float]): The classification report dictionary to save.
+            report_dict (Dict[str, Any]): The classification report dictionary to save.
             suffix (str): Suffix to append to the filename (e.g., 'zygosity' or 'iupac').
 
         Raises:
