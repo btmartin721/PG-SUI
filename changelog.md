@@ -4,6 +4,33 @@ An overview of changes to **PG-SUI** by release. This mirrors the Sphinx/RST cha
 
 ---
 
+## 1.6.21 - 2025-12-13
+
+### Changes - v1.6.21
+
+- Standardized genotype classification across all imputers:
+  - **Diploid:** 3-class categorical output (**REF, HET, ALT**).
+  - **Haploid:** 2-class categorical output (**REF, ALT**) with explicit **012→01** collapse (treat `2` as `1`).
+- Unified model “head” semantics with scoring semantics (output channel count now matches the evaluation class count).
+
+### Bug Fixes - v1.6.21
+
+- Corrected training history / loss tracking so history objects are consistently **`dict[str, list[float]]`** (e.g., `{"Train":[...], "Val":[...]}`), preventing nested dict artifacts and restoring plot compatibility.
+- Repaired validation loss logging and shape alignment:
+  - Validation loss is computed against the **aligned ground-truth matrix** (not model inputs / undefined variables).
+  - Masking rules now consistently exclude true missing (`-1`) and honor optional evaluation masks (e.g., simulated-missing test masks).
+- Hardened logits reshaping and dimensional checks so decoder outputs reliably normalize to **(B, L, K)** and error clearly on mismatch (prevents silent mis-scoring when tuning subsets change locus counts).
+
+### Improvements - v1.6.21
+
+- Added/standardized numeric stability guards (finite checks, gradient checks, clipping) across training and validation loops to reduce NaN/Inf cascades during optimization.
+- Ensured class-weight handling is device-consistent and reused across training/validation without dtype/device drift.
+- Made history and evaluation outputs more deterministic and easier to serialize/debug (no `defaultdict` leakage; explicit casting/conversion where needed).
+
+## v1.6.14 to v1.6.20
+
+Ignore these releases. Was experimenting with some new algorithms that didn't work out. Should have just had them on a separate branch.
+
 ## 1.6.14-alpha - 2025-12-05
 
 ### Enhancements - v1.6.14-alpha
