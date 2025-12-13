@@ -185,7 +185,8 @@ class ImputeRandomForest(BaseImputer):
         X_int = self.pgenc.genotypes_012
         self.X012_ = X_int.astype(float)
         self.X012_[self.X012_ < 0] = np.nan  # Ensure missing are NaN
-        self.is_haploid_ = np.count_nonzero(self.X012_ == 1) == 0
+        self.ploidy = self.cfg.io.ploidy
+        self.is_haploid = self.ploidy == 1
         self.num_classes_ = 2 if self.is_haploid_ else 3
         self.n_samples_, self.n_features_ = X_int.shape
 
