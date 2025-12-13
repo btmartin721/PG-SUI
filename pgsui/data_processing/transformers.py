@@ -209,7 +209,7 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
 
     Attributes:
         original_missing_mask_ (numpy.ndarray): Array with boolean mask for original missing locations.
-        simulated_missing_mask_ (numpy.ndarray): Array with boolean mask for simulated missing locations, excluding the original ones.
+        sim_missing_mask_ (numpy.ndarray): Array with boolean mask for simulated missing locations, excluding the original ones.
         all_missing_mask_ (numpy.ndarray): Array with boolean mask for all missing locations, including both simulated and original.
     """
 
@@ -225,8 +225,24 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
         verbose=0,
         tol=None,
         max_tries=None,
+        seed: Optional[int] = None,
         logger: logging.Logger | None = None,
     ) -> None:
+        """Initialize the SimMissingTransformer.
+
+        Args:
+            genotype_data (GenotypeData object): GenotypeData instance.
+            tree_parser (TreeParser | None): TreeParser instance with a loaded tree. Required for "nonrandom" and "nonrandom_weighted" strategies.
+            prop_missing (float, optional): Proportion of missing data desired in output. Must be in the interval [0, 1]. Defaults to 0.1
+            strategy (Literal["nonrandom", "nonrandom_weighted", "random_weighted", "random_weighted_inv", "random"]): Strategy for simulating missing data. "random": Uniformly masks genotypes at random among eligible entries until the target missing proportion is reached. "random_weighted": Masks genotypes at random with probabilities proportional to their observed genotype frequencies in each column (more common genotypes are more likely to be masked). "random_weighted_inv": Masks genotypes at random with probabilities inversely proportional to their observed genotype frequencies in each column (rarer genotypes are more likely to be masked). "nonrandom": Uses the supplied genotype tree to place missing data on clades that are sampled uniformly from internal and/or tip nodes, producing phylogenetically clustered missingness. "nonrandom_weighted": As in "nonrandom", but clades are sampled with probabilities proportional to their branch lengths, concentrating missingness on longer branches (e.g., mimicking locus dropout tied to evolutionary divergence). Defaults to "random".
+            missing_val (int, optional): Value that represents missing data. Defaults to -9.
+            mask_missing (bool, optional): True if you want to skip original missing values when simulating new missing data, False otherwise. Defaults to True.
+            verbose (bool, optional): Verbosity level. Defaults to 0.
+            tol (float): Tolerance to reach proportion specified in self.prop_missing. Defaults to 1/num_snps*num_inds
+            max_tries (int): Maximum number of tries to reach targeted missing data proportion within specified tol. If None, num_inds will be used. Defaults to None.
+            seed (int | None): RNG seed.
+            logger (logging.Logger | None): Logger for messages.
+        """
         self.genotype_data = genotype_data
         self.tree_parser = tree_parser
         self.prop_missing = prop_missing
@@ -236,6 +252,10 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
         self.verbose = verbose
         self.tol = tol
         self.max_tries = max_tries
+        self.seed = seed
+        self.rng = (
+            np.random.default_rng(seed) if seed is not None else np.random.default_rng()
+        )
         self.logger = logger or logging.getLogger(__name__)
 
     def fit(self, X: np.ndarray, y=None) -> "SimMissingTransformer":
@@ -267,7 +287,7 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
             self.mask_ = np.zeros_like(X, dtype=bool)
 
             # sample only over present sites
-            draws = np.random.random(X.shape)
+            draws = self.rng.random(X.shape)
             self.mask_[present] = draws[present] < self.prop_missing
 
             if self.mask_missing:
@@ -301,7 +321,6 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
                 self.logger.error(msg)
                 raise TypeError(msg)
 
-            rng = np.random.default_rng()
             skip_root = True
             weighted = self.strategy == "nonrandom_weighted"
 
@@ -365,7 +384,7 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
                         tips_only=False,
                         skip_root=skip_root,
                         weighted=weighted,
-                        rng=rng,
+                        rng=self.rng,
                     )
                 except ValueError:
                     # no eligible nodes or no tips intersect samples; try again
@@ -380,7 +399,7 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
                 cols_left = np.flatnonzero(col_quota > 0)
                 if cols_left.size == 0:
                     cols_left = np.arange(mask.shape[1])
-                j = int(rng.choice(cols_left))
+                j = int(self.rng.choice(cols_left))
 
                 # only edit eligible cells in this column
                 eligible_rows = np.fromiter(
@@ -397,7 +416,7 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
                     col_after = mask[present[:, j], j]
                     if col_after.all():
                         idx_present = np.flatnonzero(present[:, j])
-                        k = int(rng.choice(idx_present))
+                        k = int(self.rng.choice(idx_present))
                         mask[k, j] = False
 
                     new_placed = int(mask.sum())
@@ -415,7 +434,7 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
                     if col_idxs.size == 0:
                         continue
                     need = min(col_idxs.size, max(1, placed - target))
-                    to_clear = rng.choice(col_idxs, size=need, replace=False)
+                    to_clear = self.rng.choice(col_idxs, size=need, replace=False)
                     mask[to_clear, j] = False
 
                     new_placed = int(mask.sum())
@@ -501,7 +520,6 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
             self.logger.error(msg)
             raise ValueError(msg)
 
-        rng = np.random.default_rng() if rng is None else rng
         eps = 1e-12
 
         def _tf(arr: np.ndarray) -> np.ndarray:
@@ -538,9 +556,12 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
                 probs[present & (col == c)] = pw
 
             if target_rate is not None:
-                probs *= float(target_rate)  # scale global intensity
+                mean_p = probs[present].mean()
+                if mean_p > 0:
+                    probs *= float(target_rate) / mean_p
+            probs = np.clip(probs, 0.0, 1.0)
 
-            draws = rng.random(n_samples)
+            draws = self.rng.random(n_samples)
             out_mask[:, j] = draws < probs
             out_mask[~present, j] = False  # never alter already-missing
 
@@ -548,7 +569,7 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
             col_after = out_mask[present, j]
             if col_after.sum() == col_after.size:
                 # clear a random observed index
-                k = rng.integers(0, col_after.size)
+                k = self.rng.integers(0, col_after.size)
                 out_mask[np.flatnonzero(present)[k], j] = False
 
         return out_mask
@@ -582,8 +603,6 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
             msg = "tips_only and internal_only cannot both be True"
             self.logger.error(msg)
             raise ValueError(msg)
-
-        rng = np.random.default_rng() if rng is None else rng
 
         node_dict: dict[int | object, float] = {}
 
@@ -633,8 +652,8 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
         def _choose_key() -> object:
             if weighted and weights.sum() > 0.0:
                 p = weights / weights.sum()
-                return rng.choice(keys, p=p)
-            return rng.choice(keys)
+                return self.rng.choice(keys, p=p)
+            return self.rng.choice(keys)
 
         tree = self.tree_parser.tree
         last_error: Optional[Exception] = None
@@ -698,17 +717,22 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
             if col.size and col.all():
                 # clear one random observed index
                 idxs = np.flatnonzero(obs)
-                k = np.random.randint(0, idxs.size)
+                k = self.rng.integers(0, idxs.size)
                 self.mask_[idxs[k], j] = False
 
     def _mask_snps(self, X):
         """Mask positions in SimGenotypeData.snps and SimGenotypeData.onehot"""
-        if len(X.shape) == 3:
+        if X.ndim == 3:
             # One-hot encoded.
             mask_val = [0.0, 0.0, 0.0, 0.0]
-        elif len(X.shape) == 2:
+        elif X.ndim == 2:
             # 012-encoded.
-            mask_val = -9
+            mask_val = (
+                float(self.missing_val)
+                if np.isnan(self.missing_val)
+                else self.missing_val
+            )
+
         else:
             raise ValueError(f"Invalid shape of input X: {X.shape}")
 
