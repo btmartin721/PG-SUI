@@ -1,4 +1,5 @@
 # Standard library
+import copy
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union
@@ -58,6 +59,7 @@ def ensure_refallele_config(
     if isinstance(config, str):
         return load_yaml_to_dataclass(config, RefAlleleConfig)
     if isinstance(config, dict):
+        config = copy.deepcopy(config)  # copy
         base = RefAlleleConfig()
         # honor optional top-level 'preset'
         preset = config.pop("preset", None)
@@ -153,7 +155,7 @@ class ImputeRefAllele:
         self.plots_dir: Path
         self.metrics_dir: Path
         self.parameters_dir: Path
-        self.model_dir: Path
+        self.models_dir: Path
         self.optimize_dir: Path
 
         # Logger
@@ -199,8 +201,8 @@ class ImputeRefAllele:
         self.metrics_: Dict[str, int | float] = {}
 
         # Ploidy heuristic for 0/1/2 scoring parity
-        uniq = np.unique(self.X012_[self.X012_ != -1])
-        self.is_haploid_ = np.array_equal(np.sort(uniq), np.array([0, 2]))
+        self.ploidy = self.cfg.io.ploidy
+        self.is_haploid_ = self.ploidy == 1
 
         # Plotting (use config)
         self.plot_format = cfg.plot.fmt
@@ -256,6 +258,9 @@ class ImputeRefAllele:
 
         # Decide how to build the sim mask: legacy vs simulated-missing
         if getattr(self, "simulate_missing", False):
+            X_for_sim = self.ground_truth012_.astype(np.float32, copy=True)
+            X_for_sim[X_for_sim < 0] = -9.0
+
             # Simulate missing on the full matrix; we only use the mask.
             tr = SimMissingTransformer(
                 genotype_data=self.genotype_data,
@@ -267,7 +272,7 @@ class ImputeRefAllele:
                 verbose=self.verbose,
                 **(self.sim_kwargs or {}),
             )
-            tr.fit(self.ground_truth012_.copy())
+            tr.fit(X_for_sim)
             sim_mask_global = tr.sim_missing_mask_.astype(bool)
 
             # Only consider cells that were originally observed
@@ -418,6 +423,15 @@ class ImputeRefAllele:
         )
         y_true_10 = y_true_int[self.sim_mask_]
         y_pred_10 = y_pred_int[self.sim_mask_]
+
+        m = (y_true_10 >= 0) & (y_pred_10 >= 0)
+        y_true_10, y_pred_10 = y_true_10[m], y_pred_10[m]
+        if y_true_10.size == 0:
+            self.logger.warning(
+                "No valid IUPAC test cells; skipping 10-class evaluation."
+            )
+            return
+
         self._evaluate_iupac10_and_plot(y_true_10, y_pred_10)
 
     def _evaluate_012_and_plot(self, y_true: np.ndarray, y_pred: np.ndarray) -> None:
@@ -443,13 +457,13 @@ class ImputeRefAllele:
             "n_masked_test": int(y_true.size),
             "accuracy": accuracy_score(y_true, y_pred),
             "f1": f1_score(
-                y_true, y_pred, average="weighted", labels=labels, zero_division=0
+                y_true, y_pred, average="macro", labels=labels, zero_division=0
             ),
             "precision": precision_score(
-                y_true, y_pred, average="weighted", labels=labels, zero_division=0
+                y_true, y_pred, average="macro", labels=labels, zero_division=0
             ),
             "recall": recall_score(
-                y_true, y_pred, average="weighted", labels=labels, zero_division=0
+                y_true, y_pred, average="macro", labels=labels, zero_division=0
             ),
         }
         self.metrics_.update({f"zygosity_{k}": v for k, v in metrics.items()})
@@ -537,13 +551,13 @@ class ImputeRefAllele:
         metrics = {
             "accuracy": accuracy_score(y_true, y_pred),
             "f1": f1_score(
-                y_true, y_pred, average="weighted", labels=labels_idx, zero_division=0
+                y_true, y_pred, average="macro", labels=labels_idx, zero_division=0
             ),
             "precision": precision_score(
-                y_true, y_pred, average="weighted", labels=labels_idx, zero_division=0
+                y_true, y_pred, average="macro", labels=labels_idx, zero_division=0
             ),
             "recall": recall_score(
-                y_true, y_pred, average="weighted", labels=labels_idx, zero_division=0
+                y_true, y_pred, average="macro", labels=labels_idx, zero_division=0
             ),
         }
         self.metrics_.update({f"iupac_{k}": v for k, v in metrics.items()})
