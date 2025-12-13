@@ -5,7 +5,6 @@ import torch
 import torch.nn as nn
 from snpio.utils.logging import LoggerManager
 
-from pgsui.impute.unsupervised.loss_functions import MaskedFocalLoss
 from pgsui.utils.logging_utils import configure_logger
 
 
@@ -128,17 +127,21 @@ class AutoencoderModel(nn.Module):
 
     **Model Architecture and Objective:**
 
-    The autoencoder consists of two parts: an encoder, $f_{\theta}$, and a decoder, $g_{\phi}$.
+    The autoencoder consists of two parts: an encoder, $f_{\\theta}$, and a decoder, $g_{\\phi}$.
         1.  The **encoder** maps the input data $x$ to a latent representation $z$:
             $$
             z = f_{\theta}(x)
             $$
-        2.  The **decoder** reconstructs the data $\hat{x}$ from the latent representation:
+        2.  The **decoder** reconstructs the data $\\hat{x}$ from the latent representation:
             $$
-            \hat{x} = g_{\phi}(z)
+            \\hat{x} = g_{\\phi}(z)
             $$
 
-    The model is trained by minimizing a reconstruction loss, $L(x, \hat{x})$, which measures the dissimilarity between the original input and the reconstructed output. This implementation uses a `MaskedFocalLoss` to handle missing values and class imbalance effectively.
+    Note:
+        Backslashes in LaTeX-like expressions are escaped (e.g., ``\\theta``) to avoid Python
+        "invalid/unsupported escape sequence" warnings in docstrings.
+
+    The model is trained by minimizing a reconstruction loss, $L(x, \\hat{x})$, which measures the dissimilarity between the original input and the reconstructed output. This implementation uses a `SafeFocalCELoss` to handle missing values and class imbalance effectively.
     """
 
     def __init__(
@@ -221,47 +224,6 @@ class AutoencoderModel(nn.Module):
         z = self.encoder(x)
         reconstruction = self.decoder(z)
         return reconstruction
-
-    def compute_loss(
-        self,
-        reconstruction: torch.Tensor,
-        y: torch.Tensor,
-        mask: torch.Tensor | None = None,
-        class_weights: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        """Computes the reconstruction loss for the Autoencoder model.
-
-        This method calculates the reconstruction loss using a masked focal loss, which is suitable for categorical data with missing values and class imbalance.
-
-        Args:
-            reconstruction (torch.Tensor): The reconstructed output (logits) from the model's forward pass.
-            y (torch.Tensor): The target data tensor, expected to be one-hot encoded. It is converted to class indices internally for the loss calculation.
-            mask (torch.Tensor | None): A boolean mask to exclude missing values from the loss calculation.
-            class_weights (torch.Tensor | None): Weights to apply to each class in the loss to handle imbalance.
-
-        Returns:
-            torch.Tensor: The computed scalar loss value.
-        """
-        if class_weights is None:
-            class_weights = torch.ones(self.num_classes, device=y.device)
-
-        logits_flat = reconstruction.view(-1, self.num_classes)
-        targets_flat = torch.argmax(y, dim=-1).view(-1)
-
-        if mask is None:
-            mask_flat = torch.ones_like(targets_flat, dtype=torch.bool)
-        else:
-            mask_flat = mask.view(-1)
-
-        criterion = MaskedFocalLoss(alpha=class_weights, gamma=self.gamma)
-
-        reconstruction_loss = criterion(
-            logits_flat.to(self.device),
-            targets_flat.to(self.device),
-            valid_mask=mask_flat.to(self.device),
-        )
-
-        return reconstruction_loss
 
     def _resolve_activation(
         self, activation: Literal["relu", "elu", "leaky_relu", "selu"]
