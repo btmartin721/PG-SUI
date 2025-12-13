@@ -5,17 +5,13 @@ import torch
 import torch.nn as nn
 from snpio.utils.logging import LoggerManager
 
-from pgsui.impute.unsupervised.loss_functions import MaskedFocalLoss
 from pgsui.utils.logging_utils import configure_logger
 
 
 class NLPCAModel(nn.Module):
     r"""A non-linear Principal Component Analysis (NLPCA) decoder for genotypes.
 
-    This module maps a low-dimensional latent vector to logits over genotype states
-    (two classes for haploids or three for diploids) at every locus. It is a fully
-    connected network with optional batch normalization and dropout layers and is
-    used as the decoder inside the NLPCA imputer.
+    This module maps a low-dimensional latent vector to logits over genotype states (two classes for haploids or three for diploids) at every locus. It is a fully connected network with optional batch normalization and dropout layers and is used as the decoder inside the NLPCA imputer.
 
     **Model Architecture**
 
@@ -43,9 +39,7 @@ class NLPCAModel(nn.Module):
 
     **Loss Function**
 
-    Training minimizes ``MaskedFocalLoss``, which extends cross-entropy with class
-    weighting, focal re-weighting, and masking so that only observed genotypes
-    contribute to the objective.
+    Training minimizes ``SafeFocalCELoss``, which extends cross-entropy with class weighting, focal re-weighting, and masking so that only observed genotypes contribute to the objective.
     """
 
     def __init__(
@@ -161,46 +155,3 @@ class NLPCAModel(nn.Module):
 
         # Reshape to (batch, features, num_classes)
         return x.view(-1, *self.reshape)
-
-    def compute_loss(
-        self,
-        y: torch.Tensor,
-        outputs: torch.Tensor,
-        mask: torch.Tensor | None = None,
-        class_weights: torch.Tensor | None = None,
-        gamma: float = 2.0,
-    ) -> torch.Tensor:
-        """Computes the masked focal loss between model outputs and ground truth.
-
-        This method calculates the loss value, handling class imbalance with weights and ignoring masked (missing) values.
-
-        Args:
-            y (torch.Tensor): Integer ground-truth genotypes of shape `(batch_size, n_features)`.
-            outputs (torch.Tensor): Logits of shape `(batch_size, n_features, num_classes)`.
-            mask (torch.Tensor | None): An optional boolean mask indicating which elements should be included in the loss calculation. Defaults to None.
-            class_weights (torch.Tensor | None): An optional tensor of weights for each class to address imbalance. Defaults to None.
-            gamma (float): The focusing parameter for the focal loss. Defaults to 2.0.
-
-        Returns:
-            torch.Tensor: The computed scalar loss value.
-        """
-        if class_weights is None:
-            class_weights = torch.ones(self.num_classes, device=outputs.device)
-
-        if mask is None:
-            mask = torch.ones_like(y, dtype=torch.bool)
-
-        # Explicitly flatten all tensors to the (N, C) and (N,) format.
-        # This creates a clear contract with the new MaskedFocalLoss function.
-        n_classes = outputs.shape[-1]
-        logits_flat = outputs.reshape(-1, n_classes)
-        targets_flat = y.reshape(-1)
-        mask_flat = mask.reshape(-1)
-
-        criterion = MaskedFocalLoss(gamma=gamma, alpha=class_weights)
-
-        return criterion(
-            logits_flat.to(self.device),
-            targets_flat.to(self.device),
-            valid_mask=mask_flat.to(self.device),
-        )
