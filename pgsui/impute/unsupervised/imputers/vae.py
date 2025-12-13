@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import copy
+from collections import defaultdict
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
 import optuna
 import torch
-import torch.nn.functional as F
 from sklearn.exceptions import NotFittedError
 from sklearn.model_selection import train_test_split
 from snpio.analysis.genotype_encoder import GenotypeEncoder
@@ -19,7 +19,7 @@ from pgsui.data_processing.containers import VAEConfig
 from pgsui.data_processing.transformers import SimMissingTransformer
 from pgsui.impute.unsupervised.base import BaseNNImputer
 from pgsui.impute.unsupervised.callbacks import EarlyStopping
-from pgsui.impute.unsupervised.loss_functions import compute_vae_loss
+from pgsui.impute.unsupervised.loss_functions import SafeFocalCELoss, compute_vae_loss
 from pgsui.impute.unsupervised.models.vae_model import VAEModel
 from pgsui.utils.logging_utils import configure_logger
 from pgsui.utils.pretty_metrics import PrettyMetrics
@@ -29,15 +29,7 @@ if TYPE_CHECKING:
     from snpio.read_input.genotype_data import GenotypeData
 
 
-def ensure_vae_config(config: Union[VAEConfig, dict, str, None]) -> VAEConfig:
-    """Normalize VAEConfig input from various sources.
-
-    Args:
-        config (Union[VAEConfig, dict, str, None]): VAEConfig, nested dict, YAML path, or None (defaults).
-
-    Returns:
-        VAEConfig: Normalized configuration dataclass.
-    """
+def ensure_vae_config(config: VAEConfig | dict | str | None) -> VAEConfig:
     if config is None:
         return VAEConfig()
     if isinstance(config, VAEConfig):
@@ -45,13 +37,14 @@ def ensure_vae_config(config: Union[VAEConfig, dict, str, None]) -> VAEConfig:
     if isinstance(config, str):
         return load_yaml_to_dataclass(config, VAEConfig)
     if isinstance(config, dict):
+        cfg_in = copy.deepcopy(config)  # avoid mutating caller
         base = VAEConfig()
-        # Respect top-level preset
-        preset = config.pop("preset", None)
+
+        preset = cfg_in.pop("preset", None)
+        if "io" in cfg_in and isinstance(cfg_in["io"], dict):
+            preset = preset or cfg_in["io"].pop("preset", None)
         if preset:
             base = VAEConfig.from_preset(preset)
-        # Flatten + apply
-        flat: Dict[str, object] = {}
 
         def _flatten(prefix: str, d: dict, out: dict) -> dict:
             for k, v in d.items():
@@ -62,8 +55,9 @@ def ensure_vae_config(config: Union[VAEConfig, dict, str, None]) -> VAEConfig:
                     out[kk] = v
             return out
 
-        flat = _flatten("", config, {})
+        flat = _flatten("", cfg_in, {})
         return apply_dot_overrides(base, flat)
+
     raise TypeError("config must be a VAEConfig, dict, YAML path, or None.")
 
 
@@ -153,7 +147,6 @@ class ImputeVAE(BaseNNImputer):
         self.verbose = self.cfg.io.verbose
         self.debug = self.cfg.io.debug
         self.rng = np.random.default_rng(self.seed)
-        self.pos_weights_: torch.Tensor | None = None
 
         # Simulated-missing controls (config defaults + ctor overrides)
         sim_cfg = getattr(self.cfg, "sim", None)
@@ -205,7 +198,7 @@ class ImputeVAE(BaseNNImputer):
         self.tune_fast = self.cfg.tune.fast
         self.tune_batch_size = self.cfg.tune.batch_size
         self.tune_epochs = self.cfg.tune.epochs
-        self.tune_eval_interval = self.cfg.tune.eval_interval
+        self.tune_eval_interval = 1
         self.tune_metric: Literal[
             "pr_macro",
             "f1",
@@ -292,27 +285,26 @@ class ImputeVAE(BaseNNImputer):
             X_for_model = self.ground_truth_.copy()
 
         # Ploidy/classes
-        self.is_haploid = bool(
-            np.all(
-                np.isin(
-                    self.genotype_data.snp_data,
-                    ["A", "C", "G", "T", "N", "-", ".", "?"],
-                )
-            )
-        )
-        self.ploidy = 1 if self.is_haploid else 2
+        self.ploidy = self.cfg.io.ploidy
+        self.is_haploid = self.ploidy == 1
+
+        # Scoring + model head are now the same: categorical K classes
         self.num_classes_ = 2 if self.is_haploid else 3
-        self.output_classes_ = 2
+        self.output_classes_ = self.num_classes_
+
         self.logger.info(
             f"Data is {'haploid' if self.is_haploid else 'diploid'}; "
-            f"using {self.num_classes_} classes for scoring and {self.output_classes_} output channels."
+            f"using {self.num_classes_} classes for scoring and model output channels."
         )
 
+        # Haploid collapse: keep only {0,1}; treat 2 as ALT(=1)
         if self.is_haploid:
             self.ground_truth_[self.ground_truth_ == 2] = 1
             X_for_model[X_for_model == 2] = 1
 
         n_samples, self.num_features_ = X_for_model.shape
+
+        self.X_model_input_ = X_for_model
 
         # Model params (decoder outputs L*K logits)
         self.model_params = {
@@ -322,6 +314,11 @@ class ImputeVAE(BaseNNImputer):
             "dropout_rate": self.dropout_rate,
             "activation": self.activation,
         }
+
+        if n_samples < 3:
+            msg = f"Not enough samples ({n_samples}) for train/val split. Increase tune_max_samples or disable tune_fast."
+            self.logger.error(msg)
+            raise ValueError(msg)
 
         # Train/Val split
         indices = np.arange(n_samples)
@@ -355,10 +352,6 @@ class ImputeVAE(BaseNNImputer):
         self.class_weights_ = self._normalize_class_weights(
             self._class_weights_from_zygosity(self.X_train_)
         )
-        if not self.is_haploid:
-            self.pos_weights_ = self._compute_pos_weights(self.X_train_)
-        else:
-            self.pos_weights_ = None
 
         # DataLoader
         train_loader = self._get_data_loader(self.X_train_)
@@ -372,7 +365,6 @@ class ImputeVAE(BaseNNImputer):
             loader=train_loader,
             lr=self.learning_rate,
             l1_penalty=self.l1_penalty,
-            return_history=True,
             class_weights=self.class_weights_,
             X_val=self.X_val_,
             params=self.best_params_,
@@ -383,6 +375,7 @@ class ImputeVAE(BaseNNImputer):
             eval_latent_steps=0,
             eval_latent_lr=0.0,
             eval_latent_weight_decay=0.0,
+            eval_mask_override=getattr(self, "sim_mask_test_", None),
         )
 
         if trained_model is None:
@@ -395,8 +388,17 @@ class ImputeVAE(BaseNNImputer):
             self.models_dir / f"final_model_{self.model_name}.pt",
         )
 
-        hist: dict = {"Train": history}
+        if history is None:
+            hist: dict[str, list[float]] = {"Train": []}
+        elif isinstance(history, dict):
+            # {"Train":[...], "Val":[...]}
+            hist = dict(history)
+        else:
+            # backwards compatibility if history is a list
+            hist = {"Train": list(history)}
+
         self.best_loss_, self.model_, self.history_ = (loss, trained_model, hist)
+
         self.is_fit_ = True
 
         # Evaluate (AE-parity reporting)
@@ -409,6 +411,7 @@ class ImputeVAE(BaseNNImputer):
             self.X_val_,
             self.model_,
             self.best_params_,
+            y_true_matrix=self.GT_test_full_,
             eval_mask_override=eval_mask,
         )
 
@@ -442,11 +445,12 @@ class ImputeVAE(BaseNNImputer):
 
         # Decode to IUPAC & optionally plot
         imputed_genotypes = self.pgenc.decode_012(imputed_array)
-        original_genotypes = self.pgenc.decode_012(X_to_impute)
 
-        plt.rcParams.update(self.plotter_.param_dict)
-        self.plotter_.plot_gt_distribution(original_genotypes, is_imputed=False)
-        self.plotter_.plot_gt_distribution(imputed_genotypes, is_imputed=True)
+        if self.show_plots:
+            original_genotypes = self.pgenc.decode_012(X_to_impute)
+            plt.rcParams.update(self.plotter_.param_dict)
+            self.plotter_.plot_gt_distribution(original_genotypes, is_imputed=False)
+            self.plotter_.plot_gt_distribution(imputed_genotypes, is_imputed=True)
 
         return imputed_genotypes
 
@@ -485,7 +489,6 @@ class ImputeVAE(BaseNNImputer):
         lr: float,
         l1_penalty: float,
         trial: optuna.Trial | None = None,
-        return_history: bool = False,
         class_weights: torch.Tensor | None = None,
         *,
         X_val: np.ndarray | None = None,
@@ -497,7 +500,8 @@ class ImputeVAE(BaseNNImputer):
         eval_latent_steps: int = 0,
         eval_latent_lr: float = 0.0,
         eval_latent_weight_decay: float = 0.0,
-    ) -> Tuple[float, torch.nn.Module | None, list | None]:
+        eval_mask_override: np.ndarray | None = None,
+    ) -> Tuple[float, torch.nn.Module | None, dict[str, list[float]]]:
         """Wrap the VAE training loop with β-anneal & Optuna pruning.
 
         This method orchestrates the training of the VAE model, including setting up the optimizer and learning rate scheduler, and executing the training loop with support for early stopping and Optuna pruning. It manages the training process, monitors performance on a validation set if provided, and returns the best model and training history.
@@ -508,7 +512,6 @@ class ImputeVAE(BaseNNImputer):
             lr (float): Learning rate.
             l1_penalty (float): L1 regularization coefficient.
             trial (optuna.Trial | None): Optuna trial for pruning.
-            return_history (bool): If True, return training history.
             class_weights (torch.Tensor | None): CE class weights on device.
             X_val (np.ndarray | None): Validation data for pruning eval.
             params (dict | None): Current hyperparameters (for logging).
@@ -519,9 +522,10 @@ class ImputeVAE(BaseNNImputer):
             eval_latent_steps (int): Latent refinement steps if needed.
             eval_latent_lr (float): Latent refinement learning rate.
             eval_latent_weight_decay (float): Latent refinement L2 penalty.
+            eval_mask_override (np.ndarray | None): Optional mask override for eval.
 
         Returns:
-            Tuple[float, torch.nn.Module | None, list | None]: Best loss, best model, and training history (if requested).
+            Tuple[float, torch.nn.Module | None, dict[str, list[float]]]: Best loss, best model, and training history (if requested).
         """
         if class_weights is None:
             msg = "Must provide class_weights."
@@ -542,7 +546,6 @@ class ImputeVAE(BaseNNImputer):
             model=model,
             l1_penalty=l1_penalty,
             trial=trial,
-            return_history=return_history,
             class_weights=class_weights,
             X_val=X_val,
             params=params,
@@ -553,11 +556,9 @@ class ImputeVAE(BaseNNImputer):
             eval_latent_steps=eval_latent_steps,
             eval_latent_lr=eval_latent_lr,
             eval_latent_weight_decay=eval_latent_weight_decay,
+            eval_mask_override=eval_mask_override,
         )
-        if return_history:
-            return best_loss, best_model, hist
-
-        return best_loss, best_model, None
+        return best_loss, best_model, hist
 
     def _execute_training_loop(
         self,
@@ -567,7 +568,6 @@ class ImputeVAE(BaseNNImputer):
         model: torch.nn.Module,
         l1_penalty: float,
         trial: optuna.Trial | None,
-        return_history: bool,
         class_weights: torch.Tensor,
         *,
         X_val: np.ndarray | None = None,
@@ -579,7 +579,9 @@ class ImputeVAE(BaseNNImputer):
         eval_latent_steps: int = 0,
         eval_latent_lr: float = 0.0,
         eval_latent_weight_decay: float = 0.0,
-    ) -> Tuple[float, torch.nn.Module, list]:
+        eval_mask_override: np.ndarray | None = None,
+        val_batch_size: int | None = None,
+    ) -> Tuple[float, torch.nn.Module, dict[str, list[float]]]:
         """Train VAE with stable focal CE + KL(β) anneal and numeric guards.
 
         This method implements the core training loop for the VAE model, incorporating a focal cross-entropy loss for reconstruction and a KL divergence term with an annealed weight (beta). It includes mechanisms for early stopping based on validation performance, learning rate scheduling, and optional pruning of unpromising trials when using Optuna for hyperparameter optimization. The method ensures numerical stability throughout the training process.
@@ -602,12 +604,13 @@ class ImputeVAE(BaseNNImputer):
             eval_latent_steps (int): Latent refinement steps if needed.
             eval_latent_lr (float): Latent refinement learning rate.
             eval_latent_weight_decay (float): Latent refinement L2 penalty.
+            eval_mask_override (np.ndarray | None): Optional mask override for eval.
 
         Returns:
             Tuple[float, torch.nn.Module, list]: Best loss, best model, and training history.
         """
         best_model = None
-        history: list[float] = []
+        history: dict[str, list[float]] = defaultdict(list)
 
         early_stopping = EarlyStopping(
             patience=self.early_stop_gen,
@@ -618,21 +621,25 @@ class ImputeVAE(BaseNNImputer):
         )
 
         # ---- scalarize schedule endpoints up front ----
-        kl = self.kl_beta_final
-        if isinstance(kl, (list, tuple)):
-            if len(kl) == 0:
-                msg = "kl_beta_final list is empty."
+        beta_src = getattr(model, "beta", self.kl_beta_final)
+        gamma_src = getattr(model, "gamma", self.gamma)
+
+        # scalarize if lists
+        if isinstance(beta_src, (list, tuple)):
+            if not beta_src:
+                msg = "beta list is empty."
                 self.logger.error(msg)
                 raise ValueError(msg)
-            kl = kl[0]
-        beta_final = float(kl)
+            beta_src = beta_src[0]
+        if isinstance(gamma_src, (list, tuple)):
+            if not gamma_src:
+                msg = "gamma list is empty."
+                self.logger.error(msg)
+                raise ValueError(msg)
+            gamma_src = gamma_src[0]
 
-        gamma_val = self.gamma
-        if isinstance(gamma_val, (list, tuple)):
-            if len(gamma_val) == 0:
-                raise ValueError("gamma list is empty.")
-            gamma_val = gamma_val[0]
-        gamma_final = float(gamma_val)
+        beta_final = float(beta_src)
+        gamma_final = float(gamma_src)
 
         gamma_warm, gamma_ramp = 50, 100
         beta_warm, beta_ramp = int(self.kl_warmup), int(self.kl_ramp)
@@ -682,58 +689,87 @@ class ImputeVAE(BaseNNImputer):
                     g["lr"] *= 0.5
                 continue
 
+            val_loss = float("inf")
+            if X_val is not None:
+                y_true_val = getattr(self, "GT_test_full_", None)
+
+                if y_true_val is None:
+                    msg = "GT_test_full_ is missing; cannot compute val_loss."
+                    self.logger.error(msg)
+                    raise ValueError(msg)
+
+                val_loss = (
+                    self._val_step(
+                        X_val=X_val,
+                        y_true_val=y_true_val,
+                        model=model,
+                        l1_penalty=l1_penalty,
+                        class_weights=class_weights,
+                        eval_mask_override=eval_mask_override,
+                        batch_size=val_batch_size,
+                    )
+                    if X_val is not None
+                    else None
+                )
+
+                if isinstance(val_loss, float) and np.isfinite(val_loss):
+                    history["Val"].append(val_loss)
+
             if scheduler is not None:
                 scheduler.step()
 
-            if return_history:
-                history.append(train_loss)
+            history["Train"].append(train_loss)
 
-            early_stopping(train_loss, model)
-            if early_stopping.early_stop:
-                self.logger.debug(f"Early stopping at epoch {epoch + 1}.")
-                break
+            if "Val" in history:
+                score_for_es = val_loss  # minimize by default
+            else:
+                score_for_es = train_loss
 
-            # Optional Optuna pruning on a validation metric
-            if (
-                trial is not None
-                and X_val is not None
-                and ((epoch + 1) % eval_interval == 0)
-            ):
+            metric_val = None
+            if X_val is not None and ((epoch + 1) % eval_interval == 0):
                 metric_key = prune_metric or getattr(self, "tune_metric", "f1")
-                mask_override = None
-                if (
-                    self.simulate_missing
-                    and getattr(self, "sim_mask_test_", None) is not None
-                    and getattr(self, "X_val_", None) is not None
-                    and X_val.shape == self.X_val_.shape
-                ):
-                    mask_override = self.sim_mask_test_
                 metric_val = self._eval_for_pruning(
                     model=model,
                     X_val=X_val,
                     params=params or getattr(self, "best_params_", {}),
                     metric=metric_key,
                     objective_mode=True,
-                    do_latent_infer=False,  # VAE uses encoder; no latent refine
+                    do_latent_infer=False,
                     latent_steps=0,
                     latent_lr=0.0,
                     latent_weight_decay=0.0,
-                    latent_seed=self.seed,  # type: ignore
+                    latent_seed=self.seed,
                     _latent_cache=None,
                     _latent_cache_key=None,
-                    eval_mask_override=mask_override,
+                    y_true_matrix=getattr(self, "_tune_GT_test", None),
+                    eval_mask_override=eval_mask_override,
                 )
-                trial.report(metric_val, step=epoch + 1)
+
+            early_stopping(score_for_es, model)
+            if early_stopping.early_stop:
+                self.logger.debug(f"Early stopping at epoch {epoch + 1}.")
+                break
+
+            # Only Optuna-specific reporting/pruning should remain gated by `trial is not None`
+            if trial is not None and metric_val is not None:
+                trial.report(float(metric_val), step=epoch + 1)
                 if (epoch + 1) >= prune_warmup_epochs and trial.should_prune():
                     raise optuna.exceptions.TrialPruned(
-                        f"Pruned at epoch {epoch + 1}: {metric_key}={metric_val:.5f}"
+                        f"Pruned at epoch {epoch + 1}: {metric_key}={metric_val:.3f}"
                     )
 
         best_loss = early_stopping.best_score
-        best_model = copy.deepcopy(early_stopping.best_model)
+        best_model = early_stopping.best_model
+
         if best_model is None:
-            best_model = copy.deepcopy(model)
-        return best_loss, best_model, history
+            best_state = {k: v.cpu() for k, v in model.state_dict().items()}
+            model.load_state_dict(best_state)
+            best_model = model
+        else:
+            best_state = {k: v.cpu() for k, v in best_model.state_dict().items()}
+            best_model.load_state_dict(best_state)
+
+        return best_loss, best_model, dict(history)
 
     def _train_step(
         self,
@@ -743,31 +779,19 @@ class ImputeVAE(BaseNNImputer):
         l1_penalty: float,
         class_weights: torch.Tensor,
     ) -> float:
-        """One epoch: inputs → VAE forward → focal CE + β·KL with guards.
-
-        This method performs a single training epoch for the VAE model. It processes batches of data, computes the reconstruction and KL divergence losses, applies L1 regularization if specified, and updates the model parameters. The method includes safeguards against non-finite values in the model outputs and gradients to ensure stable training.
-
-        Args:
-            loader (torch.utils.data.DataLoader): Training data loader.
-            optimizer (torch.optim.Optimizer): Optimizer.
-            model (torch.nn.Module): VAE model.
-            l1_penalty (float): L1 regularization coefficient.
-            class_weights (torch.Tensor): CE class weights on device.
-
-        Returns:
-            float: Average training loss for the epoch.
-        """
+        """One epoch: categorical recon (focal CE) + β·KL with guards."""
         model.train()
         running, used = 0.0, 0
         l1_params = tuple(p for p in model.parameters() if p.requires_grad)
+
         if class_weights is not None and class_weights.device != self.device:
             class_weights = class_weights.to(self.device)
 
         nF_model = int(getattr(model, "n_features", self.num_features_))
+        K = int(self.output_classes_)  # 2 or 3
 
         for _, y_batch in loader:
             optimizer.zero_grad(set_to_none=True)
-
             y_int = y_batch.to(self.device, non_blocking=True).long()
 
             if y_int.dim() != 2:
@@ -783,10 +807,8 @@ class ImputeVAE(BaseNNImputer):
                 self.logger.error(msg)
                 raise ValueError(msg)
 
-            if self.is_haploid:
-                x_in = self._one_hot_encode_012(y_int)  # (B, L, 2)
-            else:
-                x_in = self._encode_multilabel_inputs(y_int)  # (B, L, 2)
+            # Inputs: categorical one-hot (missing -> all-zeros via your helper)
+            x_in = self._one_hot_encode_012(y_int, num_classes=K)  # (B, L, K)
 
             out = model(x_in)
             if isinstance(out, (list, tuple)):
@@ -794,7 +816,20 @@ class ImputeVAE(BaseNNImputer):
             else:
                 recon_logits, mu, logvar = out["recon_logits"], out["mu"], out["logvar"]
 
-            # Upstream guard
+            # Normalize recon logits to (B, L, K)
+            if recon_logits.dim() == 2 and recon_logits.shape[1] == nF_model * K:
+                recon_logits = recon_logits.view(-1, nF_model, K)
+            elif recon_logits.dim() == 3:
+                if recon_logits.shape[1] != nF_model or recon_logits.shape[2] != K:
+                    raise ValueError(
+                        f"Unexpected recon_logits shape {tuple(recon_logits.shape)}; expected (B,{nF_model},{K})."
+                    )
+            else:
+                raise ValueError(
+                    f"Unexpected recon_logits dim={recon_logits.dim()} shape={tuple(recon_logits.shape)}"
+                )
+
+            # Numeric guards
             if (
                 not torch.isfinite(recon_logits).all()
                 or not torch.isfinite(mu).all()
@@ -806,30 +841,16 @@ class ImputeVAE(BaseNNImputer):
             beta = float(getattr(model, "beta", getattr(self, "kl_beta_final", 0.0)))
             gamma = max(0.0, min(gamma, 10.0))
 
-            if self.is_haploid:
-                loss = compute_vae_loss(
-                    recon_logits=recon_logits,
-                    targets=y_int,
-                    mu=mu,
-                    logvar=logvar,
-                    class_weights=class_weights,
-                    gamma=gamma,
-                    beta=beta,
-                )
-            else:
-                targets = self._multi_hot_targets(y_int)
-                pos_w = getattr(self, "pos_weights_", None)
-                bce = F.binary_cross_entropy_with_logits(
-                    recon_logits, targets, pos_weight=pos_w, reduction="none"
-                )
-                mask = (y_int != -1).unsqueeze(-1).float()
-                recon_loss = (bce * mask).sum() / mask.sum().clamp_min(1e-8)
-                kl = (
-                    -0.5
-                    * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
-                    / (y_int.shape[0] + 1e-8)
-                )
-                loss = recon_loss + beta * kl
+            # Single categorical loss path for both haploid/diploid
+            loss = compute_vae_loss(
+                recon_logits=recon_logits,
+                targets=y_int,
+                mu=mu,
+                logvar=logvar,
+                class_weights=class_weights,
+                gamma=gamma,
+                beta=beta,
+            )
 
             if l1_penalty > 0:
                 l1 = torch.zeros((), device=self.device)
@@ -843,7 +864,6 @@ class ImputeVAE(BaseNNImputer):
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
-            # skip update if any grad is non-finite
             bad = any(
                 p.grad is not None and not torch.isfinite(p.grad).all()
                 for p in model.parameters()
@@ -853,29 +873,181 @@ class ImputeVAE(BaseNNImputer):
                 continue
 
             optimizer.step()
-
             running += float(loss.detach().item())
             used += 1
 
         return (running / used) if used > 0 else float("inf")
 
+    def _val_step(
+        self,
+        *,
+        X_val: np.ndarray,
+        y_true_val: np.ndarray,
+        model: torch.nn.Module,
+        l1_penalty: float,
+        class_weights: torch.Tensor,
+        eval_mask_override: np.ndarray | None = None,
+        batch_size: int | None = None,
+    ) -> float:
+        """Compute validation focal CE loss without gradient updates.
+
+        Notes:
+            - This does NOT call backward() or optimizer.step().
+            - Positions not selected for scoring are set to ignore_index (-1).
+            - If a batch has no valid targets (all -1), it is skipped.
+
+        Args:
+            X_val: Validation inputs (0/1/2 with -1 for missing / masked).
+            y_true_val: Ground truth matrix aligned to X_val (0/1/2; -1 for truly missing).
+            model: Trained/active model.
+            l1_penalty: Optional L1 coeff. (If you want "pure" val loss, pass 0.0.)
+            class_weights: Class weights (C,).
+            eval_mask_override: Optional boolean mask (N,L) selecting positions to score.
+            batch_size: Optional batch size override.
+
+        Returns:
+            Mean validation loss (float). Returns +inf if no valid targets exist.
+        """
+        if X_val.shape != y_true_val.shape:
+            raise ValueError(
+                f"X_val and y_true_val must have identical shape; got {X_val.shape} vs {y_true_val.shape}."
+            )
+
+        model.eval()
+        running = 0.0
+        num_batches = 0
+
+        if class_weights.device != self.device:
+            class_weights = class_weights.to(self.device)
+
+        nF_x = int(X_val.shape[1])
+        nF_model = int(getattr(model, "n_features", nF_x))
+        if nF_model != nF_x:
+            raise ValueError(f"Model expects {nF_model} loci but X_val has {nF_x}.")
+
+        nC_model = int(getattr(model, "num_classes", self.output_classes_))
+
+        # Build scoring mask
+        if eval_mask_override is not None:
+            if eval_mask_override.shape != X_val.shape:
+                raise ValueError(
+                    f"eval_mask_override shape {eval_mask_override.shape} does not match X_val shape {X_val.shape}."
+                )
+            mask = eval_mask_override.astype(bool, copy=False) & (y_true_val != -1)
+        else:
+            mask = (X_val != -1) & (y_true_val != -1)
+
+        # Targets: ignore everything not in mask
+        y_targets = y_true_val.copy()
+        if self.is_haploid:
+            y_targets[y_targets == 2] = 1
+        y_targets = np.where(mask, y_targets, -1).astype(np.int64, copy=False)
+
+        # Local val loader (do NOT reuse training loader which shuffles)
+        N = int(X_val.shape[0])
+        idx_tensor = torch.arange(N, dtype=torch.long)
+        x_tensor = torch.from_numpy(X_val).long()
+        dataset = torch.utils.data.TensorDataset(idx_tensor, x_tensor)
+        pin_memory = self.device.type == "cuda"
+        bs = int(batch_size or self.batch_size)
+        val_loader = torch.utils.data.DataLoader(
+            dataset,
+            batch_size=bs,
+            shuffle=False,
+            pin_memory=pin_memory,
+        )
+
+        # Keep y_targets as a CPU tensor; gather by idx_batch then move to device
+        y_targets_cpu = torch.from_numpy(y_targets).long()
+
+        gamma = float(getattr(model, "gamma", getattr(self, "gamma", 0.0)))
+        gamma = float(np.clip(gamma, 0.0, 10.0))
+
+        ce_criterion = SafeFocalCELoss(
+            gamma=gamma,
+            weight=class_weights,
+            ignore_index=-1,
+        )
+
+        l1_params = tuple(p for p in model.parameters() if p.requires_grad)
+
+        with torch.inference_mode():
+            for idx_batch, x_batch in val_loader:
+                x_batch = x_batch.to(self.device, non_blocking=True).long()
+                y_batch = y_targets_cpu.index_select(0, idx_batch).to(
+                    self.device, non_blocking=True
+                )
+
+                if x_batch.dim() != 2 or y_batch.dim() != 2:
+                    raise ValueError(
+                        f"Expected 2D (B,L) tensors; got x={tuple(x_batch.shape)}, y={tuple(y_batch.shape)}."
+                    )
+
+                x_in = self._one_hot_encode_012(
+                    x_batch, num_classes=nC_model
+                )  # (B,L,C)
+                raw = model(x_in)
+
+                logits_flat = raw if isinstance(raw, torch.Tensor) else raw[0]
+                expected = (x_batch.shape[0], nF_model * nC_model)
+
+                if logits_flat.dim() != 2 or tuple(logits_flat.shape) != expected:
+                    try:
+                        logits_flat = logits_flat.view(-1, nF_model * nC_model)
+                    except Exception as e:
+                        msg = f"Model output logits expected shape {expected}, got {tuple(logits_flat.shape)}. Ensure tuning subsets and masks use matching loci columns."
+                        self.logger.error(msg)
+                        raise ValueError(msg) from e
+
+                logits = logits_flat.view(-1, nF_model, nC_model).reshape(-1, nC_model)
+                targets_flat = y_batch.view(-1)
+
+                if not torch.isfinite(logits).all():
+                    continue
+
+                # Skip if there are no valid targets in this batch
+                valid = targets_flat != -1
+                if not bool(valid.any()):
+                    continue
+
+                logits_v = logits[valid]
+                targets_v = targets_flat[valid]
+
+                loss = ce_criterion(logits_v, targets_v)
+
+                # Optional: include L1 in the monitored objective
+                if l1_penalty > 0:
+                    l1 = torch.zeros((), device=self.device)
+                    for p in l1_params:
+                        l1 = l1 + p.abs().sum()
+                    loss = loss + l1_penalty * l1
+
+                if not torch.isfinite(loss):
+                    continue
+
+                running += float(loss.item())
+                num_batches += 1
+
+        return float("inf") if num_batches == 0 else running / num_batches
+
     def _predict(
         self,
         model: torch.nn.Module,
-        X: np.ndarray | torch.Tensor,
+        X: np.ndarray,
         return_proba: bool = False,
-    ) -> Tuple[np.ndarray, np.ndarray] | np.ndarray:
-        """Predict 0/1/2 labels (and probabilities) from masked inputs.
+    ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
+        """Predict categorical genotype labels from the VAE decoder logits.
 
-        This method uses the trained VAE model to predict genotype labels for the provided input data. It processes the input data, performs a forward pass through the model, and computes the predicted labels and probabilities. The method can return either just the predicted labels or both labels and probabilities based on the `return_proba` flag.
+        Diploid: K=3 -> {0=REF, 1=HET, 2=ALT}
+        Haploid: K=2 -> {0=REF, 1=ALT}
 
         Args:
-            model (torch.nn.Module): Trained model.
-            X (np.ndarray | torch.Tensor): 0/1/2 matrix with -1 for missing.
-            return_proba (bool): If True, also return probabilities.
+            model: Trained VAE model.
+            X: 0/1/2 matrix with -1 for missing.
+            return_proba: If True, also return probabilities.
 
         Returns:
-            Tuple[np.ndarray, np.ndarray] | np.ndarray: Predicted labels, and probabilities if requested.
+            labels (N,L) and optionally probas (N,L,K).
         """
         if model is None:
             msg = "Model is not trained. Call fit() before predict()."
@@ -884,31 +1056,42 @@ class ImputeVAE(BaseNNImputer):
 
         model.eval()
         with torch.no_grad():
-            X_tensor = torch.from_numpy(X) if isinstance(X, np.ndarray) else X
-            X_tensor = X_tensor.to(self.device).long()
-            if self.is_haploid:
-                x_ohe = self._one_hot_encode_012(X_tensor)
-                outputs = model(x_ohe)
-                logits = outputs[0].view(-1, self.num_features_, self.output_classes_)
-                probas = torch.softmax(logits, dim=-1)
-                labels = torch.argmax(probas, dim=-1)
+            X_tensor = torch.from_numpy(X).to(self.device).long()
+
+            if X_tensor.dim() != 2:
+                raise ValueError(f"X must be 2D (N,L); got {tuple(X_tensor.shape)}")
+
+            nF = int(X_tensor.shape[1])
+            K = int(self.output_classes_)  # 2 or 3
+
+            # (N, L, K)
+            x_in = self._one_hot_encode_012(X_tensor, num_classes=K)
+
+            out = model(x_in)
+            if isinstance(out, (list, tuple)):
+                recon_logits = out[0]
             else:
-                x_in = self._encode_multilabel_inputs(X_tensor)
-                outputs = model(x_in)
-                logits = outputs[0].view(-1, self.num_features_, self.output_classes_)
-                probas2 = torch.sigmoid(logits)
-                p_ref = probas2[..., 0]
-                p_alt = probas2[..., 1]
-                p_het = p_ref * p_alt
-                p_ref_only = p_ref * (1 - p_alt)
-                p_alt_only = p_alt * (1 - p_ref)
-                probas = torch.stack([p_ref_only, p_het, p_alt_only], dim=-1)
-                probas = probas / probas.sum(dim=-1, keepdim=True).clamp_min(1e-8)
-                labels = torch.argmax(probas, dim=-1)
+                recon_logits = out["recon_logits"]
+
+            # Normalize recon_logits to (N, L, K)
+            if recon_logits.dim() == 2 and recon_logits.shape[1] == nF * K:
+                logits = recon_logits.view(-1, nF, K)
+            elif recon_logits.dim() == 3:
+                logits = recon_logits
+                if logits.shape[1] != nF or logits.shape[2] != K:
+                    raise ValueError(
+                        f"Unexpected recon_logits shape {tuple(logits.shape)}; expected (N,{nF},{K})."
+                    )
+            else:
+                raise ValueError(
+                    f"Unexpected recon_logits dim={recon_logits.dim()} shape={tuple(recon_logits.shape)}"
+                )
+
+            probas = torch.softmax(logits, dim=-1)  # (N,L,K)
+            labels = torch.argmax(probas, dim=-1)  # (N,L)
 
         if return_proba:
             return labels.cpu().numpy(), probas.cpu().numpy()
-
         return labels.cpu().numpy()
 
     def _evaluate_model(
@@ -919,6 +1102,7 @@ class ImputeVAE(BaseNNImputer):
         objective_mode: bool = False,
         latent_vectors_val: np.ndarray | None = None,
         *,
+        y_true_matrix: np.ndarray | None = None,
         eval_mask_override: np.ndarray | None = None,
     ) -> Dict[str, float]:
         """Evaluate on 0/1/2; then IUPAC decoding and 10-base integer reports.
@@ -931,6 +1115,7 @@ class ImputeVAE(BaseNNImputer):
             params (dict): Current hyperparameters (for logging).
             objective_mode (bool): If True, minimize logging for Optuna.
             latent_vectors_val (np.ndarray | None): Not used by VAE.
+            y_true_matrix (np.ndarray | None): Optional GT 0/1/2 matrix for eval.
             eval_mask_override (np.ndarray | None): Optional mask to override default eval mask.
 
         Returns:
@@ -938,6 +1123,7 @@ class ImputeVAE(BaseNNImputer):
 
         Raises:
             NotFittedError: If called before fit().
+            ValueError: If GT and X_val shapes do not match.
         """
         pred_labels, pred_probas = self._predict(
             model=model, X=X_val, return_proba=True
@@ -945,49 +1131,50 @@ class ImputeVAE(BaseNNImputer):
 
         finite_mask = np.all(np.isfinite(pred_probas), axis=-1)  # (N, L)
 
-        # FIX 1: Match rows (shape[0]) only to allow feature subsets (tune_fast)
-        if (
-            hasattr(self, "X_val_")
-            and getattr(self, "X_val_", None) is not None
-            and X_val.shape[0] == self.X_val_.shape[0]
-        ):
-            GT_ref = getattr(self, "GT_test_full_", self.ground_truth_)
-        elif (
-            hasattr(self, "X_train_")
-            and getattr(self, "X_train_", None) is not None
-            and X_val.shape[0] == self.X_train_.shape[0]
-        ):
-            GT_ref = getattr(self, "GT_train_full_", self.ground_truth_)
-        else:
-            GT_ref = self.ground_truth_
+        GT_ref = y_true_matrix
 
-        # FIX 2: Handle Feature Mismatch
-        # If GT has more columns than X_val, slice it to match.
-        if GT_ref.shape[1] > X_val.shape[1]:
-            GT_ref = GT_ref[:, : X_val.shape[1]]
+        # If not provided,
+        # select from known aligned stores by exact shape match.
+        if GT_ref is None:
+            if (
+                getattr(self, "_tune_ready", False)
+                and getattr(self, "_tune_GT_test", None) is not None
+            ):
+                if X_val.shape == self._tune_GT_test.shape:
+                    GT_ref = self._tune_GT_test
+            if (
+                GT_ref is None
+                and getattr(self, "GT_test_full_", None) is not None
+                and X_val.shape == self.GT_test_full_.shape
+            ):
+                GT_ref = self.GT_test_full_
+            if (
+                GT_ref is None
+                and getattr(self, "GT_train_full_", None) is not None
+                and X_val.shape == self.GT_train_full_.shape
+            ):
+                GT_ref = self.GT_train_full_
 
-        # Fallback safeguard
-        if GT_ref.shape != X_val.shape:
-            GT_ref = X_val
+        # Hard fail if still unknown; do not “slice columns” or set GT_ref = X_val.
+        if GT_ref is None or GT_ref.shape != X_val.shape:
+            raise ValueError(
+                f"Cannot align evaluation ground truth: X_val shape={X_val.shape}, "
+                f"GT shape={(None if GT_ref is None else GT_ref.shape)}."
+            )
 
-        # FIX 3: Allow override mask to be sliced if it's too wide
         if eval_mask_override is not None:
-            if eval_mask_override.shape[0] != X_val.shape[0]:
+            if eval_mask_override.shape != X_val.shape:
                 msg = (
-                    f"eval_mask_override rows {eval_mask_override.shape[0]} "
-                    f"does not match X_val rows {X_val.shape[0]}"
+                    f"eval_mask_override shape {eval_mask_override.shape} "
+                    f"does not match X_val shape {X_val.shape}."
                 )
                 self.logger.error(msg)
                 raise ValueError(msg)
 
-            if eval_mask_override.shape[1] > X_val.shape[1]:
-                eval_mask = eval_mask_override[:, : X_val.shape[1]].astype(bool)
-            else:
-                eval_mask = eval_mask_override.astype(bool)
+            eval_mask = eval_mask_override.astype(bool, copy=False)
+            eval_mask = eval_mask & finite_mask & (GT_ref != -1)
         else:
-            eval_mask = X_val != -1
-
-        eval_mask = eval_mask & finite_mask & (GT_ref != -1)
+            eval_mask = (X_val != -1) & finite_mask & (GT_ref != -1)
 
         y_true_flat = GT_ref[eval_mask].astype(np.int64, copy=False)
         y_pred_flat = pred_labels[eval_mask].astype(np.int64, copy=False)
@@ -1012,7 +1199,7 @@ class ImputeVAE(BaseNNImputer):
             y_pred_flat[y_pred_flat == 2] = 1
             proba_2 = np.zeros((len(y_proba_flat), 2), dtype=y_proba_flat.dtype)
             proba_2[:, 0] = y_proba_flat[:, 0]
-            proba_2[:, 1] = y_proba_flat[:, 2]
+            proba_2[:, 1] = y_proba_flat[:, 1]
             y_proba_flat = proba_2
 
         y_true_ohe = np.eye(len(labels_for_scoring))[y_true_flat]
@@ -1098,6 +1285,10 @@ class ImputeVAE(BaseNNImputer):
 
         Returns:
             float: Value of the tuning metric to be optimized.
+
+        Raises:
+            optuna.exceptions.TrialPruned: If the trial fails during training.
+            RuntimeError: If model training returns None.
         """
         try:
             self._prepare_tuning_artifacts()
@@ -1124,12 +1315,6 @@ class ImputeVAE(BaseNNImputer):
             # Always align model width to the data used in this trial
             params["model_params"]["n_features"] = int(X_train.shape[1])
 
-            # Pos weights for diploid multilabel BCE during tuning
-            if not self.is_haploid:
-                self.pos_weights_ = self._compute_pos_weights(X_train)
-            else:
-                self.pos_weights_ = None
-
             model = self.build_model(self.Model, params["model_params"])
             model.apply(self.initialize_weights)
 
@@ -1137,47 +1322,53 @@ class ImputeVAE(BaseNNImputer):
             l1_penalty: float = params["l1_penalty"]
 
             # Train + prune on metric
-            _, model, __ = self._train_and_validate_model(
+            res = self._train_and_validate_model(
                 model=model,
                 loader=train_loader,
                 lr=lr,
                 l1_penalty=l1_penalty,
                 trial=trial,
-                return_history=False,
                 class_weights=class_weights,
                 X_val=X_val,
                 params=params,
                 prune_metric=self.tune_metric,
-                prune_warmup_epochs=10,
+                prune_warmup_epochs=25,
                 eval_interval=self.tune_eval_interval,
                 eval_requires_latents=False,
                 eval_latent_steps=0,
                 eval_latent_lr=0.0,
                 eval_latent_weight_decay=0.0,
+                eval_mask_override=(
+                    getattr(self, "_tune_sim_mask_test", None)
+                    if self.simulate_missing
+                    else None
+                ),
             )
+            model = res[1]
 
+            # Prefer tune-aligned mask whenever tune artifacts exist
             eval_mask = (
-                self.sim_mask_test_
-                if (
-                    self.simulate_missing
-                    and getattr(self, "sim_mask_test_", None) is not None
-                )
+                getattr(self, "_tune_sim_mask_test", None)
+                if self.simulate_missing
                 else None
             )
 
+            # non-tune path fallback (full fit/val)
+            if eval_mask is None:
+                eval_mask = getattr(self, "sim_mask_test_", None)
+
             if model is None:
-                raise RuntimeError("Model training failed; no model was returned.")
+                msg = "Model training returned None."
+                self.logger.error(msg)
+                raise RuntimeError(msg)
 
             metrics = self._evaluate_model(
                 X_val,
                 model,
                 params,
                 objective_mode=True,
-                eval_mask_override=(
-                    eval_mask[:, : X_val.shape[1]]
-                    if (eval_mask is not None and eval_mask.shape[1] > X_val.shape[1])
-                    else eval_mask
-                ),
+                y_true_matrix=getattr(self, "_tune_GT_test", None),
+                eval_mask_override=eval_mask,
             )
             self._clear_resources(model, train_loader)
             return metrics[self.tune_metric]
@@ -1224,7 +1415,11 @@ class ImputeVAE(BaseNNImputer):
             if (self.tune and self.tune_fast and hasattr(self, "_tune_num_features"))
             else self.num_features_
         )
-        input_dim = use_n_features * self.output_classes_
+
+        # will be set correctly after fit() prep
+        K = int(getattr(self, "num_classes_", 3))
+        input_dim = use_n_features * K
+
         hidden_layer_sizes = self._compute_hidden_layer_sizes(
             n_inputs=input_dim,
             n_outputs=input_dim,
@@ -1239,12 +1434,11 @@ class ImputeVAE(BaseNNImputer):
         )
 
         # [latent_dim] + interior widths (exclude output width)
-        hidden_only = [hidden_layer_sizes[0]] + hidden_layer_sizes[1:-1]
+        hidden_only = hidden_layer_sizes[1:-1]
 
         params["model_params"] = {
             "n_features": use_n_features,
-            "num_classes": self.output_classes_,
-            "latent_dim": params["latent_dim"],
+            "num_classes": K,  # categorical head: 2 or 3
             "dropout_rate": params["dropout_rate"],
             "hidden_layer_sizes": hidden_only,
             "activation": params["activation"],
@@ -1273,15 +1467,19 @@ class ImputeVAE(BaseNNImputer):
         self.kl_beta_final = best_params.get("beta", self.kl_beta_final)
         self.gamma = best_params.get("gamma", self.gamma)
 
+        K = int(getattr(self, "num_classes_", 3))
+        n_inputs = self.num_features_ * K
+        n_outputs = self.num_features_ * K
+
         hidden_layer_sizes = self._compute_hidden_layer_sizes(
-            n_inputs=self.num_features_ * self.output_classes_,
-            n_outputs=self.num_features_ * self.output_classes_,
+            n_inputs=n_inputs,
+            n_outputs=n_outputs,
             n_samples=len(self.train_idx_),
             n_hidden=best_params["num_hidden_layers"],
             alpha=best_params["layer_scaling_factor"],
             schedule=best_params["layer_schedule"],
         )
-        hidden_only = [hidden_layer_sizes[0]] + hidden_layer_sizes[1:-1]
+        hidden_only = hidden_layer_sizes[1:-1]
 
         return {
             "n_features": self.num_features_,
@@ -1289,8 +1487,7 @@ class ImputeVAE(BaseNNImputer):
             "hidden_layer_sizes": hidden_only,
             "dropout_rate": self.dropout_rate,
             "activation": self.activation,
-            "num_classes": self.output_classes_,
-            "beta": self.kl_beta_final,
+            "num_classes": K,
             "gamma": self.gamma,
         }
 
@@ -1300,59 +1497,27 @@ class ImputeVAE(BaseNNImputer):
         Returns:
             Dict[str, int | float | str | list]: VAE model parameters.
         """
+        K = int(getattr(self, "num_classes_", 3))
+        n_inputs = self.num_features_ * K
+        n_outputs = self.num_features_ * K
+
         hidden_layer_sizes = self._compute_hidden_layer_sizes(
-            n_inputs=self.num_features_ * self.output_classes_,
-            n_outputs=self.num_features_ * self.output_classes_,
+            n_inputs=n_inputs,
+            n_outputs=n_outputs,
             n_samples=len(self.ground_truth_),
             n_hidden=self.num_hidden_layers,
             alpha=self.layer_scaling_factor,
             schedule=self.layer_schedule,
         )
+        hidden_only = hidden_layer_sizes[1:-1]
+
         return {
             "n_features": self.num_features_,
             "latent_dim": self.latent_dim,
-            "hidden_layer_sizes": hidden_layer_sizes,
+            "hidden_layer_sizes": hidden_only,
             "dropout_rate": self.dropout_rate,
             "activation": self.activation,
-            "num_classes": self.output_classes_,
+            "num_classes": K,
             "beta": self.kl_beta_final,
             "gamma": self.gamma,
         }
-
-    def _encode_multilabel_inputs(self, y: torch.Tensor) -> torch.Tensor:
-        """Two-channel multi-hot for diploid: REF-only, ALT-only; HET sets both."""
-        if self.is_haploid:
-            return self._one_hot_encode_012(y)
-        y = y.to(self.device)
-        shape = y.shape + (2,)
-        out = torch.zeros(shape, device=self.device, dtype=torch.float32)
-        valid = y != -1
-        ref_mask = valid & (y != 2)
-        alt_mask = valid & (y != 0)
-        out[ref_mask, 0] = 1.0
-        out[alt_mask, 1] = 1.0
-        return out
-
-    def _multi_hot_targets(self, y: torch.Tensor) -> torch.Tensor:
-        """Targets aligned with _encode_multilabel_inputs for diploid training."""
-        if self.is_haploid:
-            raise RuntimeError("_multi_hot_targets called for haploid data.")
-        y = y.to(self.device)
-        out = torch.zeros(y.shape + (2,), device=self.device, dtype=torch.float32)
-        valid = y != -1
-        ref_mask = valid & (y != 2)
-        alt_mask = valid & (y != 0)
-        out[ref_mask, 0] = 1.0
-        out[alt_mask, 1] = 1.0
-        return out
-
-    def _compute_pos_weights(self, X: np.ndarray) -> torch.Tensor:
-        """Balance REF/ALT channels for multilabel BCE."""
-        ref_pos = np.count_nonzero((X == 0) | (X == 1))
-        alt_pos = np.count_nonzero((X == 2) | (X == 1))
-        total_valid = np.count_nonzero(X != -1)
-        pos_counts = np.array([ref_pos, alt_pos], dtype=np.float32)
-        neg_counts = np.maximum(total_valid - pos_counts, 1.0)
-        pos_counts = np.maximum(pos_counts, 1.0)
-        weights = neg_counts / pos_counts
-        return torch.tensor(weights, device=self.device, dtype=torch.float32)
