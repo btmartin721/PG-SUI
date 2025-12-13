@@ -1,11 +1,11 @@
 import copy
+from collections import defaultdict
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
 import optuna
 import torch
-import torch.nn.functional as F
 from sklearn.exceptions import NotFittedError
 from sklearn.model_selection import train_test_split
 from snpio.analysis.genotype_encoder import GenotypeEncoder
@@ -25,6 +25,39 @@ from pgsui.utils.pretty_metrics import PrettyMetrics
 if TYPE_CHECKING:
     from snpio import TreeParser
     from snpio.read_input.genotype_data import GenotypeData
+
+
+def _make_warmup_cosine_scheduler(
+    optimizer: torch.optim.Optimizer,
+    *,
+    max_epochs: int,
+    warmup_epochs: int,
+    start_factor: float = 0.1,
+) -> Any:
+    """Create a warmup->cosine LR scheduler.
+
+    Args:
+        optimizer (torch.optim.Optimizer): Optimizer to schedule.
+        max_epochs (int): Total number of epochs.
+        warmup_epochs (int): Number of warmup epochs.
+        start_factor (float): Starting LR factor for warmup.
+
+    Returns:
+        torch.optim.lr_scheduler._LRScheduler: LR scheduler.
+    """
+    warmup_epochs = int(max(0, warmup_epochs))
+
+    if warmup_epochs == 0:
+        return CosineAnnealingLR(optimizer, T_max=max_epochs)
+
+    warmup = torch.optim.lr_scheduler.LinearLR(
+        optimizer, start_factor=float(start_factor), total_iters=warmup_epochs
+    )
+    cosine = CosineAnnealingLR(optimizer, T_max=max(1, max_epochs - warmup_epochs))
+
+    return torch.optim.lr_scheduler.SequentialLR(
+        optimizer, schedulers=[warmup, cosine], milestones=[warmup_epochs]
+    )
 
 
 def ensure_autoencoder_config(
@@ -163,7 +196,6 @@ class ImputeAutoencoder(BaseNNImputer):
         self.verbose = self.cfg.io.verbose
         self.debug = self.cfg.io.debug
         self.rng = np.random.default_rng(self.seed)
-        self.pos_weights_: torch.Tensor | None = None
 
         # Simulated-missing controls (config defaults with ctor overrides)
         sim_cfg = getattr(self.cfg, "sim", None)
@@ -201,7 +233,11 @@ class ImputeAutoencoder(BaseNNImputer):
         self.layer_scaling_factor = float(self.cfg.model.layer_scaling_factor)
         self.layer_schedule: str = str(self.cfg.model.layer_schedule)
         self.activation = str(self.cfg.model.hidden_activation)
-        self.gamma = float(self.cfg.model.gamma)
+        gamma_raw = self.cfg.model.gamma
+        if isinstance(gamma_raw, (list, tuple)):
+            self.gamma = list(gamma_raw)
+        else:
+            self.gamma = float(gamma_raw)
 
         # Train hyperparams
         self.batch_size = int(self.cfg.train.batch_size)
@@ -219,22 +255,19 @@ class ImputeAutoencoder(BaseNNImputer):
         self.tune_fast = bool(self.cfg.tune.fast)
         self.tune_batch_size = int(self.cfg.tune.batch_size)
         self.tune_epochs = int(self.cfg.tune.epochs)
-        self.tune_eval_interval = int(self.cfg.tune.eval_interval)
-        self.tune_metric: str = self.cfg.tune.metric
-
-        if self.tune_metric is not None:
-            self.tune_metric_: (
-                Literal[
-                    "pr_macro",
-                    "f1",
-                    "accuracy",
-                    "precision",
-                    "recall",
-                    "roc_auc",
-                    "average_precision",
-                ]
-                | None
-            ) = self.cfg.tune.metric
+        self.tune_eval_interval = 1
+        self.tune_metric = self.cfg.tune.metric
+        self.tune_metric_: Literal[
+            "pr_macro",
+            "f1",
+            "accuracy",
+            "precision",
+            "recall",
+            "roc_auc",
+            "average_precision",
+        ] = (
+            self.cfg.tune.metric or "f1"
+        )
 
         self.n_trials = int(self.cfg.tune.n_trials)
         self.tune_save_db = bool(self.cfg.tune.save_db)
@@ -247,7 +280,7 @@ class ImputeAutoencoder(BaseNNImputer):
         self.tune_patience = int(self.cfg.tune.patience)
 
         # Evaluate
-        # AE does not optimize latents, so these are unused / fixed
+        # NOTE: AE does not optimize latents, so these are unused / fixed
         self.eval_latent_steps: int = 0
         self.eval_latent_lr: float = 0.0
         self.eval_latent_weight_decay: float = 0.0
@@ -323,27 +356,25 @@ class ImputeAutoencoder(BaseNNImputer):
             raise TypeError(msg)
 
         # Ploidy & classes
-        self.is_haploid = bool(
-            np.all(
-                np.isin(
-                    self.genotype_data.snp_data,
-                    ["A", "C", "G", "T", "N", "-", ".", "?"],
-                )
-            )
-        )
-        self.ploidy = 1 if self.is_haploid else 2
-        # Scoring still uses 3 labels for diploid (REF/HET/ALT); model head uses 2 logits
+        self.ploidy = self.cfg.io.ploidy
+        self.is_haploid = self.ploidy == 1
+
+        # Scoring labels == model output channels now
         self.num_classes_ = 2 if self.is_haploid else 3
-        self.output_classes_ = 2
+        self.output_classes_ = self.num_classes_
+
         self.logger.info(
             f"Data is {'haploid' if self.is_haploid else 'diploid'}; "
             f"using {self.num_classes_} classes for scoring and {self.output_classes_} output channels."
         )
 
+        # Collapse diploid ALT(2)->ALT(1) for haploids
         if self.is_haploid:
             self.ground_truth_[self.ground_truth_ == 2] = 1
             X_for_model[X_for_model == 2] = 1
 
+        # After X_for_model is fully prepared (and after haploid collapsing)
+        self.X_model_input_ = X_for_model
         n_samples, self.num_features_ = X_for_model.shape
 
         # Model params (decoder outputs L * K logits)
@@ -373,12 +404,6 @@ class ImputeAutoencoder(BaseNNImputer):
             self.sim_mask_train_ = None
             self.sim_mask_test_ = None
 
-        # Pos weights for diploid multilabel path (must exist before tuning)
-        if not self.is_haploid:
-            self.pos_weights_ = self._compute_pos_weights(self.X_train_)
-        else:
-            self.pos_weights_ = None
-
         # Plotters/scorers (shared utilities)
         self.plotter_, self.scorers_ = self.initialize_plotting_and_scorers()
 
@@ -406,17 +431,19 @@ class ImputeAutoencoder(BaseNNImputer):
             loader=train_loader,
             lr=self.learning_rate,
             l1_penalty=self.l1_penalty,
-            return_history=True,
+            max_epochs=self.epochs,
             class_weights=self.class_weights_,
             X_val=self.X_val_,
+            y_true_val=self.GT_test_full_,
             params=self.best_params_,
             prune_metric=self.tune_metric,
-            prune_warmup_epochs=10,
+            prune_warmup_epochs=25,
             eval_interval=1,
             eval_requires_latents=False,
             eval_latent_steps=0,
             eval_latent_lr=0.0,
             eval_latent_weight_decay=0.0,
+            eval_mask_override=getattr(self, "sim_mask_test_", None),
         )
 
         if trained_model is None:
@@ -429,20 +456,30 @@ class ImputeAutoencoder(BaseNNImputer):
             self.models_dir / f"final_model_{self.model_name}.pt",
         )
 
-        hist: Dict[str, List[float] | Dict[str, List[float]] | None] | None = {
-            "Train": history
-        }
+        if history is None:
+            hist: dict[str, list[float]] = {"Train": []}
+        elif isinstance(history, dict):
+            # {"Train":[...], "Val":[...]}
+            hist = dict(history)
+        else:
+            # backwards compatibility if history is a list
+            hist = {"Train": list(history)}
+
         self.best_loss_, self.model_, self.history_ = (loss, trained_model, hist)
         self.is_fit_ = True
 
-        # Evaluate on validation set (parity with NLPCA reporting)
+        # Evaluate on validation set
         eval_mask = (
             self.sim_mask_test_
             if (self.simulate_missing and self.sim_mask_test_ is not None)
             else None
         )
         self._evaluate_model(
-            self.X_val_, self.model_, self.best_params_, eval_mask_override=eval_mask
+            self.X_val_,
+            self.model_,
+            self.best_params_,
+            y_true_matrix=self.GT_test_full_,
+            eval_mask_override=eval_mask,
         )
         self.plotter_.plot_history(self.history_)
         self._save_best_params(self.best_params_)
@@ -461,7 +498,9 @@ class ImputeAutoencoder(BaseNNImputer):
             NotFittedError: If called before fit().
         """
         if not getattr(self, "is_fit_", False):
-            raise NotFittedError("Model is not fitted. Call fit() before transform().")
+            msg = "Model is not fitted. Call fit() before transform()."
+            self.logger.error(msg)
+            raise NotFittedError(msg)
 
         self.logger.info(f"Imputing entire dataset with {self.model_name}...")
         X_to_impute = self.ground_truth_.copy()
@@ -484,16 +523,22 @@ class ImputeAutoencoder(BaseNNImputer):
 
         return imputed_genotypes
 
-    def _get_data_loaders(self, y: np.ndarray) -> torch.utils.data.DataLoader:
+    def _get_data_loaders(
+        self,
+        y: np.ndarray,
+        *,
+        shuffle: bool = True,
+        batch_size: int | None = None,
+    ) -> torch.utils.data.DataLoader:
         """Create DataLoader over indices + integer targets (-1 for missing).
 
-        This method creates a PyTorch DataLoader that yields batches of indices and their corresponding genotype targets encoded as integers (0, 1, 2) with -1 indicating missing values. The DataLoader is shuffled to ensure random sampling during training.
-
         Args:
-            y (np.ndarray): 0/1/2 matrix with -1 for missing.
+            y: 0/1/2 matrix with -1 for missing.
+            shuffle: Whether to shuffle batches.
+            batch_size: Optional override for batch size.
 
         Returns:
-            torch.utils.data.DataLoader: Shuffled DataLoader.
+            Shuffled (or not) DataLoader.
         """
         y_tensor = torch.from_numpy(y).long()
         indices = torch.arange(len(y), dtype=torch.long)
@@ -501,8 +546,8 @@ class ImputeAutoencoder(BaseNNImputer):
         pin_memory = self.device.type == "cuda"
         return torch.utils.data.DataLoader(
             dataset,
-            batch_size=self.batch_size,
-            shuffle=True,
+            batch_size=int(batch_size or self.batch_size),
+            shuffle=bool(shuffle),
             pin_memory=pin_memory,
         )
 
@@ -512,11 +557,12 @@ class ImputeAutoencoder(BaseNNImputer):
         loader: torch.utils.data.DataLoader,
         lr: float,
         l1_penalty: float,
+        max_epochs: int,
         trial: optuna.Trial | None = None,
-        return_history: bool = False,
         class_weights: torch.Tensor | None = None,
         *,
         X_val: np.ndarray | None = None,
+        y_true_val: np.ndarray | None = None,
         params: dict | None = None,
         prune_metric: str = "f1",  # "f1" | "accuracy" | "pr_macro"
         prune_warmup_epochs: int = 10,
@@ -526,7 +572,8 @@ class ImputeAutoencoder(BaseNNImputer):
         eval_latent_steps: int = 0,
         eval_latent_lr: float = 0.0,
         eval_latent_weight_decay: float = 0.0,
-    ) -> Tuple[float, torch.nn.Module | None, list | None]:
+        eval_mask_override: np.ndarray | None = None,
+    ) -> Tuple[float, torch.nn.Module | None, dict[str, list[float]]]:
         """Wrap the AE training loop (no latent optimizer), with Optuna pruning.
 
         This method orchestrates the training of the autoencoder model using the provided DataLoader. It sets up the optimizer and learning rate scheduler, and executes the training loop with support for early stopping and Optuna pruning based on validation performance. The method returns the best validation loss, the best model state, and optionally the training history.
@@ -536,8 +583,8 @@ class ImputeAutoencoder(BaseNNImputer):
             loader (torch.utils.data.DataLoader): Batches (indices, y_int) where y_int is 0/1/2; -1 for missing.
             lr (float): Learning rate.
             l1_penalty (float): L1 regularization coeff.
+            max_epochs (int): Maximum training epochs.
             trial (optuna.Trial | None): Optuna trial for pruning (optional).
-            return_history (bool): If True, return train loss history.
             class_weights (torch.Tensor | None): Class weights tensor (on device).
             X_val (np.ndarray | None): Validation matrix (0/1/2 with -1 for missing).
             params (dict | None): Model params for evaluation.
@@ -548,22 +595,25 @@ class ImputeAutoencoder(BaseNNImputer):
             eval_latent_steps (int): Unused for AE.
             eval_latent_lr (float): Unused for AE.
             eval_latent_weight_decay (float): Unused for AE.
+            eval_mask_override (np.ndarray | None): Optional eval mask to override default.
 
         Returns:
-            Tuple[float, torch.nn.Module | None, list | None]: (best_loss, best_model, history or None).
+            Tuple[float, torch.nn.Module | None, dict[str, list[float]]]: (best_loss, best_model, history).
         """
         if class_weights is None:
             msg = "Must provide class_weights."
             self.logger.error(msg)
             raise TypeError(msg)
 
-        # Epoch budget mirrors NLPCA config (tuning vs final)
-        max_epochs = (
-            self.tune_epochs if (trial is not None and self.tune_fast) else self.epochs
-        )
+        if trial is not None and self.tune_fast:
+            max_epochs = self.tune_epochs
 
         optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-        scheduler = CosineAnnealingLR(optimizer, T_max=max_epochs)
+        scheduler = _make_warmup_cosine_scheduler(
+            optimizer,
+            max_epochs=max_epochs,
+            warmup_epochs=int(getattr(self, "lr_warmup_epochs", 5)),
+        )
 
         best_loss, best_model, hist = self._execute_training_loop(
             loader=loader,
@@ -572,9 +622,10 @@ class ImputeAutoencoder(BaseNNImputer):
             model=model,
             l1_penalty=l1_penalty,
             trial=trial,
-            return_history=return_history,
             class_weights=class_weights,
+            max_epochs=max_epochs,
             X_val=X_val,
+            y_true_val=y_true_val,
             params=params,
             prune_metric=prune_metric,
             prune_warmup_epochs=prune_warmup_epochs,
@@ -583,37 +634,35 @@ class ImputeAutoencoder(BaseNNImputer):
             eval_latent_steps=0,
             eval_latent_lr=0.0,
             eval_latent_weight_decay=0.0,
+            eval_mask_override=eval_mask_override,
         )
-        if return_history:
-            return best_loss, best_model, hist
-
-        return best_loss, best_model, None
+        return best_loss, best_model, hist
 
     def _execute_training_loop(
         self,
         loader: torch.utils.data.DataLoader,
         optimizer: torch.optim.Optimizer,
-        scheduler: CosineAnnealingLR,
+        scheduler: torch.optim.lr_scheduler._LRScheduler,
         model: torch.nn.Module,
         l1_penalty: float,
         trial: optuna.Trial | None,
-        return_history: bool,
         class_weights: torch.Tensor,
+        max_epochs: int,
         *,
         X_val: np.ndarray | None = None,
+        y_true_val: np.ndarray | None = None,
         params: dict | None = None,
         prune_metric: str = "f1",
         prune_warmup_epochs: int = 10,
         eval_interval: int = 1,
-        # Evaluation parameters (AE ignores latent refinement knobs)
-        eval_requires_latents: bool = False,  # AE: False
+        eval_requires_latents: bool = False,
         eval_latent_steps: int = 0,
         eval_latent_lr: float = 0.0,
         eval_latent_weight_decay: float = 0.0,
-    ) -> Tuple[float, torch.nn.Module, list]:
-        """Train AE with focal CE (gamma warm/ramp) + early stopping & pruning.
-
-        This method executes the training loop for the autoencoder model, performing one epoch at a time. It computes the focal cross-entropy loss while ignoring masked (missing) values and applies L1 regularization if specified. The method incorporates early stopping based on validation performance and supports Optuna pruning to terminate unpromising trials early. It returns the best validation loss, the best model state, and optionally the training history.
+        eval_mask_override: np.ndarray | None = None,
+        val_batch_size: int | None = None,
+    ) -> tuple[float, torch.nn.Module, dict[str, list[float]]]:
+        """Train AE with focal CE and validation-loss EarlyStopping + Optuna pruning.
 
         Args:
             loader (torch.utils.data.DataLoader): Batches (indices, y_int) where y_int is 0/1/2; -1 for missing.
@@ -622,9 +671,10 @@ class ImputeAutoencoder(BaseNNImputer):
             model (torch.nn.Module): Autoencoder model.
             l1_penalty (float): L1 regularization coeff.
             trial (optuna.Trial | None): Optuna trial for pruning (optional).
-            return_history (bool): If True, return train loss history.
             class_weights (torch.Tensor): Class weights tensor (on device).
+            max_epochs (int): Maximum training epochs.
             X_val (np.ndarray | None): Validation matrix (0/1/2 with -1 for missing).
+            y_true_val (np.ndarray | None): Ground-truth validation genotypes (0/1/2).
             params (dict | None): Model params for evaluation.
             prune_metric (str): Metric for pruning reports.
             prune_warmup_epochs (int): Pruning warmup epochs.
@@ -633,13 +683,10 @@ class ImputeAutoencoder(BaseNNImputer):
             eval_latent_steps (int): Unused for AE.
             eval_latent_lr (float): Unused for AE.
             eval_latent_weight_decay (float): Unused for AE.
-
-        Returns:
-            Tuple[float, torch.nn.Module, list]: Best validation loss, best model, and training history.
+            eval_mask_override (np.ndarray | None): Optional eval mask to override default.
+            val_batch_size (int | None): Optional validation batch size override.
         """
-        best_loss = float("inf")
-        best_model = None
-        history: list[float] = []
+        history: dict[str, list[float]] = defaultdict(list)
 
         early_stopping = EarlyStopping(
             patience=self.early_stop_gen,
@@ -649,37 +696,51 @@ class ImputeAutoencoder(BaseNNImputer):
             debug=self.debug,
         )
 
-        gamma_val = self.gamma
+        # Resolve gamma (prefer tuned)
+        gamma_val = None
+        if isinstance(params, dict):
+            gamma_val = params.get("gamma", None)
+            if gamma_val is None and isinstance(params.get("model_params", None), dict):
+                gamma_val = params["model_params"].get("gamma", None)
+        if gamma_val is None:
+            gamma_val = getattr(self, "gamma", 0.0)
+
         if isinstance(gamma_val, (list, tuple)):
             if len(gamma_val) == 0:
                 raise ValueError("gamma list is empty.")
             gamma_val = gamma_val[0]
 
-        gamma_final = float(gamma_val)
-        gamma_warm, gamma_ramp = 50, 100
+        gamma_final = float(np.clip(float(gamma_val), 0.0, 10.0))
+        gamma_warm, gamma_ramp = 50, 100  # keep as-is unless you want it proportional
 
-        # Optional LR warmup
-        warmup_epochs = int(getattr(self, "lr_warmup_epochs", 5))
-        base_lr = float(optimizer.param_groups[0]["lr"])
-        min_lr = base_lr * 0.1
+        # If validation is provided, enforce y_true_val presence + shape agreement
+        if X_val is not None:
+            if y_true_val is None:
+                raise ValueError(
+                    "X_val was provided but y_true_val is None. Pass aligned ground-truth explicitly."
+                )
+            if y_true_val.shape != X_val.shape:
+                raise ValueError(
+                    f"Shape mismatch: X_val={X_val.shape}, y_true_val={y_true_val.shape}."
+                )
+            if (
+                eval_mask_override is not None
+                and eval_mask_override.shape != X_val.shape
+            ):
+                msg = f"eval_mask_override shape {eval_mask_override.shape} does not match X_val shape {X_val.shape}."
+                self.logger.error(msg)
+                raise ValueError(msg)
 
-        max_epochs = int(getattr(scheduler, "T_max", getattr(self, "epochs", 100)))
-
-        for epoch in range(max_epochs):
-            # focal γ schedule (for stable training)
+        for epoch in range(int(max_epochs)):
+            # Focal gamma schedule
             if epoch < gamma_warm:
-                model.gamma = 0.0  # type: ignore
+                model.gamma = 0.0  # type: ignore[attr-defined]
             elif epoch < gamma_warm + gamma_ramp:
-                model.gamma = gamma_final * ((epoch - gamma_warm) / gamma_ramp)  # type: ignore
+                model.gamma = gamma_final * ((epoch - gamma_warm) / gamma_ramp)  # type: ignore[attr-defined]
             else:
-                model.gamma = gamma_final  # type: ignore
+                model.gamma = gamma_final  # type: ignore[attr-defined]
 
-            # LR warmup
-            if epoch < warmup_epochs:
-                scale = float(epoch + 1) / warmup_epochs
-                for g in optimizer.param_groups:
-                    g["lr"] = min_lr + (base_lr - min_lr) * scale
-
+            # ---- TRAIN ----
             train_loss = self._train_step(
                 loader=loader,
                 optimizer=optimizer,
@@ -688,69 +749,104 @@ class ImputeAutoencoder(BaseNNImputer):
                 class_weights=class_weights,
             )
 
-            # Abort or prune on non-finite epoch loss
             if not np.isfinite(train_loss):
                 if trial is not None:
-                    raise optuna.exceptions.TrialPruned("Epoch loss non-finite.")
-                # Soft reset suggestion: reduce LR and continue, or break
-                self.logger.warning(
-                    "Non-finite epoch loss. Reducing LR by 10 percent and continuing."
+                    raise optuna.exceptions.TrialPruned("Training loss non-finite.")
+                self.logger.debug(
+                    "Non-finite training loss. Reducing LR by 10 percent and continuing."
                 )
                 for g in optimizer.param_groups:
                     g["lr"] *= 0.9
                 continue
 
-            scheduler.step()
-            if return_history:
-                history.append(train_loss)
+            # ---- VALIDATION ----
+            val_loss = float("inf")
+            if X_val is not None:
+                y_true_val = getattr(self, "GT_test_full_", None)
 
-            early_stopping(train_loss, model)
+                if y_true_val is None:
+                    msg = "GT_test_full_ is missing; cannot compute val_loss."
+                    self.logger.error(msg)
+                    raise ValueError(msg)
+
+                val_loss = (
+                    self._val_step(
+                        X_val=X_val,
+                        y_true_val=y_true_val,
+                        model=model,
+                        l1_penalty=l1_penalty,
+                        class_weights=class_weights,
+                        eval_mask_override=eval_mask_override,
+                        batch_size=val_batch_size,
+                    )
+                    if X_val is not None
+                    else None
+                )
+
+                if isinstance(val_loss, float) and np.isfinite(val_loss):
+                    history["Val"].append(val_loss)
+
+            scheduler.step()
+
+            history["Train"].append(float(train_loss))
+
+            if X_val is not None and val_loss is not None and np.isfinite(val_loss):
+                history["Val"].append(float(val_loss))
+
+            # Early stop on validation loss when available, else training loss
+            es_score = val_loss if (X_val is not None) else train_loss
+            early_stopping(es_score, model)
+
             if early_stopping.early_stop:
                 self.logger.debug(f"Early stopping at epoch {epoch + 1}.")
                 break
 
-            # Optuna report/prune on validation metric
+            # ---- OPTUNA PRUNING ----
             if (
                 trial is not None
                 and X_val is not None
-                and ((epoch + 1) % eval_interval == 0)
+                and ((epoch + 1) % int(max(1, eval_interval)) == 0)
             ):
                 metric_key = prune_metric or getattr(self, "tune_metric", "f1")
-                mask_override = None
-                if (
-                    self.simulate_missing
-                    and getattr(self, "sim_mask_test_", None) is not None
-                    and getattr(self, "X_val_", None) is not None
-                    and X_val.shape == self.X_val_.shape
-                ):
-                    mask_override = self.sim_mask_test_
                 metric_val = self._eval_for_pruning(
                     model=model,
                     X_val=X_val,
                     params=params or getattr(self, "best_params_", {}),
                     metric=metric_key,
                     objective_mode=True,
-                    do_latent_infer=False,  # AE: False
+                    do_latent_infer=False,
                     latent_steps=0,
                     latent_lr=0.0,
                     latent_weight_decay=0.0,
-                    latent_seed=self.seed,  # type: ignore
-                    _latent_cache=None,  # AE: not used
+                    latent_seed=self.seed,
+                    _latent_cache=None,
                     _latent_cache_key=None,
-                    eval_mask_override=mask_override,
+                    y_true_matrix=y_true_val,
+                    eval_mask_override=eval_mask_override,
                 )
                 trial.report(metric_val, step=epoch + 1)
                 if (epoch + 1) >= prune_warmup_epochs and trial.should_prune():
                     raise optuna.exceptions.TrialPruned(
-                        f"Pruned at epoch {epoch + 1}: {metric_key}={metric_val:.5f}"
+                        f"Pruned at epoch {epoch + 1}: {metric_key}={metric_val:.3f}"
                     )
 
-        best_loss = early_stopping.best_score
+        # Materialize the best model properly
         if early_stopping.best_model is not None:
-            best_model = copy.deepcopy(early_stopping.best_model)
+            best_state = {
+                k: v.cpu() for k, v in early_stopping.best_model.state_dict().items()
+            }
+            best_model = early_stopping.best_model
+            best_model.load_state_dict(best_state)
+            best_loss = float(early_stopping.best_score)
         else:
-            best_model = copy.deepcopy(model)
-        return best_loss, best_model, history
+            best_state = {k: v.cpu() for k, v in model.state_dict().items()}
+            best_model = model
+            best_model.load_state_dict(best_state)
+            best_loss = float(
+                history["Val"][-1] if history["Val"] else history["Train"][-1]
+            )
+
+        return best_loss, best_model, dict(history)
 
     def _train_step(
         self,
@@ -760,26 +856,32 @@ class ImputeAutoencoder(BaseNNImputer):
         l1_penalty: float,
         class_weights: torch.Tensor,
     ) -> float:
-        """One epoch with stable focal CE and NaN/Inf guards."""
+        """One epoch of categorical focal CE with NaN/Inf guards."""
         model.train()
         running = 0.0
         num_batches = 0
-        l1_params = tuple(p for p in model.parameters() if p.requires_grad)
+
         if class_weights is not None and class_weights.device != self.device:
             class_weights = class_weights.to(self.device)
 
         nF_model = int(getattr(model, "n_features", self.num_features_))
+        nC_model = int(getattr(model, "num_classes", self.output_classes_))
 
         # Use model.gamma if present, else self.gamma
         gamma = float(getattr(model, "gamma", getattr(self, "gamma", 0.0)))
-        gamma = float(torch.tensor(gamma).clamp(min=0.0, max=10.0))  # sane bound
+        gamma = float(torch.tensor(gamma).clamp(min=0.0, max=10.0))
+
         ce_criterion = SafeFocalCELoss(
-            gamma=gamma, weight=class_weights, ignore_index=-1
+            gamma=gamma,
+            weight=class_weights,  # expects shape (C,)
+            ignore_index=-1,
         )
+
+        l1_params = tuple(p for p in model.parameters() if p.requires_grad)
 
         for _, y_batch in loader:
             optimizer.zero_grad(set_to_none=True)
-            y_batch = y_batch.to(self.device, non_blocking=True)
+            y_batch = y_batch.to(self.device, non_blocking=True).long()
 
             if y_batch.dim() != 2:
                 msg = f"Training batch expected 2D targets, got shape {tuple(y_batch.shape)}."
@@ -794,27 +896,30 @@ class ImputeAutoencoder(BaseNNImputer):
                 self.logger.error(msg)
                 raise ValueError(msg)
 
-            # Inputs: one-hot with zeros for missing; Targets: long ints with -1 for missing
-            if self.is_haploid:
-                x_in = self._one_hot_encode_012(y_batch)  # (B, L, 2)
-                logits = model(x_in).view(-1, nF_model, self.output_classes_)
-                logits_flat = logits.view(-1, self.output_classes_)
-                targets_flat = y_batch.view(-1).long()
-                if not torch.isfinite(logits_flat).all():
-                    continue
-                loss = ce_criterion(logits_flat, targets_flat)
-            else:
-                x_in = self._encode_multilabel_inputs(y_batch)  # (B, L, 2)
-                logits = model(x_in).view(-1, nF_model, self.output_classes_)
-                if not torch.isfinite(logits).all():
-                    continue
-                pos_w = getattr(self, "pos_weights_", None)
-                targets = self._multi_hot_targets(y_batch)  # float, same shape
-                bce = F.binary_cross_entropy_with_logits(
-                    logits, targets, pos_weight=pos_w, reduction="none"
-                )
-                mask = (y_batch != -1).unsqueeze(-1).float()
-                loss = (bce * mask).sum() / mask.sum().clamp_min(1e-8)
+            # (B, L, C) where C is 2 (haploid) or 3 (diploid)
+            x_in = self._one_hot_encode_012(y_batch, num_classes=nC_model)
+
+            raw = model(x_in)
+
+            logits_flat = raw if isinstance(raw, torch.Tensor) else raw[0]
+            expected = (y_batch.shape[0], nF_model * nC_model)
+
+            if logits_flat.dim() != 2 or tuple(logits_flat.shape) != expected:
+                try:
+                    logits_flat = logits_flat.view(-1, nF_model * nC_model)
+                except Exception as e:
+                    msg = f"Model output logits expected shape {expected}, got {tuple(logits_flat.shape)}. Ensure tuning subsets and masks use matching loci columns."
+                    self.logger.error(msg)
+                    raise ValueError(msg) from e
+
+            logits = logits_flat.view(-1, nF_model, nC_model)
+            logits_flat = logits.view(-1, nC_model)
+            targets_flat = y_batch.view(-1)
+
+            if not torch.isfinite(logits_flat).all():
+                continue
+
+            loss = ce_criterion(logits_flat, targets_flat)
 
             if l1_penalty > 0:
                 l1 = torch.zeros((), device=self.device)
@@ -822,16 +927,12 @@ class ImputeAutoencoder(BaseNNImputer):
                     l1 = l1 + p.abs().sum()
                 loss = loss + l1_penalty * l1
 
-            # Final guard
             if not torch.isfinite(loss):
                 continue
 
             loss.backward()
-
-            # Clip to prevent exploding grads
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
-            # If grads blew up to non-finite, skip update
             if any(
                 (not torch.isfinite(p.grad).all())
                 for p in model.parameters()
@@ -846,8 +947,160 @@ class ImputeAutoencoder(BaseNNImputer):
             num_batches += 1
 
         if num_batches == 0:
-            return float("inf")  # signal upstream that epoch had no usable batches
+            return float("inf")
         return running / num_batches
+
+    def _val_step(
+        self,
+        *,
+        X_val: np.ndarray,
+        y_true_val: np.ndarray,
+        model: torch.nn.Module,
+        l1_penalty: float,
+        class_weights: torch.Tensor,
+        eval_mask_override: np.ndarray | None = None,
+        batch_size: int | None = None,
+    ) -> float:
+        """Compute validation focal CE loss without gradient updates.
+
+        Notes:
+            - This does NOT call backward() or optimizer.step().
+            - Positions not selected for scoring are set to ignore_index (-1).
+            - If a batch has no valid targets (all -1), it is skipped.
+
+        Args:
+            X_val: Validation inputs (0/1/2 with -1 for missing / masked).
+            y_true_val: Ground truth matrix aligned to X_val (0/1/2; -1 for truly missing).
+            model: Trained/active model.
+            l1_penalty: Optional L1 coeff. (If you want "pure" val loss, pass 0.0.)
+            class_weights: Class weights (C,).
+            eval_mask_override: Optional boolean mask (N,L) selecting positions to score.
+            batch_size: Optional batch size override.
+
+        Returns:
+            Mean validation loss (float). Returns +inf if no valid targets exist.
+        """
+        if X_val.shape != y_true_val.shape:
+            raise ValueError(
+                f"X_val and y_true_val must have identical shape; got {X_val.shape} vs {y_true_val.shape}."
+            )
+
+        model.eval()
+        running = 0.0
+        num_batches = 0
+
+        if class_weights.device != self.device:
+            class_weights = class_weights.to(self.device)
+
+        nF_x = int(X_val.shape[1])
+        nF_model = int(getattr(model, "n_features", nF_x))
+        if nF_model != nF_x:
+            raise ValueError(f"Model expects {nF_model} loci but X_val has {nF_x}.")
+
+        nC_model = int(getattr(model, "num_classes", self.output_classes_))
+
+        # Build scoring mask
+        if eval_mask_override is not None:
+            if eval_mask_override.shape != X_val.shape:
+                raise ValueError(
+                    f"eval_mask_override shape {eval_mask_override.shape} does not match X_val shape {X_val.shape}."
+                )
+            mask = eval_mask_override.astype(bool, copy=False) & (y_true_val != -1)
+        else:
+            mask = (X_val != -1) & (y_true_val != -1)
+
+        # Targets: ignore everything not in mask
+        y_targets = y_true_val.copy()
+        if self.is_haploid:
+            y_targets[y_targets == 2] = 1
+        y_targets = np.where(mask, y_targets, -1).astype(np.int64, copy=False)
+
+        # Local val loader (do NOT reuse training loader which shuffles)
+        N = int(X_val.shape[0])
+        idx_tensor = torch.arange(N, dtype=torch.long)
+        x_tensor = torch.from_numpy(X_val).long()
+        dataset = torch.utils.data.TensorDataset(idx_tensor, x_tensor)
+        pin_memory = self.device.type == "cuda"
+        bs = int(batch_size or self.batch_size)
+        val_loader = torch.utils.data.DataLoader(
+            dataset,
+            batch_size=bs,
+            shuffle=False,
+            pin_memory=pin_memory,
+        )
+
+        # Keep y_targets as a CPU tensor; gather by idx_batch then move to device
+        y_targets_cpu = torch.from_numpy(y_targets).long()
+
+        gamma = float(getattr(model, "gamma", getattr(self, "gamma", 0.0)))
+        gamma = float(np.clip(gamma, 0.0, 10.0))
+
+        ce_criterion = SafeFocalCELoss(
+            gamma=gamma,
+            weight=class_weights,
+            ignore_index=-1,
+        )
+
+        l1_params = tuple(p for p in model.parameters() if p.requires_grad)
+
+        with torch.inference_mode():
+            for idx_batch, x_batch in val_loader:
+                x_batch = x_batch.to(self.device, non_blocking=True).long()
+                y_batch = y_targets_cpu.index_select(0, idx_batch).to(
+                    self.device, non_blocking=True
+                )
+
+                if x_batch.dim() != 2 or y_batch.dim() != 2:
+                    raise ValueError(
+                        f"Expected 2D (B,L) tensors; got x={tuple(x_batch.shape)}, y={tuple(y_batch.shape)}."
+                    )
+
+                x_in = self._one_hot_encode_012(
+                    x_batch, num_classes=nC_model
+                )  # (B,L,C)
+                raw = model(x_in)
+
+                logits_flat = raw if isinstance(raw, torch.Tensor) else raw[0]
+                expected = (x_batch.shape[0], nF_model * nC_model)
+
+                if logits_flat.dim() != 2 or tuple(logits_flat.shape) != expected:
+                    try:
+                        logits_flat = logits_flat.view(-1, nF_model * nC_model)
+                    except Exception as e:
+                        msg = f"Model output logits expected shape {expected}, got {tuple(logits_flat.shape)}. Ensure tuning subsets and masks use matching loci columns."
+                        self.logger.error(msg)
+                        raise ValueError(msg) from e
+
+                logits = logits_flat.view(-1, nF_model, nC_model).reshape(-1, nC_model)
+                targets_flat = y_batch.view(-1)
+
+                if not torch.isfinite(logits).all():
+                    continue
+
+                # Skip if there are no valid targets in this batch
+                valid = targets_flat != -1
+                if not bool(valid.any()):
+                    continue
+
+                logits_v = logits[valid]
+                targets_v = targets_flat[valid]
+
+                loss = ce_criterion(logits_v, targets_v)
+
+                # Optional: include L1 in the monitored objective
+                if l1_penalty > 0:
+                    l1 = torch.zeros((), device=self.device)
+                    for p in l1_params:
+                        l1 = l1 + p.abs().sum()
+                    loss = loss + l1_penalty * l1
+
+                if not torch.isfinite(loss):
+                    continue
+
+                running += float(loss.item())
+                num_batches += 1
+
+        return float("inf") if num_batches == 0 else running / num_batches
 
     def _predict(
         self,
@@ -855,19 +1108,11 @@ class ImputeAutoencoder(BaseNNImputer):
         X: np.ndarray | torch.Tensor,
         return_proba: bool = False,
     ) -> Tuple[np.ndarray, np.ndarray] | np.ndarray:
-        """Predict 0/1/2 labels (and probabilities) from masked inputs.
+        """Predict labels (and probabilities) from categorical logits.
 
-        This method generates predictions from the trained autoencoder model for the provided input data. It processes the input data, performs a forward pass through the model, and computes the predicted genotype labels (0, 1, or 2) along with their associated probabilities if requested.
-
-        Args:
-            model (torch.nn.Module): Trained model.
-            X (np.ndarray | torch.Tensor): 0/1/2 matrix with -1
-                for missing.
-            return_proba (bool): If True, return probabilities.
-
-        Returns:
-            Tuple[np.ndarray, np.ndarray] | np.ndarray: Predicted labels,
-                and probabilities if requested.
+        Diploid: returns {0,1,2} (REF,HET,ALT)
+        Haploid: returns {0,1}   (REF,ALT)
+        Missing in X (-1) is allowed; outputs are still produced but you typically mask later.
         """
         if model is None:
             msg = "Model is not trained. Call fit() before predict()."
@@ -878,68 +1123,45 @@ class ImputeAutoencoder(BaseNNImputer):
         with torch.no_grad():
             X_tensor = torch.from_numpy(X) if isinstance(X, np.ndarray) else X
             X_tensor = X_tensor.to(self.device).long()
-            if self.is_haploid:
-                x_ohe = self._one_hot_encode_012(X_tensor)
-                logits = model(x_ohe).view(-1, self.num_features_, self.output_classes_)
-                probas = torch.softmax(logits, dim=-1)
-                labels = torch.argmax(probas, dim=-1)
-            else:
-                x_in = self._encode_multilabel_inputs(X_tensor)
-                logits = model(x_in).view(-1, self.num_features_, self.output_classes_)
-                probas_2 = torch.sigmoid(logits)
-                p_ref = probas_2[..., 0]
-                p_alt = probas_2[..., 1]
-                p_het = p_ref * p_alt
-                p_ref_only = p_ref * (1 - p_alt)
-                p_alt_only = p_alt * (1 - p_ref)
-                stacked = torch.stack([p_ref_only, p_het, p_alt_only], dim=-1)
-                stacked = stacked / stacked.sum(dim=-1, keepdim=True).clamp_min(1e-8)
-                probas = stacked
-                labels = torch.argmax(stacked, dim=-1)
+
+            if X_tensor.dim() != 2:
+                raise ValueError(
+                    f"X must be 2D (N,L); got shape {tuple(X_tensor.shape)}"
+                )
+
+            nF_x = int(X_tensor.shape[1])
+            nF_model = int(getattr(model, "n_features", nF_x))
+            if nF_model != nF_x:
+                msg = (
+                    f"Feature mismatch: model expects {nF_model} loci but X has {nF_x}."
+                )
+                self.logger.error(msg)
+                raise ValueError(msg)
+
+            nC_model = int(getattr(model, "num_classes", self.output_classes_))
+
+            x_ohe = self._one_hot_encode_012(X_tensor, num_classes=nC_model)  # (N,L,C)
+            raw = model(x_ohe)
+
+            logits_flat = raw if isinstance(raw, torch.Tensor) else raw[0]
+            expected = (x_ohe.shape[0], nF_model * nC_model)
+
+            if logits_flat.dim() != 2 or tuple(logits_flat.shape) != expected:
+                try:
+                    logits_flat = logits_flat.view(-1, nF_model * nC_model)
+                except Exception as e:
+                    msg = f"Model output logits expected shape {expected}, got {tuple(logits_flat.shape)}. Ensure tuning subsets and masks use matching loci columns."
+                    self.logger.error(msg)
+                    raise ValueError(msg) from e
+
+            logits = logits_flat.view(-1, nF_model, nC_model)
+
+            probas = torch.softmax(logits, dim=-1)
+            labels = torch.argmax(probas, dim=-1)
 
         if return_proba:
             return labels.cpu().numpy(), probas.cpu().numpy()
-
         return labels.cpu().numpy()
-
-    def _encode_multilabel_inputs(self, y: torch.Tensor) -> torch.Tensor:
-        """Two-channel multi-hot for diploid: REF-only, ALT-only; HET sets both."""
-        if self.is_haploid:
-            return self._one_hot_encode_012(y)
-        y = y.to(self.device)
-        shape = y.shape + (2,)
-        out = torch.zeros(shape, device=self.device, dtype=torch.float32)
-        valid = y != -1
-        ref_mask = valid & (y != 2)
-        alt_mask = valid & (y != 0)
-        out[ref_mask, 0] = 1.0
-        out[alt_mask, 1] = 1.0
-        return out
-
-    def _multi_hot_targets(self, y: torch.Tensor) -> torch.Tensor:
-        """Targets aligned with _encode_multilabel_inputs for diploid training."""
-        if self.is_haploid:
-            # One-hot CE path expects integer targets; handled upstream.
-            raise RuntimeError("_multi_hot_targets called for haploid data.")
-        y = y.to(self.device)
-        out = torch.zeros(y.shape + (2,), device=self.device, dtype=torch.float32)
-        valid = y != -1
-        ref_mask = valid & (y != 2)
-        alt_mask = valid & (y != 0)
-        out[ref_mask, 0] = 1.0
-        out[alt_mask, 1] = 1.0
-        return out
-
-    def _compute_pos_weights(self, X: np.ndarray) -> torch.Tensor:
-        """Balance REF/ALT channels for multilabel BCE."""
-        ref_pos = np.count_nonzero((X == 0) | (X == 1))
-        alt_pos = np.count_nonzero((X == 2) | (X == 1))
-        total_valid = np.count_nonzero(X != -1)
-        pos_counts = np.array([ref_pos, alt_pos], dtype=np.float32)
-        neg_counts = np.maximum(total_valid - pos_counts, 1.0)
-        pos_counts = np.maximum(pos_counts, 1.0)
-        weights = neg_counts / pos_counts
-        return torch.tensor(weights, device=self.device, dtype=torch.float32)
 
     def _evaluate_model(
         self,
@@ -947,25 +1169,29 @@ class ImputeAutoencoder(BaseNNImputer):
         model: torch.nn.Module,
         params: dict,
         objective_mode: bool = False,
-        latent_vectors_val: Optional[np.ndarray] = None,
+        latent_vectors_val: np.ndarray | None = None,
         *,
+        y_true_matrix: np.ndarray | None = None,
         eval_mask_override: np.ndarray | None = None,
     ) -> Dict[str, float]:
         """Evaluate on 0/1/2; then IUPAC decoding and 10-base integer reports.
 
-        This method evaluates the trained autoencoder model on a validation set, computing various classification metrics based on the predicted and true genotypes. It handles both haploid and diploid data appropriately and generates detailed classification reports for both genotype and IUPAC/10-base integer encodings.
+        This method evaluates the trained VAE model on a validation dataset, computing various performance metrics. It handles missing data appropriately and generates detailed classification reports for both the original 0/1/2 encoding and the decoded IUPAC and integer formats. The evaluation metrics are logged for review.
 
         Args:
-            X_val (np.ndarray): Validation set 0/1/2 matrix with -1
-                for missing.
+            X_val (np.ndarray): Validation 0/1/2 matrix with -1 for missing.
             model (torch.nn.Module): Trained model.
-            params (dict): Model parameters.
-            objective_mode (bool): If True, suppress logging and reports.
-            latent_vectors_val (Optional[np.ndarray]): Unused for AE.
-            eval_mask_override (np.ndarray | None): Optional mask to override default evaluation mask.
+            params (dict): Current hyperparameters (for logging).
+            objective_mode (bool): If True, minimize logging for Optuna.
+            latent_vectors_val (np.ndarray | None): Not used by VAE.
+            y_true_matrix (np.ndarray | None): Optional ground truth matrix for eval.
+            eval_mask_override (np.ndarray | None): Optional mask to override default eval mask.
 
         Returns:
-            Dict[str, float]: Dictionary of evaluation metrics.
+            Dict[str, float]: Computed metrics.
+
+        Raises:
+            NotFittedError: If called before fit().
         """
         pred_labels, pred_probas = self._predict(
             model=model, X=X_val, return_proba=True
@@ -973,62 +1199,58 @@ class ImputeAutoencoder(BaseNNImputer):
 
         finite_mask = np.all(np.isfinite(pred_probas), axis=-1)  # (N, L)
 
-        # FIX 1: Check ROWS (shape[0]) only. X_val might be a feature subset.
-        if (
-            hasattr(self, "X_val_")
-            and getattr(self, "X_val_", None) is not None
-            and X_val.shape[0] == self.X_val_.shape[0]
-        ):
-            GT_ref = getattr(self, "GT_test_full_", self.ground_truth_)
-        elif (
-            hasattr(self, "X_train_")
-            and getattr(self, "X_train_", None) is not None
-            and X_val.shape[0] == self.X_train_.shape[0]
-        ):
-            GT_ref = getattr(self, "GT_train_full_", self.ground_truth_)
-        else:
-            GT_ref = self.ground_truth_
+        GT_ref = y_true_matrix
 
-        # FIX 2: Handle Feature Mismatch (e.g., tune_fast feature subsetting)
-        # If the GT source has more columns than X_val, slice it to match.
-        if GT_ref.shape[1] > X_val.shape[1]:
-            GT_ref = GT_ref[:, : X_val.shape[1]]
+        # If not provided, select from known aligned stores by exact shape match.
+        if GT_ref is None:
+            if (
+                getattr(self, "_tune_ready", False)
+                and getattr(self, "_tune_GT_test", None) is not None
+            ):
+                if X_val.shape == self._tune_GT_test.shape:
+                    GT_ref = self._tune_GT_test
+            if (
+                GT_ref is None
+                and getattr(self, "GT_test_full_", None) is not None
+                and X_val.shape == self.GT_test_full_.shape
+            ):
+                GT_ref = self.GT_test_full_
+            if (
+                GT_ref is None
+                and getattr(self, "GT_train_full_", None) is not None
+                and X_val.shape == self.GT_train_full_.shape
+            ):
+                GT_ref = self.GT_train_full_
 
-        # Fallback if rows mismatch (unlikely after Fix 1, but safe to keep)
-        if GT_ref.shape != X_val.shape:
-            # If completely different, we can't use the ground truth object.
-            # Fall back to X_val (this implies only observed values are scored)
-            GT_ref = X_val
+        # Hard fail if still unknown;
+        # do not “slice columns” or set GT_ref = X_val.
+        if GT_ref is None or GT_ref.shape != X_val.shape:
+            msg = f"Evaluation ground truth not found or shape mismatch: X_val shape={X_val.shape}, GT shape={(None if GT_ref is None else GT_ref.shape)}."
+            self.logger.error(msg)
+            raise ValueError(msg)
 
         if eval_mask_override is not None:
-            # FIX 3: Allow override mask to be sliced if it's too wide
-            if eval_mask_override.shape[0] != X_val.shape[0]:
+            if eval_mask_override.shape != X_val.shape:
                 msg = (
-                    f"eval_mask_override rows {eval_mask_override.shape[0]} "
-                    f"does not match X_val rows {X_val.shape[0]}"
+                    f"eval_mask_override shape {eval_mask_override.shape} "
+                    f"does not match X_val shape {X_val.shape}."
                 )
                 self.logger.error(msg)
                 raise ValueError(msg)
 
-            if eval_mask_override.shape[1] > X_val.shape[1]:
-                eval_mask = eval_mask_override[:, : X_val.shape[1]].astype(bool)
-            else:
-                eval_mask = eval_mask_override.astype(bool)
+            eval_mask = eval_mask_override.astype(bool, copy=False)
+            eval_mask = eval_mask & finite_mask & (GT_ref != -1)
         else:
-            eval_mask = X_val != -1
-
-        # Combine masks
-        eval_mask = eval_mask & finite_mask & (GT_ref != -1)
+            eval_mask = (X_val != -1) & finite_mask & (GT_ref != -1)
 
         y_true_flat = GT_ref[eval_mask].astype(np.int64, copy=False)
         y_pred_flat = pred_labels[eval_mask].astype(np.int64, copy=False)
         y_proba_flat = pred_probas[eval_mask].astype(np.float64, copy=False)
 
         if y_true_flat.size == 0:
-            self.tune_metric = "f1" if self.tune_metric is None else self.tune_metric
             return {self.tune_metric: 0.0}
 
-        # ensure valid probability simplex after masking (no NaNs/Infs, sums=1)
+        # ensure valid probability simplex after masking
         y_proba_flat = np.clip(y_proba_flat, 0.0, 1.0)
         row_sums = y_proba_flat.sum(axis=1, keepdims=True)
         row_sums[row_sums == 0] = 1.0
@@ -1042,27 +1264,12 @@ class ImputeAutoencoder(BaseNNImputer):
             y_pred_flat = y_pred_flat.copy()
             y_true_flat[y_true_flat == 2] = 1
             y_pred_flat[y_pred_flat == 2] = 1
-            # collapse probs to 2-class
             proba_2 = np.zeros((len(y_proba_flat), 2), dtype=y_proba_flat.dtype)
             proba_2[:, 0] = y_proba_flat[:, 0]
-            proba_2[:, 1] = y_proba_flat[:, 2]
+            proba_2[:, 1] = y_proba_flat[:, 1]
             y_proba_flat = proba_2
 
         y_true_ohe = np.eye(len(labels_for_scoring))[y_true_flat]
-
-        tune_metric_tmp: Literal[
-            "pr_macro",
-            "roc_auc",
-            "average_precision",
-            "accuracy",
-            "f1",
-            "precision",
-            "recall",
-        ]
-        if self.tune_metric_ is not None:
-            tune_metric_tmp = self.tune_metric_
-        else:
-            tune_metric_tmp = "f1"  # Default if not tuning
 
         metrics = self.scorers_.evaluate(
             y_true_flat,
@@ -1070,16 +1277,16 @@ class ImputeAutoencoder(BaseNNImputer):
             y_true_ohe,
             y_proba_flat,
             objective_mode,
-            tune_metric_tmp,
+            self.tune_metric,  # type: ignore
         )
 
         if not objective_mode:
             pm = PrettyMetrics(
                 metrics, precision=3, title=f"{self.model_name} Validation Metrics"
             )
-            pm.render()  # prints a command-line table
+            pm.render()
 
-            # Primary report (REF/HET/ALT or REF/ALT)
+            # Primary report
             self._make_class_reports(
                 y_true=y_true_flat,
                 y_pred_proba=y_proba_flat,
@@ -1088,15 +1295,13 @@ class ImputeAutoencoder(BaseNNImputer):
                 labels=target_names,
             )
 
-            # IUPAC decode & 10-base integer reports
-            # Now safe because GT_ref has been sliced to match X_val dimensions
+            # IUPAC decode & 10-base integer report
+            # FIX 4: Use current shape (X_val.shape) not self.num_features_
             y_true_dec = self.pgenc.decode_012(
                 GT_ref.reshape(X_val.shape[0], X_val.shape[1])
             )
             X_pred = X_val.copy()
             X_pred[eval_mask] = y_pred_flat
-
-            # Use X_val.shape[1] (current features) not self.num_features_ (original features)
             y_pred_dec = self.pgenc.decode_012(
                 X_pred.reshape(X_val.shape[0], X_val.shape[1])
             )
@@ -1187,47 +1392,52 @@ class ImputeAutoencoder(BaseNNImputer):
                 loader=train_loader,
                 lr=lr,
                 l1_penalty=l1_penalty,
+                max_epochs=self.tune_epochs,
                 trial=trial,
-                return_history=False,
                 class_weights=class_weights,
                 X_val=X_val,
+                y_true_val=getattr(self, "_tune_GT_test", None),
                 params=params,
                 prune_metric=self.tune_metric,
-                prune_warmup_epochs=10,
+                prune_warmup_epochs=25,
                 eval_interval=self.tune_eval_interval,
                 eval_requires_latents=False,
                 eval_latent_steps=0,
                 eval_latent_lr=0.0,
                 eval_latent_weight_decay=0.0,
+                eval_mask_override=(
+                    getattr(self, "_tune_sim_mask_test", None)
+                    if self.simulate_missing
+                    else None
+                ),
             )
 
+            # Prefer tune-aligned mask whenever tune artifacts exist
             eval_mask = (
-                self.sim_mask_test_
-                if (
-                    self.simulate_missing
-                    and getattr(self, "sim_mask_test_", None) is not None
-                )
+                getattr(self, "_tune_sim_mask_test", None)
+                if self.simulate_missing
                 else None
             )
 
-            if model is not None:
-                metrics = self._evaluate_model(
-                    X_val,
-                    model,
-                    params,
-                    objective_mode=True,
-                    eval_mask_override=(
-                        eval_mask[:, : X_val.shape[1]]
-                        if (
-                            eval_mask is not None
-                            and eval_mask.shape[1] > X_val.shape[1]
-                        )
-                        else eval_mask
-                    ),
-                )
-                self._clear_resources(model, train_loader)
-            else:
-                raise TypeError("Model training failed; no model was returned.")
+            # non-tune path fallback (full fit/val)
+            if eval_mask is None:
+                eval_mask = getattr(self, "sim_mask_test_", None)
+
+            if model is None:
+                msg = "Model training returned None."
+                self.logger.error(msg)
+                raise RuntimeError(msg)
+
+            metrics = self._evaluate_model(
+                X_val,
+                model,
+                params,
+                objective_mode=True,
+                y_true_matrix=getattr(self, "_tune_GT_test", None),
+                eval_mask_override=eval_mask,
+            )
+
+            self._clear_resources(model, train_loader)
 
             return metrics[self.tune_metric]
 
@@ -1261,6 +1471,7 @@ class ImputeAutoencoder(BaseNNImputer):
             "layer_schedule": trial.suggest_categorical(
                 "layer_schedule", ["pyramid", "linear"]
             ),
+            "gamma": trial.suggest_float("gamma", 0.0, 5.0, step=0.5),
         }
 
         nF = (
@@ -1285,11 +1496,13 @@ class ImputeAutoencoder(BaseNNImputer):
             schedule=params["layer_schedule"],
         )
 
+        # [latent_dim] + interior widths (exclude output width)
+        hidden_only = hidden_layer_sizes[1:-1]
+
         # Keep the latent_dim as the first element,
         # then the interior hidden widths.
         # If there are no interior widths (very small nets),
         # this still leaves [latent_dim].
-        hidden_only: list[int] = [hidden_layer_sizes[0]] + hidden_layer_sizes[1:-1]
 
         params["model_params"] = {
             "n_features": int(nF),
@@ -1326,6 +1539,7 @@ class ImputeAutoencoder(BaseNNImputer):
                     "learning_rate",
                     "l1_penalty",
                     "layer_scaling_factor",
+                    "gamma",
                 }:
                     bp[k] = float(v)
                 elif k in {"activation", "layer_schedule"}:
@@ -1337,6 +1551,9 @@ class ImputeAutoencoder(BaseNNImputer):
                         bp[k] = str(v)
             else:
                 bp[k] = v  # keep lists as-is
+
+        if "gamma" in bp:
+            self.gamma = float(bp["gamma"])
 
         self.latent_dim: int = bp["latent_dim"]
         self.dropout_rate: float = bp["dropout_rate"]
@@ -1361,7 +1578,7 @@ class ImputeAutoencoder(BaseNNImputer):
         # then the interior hidden widths.
         # If there are no interior widths (very small nets),
         # this still leaves [latent_dim].
-        hidden_only = [hidden_layer_sizes[0]] + hidden_layer_sizes[1:-1]
+        hidden_only = hidden_layer_sizes[1:-1]
 
         return {
             "n_features": self.num_features_,
@@ -1381,8 +1598,8 @@ class ImputeAutoencoder(BaseNNImputer):
             Dict[str, int | float | str | list]: Default model parameters.
         """
         nF: int = self.num_features_
-        # Use the number of output channels passed to the model (2 for diploid multilabel)
-        # instead of the scoring classes (3) to keep layer shapes aligned.
+
+        # Use the number of output channels passed to the model (3 for diploid)
         nC: int = int(getattr(self, "output_classes_", self.num_classes_ or 3))
         ls = self.layer_schedule
 
@@ -1397,10 +1614,12 @@ class ImputeAutoencoder(BaseNNImputer):
             alpha=self.layer_scaling_factor,
             schedule=ls,
         )
+        hidden_only = hidden_layer_sizes[1:-1]
+
         return {
             "n_features": self.num_features_,
             "latent_dim": self.latent_dim,
-            "hidden_layer_sizes": hidden_layer_sizes,
+            "hidden_layer_sizes": hidden_only,
             "dropout_rate": self.dropout_rate,
             "activation": self.activation,
             "num_classes": nC,
