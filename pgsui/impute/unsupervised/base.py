@@ -1,9 +1,11 @@
 import copy
 import gc
+import inspect
 import json
 import logging
+from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Mapping, Tuple, Type, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -89,6 +91,9 @@ class BaseNNImputer:
         self.logger = configure_logger(
             logman.get_logger(), verbose=self.verbose, debug=self.debug
         )
+
+        self.logger.info(f"Using PyTorch device: {self.device.type}.")
+
         self._float_genotype_cache: np.ndarray | None = None
         self._sim_mask_cache: dict[tuple, np.ndarray] = {}
         self._tune_ready: bool = False
@@ -98,7 +103,7 @@ class BaseNNImputer:
         self.tune_resume: bool = False
         self.n_trials: int = 100
         self.model_params: Dict[str, Any] = {}
-        self.tune_metric: str = "val_f1_macro"
+        self.tune_metric: str = "f1"
         self.learning_rate: float = 1e-3
         self.plotter_: "Plotting"
         self.num_features_: int = 0
@@ -134,7 +139,9 @@ class BaseNNImputer:
         self.plots_dir: Path
         self.metrics_dir: Path
         self.parameters_dir: Path
-        self.study_db: Path
+        self.study_db: Path | None = None
+        self.X_model_input_: np.ndarray | None = None
+        self.sim_mask_global_: np.ndarray | None = None
 
     def tune_hyperparameters(self) -> None:
         """Tunes model hyperparameters using an Optuna study.
@@ -154,15 +161,20 @@ class BaseNNImputer:
         study_db = None
         load_if_exists = False
         if self.tune_save_db:
-            study_db = self.optimize_dir / "study_database" / "optuna_study.db"
+            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            study_db = (
+                self.optimize_dir / "study_database" / f"optuna_study_{timestamp}.db"
+            )
             study_db.parent.mkdir(parents=True, exist_ok=True)
 
             if self.tune_resume and study_db.exists():
                 load_if_exists = True
 
             if not self.tune_resume and study_db.exists():
-                study_db.unlink()
+                timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+                study_db = study_db.with_name(f"optuna_study_{timestamp}.db")
 
+        self.study_db = study_db
         study_name = f"{self.prefix} {self.model_name} Model Optimization"
         storage = f"sqlite:///{study_db}" if self.tune_save_db else None
 
@@ -242,14 +254,8 @@ class BaseNNImputer:
 
     def build_model(
         self,
-        Model: (
-            torch.nn.Module
-            | type["AutoencoderModel"]
-            | type["NLPCAModel"]
-            | type["UBPModel"]
-            | type["VAEModel"]
-        ),
-        model_params: Dict[str, int | float | str | bool],
+        Model: Type[torch.nn.Module],
+        model_params: Dict[str, Any],
     ) -> torch.nn.Module:
         """Builds and initializes a neural network model instance.
 
@@ -488,25 +494,20 @@ class BaseNNImputer:
         Returns:
             torch.device: The selected PyTorch device.
         """
-        dvc: str = device
-        dvc = dvc.lower().strip()
+        dvc = device.lower().strip()
         if dvc == "cpu":
-            self.logger.info("Using PyTorch device: CPU.")
             return torch.device("cpu")
         if dvc == "mps":
             if torch.backends.mps.is_available():
-                self.logger.info("Using PyTorch device: mps.")
                 return torch.device("mps")
-            self.logger.warning("MPS unavailable; falling back to CPU.")
             return torch.device("cpu")
-        # gpu
         if torch.cuda.is_available():
-            self.logger.info("Using PyTorch device: cuda.")
             return torch.device("cuda")
-        self.logger.warning("CUDA unavailable; falling back to CPU.")
         return torch.device("cpu")
 
-    def _create_model_directories(self, prefix: str, outdirs: List[str]) -> None:
+    def _create_model_directories(
+        self, prefix: str, outdirs: List[str], *, outdir: Path | str | None = None
+    ) -> None:
         """Creates the directory structure for storing model outputs.
 
         This method sets up a standardized folder hierarchy for saving models, plots, metrics, and optimization results, organized under a main directory named after the provided prefix.
@@ -514,10 +515,13 @@ class BaseNNImputer:
         Args:
             prefix (str): The prefix for the main output directory.
             outdirs (List[str]): A list of subdirectory names to create within the main directory.
+            outdir (Path | str | None): The base output directory. If None, uses the current working directory. Defaults to None.
 
         Raises:
             Exception: If any of the directories cannot be created.
         """
+        base_root = Path(outdir) if outdir is not None else Path.cwd()
+        formatted_output_dir = base_root / f"{prefix}_output"
         formatted_output_dir = Path(f"{prefix}_output")
         base_dir = formatted_output_dir / "Unsupervised"
 
@@ -679,13 +683,15 @@ class BaseNNImputer:
             json.dump(report, f, indent=4)
 
         viz = ClassificationReportVisualizer(reset_kwargs=self.plotter_.param_dict)
-
-        plots = viz.plot_all(
-            report,  # type: ignore
-            title_prefix=f"{self.model_name} {middle} Report",
-            show=getattr(self, "show_plots", False),
-            heatmap_classes_only=True,
-        )
+        try:
+            plots = viz.plot_all(
+                report,  # type: ignore
+                title_prefix=f"{self.model_name} {middle} Report",
+                show=getattr(self, "show_plots", False),
+                heatmap_classes_only=True,
+            )
+        finally:
+            viz._reset_mpl_style()
 
         for name, fig in plots.items():
             fout = self.plots_dir / f"{report_name}_report_{name}.{self.plot_format}"
@@ -708,8 +714,6 @@ class BaseNNImputer:
             if not self.is_haploid:
                 msg = f"Ploidy: {self.ploidy}. Evaluating per allele."
                 self.logger.info(msg)
-
-        viz._reset_mpl_style()
 
     def _compute_hidden_layer_sizes(
         self,
@@ -822,29 +826,28 @@ class BaseNNImputer:
         return np.clip(sizes, min_size, max_size).astype(int).tolist()
 
     def _class_weights_from_zygosity(self, X: np.ndarray) -> torch.Tensor:
-        """Class-balanced weights for 0/1/2 (handles haploid collapse if needed).
-
-        This method computes class-balanced weights for the genotype classes (0/1/2) based on the provided genotype matrix. It handles cases where the data is haploid by collapsing the ALT class to 1, effectively treating the problem as binary classification (REF vs ALT). The weights are calculated using a class-balanced weighting scheme that considers the frequency of each class in the training data, with parameters for beta and maximum ratio to control the weighting behavior. The resulting weights are returned as a PyTorch tensor on the current device.
-
-        Args:
-            X (np.ndarray): 0/1/2 with -1 for missing.
-
-        Returns:
-            torch.Tensor: Weights on current device.
-        """
         y = X[X != -1].ravel().astype(np.int64)
         if y.size == 0:
             return torch.ones(
                 self.num_classes_, dtype=torch.float32, device=self.device
             )
 
+        if getattr(self, "is_haploid", False):
+            y = y.copy()
+            y[y == 2] = 1
+
+        # If haploid, num_classes_ should be 2 for weights; enforce defensively
+        num_classes = (
+            2 if getattr(self, "is_haploid", False) else int(self.num_classes_)
+        )
+
         return self._class_balanced_weights_from_mask(
             y=y,
             train_mask=np.ones_like(y, dtype=bool),
-            num_classes=self.num_classes_,
+            num_classes=num_classes,
             beta=self.beta,
             max_ratio=self.max_ratio,
-            mode="allele",  # 1D int vector
+            mode="allele",
         ).to(self.device)
 
     @staticmethod
@@ -894,16 +897,17 @@ class BaseNNImputer:
             shape,
         )
 
-    def _one_hot_encode_012(self, X: np.ndarray | torch.Tensor) -> torch.Tensor:
-        """One-hot 0/1/2; -1 rows are all-zeros (B, L, K).
+    def _one_hot_encode_012(
+        self, X: np.ndarray | torch.Tensor, num_classes: int | None
+    ) -> torch.Tensor:
+        """One-hot encode genotype calls with masking for missing (<0).
 
-        This method performs one-hot encoding of the input genotype data (0, 1, 2) while handling missing values represented by -1. The output is a tensor of shape (B, L, K), where B is the batch size, L is the number of features, and K is the number of classes.
+        Contract:
+            - Valid classes must be integers in [0, K-1]
+            - Missing is any value < 0
 
-        Args:
-            X (np.ndarray | torch.Tensor): The input data to be one-hot encoded, either as a NumPy array or a PyTorch tensor.
-
-        Returns:
-            torch.Tensor: A one-hot encoded tensor of shape (B, L, K), where B is the batch size, L is the number of features, and K is the number of classes.
+        Special-case:
+            - If K==2 and values are in {0,2} (no 1s), map 2->1.
         """
         Xt = (
             torch.from_numpy(X).to(self.device)
@@ -911,12 +915,39 @@ class BaseNNImputer:
             else X.to(self.device)
         )
 
-        # B=batch, L=features, K=classes
+        # Make sure we have integer class labels
+        if Xt.dtype.is_floating_point:
+            # Convert NaN -> -1 and cast to long
+            Xt = torch.nan_to_num(Xt, nan=-1.0).long()
+        else:
+            Xt = Xt.long()
+
         B, L = Xt.shape
-        K = self.num_classes_
-        X_ohe = torch.zeros(B, L, K, dtype=torch.float32, device=self.device)
-        valid = Xt != -1
-        idx = Xt[valid].long()
+        K = int(num_classes) if num_classes is not None else int(self.num_classes_)
+
+        # Missing is anything < 0 (covers -1, -9, etc.)
+        valid = Xt >= 0
+
+        # If binary mode but data is {0,2} (haploid-like or "ref vs non-ref"), map 2->1
+        if K == 2:
+            has_het = torch.any(valid & (Xt == 1))
+            has_alt2 = torch.any(valid & (Xt == 2))
+            if has_alt2 and not has_het:
+                Xt = Xt.clone()
+                Xt[valid & (Xt == 2)] = 1
+
+        # Now enforce the one-hot precondition
+        if torch.any(valid & (Xt >= K)):
+            bad_vals = torch.unique(Xt[valid & (Xt >= K)]).detach().cpu().tolist()
+            all_vals = torch.unique(Xt[valid]).detach().cpu().tolist()
+            raise ValueError(
+                f"_one_hot_encode_012 received class values outside [0, {K-1}]. "
+                f"num_classes={K}, offending_values={bad_vals}, observed_values={all_vals}. "
+                "Upstream encoding mismatch (e.g., passing 0/1/2 with num_classes=2)."
+            )
+
+        X_ohe = torch.zeros((B, L, K), dtype=torch.float32, device=self.device)
+        idx = Xt[valid]
 
         if idx.numel() > 0:
             X_ohe[valid] = F.one_hot(idx, num_classes=K).float()
@@ -935,58 +966,58 @@ class BaseNNImputer:
         latent_steps: int = 50,
         latent_lr: float = 1e-2,
         latent_weight_decay: float = 0.0,
-        latent_seed: int = 123,
+        latent_seed: int | None = 123,
         _latent_cache: dict | None = None,
         _latent_cache_key: str | None = None,
+        y_true_matrix: np.ndarray | None = None,
         eval_mask_override: np.ndarray | None = None,
+        GT_val: np.ndarray | None = None,
     ) -> float:
         """Compute a scalar metric (to MAXIMIZE) on a fixed validation set.
 
-        This method evaluates the model on a validation dataset and computes a specified metric, which is used for pruning decisions during hyperparameter tuning. It supports optional latent inference to optimize latent representations before evaluation. The method handles potential issues with non-finite metric values by returning negative infinity, making it easier to prune poorly performing trials.
-
-        Args:
-            model (torch.nn.Module): The model to evaluate.
-            X_val (np.ndarray): Validation data.
-            params (dict): Model parameters.
-            metric (str): Metric name to return.
-            objective_mode (bool): If True, use objective-mode evaluation. Default is True.
-            do_latent_infer (bool): If True, perform latent inference before evaluation. Default
-            latent_steps (int): Number of steps for latent inference. Default is 50.
-            latent_lr (float): Learning rate for latent inference. Default is 1e-2
-            latent_weight_decay (float): Weight decay for latent inference. Default is 0.0.
-            latent_seed (int): Random seed for latent inference. Default is 123.
-            _latent_cache (dict | None): Optional cache for storing/retrieving optimized latents
-            _latent_cache_key (str | None): Key for storing/retrieving in _latent_cache.
-            eval_mask_override (np.ndarray | None): Optional mask to override default evaluation mask.
+        This method is used for Optuna pruning decisions. It optionally performs latent inference (for models like UBP that benefit from it), then calls `_evaluate_model()` and returns a single metric value. If `eval_mask_override` is provided (e.g., simulated-missing mask), you SHOULD provide `y_true_matrix` aligned to `X_val` to avoid scoring against masked (-1) values.
 
         Returns:
-            float: The computed metric value to maximize. Returns -inf on failure.
+            float: Metric value to maximize. Returns -inf on failure/non-finite.
         """
-        optimized_val_latents = None
+        optimized_val_latents: torch.Tensor | None = None
 
-        # Optional latent inference path for models that need it.
+        # --- Optional latent inference path (cache-aware) ---
         if do_latent_infer and hasattr(self, "_latent_infer_for_eval"):
-            optimized_val_latents = self._latent_infer_for_eval(  # type: ignore
-                model=model,
-                X_val=X_val,
-                steps=latent_steps,
-                lr=latent_lr,
-                weight_decay=latent_weight_decay,
-                seed=latent_seed,
-                cache=_latent_cache,
-                cache_key=_latent_cache_key,
-            )
-            # Retrieve the optimized latents from the cache
-            if _latent_cache is not None and _latent_cache_key in _latent_cache:
-                optimized_val_latents = _latent_cache[_latent_cache_key]
+            try:
+                # Your _latent_infer_for_eval currently returns None; it writes into cache.
+                # We call it for side-effects then try to retrieve from the cache.
+                self._latent_infer_for_eval(  # type: ignore[attr-defined]
+                    model=model,
+                    X_val=X_val,
+                    steps=latent_steps,
+                    lr=latent_lr,
+                    weight_decay=latent_weight_decay,
+                    seed=latent_seed,
+                    cache=_latent_cache,
+                    cache_key=_latent_cache_key,
+                )
 
+                if _latent_cache is not None and _latent_cache_key is not None:
+                    cached = _latent_cache.get(_latent_cache_key, None)
+                    if cached is not None:
+                        optimized_val_latents = cached
+            except Exception as e:
+                # If latent inference fails, just prune hard (return -inf).
+                self.logger.warning(f"Latent inference for pruning failed: {e}")
+                return -np.inf
+
+        # --- If you thin the validation set (proxy metric), thin everything aligned ---
         if getattr(self, "_tune_eval_slice", None) is not None:
-            X_val = X_val[self._tune_eval_slice]
+            sl = self._tune_eval_slice
+            X_val = X_val[sl]
             if eval_mask_override is not None:
-                eval_mask_override = eval_mask_override[self._tune_eval_slice]
+                eval_mask_override = eval_mask_override[sl]
+            if y_true_matrix is not None:
+                y_true_matrix = y_true_matrix[sl]
 
-        # Child's evaluator now accepts the pre-computed latents
-        metrics = self._evaluate_model(  # type: ignore
+        # --- Build kwargs for evaluator with signature compatibility ---
+        eval_kwargs: dict[str, Any] = dict(
             X_val=X_val,
             model=model,
             params=params,
@@ -995,11 +1026,36 @@ class BaseNNImputer:
             eval_mask_override=eval_mask_override,
         )
 
+        # Pass ground truth matrix under the correct parameter name:
+        # - Prefer GT_val (new)
+        # - Fall back to y_true_matrix (old)
+        if y_true_matrix is not None:
+            sig = inspect.signature(self._evaluate_model)  # type: ignore
+            if "GT_val" in sig.parameters:
+                eval_kwargs["GT_val"] = y_true_matrix
+            elif "y_true_matrix" in sig.parameters:
+                eval_kwargs["y_true_matrix"] = y_true_matrix
+            else:
+                # If evaluator doesn't accept GT at all, this is unsafe for mask_override scoring.
+                if eval_mask_override is not None:
+                    self.logger.error(
+                        "Evaluator does not accept ground truth matrix; "
+                        "cannot safely score with eval_mask_override."
+                    )
+                    return -np.inf
+
+        # --- Evaluate safely for pruning ---
+        try:
+            metrics = self._evaluate_model(**eval_kwargs)  # type: ignore[attr-defined]
+        except Exception as e:
+            self.logger.warning(f"Pruning-eval failed (returning -inf): {e}")
+            return -np.inf
+
         # Prefer the requested metric; fall back to self.tune_metric if needed.
         val = metrics.get(metric, metrics.get(getattr(self, "tune_metric", ""), None))
 
         if val is None or not np.isfinite(val):
-            return -np.inf  # make pruning decisions easy/robust on bad reads
+            return -np.inf
 
         return float(val)
 
@@ -1043,37 +1099,103 @@ class BaseNNImputer:
     def _prepare_tuning_artifacts(self) -> None:
         """Prepare data and artifacts needed for hyperparameter tuning.
 
-        This method sets up the necessary data splits, data loaders, and class weights required for hyperparameter tuning. It creates training and validation sets from the ground truth data, initializes data loaders with a specified batch size, and computes class-balanced weights based on the training data. The method also handles optional subsampling of the dataset for faster tuning and prepares slices for evaluation if needed.
+        Optionally subsamples both samples (rows) and loci (columns) for fast tuning and ensures all derived artifacts remain row/column aligned, including simulated-missing masks.
 
         Raises:
-            AttributeError: If the ground truth data (`ground_truth_`) is not set.
+            ValueError: If there are shape mismatches between ground truth, model input, or simulated-missing masks.
         """
         if getattr(self, "_tune_ready", False):
             return
 
-        X = self.ground_truth_
-        n_samp, n_loci = X.shape
         rng = self.rng
+        X_truth = self.ground_truth_
+        X_input = self.X_model_input_
 
+        if X_input is None:
+            msg = "X_model_input_ is None; cannot prepare tuning artifacts."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        if X_truth.shape != X_input.shape:
+            msg = f"Shape mismatch between ground truth and model input."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        sim_global = getattr(self, "sim_mask_global_", None)
+        if sim_global is not None and sim_global.shape != X_truth.shape:
+            msg = "Shape mismatch between sim_mask_global_ and ground truth."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        n_samp, n_loci = X_truth.shape
+
+        # --- Build tune-fast subset (rows + loci), else use full ---
         if self.tune_fast:
-            s = min(n_samp, self.tune_max_samples)
-            l = n_loci if self.tune_max_loci == 0 else min(n_loci, self.tune_max_loci)
+            s = min(n_samp, int(self.tune_max_samples))
+            l = (
+                n_loci
+                if int(self.tune_max_loci) == 0
+                else min(n_loci, int(self.tune_max_loci))
+            )
 
             samp_idx = np.sort(rng.choice(n_samp, size=s, replace=False))
             loci_idx = np.sort(rng.choice(n_loci, size=l, replace=False))
-            X_small = X[samp_idx][:, loci_idx]
-        else:
-            X_small = X
 
-        idx = np.arange(X_small.shape[0])
+            self._tune_samp_idx = samp_idx
+            self._tune_loci_idx = loci_idx
+
+            X_truth_small = X_truth[np.ix_(samp_idx, loci_idx)]
+            X_input_small = X_input[np.ix_(samp_idx, loci_idx)]
+            sim_small = (
+                None
+                if sim_global is None
+                else sim_global[np.ix_(samp_idx, loci_idx)].astype(bool, copy=False)
+            )
+
+        else:
+            self._tune_samp_idx = None
+            self._tune_loci_idx = None
+
+            X_truth_small = X_truth
+            X_input_small = X_input
+            sim_small = (
+                None if sim_global is None else sim_global.astype(bool, copy=False)
+            )
+
+        # Persist tune-aligned artifacts (optional but useful for debugging)
+        self._tune_X_small = X_input_small
+        self._tune_GT_small = X_truth_small
+        self._tune_sim_mask_small = sim_small
+
+        # --- Ensure enough samples for train/val split ---
+        n_rows = X_input_small.shape[0]
+        if n_rows < 3:
+            msg = f"Not enough samples ({n_rows}) for train/val split. Increase tune_max_samples or disable tune_fast."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        # --- Split rows of the tune set ---
+        idx = np.arange(X_input_small.shape[0])
         tr, te = train_test_split(
             idx, test_size=self.validation_split, random_state=self.seed
         )
+
         self._tune_train_idx = tr
         self._tune_test_idx = te
-        self._tune_X_train = X_small[tr]
-        self._tune_X_test = X_small[te]
 
+        self._tune_X_train = X_input_small[tr]
+        self._tune_X_test = X_input_small[te]
+        self._tune_GT_train = X_truth_small[tr]
+        self._tune_GT_test = X_truth_small[te]
+
+        if sim_small is not None:
+            self._tune_sim_mask_train = sim_small[tr]
+            self._tune_sim_mask_test = sim_small[te]
+        else:
+            self._tune_sim_mask_train = None
+            self._tune_sim_mask_test = None
+
+        # Class weights computed from TRAIN INPUT matrix (masked)
         self._tune_class_weights = self._normalize_class_weights(
             self._class_weights_from_zygosity(self._tune_X_train)
         )
@@ -1120,3 +1242,39 @@ class BaseNNImputer:
     def _set_best_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """An abstract method for setting best parameters."""
         raise NotImplementedError
+
+    def _resolve_gamma(
+        self,
+        params: dict | Mapping[str, Any] | None = None,
+        model: torch.nn.Module | None = None,
+    ) -> float:
+        """Resolve focal gamma with precedence: params -> params['model_params'] -> model -> self.
+
+        Args:
+            params (dict | None): Parameter dictionary that may contain 'gamma' or 'model_params
+            model (torch.nn.Module | None): Model instance that may have a 'gamma' attribute.
+
+        Returns:
+            float: Resolved gamma value, clamped to [0.0, 10.0].
+        """
+        g = None
+
+        if params is not None:
+            if isinstance(params, dict):
+                if "gamma" in params:
+                    g = params.get("gamma", None)
+                elif isinstance(params.get("model_params", None), dict):
+                    g = params["model_params"].get("gamma", None)
+
+        if g is None and model is not None:
+            g = getattr(model, "gamma", None)
+
+        if g is None:
+            g = getattr(self, "gamma", 0.0)
+
+        # clamp to sane range
+        try:
+            g = float(g)
+        except Exception:
+            g = 0.0
+        return max(0.0, min(g, 10.0))
