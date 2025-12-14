@@ -68,7 +68,7 @@ Define a typed config that mirrors the structure used by existing models (``io``
             # Common defaults
             cfg.io.verbose = True
             cfg.train.validation_split = 0.2
-            cfg.model.hidden_activation = "relu"
+            cfg.model.activation = "relu"
             cfg.model.layer_schedule = "pyramid"
             cfg.model.latent_init = "random"
 
@@ -248,7 +248,7 @@ Mirror the pattern in ``ImputeNLPCA``:
             self.latent_dim = self.cfg.model.latent_dim
             self.dropout_rate = self.cfg.model.dropout_rate
             self.num_hidden_layers = self.cfg.model.num_hidden_layers
-            self.hidden_activation = self.cfg.model.hidden_activation
+            self.activation = self.cfg.model.activation
             self.batch_size = self.cfg.train.batch_size
             self.learning_rate = self.cfg.train.learning_rate
             self.validation_split = self.cfg.train.validation_split
@@ -313,7 +313,7 @@ Mirror the pattern in ``ImputeNLPCA``:
                 "latent_dim": self.latent_dim,
                 "hidden_layer_sizes": hidden,
                 "dropout_rate": self.dropout_rate,
-                "activation": self.hidden_activation,
+                "activation": self.activation,
             }
 
             # Build model and train
@@ -335,7 +335,6 @@ Mirror the pattern in ``ImputeNLPCA``:
                 X_val=X_val,
                 params=self.best_params_,
                 prune_metric=self.tune_metric,
-                prune_warmup_epochs=10,
                 eval_interval=1,
                 eval_latent_steps=0,
                 eval_latent_lr=0.0,
