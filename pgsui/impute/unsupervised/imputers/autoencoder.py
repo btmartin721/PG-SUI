@@ -1,4 +1,5 @@
 import copy
+import traceback
 from collections import defaultdict
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union
 
@@ -232,7 +233,7 @@ class ImputeAutoencoder(BaseNNImputer):
         self.num_hidden_layers = int(self.cfg.model.num_hidden_layers)
         self.layer_scaling_factor = float(self.cfg.model.layer_scaling_factor)
         self.layer_schedule: str = str(self.cfg.model.layer_schedule)
-        self.activation = str(self.cfg.model.hidden_activation)
+        self.activation = str(self.cfg.model.activation)
         gamma_raw = self.cfg.model.gamma
         if isinstance(gamma_raw, (list, tuple)):
             self.gamma = list(gamma_raw)
@@ -407,17 +408,17 @@ class ImputeAutoencoder(BaseNNImputer):
         # Plotters/scorers (shared utilities)
         self.plotter_, self.scorers_ = self.initialize_plotting_and_scorers()
 
-        # Tuning (optional; AE never needs latent refinement)
-        if self.tune:
-            self.tune_hyperparameters()
-
-        # Best params (tuned or default)
-        self.best_params_ = getattr(self, "best_params_", self._default_best_params())
-
         # Class weights (device-aware)
         self.class_weights_ = self._normalize_class_weights(
             self._class_weights_from_zygosity(self.X_train_)
         )
+
+        # Tuning (optional; AE never needs latent refinement)
+        if self.tune:
+            self.tuned_params_ = self.tune_hyperparameters()
+
+        # Best params (tuned or default)
+        self.best_params_ = getattr(self, "best_params_", self._default_best_params())
 
         # DataLoader
         train_loader = self._get_data_loaders(self.X_train_)
@@ -437,7 +438,6 @@ class ImputeAutoencoder(BaseNNImputer):
             y_true_val=self.GT_test_full_,
             params=self.best_params_,
             prune_metric=self.tune_metric,
-            prune_warmup_epochs=25,
             eval_interval=1,
             eval_requires_latents=False,
             eval_latent_steps=0,
@@ -447,7 +447,7 @@ class ImputeAutoencoder(BaseNNImputer):
         )
 
         if trained_model is None:
-            msg = "Autoencoder training failed; no model was returned."
+            msg = f"{self.model_name} training failed; no model was returned."
             self.logger.error(msg)
             raise RuntimeError(msg)
 
@@ -481,8 +481,14 @@ class ImputeAutoencoder(BaseNNImputer):
             y_true_matrix=self.GT_test_full_,
             eval_mask_override=eval_mask,
         )
-        self.plotter_.plot_history(self.history_)
-        self._save_best_params(self.best_params_)
+
+        if self.show_plots:
+            self.plotter_.plot_history(self.history_)
+
+        if self.tune:
+            self._save_best_params(self.tuned_params_)
+        else:
+            self._save_best_params(self.best_params_)
 
         return self
 
@@ -565,7 +571,6 @@ class ImputeAutoencoder(BaseNNImputer):
         y_true_val: np.ndarray | None = None,
         params: dict | None = None,
         prune_metric: str = "f1",  # "f1" | "accuracy" | "pr_macro"
-        prune_warmup_epochs: int = 10,
         eval_interval: int = 1,
         # Evaluation parameters (AE ignores latent refinement knobs)
         eval_requires_latents: bool = False,  # AE: always False
@@ -589,7 +594,6 @@ class ImputeAutoencoder(BaseNNImputer):
             X_val (np.ndarray | None): Validation matrix (0/1/2 with -1 for missing).
             params (dict | None): Model params for evaluation.
             prune_metric (str): Metric for pruning reports.
-            prune_warmup_epochs (int): Pruning warmup epochs.
             eval_interval (int): Eval frequency (epochs).
             eval_requires_latents (bool): Ignored for AE (no latent inference).
             eval_latent_steps (int): Unused for AE.
@@ -628,7 +632,6 @@ class ImputeAutoencoder(BaseNNImputer):
             y_true_val=y_true_val,
             params=params,
             prune_metric=prune_metric,
-            prune_warmup_epochs=prune_warmup_epochs,
             eval_interval=eval_interval,
             eval_requires_latents=False,  # AE: no latent inference
             eval_latent_steps=0,
@@ -653,7 +656,6 @@ class ImputeAutoencoder(BaseNNImputer):
         y_true_val: np.ndarray | None = None,
         params: dict | None = None,
         prune_metric: str = "f1",
-        prune_warmup_epochs: int = 10,
         eval_interval: int = 1,
         eval_requires_latents: bool = False,
         eval_latent_steps: int = 0,
@@ -677,7 +679,6 @@ class ImputeAutoencoder(BaseNNImputer):
             y_true_val (np.ndarray | None): Ground-truth validation genotypes (0/1/2).
             params (dict | None): Model params for evaluation.
             prune_metric (str): Metric for pruning reports.
-            prune_warmup_epochs (int): Pruning warmup epochs.
             eval_interval (int): Eval frequency (epochs).
             eval_requires_latents (bool): Ignored for AE (no latent inference).
             eval_latent_steps (int): Unused for AE.
@@ -751,13 +752,20 @@ class ImputeAutoencoder(BaseNNImputer):
 
             if not np.isfinite(train_loss):
                 if trial is not None:
-                    raise optuna.exceptions.TrialPruned("Training loss non-finite.")
-                self.logger.debug(
-                    "Non-finite training loss. Reducing LR by 10 percent and continuing."
-                )
-                for g in optimizer.param_groups:
-                    g["lr"] *= 0.9
-                continue
+                    self.logger.debug(
+                        f"[{self.model_name}] Trial {trial.number} Training loss non-finite. Pruning trial.",
+                        exc_info=True,
+                    )
+                    raise optuna.exceptions.TrialPruned(
+                        f"[{self.model_name}] Trial {trial.number} Training loss non-finite. Pruning trial. Enable debug logging for full traceback."
+                    )
+                else:
+                    self.logger.error(
+                        f"[{self.model_name}] Non-finite training loss encountered. Terminating training."
+                    )
+                    raise RuntimeError(
+                        f"[{self.model_name}] Non-finite training loss encountered. Terminating training."
+                    )
 
             # ---- VALIDATION ----
             val_loss = float("inf")
@@ -825,26 +833,15 @@ class ImputeAutoencoder(BaseNNImputer):
                     eval_mask_override=eval_mask_override,
                 )
                 trial.report(metric_val, step=epoch + 1)
-                if (epoch + 1) >= prune_warmup_epochs and trial.should_prune():
-                    raise optuna.exceptions.TrialPruned(
-                        f"Pruned at epoch {epoch + 1}: {metric_key}={metric_val:.3f}"
-                    )
+                if trial.should_prune():
+                    msg = f"[{self.model_name}] Trial {trial.number} Median-Pruned at epoch {epoch + 1}: {metric_key}={metric_val:.3f}. This is not an error, but indicates the trial was unpromising."
+                    raise optuna.exceptions.TrialPruned(msg)
 
-        # Materialize the best model properly
-        if early_stopping.best_model is not None:
-            best_state = {
-                k: v.cpu() for k, v in early_stopping.best_model.state_dict().items()
-            }
-            best_model = early_stopping.best_model
-            best_model.load_state_dict(best_state)
-            best_loss = float(early_stopping.best_score)
-        else:
-            best_state = {k: v.cpu() for k, v in model.state_dict().items()}
-            best_model = model
-            best_model.load_state_dict(best_state)
-            best_loss = float(
-                history["Val"][-1] if history["Val"] else history["Train"][-1]
-            )
+        best_loss = float(early_stopping.best_score)
+
+        if early_stopping.best_state_dict is not None:
+            model.load_state_dict(early_stopping.best_state_dict)
+        best_model = model
 
         return best_loss, best_model, dict(history)
 
@@ -1281,10 +1278,11 @@ class ImputeAutoencoder(BaseNNImputer):
         )
 
         if not objective_mode:
-            pm = PrettyMetrics(
-                metrics, precision=3, title=f"{self.model_name} Validation Metrics"
-            )
-            pm.render()
+            if self.verbose or self.debug:
+                pm = PrettyMetrics(
+                    metrics, precision=2, title=f"{self.model_name} Validation Metrics"
+                )
+                pm.render()
 
             # Primary report
             self._make_class_reports(
@@ -1399,7 +1397,6 @@ class ImputeAutoencoder(BaseNNImputer):
                 y_true_val=getattr(self, "_tune_GT_test", None),
                 params=params,
                 prune_metric=self.tune_metric,
-                prune_warmup_epochs=25,
                 eval_interval=self.tune_eval_interval,
                 eval_requires_latents=False,
                 eval_latent_steps=0,
@@ -1442,8 +1439,16 @@ class ImputeAutoencoder(BaseNNImputer):
             return metrics[self.tune_metric]
 
         except Exception as e:
-            # Keep sweeps moving if a trial fails
-            raise optuna.exceptions.TrialPruned(f"Trial failed with error: {e}")
+            # Unexpected failure: surface full details in logs while still
+            # pruning the trial to keep sweeps moving.
+            err_type = type(e).__name__
+            self.logger.error(
+                f"Trial {trial.number} failed due to exception {err_type}: {e}"
+            )
+            self.logger.debug(traceback.format_exc())
+            raise optuna.exceptions.TrialPruned(
+                f"Trial {trial.number} failed due to an exception. {err_type}: {e}. Enable debug logging for full traceback."
+            ) from e
 
     def _sample_hyperparameters(self, trial: optuna.Trial) -> Dict[str, Any]:
         """Sample AE hyperparameters and compute hidden sizes for model params.
