@@ -143,7 +143,7 @@ class BaseNNImputer:
         self.X_model_input_: np.ndarray | None = None
         self.sim_mask_global_: np.ndarray | None = None
 
-    def tune_hyperparameters(self) -> None:
+    def tune_hyperparameters(self) -> Dict[str, Any]:
         """Tunes model hyperparameters using an Optuna study.
 
         This method orchestrates the hyperparameter search process. It creates an Optuna study that aims to maximize the metric defined in `self.tune_metric`. The search is driven by the `_objective` method, which must be implemented by the child class. After the search, the best parameters are logged, saved to a JSON file, and visualizations of the study are generated.
@@ -183,7 +183,17 @@ class BaseNNImputer:
             study_name=study_name,
             storage=storage,
             load_if_exists=load_if_exists,
-            pruner=optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=10),
+            pruner=optuna.pruners.MedianPruner(
+                # Guard against pathological small `n_trials` values (e.g., 1)
+                # that can otherwise produce 0 for these settings.
+                n_startup_trials=max(
+                    1, min(int(self.n_trials * 0.1), 10, int(self.n_trials))
+                ),
+                n_warmup_steps=25,
+                n_min_trials=max(
+                    1, min(int(0.5 * self.n_trials), 10, int(self.n_trials))
+                ),
+            ),
         )
 
         if not hasattr(self, "_objective"):
@@ -198,6 +208,13 @@ class BaseNNImputer:
 
         show_progress_bar = not self.verbose and not self.debug and self.n_jobs == 1
 
+        # Set the best parameters.
+        # NOTE: `_set_best_params()` must be implemented in the child class.
+        if not hasattr(self, "_set_best_params"):
+            msg = "Method `_set_best_params()` must be implemented in the child class."
+            self.logger.error(msg)
+            raise NotImplementedError(msg)
+
         study.optimize(
             lambda trial: self._objective(trial),
             n_trials=self.n_trials,
@@ -206,15 +223,13 @@ class BaseNNImputer:
             show_progress_bar=show_progress_bar,
         )
 
-        best_metric = study.best_value
-        best_params = study.best_params
-
-        # Set the best parameters.
-        # NOTE: `_set_best_params()` must be implemented in the child class.
-        if not hasattr(self, "_set_best_params"):
-            msg = "Method `_set_best_params()` must be implemented in the child class."
+        try:
+            best_metric = study.best_value
+            best_params = study.best_params
+        except ValueError:
+            msg = "Tuning failed: No successful trials completed."
             self.logger.error(msg)
-            raise NotImplementedError(msg)
+            raise RuntimeError(msg)
 
         self.best_params_ = self._set_best_params(best_params)
         self.model_params.update(self.best_params_)
@@ -224,16 +239,22 @@ class BaseNNImputer:
         best_params_tmp["learning_rate"] = self.learning_rate
 
         title = f"{self.model_name} Optimized Parameters"
-        pm = PrettyMetrics(best_params_tmp, precision=6, title=title)
-        pm.render()
+
+        if self.verbose or self.debug:
+            pm = PrettyMetrics(best_params_tmp, precision=6, title=title)
+            pm.render()
 
         # Save best parameters to a JSON file.
-        self._save_best_params(best_params)
+        self._save_best_params(best_params_tmp, objective_mode=True)
 
         tn = f"{self.tune_metric} Value"
-        self.plotter_.plot_tuning(
-            study, self.model_name, self.optimize_dir / "plots", target_name=tn
-        )
+
+        if self.show_plots:
+            self.plotter_.plot_tuning(
+                study, self.model_name, self.optimize_dir / "plots", target_name=tn
+            )
+
+        return best_params_tmp
 
     @staticmethod
     def initialize_weights(module: torch.nn.Module) -> None:
@@ -594,19 +615,20 @@ class BaseNNImputer:
         prefix = "zygosity" if len(labels) == 3 else "iupac"
         n_labels = len(labels)
 
-        self.plotter_.plot_metrics(
-            y_true=y_true,
-            y_pred_proba=y_pred_proba,
-            metrics=metrics,
-            label_names=labels,
-            prefix=f"geno{n_labels}_{prefix}",
-        )
-        self.plotter_.plot_confusion_matrix(
-            y_true_1d=y_true,
-            y_pred_1d=y_pred,
-            label_names=labels,
-            prefix=f"geno{n_labels}_{prefix}",
-        )
+        if self.show_plots:
+            self.plotter_.plot_metrics(
+                y_true=y_true,
+                y_pred_proba=y_pred_proba,
+                metrics=metrics,
+                label_names=labels,
+                prefix=f"geno{n_labels}_{prefix}",
+            )
+            self.plotter_.plot_confusion_matrix(
+                y_true_1d=y_true,
+                y_pred_1d=y_pred,
+                label_names=labels,
+                prefix=f"geno{n_labels}_{prefix}",
+            )
 
     def _make_class_reports(
         self,
@@ -635,17 +657,19 @@ class BaseNNImputer:
         self.logger.info(msg)
 
         if y_pred_proba is not None:
-            self.plotter_.plot_metrics(
-                y_true,
-                y_pred_proba,
-                metrics,
-                label_names=labels,
-                prefix=report_name,
-            )
+            if self.show_plots:
+                self.plotter_.plot_metrics(
+                    y_true,
+                    y_pred_proba,
+                    metrics,
+                    label_names=labels,
+                    prefix=report_name,
+                )
 
-        self.plotter_.plot_confusion_matrix(
-            y_true, y_pred, label_names=labels, prefix=report_name
-        )
+            if self.show_plots:
+                self.plotter_.plot_confusion_matrix(
+                    y_true, y_pred, label_names=labels, prefix=report_name
+                )
 
         report: str | dict = classification_report(
             y_true,
@@ -658,7 +682,7 @@ class BaseNNImputer:
 
         if not isinstance(report, dict):
             msg = "Expected classification_report to return a dict."
-            self.logger.error(msg)
+            self.logger.error(msg, exc_info=True)
             raise ValueError(msg)
 
         report_subset = {}
@@ -671,7 +695,7 @@ class BaseNNImputer:
                 if tmp:
                     report_subset[k] = tmp
 
-        if report_subset:
+        if report_subset and (self.verbose or self.debug):
             pm = PrettyMetrics(
                 report_subset,
                 precision=3,
@@ -682,37 +706,40 @@ class BaseNNImputer:
         with open(self.metrics_dir / f"{report_name}_report.json", "w") as f:
             json.dump(report, f, indent=4)
 
-        viz = ClassificationReportVisualizer(reset_kwargs=self.plotter_.param_dict)
-        try:
-            plots = viz.plot_all(
-                report,  # type: ignore
-                title_prefix=f"{self.model_name} {middle} Report",
-                show=getattr(self, "show_plots", False),
-                heatmap_classes_only=True,
-            )
-        finally:
-            viz._reset_mpl_style()
-
-        for name, fig in plots.items():
-            fout = self.plots_dir / f"{report_name}_report_{name}.{self.plot_format}"
-            if hasattr(fig, "savefig") and isinstance(fig, Figure):
-                fig.savefig(fout, dpi=300, facecolor="#111122")
-                plt.close(fig)
-            elif hasattr(fig, "write_html") and isinstance(fig, go.Figure):
-                fout_html = fout.with_suffix(".html")
-                fig.write_html(file=fout_html)
-
-                SNPioMultiQC.queue_html(
-                    fout_html,
-                    panel_id=f"pgsui_{self.model_name.lower()}_{report_name}_radar",
-                    section=f"PG-SUI: {self.model_name} Model Imputation",
-                    title=f"{self.model_name} {middle} Radar Plot",
-                    index_label=name,
-                    description=f"{self.model_name} {middle} {len(labels)}-base Radar Plot. This radar plot visualizes model performance for three metrics per-class: precision, recall, and F1-score. Each axis represents one of these metrics, allowing for a quick visual assessment of the model's strengths and weaknesses. Higher values towards the outer edge indicate better performance.",
+        if self.show_plots:
+            viz = ClassificationReportVisualizer(reset_kwargs=self.plotter_.param_dict)
+            try:
+                plots = viz.plot_all(
+                    report,  # type: ignore
+                    title_prefix=f"{self.model_name} {middle} Report",
+                    show=self.show_plots,
+                    heatmap_classes_only=True,
                 )
+            finally:
+                viz._reset_mpl_style()
+
+            for name, fig in plots.items():
+                fout = (
+                    self.plots_dir / f"{report_name}_report_{name}.{self.plot_format}"
+                )
+                if hasattr(fig, "savefig") and isinstance(fig, Figure):
+                    fig.savefig(fout, dpi=300, facecolor="#111122")
+                    plt.close(fig)
+                elif hasattr(fig, "write_html") and isinstance(fig, go.Figure):
+                    fout_html = fout.with_suffix(".html")
+                    fig.write_html(file=fout_html)
+
+                    SNPioMultiQC.queue_html(
+                        fout_html,
+                        panel_id=f"pgsui_{self.model_name.lower()}_{report_name}_radar",
+                        section=f"PG-SUI: {self.model_name} Model Imputation",
+                        title=f"{self.model_name} {middle} Radar Plot",
+                        index_label=name,
+                        description=f"{self.model_name} {middle} {len(labels)}-base Radar Plot. This radar plot visualizes model performance for three metrics per-class: precision, recall, and F1-score. Each axis represents one of these metrics, allowing for a quick visual assessment of the model's strengths and weaknesses. Higher values towards the outer edge indicate better performance.",
+                    )
 
             if not self.is_haploid:
-                msg = f"Ploidy: {self.ploidy}. Evaluating per allele."
+                msg = f"Ploidy: {self.ploidy}. Evaluating per genotype (REF, HET, ALT)."
                 self.logger.info(msg)
 
     def _compute_hidden_layer_sizes(
@@ -1221,7 +1248,9 @@ class BaseNNImputer:
 
         self._tune_ready = True
 
-    def _save_best_params(self, best_params: Dict[str, Any]) -> None:
+    def _save_best_params(
+        self, best_params: Dict[str, Any], objective_mode: bool = False
+    ) -> None:
         """Save the best hyperparameters to a JSON file.
 
         This method saves the best hyperparameters found during hyperparameter tuning to a JSON file in the optimization directory. The filename includes the model name for easy identification.
@@ -1234,7 +1263,12 @@ class BaseNNImputer:
             self.logger.error(msg)
             raise AttributeError(msg)
 
-        fout = self.parameters_dir / "best_parameters.json"
+        if objective_mode:
+            fout = self.optimize_dir / "parameters" / "best_tuned_parameters.json"
+        else:
+            fout = self.parameters_dir / "best_parameters.json"
+
+        fout.parent.mkdir(parents=True, exist_ok=True)
 
         with open(fout, "w") as f:
             json.dump(best_params, f, indent=4)
