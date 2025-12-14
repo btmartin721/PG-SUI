@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import copy
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
+import traceback
+from collections import defaultdict
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple, cast
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -192,7 +194,7 @@ class ImputeNLPCA(BaseNNImputer):
         self.layer_scaling_factor = self.cfg.model.layer_scaling_factor
         self.layer_schedule = self.cfg.model.layer_schedule
         self.latent_init: Literal["random", "pca"] = self.cfg.model.latent_init
-        self.activation = self.cfg.model.hidden_activation
+        self.activation = self.cfg.model.activation
         self.gamma = self.cfg.model.gamma
 
         self.batch_size = self.cfg.train.batch_size
@@ -331,7 +333,7 @@ class ImputeNLPCA(BaseNNImputer):
         else:
             X_for_model = self.ground_truth_.copy()
 
-        self.X_model_input_ = X_for_model.copy()
+        self.X_model_input_ = X_for_model
 
         self.ploidy = self.cfg.io.ploidy
         self.is_haploid = self.ploidy == 1
@@ -393,14 +395,16 @@ class ImputeNLPCA(BaseNNImputer):
         # Tuning, model setup, training (unchanged except DataLoader input)
         self.plotter_, self.scorers_ = self.initialize_plotting_and_scorers()
 
+        # Class weights from training data zygosity distribution
+        self.class_weights_ = self._normalize_class_weights(
+            self._class_weights_from_zygosity(self.X_train_)
+        )
+
         if self.tune:
-            self.tune_hyperparameters()
+            self.tuned_params_ = self.tune_hyperparameters()
             self.best_params_ = getattr(self, "best_params_", self.model_params.copy())
         else:
             self.best_params_ = self._set_best_params_default()
-
-        # Class weights from 0/1/2 training data
-        self.class_weights_ = self._class_weights_from_zygosity(self.X_train_)
 
         if not self.latent_init in {"random", "pca"} and isinstance(
             self.latent_init, str
@@ -426,25 +430,26 @@ class ImputeNLPCA(BaseNNImputer):
         )
 
         self.is_fit_ = True
-        self.plotter_.plot_history(self.history_)
 
+        if self.show_plots:
+            self.plotter_.plot_history(self.history_)
+
+        eval_mask_override = None
         if self.sim_mask_test_ is not None:
-            self._evaluate_model(
-                self.X_test_,
-                self.model_,
-                self.best_params_,
-                y_true_matrix=self.GT_test_full_,
-                eval_mask_override=self.sim_mask_test_,
-            )
-        else:
-            self._evaluate_model(
-                self.X_test_,
-                self.model_,
-                self.best_params_,
-                y_true_matrix=self.GT_test_full_,
-            )
+            eval_mask_override = self.sim_mask_test_.astype(bool, copy=False)
 
-        self._save_best_params(self.best_params_)
+        self._evaluate_model(
+            self.X_test_,
+            self.model_,
+            self.best_params_,
+            y_true_matrix=self.GT_test_full_,
+            eval_mask_override=eval_mask_override,
+        )
+
+        if self.tune:
+            self._save_best_params(self.tuned_params_)
+        else:
+            self._save_best_params(self.best_params_)
 
         return self
 
@@ -605,6 +610,253 @@ class ImputeNLPCA(BaseNNImputer):
 
         return running / used, latent_vectors
 
+    def _val_loss_from_latents(
+        self,
+        *,
+        z_val: torch.Tensor,
+        y_true_val: np.ndarray | None,
+        model: torch.nn.Module,
+        params: dict | None,
+        l1_penalty: float,
+        class_weights: torch.Tensor,
+        eval_mask_override: np.ndarray | None = None,
+    ) -> float:
+        """Compute validation focal CE loss from precomputed latents (no latent inference).
+
+        Args:
+            z_val: Precomputed validation latents (N, latent_dim), CPU or GPU tensor.
+            y_true_val: Ground-truth aligned to X_val (0/1/2; -1 for truly missing).
+            model: NLPCA model (decoder used).
+            params: Params dict (for gamma resolution).
+            l1_penalty: Optional L1 coefficient (0.0 for pure CE).
+            class_weights: Class weights for focal CE.
+            eval_mask_override: Optional boolean mask (N,L) selecting positions to score.
+
+        Returns:
+            Mean validation loss. +inf if nothing is scorable.
+        """
+        if eval_mask_override is not None:
+            mask = eval_mask_override.astype(bool, copy=False) & (y_true_val != -1)
+        else:
+            mask = y_true_val != -1
+
+        if not bool(mask.any()):
+            return float("inf")
+
+        ytv = cast(np.ndarray, y_true_val)
+
+        y_targets = ytv.copy()
+        if self.is_haploid:
+            y_targets[y_targets == 2] = 1
+        y_targets = np.where(mask, y_targets, -1).astype(np.int64, copy=False)
+
+        decoder = model.phase23_decoder
+        if not isinstance(decoder, torch.nn.Module):
+            raise TypeError("Model decoder is not a valid torch.nn.Module.")
+
+        nF = int(getattr(model, "n_features", y_targets.shape[1]))
+
+        cw = (
+            class_weights.to(self.device)
+            if class_weights.device != self.device
+            else class_weights
+        )
+        cw = cw / cw.mean().clamp_min(1e-8)
+
+        gamma = self._resolve_gamma(params, model)
+        criterion = SafeFocalCELoss(gamma=gamma, weight=cw, ignore_index=-1)
+
+        y_t = torch.from_numpy(y_targets).long().to(self.device)
+        z_d = z_val.to(self.device)
+
+        with torch.inference_mode():
+            logits = decoder(z_d).view(y_targets.shape[0], nF, self.output_classes_)
+            logits_flat = logits.view(-1, self.output_classes_)
+            targets_flat = y_t.view(-1)
+            valid = targets_flat != -1
+
+            if not bool(valid.any()):
+                return float("inf")
+
+            loss = criterion(logits_flat[valid], targets_flat[valid])
+
+            if l1_penalty > 0:
+                l1 = torch.zeros((), device=self.device)
+                for p in decoder.parameters():
+                    if p.requires_grad:
+                        l1 = l1 + p.abs().sum()
+                loss = loss + float(l1_penalty) * l1
+
+            return float(loss.item()) if torch.isfinite(loss) else float("inf")
+
+    def _val_step(
+        self,
+        *,
+        X_val: np.ndarray,
+        y_true_val: np.ndarray,
+        model: torch.nn.Module,
+        params: dict | None,
+        l1_penalty: float,
+        class_weights: torch.Tensor,
+        eval_mask_override: np.ndarray | None = None,
+        latent_steps: int = 50,
+        latent_lr: float = 1e-2,
+        latent_weight_decay: float = 0.0,
+        latent_seed: int = 12345,
+    ) -> float:
+        """Compute validation focal CE loss for NLPCA (latent-decoder) without weight updates.
+
+        Notes:
+            - Freezes model weights and optimizes *validation latents only* (no leakage).
+            - Scores only positions selected by eval_mask_override, otherwise observed entries.
+            - Positions not scored are set to ignore_index (-1).
+            - Returns +inf if no valid targets exist.
+
+        Args:
+            X_val: Validation inputs (0/1/2 with -1 for missing/masked).
+            y_true_val: Ground-truth aligned to X_val (0/1/2; -1 for truly missing).
+            model: Trained/active model.
+            params: Model params (used to resolve gamma).
+            l1_penalty: Optional L1 coefficient (pass 0.0 for "pure" val CE).
+            class_weights: Class weights (C,).
+            eval_mask_override: Optional boolean mask (N,L) selecting positions to score.
+            latent_steps: Steps for validation latent optimization.
+            latent_lr: LR for validation latent optimization.
+            latent_weight_decay: Weight decay for validation latent optimization.
+            latent_seed: Seed to make latent inference deterministic across epochs (optional).
+
+        Returns:
+            Mean validation loss (float).
+        """
+        if X_val.shape != y_true_val.shape:
+            msg = f"X_val and y_true_val must have identical shape; got {X_val.shape} vs {y_true_val.shape}."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        # ---- Build scoring mask ----
+        if eval_mask_override is not None:
+            if eval_mask_override.shape != X_val.shape:
+                raise ValueError(
+                    f"eval_mask_override shape {eval_mask_override.shape} does not match X_val shape {X_val.shape}."
+                )
+            mask = eval_mask_override.astype(bool, copy=False) & (y_true_val != -1)
+        else:
+            mask = (X_val != -1) & (y_true_val != -1)
+
+        # If nothing to score, return +inf (signals "no meaningful val loss")
+        if not bool(mask.any()):
+            return float("inf")
+
+        # Targets: ignore everything not in mask
+        y_targets = y_true_val.copy()
+        if self.is_haploid:
+            # haploid scoring uses 0/1; class "2" should never appear, but be defensive
+            y_targets[y_targets == 2] = 1
+        y_targets = np.where(mask, y_targets, -1).astype(np.int64, copy=False)
+
+        # Ensure X_val uses -1 for masked/missing
+        Xv = X_val.astype(np.int64, copy=False)
+        Xv[Xv < 0] = -1
+
+        # ---- Infer validation latents with frozen weights ----
+        # Use the same latent-only inference logic you already use for pruning,
+        # but here we want the z tensor. We'll do a minimal local implementation.
+        torch.manual_seed(int(latent_seed))
+        np.random.seed(int(latent_seed))
+
+        model.eval()
+        nF = int(getattr(model, "n_features", Xv.shape[1]))
+        if nF != int(Xv.shape[1]):
+            msg = f"Model expects {nF} loci but X_val has {Xv.shape[1]}."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        # Freeze weights
+        for p in model.parameters():
+            p.requires_grad_(False)
+
+        latent_dim = self._first_linear_in_features(model)
+
+        z = self._create_latent_space(
+            {"latent_dim": latent_dim},
+            n_samples=Xv.shape[0],
+            X=Xv,
+            latent_init=self.latent_init,
+        ).requires_grad_(True)
+
+        opt = torch.optim.AdamW(
+            [z], lr=float(latent_lr), weight_decay=float(latent_weight_decay), eps=1e-7
+        )
+
+        y_t = torch.from_numpy(y_targets).long().to(self.device)
+
+        gamma = self._resolve_gamma(params, model)
+
+        cw = class_weights
+        if cw.device != self.device:
+            cw = cw.to(self.device)
+        cw = cw / cw.mean().clamp_min(1e-8)
+
+        ce_criterion = SafeFocalCELoss(gamma=gamma, weight=cw, ignore_index=-1)
+
+        decoder = model.phase23_decoder
+        if not isinstance(decoder, torch.nn.Module):
+            raise TypeError("Model decoder is not a valid torch.nn.Module.")
+
+        with torch.enable_grad():
+            for _ in range(max(int(latent_steps), 0)):
+                opt.zero_grad(set_to_none=True)
+
+                logits = decoder(z).view(Xv.shape[0], nF, self.output_classes_)
+                if not torch.isfinite(logits).all():
+                    break
+
+                logits_flat = logits.view(-1, self.output_classes_)
+                targets_flat = y_t.view(-1)
+
+                valid = targets_flat != -1
+                if not bool(valid.any()):
+                    break
+
+                loss = ce_criterion(logits_flat[valid], targets_flat[valid])
+                if not torch.isfinite(loss):
+                    break
+
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_([z], max_norm=1.0)
+                if z.grad is None or not torch.isfinite(z.grad).all():
+                    break
+                opt.step()
+
+        # ---- Compute validation loss with inferred z (no grads) ----
+        l1_params = tuple(p for p in decoder.parameters() if p.requires_grad)
+
+        with torch.inference_mode():
+            logits = decoder(z.detach()).view(Xv.shape[0], nF, self.output_classes_)
+            logits_flat = logits.view(-1, self.output_classes_)
+            targets_flat = y_t.view(-1)
+            valid = targets_flat != -1
+
+            if not bool(valid.any()):
+                val_loss = float("inf")
+            else:
+                loss = ce_criterion(logits_flat[valid], targets_flat[valid])
+
+                # Optional: include decoder L1 in the monitored objective
+                if l1_penalty > 0 and l1_params:
+                    l1 = torch.zeros((), device=self.device)
+                    for p in l1_params:
+                        l1 = l1 + p.abs().sum()
+                    loss = loss + float(l1_penalty) * l1
+
+                val_loss = float(loss.item()) if torch.isfinite(loss) else float("inf")
+
+        # Unfreeze weights
+        for p in model.parameters():
+            p.requires_grad_(True)
+
+        return val_loss
+
     def _predict(
         self, model: torch.nn.Module, latent_vectors: torch.Tensor | None = None
     ) -> Tuple[np.ndarray, np.ndarray]:
@@ -725,10 +977,11 @@ class ImputeNLPCA(BaseNNImputer):
         )
 
         if not objective_mode:
-            pm = PrettyMetrics(
-                metrics, precision=3, title=f"{self.model_name} Validation Metrics"
-            )
-            pm.render()  # prints a command-line table
+            if self.verbose or self.debug:
+                pm = PrettyMetrics(
+                    metrics, precision=2, title=f"{self.model_name} Validation Metrics"
+                )
+                pm.render()  # prints a command-line table
 
             self._make_class_reports(
                 y_true=y_true_flat,
@@ -956,7 +1209,6 @@ class ImputeNLPCA(BaseNNImputer):
                 X_val=X_test_trial,
                 params=model_params,
                 prune_metric=self.tune_metric,
-                prune_warmup_epochs=25,
                 eval_interval=self.tune_eval_interval,
                 eval_latent_steps=self.eval_latent_steps,
                 eval_latent_lr=self.eval_latent_lr,
@@ -982,7 +1234,16 @@ class ImputeNLPCA(BaseNNImputer):
             return float(metrics[self.tune_metric])
 
         except Exception as e:
-            raise optuna.exceptions.TrialPruned(f"Trial failed with error: {e}")
+            # Unexpected failure: surface full details in logs while still
+            # pruning the trial to keep sweeps moving.
+            err_type = type(e).__name__
+            self.logger.error(
+                f"Trial {trial.number} failed due to exception {err_type}: {e}"
+            )
+            self.logger.debug(traceback.format_exc())
+            raise optuna.exceptions.TrialPruned(
+                f"Trial {trial.number} failed due to an exception. {err_type}: {e}. Enable debug logging for full traceback."
+            ) from e
 
     def _sample_hyperparameters(self, trial: optuna.Trial) -> Dict[str, Any]:
         """Samples hyperparameters for the simplified NLPCA model.
@@ -1136,7 +1397,6 @@ class ImputeNLPCA(BaseNNImputer):
         X_val: np.ndarray | None = None,
         params: dict | None = None,
         prune_metric: str | None = None,  # "f1" | "accuracy" | "pr_macro"
-        prune_warmup_epochs: int = 10,
         eval_interval: int = 1,
         eval_latent_steps: int = 50,
         eval_latent_lr: float = 1e-2,
@@ -1157,7 +1417,6 @@ class ImputeNLPCA(BaseNNImputer):
             X_val (np.ndarray | None): Validation data for pruning.
             params (dict | None): Model parameters.
             prune_metric (str | None): Metric for pruning decisions.
-            prune_warmup_epochs (int): Number of epochs before pruning starts.
             eval_interval (int): Interval (in epochs) for evaluation during training.
             eval_latent_steps (int): Steps for latent optimization during evaluation.
             eval_latent_lr (float): Learning rate for latent optimization during evaluation.
@@ -1171,10 +1430,15 @@ class ImputeNLPCA(BaseNNImputer):
         """
         class_weights = getattr(self, "class_weights_", None)
 
-        if latent_vectors is None or class_weights is None:
-            msg = "latent_vectors and class_weights must be provided."
+        if latent_vectors is None:
+            msg = "latent_vectors must be provided."
             self.logger.error(msg)
-            raise TypeError("Must provide latent_vectors and class_weights.")
+            raise TypeError(msg)
+
+        if class_weights is None:
+            msg = "class_weights_ must be set before training."
+            self.logger.error(msg)
+            raise TypeError(msg)
 
         latent_optimizer = torch.optim.Adam([latent_vectors], lr=lr * lr_input_factor)
 
@@ -1204,7 +1468,6 @@ class ImputeNLPCA(BaseNNImputer):
             X_val=X_val,
             params=params,
             prune_metric=prune_metric,
-            prune_warmup_epochs=prune_warmup_epochs,
             eval_interval=eval_interval,
             eval_latent_steps=eval_latent_steps,
             eval_latent_lr=eval_latent_lr,
@@ -1250,7 +1513,6 @@ class ImputeNLPCA(BaseNNImputer):
             X_val=self.X_test_,
             params=best_params,
             prune_metric=self.tune_metric,
-            prune_warmup_epochs=25,
             eval_interval=self.cfg.tune.eval_interval,
             eval_latent_steps=self.eval_latent_steps,
             eval_latent_lr=self.eval_latent_lr,
@@ -1258,14 +1520,19 @@ class ImputeNLPCA(BaseNNImputer):
         )
 
         if trained_model is None:
-            msg = "Final model training failed."
+            msg = f"{self.model_name} training failed; no model was returned."
             self.logger.error(msg)
             raise RuntimeError(msg)
 
         fn = self.models_dir / "final_model.pt"
         torch.save(trained_model.state_dict(), fn)
 
-        return (loss, trained_model, {"Train": history}, latent_vectors)
+        return (
+            loss,
+            trained_model,
+            {"Train": history["Train"], "Val": history["Val"]},
+            latent_vectors,
+        )
 
     def _execute_training_loop(
         self,
@@ -1281,41 +1548,14 @@ class ImputeNLPCA(BaseNNImputer):
         X_val: np.ndarray | None = None,
         params: dict | None = None,
         prune_metric: str | None = None,
-        prune_warmup_epochs: int = 10,
         eval_interval: int = 1,
         eval_latent_steps: int = 50,
         eval_latent_lr: float = 1e-2,
         eval_latent_weight_decay: float = 0.0,
-    ) -> Tuple[float, torch.nn.Module, list, torch.nn.Parameter]:
-        """Train NLPCA with warmup, pruning, and early stopping.
+    ) -> Tuple[float, torch.nn.Module, dict[str, list[float]], torch.nn.Parameter]:
 
-        This method executes the training loop for the NLPCA model, incorporating features such as learning rate warmup, Optuna pruning based on validation performance, and early stopping. It trains the model for a specified number of epochs, evaluates it periodically on a validation set, and returns the best model and training history.
-
-        Args:
-            loader (torch.utils.data.DataLoader): DataLoader for training data.
-            optimizer (torch.optim.Optimizer): Optimizer for model parameters.
-            latent_optimizer (torch.optim.Optimizer): Optimizer for latent vectors.
-            scheduler (torch.optim.lr_scheduler._LRScheduler): Learning rate scheduler.
-            model (torch.nn.Module): NLPCA model to be trained.
-            l1_penalty (float): L1 regularization penalty.
-            latent_vectors (torch.nn.Parameter): Latent vectors for samples.
-            trial (optuna.Trial | None): Optuna trial for hyperparameter tuning.
-            X_val (np.ndarray | None): Validation data for pruning.
-            params (dict | None): Model parameters.
-            prune_metric (str | None): Metric for pruning decisions.
-            prune_warmup_epochs (int): Number of epochs before pruning starts.
-            eval_interval (int): Interval (in epochs) for evaluation during training.
-            eval_latent_steps (int): Steps for latent optimization during evaluation.
-            eval_latent_lr (float): Learning rate for latent optimization during evaluation.
-            eval_latent_weight_decay (float): Weight decay for latent optimization during evaluation.
-
-        Returns:
-            Tuple[float, torch.nn.Module, list, torch.nn.Parameter]: Best training loss, best model, training history, and optimized latent vectors.
-        """
-        best_model = None
-        history: list[float] = []
+        history: dict[str, list[float]] = defaultdict(list)
         _eval_every = max(1, int(eval_interval))
-        _warmup = max(0, int(prune_warmup_epochs))
 
         early_stopping = EarlyStopping(
             patience=self.early_stop_gen,
@@ -1323,41 +1563,23 @@ class ImputeNLPCA(BaseNNImputer):
             verbose=self.verbose,
             prefix=self.prefix,
             debug=self.debug,
+            mode="min",  # explicit: val loss should be minimized
         )
 
-        # Epoch budget
         max_epochs = (
             self.tune_epochs if (trial is not None and self.tune_fast) else self.epochs
         )
 
-        # Optional LR warmup for both optimizers
-        warmup_epochs = getattr(self, "lr_warmup_epochs", 5)
-        model_lr0 = optimizer.param_groups[0]["lr"]
-        latent_lr0 = latent_optimizer.param_groups[0]["lr"]
-        model_lr_min = model_lr0 * 0.1
-        latent_lr_min = latent_lr0 * 0.1
-
-        _latent_cache: dict = {}
-        _latent_cache_key = f"{self.prefix}_{self.model_name}_val_latents"
-
         gamma = self._resolve_gamma(params, model)
 
-        cw = None
-        if getattr(self, "class_weights_", None) is not None:
-            cw = self.class_weights_.to(self.device)
+        cw = getattr(self, "class_weights_", None)
+        if cw is not None:
+            cw = cw.to(self.device)
             cw = cw / cw.mean().clamp_min(1e-8)
 
         criterion = SafeFocalCELoss(gamma=gamma, weight=cw, ignore_index=-1)
 
         for epoch in range(max_epochs):
-            # Linear warmup LRs for first few epochs
-            if epoch < warmup_epochs:
-                scale = float(epoch + 1) / warmup_epochs
-                for g in optimizer.param_groups:
-                    g["lr"] = model_lr_min + (model_lr0 - model_lr_min) * scale
-                for g in latent_optimizer.param_groups:
-                    g["lr"] = latent_lr_min + (latent_lr0 - latent_lr_min) * scale
-
             train_loss, latent_vectors = self._train_step(
                 loader=loader,
                 optimizer=optimizer,
@@ -1369,77 +1591,98 @@ class ImputeNLPCA(BaseNNImputer):
             )
 
             if not np.isfinite(train_loss):
-                if trial:
-                    raise optuna.exceptions.TrialPruned("Epoch loss non-finite.")
-                # Reduce both LRs and continue
-                for g in optimizer.param_groups:
-                    g["lr"] *= 0.5
-                for g in latent_optimizer.param_groups:
-                    g["lr"] *= 0.5
-                continue
+                if trial is not None:
+                    raise optuna.exceptions.TrialPruned(
+                        f"[{self.model_name}] Epoch loss non-finite. Pruning trial."
+                    )
+                raise RuntimeError(
+                    f"[{self.model_name}] Non-finite training loss encountered."
+                )
 
             if scheduler is not None:
                 scheduler.step()
 
-            history.append(train_loss)
+            # Default placeholder for plotting alignment
+            val_loss_epoch: float = float("nan")
 
-            # Optuna prune on validation metric
-            if (
-                trial is not None
-                and X_val is not None
-                and ((epoch + 1) % _eval_every == 0)
-            ):
-                seed = int(
-                    self.rng.integers(0, 1_000_000) if self.seed is None else self.seed
-                )
+            do_eval = (X_val is not None) and ((epoch + 1) % _eval_every == 0)
+            if do_eval:
+                seed = int(self.seed or 12345) + epoch
                 metric_key = prune_metric or getattr(self, "tune_metric", "f1")
-                do_infer = int(eval_latent_steps) > 0
 
-                mask_override, gt_override = self._resolve_prune_eval_mask_and_gt(X_val)
+                mask_override, gt_override = self._resolve_prune_eval_mask_and_gt(
+                    cast(np.ndarray, X_val)
+                )
+                y_true_val = gt_override if gt_override is not None else X_val
 
-                metric_val = self._eval_for_pruning(
+                # Infer latents ONCE and reuse for metric + val loss
+                res = self._eval_for_pruning(
                     model=model,
                     X_val=X_val,
-                    params=params or getattr(self, "best_params_", {}),
+                    params=params or {},
                     metric=metric_key,
                     objective_mode=True,
-                    do_latent_infer=do_infer,
+                    do_latent_infer=True,
                     latent_steps=eval_latent_steps,
                     latent_lr=eval_latent_lr,
                     latent_weight_decay=eval_latent_weight_decay,
                     latent_seed=seed,
-                    _latent_cache=_latent_cache,
-                    _latent_cache_key=_latent_cache_key,
+                    _latent_cache={},  # avoid cross-epoch reuse
+                    _latent_cache_key="__unused__",  # avoid cross-epoch reuse
                     eval_mask_override=mask_override,
-                    GT_val=gt_override,
+                    GT_val=y_true_val,
+                    return_latents=True,
                 )
+                if isinstance(res, tuple):
+                    metric_val, z_val = res[0], res[1]
+                else:
+                    metric_val, z_val = res, None
 
-                trial.report(metric_val, step=epoch + 1)
-                if (epoch + 1) >= _warmup and trial.should_prune():
-                    raise optuna.exceptions.TrialPruned(
-                        f"Pruned at epoch {epoch + 1}: {metric_key}={metric_val:.3f}"
+                if z_val is not None:
+                    val_loss_epoch = self._val_loss_from_latents(
+                        z_val=z_val,
+                        y_true_val=y_true_val,
+                        model=model,
+                        params=params,
+                        l1_penalty=l1_penalty,
+                        class_weights=cast(torch.Tensor, cw),
+                        eval_mask_override=mask_override,
                     )
+                else:
+                    val_loss_epoch = float("inf")
 
-            early_stopping(train_loss, model)
+                # Pruning only when running an Optuna trial
+                if trial is not None:
+                    trial.report(float(metric_val), step=epoch + 1)
+                    if trial.should_prune():
+                        msg = f"[{self.model_name}] Trial {trial.number} Median-Pruned at epoch {epoch + 1}: {metric_key}={metric_val:.3f}. This is not an error, but indicates the trial was unpromising."
+                        raise optuna.exceptions.TrialPruned(msg)
+
+                # Early stopping: ONLY update when we actually computed a real
+                # val loss
+                if np.isfinite(val_loss_epoch):
+                    early_stopping(val_loss_epoch, model, epoch=epoch + 1)
+
+            else:
+                # If no validation set exists at all, do simple
+                # early-stop on train loss.
+                # If X_val exists but we're between eval points, do not touch
+                # early stopping.
+                if X_val is None:
+                    early_stopping(train_loss, model, epoch=epoch + 1)
+
+            history["Train"].append(float(train_loss))
+            history["Val"].append(float(val_loss_epoch))
+
             if early_stopping.early_stop:
-                self.logger.debug(f"Early stopping at epoch {epoch + 1}.")
                 break
 
-        best_loss = early_stopping.best_score
-        best_model = early_stopping.best_model
+        # Restore best weights
+        if getattr(early_stopping, "best_state_dict", None) is not None:
+            model.load_state_dict(early_stopping.best_state_dict)
 
-        if best_model is None:
-            self.logger.debug("No best model found after training loop.")
-            best_model = model
-
-        else:
-            best_state = {
-                k: v.detach().cpu().clone() for k, v in best_model.state_dict().items()
-            }
-
-        best_model.load_state_dict(best_state)
-
-        return best_loss, best_model, history, latent_vectors
+        best_loss = float(getattr(early_stopping, "best_score", float("inf")))
+        return best_loss, model, history, latent_vectors
 
     def _resolve_gamma(
         self,
@@ -1498,9 +1741,9 @@ class ImputeNLPCA(BaseNNImputer):
         model.eval()
         gamma = self._resolve_gamma(params, model)
 
-        cw = None
-        if getattr(self, "class_weights_", None) is not None:
-            cw = self.class_weights_.to(self.device)
+        cw = getattr(self, "class_weights_", None)
+        if cw is not None:
+            cw = cw.to(self.device)
             cw = cw / cw.mean().clamp_min(1e-8)
 
         criterion = SafeFocalCELoss(gamma=gamma, weight=cw, ignore_index=-1)
@@ -1564,7 +1807,7 @@ class ImputeNLPCA(BaseNNImputer):
         seed: int,
         cache: dict | None,
         cache_key: str | None,
-    ) -> None:
+    ) -> torch.Tensor:
         """Freeze weights; refine validation latents only (no leakage).
 
         This method refines latent vectors for validation data by optimizing them while keeping the model weights frozen. It initializes the latent space, optionally using cached latent vectors, and iteratively updates the latent vectors to minimize the reconstruction loss using cross-entropy. The method includes safeguards to handle non-finite values during optimization and can store the optimized latent vectors in a cache.
@@ -1660,6 +1903,16 @@ class ImputeNLPCA(BaseNNImputer):
         for p in model.parameters():
             p.requires_grad_(True)
 
+        z_out = z.detach().cpu()
+
+        if cache is not None and cache_key is not None:
+            cache[cache_key] = z_out.clone()
+
+        for p in model.parameters():
+            p.requires_grad_(True)
+
+        return z_out
+
     def _haploid_012_to_bin(self, X: np.ndarray) -> np.ndarray:
         """Map haploid 0/2/-1 -> 0/1/-1 for modeling."""
         out = X.copy()
@@ -1681,18 +1934,18 @@ class ImputeNLPCA(BaseNNImputer):
         """
         # If we're evaluating simulated-missing positions, we must have GT.
         if self.simulate_missing:
+            sim_mask_test = getattr(self, "sim_mask_test_", None)
+            gt_test_full = getattr(self, "GT_test_full_", None)
+
             # Full training (non-tune) test split
             if (
-                getattr(self, "sim_mask_test_", None) is not None
-                and getattr(self, "GT_test_full_", None) is not None
+                sim_mask_test is not None
+                and gt_test_full is not None
                 and hasattr(self, "X_test_")
                 and X_val.shape == self.X_test_.shape
             ):
-                if self.sim_mask_test_:
-                    return (
-                        self.sim_mask_test_.astype(bool, copy=False),
-                        self.GT_test_full_,
-                    )
+                if sim_mask_test is not None:
+                    return sim_mask_test.astype(bool, copy=False), gt_test_full
 
             # Tune-fast subset test split
             if (
@@ -1707,15 +1960,16 @@ class ImputeNLPCA(BaseNNImputer):
                     self._tune_GT_test,
                 )
 
-        # Default: evaluate observed entries; GT can safely be X_val itself for observed-only scoring.
-        # (because eval_mask defaults to X_val != -1, and those entries are the observed truth)
+        # NOTE: Default: evaluate observed entries; GT can safely be X_val
+        # itself for observed-only scoring. (because eval_mask defaults to
+        #  X_val != -1, and those entries are the observed truth)
         return None, X_val
 
     def _eval_for_pruning(
         self,
         *,
         model: torch.nn.Module,
-        X_val: np.ndarray,
+        X_val: np.ndarray | None,
         params: dict,
         metric: str,
         objective_mode: bool,
@@ -1728,11 +1982,24 @@ class ImputeNLPCA(BaseNNImputer):
         _latent_cache_key: str,
         eval_mask_override: np.ndarray | None = None,
         GT_val: np.ndarray | None = None,
-    ) -> float:
-        if do_latent_infer and latent_steps > 0:
-            self._latent_infer_for_eval(
+        latent_vectors_val: torch.Tensor | None = None,
+        return_latents: bool = False,
+    ) -> float | tuple[float, torch.Tensor | None]:
+        """Evaluate pruning metric, optionally using precomputed validation latents.
+
+        Args:
+            latent_vectors_val: If provided, reuse these latents (no inference).
+            return_latents: If True, also return the latents used.
+
+        Returns:
+            metric_value or (metric_value, z_used)
+        """
+        if latent_vectors_val is not None:
+            z = latent_vectors_val
+        elif do_latent_infer and latent_steps > 0:
+            z = self._latent_infer_for_eval(
                 model=model,
-                X_val=X_val,
+                X_val=cast(np.ndarray, X_val),
                 steps=latent_steps,
                 lr=latent_lr,
                 weight_decay=latent_weight_decay,
@@ -1740,13 +2007,11 @@ class ImputeNLPCA(BaseNNImputer):
                 cache=_latent_cache,
                 cache_key=_latent_cache_key,
             )
-            # If your cache stores z, pull it; otherwise change _latent_infer_for_eval to return z.
-            z = _latent_cache[_latent_cache_key]
         else:
             z = None
 
         metrics = self._evaluate_model(
-            X_val=X_val,
+            X_val=cast(np.ndarray, X_val),
             model=model,
             params=params,
             objective_mode=objective_mode,
@@ -1754,4 +2019,6 @@ class ImputeNLPCA(BaseNNImputer):
             y_true_matrix=GT_val,
             eval_mask_override=eval_mask_override,
         )
-        return float(metrics.get(metric, 0.0))
+
+        val = float(metrics.get(metric, 0.0))
+        return (val, z) if return_latents else val
