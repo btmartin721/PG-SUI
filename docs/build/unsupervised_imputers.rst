@@ -55,7 +55,7 @@ Extends the NLPCA options with UBP-specific presets tuned for class imbalance an
 Variational Autoencoder (Config)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Adds a ``vae`` section (``kl_beta``, ``kl_warmup``, ``kl_ramp``) to the autoencoder defaults, controlling KL annealing.
+Adds a ``vae`` section (``kl_beta``) to the autoencoder defaults, controlling KL annealing.
 
 .. autoclass:: pgsui.data_processing.containers.VAEConfig
    :members:
@@ -93,7 +93,7 @@ Autoencoder (ImputeAutoencoder)
 Variational Autoencoder (ImputeVAE)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-- Extends the autoencoder with a KL divergence term whose strength is annealed via ``vae.kl_warmup`` / ``vae.kl_ramp`` to ``vae.kl_beta``.
+- Extends the autoencoder with a KL divergence term whose strength is annealed via ``vae.kl_beta``.
 - Shares the focal cross-entropy schedule with the standard autoencoder (``model.gamma`` ramp) and records the annealed ``beta``/``gamma`` per epoch.
 - Hyperparameter tuning reuses the autoencoder search surface while keeping the latent evaluator disabled (VAEs rely on decoder logits during validation).
 - ``transform()`` predicts class probabilities across genotypes, fills masked entries with MAP labels, and emits IUPAC arrays with paired distribution plots.
