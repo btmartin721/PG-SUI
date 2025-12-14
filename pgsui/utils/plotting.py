@@ -437,7 +437,9 @@ class Plotting:
         )
         fig.savefig(self.output_dir / out_name, bbox_inches="tight")
         if self.show_plots:
-            plt.show()
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                plt.show()
         plt.close(fig)
 
         # ---- MultiQC: metrics table + per-class AUC/AP heatmap ------------
@@ -469,6 +471,19 @@ class Plotting:
             except Exception as exc:  # pragma: no cover - defensive
                 self.logger.warning(f"Failed to queue MultiQC ROC/PR curves: {exc}")
 
+    def _series_from_history(self, vals: list[float]) -> pd.Series:
+        """Convert to float series and coerce non-finite to NaN."""
+        s = pd.Series(vals, dtype="float64")
+        s[~np.isfinite(s.to_numpy())] = np.nan
+        return s
+
+    def _interp_sparse(self, s: pd.Series) -> pd.Series:
+        """Interpolate internal gaps; keep leading/trailing NaNs."""
+        # Only interpolate if we have enough points to make it meaningful
+        if s.notna().sum() < 2:
+            return s
+        return s.interpolate(method="linear", limit_area="inside")
+
     def plot_history(self, history: dict[str, list[float]]) -> None:
         """Plot model history traces. Will be saved to file.
 
@@ -498,27 +513,42 @@ class Plotting:
                     raise TypeError(msg)
 
                 fig, ax = plt.subplots(1, 1, figsize=(12, 8))
-                df_train = pd.Series(history["Train"])
-                df_train = df_train.iloc[1:]  # ignore first epoch
+                df_train = self._series_from_history(history["Train"]).iloc[1:]
 
                 ax.plot(df_train, c="blue", lw=3)
 
                 if "Val" in history:
-                    val_vals = pd.Series(history["Val"])
-                    val_vals = val_vals.iloc[1:]  # ignore first epoch
+                    val = self._series_from_history(history["Val"]).iloc[1:]
 
-                    ax.plot(val_vals, c="orange", lw=3)
-                    ax.set_title(f"{self.model_name} Loss per Epoch")
-                    ax.set_ylabel("Loss")
-                    ax.set_xlabel("Epoch")
-                    ax.legend(
-                        ["Train", "Validation"], loc="best", shadow=True, fancybox=True
-                    )
+                    # Plot actual computed validation points as markers
+                    val_points = val.dropna()
+                    if not val_points.empty:
+                        ax.plot(
+                            val_points.index,
+                            val_points.to_numpy(),
+                            lw=0,
+                            marker="o",
+                            markersize=5,
+                        )
+
+                        val_i = self._interp_sparse(val)
+                        ax.plot(val_i.index, val_i.to_numpy(), lw=3, linestyle="--")
+
+                        ax.legend(
+                            ["Train", "Val (points)", "Val (interpolated)"],
+                            loc="best",
+                            shadow=True,
+                            fancybox=True,
+                        )
+                    else:
+                        ax.legend(["Train"], loc="best", shadow=True, fancybox=True)
                 else:
-                    ax.set_title(f"{self.model_name} Loss per Epoch")
-                    ax.set_ylabel("Loss")
-                    ax.set_xlabel("Epoch")
                     ax.legend(["Train"], loc="best", shadow=True, fancybox=True)
+
+                ax.set_title(f"{self.model_name} Loss per Epoch")
+                ax.set_ylabel("Loss")
+                ax.set_xlabel("Epoch")
+                ax.legend(["Train"], loc="best", shadow=True, fancybox=True)
 
         else:
             fig, ax = plt.subplots(3, 1, figsize=(12, 8))
@@ -540,17 +570,53 @@ class Plotting:
 
                 # Plot train accuracy
                 ax[i].plot(train, c="blue", lw=3)
+
+                if "Val" in history:
+                    val_dict = cast(Dict[str, List[float]], history["Val"])
+                    val = pd.Series(val_dict[f"Phase {phase}"])
+                    val = val.iloc[1:]  # ignore first epoch
+
+                    # Plot actual computed validation points as markers
+                    val_points = val.dropna()
+                    if not val_points.empty:
+                        ax[i].plot(
+                            val_points.index,
+                            val_points.to_numpy(),
+                            lw=0,
+                            marker="o",
+                            markersize=5,
+                        )
+
+                        val_i = self._interp_sparse(val)
+                        ax[i].plot(val_i.index, val_i.to_numpy(), lw=3, linestyle="--")
+
+                        ax[i].legend(
+                            ["Train", "Val (points)", "Val (interpolated)"],
+                            loc="best",
+                            shadow=True,
+                            fancybox=True,
+                        )
+                    else:
+                        ax[i].legend(["Train"], loc="best", shadow=True, fancybox=True)
+                else:
+                    ax[i].legend(["Train"], loc="best", shadow=True, fancybox=True)
+
                 ax[i].set_title(f"{self.model_name}: Phase {phase} Loss per Epoch")
                 ax[i].set_ylabel("Loss")
                 ax[i].set_xlabel("Epoch")
                 ax[i].legend([f"Phase {phase}"], loc="best", shadow=True, fancybox=True)
+
+        if self.model_name == "ImputeUBP":
+            fig.subplots_adjust(hspace=0.75)
 
         fn = f"{self.model_name.lower()}_history_plot.{self.plot_format}"
         fn = self.output_dir / fn
         fig.savefig(fn)
 
         if self.show_plots:
-            plt.show()
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                plt.show()
         plt.close(fig)
 
         # ---- MultiQC: training-loss vs epoch linegraphs -------------------
@@ -633,7 +699,9 @@ class Plotting:
         )
         fig.savefig(self.output_dir / out_name, bbox_inches="tight")
         if self.show_plots:
-            plt.show()
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                plt.show()
         plt.close(fig)
 
         # ---- MultiQC: confusion-matrix heatmap ----------------------------
@@ -734,7 +802,9 @@ class Plotting:
         fig.savefig(fn, dpi=300)
 
         if self.show_plots:
-            plt.show()
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                plt.show()
         plt.close(fig)
 
         # ---- MultiQC: genotype-distribution barplot -----------------------
