@@ -48,7 +48,7 @@ The four deep imputer families (UBP, NLPCA, Autoencoder, VAE) share these struct
    * - ``num_hidden_layers``
      - ``2``
      - Count of hidden layers.
-   * - ``hidden_activation``
+   * - ``activation``
      - ``"relu"``
      - Hidden non-linearity.
    * - ``layer_scaling_factor``
@@ -246,18 +246,12 @@ Common blocks align with Autoencoder (no latent refinement at eval). Extra block
    * - ``kl_beta``
      - ``1.0``
      - Final KL weight.
-   * - ``kl_warmup``
-     - ``50``
-     - Epochs with ``beta=0``.
-   * - ``kl_ramp``
-     - ``200``
-     - Linear ramp epochs to ``kl_beta``.
 
 Presets:
 
-- ``fast``: ``latent_dim=4``, ``num_hidden_layers=1``, ``layer_scaling_factor=2.0``, ``dropout_rate=0.10``, ``gamma=1.5``, VAE extras ``kl_beta=0.5``, ``kl_warmup=10``, ``kl_ramp=40``, training ``batch_size=256``, ``learning_rate=2e-3``, ``early_stop_gen=5``, ``min_epochs=10``, ``max_epochs=150``, tuning ``enabled=True``, ``fast=True``, ``n_trials=20``, ``epochs=150``, ``batch_size=256``, ``max_samples=512``, ``eval_interval=20``, ``patience=5``, ``infer_epochs=0``.
-- ``balanced``: ``latent_dim=8``, ``num_hidden_layers=2``, ``layer_scaling_factor=3.0``, ``dropout_rate=0.20``, ``gamma=2.0``, extras ``kl_beta=1.0``, ``kl_warmup=50``, ``kl_ramp=150``, training ``batch_size=128``, ``learning_rate=1e-3``, ``early_stop_gen=15``, ``min_epochs=50``, ``max_epochs=600``, tuning ``enabled=True``, ``fast=False``, ``n_trials=60``, ``epochs=200``, ``batch_size=128``, ``max_samples=2048``, ``eval_interval=10``, ``patience=10``, ``infer_epochs=0``.
-- ``thorough``: ``latent_dim=16``, ``num_hidden_layers=3``, ``layer_scaling_factor=5.0``, ``dropout_rate=0.30``, ``gamma=2.5``, extras ``kl_beta=1.0``, ``kl_warmup=100``, ``kl_ramp=400``, training ``batch_size=64``, ``learning_rate=5e-4``, ``early_stop_gen=30``, ``min_epochs=100``, ``max_epochs=2000``, tuning ``enabled=True``, ``fast=False``, ``n_trials=100``, ``epochs=600``, ``batch_size=64``, ``max_samples=0``, ``eval_interval=10``, ``patience=20``, ``infer_epochs=0``.
+- ``fast``: ``latent_dim=4``, ``num_hidden_layers=1``, ``layer_scaling_factor=2.0``, ``dropout_rate=0.10``, ``gamma=1.5``, VAE extras ``kl_beta=0.5``, training ``batch_size=256``, ``learning_rate=2e-3``, ``early_stop_gen=5``, ``min_epochs=10``, ``max_epochs=150``, tuning ``enabled=True``, ``fast=True``, ``n_trials=20``, ``epochs=150``, ``batch_size=256``, ``max_samples=512``, ``eval_interval=20``, ``patience=5``, ``infer_epochs=0``.
+- ``balanced``: ``latent_dim=8``, ``num_hidden_layers=2``, ``layer_scaling_factor=3.0``, ``dropout_rate=0.20``, ``gamma=2.0``, extras ``kl_beta=1.0``, training ``batch_size=128``, ``learning_rate=1e-3``, ``early_stop_gen=15``, ``min_epochs=50``, ``max_epochs=600``, tuning ``enabled=True``, ``fast=False``, ``n_trials=60``, ``epochs=200``, ``batch_size=128``, ``max_samples=2048``, ``eval_interval=10``, ``patience=10``, ``infer_epochs=0``.
+- ``thorough``: ``latent_dim=16``, ``num_hidden_layers=3``, ``layer_scaling_factor=5.0``, ``dropout_rate=0.30``, ``gamma=2.5``, extras ``kl_beta=1.0``, training ``batch_size=64``, ``learning_rate=5e-4``, ``early_stop_gen=30``, ``min_epochs=100``, ``max_epochs=2000``, tuning ``enabled=True``, ``fast=False``, ``n_trials=100``, ``epochs=600``, ``batch_size=64``, ``max_samples=0``, ``eval_interval=10``, ``patience=20``, ``infer_epochs=0``.
 
 Deterministic imputers
 ----------------------
