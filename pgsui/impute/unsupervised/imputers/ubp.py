@@ -1,4 +1,6 @@
 import copy
+import traceback
+from collections import defaultdict
 from typing import TYPE_CHECKING, Any, Dict, Literal, Mapping, Optional, Tuple
 
 import numpy as np
@@ -188,7 +190,7 @@ class ImputeUBP(BaseNNImputer):
         self.layer_scaling_factor = self.cfg.model.layer_scaling_factor
         self.layer_schedule = self.cfg.model.layer_schedule
         self.latent_init: Literal["pca", "random"] = self.cfg.model.latent_init
-        self.activation = self.cfg.model.hidden_activation
+        self.activation = self.cfg.model.activation
         self.gamma = self.cfg.model.gamma
 
         # ---- training ----
@@ -321,6 +323,8 @@ class ImputeUBP(BaseNNImputer):
                 "Diploid data detected. Using 3 classes (REF=0, HET=1, ALT=2) for training/scoring."
             )
 
+        self.X_model_input_ = X_for_model
+
         # IMPORTANT: model head matches scoring classes now
         self.output_classes_ = int(self.num_classes_)
 
@@ -354,15 +358,15 @@ class ImputeUBP(BaseNNImputer):
             self.sim_mask_train_ = None
             self.sim_mask_test_ = None
 
-        cw = self._normalize_class_weights(
-            self._class_weights_from_zygosity(self.X_train_)
-        )
-        self.class_weights_ = cw
-
         # --- plotting/scorers & tuning ---
         self.plotter_, self.scorers_ = self.initialize_plotting_and_scorers()
+
+        self.class_weights_ = self._normalize_class_weights(
+            self._class_weights_from_zygosity(self.X_train_)
+        )
+
         if self.tune:
-            self.tune_hyperparameters()
+            self.tuned_params_ = self.tune_hyperparameters()
 
         # Fall back to default model params when none have been selected yet.
         if not getattr(self, "best_params_", None):
@@ -384,7 +388,10 @@ class ImputeUBP(BaseNNImputer):
         )
 
         self.is_fit_ = True
-        self.plotter_.plot_history(self.history_)
+
+        if self.show_plots:
+            self.plotter_.plot_history(self.history_)
+
         eval_mask = (
             self.sim_mask_test_
             if (self.simulate_missing and self.sim_mask_test_ is not None)
@@ -396,7 +403,12 @@ class ImputeUBP(BaseNNImputer):
             self.best_params_,
             eval_mask_override=eval_mask,
         )
-        self._save_best_params(self.best_params_)
+
+        if self.tune:
+            self._save_best_params(self.best_params_)
+        else:
+            self._save_best_params(self.best_params_)
+
         return self
 
     def transform(self) -> np.ndarray:
@@ -734,10 +746,11 @@ class ImputeUBP(BaseNNImputer):
         )
 
         if not objective_mode:
-            pm = PrettyMetrics(
-                metrics, precision=3, title=f"{self.model_name} Validation Metrics"
-            )
-            pm.render()
+            if self.verbose or self.debug:
+                pm = PrettyMetrics(
+                    metrics, precision=3, title=f"{self.model_name} Validation Metrics"
+                )
+                pm.render()
 
             self._make_class_reports(
                 y_true=y_true_flat,
@@ -845,7 +858,7 @@ class ImputeUBP(BaseNNImputer):
             float: Objective metric value for the current trial.
 
         Raises:
-            optuna.exceptions.TrialPruned: For expected numerical instabilities or explicit pruning.
+            optuna.exceptions.TrialPruned: If the trial is pruned due to poor performance.
             Exception: Re-raised for unexpected errors (after logging), to avoid hiding bugs.
         """
         try:
@@ -938,7 +951,6 @@ class ImputeUBP(BaseNNImputer):
                 X_val=X_test_trial,
                 params=model_params,
                 prune_metric=self.tune_metric,
-                prune_warmup_epochs=10,
                 eval_interval=self.tune_eval_interval,
                 eval_requires_latents=True,
                 eval_latent_steps=self.eval_latent_steps,
@@ -977,16 +989,17 @@ class ImputeUBP(BaseNNImputer):
             )
             return float(metrics[self.tune_metric])
 
-        except optuna.exceptions.TrialPruned:
-            raise
-        except (FloatingPointError, OverflowError, RuntimeError, ValueError) as e:
-            # Prune only for expected numeric/shape instability during tuning
-            self.logger.warning(f"Trial pruned due to instability/error: {e}")
-            raise optuna.exceptions.TrialPruned(str(e))
         except Exception as e:
-            # Do NOT hide real bugs as pruning
-            self.logger.exception(f"Unexpected error in Optuna objective: {e}")
-            raise
+            # Unexpected failure: surface full details in logs while still
+            # pruning the trial to keep sweeps moving.
+            err_type = type(e).__name__
+            self.logger.error(
+                f"Trial {trial.number} failed due to exception {err_type}: {e}"
+            )
+            self.logger.debug(traceback.format_exc(), exc_info=True)
+            raise optuna.exceptions.TrialPruned(
+                f"Trial {trial.number} failed due to an exception. {err_type}: {e}. Enable debug logging for full traceback."
+            ) from e
 
     def _sample_hyperparameters(self, trial: optuna.Trial) -> dict[str, Any]:
         lr = trial.suggest_float("learning_rate", 3e-4, 1e-3, log=True)
@@ -1115,7 +1128,6 @@ class ImputeUBP(BaseNNImputer):
         X_val: np.ndarray | None = None,
         params: Mapping[str, Any] | None = None,
         prune_metric: str | None = None,  # "f1" | "accuracy" | "pr_macro"
-        prune_warmup_epochs: int = 10,
         eval_interval: int = 1,
         eval_requires_latents: bool = True,  # UBP needs latent eval
         eval_latent_steps: int = 50,
@@ -1138,7 +1150,6 @@ class ImputeUBP(BaseNNImputer):
             X_val (np.ndarray | None): Validation set for pruning/eval.
             params (Mapping[str, Any] | None): Model params for eval.
             prune_metric (str | None): Metric to monitor for pruning.
-            prune_warmup_epochs (int): Epochs before pruning starts.
             eval_interval (int): Epochs between evaluations.
             eval_requires_latents (bool): If True, optimize latents for eval.
             eval_latent_steps (int): Latent optimization steps for eval.
@@ -1183,11 +1194,9 @@ class ImputeUBP(BaseNNImputer):
             l1_penalty=l1_penalty,
             trial=trial,
             latent_vectors=latent_vectors,
-            class_weights=class_weights,
             X_val=X_val,
             params=params,
             prune_metric=prune_metric,
-            prune_warmup_epochs=prune_warmup_epochs,
             eval_interval=eval_interval,
             eval_requires_latents=eval_requires_latents,
             eval_latent_steps=eval_latent_steps,
@@ -1214,7 +1223,7 @@ class ImputeUBP(BaseNNImputer):
             initial_latent_vectors (torch.nn.Parameter): Initialized latent vectors.
 
         Returns:
-            Tuple[float, torch.nn.Module, dict, torch.nn.Parameter]: (loss, model, {"Train": history}, latents).
+            Tuple[float, torch.nn.Module, dict, torch.nn.Parameter]: (loss, model, {"Train": history["Train"], "Val": history["Val"]}, latents).
         """
         self.logger.info(f"Training the final {self.model_name} model...")
 
@@ -1233,7 +1242,6 @@ class ImputeUBP(BaseNNImputer):
             X_val=self.X_test_,
             params=best_params,
             prune_metric=self.tune_metric,
-            prune_warmup_epochs=25,
             eval_interval=1,
             eval_requires_latents=True,
             eval_latent_steps=self.eval_latent_steps,
@@ -1242,13 +1250,13 @@ class ImputeUBP(BaseNNImputer):
         )
 
         if trained_model is None:
-            msg = "Final model training failed."
+            msg = f"{self.model_name} training failed; no model was returned."
             self.logger.error(msg)
             raise RuntimeError(msg)
 
         fout = self.models_dir / "final_model.pt"
         torch.save(trained_model.state_dict(), fout)
-        return loss, trained_model, {"Train": history}, latent_vectors
+        return loss, trained_model, history, latent_vectors
 
     def _execute_training_loop(
         self,
@@ -1259,12 +1267,10 @@ class ImputeUBP(BaseNNImputer):
         l1_penalty: float,
         trial: optuna.Trial | None,
         latent_vectors: torch.nn.Parameter,
-        class_weights: torch.Tensor,
         *,
         X_val: np.ndarray | None = None,
         params: dict | Mapping[str, Any] | None = None,
         prune_metric: str | None = None,
-        prune_warmup_epochs: int = 10,
         eval_interval: int = 1,
         eval_requires_latents: bool = True,
         eval_latent_steps: int = 50,
@@ -1272,40 +1278,16 @@ class ImputeUBP(BaseNNImputer):
         eval_latent_weight_decay: float = 0.0,
         max_epochs: int | None = None,
     ) -> Tuple[float, torch.nn.Module, Mapping[str, Any], torch.nn.Parameter]:
-        """Three-phase UBP with numeric guards, LR warmup, and pruning.
 
-        Args:
-            loader (torch.utils.data.DataLoader): DataLoader for training data.
-            latent_optimizer (torch.optim.Optimizer): Optimizer for latent vectors.
-            lr (float): Learning rate for decoder.
-            model (torch.nn.Module): UBP model with phase1_decoder & phase23_decoder.
-            l1_penalty (float): L1 regularization weight.
-            trial (optuna.Trial | None): Current trial or None.
-            latent_vectors (torch.nn.Parameter): Trainable Z.
-            class_weights (torch.Tensor): Class weights for 0/1/2.
-            X_val (np.ndarray | None): Validation set for pruning/eval.
-            params (dict | Mapping[str, Any] | None): Model params for eval.
-            prune_metric (str | None): Metric to monitor for pruning.
-            prune_warmup_epochs (int): Epochs before pruning starts.
-            eval_interval (int): Epochs between evaluations.
-            eval_requires_latents (bool): If True, optimize latents for eval.
-            eval_latent_steps (int): Latent optimization steps for eval.
-            eval_latent_lr (float): Latent optimization LR for eval.
-            eval_latent_weight_decay (float): Latent optimization weight decay for eval.
-            max_epochs (int | None): Maximum epochs to train.
+        # NEW: nested history for UBP (matches your plotter’s ImputeUBP expectation)
+        history: dict[str, dict[str, list[float]]] = {
+            "Train": defaultdict(list),
+            "Val": defaultdict(list),
+        }
 
-        Returns:
-            Tuple[float, torch.nn.Module, Mapping[str, Any], torch.nn.Parameter]: Tuple with (best_loss, best_model, history_or_none, latent_vectors).
-
-        Raises:
-            ValueError: If X_val is not provided for evaluation.
-            RuntimeError: If eval_latent_steps is not positive.
-        """
-        history: dict[str, list[float]] = {}
-        final_best_loss, final_best_model = float("inf"), None
+        final_best_loss = float("inf")
         best_state: Mapping[str, torch.Tensor] | None = None
 
-        # Schema-aware latent cache for eval
         _latent_cache: dict = {}
         nF = int(getattr(model, "n_features", self.num_features_))
         cache_key_root = f"{self.prefix}_ubp_val_latents_L{nF}_K{self.output_classes_}"
@@ -1317,10 +1299,10 @@ class ImputeUBP(BaseNNImputer):
             3: max(1, E - int(0.15 * E) - int(0.35 * E)),
         }
 
+        _eval_every = max(1, int(eval_interval))
+
         for phase in (1, 2, 3):
             steps_this_phase = int(phase_epochs[phase])
-
-            warmup_epochs = getattr(self, "lr_warmup_epochs", 5) if phase == 1 else 0
 
             early_stopping = EarlyStopping(
                 patience=self.early_stop_gen,
@@ -1340,23 +1322,14 @@ class ImputeUBP(BaseNNImputer):
                 model.phase1_decoder if phase == 1 else model.phase23_decoder
             )
             if not isinstance(decoder, torch.nn.Module):
-                msg = f"{self.model_name} Decoder is not a torch.nn.Module."
-                self.logger.error(msg)
-                raise TypeError(msg)
+                raise TypeError(f"{self.model_name} Decoder is not a torch.nn.Module.")
 
             optimizer = torch.optim.AdamW(decoder.parameters(), lr=lr, eps=1e-7)
             scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
                 optimizer, T_max=steps_this_phase
             )
 
-            # Cache base LRs for warmup
-            dec_lr0 = float(optimizer.param_groups[0]["lr"])
-            lat_lr0 = float(latent_optimizer.param_groups[0]["lr"])
-            dec_lr_min, lat_lr_min = dec_lr0 * 0.1, lat_lr0 * 0.1
-
-            phase_hist: list[float] = []
             gamma = self._resolve_gamma(params, model)
-
             cw = None
             if self.class_weights_ is not None:
                 cw = self.class_weights_.to(self.device)
@@ -1364,15 +1337,9 @@ class ImputeUBP(BaseNNImputer):
 
             criterion = SafeFocalCELoss(gamma=gamma, weight=cw, ignore_index=-1)
 
-            for epoch in range(steps_this_phase):
-                # --- Linear LR warmup (phase 1 only) ---
-                if warmup_epochs and epoch < warmup_epochs:
-                    scale = float(epoch + 1) / float(warmup_epochs)
-                    for g in optimizer.param_groups:
-                        g["lr"] = dec_lr_min + (dec_lr0 - dec_lr_min) * scale
-                    for g in latent_optimizer.param_groups:
-                        g["lr"] = lat_lr_min + (lat_lr0 - lat_lr_min) * scale
+            last_val_loss = float("nan")
 
+            for epoch in range(steps_this_phase):
                 train_loss, latent_vectors = self._train_step(
                     loader=loader,
                     optimizer=optimizer,
@@ -1385,95 +1352,113 @@ class ImputeUBP(BaseNNImputer):
                 )
 
                 if not np.isfinite(train_loss):
-                    if trial:
-                        self.logger.debug("Non-finite train loss during training step.")
-                        raise optuna.exceptions.TrialPruned("Epoch loss non-finite.")
-                    for g in optimizer.param_groups:
-                        g["lr"] *= 0.5
-                    for g in latent_optimizer.param_groups:
-                        g["lr"] *= 0.5
-                    continue
+                    msg = f"[{self.model_name}] Non-finite train loss (phase {phase}, epoch {epoch + 1})."
+                    if trial is not None:
+                        raise optuna.exceptions.TrialPruned(msg)
+                    raise RuntimeError(msg)
 
                 scheduler.step()
 
-                phase_hist.append(float(train_loss))
+                # Record train loss
+                history["Train"][f"Phase {phase}"].append(float(train_loss))
 
-                early_stopping(train_loss, model)
+                # Default val loss (only filled on eval epochs)
+                val_loss_epoch = float("nan")
+
+                # --- Validation loss (and pruning metric if trial) ---
+                if (X_val is not None) and (((epoch + 1) % _eval_every) == 0):
+                    # Schema-aware cache key for val latents
+                    zdim = int(self._first_linear_in_features(model))
+                    schema_key = f"{cache_key_root}_z{zdim}"
+
+                    # Mask + GT aligned to X_val
+                    mask_override, gt_override = self._resolve_prune_eval_mask_and_gt(
+                        X_val
+                    )
+
+                    # Infer latents ONCE (reused for metric + val loss)
+                    latent_vectors_val = None
+                    if eval_requires_latents and eval_latent_steps > 0:
+                        latent_vectors_val = self._latent_infer_for_eval(
+                            model=model,
+                            X_val=X_val,
+                            steps=int(eval_latent_steps),
+                            lr=float(eval_latent_lr),
+                            weight_decay=float(eval_latent_weight_decay),
+                            seed=int(self.seed or 12345) + epoch,
+                            cache=_latent_cache,
+                            cache_key=schema_key,
+                        )
+
+                    # Compute val loss (even when not tuning)
+                    if latent_vectors_val is not None:
+                        val_loss_epoch = self._val_loss_from_latents(
+                            z_val=latent_vectors_val,
+                            X_val=X_val,
+                            model=model,
+                            params=params or {},
+                            eval_mask_override=mask_override,
+                            GT_val=gt_override,
+                        )
+                        last_val_loss = val_loss_epoch
+
+                    # If tuning, compute metric + pruning (phase 3)
+                    if trial is not None:
+                        metric_key = prune_metric or getattr(self, "tune_metric", "f1")
+                        metrics = self._evaluate_model(
+                            X_val=X_val,
+                            model=model,
+                            params=dict(params or {}),
+                            objective_mode=True,
+                            latent_vectors_val=latent_vectors_val,
+                            eval_mask_override=mask_override,
+                            GT_val=gt_override,
+                        )
+                        metric_val = float(metrics.get(metric_key, 0.0))
+
+                        if phase == 3:
+                            trial.report(metric_val, step=epoch + 1)
+                            if trial.should_prune():
+                                msg = f"[{self.model_name}] Trial {trial.number} Median-Pruned at epoch {epoch + 1}: {metric_key}={metric_val:.3f}. This is not an error, but indicates the trial was unpromising."
+                                raise optuna.exceptions.TrialPruned(msg)
+
+                # Record val loss (NaN on non-eval epochs)
+                history["Val"][f"Phase {phase}"].append(float(val_loss_epoch))
+
+                # Early stopping: ONLY update when we actually computed a real
+                # val loss
+                if np.isfinite(val_loss_epoch):
+                    early_stopping(val_loss_epoch, model, epoch=epoch + 1)
+                else:
+                    # If no validation set exists at all, do simple
+                    # early-stop on train loss.
+                    # If X_val exists but we're between eval points, do not
+                    # touch early stopping.
+                    if X_val is None:
+                        early_stopping(train_loss, model, epoch=epoch + 1)
+
                 if early_stopping.early_stop:
                     self.logger.debug(
                         f"Early stopping at epoch {epoch + 1} (phase {phase})."
                     )
                     break
 
-                # --- Validation + pruning ---
-                if (
-                    trial is not None
-                    and X_val is not None
-                    and ((epoch + 1) % int(eval_interval) == 0)
-                ):
-                    metric_key = prune_metric or getattr(self, "tune_metric", "f1")
-                    zdim = int(self._first_linear_in_features(model))
-                    schema_key = f"{cache_key_root}_z{zdim}"
-
-                    # Resolve both mask + GT aligned to THIS X_val
-                    mask_override, gt_override = self._resolve_prune_eval_mask_and_gt(
-                        X_val
-                    )
-
-                    metric_val = self._eval_for_pruning(
-                        model=model,
-                        X_val=X_val,
-                        params=params or getattr(self, "best_params_", {}),  # type: ignore
-                        metric=metric_key,
-                        objective_mode=True,
-                        do_latent_infer=eval_requires_latents,
-                        latent_steps=eval_latent_steps,
-                        latent_lr=eval_latent_lr,
-                        latent_weight_decay=eval_latent_weight_decay,
-                        latent_seed=self.seed,
-                        _latent_cache=_latent_cache,
-                        _latent_cache_key=schema_key,
-                        eval_mask_override=mask_override,
-                        GT_val=gt_override,
-                    )
-
-                    if phase == 3:
-                        trial.report(metric_val, step=epoch + 1)
-                        if (epoch + 1) >= int(
-                            prune_warmup_epochs
-                        ) and trial.should_prune():
-                            msg = (
-                                f"Trial Median-Pruned at epoch {epoch + 1} (phase {phase}): "
-                                f"{metric_key}={metric_val:.3f}"
-                            )
-                            raise optuna.exceptions.TrialPruned(msg)
-
-            history[f"Phase {phase}"] = phase_hist
+            # Track best across phases
             phase_best = float(early_stopping.best_score)
-
             if phase_best < final_best_loss:
                 final_best_loss = phase_best
-                final_best_model = early_stopping.best_model or model
+                best_state = early_stopping.best_state_dict
 
-                # when improved:
-                best_state = {
-                    k: v.detach().cpu().clone()
-                    for k, v in final_best_model.state_dict().items()
-                }
-
-        if final_best_model is None:
-            msg = "Training loop failed to produce a best model."
+        if best_state is None:
+            msg = "Training loop failed to produce a best model state."
             self.logger.error(msg)
             raise RuntimeError(msg)
 
-        if best_state is None:
-            best_state = {
-                k: v.detach().cpu().clone()
-                for k, v in final_best_model.state_dict().items()
-            }
-        final_best_model.load_state_dict(best_state)
+        # IMPORTANT FIX: load the GLOBAL best_state, not the last phase’s early_stopping state
+        model.load_state_dict(best_state)
+        best_model = model
 
-        return final_best_loss, final_best_model, history, latent_vectors
+        return final_best_loss, best_model, history, latent_vectors
 
     def _optimize_latents_for_inference(
         self,
@@ -1908,3 +1893,90 @@ class ImputeUBP(BaseNNImputer):
             GT_val=GT_val,
         )
         return float(metrics.get(metric, 0.0))
+
+    def _val_loss_from_latents(
+        self,
+        *,
+        z_val: torch.Tensor,
+        X_val: np.ndarray,
+        model: torch.nn.Module,
+        params: Mapping[str, Any] | None = None,
+        eval_mask_override: np.ndarray | None = None,
+        GT_val: np.ndarray | None = None,
+    ) -> float:
+        """Compute focal CE validation loss given pre-optimized validation latents.
+
+        Loss is computed on the evaluation mask. If eval_mask_override is provided, loss is computed ONLY on those entries and requires GT_val to avoid using masked (-1) targets. Otherwise, loss is computed on observed entries (X_val != -1).
+
+        Args:
+            z_val: Validation latents (n_val x zdim).
+            X_val: Validation genotype matrix (n_val x L) with -1 for missing.
+            model: Trained UBP model.
+            params: Model params (for gamma/lr_factor resolution).
+            eval_mask_override: Optional boolean mask specifying evaluated entries.
+            GT_val: Ground-truth matrix aligned to X_val (required if mask override is used).
+
+        Returns:
+            float: Validation loss (np.nan if no valid entries).
+        """
+        model.eval()
+
+        nF = int(getattr(model, "n_features", X_val.shape[1]))
+        K = int(self.output_classes_)
+
+        if eval_mask_override is not None and GT_val is None:
+            msg = (
+                "GT_val must be provided when eval_mask_override is used for val loss."
+            )
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        # Resolve mask
+        if eval_mask_override is not None:
+            if eval_mask_override.shape[0] != X_val.shape[0]:
+                raise ValueError("eval_mask_override row count does not match X_val.")
+            if eval_mask_override.shape[1] < X_val.shape[1]:
+                raise ValueError("eval_mask_override has fewer cols than X_val.")
+            mask = eval_mask_override[:, : X_val.shape[1]].astype(bool, copy=False)
+        else:
+            mask = X_val != -1
+
+        # Resolve targets
+        if GT_val is not None:
+            if GT_val.shape[0] != X_val.shape[0]:
+                raise ValueError("GT_val row count does not match X_val.")
+            if GT_val.shape[1] < X_val.shape[1]:
+                raise ValueError("GT_val has fewer cols than X_val.")
+            GT = GT_val[:, : X_val.shape[1]]
+        else:
+            GT = X_val
+
+        # Build criterion consistent with training
+        gamma = self._resolve_gamma(params, model)
+
+        cw = getattr(self, "class_weights_", None)
+        if cw is not None:
+            cw = cw.to(self.device)
+            cw = cw / cw.mean().clamp_min(1e-8)
+
+        criterion = SafeFocalCELoss(gamma=gamma, weight=cw, ignore_index=-1)
+
+        with torch.no_grad():
+            decoder = model.phase23_decoder
+            if not isinstance(decoder, torch.nn.Module):
+                raise TypeError(f"{self.model_name} Decoder is not a torch.nn.Module.")
+
+            logits = decoder(z_val.to(self.device)).view(X_val.shape[0], nF, K)
+
+            y = torch.from_numpy(GT.astype(np.int64, copy=False)).to(self.device)
+            logits_flat = logits.view(-1, K)
+            targets_flat = y.view(-1)
+
+            mask_flat = torch.from_numpy(mask.reshape(-1)).to(self.device)
+            valid = mask_flat & (targets_flat != -1)
+
+            if valid.sum().item() == 0:
+                return float("nan")
+
+            loss = criterion(logits_flat[valid], targets_flat[valid])
+            return float(loss.detach().item())
