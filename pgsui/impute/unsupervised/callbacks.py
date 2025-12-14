@@ -1,3 +1,4 @@
+import numpy as np
 from snpio.utils.logging import LoggerManager
 
 from pgsui.utils.logging_utils import configure_logger
@@ -53,7 +54,7 @@ class EarlyStopping:
         self.epoch_count = 0
         self.best_score = float("inf") if mode == "min" else 0.0
         self.early_stop = False
-        self.best_model = None
+        self.best_state_dict: dict | None = None
         self.min_epochs = min_epochs
 
         is_verbose = verbose >= 2 or debug
@@ -72,45 +73,39 @@ class EarlyStopping:
             self.logger.error(msg)
             raise ValueError(msg)
 
-    def __call__(self, score, model):
-        """Checks if early stopping condition is met and checkpoints model accordingly.
+    def __call__(self, score, model, *, epoch: int | None = None):
+        """Update early stopping state.
 
         Args:
-            score (float): The current metric value (e.g., validation loss/accuracy).
-            model (torch.nn.Module): The model being trained.
+            score: Monitored metric value.
+            model: Model to checkpoint.
+            epoch: If provided, sets the internal epoch counter to the true epoch number.
         """
-        # Increment the epoch count each time we call this function
-        self.epoch_count += 1
+        if epoch is not None:
+            self.epoch_count = int(epoch)
+        else:
+            self.epoch_count += 1
 
-        # If this is the first epoch, initialize best_score and save model
-        if self.best_score is None:
-            self.best_score = score
+        # Treat non-finite scores as non-improvements
+        try:
+            score_f = float(score)
+        except Exception:
+            score_f = float("inf") if self.mode == "min" else float("-inf")
+
+        if not np.isfinite(score_f):
+            self.counter += 1
+            if self.counter >= self.patience and self.epoch_count >= self.min_epochs:
+                self.early_stop = True
             return
 
-        # Check if there is improvement
-        if self.monitor(score, self.best_score):
-            # If improved, reset counter and update the best score/model
-            self.best_score = score
-            self.best_model = model
+        if self.monitor(score_f, self.best_score):
+            self.best_score = score_f
+            # THIS is the real checkpoint:
+            self.best_state_dict = {
+                k: v.detach().cpu().clone() for k, v in model.state_dict().items()
+            }
             self.counter = 0
         else:
-            # No improvement: increase counter
             self.counter += 1
-
-            if self.verbose:
-                self.logger.info(
-                    f"EarlyStopping counter: {self.counter}/{self.patience}"
-                )
-
-            # Now check if we surpass patience AND have reached min_epochs
             if self.counter >= self.patience and self.epoch_count >= self.min_epochs:
-
-                if self.best_model is None:
-                    self.best_model = model
-
                 self.early_stop = True
-
-                if self.verbose:
-                    self.logger.debug(
-                        f"Early stopping triggered at epoch {self.epoch_count}"
-                    )
