@@ -4,6 +4,55 @@ An overview of changes to **PG-SUI** by release. This mirrors the Sphinx/RST cha
 
 ---
 
+## v1.6.22 - 2025-12-13
+
+### Bug Fixes - v1.6.22
+
+- **CLI config precedence with `--load-best-params` (ImputeUBP, ImputeNLPCA):**
+  - `--load-best-params` now **hard-disables hyperparameter tuning** for tune-capable models (including **ImputeUBP** and **ImputeNLPCA**) and **cannot be overridden** by:
+    - presets,
+    - YAML config values (e.g., `tune.enabled: true`),
+    - `--tune` / `--tune-n-trials`,
+    - or `--set tune.*=...`,
+    - or keys embedded in the loaded best-parameters JSON.
+  - Added a strict “force tuning off” enforcement step that is applied:
+    - after loading best parameters,
+    - after applying CLI overrides,
+    - and again after `--set` overrides (final guarantee).
+  - When a user provides `--tune`, `--tune-n-trials`, or `--set tune.*=...` alongside `--load-best-params`, the CLI now **logs warnings** and proceeds with tuning disabled.
+
+- **Prefix resolution correctness affecting best-params lookup (ImputeUBP, ImputeNLPCA):**
+  - Fixed `io.prefix` inference to prefer `--input` (not only legacy `--vcf`) when deriving the default prefix.
+  - Ensured the resolved `prefix` is written back into `args` so subsequent config building and best-parameter lookup use a consistent prefix value.
+- Resolved an edge case where explicit ``--prefix`` could be ignored when ``--input`` was also provided.
+- Updated docs to clarify ``--load-best-params`` behavior and precedence.
+- Added unit tests covering best-parameter loading behavior with various CLI override combinations.
+- Code cleanup and documentation improvements throughout all modules.
+- Bumped version to v1.6.22.
+
+### Enhancements - v1.6.22
+
+- **Validation-loss support and stability improvements (ImputeUBP, ImputeNLPCA):**
+  - Implemented explicit validation evaluation flow compatible with simulated-missing scoring:
+    - added support for `eval_mask_override` to score only intended entries (e.g., simulated-missing mask),
+    - added explicit `GT_val` handling to ensure metrics are computed against the true (pre-mask) genotypes.
+  - Added pruning/evaluation utilities to keep validation logic aligned and safe:
+    - `_resolve_prune_eval_mask_and_gt()` resolves a mask + matching GT matrix aligned to the current `X_val`,
+    - `_eval_for_pruning()` centralizes latent inference + evaluation for Optuna pruning.
+  - Added schema-aware caching of validation latents to reduce redundant inference and prevent cross-shape reuse:
+    - cache keys include latent dim (`z`), loci width (`L`), and number of classes (`K`).
+  - Hardened shape/consistency checks to fail fast (with clear errors) when `X_val`, masks, or GT matrices do not align.
+
+- **Validation-loss integration into training loop (ImputeUBP, ImputeNLPCA):**
+  - Integrated periodic validation evaluation during training (via `eval_interval`) with optional latent inference:
+    - supports `eval_latent_steps`, `eval_latent_lr`, and `eval_latent_weight_decay`,
+    - enables Optuna pruning based on a chosen validation metric during the final phase.
+  - Ensured evaluation respects haploid vs diploid class semantics and avoids scoring against masked `-1` values.
+- Refactored ImputeUBP and ImputeNLPCA training and validation loops for clarity and maintainability.
+- Added unit tests covering the new validation logic, pruning, and best-parameter loading behavior.
+- Code cleanup and documentation improvements throughout all modules.
+- Bumped version to v1.6.22.
+
 ## 1.6.21 - 2025-12-13
 
 ### Changes - v1.6.21
