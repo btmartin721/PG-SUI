@@ -121,7 +121,7 @@ class ModelConfig:
         latent_dim (int): Dimensionality of the latent space.
         dropout_rate (float): Dropout rate for regularization.
         num_hidden_layers (int): Number of hidden layers in the neural network.
-        hidden_activation (Literal["relu", "elu", "selu", "leaky_relu"]): Activation function.
+        activation (Literal["relu", "elu", "selu", "leaky_relu"]): Activation function.
         layer_scaling_factor (float): Scaling factor for the number of neurons in hidden layers.
         layer_schedule (Literal["pyramid", "constant", "linear"]): Schedule for scaling hidden layer sizes.
         gamma (float): Parameter for the focal loss function.
@@ -131,7 +131,7 @@ class ModelConfig:
     latent_dim: int = 2
     dropout_rate: float = 0.2
     num_hidden_layers: int = 2
-    hidden_activation: Literal["relu", "elu", "selu", "leaky_relu"] = "relu"
+    activation: Literal["relu", "elu", "selu", "leaky_relu"] = "relu"
     layer_scaling_factor: float = 5.0
     layer_schedule: Literal["pyramid", "constant", "linear"] = "pyramid"
     gamma: float = 2.0
@@ -244,7 +244,7 @@ class PlotConfig:
     dpi: int = 300
     fontsize: int = 18
     despine: bool = True
-    show: bool = False
+    show: bool = True
 
 
 @dataclass
@@ -329,7 +329,7 @@ class NLPCAConfig:
         cfg.io.verbose = False
         cfg.io.ploidy = 2
         cfg.train.validation_split = 0.20
-        cfg.model.hidden_activation = "relu"
+        cfg.model.activation = "relu"
         cfg.model.layer_schedule = "pyramid"
         cfg.model.latent_init = "random"
         cfg.evaluate.eval_latent_lr = 1e-2
@@ -485,7 +485,7 @@ class UBPConfig:
         # Common baselines
         cfg.io.verbose = False
         cfg.io.ploidy = 2
-        cfg.model.hidden_activation = "relu"
+        cfg.model.activation = "relu"
         cfg.model.layer_schedule = "pyramid"
         cfg.model.latent_init = "random"
         cfg.sim.simulate_missing = True
@@ -647,7 +647,7 @@ class AutoencoderConfig:
         cfg.io.verbose = False
         cfg.io.ploidy = 2
         cfg.train.validation_split = 0.20
-        cfg.model.hidden_activation = "relu"
+        cfg.model.activation = "relu"
         cfg.model.layer_schedule = "pyramid"
         cfg.evaluate.eval_latent_steps = 0
         cfg.evaluate.eval_latent_lr = 0.0
@@ -762,13 +762,9 @@ class VAEExtraConfig:
 
     Attributes:
         kl_beta (float): Final β for KL divergence term.
-        kl_warmup (int): Number of epochs with β=0 (warm-up period).
-        kl_ramp (int): Number of epochs for linear ramp to final β.
     """
 
     kl_beta: float = 1.0
-    kl_warmup: int = 50
-    kl_ramp: int = 200
 
 
 @dataclass
@@ -809,7 +805,7 @@ class VAEConfig:
         cfg.io.verbose = False
         cfg.io.ploidy = 2
         cfg.train.validation_split = 0.20
-        cfg.model.hidden_activation = "relu"
+        cfg.model.activation = "relu"
         cfg.model.layer_schedule = "pyramid"
         cfg.evaluate.eval_latent_steps = 0
         cfg.evaluate.eval_latent_lr = 0.0
@@ -826,8 +822,6 @@ class VAEConfig:
             cfg.model.gamma = 1.5
             # VAE specifics
             cfg.vae.kl_beta = 0.5
-            cfg.vae.kl_warmup = 10
-            cfg.vae.kl_ramp = 40
             # Train
             cfg.train.batch_size = 256
             cfg.train.learning_rate = 2e-3
@@ -858,8 +852,6 @@ class VAEConfig:
             cfg.model.gamma = 2.0
             # VAE specifics
             cfg.vae.kl_beta = 1.0
-            cfg.vae.kl_warmup = 50
-            cfg.vae.kl_ramp = 150
             # Train
             cfg.train.batch_size = 128
             cfg.train.learning_rate = 1e-3
@@ -890,8 +882,6 @@ class VAEConfig:
             cfg.model.gamma = 2.5
             # VAE specifics
             cfg.vae.kl_beta = 1.0
-            cfg.vae.kl_warmup = 100
-            cfg.vae.kl_ramp = 400
             # Train
             cfg.train.batch_size = 64
             cfg.train.learning_rate = 5e-4
