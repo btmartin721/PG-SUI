@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import argparse
 import ast
-import importlib.metadata
+import json
 import logging
 import sys
 import time
@@ -99,6 +99,135 @@ def _print_version() -> None:
     from pgsui import __version__ as version
 
     logging.info(f"Using PG-SUI version: {version}")
+
+
+def _model_family(model_name: str) -> str:
+    """Return output family folder name used by PG-SUI."""
+    if model_name in {"ImputeUBP", "ImputeVAE", "ImputeAutoencoder", "ImputeNLPCA"}:
+        return "Unsupervised"
+    if model_name in {"ImputeMostFrequent", "ImputeRefAllele"}:
+        return "Deterministic"
+    return "Unknown"
+
+
+def _flatten_dict(d: dict, parent: str = "") -> dict:
+    """Flatten a nested dict into dot keys."""
+    out: dict = {}
+    for k, v in (d or {}).items():
+        key = f"{parent}.{k}" if parent else str(k)
+        if isinstance(v, dict):
+            out.update(_flatten_dict(v, key))
+        else:
+            out[key] = v
+    return out
+
+
+def _force_tuning_off(cfg: Any, model_name: str) -> Any:
+    """Force tuning disabled on a config object (best-effort, but strict for tune-capable models)."""
+    # Prefer direct attribute mutation (avoids apply_dot_overrides edge-cases)
+    try:
+        if hasattr(cfg, "tune") and hasattr(cfg.tune, "enabled"):
+            cfg.tune.enabled = False
+            return cfg
+    except Exception:
+        pass
+
+    # Fallback to dot override
+    try:
+        return apply_dot_overrides(cfg, {"tune.enabled": False})
+    except Exception as e:
+        # Only strict for models that actually support tuning
+        if model_name in {"ImputeUBP", "ImputeVAE", "ImputeAutoencoder", "ImputeNLPCA"}:
+            raise RuntimeError(
+                f"Failed to force tuning off for {model_name}: {e}"
+            ) from e
+        return cfg
+
+
+def _find_best_params_json(prefix: str, model_name: str) -> Path | None:
+    """Locate best parameter JSON (tuned or final) for a model.
+
+    Args:
+        prefix (str): Output prefix used during the run.
+        model_name (str): Model name to look for.
+
+    Returns:
+        Path | None: Path to best_parameters.json / best_tuned_parameters.json if found; else None.
+    """
+    families = ("Unsupervised", "Deterministic")
+    model_dir_candidates = (model_name, model_name.lower())
+
+    for fam in families:
+        for mdir in model_dir_candidates:
+            base = Path(f"{prefix}_output") / fam
+            candidates = (
+                base / "optimize" / mdir / "parameters" / "best_tuned_parameters.json",
+                base / "parameters" / mdir / "best_parameters.json",
+            )
+            for p in candidates:
+                if p.exists():
+                    return p
+    return None
+
+
+def _load_best_params(best_params_path: Path) -> dict:
+    """Load best parameters JSON."""
+    with best_params_path.open("r", encoding="utf-8") as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        raise ValueError(
+            f"best_parameters.json must be a JSON object, got {type(data)}"
+        )
+    return data
+
+
+def _apply_best_params_to_cfg(cfg: Any, best_params: dict, model_name: str) -> Any:
+    """Apply best params into cfg using dot-path keys or inferred dot-paths.
+
+    - If JSON is nested, flatten to dot keys.
+    - If key already contains '.', treat as dot-path and apply directly.
+    - If key has no '.', try common sections in order: model., train., sim., tune., io., plot.
+    - Unknown keys are ignored with a warning.
+    """
+    # Flatten if nested (but keep existing dot keys as-is too)
+    flat = {}
+    for k, v in best_params.items():
+        if isinstance(v, dict):
+            flat.update(_flatten_dict(v, str(k)))
+        else:
+            flat[str(k)] = v
+
+    candidate_prefixes = ("", "model.", "train.", "sim.", "tune.", "io.", "plot.")
+
+    # Apply one by one so we can try multiple candidate destinations for
+    # non-dot keys
+    for raw_k, v in flat.items():
+        if "." in raw_k:
+            try:
+                cfg = apply_dot_overrides(cfg, {raw_k: v})
+                continue
+            except Exception as e:
+                logging.warning(
+                    f"Could not apply best param '{raw_k}' to {model_name} (dot key). Skipping. Error: {e}"
+                )
+                continue
+
+        applied = False
+        for pref in candidate_prefixes:
+            k = f"{pref}{raw_k}" if pref else raw_k
+            try:
+                cfg = apply_dot_overrides(cfg, {k: v})
+                applied = True
+                break
+            except Exception:
+                continue
+
+        if not applied:
+            logging.warning(
+                f"Best param '{raw_k}' not recognized for {model_name}; leaving config unchanged for that key."
+            )
+
+    return cfg
 
 
 def _configure_logging(verbose: bool, log_file: Optional[str] = None) -> None:
@@ -182,10 +311,12 @@ def _args_to_cli_overrides(args: argparse.Namespace) -> dict:
     if hasattr(args, "prefix") and args.prefix is not None:
         overrides["io.prefix"] = args.prefix
     else:
-        # Note: we don't know input_path here; prefix default is handled later.
-        # This fallback is preserved to avoid changing semantics.
-        if hasattr(args, "vcf"):
-            overrides["io.prefix"] = str(Path(args.vcf).stem)
+        # Prefer --input stem; fallback to legacy --vcf stem
+        input_path = getattr(args, "input", None)
+        if input_path is None and hasattr(args, "vcf"):
+            input_path = getattr(args, "vcf", None)
+        if input_path:
+            overrides["io.prefix"] = str(Path(input_path).stem)
 
     if hasattr(args, "verbose"):
         overrides["io.verbose"] = bool(args.verbose)
@@ -208,20 +339,38 @@ def _args_to_cli_overrides(args: argparse.Namespace) -> dict:
     # Plot
     if hasattr(args, "plot_format"):
         overrides["plot.fmt"] = args.plot_format
+    if getattr(args, "disable_plotting", False):
+        logging.info(
+            "Disabling plotting for all models as per --disable-plotting flag."
+        )
+        overrides["plot.show"] = False
 
-    # Simulation overrides (shared across config-driven models)
+    # Simulation overrides
     if hasattr(args, "sim_strategy"):
         overrides["sim.sim_strategy"] = args.sim_strategy
     if hasattr(args, "sim_prop"):
         overrides["sim.sim_prop"] = float(args.sim_prop)
-    if hasattr(args, "simulate_missing"):
-        overrides["sim.simulate_missing"] = bool(args.simulate_missing)
+    if hasattr(args, "disable_simulate_missing"):
+        overrides["sim.simulate_missing"] = (
+            False if args.disable_simulate_missing else True
+        )
 
     # Tuning
-    if hasattr(args, "tune"):
-        overrides["tune.enabled"] = bool(args.tune)
-    if hasattr(args, "tune_n_trials"):
-        overrides["tune.n_trials"] = int(args.tune_n_trials)
+    if getattr(args, "load_best_params", False):
+        # Never allow CLI flags to re-enable tuning when loading params
+        if hasattr(args, "tune") and bool(getattr(args, "tune", False)):
+            logging.warning(
+                "--tune was supplied, but --load-best-params is active; ignoring --tune."
+            )
+        if hasattr(args, "tune_n_trials"):
+            logging.warning(
+                "--tune-n-trials was supplied, but --load-best-params is active; ignoring it."
+            )
+    else:
+        if hasattr(args, "tune"):
+            overrides["tune.enabled"] = bool(args.tune)
+        if hasattr(args, "tune_n_trials"):
+            overrides["tune.n_trials"] = int(args.tune_n_trials)
 
     return overrides
 
@@ -271,18 +420,31 @@ def build_genotype_data(
     qmatrix: str | None,
     siterates: str | None,
     force_popmap: bool,
-    verbose: bool,
+    debug: bool,
     include_pops: List[str] | None,
     plot_format: Literal["pdf", "png", "jpg", "jpeg"],
 ):
-    """Load genotype data from heterogeneous inputs."""
+    """Load genotype data from heterogeneous inputs.
+
+    Args:
+        input_path (str): Path to genotype data file.
+        fmt (Literal): Format of genotype data file.
+        popmap_path (str | None): Optional path to population map file.
+        treefile (str | None): Optional path to phylogenetic tree file.
+        qmatrix (str | None): Optional path to IQ-TREE Q matrix file.
+        siterates (str | None): Optional path to SNP site rates file.
+        force_popmap (bool): Whether to force use of popmap even if samples don't match exactly.
+        debug (bool): Whether to enable debug-level logging in SNPio readers.
+        include_pops (List[str] | None): Optional list of population IDs to include.
+        plot_format (Literal): Figure format for SNPio plots.
+    """
     logging.info(f"Loading {fmt.upper()} and popmap data...")
 
     kwargs = {
         "filename": input_path,
         "popmapfile": popmap_path,
         "force_popmap": force_popmap,
-        "verbose": verbose,
+        "verbose": debug,
         "include_pops": include_pops if include_pops else None,
         "prefix": f"snpio_{Path(input_path).stem}",
         "plot_format": plot_format,
@@ -380,12 +542,63 @@ def _build_effective_config_for_model(
             f"Loaded YAML config for {model_name} from {yaml_path} (ignored 'preset' in YAML if present)."
         )
 
-    # 3) Explicit CLI flags overlay YAML.
+    # 3) Optional: load best parameters from a previous run and force tuning OFF.
+    if getattr(args, "load_best_params", False):
+        # Determine which prefix to look under for *_output
+        src_prefix = getattr(args, "best_params_prefix", None)
+        if src_prefix is None:
+            # Use the resolved prefix if provided; otherwise fall back to input
+            # stem behavior
+            src_prefix = getattr(args, "prefix", None)
+
+            if src_prefix is None and hasattr(args, "vcf"):
+                src_prefix = str(Path(args.vcf).stem)
+
+            if src_prefix is None:
+                # As a last resort, use current effective io.prefix if it exists in cfg
+                src_prefix = getattr(getattr(cfg, "io", object()), "prefix", None)
+
+        if getattr(args, "tune", False):
+            logging.warning(
+                "--tune was supplied, but --load-best-params is active; forcing tuning OFF."
+            )
+
+        # Force tuning disabled in config (even if CLI/YAML enabled it)
+        cfg = _force_tuning_off(cfg, model_name)
+
+        best_path = _find_best_params_json(str(src_prefix), model_name)
+        if best_path is None:
+            # For tune-capable (unsupervised) models, treat as an error; deterministic models warn only.
+            fam = _model_family(model_name)
+            msg = (
+                "Requested --load-best-params, but could not find a best parameters JSON "
+                f"for {model_name}. Looked under '.../optimize/<model>/parameters/best_tuned_parameters.json' and '{src_prefix}_output/{fam}/parameters/{model_name}/best_parameters.json'"
+            )
+            if model_name in {
+                "ImputeUBP",
+                "ImputeVAE",
+                "ImputeAutoencoder",
+                "ImputeNLPCA",
+            }:
+                logging.error(msg)
+                raise FileNotFoundError(msg)
+            logging.warning(msg)
+        else:
+            logging.info(f"Loading best parameters for {model_name} from: {best_path}")
+            best_params = _load_best_params(best_path)
+            cfg = _apply_best_params_to_cfg(cfg, best_params, model_name)
+            cfg = _force_tuning_off(cfg, model_name)
+
+    # 4) Explicit CLI flags overlay YAML/best-params layers.
     cli_overrides = _args_to_cli_overrides(args)
     if cli_overrides:
         cfg = apply_dot_overrides(cfg, cli_overrides)
 
-    # 4) --set has highest precedence.
+    # Keep tuning disabled if --load-best-params was requested, even if CLI flags tried to re-enable it.
+    if getattr(args, "load_best_params", False):
+        cfg = _force_tuning_off(cfg, model_name)
+
+    # 5) --set has highest precedence.
     user_overrides = _parse_overrides(getattr(args, "set", []))
 
     if user_overrides:
@@ -404,6 +617,18 @@ def _build_effective_config_for_model(
                 raise
             else:
                 pass  # non-config-driven models ignore --set
+
+        # FINAL GUARANTEE:
+        # --load-best-params always wins over
+        # --set, YAML, preset, and CLI flags.
+        if getattr(args, "load_best_params", False):
+            # If user explicitly tried to set tune.* via --set, warn and override.
+            if any(str(k).startswith("tune.") for k in (user_overrides or {}).keys()):
+                logging.warning(
+                    f"{model_name}: '--set tune.*=...' was provided, but --load-best-params forces tuning OFF. "
+                    "Ignoring any tune.* overrides."
+                )
+            cfg = _force_tuning_off(cfg, model_name)
 
     return cfg
 
@@ -445,9 +670,19 @@ def _maybe_print_or_dump_configs(
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    """PG-SUI CLI main entry point.
+
+    The CLI supports running multiple imputation models on a single input file, with configuration handled via presets, YAML files, and CLI flags.
+
+    Args:
+        argv (Optional[List[str]]): List of CLI args (default: sys.argv[1:]).
+
+    Returns:
+        int: Exit code (0=success, 2=argparse error, 1=other error).
+    """
     parser = argparse.ArgumentParser(
         prog="pg-sui",
-        description="Run PG-SUI imputation models on an input file. Handle configuration via presets, YAML, and CLI flags. The default is to run all models.",
+        description="Run PG-SUI imputation models on an input file. Handle configuration via presets, YAML, and CLI flags. The default is to run all models. The input file can be in VCF, PHYLIP, or GENEPOP format. Outputs include imputed genotype files and performance summaries.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         usage="%(prog)s [options]",
     )
@@ -456,7 +691,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument(
         "--input",
         default=argparse.SUPPRESS,
-        help="Path to input file (VCF/PHYLIP/STRUCTURE/GENEPOP).",
+        help="Path to input file (VCF/PHYLIP/GENEPOP). VCF file can be bgzipped or uncompressed.",
     )
     parser.add_argument(
         "--format",
@@ -472,23 +707,23 @@ def main(argv: Optional[List[str]] = None) -> int:
             "gen",
         ),
         default=argparse.SUPPRESS,
-        help="Input format. If 'infer', deduced from file extension. The default is 'infer'.",
+        help="Input format. If 'infer', deduced from file extension. The default is 'infer'. Supported formats: VCF ('.vcf', '.vcf.gz'), PHYLIP ('.phy', '.phylip'), GENEPOP ('.genepop', '.gen').",
     )
     # Back-compat: --vcf retained; if both provided, --input wins.
     parser.add_argument(
         "--vcf",
         default=argparse.SUPPRESS,
-        help="Path to input VCF file. Can be bgzipped or uncompressed.",
+        help="Path to input VCF file. Can be bgzipped or uncompressed. (Deprecated; use --input instead.)",
     )
     parser.add_argument(
         "--popmap",
         default=argparse.SUPPRESS,
-        help="Path to population map file. This is a two-column tab-delimited file with sample IDs and population IDs.",
+        help="Path to population map file. This is a two-column tab-delimited file with sample IDs and population IDs. If not provided, no population info is used.",
     )
     parser.add_argument(
         "--treefile",
         default=argparse.SUPPRESS,
-        help="Path to phylogenetic tree file. Can be in Newick (recommended) or Nexus format.",
+        help="Path to phylogenetic tree file. Can be in Newick (recommended) or Nexus format. Used with --qmatrix and --siterates.",
     )
     parser.add_argument(
         "--qmatrix",
@@ -498,19 +733,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument(
         "--siterates",
         default=argparse.SUPPRESS,
-        help="Path to SNP site rates file (has .rate extension). Used with --treefile and --qmatrix.",
+        help="Path to SNP site rates file (has .rate extension and can be produced with IQ-TREE). Used with --treefile and --qmatrix.",
     )
     parser.add_argument(
         "--prefix",
         default=argparse.SUPPRESS,
-        help="Output file prefix.",
+        help="Output file prefix. If not provided, defaults to the input file stem.",
     )
 
     # ---------------------- Generic Config Inputs -------------------------- #
     parser.add_argument(
         "--config",
         default=argparse.SUPPRESS,
-        help="YAML config for config-driven models (NLPCA/UBP/Autoencoder/VAE).",
+        help="YAML config for config-driven models (NLPCA/UBP/Autoencoder/VAE). Overrides preset/defaults.",
     )
     parser.add_argument(
         "--preset",
@@ -522,7 +757,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--set",
         action="append",
         default=argparse.SUPPRESS,
-        help="Dot-key overrides, e.g. --set model.latent_dim=4",
+        help="Dot-key overrides, e.g. --set model.latent_dim=4 --set train.epochs=100. Applies to all models.",
     )
     parser.add_argument(
         "--print-config",
@@ -540,7 +775,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--tune",
         action="store_true",
         default=argparse.SUPPRESS,
-        help="Enable hyperparameter tuning (if supported).",
+        help="Enable hyperparameter tuning (if supported by model). Uses Optuna to optimize hyperparameters.",
     )
     parser.add_argument(
         "--tune-n-trials",
@@ -570,8 +805,31 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--plot-format",
         choices=("png", "pdf", "svg", "jpg", "jpeg"),
         default=argparse.SUPPRESS,
-        help="Figure format for model plots.",
+        help="Figure format for model plots. Choices: png, pdf, svg, jpg, jpeg.",
     )
+    parser.add_argument(
+        "--disable-plotting",
+        action="store_true",
+        default=False,
+        help="Disable plotting for all models. Overrides any config settings enabling plotting.",
+    )
+
+    parser.add_argument(
+        "--load-best-params",
+        action="store_true",
+        default=False,
+        help=(
+            "Load best hyperparameters from a previous run's best_parameters.json (or tuning best_tuned_parameters.json) for each selected model and apply them to the model configs. This forces tuning OFF."
+        ),
+    )
+    parser.add_argument(
+        "--best-params-prefix",
+        default=argparse.SUPPRESS,
+        help=(
+            "Prefix of the PREVIOUS run to load best parameters from. If omitted, uses the current --prefix (or input stem)."
+        ),
+    )
+
     # ------------------------- Simulation Controls ------------------------ #
     parser.add_argument(
         "--sim-strategy",
@@ -586,8 +844,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="Override the proportion of observed entries to mask during simulation (0-1).",
     )
     parser.add_argument(
-        "--simulate-missing",
-        action="store_false",
+        "--disable-simulate-missing",
+        action="store_true",
         default=argparse.SUPPRESS,
         help="Disable missing-data simulation regardless of preset/config (when provided).",
     )
@@ -596,8 +854,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument(
         "--seed",
         default=argparse.SUPPRESS,
-        help="Random seed: 'random', 'deterministic', or an integer.",
+        help="Random seed: 'random', 'deterministic', or an integer. Default is 'random'.",
     )
+
+    # ----------------------------- Logging --------------------------------- #
     parser.add_argument("--verbose", action="store_true", help="Info-level logging.")
     parser.add_argument("--debug", action="store_true", help="Debug-level logging.")
     parser.add_argument(
@@ -615,7 +875,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--force-popmap",
         action="store_true",
         default=False,
-        help="Require popmap (error if absent).",
+        help="Force use of provided popmap even if samples don't match exactly. This will drop samples not in the popmap and vice versa.",
     )
 
     # ---------------------------- Model selection -------------------------- #
@@ -624,40 +884,41 @@ def main(argv: Optional[List[str]] = None) -> int:
         nargs="+",
         default=argparse.SUPPRESS,
         help=(
-            "Which models to run. Choices: ImputeUBP ImputeVAE ImputeAutoencoder ImputeNLPCA ImputeMostFrequent ImputeRefAllele. Default is all."
+            "Which models to run. Specify each model separated by a space. Choices: ImputeUBP ImputeVAE ImputeAutoencoder ImputeNLPCA ImputeMostFrequent ImputeRefAllele (Default is all models)."
         ),
     )
 
     # -------------------------- MultiQC integration ------------------------ #
     parser.add_argument(
-        "--multiqc",
+        "--disable-multiqc",
         action="store_true",
+        default=False,
         help=(
-            "Build a MultiQC HTML report at the end of the run, combining SNPio and PG-SUI plots (requires SNPio's MultiQC module)."
+            "Disable MultiQC report generation after imputation. By default, a MultiQC report is generated unless this flag is set."
         ),
     )
     parser.add_argument(
         "--multiqc-title",
         default=argparse.SUPPRESS,
-        help="Optional title for the MultiQC report (default: 'PG-SUI MultiQC Report - <prefix>').",
+        help="Optional title for the MultiQC report (default: 'PG-SUI MultiQC Report - <prefix>'). ",
     )
     parser.add_argument(
         "--multiqc-output-dir",
         default=argparse.SUPPRESS,
-        help="Optional output directory for the MultiQC report (default: '<prefix>_output/multiqc').",
+        help="Optional output directory for the MultiQC report (default: '<prefix>_output/multiqc'). This directory will be created if it does not exist.",
     )
     parser.add_argument(
         "--multiqc-overwrite",
         action="store_true",
         default=False,
-        help="Overwrite an existing MultiQC report if present.",
+        help="Overwrite an existing MultiQC report if present. If not set and a report exists, an integer suffix will be added to avoid overwriting. NOTE: if running multiple times with this flag, it may append multiple suffixes to avoid overwriting previous reports.",
     )
 
     # ------------------------------ Safety/UX ------------------------------ #
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Parse args and load data, but skip model training.",
+        help="Parse args and load data, but skip model training. Useful for testing I/O and configs.",
     )
     parser.add_argument(
         "--version", action="store_true", help="Print PG-SUI version and exit."
@@ -682,6 +943,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         selected_models = _parse_models(getattr(args, "models", ()))
     except argparse.ArgumentTypeError as e:
+        logging.error(str(e))
         parser.error(str(e))
         return 2
 
@@ -693,12 +955,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             setattr(args, "format", "vcf")
 
     if input_path is None:
+        logging.error("You must provide --input (or legacy --vcf).")
         parser.error("You must provide --input (or legacy --vcf).")
         return 2
 
-    fmt: Literal["infer", "vcf", "vcf.gz", "phy", "phylip", "genepop", "gen"] = getattr(
-        args, "format", "infer"
-    )
+    fmt = getattr(args, "format", "infer")
 
     if fmt == "infer":
         if input_path.endswith((".vcf", ".vcf.gz")):
@@ -708,20 +969,27 @@ def main(argv: Optional[List[str]] = None) -> int:
         elif input_path.endswith((".genepop", ".gen")):
             fmt_final = "genepop"
         else:
+            logging.error(
+                "Could not infer input format from file extension. Please provide --format."
+            )
             parser.error(
                 "Could not infer input format from file extension. Please provide --format."
             )
             return 2
     else:
-        fmt_final = fmt
+        fmt_final = cast(
+            Literal["vcf", "vcf.gz", "phy", "phylip", "genepop", "gen"], fmt
+        )
 
     popmap_path = getattr(args, "popmap", None)
     include_pops = getattr(args, "include_pops", None)
-    verbose_flag = getattr(args, "verbose", False)
     force_popmap = bool(getattr(args, "force_popmap", False))
 
     # Canonical prefix for this run (used for outputs and MultiQC)
     prefix: str = getattr(args, "prefix", str(Path(input_path).stem))
+    # Ensure downstream config building sees the resolved prefix even if
+    # --prefix was not provided.
+    setattr(args, "prefix", prefix)
 
     treefile = getattr(args, "treefile", None)
     qmatrix = getattr(args, "qmatrix", None)
@@ -729,6 +997,9 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if any(x is not None for x in (treefile, qmatrix, siterates)):
         if not all(x is not None for x in (treefile, qmatrix, siterates)):
+            logging.error(
+                "--treefile, --qmatrix, and --siterates must all be provided together or they should all be omitted."
+            )
             parser.error(
                 "--treefile, --qmatrix, and --siterates must all be provided together or they should all be omitted."
             )
@@ -743,8 +1014,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         qmatrix=qmatrix,
         siterates=siterates,
         force_popmap=force_popmap,
-        verbose=verbose_flag,
         include_pops=include_pops,
+        debug=getattr(args, "debug", False),
         plot_format=getattr(args, "plot_format", "pdf"),
     )
 
@@ -881,6 +1152,10 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     logging.info(f"Selected models: {', '.join(selected_models)}")
     for name in selected_models:
+        logging.info("")
+        logging.info("=" * 60)
+        logging.info("")
+        logging.info(f"Processing model: {name} ...")
         X_imputed = run_model_safely(name, model_builders[name], warn_only=False)
         gd_imp = gd.copy()
         gd_imp.snp_data = X_imputed
@@ -892,6 +1167,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         elif name in {"ImputeHistGradientBoosting", "ImputeRandomForest"}:
             family = "Supervised"
         else:
+            logging.error(f"Unknown model family for {name}")
             raise ValueError(f"Unknown model family for {name}")
 
         pth = Path(f"{prefix}_output/{family}/imputed/{name}")
@@ -910,7 +1186,19 @@ def main(argv: Optional[List[str]] = None) -> int:
                 f"Output format {fmt_final} not supported for imputed data export."
             )
 
-    logging.info("All requested models processed.")
+        logging.info("")
+        logging.info(f"Successfully finished imputation for model: {name}!")
+        logging.info("")
+        logging.info("=" * 60)
+
+    logging.info(f"All requested models processed for input: {input_path}")
+
+    disable_mqc = bool(getattr(args, "disable_multiqc", False))
+
+    if disable_mqc:
+        logging.info("MultiQC report generation disabled via --disable-multiqc.")
+        logging.info("PG-SUI imputation run complete!")
+        return 0
 
     # -------------------------- MultiQC builder ---------------------------- #
 
@@ -930,9 +1218,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             overwrite=overwrite,
         )
         logging.info("MultiQC report successfully built.")
-    except Exception as exc2:  # pragma: no cover
+    except Exception as exc2:
         logging.error(f"Failed to build MultiQC report: {exc2}", exc_info=True)
 
+    logging.info("PG-SUI imputation run complete!")
     return 0
 
 
