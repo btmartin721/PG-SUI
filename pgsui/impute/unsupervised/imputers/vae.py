@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import traceback
 from collections import defaultdict
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple, Union
 
@@ -174,13 +175,11 @@ class ImputeVAE(BaseNNImputer):
         self.num_hidden_layers = self.cfg.model.num_hidden_layers
         self.layer_scaling_factor = self.cfg.model.layer_scaling_factor
         self.layer_schedule = self.cfg.model.layer_schedule
-        self.activation = self.cfg.model.hidden_activation
+        self.activation = self.cfg.model.activation
         self.gamma = self.cfg.model.gamma  # focal loss focusing (for recon CE)
 
         # VAE-only KL controls
         self.kl_beta_final = self.cfg.vae.kl_beta
-        self.kl_warmup = self.cfg.vae.kl_warmup
-        self.kl_ramp = self.cfg.vae.kl_ramp
 
         # Train hyperparams (AE-parity)
         self.batch_size = self.cfg.train.batch_size
@@ -341,17 +340,17 @@ class ImputeVAE(BaseNNImputer):
         # Plotters/scorers (shared utilities)
         self.plotter_, self.scorers_ = self.initialize_plotting_and_scorers()
 
-        # Optional tuning
-        if self.tune:
-            self.tune_hyperparameters()
-
-        # Best params (tuned or default)
-        self.best_params_ = getattr(self, "best_params_", self._default_best_params())
-
         # Class weights (device-aware)
         self.class_weights_ = self._normalize_class_weights(
             self._class_weights_from_zygosity(self.X_train_)
         )
+
+        # Optional tuning
+        if self.tune:
+            self.tuned_params_ = self.tune_hyperparameters()
+
+        # Best params (tuned or default)
+        self.best_params_ = getattr(self, "best_params_", self._default_best_params())
 
         # DataLoader
         train_loader = self._get_data_loader(self.X_train_)
@@ -369,7 +368,6 @@ class ImputeVAE(BaseNNImputer):
             X_val=self.X_val_,
             params=self.best_params_,
             prune_metric=self.tune_metric,
-            prune_warmup_epochs=10,
             eval_interval=1,
             eval_requires_latents=False,  # no latent refinement for eval
             eval_latent_steps=0,
@@ -379,7 +377,7 @@ class ImputeVAE(BaseNNImputer):
         )
 
         if trained_model is None:
-            msg = "VAE training failed; no model was returned."
+            msg = f"{self.model_name} training failed; no model was returned."
             self.logger.error(msg)
             raise RuntimeError(msg)
 
@@ -415,8 +413,14 @@ class ImputeVAE(BaseNNImputer):
             eval_mask_override=eval_mask,
         )
 
-        self.plotter_.plot_history(self.history_)
-        self._save_best_params(self.best_params_)
+        if self.show_plots:
+            self.plotter_.plot_history(self.history_)
+
+        if self.tune:
+            self._save_best_params(self.tuned_params_)
+        else:
+            self._save_best_params(self.best_params_)
+
         return self
 
     def transform(self) -> np.ndarray:
@@ -494,7 +498,6 @@ class ImputeVAE(BaseNNImputer):
         X_val: np.ndarray | None = None,
         params: dict | None = None,
         prune_metric: str | None = None,  # "f1" | "accuracy" | "pr_macro"
-        prune_warmup_epochs: int = 10,
         eval_interval: int = 1,
         eval_requires_latents: bool = False,  # VAE: no latent eval refinement
         eval_latent_steps: int = 0,
@@ -516,7 +519,6 @@ class ImputeVAE(BaseNNImputer):
             X_val (np.ndarray | None): Validation data for pruning eval.
             params (dict | None): Current hyperparameters (for logging).
             prune_metric (str | None): Metric for pruning decisions.
-            prune_warmup_epochs (int): Epochs to skip before pruning.
             eval_interval (int): Epochs between validation evaluations.
             eval_requires_latents (bool): If True, refine latents during eval.
             eval_latent_steps (int): Latent refinement steps if needed.
@@ -550,7 +552,6 @@ class ImputeVAE(BaseNNImputer):
             X_val=X_val,
             params=params,
             prune_metric=prune_metric,
-            prune_warmup_epochs=prune_warmup_epochs,
             eval_interval=eval_interval,
             eval_requires_latents=eval_requires_latents,
             eval_latent_steps=eval_latent_steps,
@@ -573,7 +574,6 @@ class ImputeVAE(BaseNNImputer):
         X_val: np.ndarray | None = None,
         params: dict | None = None,
         prune_metric: str | None = None,
-        prune_warmup_epochs: int = 10,
         eval_interval: int = 1,
         eval_requires_latents: bool = False,
         eval_latent_steps: int = 0,
@@ -598,7 +598,6 @@ class ImputeVAE(BaseNNImputer):
             X_val (np.ndarray | None): Validation data for pruning eval.
             params (dict | None): Current hyperparameters (for logging).
             prune_metric (str | None): Metric for pruning decisions.
-            prune_warmup_epochs (int): Epochs to skip before pruning.
             eval_interval (int): Epochs between validation evaluations.
             eval_requires_latents (bool): If True, refine latents during eval.
             eval_latent_steps (int): Latent refinement steps if needed.
@@ -638,41 +637,9 @@ class ImputeVAE(BaseNNImputer):
                 raise ValueError(msg)
             gamma_src = gamma_src[0]
 
-        beta_final = float(beta_src)
-        gamma_final = float(gamma_src)
-
-        gamma_warm, gamma_ramp = 50, 100
-        beta_warm, beta_ramp = int(self.kl_warmup), int(self.kl_ramp)
-
-        # Optional LR warmup
-        warmup_epochs = int(getattr(self, "lr_warmup_epochs", 5))
-        base_lr = float(optimizer.param_groups[0]["lr"])
-        min_lr = base_lr * 0.1
-
         max_epochs = int(getattr(scheduler, "T_max", getattr(self, "epochs", 100)))
 
         for epoch in range(max_epochs):
-            # focal γ schedule
-            if epoch < gamma_warm:
-                model.gamma = 0.0  # type: ignore[attr-defined]
-            elif epoch < gamma_warm + gamma_ramp:
-                model.gamma = gamma_final * ((epoch - gamma_warm) / gamma_ramp)  # type: ignore[attr-defined]
-            else:
-                model.gamma = gamma_final  # type: ignore[attr-defined]
-
-            # KL β schedule (float throughout + ramp guard)
-            if epoch < beta_warm:
-                model.beta = 0.0  # type: ignore[attr-defined]
-            elif beta_ramp > 0 and epoch < beta_warm + beta_ramp:
-                model.beta = beta_final * ((epoch - beta_warm) / beta_ramp)  # type: ignore[attr-defined]
-            else:
-                model.beta = beta_final  # type: ignore[attr-defined]
-            # LR warmup
-            if epoch < warmup_epochs:
-                scale = float(epoch + 1) / warmup_epochs
-                for g in optimizer.param_groups:
-                    g["lr"] = min_lr + (base_lr - min_lr) * scale
-
             train_loss = self._train_step(
                 loader=loader,
                 optimizer=optimizer,
@@ -682,12 +649,21 @@ class ImputeVAE(BaseNNImputer):
             )
 
             if not np.isfinite(train_loss):
-                if trial:
-                    raise optuna.exceptions.TrialPruned("Epoch loss non-finite.")
-                # shrink LR and continue
-                for g in optimizer.param_groups:
-                    g["lr"] *= 0.5
-                continue
+                if trial is not None:
+                    self.logger.debug(
+                        "Non-finite train loss encountered; pruning trial.",
+                        exc_info=True,
+                    )
+                    raise optuna.exceptions.TrialPruned(
+                        f"[{self.model_name}] Epoch loss non-finite. Trial pruned. Enable debug logging for full traceback."
+                    )
+                else:
+                    self.logger.error(
+                        f"[{self.model_name}] Non-finite train loss encountered at epoch {epoch + 1}. Terminating training."
+                    )
+                    raise RuntimeError(
+                        f"[{self.model_name}] Non-finite train loss encountered at epoch {epoch + 1}. Terminating training."
+                    )
 
             val_loss = float("inf")
             if X_val is not None:
@@ -726,7 +702,11 @@ class ImputeVAE(BaseNNImputer):
                 score_for_es = train_loss
 
             metric_val = None
-            if X_val is not None and ((epoch + 1) % eval_interval == 0):
+            if (
+                trial is not None
+                and X_val is not None
+                and ((epoch + 1) % eval_interval == 0)
+            ):
                 metric_key = prune_metric or getattr(self, "tune_metric", "f1")
                 metric_val = self._eval_for_pruning(
                     model=model,
@@ -745,29 +725,21 @@ class ImputeVAE(BaseNNImputer):
                     eval_mask_override=eval_mask_override,
                 )
 
+                trial.report(metric_val, step=epoch + 1)
+                if trial.should_prune():
+                    msg = f"[{self.model_name}] Trial Median-Pruned at epoch {epoch + 1}: {metric_key}={metric_val:.3f}. This is not an error, but indicates the trial was unpromising."
+                    raise optuna.exceptions.TrialPruned(msg)
+
             early_stopping(score_for_es, model)
             if early_stopping.early_stop:
                 self.logger.debug(f"Early stopping at epoch {epoch + 1}.")
                 break
 
-            # Only Optuna-specific reporting/pruning should remain gated by `trial is not None`
-            if trial is not None and metric_val is not None:
-                trial.report(float(metric_val), step=epoch + 1)
-                if (epoch + 1) >= prune_warmup_epochs and trial.should_prune():
-                    raise optuna.exceptions.TrialPruned(
-                        f"Pruned at epoch {epoch + 1}: {metric_key}={metric_val:.3f}"
-                    )
-
         best_loss = early_stopping.best_score
-        best_model = early_stopping.best_model
 
-        if best_model is None:
-            best_state = {k: v.cpu() for k, v in model.state_dict().items()}
-            model.load_state_dict(best_state)
-            best_model = model
-        else:
-            best_state = {k: v.cpu() for k, v in best_model.state_dict().items()}
-            best_model.load_state_dict(best_state)
+        if early_stopping.best_state_dict is not None:
+            model.load_state_dict(early_stopping.best_state_dict)
+        best_model = model
 
         return best_loss, best_model, dict(history)
 
@@ -1214,10 +1186,11 @@ class ImputeVAE(BaseNNImputer):
         )
 
         if not objective_mode:
-            pm = PrettyMetrics(
-                metrics, precision=3, title=f"{self.model_name} Validation Metrics"
-            )
-            pm.render()
+            if self.verbose or self.debug:
+                pm = PrettyMetrics(
+                    metrics, precision=3, title=f"{self.model_name} Validation Metrics"
+                )
+                pm.render()
 
             # Primary report
             self._make_class_reports(
@@ -1287,7 +1260,7 @@ class ImputeVAE(BaseNNImputer):
             float: Value of the tuning metric to be optimized.
 
         Raises:
-            optuna.exceptions.TrialPruned: If the trial fails during training.
+            optuna.exceptions.TrialPruned: If training fails unexpectedly or is unpromising.
             RuntimeError: If model training returns None.
         """
         try:
@@ -1332,7 +1305,6 @@ class ImputeVAE(BaseNNImputer):
                 X_val=X_val,
                 params=params,
                 prune_metric=self.tune_metric,
-                prune_warmup_epochs=25,
                 eval_interval=self.tune_eval_interval,
                 eval_requires_latents=False,
                 eval_latent_steps=0,
@@ -1374,11 +1346,16 @@ class ImputeVAE(BaseNNImputer):
             return metrics[self.tune_metric]
 
         except Exception as e:
-            # Keep sweeps moving
-            self.logger.debug(f"Trial failed with error: {e}")
-            raise optuna.exceptions.TrialPruned(
-                f"Trial failed with error. Enable debug logging for details."
+            # Unexpected failure: surface full details in logs while still
+            # pruning the trial to keep sweeps moving.
+            err_type = type(e).__name__
+            self.logger.error(
+                f"Trial {trial.number} failed due to exception {err_type}: {e}"
             )
+            self.logger.debug(traceback.format_exc())
+            raise optuna.exceptions.TrialPruned(
+                f"Trial {trial.number} failed due to an exception. {err_type}: {e}. Enable debug logging for full traceback."
+            ) from e
 
     def _sample_hyperparameters(self, trial: optuna.Trial) -> dict:
         """Sample VAE hyperparameters; hidden sizes mirror AE/NLPCA helper.
