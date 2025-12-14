@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union
 
@@ -599,7 +600,9 @@ class ClassificationReportVisualizer:
         )
 
         if show:
-            plt.show()
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                plt.show()
 
         return {
             "heatmap_fig": heatmap_fig,
