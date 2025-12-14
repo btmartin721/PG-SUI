@@ -422,10 +422,12 @@ class ImputeMostFrequent:
                 "ground_truth012_ is not set; cannot plot distributions."
             )
 
-        gt_decoded = self.encoder.decode_012(self.ground_truth012_)
         imp_decoded = self.encoder.decode_012(X_imputed_full_012)
-        self.plotter_.plot_gt_distribution(gt_decoded, is_imputed=False)
-        self.plotter_.plot_gt_distribution(imp_decoded, is_imputed=True)
+
+        if self.show_plots:
+            gt_decoded = self.encoder.decode_012(self.ground_truth012_)
+            self.plotter_.plot_gt_distribution(gt_decoded, is_imputed=False)
+            self.plotter_.plot_gt_distribution(imp_decoded, is_imputed=True)
 
         # Return IUPAC strings (same as DL .transform())
         return imp_decoded
@@ -647,7 +649,7 @@ class ImputeMostFrequent:
                 if tmp:
                     report_subset[k] = tmp
 
-        if report_subset:
+        if report_subset and (self.verbose or self.debug):
             pm = PrettyMetrics(
                 report_subset,
                 precision=3,
@@ -655,32 +657,33 @@ class ImputeMostFrequent:
             )
             pm.render()
 
-        viz = ClassificationReportVisualizer(reset_kwargs=self.plotter_.param_dict)
+        if self.show_plots:
+            viz = ClassificationReportVisualizer(reset_kwargs=self.plotter_.param_dict)
 
-        plots = viz.plot_all(
-            report,
-            title_prefix=f"{self.model_name} Zygosity Report",
-            show=getattr(self, "show_plots", False),
-            heatmap_classes_only=True,
-        )
+            plots = viz.plot_all(
+                report,
+                title_prefix=f"{self.model_name} Zygosity Report",
+                show=self.show_plots,
+                heatmap_classes_only=True,
+            )
 
-        for name, fig in plots.items():
-            fout = self.plots_dir / f"zygosity_report_{name}.{self.plot_format}"
-            if hasattr(fig, "savefig") and isinstance(fig, Figure):
-                fig.savefig(fout, dpi=300, facecolor="#111122")
-                plt.close(fig)
-            elif isinstance(fig, PlotlyFigure):
-                fig.write_html(file=fout.with_suffix(".html"))
+            for name, fig in plots.items():
+                fout = self.plots_dir / f"zygosity_report_{name}.{self.plot_format}"
+                if hasattr(fig, "savefig") and isinstance(fig, Figure):
+                    fig.savefig(fout, dpi=300, facecolor="#111122")
+                    plt.close(fig)
+                elif isinstance(fig, PlotlyFigure):
+                    fig.write_html(file=fout.with_suffix(".html"))
 
-        viz._reset_mpl_style()
+            viz._reset_mpl_style()
+
+            # Confusion matrix
+            self.plotter_.plot_confusion_matrix(
+                y_true, y_pred, label_names=report_names, prefix="zygosity"
+            )
 
         # Save JSON
         self._save_report(report, suffix="zygosity")
-
-        # Confusion matrix
-        self.plotter_.plot_confusion_matrix(
-            y_true, y_pred, label_names=report_names, prefix="zygosity"
-        )
 
     def _evaluate_iupac10_and_plot(
         self, y_true: np.ndarray, y_pred: np.ndarray
@@ -737,7 +740,7 @@ class ImputeMostFrequent:
                 if tmp:
                     report_subset[k] = tmp
 
-        if report_subset:
+        if report_subset and (self.verbose or self.debug):
             pm = PrettyMetrics(
                 report_subset,
                 precision=3,
@@ -745,36 +748,37 @@ class ImputeMostFrequent:
             )
             pm.render()
 
-        viz = ClassificationReportVisualizer(reset_kwargs=self.plotter_.param_dict)
+        if self.show_plots:
+            viz = ClassificationReportVisualizer(reset_kwargs=self.plotter_.param_dict)
 
-        plots = viz.plot_all(
-            report,
-            title_prefix=f"{self.model_name} IUPAC Report",
-            show=getattr(self, "show_plots", False),
-            heatmap_classes_only=True,
-        )
+            plots = viz.plot_all(
+                report,
+                title_prefix=f"{self.model_name} IUPAC Report",
+                show=self.show_plots,
+                heatmap_classes_only=True,
+            )
 
-        # Reset the style from Optuna's plotting.
-        plt.rcParams.update(self.plotter_.param_dict)
+            # Reset the style from Optuna's plotting.
+            plt.rcParams.update(self.plotter_.param_dict)
 
-        for name, fig in plots.items():
-            fout = self.plots_dir / f"iupac_report_{name}.{self.plot_format}"
-            if hasattr(fig, "savefig") and isinstance(fig, Figure):
-                fig.savefig(fout, dpi=300, facecolor="#111122")
-                plt.close(fig)
-            elif isinstance(fig, PlotlyFigure):
-                fig.write_html(file=fout.with_suffix(".html"))
+            for name, fig in plots.items():
+                fout = self.plots_dir / f"iupac_report_{name}.{self.plot_format}"
+                if hasattr(fig, "savefig") and isinstance(fig, Figure):
+                    fig.savefig(fout, dpi=300, facecolor="#111122")
+                    plt.close(fig)
+                elif isinstance(fig, PlotlyFigure):
+                    fig.write_html(file=fout.with_suffix(".html"))
 
-        # Reset the style
-        viz._reset_mpl_style()
+            # Reset the style
+            viz._reset_mpl_style()
+
+            # Confusion matrix
+            self.plotter_.plot_confusion_matrix(
+                y_true, y_pred, label_names=labels_names, prefix="iupac"
+            )
 
         # Save JSON
         self._save_report(report, suffix="iupac")
-
-        # Confusion matrix
-        self.plotter_.plot_confusion_matrix(
-            y_true, y_pred, label_names=labels_names, prefix="iupac"
-        )
 
     def _make_train_test_split(self) -> Tuple[np.ndarray, np.ndarray]:
         """Create train/test split indices.
