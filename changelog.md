@@ -4,6 +4,19 @@ An overview of changes to **PG-SUI** by release. This mirrors the Sphinx/RST cha
 
 ---
 
+## v1.6.24 - 2025-12-17
+
+### Bug Fixes - v1.6.24
+
+Refactor imputation methods to unify decoding logic and enhance missing data simulation
+
+- Introduced a new `decode_012` method in `ImputeRefAllele` and `BaseNNImputer` to standardize the decoding of 012 and 0-9 integer encodings to IUPAC nucleotides across different imputer classes.
+- Updated all imputer classes (`Autoencoder`, `NLPCA`, `UBP`, `VAE`) to utilize the new decoding method, ensuring consistency and reducing code duplication.
+- Refactored missing data simulation logic into a common method `sim_missing_transform` to streamline the process of preparing data for imputation.
+- Enhanced error handling and logging for missing data scenarios, ensuring clearer messages when required data is not available.
+- Removed redundant code related to float genotype caching and simulation mask handling, simplifying the overall structure of the imputer classes.
+- Fixed critical bug where SNPio's decode_012 was injecting missing values into the decoded data.
+
 ## v1.6.23 - 2025-12-17
 
 ### Bug Fixes - v1.6.23
