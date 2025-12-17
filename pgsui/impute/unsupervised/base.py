@@ -5,7 +5,7 @@ import json
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Mapping, Tuple, Type, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Mapping, Tuple, Type
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -19,7 +19,9 @@ from sklearn.metrics import classification_report
 from sklearn.model_selection import train_test_split
 from snpio import SNPioMultiQC
 from snpio.utils.logging import LoggerManager
+from snpio.utils.misc import validate_input_type
 
+from pgsui.data_processing.transformers import SimMissingTransformer
 from pgsui.impute.unsupervised.nn_scorers import Scorer
 from pgsui.utils.classification_viz import ClassificationReportVisualizer
 from pgsui.utils.logging_utils import configure_logger
@@ -28,11 +30,6 @@ from pgsui.utils.pretty_metrics import PrettyMetrics
 
 if TYPE_CHECKING:
     from snpio.read_input.genotype_data import GenotypeData
-
-    from pgsui.impute.unsupervised.models.autoencoder_model import AutoencoderModel
-    from pgsui.impute.unsupervised.models.nlpca_model import NLPCAModel
-    from pgsui.impute.unsupervised.models.ubp_model import UBPModel
-    from pgsui.impute.unsupervised.models.vae_model import VAEModel
 
 
 class BaseNNImputer:
@@ -63,6 +60,9 @@ class BaseNNImputer:
         """
         self.model_name = model_name
         self.genotype_data = genotype_data
+        self.simulate_missing = True
+        self.tree_parser = None
+        self.sim_kwargs = {}
 
         self.prefix = prefix
         self.verbose = verbose
@@ -893,37 +893,6 @@ class BaseNNImputer:
             return None
         return weights / weights.mean().clamp_min(1e-8)
 
-    def _get_float_genotypes(self, *, copy: bool = True) -> np.ndarray:
-        """Float32 0/1/2 matrix with NaNs for missing, cached per dataset.
-
-        Args:
-            copy (bool): If True, return a copy of the cached array. Default is True.
-
-        Returns:
-            np.ndarray: Float32 genotype matrix with NaNs for missing values.
-        """
-        cache = self._float_genotype_cache
-        current = self.pgenc.genotypes_012
-        if cache is None or cache.shape != current.shape or cache.dtype != np.float32:
-            arr = np.asarray(current, dtype=np.float32)
-            arr = np.where(arr < 0, np.nan, arr)
-            self._float_genotype_cache = arr
-            cache = arr
-        return cache.copy() if copy else cache
-
-    def _sim_mask_cache_key(self) -> tuple | None:
-        """Key for caching simulated-missing masks."""
-        if not getattr(self, "simulate_missing", False):
-            return None
-        shape = tuple(self.pgenc.genotypes_012.shape)
-        return (
-            id(self.genotype_data),
-            self.sim_strategy,
-            round(float(self.sim_prop), 6),
-            self.seed,
-            shape,
-        )
-
     def _one_hot_encode_012(
         self, X: np.ndarray | torch.Tensor, num_classes: int | None
     ) -> torch.Tensor:
@@ -1101,6 +1070,173 @@ class BaseNNImputer:
             if isinstance(m, torch.nn.Linear):
                 return int(m.in_features)
         raise RuntimeError("No Linear layers found in model.")
+
+    def decode_012(
+        self, X: np.ndarray | pd.DataFrame | List[List[int]], is_nuc: bool = False
+    ) -> np.ndarray:
+        """Decode 012 or 0-9 integer encodings to single-character IUPAC nucleotides.
+
+        Always returns single-character IUPAC codes:
+        - A, C, G, T for homozygotes
+        - R, Y, S, W, K, M for heterozygotes
+        - N for missing/invalid
+
+        Modes:
+        1) Standard 012 (0=REF, 1=HET, 2=ALT, -9/-1=missing) using per-locus REF/ALT from GenotypeData.
+        Special case: ALT="." (or empty) is treated as monomorphic and defaults to REF.
+        2) IUPAC-integer mode (is_nuc=True) using SNPio's updated order:
+        A=0, C=1, G=2, T=3, W=4, R=5, M=6, K=7, Y=8, S=9, N=-9/-1.
+
+        Args:
+            X: Matrix of 012 or 0-9 IUPAC integers.
+            is_nuc: If True, interpret inputs as 0-9 IUPAC integers (A=0, C=1, G=2, T=3, ...).
+
+        Returns:
+            np.ndarray: Same shape as X, dtype '<U1', with single-character IUPAC codes.
+
+        Raises:
+            ValueError: If REF/ALT metadata are unavailable for 012 decoding.
+        """
+        df = validate_input_type(X, return_type="df")
+
+        if not isinstance(df, pd.DataFrame):
+            msg = "Internal error: expected DataFrame after validation."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        # IUPAC ambiguity mapping (unordered pairs → code) for 012→IUPAC.
+        pair_to_iupac = {
+            frozenset(("A", "G")): "R",
+            frozenset(("C", "T")): "Y",
+            frozenset(("G", "C")): "S",
+            frozenset(("A", "T")): "W",
+            frozenset(("G", "T")): "K",
+            frozenset(("A", "C")): "M",
+        }
+        valid_bases = {"A", "C", "G", "T"}
+
+        if is_nuc:
+            # UPDATED SNPio order: A=0, C=1, G=2, T=3, W=4, R=5, M=6, K=7, Y=8, S=9, N=-9/-1
+            iupac_list = ["A", "C", "G", "T", "W", "R", "M", "K", "Y", "S"]
+            mapping = {i: iupac_list[i] for i in range(10)}
+            mapping[-9] = "N"
+            mapping[-1] = "N"
+
+            # accept strings too
+            mapping.update({str(k): v for k, v in mapping.items()})
+            return df.replace(mapping).to_numpy(dtype="<U1")
+
+        # ---- Standard 012 decoding using REF/ALT per column ----
+        ref_alleles = getattr(self.genotype_data, "ref", None)
+        alt_alleles = getattr(self.genotype_data, "alt", None)
+
+        if ref_alleles is None or alt_alleles is None:
+            msg = (
+                "Reference and alternate alleles are not available in GenotypeData; "
+                "cannot decode 012 matrix."
+            )
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        df_out = df.copy().astype(object)
+
+        for j, col in enumerate(df_out.columns):
+            ref = ref_alleles[j]
+            alt = alt_alleles[j]
+
+            # Normalize REF
+            ref = "" if ref is None else str(ref).upper()
+
+            # Normalize ALT:
+            #   - If list-like, pick the first non-missing ALT that isn't "."
+            #   - Treat "." or "" as "no ALT" (monomorphic) -> default to REF later
+            if isinstance(alt, (list, tuple)):
+                alt_clean = None
+                for a in alt:
+                    if a is None:
+                        continue
+                    s = str(a).upper()
+                    if s not in {".", ""}:
+                        alt_clean = s
+                        break
+                alt = alt_clean  # may be None
+            else:
+                if alt is None:
+                    alt = None
+                else:
+                    s = str(alt).upper()
+                    alt = None if s in {".", ""} else s
+
+            ref_is_std = ref in valid_bases
+
+            # ALT="." (or empty/missing) indicates monomorphic site -> treat ALT as REF for decoding.
+            monomorphic = alt is None
+            if monomorphic:
+                alt = ref
+
+            alt_is_std = alt in valid_bases
+
+            if ref_is_std and alt_is_std:
+                # If monomorphic, ref==alt and het_code becomes ref (prevents "N" injection)
+                het_code = (
+                    ref if ref == alt else pair_to_iupac.get(frozenset((ref, alt)), "N")
+                )
+                col_map = {
+                    0: ref,
+                    "0": ref,
+                    1: het_code,
+                    "1": het_code,
+                    2: alt,
+                    "2": alt,
+                    -9: "N",
+                    "-9": "N",
+                    -1: "N",
+                    "-1": "N",
+                }
+            elif ref_is_std and not alt_is_std:
+                # ALT is truly invalid (not "."), cannot decode 1/2 meaningfully
+                col_map = {
+                    0: ref,
+                    "0": ref,
+                    1: "N",
+                    "1": "N",
+                    2: "N",
+                    "2": "N",
+                    -9: "N",
+                    "-9": "N",
+                    -1: "N",
+                    "-1": "N",
+                }
+            elif not ref_is_std and alt_is_std:
+                col_map = {
+                    0: "N",
+                    "0": "N",
+                    1: "N",
+                    "1": "N",
+                    2: alt,
+                    "2": alt,
+                    -9: "N",
+                    "-9": "N",
+                    -1: "N",
+                    "-1": "N",
+                }
+            else:
+                col_map = {
+                    0: "N",
+                    "0": "N",
+                    1: "N",
+                    "1": "N",
+                    2: "N",
+                    "2": "N",
+                    -9: "N",
+                    "-9": "N",
+                    -1: "N",
+                    "-1": "N",
+                }
+
+            df_out[col] = df_out[col].map(col_map)
+
+        return df_out.to_numpy(dtype="<U1")
 
     def _assert_model_latent_compat(
         self, model: torch.nn.Module, latent_vectors: torch.nn.Parameter
@@ -1312,3 +1448,43 @@ class BaseNNImputer:
         except Exception:
             g = 0.0
         return max(0.0, min(g, 10.0))
+
+    def sim_missing_transform(self):
+        GT_full = self.pgenc.genotypes_012
+        GT_full[GT_full < 0] = -1  # ensure missing = -1
+        GT_full = np.nan_to_num(GT_full, nan=-1.0)  # just in case
+        self.ground_truth_ = GT_full.astype(np.int64)
+
+        if not self.simulate_missing:
+            msg = "Training without simulated missing data is not currently supported for UBP imputer. Please enable `simulate_missing`."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        if not hasattr(self, "sim_prop") or self.sim_prop <= 0.0:
+            msg = "simulate_missing is True but sim_prop is not set or <= 0.0."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        if not hasattr(self, "tree_parser") and "nonrandom" in self.sim_strategy:
+            msg = "simulate_missing is True but tree_parser is not set for 'nonrandom' or 'nonrandom_weighted' strategy."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        # --- Simulate missing data ---
+        X_for_sim = self.ground_truth_.astype(np.float32, copy=True)
+        tr = SimMissingTransformer(
+            genotype_data=self.genotype_data,
+            tree_parser=self.tree_parser,
+            prop_missing=self.sim_prop,
+            strategy=self.sim_strategy,
+            missing_val=-1,
+            mask_missing=True,
+            verbose=self.verbose,
+            **self.sim_kwargs,
+        )
+        tr.fit(X_for_sim.copy())
+        X_for_model = tr.transform(X_for_sim.copy())
+        sim_mask_global = tr.sim_missing_mask_.astype(bool)
+        orig_mask_global = tr.original_missing_mask_.astype(bool)
+
+        return X_for_model, sim_mask_global, orig_mask_global

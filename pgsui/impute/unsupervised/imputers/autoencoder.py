@@ -317,42 +317,14 @@ class ImputeAutoencoder(BaseNNImputer):
         """
         self.logger.info(f"Fitting {self.model_name} model...")
 
-        # --- Data prep (mirror NLPCA) ---
-        X012 = self._get_float_genotypes(copy=True)
-        GT_full = np.nan_to_num(X012, nan=-1.0, copy=True)
-        self.ground_truth_ = GT_full.astype(np.int64, copy=False)
-
-        self.sim_mask_global_ = None
-        cache_key = self._sim_mask_cache_key()
-        if self.simulate_missing:
-            cached_mask = (
-                None if cache_key is None else self._sim_mask_cache.get(cache_key)
-            )
-            if cached_mask is not None:
-                self.sim_mask_global_ = cached_mask.copy()
-            else:
-                tr = SimMissingTransformer(
-                    genotype_data=self.genotype_data,
-                    tree_parser=self.tree_parser,
-                    prop_missing=self.sim_prop,
-                    strategy=self.sim_strategy,
-                    missing_val=-9,
-                    mask_missing=True,
-                    verbose=self.verbose,
-                    **self.sim_kwargs,
-                )
-                tr.fit(X012.copy())
-                self.sim_mask_global_ = tr.sim_missing_mask_.astype(bool)
-                if cache_key is not None:
-                    self._sim_mask_cache[cache_key] = self.sim_mask_global_.copy()
-
-            X_for_model = self.ground_truth_.copy()
-            X_for_model[self.sim_mask_global_] = -1
-        else:
-            X_for_model = self.ground_truth_.copy()
+        # --- prepare data & simulate missing if needed ---
+        X_for_model, self.sim_mask_global_, self.orig_mask_global_ = (
+            self.sim_missing_transform()
+        )
+        self.X_model_input_ = X_for_model
 
         if self.genotype_data.snp_data is None:
-            msg = "SNP data is required for Autoencoder imputer."
+            msg = f"SNP data is required for {self.model_name}."
             self.logger.error(msg)
             raise TypeError(msg)
 
@@ -374,8 +346,6 @@ class ImputeAutoencoder(BaseNNImputer):
             self.ground_truth_[self.ground_truth_ == 2] = 1
             X_for_model[X_for_model == 2] = 1
 
-        # After X_for_model is fully prepared (and after haploid collapsing)
-        self.X_model_input_ = X_for_model
         n_samples, self.num_features_ = X_for_model.shape
 
         # Model params (decoder outputs L * K logits)
@@ -519,19 +489,19 @@ class ImputeAutoencoder(BaseNNImputer):
         imputed_array = X_to_impute.copy()
         imputed_array[missing_mask] = pred_labels[missing_mask]
 
-        neg_ct = int(np.count_nonzero(imputed_array < 0))
-        self.logger.info(
-            f"[transform] negative entries remaining in imputed_array: {neg_ct}"
-        )
-        if neg_ct:
-            self.logger.info(
-                f"[transform] unique negatives: {np.unique(imputed_array[imputed_array < 0])[:10]}"
-            )
+        assert np.all(
+            imputed_array >= 0
+        ), f"[{self.model_name}] missing entries remain in imputed_array after imputation."
 
         # Decode to IUPAC & optionally plot
-        imputed_genotypes = self.pgenc.decode_012(imputed_array)
+        imputed_genotypes = self.decode_012(imputed_array)
+
+        assert np.all(
+            imputed_genotypes != "N"
+        ), f"[{self.model_name}] missing entries remain in imputed_genotypes after imputation."
+
         if self.show_plots:
-            original_genotypes = self.pgenc.decode_012(X_to_impute)
+            original_genotypes = self.decode_012(X_to_impute)
             plt.rcParams.update(self.plotter_.param_dict)
             self.plotter_.plot_gt_distribution(original_genotypes, is_imputed=False)
             self.plotter_.plot_gt_distribution(imputed_genotypes, is_imputed=True)
@@ -1304,14 +1274,10 @@ class ImputeAutoencoder(BaseNNImputer):
 
             # IUPAC decode & 10-base integer report
             # FIX 4: Use current shape (X_val.shape) not self.num_features_
-            y_true_dec = self.pgenc.decode_012(
-                GT_ref.reshape(X_val.shape[0], X_val.shape[1])
-            )
+            y_true_dec = self.decode_012(GT_ref.reshape(X_val.shape[0], X_val.shape[1]))
             X_pred = X_val.copy()
             X_pred[eval_mask] = y_pred_flat
-            y_pred_dec = self.pgenc.decode_012(
-                X_pred.reshape(X_val.shape[0], X_val.shape[1])
-            )
+            y_pred_dec = self.decode_012(X_pred.reshape(X_val.shape[0], X_val.shape[1]))
 
             encodings_dict = {
                 "A": 0,

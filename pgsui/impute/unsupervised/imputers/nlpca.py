@@ -291,49 +291,16 @@ class ImputeNLPCA(BaseNNImputer):
         """
         self.logger.info(f"Fitting {self.model_name} model...")
 
-        # --- BASE MATRIX AND GROUND TRUTH ---
-        X012 = self.pgenc.genotypes_012.astype(np.float32)
-        X012[X012 < 0] = np.nan  # NaN = original missing
-
-        # Keep an immutable ground-truth copy in 0/1/2 with -1 for original
-        # missing
-        GT_full = X012.copy()
-        GT_full[np.isnan(GT_full)] = -1
-        self.ground_truth_ = GT_full.astype(np.int64)
-
-        # --- OPTIONAL SIMULATED MISSING VIA SimMissingTransformer ---
-        self.sim_mask_global_ = None
-        if self.simulate_missing:
-            X_for_sim = self.ground_truth_.astype(np.float32, copy=True)
-            X_for_sim[X_for_sim < 0] = -9.0
-
-            tr = SimMissingTransformer(
-                genotype_data=self.genotype_data,
-                tree_parser=self.tree_parser,
-                prop_missing=self.sim_prop,
-                strategy=self.sim_strategy,
-                missing_val=-9,
-                mask_missing=True,
-                verbose=self.verbose,
-                tol=None,
-                max_tries=None,
-            )
-            tr.fit(X_for_sim)
-
-            # Store boolean mask of simulated positions only (excludes original-missing)
-            self.sim_mask_global_ = tr.sim_missing_mask_.astype(bool)
-
-            # Force: simulated mask excludes original missing
-            orig_missing = self.ground_truth_ == -1
-            self.sim_mask_global_ &= ~orig_missing
-
-            # Apply simulation to the model’s input copy: encode as -1 for loss
-            X_for_model = self.ground_truth_.copy()
-            X_for_model[self.sim_mask_global_] = -1
-        else:
-            X_for_model = self.ground_truth_.copy()
-
+        # --- prepare data & simulate missing if needed ---
+        X_for_model, self.sim_mask_global_, self.orig_mask_global_ = (
+            self.sim_missing_transform()
+        )
         self.X_model_input_ = X_for_model
+
+        if self.genotype_data.snp_data is None:
+            msg = f"SNP data is required for {self.model_name}."
+            self.logger.error(msg)
+            raise TypeError(msg)
 
         self.ploidy = self.cfg.io.ploidy
         self.is_haploid = self.ploidy == 1
@@ -485,20 +452,19 @@ class ImputeNLPCA(BaseNNImputer):
         if self.is_haploid:
             imputed_array = self._haploid_bin_to_012(imputed_array)
 
-        neg_ct = int(np.count_nonzero(imputed_array < 0))
-        self.logger.info(
-            f"[transform] negative entries remaining in imputed_array: {neg_ct}"
-        )
-        if neg_ct:
-            self.logger.info(
-                f"[transform] unique negatives: {np.unique(imputed_array[imputed_array < 0])[:10]}"
-            )
+        assert np.all(
+            imputed_array >= 0
+        ), f"[{self.model_name}] missing entries remain in imputed_array after imputation."
 
         # Decode back to IUPAC strings
-        imputed_genotypes = self.pgenc.decode_012(imputed_array)
+        imputed_genotypes = self.decode_012(imputed_array)
+
+        assert np.all(
+            imputed_genotypes != "N"
+        ), f"[{self.model_name}] missing entries remain in imputed_genotypes after imputation."
 
         if self.show_plots:
-            original_genotypes = self.pgenc.decode_012(X_to_impute)
+            original_genotypes = self.decode_012(X_to_impute)
             plt.rcParams.update(self.plotter_.param_dict)  # Ensure consistent style
             self.plotter_.plot_gt_distribution(original_genotypes, is_imputed=False)
             self.plotter_.plot_gt_distribution(imputed_genotypes, is_imputed=True)
@@ -1012,10 +978,10 @@ class ImputeNLPCA(BaseNNImputer):
                 GT_for_decode = self._haploid_bin_to_012(GT_for_decode)
                 Xpred_for_decode = self._haploid_bin_to_012(Xpred_for_decode)
 
-            y_true_dec = self.pgenc.decode_012(
+            y_true_dec = self.decode_012(
                 GT_for_decode.reshape(X_val.shape[0], X_val.shape[1])
             )
-            y_pred_dec = self.pgenc.decode_012(
+            y_pred_dec = self.decode_012(
                 Xpred_for_decode.reshape(X_val.shape[0], X_val.shape[1])
             )
 

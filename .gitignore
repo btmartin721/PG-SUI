@@ -206,5 +206,5 @@ tmp_test_output/
 test_all_output/
 test_nlpca_output/
 *.slurm
-pgsui_subset_phylip_results3/
+pgsui_subset_phylip_results*/
 *_mqc.txt

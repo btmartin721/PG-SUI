@@ -22,6 +22,7 @@ from sklearn.metrics import (
 # Project
 from snpio import GenotypeEncoder
 from snpio.utils.logging import LoggerManager
+from snpio.utils.misc import validate_input_type
 
 from pgsui.data_processing.config import apply_dot_overrides, load_yaml_to_dataclass
 from pgsui.data_processing.containers import RefAlleleConfig
@@ -351,10 +352,10 @@ class ImputeRefAllele:
             self.logger.error(msg, exc_info=True)
             raise NotFittedError(msg)
 
-        imp_decoded = self.encoder.decode_012(X_imputed_full_012)
+        imp_decoded = self.decode_012(X_imputed_full_012)
 
         if self.show_plots:
-            gt_decoded = self.encoder.decode_012(self.ground_truth012_)
+            gt_decoded = self.decode_012(self.ground_truth012_)
             self.plotter_.plot_gt_distribution(gt_decoded, is_imputed=False)
             self.plotter_.plot_gt_distribution(imp_decoded, is_imputed=True)
 
@@ -404,8 +405,8 @@ class ImputeRefAllele:
         X_pred_eval = self.ground_truth012_.copy()
         X_pred_eval[self.sim_mask_] = self.X_imputed012_[self.sim_mask_]
 
-        y_true_dec = self.encoder.decode_012(self.ground_truth012_)
-        y_pred_dec = self.encoder.decode_012(X_pred_eval)
+        y_true_dec = self.decode_012(self.ground_truth012_)
+        y_pred_dec = self.decode_012(X_pred_eval)
 
         encodings_dict = {
             "A": 0,
@@ -688,3 +689,170 @@ class ImputeRefAllele:
                 msg = f"Failed to create directory {getattr(self, f'{d}_dir')}: {e}"
                 self.logger.error(msg)
                 raise Exception(msg)
+
+    def decode_012(
+        self, X: np.ndarray | pd.DataFrame | List[List[int]], is_nuc: bool = False
+    ) -> np.ndarray:
+        """Decode 012 or 0-9 integer encodings to single-character IUPAC nucleotides.
+
+        Always returns single-character IUPAC codes:
+        - A, C, G, T for homozygotes
+        - R, Y, S, W, K, M for heterozygotes
+        - N for missing/invalid
+
+        Modes:
+        1) Standard 012 (0=REF, 1=HET, 2=ALT, -9/-1=missing) using per-locus REF/ALT from GenotypeData.
+        Special case: ALT="." (or empty) is treated as monomorphic and defaults to REF.
+        2) IUPAC-integer mode (is_nuc=True) using SNPio's updated order:
+        A=0, C=1, G=2, T=3, W=4, R=5, M=6, K=7, Y=8, S=9, N=-9/-1.
+
+        Args:
+            X: Matrix of 012 or 0-9 IUPAC integers.
+            is_nuc: If True, interpret inputs as 0-9 IUPAC integers (A=0, C=1, G=2, T=3, ...).
+
+        Returns:
+            np.ndarray: Same shape as X, dtype '<U1', with single-character IUPAC codes.
+
+        Raises:
+            ValueError: If REF/ALT metadata are unavailable for 012 decoding.
+        """
+        df = validate_input_type(X, return_type="df")
+
+        if not isinstance(df, pd.DataFrame):
+            msg = "Internal error: expected DataFrame after validation."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        # IUPAC ambiguity mapping (unordered pairs → code) for 012→IUPAC.
+        pair_to_iupac = {
+            frozenset(("A", "G")): "R",
+            frozenset(("C", "T")): "Y",
+            frozenset(("G", "C")): "S",
+            frozenset(("A", "T")): "W",
+            frozenset(("G", "T")): "K",
+            frozenset(("A", "C")): "M",
+        }
+        valid_bases = {"A", "C", "G", "T"}
+
+        if is_nuc:
+            # UPDATED SNPio order: A=0, C=1, G=2, T=3, W=4, R=5, M=6, K=7, Y=8, S=9, N=-9/-1
+            iupac_list = ["A", "C", "G", "T", "W", "R", "M", "K", "Y", "S"]
+            mapping = {i: iupac_list[i] for i in range(10)}
+            mapping[-9] = "N"
+            mapping[-1] = "N"
+
+            # accept strings too
+            mapping.update({str(k): v for k, v in mapping.items()})
+            return df.replace(mapping).to_numpy(dtype="<U1")
+
+        # ---- Standard 012 decoding using REF/ALT per column ----
+        ref_alleles = getattr(self.genotype_data, "ref", None)
+        alt_alleles = getattr(self.genotype_data, "alt", None)
+
+        if ref_alleles is None or alt_alleles is None:
+            msg = (
+                "Reference and alternate alleles are not available in GenotypeData; "
+                "cannot decode 012 matrix."
+            )
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        df_out = df.copy().astype(object)
+
+        for j, col in enumerate(df_out.columns):
+            ref = ref_alleles[j]
+            alt = alt_alleles[j]
+
+            # Normalize REF
+            ref = "" if ref is None else str(ref).upper()
+
+            # Normalize ALT:
+            #   - If list-like, pick the first non-missing ALT that isn't "."
+            #   - Treat "." or "" as "no ALT" (monomorphic) -> default to REF later
+            if isinstance(alt, (list, tuple)):
+                alt_clean = None
+                for a in alt:
+                    if a is None:
+                        continue
+                    s = str(a).upper()
+                    if s not in {".", ""}:
+                        alt_clean = s
+                        break
+                alt = alt_clean  # may be None
+            else:
+                if alt is None:
+                    alt = None
+                else:
+                    s = str(alt).upper()
+                    alt = None if s in {".", ""} else s
+
+            ref_is_std = ref in valid_bases
+
+            # ALT="." (or empty/missing) indicates monomorphic site -> treat ALT as REF for decoding.
+            monomorphic = alt is None
+            if monomorphic:
+                alt = ref
+
+            alt_is_std = alt in valid_bases
+
+            if ref_is_std and alt_is_std:
+                # If monomorphic, ref==alt and het_code becomes ref (prevents "N" injection)
+                het_code = (
+                    ref if ref == alt else pair_to_iupac.get(frozenset((ref, alt)), "N")
+                )
+                col_map = {
+                    0: ref,
+                    "0": ref,
+                    1: het_code,
+                    "1": het_code,
+                    2: alt,
+                    "2": alt,
+                    -9: "N",
+                    "-9": "N",
+                    -1: "N",
+                    "-1": "N",
+                }
+            elif ref_is_std and not alt_is_std:
+                # ALT is truly invalid (not "."), cannot decode 1/2 meaningfully
+                col_map = {
+                    0: ref,
+                    "0": ref,
+                    1: "N",
+                    "1": "N",
+                    2: "N",
+                    "2": "N",
+                    -9: "N",
+                    "-9": "N",
+                    -1: "N",
+                    "-1": "N",
+                }
+            elif not ref_is_std and alt_is_std:
+                col_map = {
+                    0: "N",
+                    "0": "N",
+                    1: "N",
+                    "1": "N",
+                    2: alt,
+                    "2": alt,
+                    -9: "N",
+                    "-9": "N",
+                    -1: "N",
+                    "-1": "N",
+                }
+            else:
+                col_map = {
+                    0: "N",
+                    "0": "N",
+                    1: "N",
+                    "1": "N",
+                    2: "N",
+                    "2": "N",
+                    -9: "N",
+                    "-9": "N",
+                    -1: "N",
+                    "-1": "N",
+                }
+
+            df_out[col] = df_out[col].map(col_map)
+
+        return df_out.to_numpy(dtype="<U1")

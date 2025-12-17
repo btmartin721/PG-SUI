@@ -270,43 +270,16 @@ class ImputeUBP(BaseNNImputer):
         """
         self.logger.info(f"Fitting {self.model_name} model...")
 
-        # --- Use 0/1/2 with -1 for missing ---
-        X012 = self._get_float_genotypes(copy=True)
-        GT_full = np.nan_to_num(X012, nan=-1.0, copy=True)
-        self.ground_truth_ = GT_full.astype(np.int64, copy=False)
+        # --- prepare data & simulate missing if needed ---
+        X_for_model, self.sim_mask_global_, self.orig_mask_global_ = (
+            self.sim_missing_transform()
+        )
+        self.X_model_input_ = X_for_model
 
-        cache_key = self._sim_mask_cache_key()
-        self.sim_mask_global_ = None
-        if self.simulate_missing:
-            cached_mask = (
-                None if cache_key is None else self._sim_mask_cache.get(cache_key)
-            )
-            if cached_mask is not None:
-                self.sim_mask_global_ = cached_mask.copy()
-            else:
-                X_for_sim = self.ground_truth_.astype(np.float32, copy=True)
-                X_for_sim[X_for_sim < 0] = -9.0
-                tr = SimMissingTransformer(
-                    genotype_data=self.genotype_data,
-                    tree_parser=self.tree_parser,
-                    prop_missing=self.sim_prop,
-                    strategy=self.sim_strategy,
-                    missing_val=-9,
-                    mask_missing=True,
-                    verbose=self.verbose,
-                    **self.sim_kwargs,
-                )
-                tr.fit(X_for_sim.copy())
-                self.sim_mask_global_ = tr.sim_missing_mask_.astype(bool)
-                orig_missing = self.ground_truth_ == -1
-                self.sim_mask_global_ = self.sim_mask_global_ & (~orig_missing)
-
-                if cache_key is not None and self.sim_mask_global_ is not None:
-                    self._sim_mask_cache[cache_key] = self.sim_mask_global_.copy()
-
-        X_for_model = self.ground_truth_.copy()
-        if self.sim_mask_global_ is not None:
-            X_for_model[self.sim_mask_global_] = -1
+        if self.genotype_data.snp_data is None:
+            msg = f"SNP data is required for {self.model_name}."
+            self.logger.error(msg)
+            raise TypeError(msg)
 
         # --- Determine ploidy (haploid vs diploid) and classes ---
         self.ploidy = self.cfg.io.ploidy
@@ -323,11 +296,7 @@ class ImputeUBP(BaseNNImputer):
                 "Diploid data detected. Using 3 classes (REF=0, HET=1, ALT=2) for training/scoring."
             )
 
-        self.X_model_input_ = X_for_model
-
-        # IMPORTANT: model head matches scoring classes now
         self.output_classes_ = int(self.num_classes_)
-
         n_samples, self.num_features_ = X_for_model.shape
 
         # --- model params (decoder: Z -> L * num_classes) ---
@@ -355,8 +324,9 @@ class ImputeUBP(BaseNNImputer):
             self.sim_mask_train_ = self.sim_mask_global_[train_idx]
             self.sim_mask_test_ = self.sim_mask_global_[test_idx]
         else:
-            self.sim_mask_train_ = None
-            self.sim_mask_test_ = None
+            msg = "sim_mask_global_ is None after simulated missing generation."
+            self.logger.error(msg)
+            raise TypeError(msg)
 
         # --- plotting/scorers & tuning ---
         self.plotter_, self.scorers_ = self.initialize_plotting_and_scorers()
@@ -404,10 +374,7 @@ class ImputeUBP(BaseNNImputer):
             eval_mask_override=eval_mask,
         )
 
-        if self.tune:
-            self._save_best_params(self.best_params_)
-        else:
-            self._save_best_params(self.best_params_)
+        self._save_best_params(self.best_params_)
 
         return self
 
@@ -441,24 +408,23 @@ class ImputeUBP(BaseNNImputer):
 
         pred_labels, _ = self._predict(self.model_, latent_vectors=optimized_latents)
 
-        missing_mask = X_to_impute < 0
+        missing_mask = self.orig_mask_global_
         imputed_array = X_to_impute.copy()
         imputed_array[missing_mask] = pred_labels[missing_mask]
 
-        neg_ct = int(np.count_nonzero(imputed_array < 0))
-        self.logger.info(
-            f"[transform] negative entries remaining in imputed_array: {neg_ct}"
-        )
-        if neg_ct:
-            self.logger.info(
-                f"[transform] unique negatives: {np.unique(imputed_array[imputed_array < 0])[:10]}"
-            )
+        assert np.all(
+            imputed_array >= 0
+        ), f"[{self.model_name}] missing entries remain in imputed_array after imputation."
 
         # Decode to IUPAC for return and optional plots
-        imputed_genotypes = self.pgenc.decode_012(imputed_array)
+        imputed_genotypes = self.decode_012(imputed_array)
+
+        assert np.all(
+            imputed_genotypes != "N"
+        ), f"[{self.model_name}] missing entries remain in imputed_genotypes after imputation."
 
         if self.show_plots:
-            original_genotypes = self.pgenc.decode_012(X_to_impute)
+            original_genotypes = self.decode_012(X_to_impute)
             self.plotter_.plot_gt_distribution(original_genotypes, is_imputed=False)
             self.plotter_.plot_gt_distribution(imputed_genotypes, is_imputed=True)
 
@@ -770,15 +736,11 @@ class ImputeUBP(BaseNNImputer):
             )
 
             # Use X_val dimensions for decoding/plotting
-            y_true_dec = self.pgenc.decode_012(
-                GT_ref.reshape(X_val.shape[0], X_val.shape[1])
-            )
+            y_true_dec = self.decode_012(GT_ref.reshape(X_val.shape[0], X_val.shape[1]))
 
             X_pred = X_val.copy()
             X_pred[eval_mask] = pred_labels_flat
-            y_pred_dec = self.pgenc.decode_012(
-                X_pred.reshape(X_val.shape[0], X_val.shape[1])
-            )
+            y_pred_dec = self.decode_012(X_pred.reshape(X_val.shape[0], X_val.shape[1]))
 
             encodings_dict = {
                 "A": 0,
@@ -892,10 +854,12 @@ class ImputeUBP(BaseNNImputer):
                     self, "X_test_", self.ground_truth_[self.test_idx_]
                 )
 
-                # Ground truth for eval should be the pre-mask split if available
+                # Ground truth for eval should be the pre-mask split if
+                # available
                 GT_test_trial = getattr(self, "GT_test_full_", None)
                 if GT_test_trial is None or GT_test_trial.shape != X_test_trial.shape:
-                    # Fall back to using X_test_trial ONLY when not using eval_mask_override
+                    # Fall back to using X_test_trial ONLY when not using
+                    # eval_mask_override
                     GT_test_trial = X_test_trial
 
                 eval_mask = (
