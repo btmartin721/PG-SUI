@@ -284,8 +284,7 @@ class ImputeMostFrequent:
 
         # Work in DataFrame with NaN as missing for mode computation
         df_all = pd.DataFrame(self.ground_truth012_, dtype=np.float32)
-        df_all = df_all.replace(self.missing, np.nan)
-        df_all = df_all.replace(-9, np.nan)  # Just in case
+        df_all[df_all < 0] = np.nan
 
         # Modes from TRAIN rows only (per-locus)
         df_train = df_all.iloc[self.train_idx_].copy()
@@ -400,7 +399,10 @@ class ImputeMostFrequent:
             msg = "Model is not fitted. Call fit() before transform()."
             self.logger.error(msg)
             raise NotFittedError(msg)
-        assert self.X_train_df_ is not None
+
+        assert (
+            self.X_train_df_ is not None
+        ), f"[{self.model_name}] X_train_df_ is not set after fit()."
 
         # 1) Impute the evaluation-masked copy (to compute metrics)
         imputed_eval_df = self._impute_df(self.X_train_df_)
@@ -412,15 +414,22 @@ class ImputeMostFrequent:
 
         # 2) Impute the FULL dataset (only true missings)
         df_missingonly = pd.DataFrame(self.ground_truth012_, dtype=np.float32)
-        df_missingonly.replace(self.missing, np.nan, inplace=True)
+        df_missingonly[df_missingonly < 0] = np.nan
+
         imputed_full_df = self._impute_df(df_missingonly)
         X_imputed_full_012 = imputed_full_df.to_numpy(dtype=np.int16)
 
+        neg = int(np.count_nonzero(X_imputed_full_012 < 0))
+        if neg:
+            msg = f"{neg} negative entries remain after REF imputation. Unique: {np.unique(X_imputed_full_012[X_imputed_full_012 < 0])[:10]}"
+            self.logger.error(msg)
+            raise RuntimeError(msg)
+
         # Plot distributions (parity with DL transform())
         if self.ground_truth012_ is None:
-            raise NotFittedError(
-                "ground_truth012_ is not set; cannot plot distributions."
-            )
+            msg = "ground_truth012_ is not set; cannot plot distributions."
+            self.logger.error(msg)
+            raise NotFittedError(msg)
 
         imp_decoded = self.encoder.decode_012(X_imputed_full_012)
 

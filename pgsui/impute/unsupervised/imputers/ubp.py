@@ -441,9 +441,18 @@ class ImputeUBP(BaseNNImputer):
 
         pred_labels, _ = self._predict(self.model_, latent_vectors=optimized_latents)
 
-        missing_mask = X_to_impute == -1
+        missing_mask = X_to_impute < 0
         imputed_array = X_to_impute.copy()
         imputed_array[missing_mask] = pred_labels[missing_mask]
+
+        neg_ct = int(np.count_nonzero(imputed_array < 0))
+        self.logger.info(
+            f"[transform] negative entries remaining in imputed_array: {neg_ct}"
+        )
+        if neg_ct:
+            self.logger.info(
+                f"[transform] unique negatives: {np.unique(imputed_array[imputed_array < 0])[:10]}"
+            )
 
         # Decode to IUPAC for return and optional plots
         imputed_genotypes = self.pgenc.decode_012(imputed_array)

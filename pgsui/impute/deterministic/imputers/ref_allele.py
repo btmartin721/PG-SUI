@@ -245,8 +245,7 @@ class ImputeRefAllele:
 
         # Use NaN for missing inside a DataFrame to leverage fillna
         df_all = pd.DataFrame(self.ground_truth012_, dtype=np.float32)
-        df_all = df_all.replace(self.missing, np.nan)
-        df_all = df_all.replace(-9, np.nan)  # Just in case
+        df_all[df_all < 0] = np.nan
 
         # Observed mask in the ORIGINAL data (before any simulated-missing)
         obs_mask = df_all.notna().to_numpy()  # shape (n_samples, n_loci)
@@ -322,8 +321,13 @@ class ImputeRefAllele:
             NotFittedError: If the model has not been fitted yet.
         """
         if not self.is_fit_:
-            raise NotFittedError("Model is not fitted. Call fit() before transform().")
-        assert self.X_train_df_ is not None
+            msg = "ImputeRefAllele instance is not fitted yet. Call 'fit()' before 'transform()'."
+            self.logger.error(msg)
+            raise NotFittedError(msg)
+
+        assert (
+            self.X_train_df_ is not None
+        ), f"[{self.model_name}] X_train_df_ is not set after fit()."
 
         # 1) Impute the evaluation-masked copy (compute metrics)
         imputed_eval_df = self._impute_ref(df_in=self.X_train_df_)
@@ -335,8 +339,7 @@ class ImputeRefAllele:
 
         # 2) Impute the FULL dataset (only true missings)
         df_missingonly = pd.DataFrame(self.ground_truth012_, dtype=np.float32)
-        df_missingonly = df_missingonly.replace(self.missing, np.nan)
-        df_missingonly = df_missingonly.replace(-9, np.nan)  # Just in case
+        df_missingonly[df_missingonly < 0] = np.nan
 
         imputed_full_df = self._impute_ref(df_in=df_missingonly)
         X_imputed_full_012 = imputed_full_df.to_numpy(dtype=np.int16)
@@ -346,7 +349,7 @@ class ImputeRefAllele:
         if self.ground_truth012_ is None:
             msg = "ground_truth012_ is NoneType; cannot plot distributions."
             self.logger.error(msg, exc_info=True)
-            raise NotFittedError("ground_truth012_ is None; cannot plot distributions.")
+            raise NotFittedError(msg)
 
         imp_decoded = self.encoder.decode_012(X_imputed_full_012)
 

@@ -465,7 +465,9 @@ class ImputeNLPCA(BaseNNImputer):
             NotFittedError: If the model has not been fitted.
         """
         if not getattr(self, "is_fit_", False):
-            raise NotFittedError("Model is not fitted. Call fit() before transform().")
+            msg = "Model is not fitted. Call fit() before transform()."
+            self.logger.error(msg)
+            raise NotFittedError(msg)
 
         self.logger.info(f"Imputing entire dataset with {self.model_name}...")
 
@@ -476,12 +478,21 @@ class ImputeNLPCA(BaseNNImputer):
         )
         pred_labels, _ = self._predict(self.model_, latent_vectors=optimized_latents)
 
-        missing_mask = X_to_impute == -1
+        missing_mask = X_to_impute < 0
         imputed_array = X_to_impute.copy()
         imputed_array[missing_mask] = pred_labels[missing_mask]
 
         if self.is_haploid:
             imputed_array = self._haploid_bin_to_012(imputed_array)
+
+        neg_ct = int(np.count_nonzero(imputed_array < 0))
+        self.logger.info(
+            f"[transform] negative entries remaining in imputed_array: {neg_ct}"
+        )
+        if neg_ct:
+            self.logger.info(
+                f"[transform] unique negatives: {np.unique(imputed_array[imputed_array < 0])[:10]}"
+            )
 
         # Decode back to IUPAC strings
         imputed_genotypes = self.pgenc.decode_012(imputed_array)
