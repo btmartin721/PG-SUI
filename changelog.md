@@ -4,6 +4,13 @@ An overview of changes to **PG-SUI** by release. This mirrors the Sphinx/RST cha
 
 ---
 
+## v1.6.23 - 2025-12-17
+
+### Bug Fixes - v1.6.23
+
+- Fixed critical bug where the outputs from `transform()` in all methods still had missing genotypes.
+  - Was a simple fix, was just not a robust enough detection step for missing values. Now handles any negative value instead of just "-1" or "-9".
+
 ## v1.6.22 - 2025-12-13
 
 ### Bug Fixes - v1.6.22
