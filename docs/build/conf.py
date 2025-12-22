@@ -34,24 +34,16 @@ release = "v1.6.12"
 # Add any Sphinx extension module names here, as strings. They can be
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
-# Add extensions for autodoc, type hints, and more
-extensions = [
-    "sphinx.ext.autodoc",
-    "sphinx.ext.napoleon",  # Supports Google-style docstrings
-    "sphinx_autodoc_typehints",  # Type hints in function signatures
-    "sphinx.ext.todo",  # To-do directives in documentation
-    "sphinx.ext.viewcode",  # Add links to highlighted source code
-]
-
+# Add extensions for autodoc and more
 extensions = [
     "sphinx.ext.napoleon",
     "sphinx.ext.autodoc",
     "sphinx.ext.viewcode",
-    "sphinx_autodoc_typehints",
     "sphinx.ext.todo",
     "sphinx.ext.githubpages",
     "sphinx.ext.intersphinx",
     "sphinx.ext.viewcode",
+    "sphinx_rtd_theme",
 ]
 
 intersphinx_mapping = {
@@ -125,3 +117,4 @@ todo_include_todos = True
 napoleon_include_init_with_doc = True
 napoleon_google_docstring = True
 autodoc_member_order = "bysource"
+autodoc_typehints = "signature"
