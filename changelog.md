@@ -4,6 +4,14 @@ An overview of changes to **PG-SUI** by release. This mirrors the Sphinx/RST cha
 
 ---
 
+## v1.6.26 - 2025-12-22
+
+### CI/Automation - v1.6.26
+
+- Added a dedicated `unit-tests` GitHub Actions workflow that disables plotting during CI runs.
+- Updated release workflows (PyPI, conda, Docker) to wait for the `unit-tests` workflow before building or uploading artifacts.
+- Explicitly set `MPLCONFIGDIR` during CI installs/tests to avoid Matplotlib cache issues.
+
 ## v1.6.25 - 2025-12-21
 
 ### Bug Fixes - v1.6.25

@@ -4,6 +4,16 @@ Changelog
 
 An overview of changes to **PG-SUI** by release. This file mirrors the GitHub Markdown changelog and reflects the refactor-era docs: dataclass-first configs, presets, unified scikit-learn framework-based ``fit()/transform()`` methods, CLI precedence, and updated deterministic/supervised docs.
 
+v1.6.26 - 2025-12-22
+--------------------
+
+CI/Automation - v1.6.26
+^^^^^^^^^^^^^^^^^^^^^^^
+
+- Added a dedicated ``unit-tests`` GitHub Actions workflow that disables plotting during CI runs.
+- Updated release workflows (PyPI, conda, Docker) to wait for the ``unit-tests`` workflow before building or uploading artifacts.
+- Explicitly set ``MPLCONFIGDIR`` during CI installs/tests to avoid Matplotlib cache issues.
+
 v1.6.25 - 2025-12-21
 --------------------
 
