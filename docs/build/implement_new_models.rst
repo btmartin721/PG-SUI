@@ -416,7 +416,7 @@ Usage Examples
 .. code-block:: bash
 
     pg-sui \
-        --vcf example.vcf.gz \
+        --input example.vcf.gz \
         --popmap example.popmap \
         --models ImputeMyNewModel \
         --preset balanced \
@@ -424,7 +424,7 @@ Usage Examples
         --sim-prop 0.25 \
         --set io.prefix=mymodel_demo
 
-The CLI propagates ``--sim-strategy``/``--sim-prop`` choices to every selected model, so new implementations participate automatically; add ``--simulate-missing`` if you need to benchmark against runs that rely solely on naturally missing cells.
+The CLI propagates ``--sim-strategy``/``--sim-prop`` choices to every selected model, so new implementations participate automatically; ``--disable-simulate-missing`` is intended for supervised/deterministic runs (unsupervised models require simulated masking).
 
 Design Notes & Best Practices
 -----------------------------
