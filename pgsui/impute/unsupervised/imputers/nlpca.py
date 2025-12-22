@@ -464,7 +464,10 @@ class ImputeNLPCA(BaseNNImputer):
         ), f"[{self.model_name}] missing entries remain in imputed_genotypes after imputation."
 
         if self.show_plots:
-            original_genotypes = self.decode_012(X_to_impute)
+            original_input = X_to_impute
+            if self.is_haploid:
+                original_input = self._haploid_bin_to_012(X_to_impute)
+            original_genotypes = self.decode_012(original_input)
             plt.rcParams.update(self.plotter_.param_dict)  # Ensure consistent style
             self.plotter_.plot_gt_distribution(original_genotypes, is_imputed=False)
             self.plotter_.plot_gt_distribution(imputed_genotypes, is_imputed=True)
