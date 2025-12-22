@@ -62,7 +62,6 @@ intel = ["scikit-learn-intelex"]
 docs = [
     "sphinx",
     "sphinx-rtd-theme",
-    "sphinx_autodoc_typehints",
     "sphinxcontrib-napoleon",
     "sphinxcontrib-programoutput"
 ]
@@ -72,7 +71,6 @@ dev = [
     "pytest",
     "sphinx",
     "sphinx-rtd-theme",
-    "sphinx-autodoc-typehints",
     "sphinxcontrib-napoleon",
     "sphinxcontrib-programoutput",
     "requests",
