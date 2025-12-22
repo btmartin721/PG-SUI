@@ -32,11 +32,13 @@ Welcome to PG-SUI's documentation!
 
    about
    install
-   gui
    tutorial
+   simulate
+   config
+   gui
    unsupervised_imputers
-   supervised_imputers
    non_ml_imputers
+   supervised_imputers
    imputer_methods
    implement_new_models
    modules
