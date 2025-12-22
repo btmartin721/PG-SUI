@@ -297,7 +297,7 @@ class ImputeHistGradientBoosting(BaseImputer):
         This method applies the trained imputer to the entire dataset, filling in missing genotype values. It ensures that any remaining missing values after imputation are set to -9, and decodes the imputed 0/1/2 genotypes back to their original format.
 
         Returns:
-            np.ndarray: (n_samples, n_loci) integers with no -9/-1/NaN.
+            np.ndarray: (n_samples, n_loci) IUPAC strings (single-character codes).
 
         Raises:
             NotFittedError: If fit() has not been called prior to transform().
