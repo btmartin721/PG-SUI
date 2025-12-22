@@ -18,7 +18,7 @@ PG-SUI's supervised imputers frame genotype imputation as **multiclass predictio
 
    model = ImputeRandomForest(genotype_data=gd, config=cfg)
    model.fit()
-   X012_imputed = model.transform()
+   X_iupac = model.transform()
 
 Shared Arguments
 ----------------
@@ -101,7 +101,7 @@ Run both supervised models with the ``balanced`` preset and a shared prefix:
 .. code-block:: bash
 
    pg-sui \
-      --vcf data.vcf.gz \
+      --input data.vcf.gz \
       --popmap pops.popmap \
       --models ImputeRandomForest ImputeHistGradientBoosting \
       --preset balanced \
@@ -114,7 +114,7 @@ YAML + overrides:
 .. code-block:: bash
 
    pg-sui \
-      --vcf data.vcf.gz \
+      --input data.vcf.gz \
       --popmap pops.popmap \
       --models ImputeHistGradientBoosting \
       --preset thorough \
@@ -123,7 +123,7 @@ YAML + overrides:
       --set imputer.max_iter=12 \
       --sim-prop 0.40
 
-Use ``--simulate-missing`` to temporarily disable simulated masking for diagnostics or ablation studies; omit it to honour the preset/YAML defaults. Strategy definitions are listed in :ref:`simulated_missingness`.
+Use ``--disable-simulate-missing`` to temporarily disable simulated masking for diagnostics or ablation studies; omit it to honour the preset/YAML defaults. Strategy definitions are listed in :ref:`simulated_missingness`.
 
 Outputs
 -------
