@@ -274,7 +274,7 @@ class ImputeRandomForest(BaseImputer):
         This method applies the trained imputer to the entire dataset, filling in missing genotype values. It ensures that any remaining missing values after imputation are set to -9, and decodes the imputed 0/1/2 genotypes back to their original format.
 
         Returns:
-            np.ndarray: (n_samples, n_loci) integers with no -9/-1/NaN.
+            np.ndarray: (n_samples, n_loci) IUPAC strings (single-character codes).
         """
         if not self.is_fit_:
             msg = "Imputer has not been fit; call fit() before transform()."
