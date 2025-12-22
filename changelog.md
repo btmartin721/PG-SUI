@@ -4,6 +4,25 @@ An overview of changes to **PG-SUI** by release. This mirrors the Sphinx/RST cha
 
 ---
 
+## v1.6.25 - 2025-12-21
+
+### Bug Fixes - v1.6.25
+
+- Fixed haploid decoding in unsupervised imputers (Autoencoder, VAE, UBP, NLPCA) to emit REF/ALT bases rather than heterozygote codes.
+- Normalized REF/ALT handling in `decode_012` to support ambiguous IUPAC inputs without injecting missing values.
+- Ensured ImputeVAE persists `best_parameters.json` from the final fitted parameters (not just tuned params) for reliable best-params loading.
+- Fixed CLI format aliases (`vcf.gz`, `phy`, `gen`, `structure`) and added STRUCTURE-specific parsing flags.
+
+### Enhancements - v1.6.25
+
+- Normalized plot-format aliases (e.g., `jpeg` -> `jpg`) and expanded CLI plot format support to include `svg` where supported.
+
+### Documentation - v1.6.25
+
+- Clarified IUPAC outputs in docs and examples.
+- Updated supervised imputer docstrings to match IUPAC return types.
+- Refined configuration and tutorial docs to align presets/defaults with `containers.py`, corrected YAML examples, and clarified simulated-missingness behavior for deterministic/unsupervised models.
+
 ## v1.6.24 - 2025-12-17
 
 ### Bug Fixes - v1.6.24
@@ -143,7 +162,7 @@ Ignore these releases. Was experimenting with some new algorithms that didn't wo
 
 ### Enhancements - v1.6.9
 
-- The `pg-sui` CLI now exposes explicit simulation overrides: `--sim-strategy`, `--sim-prop`, and `--simulate-missing` (store-false) so evaluation masks can be aligned across models without editing YAML files.
+- The `pg-sui` CLI now exposes explicit simulation overrides: `--sim-strategy`, `--sim-prop`, and `--disable-simulate-missing` so evaluation masks can be aligned across models without editing YAML files.
 
 ### Documentation - v1.6.9
 
