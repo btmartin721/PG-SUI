@@ -4,7 +4,7 @@ Config Reference
 This page summarizes the configuration surface exposed through the ``containers.py`` dataclasses that back the CLI and Python APIs. Every block below lists defaults and the preset bundles applied by ``from_preset(...)`` helpers. Values are shown as declared in code; all options are ASCII-safe and can be overridden via YAML or dot-keys on the CLI.
 
 Common Blocks (unsupervised NN)
-------------------------------
+-------------------------------
 
 The four deep imputer families (UBP, NLPCA, Autoencoder, VAE) share these structures:
 
@@ -17,6 +17,9 @@ The four deep imputer families (UBP, NLPCA, Autoencoder, VAE) share these struct
    * - ``prefix``
      - ``"pgsui"``
      - Run/output prefix used for directories and logging.
+   * - ``ploidy``
+     - ``2``
+     - Ploidy level (``1`` for haploid, ``2`` for diploid).
    * - ``verbose`` / ``debug``
      - ``False`` / ``False``
      - Logging verbosity.
@@ -167,7 +170,7 @@ The four deep imputer families (UBP, NLPCA, Autoencoder, VAE) share these struct
      - ``True``
      - Remove top/right spines.
    * - ``show``
-     - ``False``
+     - ``True``
      - Interactive display toggle.
 
 .. list-table:: SimConfig
@@ -178,7 +181,7 @@ The four deep imputer families (UBP, NLPCA, Autoencoder, VAE) share these struct
      - Description
    * - ``simulate_missing``
      - ``False``
-     - Whether to simulate missingness for eval.
+     - Whether to simulate missingness for eval (required for unsupervised models).
    * - ``sim_strategy``
      - ``"random"``
      - ``random``, ``random_weighted``, ``random_weighted_inv``, ``nonrandom``, ``nonrandom_weighted``.
@@ -194,13 +197,51 @@ Field-by-field notes
 
 This section adds narrative detail on when to adjust each option and how blocks interact.
 
-- **IOConfig**: Use ``prefix`` to isolate outputs per experiment; ``n_jobs`` controls Optuna parallelism (``1`` keeps deterministic logging). ``seed`` is honored across data splits and numpy/torch RNG where available.
-- **ModelConfig**: ``latent_dim`` governs compression strength; higher values retain more signal at the cost of capacity/overfit. ``layer_schedule``/``layer_scaling_factor`` shape hidden widths; ``pyramid`` shrinks toward the bottleneck, ``linear`` walks widths linearly, ``constant`` keeps widths fixed. ``latent_init="pca"`` seeds latents from PCA on the training set (UBP only) for quicker convergence.
-- **TrainConfig**: ``lr_input_factor`` scales the first layer LR (UBP) to stabilize early training. ``weights_beta`` and ``weights_max_ratio`` smooth per-class weights to avoid extreme focal weighting; increase ``max_ratio`` if your dataset is strongly imbalanced. ``early_stop_gen`` is applied with patience across epochs; ``min_epochs`` enforces a warm-up before stopping.
-- **TuneConfig**: ``fast=True`` subsamples rows/loci using ``max_samples`` and ``max_loci`` to keep sweeps quick. ``proxy_metric_batch`` limits validation rows during pruning for very wide matrices. ``infer_epochs`` controls latent refinement steps during tuning (0 disables); keep small for speed. ``eval_interval``/``patience`` gate Optuna pruning frequency.
-- **EvalConfig**: Latent refinement is optional; set ``eval_latent_steps=0`` to disable gradient-based refinement. When enabled, ``eval_latent_lr``/``eval_latent_weight_decay`` control the optimizer on latent vectors during evaluation only.
-- **PlotConfig**: ``fmt`` accepts ``pdf/png/jpg/jpeg/svg``. ``despine`` toggles seaborn-style axes cleanup. ``show`` should stay ``False`` on headless environments (e.g., Read the Docs, CI).
-- **SimConfig**: ``simulate_missing`` applies only during evaluation (and tuning) to mimic missingness. ``sim_strategy`` ``nonrandom``/``nonrandom_weighted`` require a tree parser; weighted variants bias masks toward common (or rare, inv) genotypes or longer branches. ``sim_prop`` masks a proportion of observed cells; the transformer prevents fully-masked rows/cols. ``sim_kwargs`` forwards advanced knobs (e.g., ``het_boost``).
+- **IOConfig**
+
+  - ``prefix``: Use to isolate outputs per experiment.
+  - ``ploidy``: Set to ``1`` for haploids; controls class count and decoding.
+  - ``n_jobs``: Controls Optuna parallelism (``1`` keeps deterministic logging).
+  - ``seed``: Honored across data splits and numpy/torch RNG where available.
+  - ``scoring_averaging``: Metric averaging strategy for class-imbalanced reports.
+
+- **ModelConfig**
+
+  - ``latent_dim``: Governs compression strength; higher values retain more signal at the cost of capacity/overfit.
+  - ``layer_schedule``/``layer_scaling_factor``: Shape hidden widths; ``pyramid`` shrinks toward the bottleneck, ``linear`` walks widths linearly, ``constant`` keeps widths fixed.
+  - ``activation``: ``relu``, ``elu``, ``selu``, or ``leaky_relu``.
+  - ``latent_init="pca"``: Seeds latents from PCA on the training set (UBP only) for quicker convergence.
+
+- **TrainConfig**
+
+  - ``lr_input_factor``: Scales the first layer LR (UBP) to stabilize early training.
+  - ``weights_beta``/``weights_max_ratio``: Smooth per-class weights to avoid extreme focal weighting; increase ``weights_max_ratio`` for strongly imbalanced data.
+  - ``early_stop_gen``/``min_epochs``: Patience-based early stopping with a warm-up floor.
+
+- **TuneConfig**
+
+  - ``fast``/``max_samples``/``max_loci``: Subsample rows/loci to keep sweeps quick.
+  - ``proxy_metric_batch``: Limits validation rows during pruning for very wide matrices.
+  - ``infer_epochs``: Controls latent refinement steps during tuning (``0`` disables).
+  - ``eval_interval``/``patience``: Gate Optuna pruning frequency.
+
+- **EvalConfig**
+
+  - ``eval_latent_steps``: Set to ``0`` to disable gradient-based refinement.
+  - ``eval_latent_lr``/``eval_latent_weight_decay``: Optimizer settings for latent refinement during evaluation only.
+
+- **PlotConfig**
+
+  - ``fmt``: ``pdf/png/jpg/jpeg/svg``.
+  - ``despine``: Toggles seaborn-style axes cleanup.
+  - ``show``: Default ``True``; set ``False`` on headless environments (e.g., Read the Docs, CI).
+
+- **SimConfig**
+
+  - ``simulate_missing``: Required for current unsupervised training; applies during evaluation/tuning to mimic missingness.
+  - ``sim_strategy``: ``nonrandom``/``nonrandom_weighted`` require a tree parser; weighted variants bias masks toward common (or rare, inv) genotypes or longer branches.
+  - ``sim_prop``: Masks a proportion of observed cells; the transformer prevents fully-masked rows/cols.
+  - ``sim_kwargs``: Forwards advanced knobs (e.g., ``het_boost``).
 
 Unsupervised NN presets
 -----------------------
@@ -210,27 +251,99 @@ Each model exposes ``from_preset("fast" | "balanced" | "thorough")`` to seed a b
 UBPConfig
 ~~~~~~~~~
 
-Preset highlights (fields not mentioned stay at Common defaults):
+Preset baseline (all presets):
 
-- ``fast``: ``latent_dim=4``, ``num_hidden_layers=1``, ``dropout_rate=0.10``, ``gamma=1.5``, ``batch_size=256``, ``learning_rate=2e-3``, ``early_stop_gen=5``, ``min_epochs=10``, ``max_epochs=150``, class-weight ``weights_max_ratio=5.0``, tuning ``enabled=True``, ``fast=True``, ``n_trials=20``, ``epochs=150``, ``batch_size=256``, ``max_samples=512``, ``eval_interval=20``, ``infer_epochs=20``, ``patience=5``.
-- ``balanced``: ``latent_dim=8``, ``num_hidden_layers=2``, ``layer_scaling_factor=3.0``, ``dropout_rate=0.20``, ``gamma=2.0``, ``batch_size=128``, ``learning_rate=1e-3``, ``early_stop_gen=15``, ``min_epochs=50``, ``max_epochs=600``, tuning ``enabled=True``, ``fast=False``, ``n_trials=60``, ``epochs=200``, ``batch_size=128``, ``max_samples=2048``, ``eval_interval=10``, ``infer_epochs=50``, ``patience=10``.
-- ``thorough``: ``latent_dim=16``, ``num_hidden_layers=3``, ``layer_scaling_factor=5.0``, ``dropout_rate=0.30``, ``gamma=2.5``, ``batch_size=64``, ``learning_rate=5e-4``, ``early_stop_gen=30``, ``min_epochs=100``, ``max_epochs=2000``, tuning ``enabled=True``, ``fast=False``, ``n_trials=100``, ``epochs=600``, ``batch_size=64``, ``max_samples=0`` (all), ``eval_interval=10``, ``infer_epochs=80``, ``patience=20``.
+- ``io``: ``verbose=False``, ``ploidy=2``.
+- ``model``: ``activation="relu"``, ``layer_schedule="pyramid"``, ``latent_init="random"``.
+- ``sim``: ``simulate_missing=True``, ``sim_strategy="random"``, ``sim_prop=0.2``.
+
+Preset overrides:
+
+- ``fast``
+
+  - ``model``: ``latent_dim=4``, ``num_hidden_layers=1``, ``layer_scaling_factor=2.0``, ``dropout_rate=0.10``, ``gamma=1.5``.
+  - ``train``: ``batch_size=256``, ``learning_rate=2e-3``, ``early_stop_gen=5``, ``min_epochs=10``, ``max_epochs=150``, ``weights_beta=0.999``, ``weights_max_ratio=5.0``.
+  - ``tune``: ``enabled=True``, ``fast=True``, ``n_trials=20``, ``epochs=150``, ``batch_size=256``, ``max_samples=512``, ``eval_interval=20``, ``infer_epochs=20``, ``patience=5``.
+  - ``evaluate``: ``eval_latent_steps=20``.
+
+- ``balanced``
+
+  - ``model``: ``latent_dim=8``, ``num_hidden_layers=2``, ``layer_scaling_factor=3.0``, ``dropout_rate=0.20``, ``gamma=2.0``.
+  - ``train``: ``batch_size=128``, ``learning_rate=1e-3``, ``early_stop_gen=15``, ``min_epochs=50``, ``max_epochs=600``, ``weights_beta=0.9999``, ``weights_max_ratio=5.0``.
+  - ``tune``: ``enabled=True``, ``fast=False``, ``n_trials=60``, ``epochs=200``, ``batch_size=128``, ``max_samples=2048``, ``eval_interval=10``, ``infer_epochs=50``, ``patience=10``.
+  - ``evaluate``: ``eval_latent_steps=40``.
+
+- ``thorough``
+
+  - ``model``: ``latent_dim=16``, ``num_hidden_layers=3``, ``layer_scaling_factor=5.0``, ``dropout_rate=0.30``, ``gamma=2.5``.
+  - ``train``: ``batch_size=64``, ``learning_rate=5e-4``, ``early_stop_gen=30``, ``min_epochs=100``, ``max_epochs=2000``, ``weights_beta=0.9999``, ``weights_max_ratio=5.0``.
+  - ``tune``: ``enabled=True``, ``fast=False``, ``n_trials=100``, ``epochs=600``, ``batch_size=64``, ``max_samples=0`` (all), ``eval_interval=10``, ``infer_epochs=80``, ``patience=20``.
+  - ``evaluate``: ``eval_latent_steps=100``.
 
 NLPCAConfig
 ~~~~~~~~~~~
 
-- ``fast``: ``latent_dim=4``, ``num_hidden_layers=1``, ``layer_scaling_factor=2.0``, ``dropout_rate=0.10``, ``gamma=1.5``, ``batch_size=256``, ``learning_rate=2e-3``, ``early_stop_gen=5``, ``min_epochs=10``, ``max_epochs=150``, ``weights_beta=0.999``, tuning ``enabled=True``, ``fast=True``, ``n_trials=20``, ``epochs=150``, ``batch_size=256``, ``max_samples=512``, ``eval_interval=20``, ``infer_epochs=20``, ``patience=5``.
-- ``balanced``: ``latent_dim=8``, ``num_hidden_layers=2``, ``layer_scaling_factor=3.0``, ``dropout_rate=0.20``, ``gamma=2.0``, ``batch_size=128``, ``learning_rate=1e-3``, ``early_stop_gen=15``, ``min_epochs=50``, ``max_epochs=600``, tuning ``enabled=True``, ``fast=False``, ``n_trials=60``, ``epochs=200``, ``batch_size=128``, ``max_samples=2048``, ``eval_interval=10``, ``infer_epochs=50``, ``patience=10``.
-- ``thorough``: ``latent_dim=16``, ``num_hidden_layers=3``, ``layer_scaling_factor=5.0``, ``dropout_rate=0.30``, ``gamma=2.5``, ``batch_size=64``, ``learning_rate=5e-4``, ``early_stop_gen=30``, ``min_epochs=100``, ``max_epochs=2000``, tuning ``enabled=True``, ``fast=False``, ``n_trials=100``, ``epochs=600``, ``batch_size=64``, ``max_samples=0``, ``eval_interval=10``, ``infer_epochs=80``, ``patience=20``.
+Preset baseline (all presets):
+
+- ``io``: ``verbose=False``, ``ploidy=2``.
+- ``train``: ``validation_split=0.20``.
+- ``model``: ``activation="relu"``, ``layer_schedule="pyramid"``, ``latent_init="random"``.
+- ``evaluate``: ``eval_latent_lr=1e-2``, ``eval_latent_weight_decay=0.0``.
+- ``sim``: ``simulate_missing=True``, ``sim_strategy="random"``, ``sim_prop=0.2``.
+
+Preset overrides:
+
+- ``fast``
+
+  - ``model``: ``latent_dim=4``, ``num_hidden_layers=1``, ``layer_scaling_factor=2.0``, ``dropout_rate=0.10``, ``gamma=1.5``.
+  - ``train``: ``batch_size=256``, ``learning_rate=2e-3``, ``early_stop_gen=5``, ``min_epochs=10``, ``max_epochs=150``, ``weights_beta=0.999``, ``weights_max_ratio=5.0``.
+  - ``tune``: ``enabled=True``, ``fast=True``, ``n_trials=20``, ``epochs=150``, ``batch_size=256``, ``max_samples=512``, ``eval_interval=20``, ``infer_epochs=20``, ``patience=5``.
+  - ``evaluate``: ``eval_latent_steps=20``.
+
+- ``balanced``
+
+  - ``model``: ``latent_dim=8``, ``num_hidden_layers=2``, ``layer_scaling_factor=3.0``, ``dropout_rate=0.20``, ``gamma=2.0``.
+  - ``train``: ``batch_size=128``, ``learning_rate=1e-3``, ``early_stop_gen=15``, ``min_epochs=50``, ``max_epochs=600``, ``weights_beta=0.9999``, ``weights_max_ratio=5.0``.
+  - ``tune``: ``enabled=True``, ``fast=False``, ``n_trials=60``, ``epochs=200``, ``batch_size=128``, ``max_samples=2048``, ``eval_interval=10``, ``infer_epochs=50``, ``patience=10``.
+  - ``evaluate``: ``eval_latent_steps=40``.
+
+- ``thorough``
+
+  - ``model``: ``latent_dim=16``, ``num_hidden_layers=3``, ``layer_scaling_factor=5.0``, ``dropout_rate=0.30``, ``gamma=2.5``.
+  - ``train``: ``batch_size=64``, ``learning_rate=5e-4``, ``early_stop_gen=30``, ``min_epochs=100``, ``max_epochs=2000``, ``weights_beta=0.9999``, ``weights_max_ratio=5.0``.
+  - ``tune``: ``enabled=True``, ``fast=False``, ``n_trials=100``, ``epochs=600``, ``batch_size=64``, ``max_samples=0``, ``eval_interval=10``, ``infer_epochs=80``, ``patience=20``.
+  - ``evaluate``: ``eval_latent_steps=100``.
 
 AutoencoderConfig
 ~~~~~~~~~~~~~~~~~
 
-Matches Common blocks with no latent refinement at eval (``evaluate.eval_latent_steps=0``, ``eval_latent_lr=0``, ``eval_latent_weight_decay=0``).
+Preset baseline (all presets):
 
-- ``fast``: ``latent_dim=4``, ``num_hidden_layers=1``, ``layer_scaling_factor=2.0``, ``dropout_rate=0.10``, ``gamma=1.5``, ``batch_size=256``, ``learning_rate=2e-3``, ``early_stop_gen=5``, ``min_epochs=10``, ``max_epochs=150``, ``weights_beta=0.999``, ``weights_max_ratio=5.0``, tuning ``enabled=True``, ``fast=True``, ``n_trials=20``, ``epochs=150``, ``batch_size=256``, ``max_samples=512``, ``eval_interval=20``, ``patience=5``, ``infer_epochs=0``.
-- ``balanced``: ``latent_dim=8``, ``num_hidden_layers=2``, ``layer_scaling_factor=3.0``, ``dropout_rate=0.20``, ``gamma=2.0``, ``batch_size=128``, ``learning_rate=1e-3``, ``early_stop_gen=15``, ``min_epochs=50``, ``max_epochs=600``, ``weights_max_ratio=5.0``, tuning ``enabled=True``, ``fast=False``, ``n_trials=60``, ``epochs=200``, ``batch_size=128``, ``max_samples=2048``, ``eval_interval=10``, ``patience=10``, ``infer_epochs=0``.
-- ``thorough``: ``latent_dim=16``, ``num_hidden_layers=3``, ``layer_scaling_factor=5.0``, ``dropout_rate=0.30``, ``gamma=2.5``, ``batch_size=64``, ``learning_rate=5e-4``, ``early_stop_gen=30``, ``min_epochs=100``, ``max_epochs=2000``, tuning ``enabled=True``, ``fast=False``, ``n_trials=100``, ``epochs=600``, ``batch_size=64``, ``max_samples=0``, ``eval_interval=10``, ``patience=20``, ``infer_epochs=0``.
+- ``io``: ``verbose=False``, ``ploidy=2``.
+- ``train``: ``validation_split=0.20``.
+- ``model``: ``activation="relu"``, ``layer_schedule="pyramid"``.
+- ``evaluate``: ``eval_latent_steps=0``, ``eval_latent_lr=0``, ``eval_latent_weight_decay=0``.
+- ``sim``: ``simulate_missing=True``, ``sim_strategy="random"``, ``sim_prop=0.2``.
+
+Preset overrides:
+
+- ``fast``
+
+  - ``model``: ``latent_dim=4``, ``num_hidden_layers=1``, ``layer_scaling_factor=2.0``, ``dropout_rate=0.10``, ``gamma=1.5``.
+  - ``train``: ``batch_size=256``, ``learning_rate=2e-3``, ``early_stop_gen=5``, ``min_epochs=10``, ``max_epochs=150``, ``weights_beta=0.999``, ``weights_max_ratio=5.0``.
+  - ``tune``: ``enabled=True``, ``fast=True``, ``n_trials=20``, ``epochs=150``, ``batch_size=256``, ``max_samples=512``, ``eval_interval=20``, ``patience=5``, ``infer_epochs=0``.
+
+- ``balanced``
+
+  - ``model``: ``latent_dim=8``, ``num_hidden_layers=2``, ``layer_scaling_factor=3.0``, ``dropout_rate=0.20``, ``gamma=2.0``.
+  - ``train``: ``batch_size=128``, ``learning_rate=1e-3``, ``early_stop_gen=15``, ``min_epochs=50``, ``max_epochs=600``, ``weights_beta=0.9999``, ``weights_max_ratio=5.0``.
+  - ``tune``: ``enabled=True``, ``fast=False``, ``n_trials=60``, ``epochs=200``, ``batch_size=128``, ``max_samples=2048``, ``eval_interval=10``, ``patience=10``, ``infer_epochs=0``.
+
+- ``thorough``
+
+  - ``model``: ``latent_dim=16``, ``num_hidden_layers=3``, ``layer_scaling_factor=5.0``, ``dropout_rate=0.30``, ``gamma=2.5``.
+  - ``train``: ``batch_size=64``, ``learning_rate=5e-4``, ``early_stop_gen=30``, ``min_epochs=100``, ``max_epochs=2000``, ``weights_beta=0.9999``, ``weights_max_ratio=5.0``.
+  - ``tune``: ``enabled=True``, ``fast=False``, ``n_trials=100``, ``epochs=600``, ``batch_size=64``, ``max_samples=0``, ``eval_interval=10``, ``patience=20``, ``infer_epochs=0``.
 
 VAEConfig + VAEExtraConfig
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -249,9 +362,36 @@ Common blocks align with Autoencoder (no latent refinement at eval). Extra block
 
 Presets:
 
-- ``fast``: ``latent_dim=4``, ``num_hidden_layers=1``, ``layer_scaling_factor=2.0``, ``dropout_rate=0.10``, ``gamma=1.5``, VAE extras ``kl_beta=0.5``, training ``batch_size=256``, ``learning_rate=2e-3``, ``early_stop_gen=5``, ``min_epochs=10``, ``max_epochs=150``, tuning ``enabled=True``, ``fast=True``, ``n_trials=20``, ``epochs=150``, ``batch_size=256``, ``max_samples=512``, ``eval_interval=20``, ``patience=5``, ``infer_epochs=0``.
-- ``balanced``: ``latent_dim=8``, ``num_hidden_layers=2``, ``layer_scaling_factor=3.0``, ``dropout_rate=0.20``, ``gamma=2.0``, extras ``kl_beta=1.0``, training ``batch_size=128``, ``learning_rate=1e-3``, ``early_stop_gen=15``, ``min_epochs=50``, ``max_epochs=600``, tuning ``enabled=True``, ``fast=False``, ``n_trials=60``, ``epochs=200``, ``batch_size=128``, ``max_samples=2048``, ``eval_interval=10``, ``patience=10``, ``infer_epochs=0``.
-- ``thorough``: ``latent_dim=16``, ``num_hidden_layers=3``, ``layer_scaling_factor=5.0``, ``dropout_rate=0.30``, ``gamma=2.5``, extras ``kl_beta=1.0``, training ``batch_size=64``, ``learning_rate=5e-4``, ``early_stop_gen=30``, ``min_epochs=100``, ``max_epochs=2000``, tuning ``enabled=True``, ``fast=False``, ``n_trials=100``, ``epochs=600``, ``batch_size=64``, ``max_samples=0``, ``eval_interval=10``, ``patience=20``, ``infer_epochs=0``.
+Preset baseline (all presets):
+
+- ``io``: ``verbose=False``, ``ploidy=2``.
+- ``train``: ``validation_split=0.20``.
+- ``model``: ``activation="relu"``, ``layer_schedule="pyramid"``.
+- ``evaluate``: ``eval_latent_steps=0``, ``eval_latent_lr=0``, ``eval_latent_weight_decay=0``.
+- ``sim``: ``simulate_missing=True``, ``sim_strategy="random"``, ``sim_prop=0.2``.
+
+Preset overrides:
+
+- ``fast``
+
+  - ``model``: ``latent_dim=4``, ``num_hidden_layers=1``, ``layer_scaling_factor=2.0``, ``dropout_rate=0.10``, ``gamma=1.5``.
+  - ``vae``: ``kl_beta=0.5``.
+  - ``train``: ``batch_size=256``, ``learning_rate=2e-3``, ``early_stop_gen=5``, ``min_epochs=10``, ``max_epochs=150``, ``weights_beta=0.999``, ``weights_max_ratio=5.0``.
+  - ``tune``: ``enabled=True``, ``fast=True``, ``n_trials=20``, ``epochs=150``, ``batch_size=256``, ``max_samples=512``, ``eval_interval=20``, ``patience=5``, ``infer_epochs=0``.
+
+- ``balanced``
+
+  - ``model``: ``latent_dim=8``, ``num_hidden_layers=2``, ``layer_scaling_factor=3.0``, ``dropout_rate=0.20``, ``gamma=2.0``.
+  - ``vae``: ``kl_beta=1.0``.
+  - ``train``: ``batch_size=128``, ``learning_rate=1e-3``, ``early_stop_gen=15``, ``min_epochs=50``, ``max_epochs=600``, ``weights_beta=0.9999``, ``weights_max_ratio=5.0``.
+  - ``tune``: ``enabled=True``, ``fast=False``, ``n_trials=60``, ``epochs=200``, ``batch_size=128``, ``max_samples=2048``, ``eval_interval=10``, ``patience=10``, ``infer_epochs=0``.
+
+- ``thorough``
+
+  - ``model``: ``latent_dim=16``, ``num_hidden_layers=3``, ``layer_scaling_factor=5.0``, ``dropout_rate=0.30``, ``gamma=2.5``.
+  - ``vae``: ``kl_beta=1.0``.
+  - ``train``: ``batch_size=64``, ``learning_rate=5e-4``, ``early_stop_gen=30``, ``min_epochs=100``, ``max_epochs=2000``, ``weights_beta=0.9999``, ``weights_max_ratio=5.0``.
+  - ``tune``: ``enabled=True``, ``fast=False``, ``n_trials=100``, ``epochs=600``, ``batch_size=64``, ``max_samples=0``, ``eval_interval=10``, ``patience=20``, ``infer_epochs=0``.
 
 Deterministic imputers
 ----------------------
@@ -365,13 +505,40 @@ Supervised configs live at the bottom of ``containers.py`` and control classical
 
 Presets:
 
-- RF ``fast``: ``n_estimators=50``, ``max_depth=None``, ``max_iter=5`` (imputer), ``n_jobs=1``, ``tune.enabled=False``.
-- RF ``balanced``: ``n_estimators=200``, ``max_depth=None``, ``max_iter=10``, ``n_jobs=1``, ``tune.enabled=False``, ``n_trials=100``.
-- RF ``thorough``: ``n_estimators=500``, ``max_depth=50``, ``max_iter=20``, ``n_jobs=1``, ``tune.enabled=False``, ``n_trials=250``.
+- RF ``fast``
 
-- HGB ``fast``: ``n_estimators=50``, ``learning_rate=0.2``, ``max_depth=None``, ``max_iter=5``, ``tune.enabled=False``, ``n_trials=50``.
-- HGB ``balanced``: ``n_estimators=150``, ``learning_rate=0.1``, ``max_depth=None``, ``max_iter=10``, ``tune.enabled=False``, ``n_trials=100``.
-- HGB ``thorough``: ``n_estimators=500``, ``learning_rate=0.05``, ``n_iter_no_change=20``, ``max_depth=None``, ``max_iter=20``, ``tune.enabled=False``, ``n_trials=250``.
+  - ``model``: ``n_estimators=50``, ``max_depth=None``.
+  - ``imputer``: ``max_iter=5``.
+  - ``io``: ``n_jobs=1``.
+  - ``tune``: ``enabled=False``.
+- RF ``balanced``
+
+  - ``model``: ``n_estimators=200``, ``max_depth=None``.
+  - ``imputer``: ``max_iter=10``.
+  - ``io``: ``n_jobs=1``.
+  - ``tune``: ``enabled=False``, ``n_trials=100``.
+- RF ``thorough``
+
+  - ``model``: ``n_estimators=500``, ``max_depth=50``.
+  - ``imputer``: ``max_iter=20``.
+  - ``io``: ``n_jobs=1``.
+  - ``tune``: ``enabled=False``, ``n_trials=250``.
+
+- HGB ``fast``
+
+  - ``model``: ``n_estimators=50``, ``learning_rate=0.2``, ``max_depth=None``.
+  - ``imputer``: ``max_iter=5``.
+  - ``tune``: ``enabled=False``, ``n_trials=50``.
+- HGB ``balanced``
+
+  - ``model``: ``n_estimators=150``, ``learning_rate=0.1``, ``max_depth=None``.
+  - ``imputer``: ``max_iter=10``.
+  - ``tune``: ``enabled=False``, ``n_trials=100``.
+- HGB ``thorough``
+
+  - ``model``: ``n_estimators=500``, ``learning_rate=0.05``, ``n_iter_no_change=20``, ``max_depth=None``.
+  - ``imputer``: ``max_iter=20``.
+  - ``tune``: ``enabled=False``, ``n_trials=250``.
 
 Quick override tips
 -------------------
