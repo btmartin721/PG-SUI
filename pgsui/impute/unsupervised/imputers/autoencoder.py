@@ -494,14 +494,22 @@ class ImputeAutoencoder(BaseNNImputer):
         ), f"[{self.model_name}] missing entries remain in imputed_array after imputation."
 
         # Decode to IUPAC & optionally plot
-        imputed_genotypes = self.decode_012(imputed_array)
+        decode_input = imputed_array
+        if self.is_haploid:
+            decode_input = imputed_array.copy()
+            decode_input[decode_input == 1] = 2
+        imputed_genotypes = self.decode_012(decode_input)
 
         assert np.all(
             imputed_genotypes != "N"
         ), f"[{self.model_name}] missing entries remain in imputed_genotypes after imputation."
 
         if self.show_plots:
-            original_genotypes = self.decode_012(X_to_impute)
+            original_input = X_to_impute
+            if self.is_haploid:
+                original_input = X_to_impute.copy()
+                original_input[original_input == 1] = 2
+            original_genotypes = self.decode_012(original_input)
             plt.rcParams.update(self.plotter_.param_dict)
             self.plotter_.plot_gt_distribution(original_genotypes, is_imputed=False)
             self.plotter_.plot_gt_distribution(imputed_genotypes, is_imputed=True)
@@ -1274,10 +1282,19 @@ class ImputeAutoencoder(BaseNNImputer):
 
             # IUPAC decode & 10-base integer report
             # FIX 4: Use current shape (X_val.shape) not self.num_features_
-            y_true_dec = self.decode_012(GT_ref.reshape(X_val.shape[0], X_val.shape[1]))
+            y_true_matrix = GT_ref.reshape(X_val.shape[0], X_val.shape[1])
+            if self.is_haploid:
+                y_true_matrix = y_true_matrix.copy()
+                y_true_matrix[y_true_matrix == 1] = 2
+            y_true_dec = self.decode_012(y_true_matrix)
+
             X_pred = X_val.copy()
             X_pred[eval_mask] = y_pred_flat
-            y_pred_dec = self.decode_012(X_pred.reshape(X_val.shape[0], X_val.shape[1]))
+            y_pred_matrix = X_pred.reshape(X_val.shape[0], X_val.shape[1])
+            if self.is_haploid:
+                y_pred_matrix = y_pred_matrix.copy()
+                y_pred_matrix[y_pred_matrix == 1] = 2
+            y_pred_dec = self.decode_012(y_pred_matrix)
 
             encodings_dict = {
                 "A": 0,
