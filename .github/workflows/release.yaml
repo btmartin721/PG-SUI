@@ -7,40 +7,62 @@ on:
   workflow_dispatch:
 
 jobs:
-  tests:
-    name: Unit tests (pip)
+  wait-unit-tests:
+    name: Wait for unit-tests workflow
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.11", "3.12"]
+    permissions:
+      actions: read
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Clean test artifacts
-        run: rm -rf dist build .pytest_cache tmp_test_output
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-          cache: pip
-
-      - name: Install dependencies
+      - name: Wait for unit-tests success
         env:
-          MPLCONFIGDIR: ${{ runner.temp }}/mpl
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ github.sha }}
         run: |
-          python -m pip install -U pip
-          python -m pip install ".[dev,gui]"
+          set -euo pipefail
 
-      - name: Run tests
-        env:
-          MPLCONFIGDIR: ${{ runner.temp }}/mpl
-        run: pytest -q
+          workflow_id=$(gh api repos/${{ github.repository }}/actions/workflows --jq '.workflows[] | select(.name=="unit-tests") | .id' | head -n 1)
+          if [[ -z "${workflow_id:-}" ]]; then
+            echo "Could not find unit-tests workflow id in repository workflows."
+            exit 1
+          fi
+
+          echo "Waiting for unit-tests workflow (id: $workflow_id) to finish for SHA $TARGET_SHA"
+
+          for attempt in {1..40}; do
+            run_info=$(gh api "repos/${{ github.repository }}/actions/workflows/${workflow_id}/runs" \
+              --jq 'first(.workflow_runs[] | select(.head_sha=="'"${TARGET_SHA}"'"))')
+
+            if [[ -z "${run_info:-}" || "$run_info" == "null" ]]; then
+              echo "No matching unit-tests run yet (attempt $attempt/40); sleeping 30s..."
+              sleep 30
+              continue
+            fi
+
+            status=$(echo "$run_info" | jq -r '.status')
+            conclusion=$(echo "$run_info" | jq -r '.conclusion // ""')
+            url=$(echo "$run_info" | jq -r '.html_url')
+
+            echo "unit-tests workflow run: $url (status=$status, conclusion=$conclusion)"
+
+            if [[ "$status" == "completed" ]]; then
+              if [[ "$conclusion" == "success" ]]; then
+                echo "unit-tests workflow completed successfully."
+                exit 0
+              else
+                echo "unit-tests workflow finished with conclusion=$conclusion"
+                exit 1
+              fi
+            fi
+
+            sleep 30
+          done
+
+          echo "Timed out waiting for unit-tests workflow to complete."
+          exit 1
 
   build-and-publish:
     runs-on: ubuntu-latest
-    needs: tests
+    needs: wait-unit-tests
     permissions:
       contents: write
     steps:

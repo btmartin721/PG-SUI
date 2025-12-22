@@ -51,6 +51,24 @@ def _configure_matplotlib_cache(tmp_path_factory: pytest.TempPathFactory) -> Non
     os.environ.setdefault("MPLCONFIGDIR", str(cache_dir))
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _force_plot_show_off_for_tests() -> None:
+    """Force PlotConfig.show to False when requested by CI."""
+    flag = os.environ.get("PGSUI_TEST_DISABLE_PLOTS", "").strip().lower()
+    if flag not in {"1", "true", "yes"}:
+        return
+
+    from pgsui.data_processing.containers import PlotConfig
+
+    orig_init = PlotConfig.__init__
+
+    def _patched_init(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        kwargs["show"] = False
+        orig_init(self, *args, **kwargs)
+
+    PlotConfig.__init__ = _patched_init  # type: ignore[assignment]
+
+
 @pytest.fixture(scope="session")
 def example_vcf_path() -> Path:
     return (
