@@ -14,7 +14,7 @@ Key Design (at a glance)
 - **Typed configs**: each imputer uses a ``*Config`` dataclass (e.g., ``VAEConfig``, ``NLPCAConfig``, ``UBPConfig``) with presets (``fast``, ``balanced``, ``thorough``).
 - **Workflow**: pass a SNPio ``GenotypeData`` at construction → ``fit()`` → ``transform()`` (no arguments).
 - **Overrides**: presets ⇢ YAML (optional) ⇢ explicit overrides via dot-keys; CLI mirrors the same precedence.
-- **CLI overrides**: ``pg-sui`` exposes ``--sim-strategy``, ``--sim-prop``, and ``--simulate-missing`` so you can globally control missing-data simulation per run without editing YAML.
+- **CLI overrides**: ``pg-sui`` exposes ``--sim-strategy``, ``--sim-prop``, and ``--disable-simulate-missing`` so you can globally control missing-data simulation per run without editing YAML (``--disable-simulate-missing`` is for supervised/deterministic runs; unsupervised models require simulated masking).
 - **Evaluation**: macro-F1 and macro-PR with zygosity-aware summaries to address genomic class imbalance.
 - **Plotting**: confusion matrices, PR curves, and imputation accuracy stratified by MAF bins.
 - **Hyperparameter tuning**: built-in support for automated hyperparameter optimization with flexible search spaces.
@@ -34,7 +34,7 @@ Unsupervised models in PG-SUI are purpose-built for genomic data:
 
 These models learn structure from observed entries and then infer true missing genotypes:
 
-1. **Train on observed values**: real missings are masked; optional simulated masking during training improves robustness.
+1. **Train on observed values**: real missings are masked; simulated masking is required for unsupervised evaluation and training.
 2. **Predict true missings**: after training, the model predicts the masked cells to yield a complete matrix.
 
 Detailed Unsupervised Deep Learning Imputation
