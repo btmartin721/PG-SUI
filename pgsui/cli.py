@@ -49,6 +49,11 @@ from typing import (
 
 from snpio import GenePopReader, PhylipReader, SNPioMultiQC, TreeParser, VCFReader
 
+try:
+    from snpio import StructureReader
+except ImportError:
+    StructureReader = None
+
 from pgsui import (
     AutoencoderConfig,
     ImputeAutoencoder,
@@ -303,6 +308,59 @@ def _parse_overrides(pairs: list[str]) -> dict:
     return out
 
 
+def _parse_allele_encoding(arg: str) -> dict:
+    """Parse STRUCTURE allele encoding dict from JSON or Python literal."""
+    try:
+        payload = json.loads(arg)
+    except Exception:
+        try:
+            payload = ast.literal_eval(arg)
+        except Exception as e:
+            raise argparse.ArgumentTypeError(
+                f"Invalid --structure-allele-encoding; must be a dict. Error: {e}"
+            ) from e
+
+    if not isinstance(payload, dict):
+        raise argparse.ArgumentTypeError(
+            "--structure-allele-encoding must be a dict-like mapping."
+        )
+
+    out: dict = {}
+    for k, v in payload.items():
+        key = k
+        if isinstance(k, str):
+            k_strip = k.strip()
+            if k_strip.lstrip("-").isdigit():
+                try:
+                    key = int(k_strip)
+                except Exception:
+                    key = k
+        out[key] = str(v)
+    return out
+
+
+def _normalize_input_format(fmt: str) -> str:
+    """Normalize format aliases into canonical reader names."""
+    fmt = fmt.lower()
+    if fmt in {"vcf", "vcf.gz"}:
+        return "vcf"
+    if fmt in {"phy", "phylip"}:
+        return "phylip"
+    if fmt in {"gen", "genepop"}:
+        return "genepop"
+    if fmt in {"str", "structure"}:
+        return "structure"
+    return fmt
+
+
+def _normalize_plot_format(fmt: str) -> str:
+    """Normalize plot format aliases to reader-supported values."""
+    fmt = fmt.lower()
+    if fmt == "jpeg":
+        return "jpg"
+    return fmt
+
+
 def _args_to_cli_overrides(args: argparse.Namespace) -> dict:
     """Convert explicitly provided CLI flags into config dot-overrides."""
     overrides: dict = {}
@@ -414,7 +472,16 @@ def log_model_time(fn: Callable[P, R]) -> Callable[P, R]:
 # ------------------------------ Core Runner ------------------------------ #
 def build_genotype_data(
     input_path: str,
-    fmt: Literal["vcf", "vcf.gz", "phy", "phylip", "genepop", "gen"],
+    fmt: Literal[
+        "vcf",
+        "vcf.gz",
+        "phy",
+        "phylip",
+        "genepop",
+        "gen",
+        "structure",
+        "str",
+    ],
     popmap_path: str | None,
     treefile: str | None,
     qmatrix: str | None,
@@ -422,7 +489,11 @@ def build_genotype_data(
     force_popmap: bool,
     debug: bool,
     include_pops: List[str] | None,
-    plot_format: Literal["pdf", "png", "jpg", "jpeg"],
+    plot_format: Literal["pdf", "png", "jpg", "jpeg", "svg"],
+    structure_has_popids: bool = False,
+    structure_has_marker_names: bool = False,
+    structure_allele_start_col: int | None = None,
+    structure_allele_encoding: dict | None = None,
 ):
     """Load genotype data from heterogeneous inputs.
 
@@ -437,8 +508,14 @@ def build_genotype_data(
         debug (bool): Whether to enable debug-level logging in SNPio readers.
         include_pops (List[str] | None): Optional list of population IDs to include.
         plot_format (Literal): Figure format for SNPio plots.
+        structure_has_popids (bool): STRUCTURE only; whether pop IDs are present.
+        structure_has_marker_names (bool): STRUCTURE only; whether the first line has marker names.
+        structure_allele_start_col (int | None): STRUCTURE only; zero-based allele start column.
+        structure_allele_encoding (dict | None): STRUCTURE only; allele encoding map.
     """
-    logging.info(f"Loading {fmt.upper()} and popmap data...")
+    fmt_norm = _normalize_input_format(fmt)
+    plot_format = _normalize_plot_format(plot_format)
+    logging.info(f"Loading {fmt_norm.upper()} and popmap data...")
 
     kwargs = {
         "filename": input_path,
@@ -450,12 +527,27 @@ def build_genotype_data(
         "plot_format": plot_format,
     }
 
-    if fmt == "vcf":
+    if fmt_norm == "vcf":
         gd = VCFReader(**kwargs)
-    elif fmt == "phylip":
+    elif fmt_norm == "phylip":
         gd = PhylipReader(**kwargs)
-    elif fmt == "genepop":
+    elif fmt_norm == "genepop":
         gd = GenePopReader(**kwargs)
+    elif fmt_norm == "structure":
+        if StructureReader is None:
+            raise ImportError(
+                "StructureReader is not available in the installed snpio version. "
+                "Please upgrade snpio or use a supported format."
+            )
+        kwargs.update(
+            {
+                "has_popids": structure_has_popids,
+                "has_marker_names": structure_has_marker_names,
+                "allele_start_col": structure_allele_start_col,
+                "allele_encoding": structure_allele_encoding,
+            }
+        )
+        gd = StructureReader(**kwargs)
     else:
         raise ValueError(f"Unsupported genotype data format: {fmt}")
 
@@ -878,6 +970,32 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="Force use of provided popmap even if samples don't match exactly. This will drop samples not in the popmap and vice versa.",
     )
 
+    # -------------------------- STRUCTURE options ------------------------- #
+    parser.add_argument(
+        "--structure-has-popids",
+        action="store_true",
+        default=False,
+        help="STRUCTURE only: second column contains population IDs.",
+    )
+    parser.add_argument(
+        "--structure-has-marker-names",
+        action="store_true",
+        default=False,
+        help="STRUCTURE only: first row contains marker names.",
+    )
+    parser.add_argument(
+        "--structure-allele-start-col",
+        type=int,
+        default=argparse.SUPPRESS,
+        help="STRUCTURE only: zero-based column index where alleles begin.",
+    )
+    parser.add_argument(
+        "--structure-allele-encoding",
+        type=_parse_allele_encoding,
+        default=argparse.SUPPRESS,
+        help="STRUCTURE only: allele encoding mapping as JSON or Python dict.",
+    )
+
     # ---------------------------- Model selection -------------------------- #
     parser.add_argument(
         "--models",
@@ -968,6 +1086,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             fmt_final = "phylip"
         elif input_path.endswith((".genepop", ".gen")):
             fmt_final = "genepop"
+        elif input_path.endswith((".str", ".stru", ".structure")):
+            fmt_final = "structure"
         else:
             logging.error(
                 "Could not infer input format from file extension. Please provide --format."
@@ -978,12 +1098,28 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 2
     else:
         fmt_final = cast(
-            Literal["vcf", "vcf.gz", "phy", "phylip", "genepop", "gen"], fmt
+            Literal[
+                "vcf",
+                "vcf.gz",
+                "phy",
+                "phylip",
+                "genepop",
+                "gen",
+                "structure",
+                "str",
+            ],
+            fmt,
         )
+
+    fmt_final = _normalize_input_format(fmt_final)
 
     popmap_path = getattr(args, "popmap", None)
     include_pops = getattr(args, "include_pops", None)
     force_popmap = bool(getattr(args, "force_popmap", False))
+    structure_has_popids = bool(getattr(args, "structure_has_popids", False))
+    structure_has_marker_names = bool(getattr(args, "structure_has_marker_names", False))
+    structure_allele_start_col = getattr(args, "structure_allele_start_col", None)
+    structure_allele_encoding = getattr(args, "structure_allele_encoding", None)
 
     # Canonical prefix for this run (used for outputs and MultiQC)
     prefix: str = getattr(args, "prefix", str(Path(input_path).stem))
@@ -1017,6 +1153,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         include_pops=include_pops,
         debug=getattr(args, "debug", False),
         plot_format=getattr(args, "plot_format", "pdf"),
+        structure_has_popids=structure_has_popids,
+        structure_has_marker_names=structure_has_marker_names,
+        structure_allele_start_col=structure_allele_start_col,
+        structure_allele_encoding=structure_allele_encoding,
     )
 
     if getattr(args, "dry_run", False):
