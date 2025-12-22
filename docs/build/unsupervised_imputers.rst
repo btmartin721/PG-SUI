@@ -16,7 +16,7 @@ Workflow Highlights
 Configuration
 -------------
 
-Each imputer exposes the same top-level sections: ``io`` (run identity + logging), ``model`` (architecture), ``train`` (optimizer schedule, class weighting, early stopping), ``tune`` (Optuna surface), ``evaluate`` (latent refinement controls), and ``plot`` (figure styling). Presets (``fast``, ``balanced``, ``thorough``) trade accuracy for runtime, and YAML configs may declare a preset before overriding individual fields. Heavy class imbalance can be tempered by ``train.weights_beta`` / ``train.weights_max_ratio``; layer widths are governed by ``model.layer_schedule`` and ``model.layer_scaling_factor``.
+Each imputer exposes the same top-level sections: ``io`` (run identity + logging), ``model`` (architecture), ``train`` (optimizer schedule, class weighting, early stopping), ``tune`` (Optuna surface), ``evaluate`` (latent refinement controls), and ``plot`` (figure styling). Presets (``fast``, ``balanced``, ``thorough``) trade accuracy for runtime; select them via ``--preset`` or ``*.from_preset(...)`` and then overlay YAML/CLI overrides. Heavy class imbalance can be tempered by ``train.weights_beta`` / ``train.weights_max_ratio``; layer widths are governed by ``model.layer_schedule`` and ``model.layer_scaling_factor``.
 
 .. tip::
 
@@ -55,7 +55,7 @@ Extends the NLPCA options with UBP-specific presets tuned for class imbalance an
 Variational Autoencoder (Config)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Adds a ``vae`` section (``kl_beta``) to the autoencoder defaults, controlling KL annealing.
+Adds a ``vae`` section (``kl_beta``) to the autoencoder defaults, controlling the KL weight.
 
 .. autoclass:: pgsui.data_processing.containers.VAEConfig
    :members:
@@ -93,8 +93,8 @@ Autoencoder (ImputeAutoencoder)
 Variational Autoencoder (ImputeVAE)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-- Extends the autoencoder with a KL divergence term whose strength is annealed via ``vae.kl_beta``.
-- Shares the focal cross-entropy schedule with the standard autoencoder (``model.gamma`` ramp) and records the annealed ``beta``/``gamma`` per epoch.
+- Extends the autoencoder with a KL divergence term weighted by ``vae.kl_beta`` (or tuned via Optuna).
+- Uses focal cross-entropy reconstruction with ``model.gamma`` (fixed unless tuned).
 - Hyperparameter tuning reuses the autoencoder search surface while keeping the latent evaluator disabled (VAEs rely on decoder logits during validation).
 - ``transform()`` predicts class probabilities across genotypes, fills masked entries with MAP labels, and emits IUPAC arrays with paired distribution plots.
 
@@ -123,7 +123,7 @@ CLI usage mirrors the Python API:
 .. code-block:: bash
 
    pg-sui \
-      --vcf cohort.vcf.gz \
+      --input cohort.vcf.gz \
       --models ImputeNLPCA ImputeUBP \
       --preset thorough \
       --set io.prefix=nlpca_vs_ubp \
@@ -131,4 +131,4 @@ CLI usage mirrors the Python API:
       --sim-strategy random_weighted \
       --sim-prop 0.20
 
-``--sim-strategy`` and ``--sim-prop`` apply to every selected neural model, ensuring the same simulated-missingness mask is used throughout evaluation. Pass ``--simulate-missing`` if you want to rely solely on organically missing calls for a diagnostic run. See :ref:`simulated_missingness` for how each strategy behaves.
+``--sim-strategy`` and ``--sim-prop`` apply to every selected neural model. Each imputer simulates missingness independently; set ``sim.sim_kwargs.seed`` if you need identical masks across runs. Unsupervised models require simulated masking, so keep ``sim.simulate_missing=True`` (disabling it raises an error). See :ref:`simulated_missingness` for how each strategy behaves.
