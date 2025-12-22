@@ -95,7 +95,7 @@ from snpio import VCFReader
 # Read in VCF alignment.
 # SNPio also supports PHYLIP, STRUCTURE, and GENEPOP input file formats.
 data = VCFReader(
-    filename="pgsui/example_data/phylogen_subset14K.vcf.gz,
+    filename="pgsui/example_data/phylogen_subset14K.vcf.gz",
     popmapfile="pgsui/example_data/popmaps/phylogen_nomx.popmap", # optional
     force_popmap=True, # optional
 )
@@ -134,7 +134,7 @@ ae.fit()
 ae_imputed = ae.transform()
 ```
 
-The ``*_imputed`` objects will be NumPy arrays that are compatible with SNPio's ``GenotypeData`` objects.
+The ``*_imputed`` objects are NumPy arrays of IUPAC single-character codes that are compatible with SNPio's ``GenotypeData`` objects.
 
 ### Supervised Imputers
 
@@ -188,7 +188,7 @@ Recent releases add explicit switches for the simulated-missingness workflow sha
 
 + ``--sim-strategy`` selects one of ``random``, ``random_weighted``, ``random_weighted_inv``, ``nonrandom``, ``nonrandom_weighted``.
 + ``--sim-prop`` sets the proportion of observed calls to temporarily mask when building the evaluation set.
-+ ``--simulate-missing`` disables simulated masking entirely (store-false flag); omit it to inherit preset/YAML defaults or re-enable via ``--set sim.simulate_missing=True``.
++ ``--disable-simulate-missing`` disables simulated masking for supervised/deterministic runs; unsupervised models require simulated masking.
 
 Example:
 
@@ -207,6 +207,17 @@ pg-sui \
 ```
 
 CLI overrides cascade into every selected model, so a single invocation can evaluate multiple imputers with a consistent simulation strategy and output prefix.
+
+STRUCTURE inputs accept a few extra flags for parsing metadata:
+
+``` shell
+pg-sui \
+  --input data.str \
+  --format structure \
+  --structure-has-popids \
+  --structure-allele-start-col 2 \
+  --structure-allele-encoding '{"1":"A","2":"C","3":"G","4":"T","-9":"N"}'
+```
 
 ## References
 
