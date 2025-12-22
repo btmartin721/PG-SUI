@@ -25,13 +25,13 @@ What's included
 Shared behavior & outputs
 -------------------------
 
-- **Evaluation protocol:** single TRAIN/TEST split by samples; on TEST rows, *all originally
-  observed* cells are masked for unbiased reconstruction scoring; metrics are computed on
-  those masked cells.
+- **Evaluation protocol:** single TRAIN/TEST split by samples; on TEST rows, either a
+  simulated-missingness mask (``sim.simulate_missing=True``) or all originally observed
+  cells (when disabled) are used for scoring.
 - **Metrics & figures:** macro F1/PR/accuracy at zygosity level (REF/HET/ALT, with
   haploid folding), and IUPAC-10 classification plus confusion matrices; genotype
   distribution plots pre/post imputation.
-- **I/O layout:** artifacts are written under ``{prefix}_output/Deterministic/{plots,metrics,models,optimize}/{Model}/``.
+- **I/O layout:** artifacts are written under ``{prefix}_output/Deterministic/{plots,metrics,models,optimize,parameters}/{Model}/``.
 
 Quick start (Python)
 --------------------
@@ -74,14 +74,15 @@ Quick start (Python)
 YAML configuration
 ------------------
 
-Both imputers accept a YAML file (merged with an optional ``preset``) and support
-dot-path overrides in the CLI (and in Python via helpers). Minimal examples:
+Both imputers accept a YAML file that overlays dataclass defaults (or a CLI-selected
+preset) and support dot-path overrides in the CLI (and in Python via helpers). The
+``preset`` key is CLI-only, so select it with ``--preset`` or ``*.from_preset(...)``.
+Minimal examples:
 
 **MostFrequent (``mostfrequent.yaml``)**
 
 .. code-block:: yaml
 
-   preset: balanced
    io:
      prefix: "mf_yaml"
    split:
@@ -99,7 +100,6 @@ dot-path overrides in the CLI (and in Python via helpers). Minimal examples:
 
 .. code-block:: yaml
 
-   preset: fast
    io:
      prefix: "ref_yaml"
    split:
@@ -121,7 +121,7 @@ These deterministic models follow the same CLI precedence model as the rest of P
 
    # Most-frequent, population-aware, YAML + a final override
    pg-sui \
-     --vcf data.vcf.gz \
+     --input data.vcf.gz \
      --popmap pops.popmap \
      --models ImputeMostFrequent \
      --preset balanced \
@@ -131,12 +131,12 @@ These deterministic models follow the same CLI precedence model as the rest of P
 
    # REF-allele baseline
    pg-sui \
-     --vcf data.vcf.gz \
+     --input data.vcf.gz \
      --models ImputeRefAllele \
      --preset fast \
      --set io.prefix=ref_cli
 
-Even deterministic runs honour ``--sim-strategy``/``--sim-prop``/``--simulate-missing`` so you can align their evaluation masks with neural/supervised models for cross-family comparisons.
+Even deterministic runs honour ``--sim-strategy``/``--sim-prop`` and ``--disable-simulate-missing``; you can also set ``sim.simulate_missing=False`` via YAML or ``--set`` for cross-family comparisons.
 
 Configuration dataclasses
 -------------------------
