@@ -4,7 +4,7 @@ PG-SUI Tutorial
 Overview
 --------
 
-**PG-SUI** (Population Genomic Supervised & Unsupervised Imputation) performs missing-data imputation on SNP genotype matrices using **Deterministic** and **Unsupervised** model families. It integrates tightly with `SNPio <https://github.com/btmartin721/SNPio>`_ for reading, filtering, and writing genotype datasets, and emphasizes **unsupervised deep learning** approaches tuned for class imbalance and diploid (3-class) genotype representations. Unsupervised neural approaches (e.g., non-linear PCA and autoencoding families) are inspired by prior work on representation learning and generative modeling (Scholz et al., 2005; Hinton & Salakhutdinov, 2006; Kingma & Welling, 2013), while the Unsupervised Backpropagation approach follows the imputation framing of Gashler et al. (2016).
+**PG-SUI** (Population Genomic Supervised & Unsupervised Imputation) performs missing-data imputation on SNP genotype matrices using **Deterministic**, **Supervised**, and **Unsupervised** model families. It integrates tightly with `SNPio <https://github.com/btmartin721/SNPio>`__ for reading, filtering, and writing genotype datasets, and emphasizes **unsupervised deep learning** approaches tuned for class imbalance and diploid (3-class) genotype representations. Unsupervised neural approaches (e.g., non-linear PCA and autoencoding families) are inspired by prior work on representation learning and generative modeling (Scholz et al., 2005; Hinton & Salakhutdinov, 2006; Kingma & Welling, 2013), while the Unsupervised Backpropagation approach follows the imputation framing of Gashler et al. (2016).
 
 PG-SUI supports both a command-line interface (CLI) for scripted workflows and a Python API for programmatic control.
 
@@ -16,14 +16,17 @@ What's new
 - **YAML configuration files** (``--config path.yaml``) to persist experiments; YAML merges with presets and can be partially specified.
 - **Refactored CLI** with a clear precedence model:
 
-  ``code defaults  <  preset (--preset)  <  YAML (--config)  <  explicit CLI flags  <  --set k=v``
+  ``code defaults  <  preset (--preset)  <  YAML (--config)  <  explicit CLI flags  <  --set k=v``,
 
   where ``--set`` applies deep dot-path overrides (e.g., ``--set model.latent_dim=16``).
 
-- **Best-parameter loading** via ``--load-best-params``:
+- **Best-parameter loading** via ``--load-best-params``
+
   - Loads prior best parameters per selected model from the previous run's output directory.
   - **Forces tuning OFF** (even if YAML/CLI/``--set`` attempts to re-enable tuning).
-- **Validation-loss enhancements (ImputeUBP)**:
+
+- **Validation-loss enhancements (ImputeUBP)**
+
   - Validation evaluation is now explicitly mask-aware (e.g., evaluates on simulated-missing entries when applicable).
   - Added stable validation latent inference and schema-aware caching to avoid invalid reuse across shapes/classes.
   - Optuna pruning hooks can use validation metrics reliably during the final phase (when enabled by config).
@@ -38,27 +41,46 @@ Model Families
 --------------
 
 - **Deterministic (Baselines)**
-  - ``ImputeMostFrequent`` — per-locus mode imputation (global or population-aware).
-  - ``ImputeRefAllele`` — fills missing diploid genotypes with the REF (0) state.
+
+  - ``ImputeMostFrequent``: per-locus mode imputation (global or population-aware). The population-aware variant uses ``popmap`` groups to compute modes per subpopulation.
+  - ``ImputeRefAllele``: fills missing genotypes with the REF (0) state.
 
 - **Unsupervised (Deep Learning)**
-  - ``ImputeNLPCA`` — Non-linear PCA with optional latent optimization (Scholz et al., 2005).
-  - ``ImputeUBP`` — Unsupervised Backpropagation with joint latent + weight training (Gashler et al., 2016).
-  - ``ImputeAutoencoder`` — Standard autoencoder reconstruction (Hinton & Salakhutdinov, 2006).
-  - ``ImputeVAE`` — Variational Autoencoder with KL regularization (Kingma & Welling, 2013).
+
+  - ``ImputeNLPCA``: Non-linear PCA with optional latent optimization (Scholz et al., 2005).
+  - ``ImputeUBP``: Unsupervised Backpropagation with joint latent + weight training (Gashler et al., 2016).
+  - ``ImputeAutoencoder``: Standard autoencoder reconstruction (Hinton & Salakhutdinov, 2006).
+  - ``ImputeVAE``: Variational Autoencoder with KL regularization (Kingma & Welling, 2013).
+
+- **Supervised (Tree-based)**
+
+  - ``ImputeRandomForest``: IterativeImputer + RandomForestClassifier.
+  - ``ImputeHistGradientBoosting``: IterativeImputer + HistGradientBoostingClassifier.
+
+.. warning::
+
+    Supervised models can take significantly longer to run than unsupervised models due to the computationally expensive, iterative nature of the scikit-learn `IterativeImputer <https://scikit-learn.org/stable/modules/generated/sklearn.impute.IterativeImputer.html#sklearn.impute.IterativeImputer>`__. Per the scikit-learn documentation, "the computational cost of each iteration is :math:`O(k\,n\,p^3\min(n, p))`, where ``k=max_iter``, ``n`` is the number of samples, and ``p`` is the number of features. Setting ``n_nearest_features << n_features``, ``skip_complete=True`` or increasing ``tol`` can help to reduce its computational cost."
 
 .. note::
 
-   **Fit/transform contract:** ``fit()`` and ``transform()`` do **not** accept genotype inputs. Each model is constructed with a ``genotype_data`` object and a typed ``*Config``. Then call ``fit()`` and ``transform()`` in sequence.
+   **Fit/ transform:** ``fit()`` and ``transform()`` do **not** accept genotype inputs. Each model is constructed with a `SNPio <https://snpio.readthedocs.io/en/latest/>`__ ``GenotypeData`` object and a typed ``*Config``. Then call ``fit()`` and ``transform()`` in sequence.
 
 Installation
 ------------
+
+PG-SUI can be installed via pip, Anaconda, or Docker. See the instructions below and the :doc:`install` page for more details. Currently, PG-SUI requires Python 3.11 or 3.12, and depends on `SNPio <https://snpio.readthedocs.io/en/latest/>`__ for genotype I/O and preprocessing. Windows is not officially supported at this time, but should work within `WSL2 (Windows Subsystem for Linux 2) <https://learn.microsoft.com/en-us/windows/wsl/install>`__ or a compatible Docker environment.
+
+Pip installation
+^^^^^^^^^^^^^^^^
 
 Install PG-SUI with pip (ideally in a fresh virtual environment):
 
 .. code-block:: bash
 
-    pip install pg-sui            # CLI + Python API
+    pip install pg-sui
+
+Anaconda installation
+^^^^^^^^^^^^^^^^^^^^^
 
 An Anaconda package is also available on `Anaconda Cloud <https://anaconda.org/btmartin721/pg-sui>`__.
 
@@ -67,6 +89,9 @@ An Anaconda package is also available on `Anaconda Cloud <https://anaconda.org/b
     conda create -n pgsui-env python=3.12
     conda activate pgsui-env
     conda install -c btmartin721 pg-sui
+
+Docker installation
+^^^^^^^^^^^^^^^^^^^
 
 Finally, a Docker image is available on `Docker Hub <https://hub.docker.com/r/btmartin721/pg-sui>`__:
 
@@ -80,39 +105,61 @@ See :doc:`install` for more detail. PG-SUI expects genotype I/O via `SNPio <http
 Data Input, Encodings, and Conventions
 --------------------------------------
 
-PG-SUI uses SNPio's ``GenotypeData`` object.
+PG-SUI uses `SNPio's <https://snpio.readthedocs.io/en/latest/>`__  ``GenotypeData`` object.
 
-- **Inputs**: VCF, PHYLIP, or GENEPOP, plus optional ``popmap`` (recommended).
-- **Internal ML encoding** (conceptual): diploids use a 3-class genotype representation (REF/HET/ALT). Missing and/or masked entries are represented with a sentinel value during training/evaluation (implementation-dependent).
-- **Evaluation labels**: ``["REF", "HET", "ALT"]`` for diploids; haploids collapse to two classes.
-- **Output**: ``transform()`` returns an imputed genotype matrix in an encoding compatible with SNPio writers. The CLI writes the imputed dataset back to disk via SNPio (VCF/PHYLIP/GENEPOP).
+- **Inputs**: VCF, PHYLIP, STRUCTURE, or GENEPOP, plus an optional ``popmap`` (population map) file. See `SNPio's documentation <https://snpio.readthedocs.io/en/latest/>`__ for details on supported formats and options.
+- **Internal ML encoding**: diploids use a 3-class genotype representation (REF/HET/ALT), corresponding to integer codes 0/1/2. Haploids are treated as two classes by folding ALT into a binary code (0/1 for training, mapped back to 0/2 when decoded). Missing genotypes are encoded as ``-1`` during model fitting and imputation. REF alleles correspond to the most frequent homozygous genotype at each site (or consensus reference allele if reference genome-aligned VCF input is used). ALT corresponds to homozygous alternate genotypes; HET represents heterozygous genotypes.
+- **Evaluation labels**: ``["REF", "HET", "ALT"]`` for diploids; haploids collapse to two classes (``["REF", "ALT"]``).
+- **Output**: ``transform()`` returns a NumPy array of genotypes decoded from the REF/ HET/ ALT genotypes as IUPAC single-character strings ("A", "T", "G", "C", "R", "Y", "S", "W", "K", "M"). The imputed dataset is written to disk via SNPio in the same format as the input.
 
 CLI Quickstart (copy/paste)
 ---------------------------
 
-1. Place your VCF/PHYLIP/GENEPOP file and optional popmap in a working directory.
-2. Run a preset with two deep models (edit paths/models as needed):
+#. Prepare input files: a VCF (e.g., ``data.vcf.gz``) and optional population map (e.g., ``pops.popmap``).
+#. Run a preset with two deep models (edit paths/ models as needed):
 
-.. code-block:: bash
+   .. code-block:: bash
 
-    pg-sui \
-      --input pgsui/example_data/vcf_files/phylogen_nomx.vcf.gz \
-      --popmap pgsui/example_data/popmaps/test.popmap \
-      --models ImputeUBP ImputeVAE \
-      --preset balanced \
-      --prefix demo \
-      --sim-strategy random_weighted_inv \
-      --sim-prop 0.30 \
-      --tune \
-      --tune-n-trials 100 \
-      --n-jobs 4
+      pg-sui \
+        --input pgsui/example_data/vcf_files/phylogen_subset14K.vcf.gz \
+        --popmap pgsui/example_data/popmaps/test.popmap \
+        --models ImputeUBP ImputeVAE \
+        --preset balanced \
+        --prefix demo \
+        --sim-strategy random_weighted_inv \
+        --sim-prop 0.30 \
+        --tune \
+        --tune-n-trials 100 \
+        --n-jobs 4
 
-3. Optional: add a YAML config (``--config vae_balanced.yaml``), apply quick tweaks with ``--set key=value``, or disable simulated missingness with ``--simulate-missing``.
-4. Outputs and plots are written under ``<prefix>_output/``. The CLI prints paths as it runs.
+#. Optional: add a YAML config (``--config vae_balanced.yaml``) or apply tweaks with ``--set key=value`` command-line flags.
+#. Outputs and plots are written under ``<prefix>_output/``. The CLI prints paths as it runs.
 
 .. note::
 
    The CLI supports ``--input`` as the primary input flag. ``--vcf`` is retained for backward compatibility but is deprecated in favor of ``--input``.
+
+STRUCTURE inputs
+^^^^^^^^^^^^^^^^
+
+STRUCTURE files include a few extra command-line flags compared to the other file formats and can be passed with ``--format structure`` (or inferred from the file extension). Optional flags mirror SNPio's ``StructureReader``:
+
+- ``--structure-has-popids`` (second column contains population IDs)
+- ``--structure-has-marker-names`` (first row contains marker names)
+- ``--structure-allele-start-col <int>`` (zero-based allele start column)
+- ``--structure-allele-encoding '{"1":"A","2":"C","3":"G","4":"T","-9":"N"}'``
+
+Example:
+
+.. code-block:: bash
+
+    pg-sui \
+      --input data.str \
+      --format structure \
+      --structure-has-popids \
+      --structure-allele-start-col 2 \
+      --structure-allele-encoding '{"1":"A","2":"C","3":"G","4":"T","-9":"N"}'
+
 
 Loading best parameters from a previous run
 -------------------------------------------
@@ -129,7 +176,7 @@ Best-parameter search locations
 
 For each selected model, the CLI searches under the prior run's output directory and will accept either tuned or non-tuned best-parameters files:
 
-- Tuned runs (Optuna):
+- Tuned runs (`Optuna <https://optuna.org/>`__):
 
   - ``<prefix>_output/<Family>/optimize/<model>/parameters/best_tuned_parameters.json``
 
@@ -144,7 +191,8 @@ Example usage
 
 .. code-block:: bash
 
-    # Re-run with best parameters from an earlier tuning prefix, with tuning forcibly disabled
+    # Re-run with best parameters from an earlier tuning prefix,
+    # with tuning forcibly disabled
     pg-sui \
       --input data.vcf.gz \
       --popmap pops.popmap \
@@ -156,60 +204,16 @@ Example usage
       --sim-strategy random_weighted_inv \
       --sim-prop 0.30
 
-.. warning::
+.. note::
 
    If you supply ``--tune`` (or ``--set tune.enabled=True``) alongside ``--load-best-params``, PG-SUI will log warnings and proceed with tuning disabled. The best-params layer is intended to reproduce prior tuned settings without re-optimizing.
 
-.. _simulated_missingness:
+Simulated missingness and evaluation
+------------------------------------
 
-Simulated missingness strategies
---------------------------------
-
-PG-SUI can evaluate imputers via a **simulated masking** of observed genotypes so performance can be measured on entries with known truth. Control it via YAML (``sim`` section) or the CLI flags ``--sim-strategy`` and ``--sim-prop``; disable entirely with ``--simulate-missing``.
-
-- ``random`` — Uniform masking across eligible cells until the target proportion is reached.
-- ``random_weighted`` — Column-wise masking weighted by observed genotype frequencies; common genotypes are masked more often.
-- ``random_weighted_inv`` — Column-wise masking weighted inversely by observed genotype frequencies; rarer genotypes are masked more often.
-- ``nonrandom`` — Phylogenetically clustered masking (requires tree inputs).
-- ``nonrandom_weighted`` — Phylogenetically clustered masking with clades sampled proportional to branch length (requires tree inputs).
-
-Use ``--sim-prop`` (0-1) to set the proportion of observed entries to hide.
-
-.. note::
-
-   The CLI flag ``--simulate-missing`` is a store-false toggle. If you pass it, simulated masking is disabled for that run.
-
-Simulation Strategy Summary Table
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-.. list-table:: Summary of missing data simulation strategies
-   :header-rows: 1
-   :widths: auto
-
-   * - Strategy
-     - Selection logic
-     - Biologically mimics
-     - Expected Difficulty
-   * - Random
-     - Uniform coin flip per cell
-     - Random sequencing errors; random read-depth fluctuations
-     - Easy
-   * - Random weighted
-     - Probability proportional to genotype frequency (masks common)
-     - Reference bias / over-representation of common alleles
-     - Moderate
-   * - Random weighted inv
-     - Probability inversely proportional to genotype frequency (masks rare)
-     - Allelic dropout / minor-allele loss; ascertainment bias
-     - Hard
-   * - Nonrandom
-     - Pick a clade and mask together (tree required)
-     - Primer-site mutation / clade-specific dropout
-     - Hard
-   * - Nonrandom weighted
-     - Clade sampling proportional to branch length (tree required)
-     - Divergence-driven dropout on long branches
-     - Very hard
+PG-SUI evaluates models by masking observed genotypes and scoring only
+those held-out entries. See :doc:`simulate` for the full strategy
+definitions, tree-based options, and evaluation workflow details.
 
 Quick Start (End-to-End VAE Example)
 ------------------------------------
@@ -220,7 +224,7 @@ Quick Start (End-to-End VAE Example)
     from pgsui import VAEConfig, ImputeVAE
 
     gd = VCFReader(
-        filename="pgsui/example_data/vcf_files/phylogen_nomx.vcf.gz",
+        filename="pgsui/example_data/vcf_files/phylogen_subset14K.vcf.gz",
         popmapfile="pgsui/example_data/popmaps/test.popmap",
         prefix="pgsui_demo",
         force_popmap=True,
@@ -271,7 +275,7 @@ Example YAML - ``vae_balanced.yaml``
 
     io:
       prefix: "vae_demo"
-      plot_format: "pdf"
+      seed: 42
 
     model:
       latent_dim: 16
@@ -287,7 +291,6 @@ Example YAML - ``vae_balanced.yaml``
       max_epochs: 1000
       validation_split: 0.20
       device: "cpu"
-      seed: 42
 
     tune:
       enabled: true
@@ -301,6 +304,7 @@ Example YAML - ``vae_balanced.yaml``
       sim_prop: 0.30
 
     plot:
+      fmt: "pdf"
       show: false
       dpi: 300
 
@@ -357,21 +361,14 @@ Typical CLI usage
       --set io.prefix=vae_vs_ubp \
       --set model.latent_dim=32
 
-    # Disable simulated masking (store_false toggle)
-    pg-sui \
-      --input cohort.vcf.gz \
-      --models ImputeVAE \
-      --simulate-missing \
-      --prefix vae_observed_only
-
-Unsupervised Backpropagation (ImputeUBP): validation-loss behavior
+Unsupervised Backpropagation (ImputeUBP): Validation-loss behavior
 ------------------------------------------------------------------
 
 ImputeUBP supports periodic validation evaluation during training. In current implementations:
 
-- Validation scoring is mask-aware when simulated masking is active (i.e., it can score on the intended held-out entries rather than all unobserved/missing cells).
-- Validation latent inference is stabilized via schema-aware caching so latent solutions aren't reused across incompatible shapes/classes.
-- If tuning/pruning is enabled in configuration, pruning can reference a validation metric computed consistently during the final phase.
+- Validation scoring is mask-aware when simulated masking is active (i.e., it can score on the intended held-out entries rather than all unobserved/ missing cells).
+- Validation latent inference is stabilized via schema-aware caching so latent solutions aren't reused across incompatible shapes/ classes.
+- If tuning/ pruning is enabled in configuration, pruning can reference a validation metric computed consistently during the final phase.
 
 Minimal API Reference
 ---------------------
