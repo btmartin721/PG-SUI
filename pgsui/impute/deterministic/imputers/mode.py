@@ -910,16 +910,54 @@ class ImputeMostFrequent:
             self.logger.error(msg)
             raise ValueError(msg)
 
-        # IUPAC ambiguity mapping (unordered pairs → code) for 012→IUPAC.
-        pair_to_iupac = {
-            frozenset(("A", "G")): "R",
-            frozenset(("C", "T")): "Y",
-            frozenset(("G", "C")): "S",
-            frozenset(("A", "T")): "W",
-            frozenset(("G", "T")): "K",
-            frozenset(("A", "C")): "M",
+        iupac_to_bases = {
+            "A": {"A"},
+            "C": {"C"},
+            "G": {"G"},
+            "T": {"T"},
+            "R": {"A", "G"},
+            "Y": {"C", "T"},
+            "S": {"G", "C"},
+            "W": {"A", "T"},
+            "K": {"G", "T"},
+            "M": {"A", "C"},
+            "B": {"C", "G", "T"},
+            "D": {"A", "G", "T"},
+            "H": {"A", "C", "T"},
+            "V": {"A", "C", "G"},
         }
-        valid_bases = {"A", "C", "G", "T"}
+        bases_to_iupac = {frozenset(v): k for k, v in iupac_to_bases.items()}
+        missing_codes = {"", ".", "N", "NONE"}
+
+        def _normalize_iupac(value: object) -> str | None:
+            if value is None:
+                return None
+            if isinstance(value, (bytes, np.bytes_)):
+                value = value.decode("utf-8", errors="ignore")
+            if isinstance(value, (list, tuple, np.ndarray, pd.Series)):
+                for item in value:
+                    code = _normalize_iupac(item)
+                    if code is not None:
+                        return code
+                return None
+            if isinstance(value, str):
+                for part in value.upper().split(","):
+                    part = part.strip()
+                    if not part or part in missing_codes:
+                        continue
+                    if part in iupac_to_bases:
+                        return part
+                return None
+            part = str(value).upper().strip()
+            if part in missing_codes:
+                return None
+            if "," in part:
+                for token in part.split(","):
+                    token = token.strip()
+                    if token in iupac_to_bases:
+                        return token
+                return None
+            return part if part in iupac_to_bases else None
 
         if is_nuc:
             # UPDATED SNPio order: A=0, C=1, G=2, T=3, W=4, R=5, M=6, K=7, Y=8, S=9, N=-9/-1
@@ -936,6 +974,22 @@ class ImputeMostFrequent:
         ref_alleles = getattr(self.genotype_data, "ref", None)
         alt_alleles = getattr(self.genotype_data, "alt", None)
 
+        def _alleles_missing(value: object) -> bool:
+            try:
+                return value is None or len(value) == 0  # type: ignore[arg-type]
+            except TypeError:
+                return value is None
+
+        if _alleles_missing(ref_alleles):
+            ref_alleles = getattr(self.genotype_data, "_ref", None)
+        if _alleles_missing(ref_alleles):
+            ref_alleles = getattr(self, "_ref", None)
+
+        if _alleles_missing(alt_alleles):
+            alt_alleles = getattr(self.genotype_data, "_alt", None)
+        if _alleles_missing(alt_alleles):
+            alt_alleles = getattr(self, "_alt", None)
+
         if ref_alleles is None or alt_alleles is None:
             msg = (
                 "Reference and alternate alleles are not available in GenotypeData; "
@@ -945,100 +999,89 @@ class ImputeMostFrequent:
             raise ValueError(msg)
 
         df_out = df.copy().astype(object)
+        n_cols = len(df_out.columns)
+
+        if isinstance(ref_alleles, np.ndarray):
+            ref_alleles = ref_alleles.tolist()
+        if isinstance(alt_alleles, np.ndarray):
+            alt_alleles = alt_alleles.tolist()
+
+        def _transpose_alt_alleles(alts: object) -> object:
+            if not isinstance(alts, list) or len(alts) == 0:
+                return alts
+            try:
+                if len(alts) != n_cols and all(
+                    not isinstance(a, (str, bytes))
+                    and hasattr(a, "__len__")
+                    and len(a) == n_cols
+                    for a in alts
+                ):
+                    return [[a[i] for a in alts] for i in range(n_cols)]
+            except TypeError:
+                return alts
+            return alts
+
+        alt_alleles = _transpose_alt_alleles(alt_alleles)
+
+        if len(ref_alleles) != n_cols or len(alt_alleles) != n_cols:
+            try:
+                alleles = self.genotype_data.get_ref_alt_alleles(
+                    self.genotype_data.snp_data
+                )
+            except Exception:
+                alleles = None
+
+            if alleles:
+                ref_candidate = alleles[0]
+                if isinstance(ref_candidate, np.ndarray):
+                    ref_candidate = ref_candidate.tolist()
+                if len(ref_candidate) == n_cols:
+                    ref_alleles = ref_candidate
+
+                alt_candidate = [x for i, x in enumerate(alleles) if i > 0]
+                alt_candidate = _transpose_alt_alleles(alt_candidate)
+                if len(alt_candidate) == n_cols:
+                    alt_alleles = alt_candidate
+
+        if len(ref_alleles) != n_cols or len(alt_alleles) != n_cols:
+            msg = (
+                "Reference and alternate alleles do not align with genotype columns; "
+                "cannot decode 012 matrix."
+            )
+            self.logger.error(msg)
+            raise ValueError(msg)
 
         for j, col in enumerate(df_out.columns):
-            ref = ref_alleles[j]
-            alt = alt_alleles[j]
+            ref = _normalize_iupac(ref_alleles[j])
+            alt = _normalize_iupac(alt_alleles[j])
 
-            # Normalize REF
-            ref = "" if ref is None else str(ref).upper()
+            if ref is None and alt is None:
+                ref = "A"
+                alt = "A"
+            elif ref is None:
+                ref = alt
 
-            # Normalize ALT:
-            #   - If list-like, pick the first non-missing ALT that isn't "."
-            #   - Treat "." or "" as "no ALT" (monomorphic) -> default to REF later
-            if isinstance(alt, (list, tuple)):
-                alt_clean = None
-                for a in alt:
-                    if a is None:
-                        continue
-                    s = str(a).upper()
-                    if s not in {".", ""}:
-                        alt_clean = s
-                        break
-                alt = alt_clean  # may be None
-            else:
-                if alt is None:
-                    alt = None
-                else:
-                    s = str(alt).upper()
-                    alt = None if s in {".", ""} else s
-
-            ref_is_std = ref in valid_bases
-
-            # ALT="." (or empty/missing) indicates monomorphic site -> treat ALT as REF for decoding.
-            monomorphic = alt is None
-            if monomorphic:
+            if alt is None:
                 alt = ref
 
-            alt_is_std = alt in valid_bases
-
-            if ref_is_std and alt_is_std:
-                # If monomorphic, ref==alt and het_code becomes ref (prevents "N" injection)
-                het_code = (
-                    ref if ref == alt else pair_to_iupac.get(frozenset((ref, alt)), "N")
-                )
-                col_map = {
-                    0: ref,
-                    "0": ref,
-                    1: het_code,
-                    "1": het_code,
-                    2: alt,
-                    "2": alt,
-                    -9: "N",
-                    "-9": "N",
-                    -1: "N",
-                    "-1": "N",
-                }
-            elif ref_is_std and not alt_is_std:
-                # ALT is truly invalid (not "."), cannot decode 1/2 meaningfully
-                col_map = {
-                    0: ref,
-                    "0": ref,
-                    1: "N",
-                    "1": "N",
-                    2: "N",
-                    "2": "N",
-                    -9: "N",
-                    "-9": "N",
-                    -1: "N",
-                    "-1": "N",
-                }
-            elif not ref_is_std and alt_is_std:
-                col_map = {
-                    0: "N",
-                    "0": "N",
-                    1: "N",
-                    "1": "N",
-                    2: alt,
-                    "2": alt,
-                    -9: "N",
-                    "-9": "N",
-                    -1: "N",
-                    "-1": "N",
-                }
+            if ref == alt:
+                het_code = ref
             else:
-                col_map = {
-                    0: "N",
-                    "0": "N",
-                    1: "N",
-                    "1": "N",
-                    2: "N",
-                    "2": "N",
-                    -9: "N",
-                    "-9": "N",
-                    -1: "N",
-                    "-1": "N",
-                }
+                het_set = iupac_to_bases[ref] | iupac_to_bases[alt]
+                het_code = bases_to_iupac.get(frozenset(het_set), ref)
+
+            col_map = {
+                0: ref,
+                "0": ref,
+                1: het_code,
+                "1": het_code,
+                2: alt,
+                "2": alt,
+                -9: "N",
+                "-9": "N",
+                -1: "N",
+                "-1": "N",
+            }
 
             df_out[col] = df_out[col].map(col_map)
 
