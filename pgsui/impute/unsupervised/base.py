@@ -60,9 +60,12 @@ class BaseNNImputer:
         """
         self.model_name = model_name
         self.genotype_data = genotype_data
-        self.simulate_missing = True
-        self.tree_parser = None
-        self.sim_kwargs = {}
+        if not hasattr(self, "simulate_missing"):
+            self.simulate_missing = True
+        if not hasattr(self, "tree_parser"):
+            self.tree_parser = None
+        if not hasattr(self, "sim_kwargs"):
+            self.sim_kwargs = {}
 
         self.prefix = prefix
         self.verbose = verbose
