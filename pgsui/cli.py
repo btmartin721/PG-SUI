@@ -29,6 +29,7 @@ import argparse
 import ast
 import json
 import logging
+import os
 import sys
 import time
 from functools import wraps
@@ -358,7 +359,44 @@ def _normalize_plot_format(fmt: str) -> str:
     fmt = fmt.lower()
     if fmt == "jpeg":
         return "jpg"
-    return fmt
+    return cast(Literal["pdf", "png", "jpg", "svg"], fmt)
+
+
+def _expand_path(path: str | None) -> str | None:
+    """Expand ~ and env vars in a path-like string."""
+    if path is None:
+        return None
+    raw = str(path).strip()
+    if not raw:
+        return None
+    expanded = os.path.expandvars(raw)
+    return str(Path(expanded).expanduser())
+
+
+def _resolve_tree_paths(
+    args: argparse.Namespace,
+) -> tuple[str | None, str | None, str | None]:
+    """Resolve tree-related paths from CLI args."""
+    treefile = _expand_path(getattr(args, "treefile", None))
+    qmatrix = _expand_path(getattr(args, "qmatrix", None))
+    siterates = _expand_path(getattr(args, "siterates", None))
+    return treefile, qmatrix, siterates
+
+
+def _config_needs_tree(cfg: Any | None) -> bool:
+    """Return True if config requires a tree parser for simulated missingness."""
+    if cfg is None:
+        return False
+    sim_cfg = getattr(cfg, "sim", None)
+    if sim_cfg is None:
+        return False
+    strategy = getattr(sim_cfg, "sim_strategy", None)
+    simulate = bool(getattr(sim_cfg, "simulate_missing", False))
+    return (
+        simulate
+        and isinstance(strategy, str)
+        and strategy in {"nonrandom", "nonrandom_weighted"}
+    )
 
 
 def _args_to_cli_overrides(args: argparse.Namespace) -> dict:
@@ -1117,7 +1155,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     include_pops = getattr(args, "include_pops", None)
     force_popmap = bool(getattr(args, "force_popmap", False))
     structure_has_popids = bool(getattr(args, "structure_has_popids", False))
-    structure_has_marker_names = bool(getattr(args, "structure_has_marker_names", False))
+    structure_has_marker_names = bool(
+        getattr(args, "structure_has_marker_names", False)
+    )
     structure_allele_start_col = getattr(args, "structure_allele_start_col", None)
     structure_allele_encoding = getattr(args, "structure_allele_encoding", None)
 
@@ -1127,9 +1167,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     # --prefix was not provided.
     setattr(args, "prefix", prefix)
 
-    treefile = getattr(args, "treefile", None)
-    qmatrix = getattr(args, "qmatrix", None)
-    siterates = getattr(args, "siterates", None)
+    treefile, qmatrix, siterates = _resolve_tree_paths(args)
+    setattr(args, "treefile", treefile)
+    setattr(args, "qmatrix", qmatrix)
+    setattr(args, "siterates", siterates)
 
     if any(x is not None for x in (treefile, qmatrix, siterates)):
         if not all(x is not None for x in (treefile, qmatrix, siterates)):
@@ -1167,6 +1208,28 @@ def main(argv: Optional[List[str]] = None) -> int:
     cfgs_by_model: Dict[str, Any] = {
         m: _build_effective_config_for_model(m, args) for m in selected_models
     }
+
+    needs_tree = any(
+        _config_needs_tree(cfg) for cfg in cfgs_by_model.values() if cfg is not None
+    )
+    if needs_tree and not all(x is not None for x in (treefile, qmatrix, siterates)):
+        logging.error(
+            "Nonrandom simulated missingness requires --treefile, --qmatrix, and --siterates."
+        )
+        parser.error(
+            "Nonrandom simulated missingness requires --treefile, --qmatrix, and --siterates."
+        )
+        return 2
+    if needs_tree and tp is None:
+        logging.error(
+            "Tree parser was not initialized for nonrandom simulation. "
+            "Please verify --treefile, --qmatrix, and --siterates."
+        )
+        parser.error(
+            "Tree parser was not initialized for nonrandom simulation. "
+            "Please verify --treefile, --qmatrix, and --siterates."
+        )
+        return 2
 
     # Maybe print/dump configs and exit
     if _maybe_print_or_dump_configs(cfgs_by_model, args):
