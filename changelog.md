@@ -4,6 +4,18 @@ An overview of changes to **PG-SUI** by release. This mirrors the Sphinx/RST cha
 
 ---
 
+## v1.6.27 - 2025-12-23
+
+### Bug Fixes - v1.6.27
+
+- Preserved pre-initialized `tree_parser` instances in `BaseNNImputer` to support nonrandom simulated missingness.
+- Normalized and validated tree-related CLI inputs (`--treefile`, `--qmatrix`, `--siterates`) when nonrandom strategies are requested.
+
+### Tests - v1.6.27
+
+- Added unit coverage for all five `SimMissingTransformer` strategies.
+- Added a file-based `TreeParser` integration test using Newick, IQ-TREE Q matrix, and site rates inputs.
+
 ## v1.6.26 - 2025-12-22
 
 ### CI/Automation - v1.6.26
