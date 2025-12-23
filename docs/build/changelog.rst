@@ -4,6 +4,15 @@ Changelog
 
 An overview of changes to **PG-SUI** by release. This file mirrors the GitHub Markdown changelog and reflects the refactor-era docs: dataclass-first configs, presets, unified scikit-learn framework-based ``fit()/transform()`` methods, CLI precedence, and updated deterministic/supervised docs.
 
+v1.6.28 - 2025-12-24
+--------------------
+
+CI/Automation - v1.6.28
+^^^^^^^^^^^^^^^^^^^^^^^
+
+- Added disk cleanup and Docker pruning to the unit-tests workflow to reduce CI storage pressure.
+- Disabled pip caching during unit tests and explicitly purged pip cache after installs.
+
 v1.6.27 - 2025-12-23
 --------------------
 

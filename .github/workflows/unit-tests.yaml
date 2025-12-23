@@ -20,6 +20,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc || true
+          sudo apt-get clean || true
+          docker system prune -af || true
+
       - name: Clean test artifacts
         run: rm -rf dist build .pytest_cache tmp_test_output
 
@@ -27,14 +33,14 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-          cache: pip
 
       - name: Install dependencies
         env:
           MPLCONFIGDIR: ${{ runner.temp }}/mpl
         run: |
           python -m pip install -U pip
-          python -m pip install ".[dev,gui]"
+          python -m pip install --no-cache-dir ".[dev,gui]"
+          python -m pip cache purge || true
 
       - name: Run tests
         env:
