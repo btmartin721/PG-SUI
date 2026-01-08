@@ -19,20 +19,6 @@ pgsui.impute.unsupervised.models.autoencoder\_model module
    :members:
    :undoc-members:
 
-pgsui.impute.unsupervised.models.nlpca\_model module
-----------------------------------------------------
-
-.. automodule:: pgsui.impute.unsupervised.models.nlpca_model
-   :members:
-   :undoc-members:
-
-pgsui.impute.unsupervised.models.ubp\_model module
---------------------------------------------------
-
-.. automodule:: pgsui.impute.unsupervised.models.ubp_model
-   :members:
-   :undoc-members:
-
 pgsui.impute.unsupervised.models.vae\_model module
 --------------------------------------------------
 
