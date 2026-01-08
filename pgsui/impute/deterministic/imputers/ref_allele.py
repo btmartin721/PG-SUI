@@ -177,7 +177,7 @@ class ImputeRefAllele:
         self.encoder = GenotypeEncoder(self.genotype_data)
 
         # Work in 0/1/2 with -1 for missing
-        X012 = self.encoder.genotypes_012.astype(np.int16, copy=True)
+        X012 = self.encoder.genotypes_012.astype(np.int8, copy=True)
         X012[X012 < 0] = -1
         self.X012_ = X012
         self.num_features_ = X012.shape[1]
@@ -332,7 +332,7 @@ class ImputeRefAllele:
 
         # 1) Impute the evaluation-masked copy (compute metrics)
         imputed_eval_df = self._impute_ref(df_in=self.X_train_df_)
-        X_imputed_eval = imputed_eval_df.to_numpy(dtype=np.int16)
+        X_imputed_eval = imputed_eval_df.to_numpy(dtype=np.int8)
         self.X_imputed012_ = X_imputed_eval
 
         # Evaluate parity with DL models
@@ -343,7 +343,7 @@ class ImputeRefAllele:
         df_missingonly[df_missingonly < 0] = np.nan
 
         imputed_full_df = self._impute_ref(df_in=df_missingonly)
-        X_imputed_full_012 = imputed_full_df.to_numpy(dtype=np.int16)
+        X_imputed_full_012 = imputed_full_df.to_numpy(dtype=np.int8)
 
         # Plot distributions (like DL .transform())
 
@@ -376,7 +376,7 @@ class ImputeRefAllele:
         df = df_in.copy()
         # Fill all NaNs with 0 (homozygous REF) column-wise; constant so vectorized is fine
         df = df.fillna(0)
-        return df.astype(np.int16)
+        return df.astype(np.int8)
 
     def _evaluate_and_report(self) -> None:
         """Evaluate imputed vs. ground truth on masked test cells; produce reports and plots.
@@ -691,39 +691,30 @@ class ImputeRefAllele:
                 raise Exception(msg)
 
     def decode_012(
-        self, X: np.ndarray | pd.DataFrame | List[List[int]], is_nuc: bool = False
+        self, X: np.ndarray | pd.DataFrame | list[list[int]], is_nuc: bool = False
     ) -> np.ndarray:
-        """Decode 012 or 0-9 integer encodings to single-character IUPAC nucleotides.
+        """Decode 012-encodings to IUPAC chars with metadata repair.
 
-        Always returns single-character IUPAC codes:
-        - A, C, G, T for homozygotes
-        - R, Y, S, W, K, M for heterozygotes
-        - N for missing/invalid
-
-        Modes:
-        1) Standard 012 (0=REF, 1=HET, 2=ALT, -9/-1=missing) using per-locus REF/ALT from GenotypeData.
-        Special case: ALT="." (or empty) is treated as monomorphic and defaults to REF.
-        2) IUPAC-integer mode (is_nuc=True) using SNPio's updated order:
-        A=0, C=1, G=2, T=3, W=4, R=5, M=6, K=7, Y=8, S=9, N=-9/-1.
+        This method converts genotype calls encoded as integers (0, 1, 2, etc.) into their corresponding IUPAC nucleotide codes. It supports two modes of decoding:
+        1. Nucleotide mode (`is_nuc=True`): Decodes integer codes (0-9) directly to IUPAC nucleotide codes.
+        2. Metadata mode (`is_nuc=False`): Uses reference and alternate allele metadata to determine the appropriate IUPAC codes.
 
         Args:
-            X: Matrix of 012 or 0-9 IUPAC integers.
-            is_nuc: If True, interpret inputs as 0-9 IUPAC integers (A=0, C=1, G=2, T=3, ...).
+            X (np.ndarray | pd.DataFrame | list[list[int]]): Input genotype calls as integers.
+            is_nuc (bool): If True, decode 0-9 nucleotide codes; else use ref/alt metadata. Defaults to False.
 
         Returns:
-            np.ndarray: Same shape as X, dtype '<U1', with single-character IUPAC codes.
+            np.ndarray: IUPAC strings as a 2D array of shape (n_samples, n_snps).
 
         Raises:
-            ValueError: If REF/ALT metadata are unavailable for 012 decoding.
+            ValueError: If input is not a DataFrame.
         """
         df = validate_input_type(X, return_type="df")
-
         if not isinstance(df, pd.DataFrame):
-            msg = "Internal error: expected DataFrame after validation."
-            self.logger.error(msg)
-            raise ValueError(msg)
+            raise ValueError("Expected DataFrame.")
 
-        iupac_to_bases = {
+        # IUPAC Definitions
+        iupac_to_bases: dict[str, set[str]] = {
             "A": {"A"},
             "C": {"C"},
             "G": {"G"},
@@ -738,164 +729,168 @@ class ImputeRefAllele:
             "D": {"A", "G", "T"},
             "H": {"A", "C", "T"},
             "V": {"A", "C", "G"},
+            "N": set(),
         }
-        bases_to_iupac = {frozenset(v): k for k, v in iupac_to_bases.items()}
-        missing_codes = {"", ".", "N", "NONE"}
+        bases_to_iupac = {
+            frozenset(v): k for k, v in iupac_to_bases.items() if k != "N"
+        }
+        missing_codes = {"", ".", "N", "NONE", "-", "?", "./.", ".|.", "NAN", "nan"}
 
         def _normalize_iupac(value: object) -> str | None:
+            """Normalize an input into a single IUPAC code token or None."""
             if value is None:
                 return None
+
+            # Bytes -> str (make type narrowing explicit)
             if isinstance(value, (bytes, np.bytes_)):
-                value = value.decode("utf-8", errors="ignore")
-            if isinstance(value, (list, tuple, np.ndarray, pd.Series)):
-                for item in value:
+                value = bytes(value).decode("utf-8", errors="ignore")
+
+            # Handle list/tuple/array/Series: take first valid
+            if isinstance(value, (list, tuple, pd.Series, np.ndarray)):
+                # Convert Series to numpy array for consistent behavior
+                if isinstance(value, pd.Series):
+                    arr = value.to_numpy()
+                else:
+                    arr = value
+
+                # Scalar numpy array fast path
+                if isinstance(arr, np.ndarray) and arr.ndim == 0:
+                    return _normalize_iupac(arr.item())
+
+                # Empty sequence/array
+                if len(arr) == 0:
+                    return None
+
+                # First valid element wins
+                for item in arr:
                     code = _normalize_iupac(item)
                     if code is not None:
                         return code
                 return None
-            if isinstance(value, str):
-                for part in value.upper().split(","):
-                    part = part.strip()
-                    if not part or part in missing_codes:
-                        continue
-                    if part in iupac_to_bases:
-                        return part
+
+            s = str(value).upper().strip()
+            if not s or s in missing_codes:
                 return None
-            part = str(value).upper().strip()
-            if part in missing_codes:
+
+            if "," in s:
+                for tok in (t.strip() for t in s.split(",")):
+                    if tok and tok not in missing_codes and tok in iupac_to_bases:
+                        return tok
                 return None
-            if "," in part:
-                for token in part.split(","):
-                    token = token.strip()
-                    if token in iupac_to_bases:
-                        return token
-                return None
-            return part if part in iupac_to_bases else None
+
+            return s if s in iupac_to_bases else None
+
+        codes_df = df.apply(pd.to_numeric, errors="coerce")
+        codes = codes_df.fillna(-1).astype(np.int8).to_numpy()
+        n_rows, n_cols = codes.shape
 
         if is_nuc:
-            # UPDATED SNPio order: A=0, C=1, G=2, T=3, W=4, R=5, M=6, K=7, Y=8, S=9, N=-9/-1
-            iupac_list = ["A", "C", "G", "T", "W", "R", "M", "K", "Y", "S"]
-            mapping = {i: iupac_list[i] for i in range(10)}
-            mapping[-9] = "N"
-            mapping[-1] = "N"
-
-            # accept strings too
-            mapping.update({str(k): v for k, v in mapping.items()})
-            return df.replace(mapping).to_numpy(dtype="<U1")
-
-        # ---- Standard 012 decoding using REF/ALT per column ----
-        ref_alleles = getattr(self.genotype_data, "ref", None)
-        alt_alleles = getattr(self.genotype_data, "alt", None)
-
-        def _alleles_missing(value: object) -> bool:
-            try:
-                return value is None or len(value) == 0  # type: ignore[arg-type]
-            except TypeError:
-                return value is None
-
-        if _alleles_missing(ref_alleles):
-            ref_alleles = getattr(self.genotype_data, "_ref", None)
-        if _alleles_missing(ref_alleles):
-            ref_alleles = getattr(self, "_ref", None)
-
-        if _alleles_missing(alt_alleles):
-            alt_alleles = getattr(self.genotype_data, "_alt", None)
-        if _alleles_missing(alt_alleles):
-            alt_alleles = getattr(self, "_alt", None)
-
-        if ref_alleles is None or alt_alleles is None:
-            msg = (
-                "Reference and alternate alleles are not available in GenotypeData; "
-                "cannot decode 012 matrix."
+            iupac_list = np.array(
+                ["A", "C", "G", "T", "W", "R", "M", "K", "Y", "S"], dtype="<U1"
             )
-            self.logger.error(msg)
-            raise ValueError(msg)
+            out = np.full((n_rows, n_cols), "N", dtype="<U1")
+            mask = (codes >= 0) & (codes <= 9)
+            out[mask] = iupac_list[codes[mask]]
+            return out
 
-        df_out = df.copy().astype(object)
-        n_cols = len(df_out.columns)
+        # Metadata fetch
+        ref_alleles = getattr(self.genotype_data, "ref", [])
+        alt_alleles = getattr(self.genotype_data, "alt", [])
 
-        if isinstance(ref_alleles, np.ndarray):
-            ref_alleles = ref_alleles.tolist()
-        if isinstance(alt_alleles, np.ndarray):
-            alt_alleles = alt_alleles.tolist()
+        if len(ref_alleles) != n_cols:
+            ref_alleles = getattr(self, "_ref", [None] * n_cols)
+        if len(alt_alleles) != n_cols:
+            alt_alleles = getattr(self, "_alt", [None] * n_cols)
 
-        def _transpose_alt_alleles(alts: object) -> object:
-            if not isinstance(alts, list) or len(alts) == 0:
-                return alts
-            try:
-                if len(alts) != n_cols and all(
-                    not isinstance(a, (str, bytes))
-                    and hasattr(a, "__len__")
-                    and len(a) == n_cols
-                    for a in alts
-                ):
-                    return [[a[i] for a in alts] for i in range(n_cols)]
-            except TypeError:
-                return alts
-            return alts
+        # Ensure list length matches
+        if len(ref_alleles) != n_cols:
+            ref_alleles = [None] * n_cols
+        if len(alt_alleles) != n_cols:
+            alt_alleles = [None] * n_cols
 
-        alt_alleles = _transpose_alt_alleles(alt_alleles)
+        out = np.full((n_rows, n_cols), "N", dtype="<U1")
+        source_snp_data = None
 
-        if len(ref_alleles) != n_cols or len(alt_alleles) != n_cols:
-            try:
-                alleles = self.genotype_data.get_ref_alt_alleles(
-                    self.genotype_data.snp_data
-                )
-            except Exception:
-                alleles = None
-
-            if alleles:
-                ref_candidate = alleles[0]
-                if isinstance(ref_candidate, np.ndarray):
-                    ref_candidate = ref_candidate.tolist()
-                if len(ref_candidate) == n_cols:
-                    ref_alleles = ref_candidate
-
-                alt_candidate = [x for i, x in enumerate(alleles) if i > 0]
-                alt_candidate = _transpose_alt_alleles(alt_candidate)
-                if len(alt_candidate) == n_cols:
-                    alt_alleles = alt_candidate
-
-        if len(ref_alleles) != n_cols or len(alt_alleles) != n_cols:
-            msg = (
-                "Reference and alternate alleles do not align with genotype columns; "
-                "cannot decode 012 matrix."
-            )
-            self.logger.error(msg)
-            raise ValueError(msg)
-
-        for j, col in enumerate(df_out.columns):
+        for j in range(n_cols):
             ref = _normalize_iupac(ref_alleles[j])
             alt = _normalize_iupac(alt_alleles[j])
 
+            # --- REPAIR LOGIC ---
+            # If metadata is missing, scan the source column.
+            if ref is None or alt is None:
+                if source_snp_data is None and self.genotype_data.snp_data is not None:
+                    try:
+                        source_snp_data = np.asarray(self.genotype_data.snp_data)
+                    except Exception:
+                        pass  # if lazy loading fails
+
+                if source_snp_data is not None:
+                    try:
+                        col_data = source_snp_data[:, j]
+                        uniques = set()
+                        # Optimization: check up to 200 non-empty values
+                        count = 0
+                        for val in col_data:
+                            norm = _normalize_iupac(val)
+                            if norm:
+                                uniques.add(norm)
+                                count += 1
+                            if len(uniques) >= 2 or count > 200:
+                                break
+
+                        sorted_u = sorted(list(uniques))
+                        if len(sorted_u) >= 1 and ref is None:
+                            ref = sorted_u[0]
+                        if len(sorted_u) >= 2 and alt is None:
+                            alt = sorted_u[1]
+                    except Exception:
+                        pass
+
+            # --- DEFAULTS FOR MISSING ---
+            # If still missing, we cannot decode.
             if ref is None and alt is None:
-                ref = "A"
-                alt = "A"
+                ref = "N"
+                alt = "N"
             elif ref is None:
                 ref = alt
+            elif alt is None:
+                alt = ref  # Monomorphic site: ALT becomes REF
 
-            if alt is None:
-                alt = ref
-
+            # --- COMPUTE HET CODE ---
             if ref == alt:
                 het_code = ref
             else:
-                het_set = iupac_to_bases[ref] | iupac_to_bases[alt]
-                het_code = bases_to_iupac.get(frozenset(het_set), ref)
+                ref_set = iupac_to_bases.get(ref, set()) if ref is not None else set()
+                alt_set = iupac_to_bases.get(alt, set()) if alt is not None else set()
+                union_set = frozenset(ref_set | alt_set)
+                het_code = bases_to_iupac.get(union_set, "N")
 
-            col_map = {
-                0: ref,
-                "0": ref,
-                1: het_code,
-                "1": het_code,
-                2: alt,
-                "2": alt,
-                -9: "N",
-                "-9": "N",
-                -1: "N",
-                "-1": "N",
-            }
+            # --- ASSIGNMENT WITH SAFETY FALLBACKS ---
+            col_codes = codes[:, j]
 
-            df_out[col] = df_out[col].map(col_map)
+            # Case 0: REF
+            if ref != "N":
+                out[col_codes == 0, j] = ref
 
-        return df_out.to_numpy(dtype="<U1")
+            # Case 1: HET
+            if het_code != "N":
+                out[col_codes == 1, j] = het_code
+            else:
+                # If HET code is invalid (e.g. ref='A', alt='N'),
+                # fallback to REF
+                # Fix for an issue where a HET prediction at a monomorphic site
+                # produced 'N'
+                if ref != "N":
+                    out[col_codes == 1, j] = ref
+
+            # Case 2: ALT
+            if alt != "N":
+                out[col_codes == 2, j] = alt
+            else:
+                # If ALT is invalid (e.g. ref='A', alt='N'), fallback to REF
+                # Fix for an issue where an ALT prediction on a monomorphic site
+                # produced 'N'
+                if ref != "N":
+                    out[col_codes == 2, j] = ref
+
+        return out
