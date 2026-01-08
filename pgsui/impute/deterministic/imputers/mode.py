@@ -1,6 +1,7 @@
 # Standard library imports
 import copy
 import json
+from collections import defaultdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union
 
@@ -13,8 +14,11 @@ from plotly.graph_objs import Figure as PlotlyFigure
 from sklearn.exceptions import NotFittedError
 from sklearn.metrics import (
     accuracy_score,
+    average_precision_score,
     classification_report,
     f1_score,
+    jaccard_score,
+    matthews_corrcoef,
     precision_score,
     recall_score,
 )
@@ -163,7 +167,7 @@ class ImputeMostFrequent:
         Xf = X.astype(np.float32, copy=False)
         Xf = np.where(np.isnan(Xf), -1.0, Xf)
         Xf[Xf < 0] = -1.0
-        self.X012_ = Xf.astype(np.int16, copy=False)
+        self.X012_ = Xf.astype(np.int8, copy=False)
         self.num_features_ = self.X012_.shape[1]
 
         # Simulated-missing controls (mirror VAE/AE/NLPCA semantics where possible)
@@ -230,7 +234,6 @@ class ImputeMostFrequent:
         self.test_idx_: Optional[np.ndarray] = None
         self.X_train_df_: Optional[pd.DataFrame] = None
         self.ground_truth012_: Optional[np.ndarray] = None
-        self.metrics_: Dict[str, int | float] = {}
         self.X_imputed012_: Optional[np.ndarray] = None
 
         # Ploidy heuristic for 0/1/2 scoring parity
@@ -407,7 +410,7 @@ class ImputeMostFrequent:
 
         # 1) Impute the evaluation-masked copy (to compute metrics)
         imputed_eval_df = self._impute_df(self.X_train_df_)
-        X_imputed_eval = imputed_eval_df.to_numpy(dtype=np.int16)
+        X_imputed_eval = imputed_eval_df.to_numpy(dtype=np.int8)
         self.X_imputed012_ = X_imputed_eval
 
         # Evaluate like DL models (0/1/2, then 10-class from decoded strings)
@@ -418,7 +421,7 @@ class ImputeMostFrequent:
         df_missingonly[df_missingonly < 0] = np.nan
 
         imputed_full_df = self._impute_df(df_missingonly)
-        X_imputed_full_012 = imputed_full_df.to_numpy(dtype=np.int16)
+        X_imputed_full_012 = imputed_full_df.to_numpy(dtype=np.int8)
 
         neg = int(np.count_nonzero(X_imputed_full_012 < 0))
         if neg:
@@ -475,7 +478,7 @@ class ImputeMostFrequent:
             df = df_in.fillna(modes)
         else:
             df = df_in.copy()
-        return df.astype(np.int16)
+        return df.astype(np.int8)
 
     def _impute_by_population_mode(self, df_in: pd.DataFrame) -> pd.DataFrame:
         """Impute missing cells in df_in using population-specific modes.
@@ -489,7 +492,7 @@ class ImputeMostFrequent:
             pd.DataFrame: DataFrame with missing values imputed.
         """
         if not df_in.isnull().values.any():
-            return df_in.astype(np.int16)
+            return df_in.astype(np.int8)
 
         df = df_in.copy()
         pops = pd.Series(self.pops, index=df.index)
@@ -512,7 +515,7 @@ class ImputeMostFrequent:
         mask = np.isnan(values)
         values[mask] = replacements[mask]
 
-        return pd.DataFrame(values, columns=df.columns, index=df.index).astype(np.int16)
+        return pd.DataFrame(values, columns=df.columns, index=df.index).astype(np.int8)
 
     def _series_mode(self, s: pd.Series) -> int:
         """Compute the mode of a pandas Series, ignoring NaNs.
@@ -611,29 +614,15 @@ class ImputeMostFrequent:
         Raises:
             NotFittedError: If fit() and transform() have not been called.
         """
-        labels = [0, 1, 2]
+        labels: list[int] = [0, 1, 2]
+        report_names: list[str] = ["REF", "HET", "ALT"]
+
         # Haploid parity: fold ALT (2) into ALT/Present (1)
         if self.is_haploid_:
-            y_true[y_true == 2] = 1
-            y_pred[y_pred == 2] = 1
-            labels = [0, 1]
-
-        metrics = {
-            "n_masked_test": int(y_true.size),
-            "accuracy": accuracy_score(y_true, y_pred),
-            "f1": f1_score(
-                y_true, y_pred, average="macro", labels=labels, zero_division=0
-            ),
-            "precision": precision_score(
-                y_true, y_pred, average="macro", labels=labels, zero_division=0
-            ),
-            "recall": recall_score(
-                y_true, y_pred, average="macro", labels=labels, zero_division=0
-            ),
-        }
-        self.metrics_.update({f"zygosity_{k}": v for k, v in metrics.items()})
-
-        report_names = ["REF", "ALT"] if self.is_haploid_ else ["REF", "HET", "ALT"]
+            y_true = np.where(y_true == 2, 1, y_true)
+            y_pred = np.where(y_pred == 2, 1, y_pred)
+            labels: list[int] = [0, 1]
+            report_names: list[str] = ["REF", "ALT"]
 
         report: dict | str = classification_report(
             y_true,
@@ -648,24 +637,6 @@ class ImputeMostFrequent:
             msg = "classification_report did not return a dict as expected."
             self.logger.error(msg)
             raise TypeError(msg)
-
-        report_subset = {}
-        for k, v in report.items():
-            tmp = {}
-            if isinstance(v, dict) and "support" in v:
-                for k2, v2 in v.items():
-                    if k2 != "support":
-                        tmp[k2] = v2
-                if tmp:
-                    report_subset[k] = tmp
-
-        if report_subset and (self.verbose or self.debug):
-            pm = PrettyMetrics(
-                report_subset,
-                precision=3,
-                title=f"{self.model_name} Zygosity Report",
-            )
-            pm.render()
 
         if self.show_plots:
             viz = ClassificationReportVisualizer(reset_kwargs=self.plotter_.param_dict)
@@ -692,8 +663,97 @@ class ImputeMostFrequent:
                 y_true, y_pred, label_names=report_names, prefix="zygosity"
             )
 
+        # ------ Additional metrics ------
+        report_full = self._additional_metrics(
+            y_true, y_pred, labels, report_names, report
+        )
+
+        if self.verbose or self.debug:
+            pm = PrettyMetrics(
+                report_full,
+                precision=2,
+                title=f"{self.model_name} Zygosity Report",
+            )
+            pm.render()
+
         # Save JSON
         self._save_report(report, suffix="zygosity")
+
+    def _additional_metrics(self, y_true, y_pred, labels, report_names, report):
+        """Compute additional metrics and augment the report dictionary.
+
+        Args:
+            y_true (np.ndarray): True genotypes.
+            y_pred (np.ndarray): Predicted genotypes.
+            labels (list[int]): List of label indices.
+            report_names (list[str]): List of report names corresponding to labels.
+            report (dict): Classification report dictionary to augment.
+
+        Returns:
+            dict[str, dict[str, float] | float]: Augmented report dictionary with additional metrics.
+        """
+        # Create an identity matrix and use the targets array as indices
+        y_score = np.eye(len(report_names))[y_pred]
+
+        # Per-class metrics
+        ap_pc = average_precision_score(y_true, y_score, average=None)
+        jaccard_pc = jaccard_score(
+            y_true, y_pred, average=None, labels=labels, zero_division=0
+        )
+
+        # Macro/weighted metrics
+        ap_macro = average_precision_score(y_true, y_score, average="macro")
+        ap_weighted = average_precision_score(y_true, y_score, average="weighted")
+        jaccard_macro = jaccard_score(y_true, y_pred, average="macro", zero_division=0)
+        jaccard_weighted = jaccard_score(
+            y_true, y_pred, average="weighted", zero_division=0
+        )
+
+        # Matthews correlation coefficient (MCC)
+        mcc = matthews_corrcoef(y_true, y_pred)
+
+        if not isinstance(ap_pc, np.ndarray):
+            msg = "average_precision_score or f1_score did not return np.ndarray as expected."
+            self.logger.error(msg)
+            raise TypeError(msg)
+
+        if not isinstance(jaccard_pc, np.ndarray):
+            msg = "jaccard_score did not return np.ndarray as expected."
+            self.logger.error(msg)
+            raise TypeError(msg)
+
+        # Add per-class metrics
+        report_full = {}
+        for i, class_name in enumerate(report_names):
+            class_report = report.get(class_name)
+
+            if isinstance(class_report, float):
+                continue
+
+            report_full[class_name] = dict(class_report)
+            report_full[class_name]["average-precision"] = float(ap_pc[i])
+            report_full[class_name]["jaccard"] = float(jaccard_pc[i])
+
+        macro_avg = report.get("macro avg")
+        if isinstance(macro_avg, dict):
+            report_full["macro avg"] = dict(macro_avg)
+            report_full["macro avg"]["average-precision"] = float(ap_macro)
+            report_full["macro avg"]["jaccard"] = float(jaccard_macro)
+
+        weighted_avg = report.get("weighted avg")
+        if isinstance(weighted_avg, dict):
+            report_full["weighted avg"] = dict(weighted_avg)
+            report_full["weighted avg"]["average-precision"] = float(ap_weighted)
+            report_full["weighted avg"]["jaccard"] = float(jaccard_weighted)
+
+        # Add scalar summary metrics
+        report_full["mcc"] = float(mcc)
+        accuracy_val = report.get("accuracy")
+
+        if isinstance(accuracy_val, (int, float)):
+            report_full["accuracy"] = float(accuracy_val)
+
+        return report_full
 
     def _evaluate_iupac10_and_plot(
         self, y_true: np.ndarray, y_pred: np.ndarray
@@ -710,27 +770,16 @@ class ImputeMostFrequent:
             NotFittedError: If fit() and transform() have not been called.
         """
         labels_idx = list(range(10))
-        labels_names = ["A", "C", "G", "T", "W", "R", "M", "K", "Y", "S"]
+        report_names = ["A", "C", "G", "T", "W", "R", "M", "K", "Y", "S"]
 
-        metrics = {
-            "accuracy": accuracy_score(y_true, y_pred),
-            "f1": f1_score(
-                y_true, y_pred, average="macro", labels=labels_idx, zero_division=0
-            ),
-            "precision": precision_score(
-                y_true, y_pred, average="macro", labels=labels_idx, zero_division=0
-            ),
-            "recall": recall_score(
-                y_true, y_pred, average="macro", labels=labels_idx, zero_division=0
-            ),
-        }
-        self.metrics_.update({f"iupac_{k}": v for k, v in metrics.items()})
+        # Create an identity matrix and use the targets array as indices
+        y_score = np.eye(len(report_names))[y_pred]
 
         report: dict | str = classification_report(
             y_true,
             y_pred,
             labels=labels_idx,
-            target_names=labels_names,
+            target_names=report_names,
             zero_division=0,
             output_dict=True,
         )
@@ -739,24 +788,6 @@ class ImputeMostFrequent:
             msg = "classification_report did not return a dict as expected."
             self.logger.error(msg)
             raise TypeError(msg)
-
-        report_subset = {}
-        for k, v in report.items():
-            tmp = {}
-            if isinstance(v, dict) and "support" in v:
-                for k2, v2 in v.items():
-                    if k2 != "support":
-                        tmp[k2] = v2
-                if tmp:
-                    report_subset[k] = tmp
-
-        if report_subset and (self.verbose or self.debug):
-            pm = PrettyMetrics(
-                report_subset,
-                precision=3,
-                title=f"{self.model_name} IUPAC 10-Class Report",
-            )
-            pm.render()
 
         if self.show_plots:
             viz = ClassificationReportVisualizer(reset_kwargs=self.plotter_.param_dict)
@@ -784,8 +815,25 @@ class ImputeMostFrequent:
 
             # Confusion matrix
             self.plotter_.plot_confusion_matrix(
-                y_true, y_pred, label_names=labels_names, prefix="iupac"
+                y_true, y_pred, label_names=report_names, prefix="iupac"
             )
+
+        # ------ Additional metrics ------
+        report_full = self._additional_metrics(
+            y_true, y_pred, labels_idx, report_names, report
+        )
+        if report_full:
+            for k, v in report_full.items():
+                if k not in report:
+                    report[k] = v
+
+        if self.verbose or self.debug:
+            pm = PrettyMetrics(
+                report_full,
+                precision=2,
+                title=f"{self.model_name} IUPAC 10-Class Report",
+            )
+            pm.render()
 
         # Save JSON
         self._save_report(report, suffix="iupac")
@@ -878,39 +926,30 @@ class ImputeMostFrequent:
                 raise Exception(msg)
 
     def decode_012(
-        self, X: np.ndarray | pd.DataFrame | List[List[int]], is_nuc: bool = False
+        self, X: np.ndarray | pd.DataFrame | list[list[int]], is_nuc: bool = False
     ) -> np.ndarray:
-        """Decode 012 or 0-9 integer encodings to single-character IUPAC nucleotides.
+        """Decode 012-encodings to IUPAC chars with metadata repair.
 
-        Always returns single-character IUPAC codes:
-        - A, C, G, T for homozygotes
-        - R, Y, S, W, K, M for heterozygotes
-        - N for missing/invalid
-
-        Modes:
-        1) Standard 012 (0=REF, 1=HET, 2=ALT, -9/-1=missing) using per-locus REF/ALT from GenotypeData.
-        Special case: ALT="." (or empty) is treated as monomorphic and defaults to REF.
-        2) IUPAC-integer mode (is_nuc=True) using SNPio's updated order:
-        A=0, C=1, G=2, T=3, W=4, R=5, M=6, K=7, Y=8, S=9, N=-9/-1.
+        This method converts genotype calls encoded as integers (0, 1, 2, etc.) into their corresponding IUPAC nucleotide codes. It supports two modes of decoding:
+        1. Nucleotide mode (`is_nuc=True`): Decodes integer codes (0-9) directly to IUPAC nucleotide codes.
+        2. Metadata mode (`is_nuc=False`): Uses reference and alternate allele metadata to determine the appropriate IUPAC codes.
 
         Args:
-            X: Matrix of 012 or 0-9 IUPAC integers.
-            is_nuc: If True, interpret inputs as 0-9 IUPAC integers (A=0, C=1, G=2, T=3, ...).
+            X (np.ndarray | pd.DataFrame | list[list[int]]): Input genotype calls as integers.
+            is_nuc (bool): If True, decode 0-9 nucleotide codes; else use ref/alt metadata. Defaults to False.
 
         Returns:
-            np.ndarray: Same shape as X, dtype '<U1', with single-character IUPAC codes.
+            np.ndarray: IUPAC strings as a 2D array of shape (n_samples, n_snps).
 
         Raises:
-            ValueError: If REF/ALT metadata are unavailable for 012 decoding.
+            ValueError: If input is not a DataFrame.
         """
         df = validate_input_type(X, return_type="df")
-
         if not isinstance(df, pd.DataFrame):
-            msg = "Internal error: expected DataFrame after validation."
-            self.logger.error(msg)
-            raise ValueError(msg)
+            raise ValueError("Expected DataFrame.")
 
-        iupac_to_bases = {
+        # IUPAC Definitions
+        iupac_to_bases: dict[str, set[str]] = {
             "A": {"A"},
             "C": {"C"},
             "G": {"G"},
@@ -925,164 +964,168 @@ class ImputeMostFrequent:
             "D": {"A", "G", "T"},
             "H": {"A", "C", "T"},
             "V": {"A", "C", "G"},
+            "N": set(),
         }
-        bases_to_iupac = {frozenset(v): k for k, v in iupac_to_bases.items()}
-        missing_codes = {"", ".", "N", "NONE"}
+        bases_to_iupac = {
+            frozenset(v): k for k, v in iupac_to_bases.items() if k != "N"
+        }
+        missing_codes = {"", ".", "N", "NONE", "-", "?", "./.", ".|.", "NAN", "nan"}
 
         def _normalize_iupac(value: object) -> str | None:
+            """Normalize an input into a single IUPAC code token or None."""
             if value is None:
                 return None
+
+            # Bytes -> str (make type narrowing explicit)
             if isinstance(value, (bytes, np.bytes_)):
-                value = value.decode("utf-8", errors="ignore")
-            if isinstance(value, (list, tuple, np.ndarray, pd.Series)):
-                for item in value:
+                value = bytes(value).decode("utf-8", errors="ignore")
+
+            # Handle list/tuple/array/Series: take first valid
+            if isinstance(value, (list, tuple, pd.Series, np.ndarray)):
+                # Convert Series to numpy array for consistent behavior
+                if isinstance(value, pd.Series):
+                    arr = value.to_numpy()
+                else:
+                    arr = value
+
+                # Scalar numpy array fast path
+                if isinstance(arr, np.ndarray) and arr.ndim == 0:
+                    return _normalize_iupac(arr.item())
+
+                # Empty sequence/array
+                if len(arr) == 0:
+                    return None
+
+                # First valid element wins
+                for item in arr:
                     code = _normalize_iupac(item)
                     if code is not None:
                         return code
                 return None
-            if isinstance(value, str):
-                for part in value.upper().split(","):
-                    part = part.strip()
-                    if not part or part in missing_codes:
-                        continue
-                    if part in iupac_to_bases:
-                        return part
+
+            s = str(value).upper().strip()
+            if not s or s in missing_codes:
                 return None
-            part = str(value).upper().strip()
-            if part in missing_codes:
+
+            if "," in s:
+                for tok in (t.strip() for t in s.split(",")):
+                    if tok and tok not in missing_codes and tok in iupac_to_bases:
+                        return tok
                 return None
-            if "," in part:
-                for token in part.split(","):
-                    token = token.strip()
-                    if token in iupac_to_bases:
-                        return token
-                return None
-            return part if part in iupac_to_bases else None
+
+            return s if s in iupac_to_bases else None
+
+        codes_df = df.apply(pd.to_numeric, errors="coerce")
+        codes = codes_df.fillna(-1).astype(np.int8).to_numpy()
+        n_rows, n_cols = codes.shape
 
         if is_nuc:
-            # UPDATED SNPio order: A=0, C=1, G=2, T=3, W=4, R=5, M=6, K=7, Y=8, S=9, N=-9/-1
-            iupac_list = ["A", "C", "G", "T", "W", "R", "M", "K", "Y", "S"]
-            mapping = {i: iupac_list[i] for i in range(10)}
-            mapping[-9] = "N"
-            mapping[-1] = "N"
-
-            # accept strings too
-            mapping.update({str(k): v for k, v in mapping.items()})
-            return df.replace(mapping).to_numpy(dtype="<U1")
-
-        # ---- Standard 012 decoding using REF/ALT per column ----
-        ref_alleles = getattr(self.genotype_data, "ref", None)
-        alt_alleles = getattr(self.genotype_data, "alt", None)
-
-        def _alleles_missing(value: object) -> bool:
-            try:
-                return value is None or len(value) == 0  # type: ignore[arg-type]
-            except TypeError:
-                return value is None
-
-        if _alleles_missing(ref_alleles):
-            ref_alleles = getattr(self.genotype_data, "_ref", None)
-        if _alleles_missing(ref_alleles):
-            ref_alleles = getattr(self, "_ref", None)
-
-        if _alleles_missing(alt_alleles):
-            alt_alleles = getattr(self.genotype_data, "_alt", None)
-        if _alleles_missing(alt_alleles):
-            alt_alleles = getattr(self, "_alt", None)
-
-        if ref_alleles is None or alt_alleles is None:
-            msg = (
-                "Reference and alternate alleles are not available in GenotypeData; "
-                "cannot decode 012 matrix."
+            iupac_list = np.array(
+                ["A", "C", "G", "T", "W", "R", "M", "K", "Y", "S"], dtype="<U1"
             )
-            self.logger.error(msg)
-            raise ValueError(msg)
+            out = np.full((n_rows, n_cols), "N", dtype="<U1")
+            mask = (codes >= 0) & (codes <= 9)
+            out[mask] = iupac_list[codes[mask]]
+            return out
 
-        df_out = df.copy().astype(object)
-        n_cols = len(df_out.columns)
+        # Metadata fetch
+        ref_alleles = getattr(self.genotype_data, "ref", [])
+        alt_alleles = getattr(self.genotype_data, "alt", [])
 
-        if isinstance(ref_alleles, np.ndarray):
-            ref_alleles = ref_alleles.tolist()
-        if isinstance(alt_alleles, np.ndarray):
-            alt_alleles = alt_alleles.tolist()
+        if len(ref_alleles) != n_cols:
+            ref_alleles = getattr(self, "_ref", [None] * n_cols)
+        if len(alt_alleles) != n_cols:
+            alt_alleles = getattr(self, "_alt", [None] * n_cols)
 
-        def _transpose_alt_alleles(alts: object) -> object:
-            if not isinstance(alts, list) or len(alts) == 0:
-                return alts
-            try:
-                if len(alts) != n_cols and all(
-                    not isinstance(a, (str, bytes))
-                    and hasattr(a, "__len__")
-                    and len(a) == n_cols
-                    for a in alts
-                ):
-                    return [[a[i] for a in alts] for i in range(n_cols)]
-            except TypeError:
-                return alts
-            return alts
+        # Ensure list length matches
+        if len(ref_alleles) != n_cols:
+            ref_alleles = [None] * n_cols
+        if len(alt_alleles) != n_cols:
+            alt_alleles = [None] * n_cols
 
-        alt_alleles = _transpose_alt_alleles(alt_alleles)
+        out = np.full((n_rows, n_cols), "N", dtype="<U1")
+        source_snp_data = None
 
-        if len(ref_alleles) != n_cols or len(alt_alleles) != n_cols:
-            try:
-                alleles = self.genotype_data.get_ref_alt_alleles(
-                    self.genotype_data.snp_data
-                )
-            except Exception:
-                alleles = None
-
-            if alleles:
-                ref_candidate = alleles[0]
-                if isinstance(ref_candidate, np.ndarray):
-                    ref_candidate = ref_candidate.tolist()
-                if len(ref_candidate) == n_cols:
-                    ref_alleles = ref_candidate
-
-                alt_candidate = [x for i, x in enumerate(alleles) if i > 0]
-                alt_candidate = _transpose_alt_alleles(alt_candidate)
-                if len(alt_candidate) == n_cols:
-                    alt_alleles = alt_candidate
-
-        if len(ref_alleles) != n_cols or len(alt_alleles) != n_cols:
-            msg = (
-                "Reference and alternate alleles do not align with genotype columns; "
-                "cannot decode 012 matrix."
-            )
-            self.logger.error(msg)
-            raise ValueError(msg)
-
-        for j, col in enumerate(df_out.columns):
+        for j in range(n_cols):
             ref = _normalize_iupac(ref_alleles[j])
             alt = _normalize_iupac(alt_alleles[j])
 
+            # --- REPAIR LOGIC ---
+            # If metadata is missing, scan the source column.
+            if ref is None or alt is None:
+                if source_snp_data is None and self.genotype_data.snp_data is not None:
+                    try:
+                        source_snp_data = np.asarray(self.genotype_data.snp_data)
+                    except Exception:
+                        pass  # if lazy loading fails
+
+                if source_snp_data is not None:
+                    try:
+                        col_data = source_snp_data[:, j]
+                        uniques = set()
+                        # Optimization: check up to 200 non-empty values
+                        count = 0
+                        for val in col_data:
+                            norm = _normalize_iupac(val)
+                            if norm:
+                                uniques.add(norm)
+                                count += 1
+                            if len(uniques) >= 2 or count > 200:
+                                break
+
+                        sorted_u = sorted(list(uniques))
+                        if len(sorted_u) >= 1 and ref is None:
+                            ref = sorted_u[0]
+                        if len(sorted_u) >= 2 and alt is None:
+                            alt = sorted_u[1]
+                    except Exception:
+                        pass
+
+            # --- DEFAULTS FOR MISSING ---
+            # If still missing, we cannot decode.
             if ref is None and alt is None:
-                ref = "A"
-                alt = "A"
+                ref = "N"
+                alt = "N"
             elif ref is None:
                 ref = alt
+            elif alt is None:
+                alt = ref  # Monomorphic site: ALT becomes REF
 
-            if alt is None:
-                alt = ref
-
+            # --- COMPUTE HET CODE ---
             if ref == alt:
                 het_code = ref
             else:
-                het_set = iupac_to_bases[ref] | iupac_to_bases[alt]
-                het_code = bases_to_iupac.get(frozenset(het_set), ref)
+                ref_set = iupac_to_bases.get(ref, set()) if ref is not None else set()
+                alt_set = iupac_to_bases.get(alt, set()) if alt is not None else set()
+                union_set = frozenset(ref_set | alt_set)
+                het_code = bases_to_iupac.get(union_set, "N")
 
-            col_map = {
-                0: ref,
-                "0": ref,
-                1: het_code,
-                "1": het_code,
-                2: alt,
-                "2": alt,
-                -9: "N",
-                "-9": "N",
-                -1: "N",
-                "-1": "N",
-            }
+            # --- ASSIGNMENT WITH SAFETY FALLBACKS ---
+            col_codes = codes[:, j]
 
-            df_out[col] = df_out[col].map(col_map)
+            # Case 0: REF
+            if ref != "N":
+                out[col_codes == 0, j] = ref
 
-        return df_out.to_numpy(dtype="<U1")
+            # Case 1: HET
+            if het_code != "N":
+                out[col_codes == 1, j] = het_code
+            else:
+                # If HET code is invalid (e.g. ref='A', alt='N'),
+                # fallback to REF
+                # Fix for an issue where a HET prediction at a monomorphic site
+                # produced 'N'
+                if ref != "N":
+                    out[col_codes == 1, j] = ref
+
+            # Case 2: ALT
+            if alt != "N":
+                out[col_codes == 2, j] = alt
+            else:
+                # If ALT is invalid (e.g. ref='A', alt='N'), fallback to REF
+                # Fix for an issue where an ALT prediction on a monomorphic site
+                # produced 'N'
+                if ref != "N":
+                    out[col_codes == 2, j] = ref
+
+        return out
