@@ -154,7 +154,7 @@ class AutoencoderModel(nn.Module):
         latent_dim: int = 2,
         dropout_rate: float = 0.2,
         activation: Literal["relu", "elu", "selu", "leaky_relu"] = "relu",
-        gamma: float = 2.0,
+        gamma: torch.Tensor = torch.tensor(2.0),
         device: Literal["cpu", "gpu", "mps"] = "cpu",
         verbose: bool = False,
         debug: bool = False,
