@@ -4,14 +4,14 @@ PG-SUI Tutorial
 Overview
 --------
 
-**PG-SUI** (Population Genomic Supervised & Unsupervised Imputation) performs missing-data imputation on SNP genotype matrices using **Deterministic**, **Supervised**, and **Unsupervised** model families. It integrates tightly with `SNPio <https://github.com/btmartin721/SNPio>`__ for reading, filtering, and writing genotype datasets, and emphasizes **unsupervised deep learning** approaches tuned for class imbalance and diploid (3-class) genotype representations. Unsupervised neural approaches (e.g., non-linear PCA and autoencoding families) are inspired by prior work on representation learning and generative modeling (Scholz et al., 2005; Hinton & Salakhutdinov, 2006; Kingma & Welling, 2013), while the Unsupervised Backpropagation approach follows the imputation framing of Gashler et al. (2016).
+**PG-SUI** (Population Genomic Supervised & Unsupervised Imputation) performs missing-data imputation on SNP genotype matrices using **Deterministic**, **Supervised**, and **Unsupervised** model families. It integrates tightly with `SNPio <https://github.com/btmartin721/SNPio>`__ for reading, filtering, and writing genotype datasets, and emphasizes **unsupervised deep learning** approaches tuned for class imbalance and diploid (3-class) genotype representations. Unsupervised neural approaches (e.g., autoencoding families) are inspired by prior work on representation learning and generative modeling (Hinton & Salakhutdinov, 2006; Kingma & Welling, 2013).
 
 PG-SUI supports both a command-line interface (CLI) for scripted workflows and a Python API for programmatic control.
 
 What's new
 ----------
 
-- **Dataclass-based configuration** at the API level. Each imputer is configured with a typed ``*Config`` dataclass (e.g., ``VAEConfig``, ``UBPConfig``, ``NLPCAConfig``) instead of ad-hoc kwargs.
+- **Dataclass-based configuration** at the API level. Each imputer is configured with a typed ``*Config`` dataclass (e.g., ``VAEConfig``) instead of ad-hoc kwargs.
 - **Presets** (``fast``, ``balanced``, ``thorough``) available via ``*.from_preset("...")`` and the CLI ``--preset`` flag.
 - **YAML configuration files** (``--config path.yaml``) to persist experiments; YAML merges with presets and can be partially specified.
 - **Refactored CLI** with a clear precedence model:
@@ -24,12 +24,6 @@ What's new
 
   - Loads prior best parameters per selected model from the previous run's output directory.
   - **Forces tuning OFF** (even if YAML/CLI/``--set`` attempts to re-enable tuning).
-
-- **Validation-loss enhancements (ImputeUBP)**
-
-  - Validation evaluation is now explicitly mask-aware (e.g., evaluates on simulated-missing entries when applicable).
-  - Added stable validation latent inference and schema-aware caching to avoid invalid reuse across shapes/classes.
-  - Optuna pruning hooks can use validation metrics reliably during the final phase (when enabled by config).
 
 How to run PG-SUI
 -----------------
@@ -47,8 +41,6 @@ Model Families
 
 - **Unsupervised (Deep Learning)**
 
-  - ``ImputeNLPCA``: Non-linear PCA with optional latent optimization (Scholz et al., 2005).
-  - ``ImputeUBP``: Unsupervised Backpropagation with joint latent + weight training (Gashler et al., 2016).
   - ``ImputeAutoencoder``: Standard autoencoder reconstruction (Hinton & Salakhutdinov, 2006).
   - ``ImputeVAE``: Variational Autoencoder with KL regularization (Kingma & Welling, 2013).
 
@@ -123,7 +115,7 @@ CLI Quickstart (copy/paste)
       pg-sui \
         --input pgsui/example_data/vcf_files/phylogen_subset14K.vcf.gz \
         --popmap pgsui/example_data/popmaps/test.popmap \
-        --models ImputeUBP ImputeVAE \
+        --models ImputeAutoencoder ImputeVAE \
         --preset balanced \
         --prefix demo \
         --sim-strategy random_weighted_inv \
@@ -196,7 +188,7 @@ Example usage
     pg-sui \
       --input data.vcf.gz \
       --popmap pops.popmap \
-      --models ImputeUBP ImputeNLPCA \
+      --models ImputeAutoencoder ImputeVAE \
       --prefix rerun_bestparams \
       --load-best-params \
       --best-params-prefix tuned_run_01 \
@@ -248,22 +240,16 @@ Using Presets Programmatically
 
 .. code-block:: python
 
-    from pgsui import NLPCAConfig, ImputeNLPCA, UBPConfig, ImputeUBP
+    from pgsui import VAEConfig, ImputeVAE
 
-    nlpca_cfg = NLPCAConfig.from_preset("fast")
-    ubp_cfg = UBPConfig.from_preset("thorough")
+    vae_cfg = VAEConfig.from_preset("fast")
 
-    ubp_cfg.model.num_hidden_layers = 3
-    ubp_cfg.io.prefix = "ubp_run1"
+    vae_cfg.model.num_hidden_layers = 3
+    vae_cfg.io.prefix = "vae_run1"
 
-    nlpca = ImputeNLPCA(genotype_data=gd, config=nlpca_cfg)
-    ubp = ImputeUBP(genotype_data=gd, config=ubp_cfg)
-
-    nlpca.fit()
-    X_nlpca = nlpca.transform()
-
-    ubp.fit()
-    X_ubp = ubp.transform()
+    vae = ImputeVAE(genotype_data=gd, config=vae_cfg)
+    vae.fit()
+    X_vae = vae.transform()
 
 YAML Configuration Files
 ------------------------
@@ -347,7 +333,7 @@ Typical CLI usage
     pg-sui \
       --input data.vcf.gz \
       --popmap pops.popmap \
-      --models ImputeUBP ImputeVAE \
+      --models ImputeAutoencoder ImputeVAE \
       --preset balanced \
       --prefix demo
 
@@ -358,17 +344,8 @@ Typical CLI usage
       --models ImputeVAE \
       --preset thorough \
       --config vae_balanced.yaml \
-      --set io.prefix=vae_vs_ubp \
+      --set io.prefix=vae_vs_ae \
       --set model.latent_dim=32
-
-Unsupervised Backpropagation (ImputeUBP): Validation-loss behavior
-------------------------------------------------------------------
-
-ImputeUBP supports periodic validation evaluation during training. In current implementations:
-
-- Validation scoring is mask-aware when simulated masking is active (i.e., it can score on the intended held-out entries rather than all unobserved/ missing cells).
-- Validation latent inference is stabilized via schema-aware caching so latent solutions aren't reused across incompatible shapes/ classes.
-- If tuning/ pruning is enabled in configuration, pruning can reference a validation metric computed consistently during the final phase.
 
 Minimal API Reference
 ---------------------
@@ -384,10 +361,6 @@ References
 
 Chawla, N. V., Bowyer, K. W., Hall, L. O., & Kegelmeyer, W. P. (2002). SMOTE: Synthetic Minority Over-sampling Technique. *Journal of Artificial Intelligence Research*, 16, 321-357.
 
-Gashler, M. S., Smith, M. R., Morris, R., & Martinez, T. (2016). Missing value imputation with unsupervised backpropagation. *Computational Intelligence*, 32(2), 196-215.
-
 Hinton, G. E., & Salakhutdinov, R. (2006). Reducing the dimensionality of data with neural networks. *Science*, 313(5786), 504-507.
 
 Kingma, D. P., & Welling, M. (2013). Auto-Encoding Variational Bayes. *arXiv preprint* arXiv:1312.6114.
-
-Scholz, M., Kaplan, F., Guy, C. L., Kopka, J., & Selbig, J. (2005). Non-linear PCA: a missing data approach. *Bioinformatics*, 21(20), 3887-3895.
