@@ -5,6 +5,8 @@ from sklearn.metrics import (
     accuracy_score,
     average_precision_score,
     f1_score,
+    jaccard_score,
+    matthews_corrcoef,
     precision_score,
     recall_score,
     roc_auc_score,
@@ -164,6 +166,8 @@ class Scorer:
             "f1",
             "precision",
             "recall",
+            "mcc",
+            "jaccard",
         ] = "pr_macro",
     ) -> Dict[str, float] | None:
         """Evaluate the model using various metrics.
@@ -228,6 +232,10 @@ class Scorer:
                 metrics = {"precision": self.precision(y_true, y_pred)}
             elif tune_metric == "recall":
                 metrics = {"recall": self.recall(y_true, y_pred)}
+            elif tune_metric == "jaccard":
+                metrics = {"jaccard": self.jaccard(y_true, y_pred)}
+            elif tune_metric == "mcc":
+                metrics = {"mcc": self.mcc(y_true, y_pred)}
             else:
                 msg = f"Invalid tune_metric provided: '{tune_metric}'."
                 self.logger.error(msg)
@@ -241,9 +249,40 @@ class Scorer:
                 "roc_auc": self.roc_auc(y_true, y_pred_proba),
                 "average_precision": self.average_precision(y_true, y_pred_proba),
                 "pr_macro": self.pr_macro(y_true_ohe, y_pred_proba),
+                "jaccard": self.jaccard(np.asarray(y_true), np.asarray(y_pred)),
+                "mcc": self.mcc(np.asarray(y_true), np.asarray(y_pred)),
             }
 
         return {k: float(v) for k, v in metrics.items()}
+
+    def jaccard(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
+        """Compute the Jaccard similarity coefficient.
+
+        The Jaccard similarity coefficient, also known as Intersection over Union (IoU), measures the similarity between two sets. It is defined as the size of the intersection divided by the size of the union of the sample sets.
+
+        Args:
+            y_true (np.ndarray): Ground truth (correct) target values.
+            y_pred (np.ndarray): Predicted target values.
+
+        Returns:
+            float: Jaccard similarity coefficient.
+        """
+        avg: str = self.average
+        return float(jaccard_score(y_true, y_pred, average=avg, zero_division=0))
+
+    def mcc(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
+        """Compute the Matthews correlation coefficient (MCC).
+
+        MCC is a balanced measure that can be used even if the classes are of very different sizes. It returns a value between -1 and +1, where +1 indicates a perfect prediction, 0 indicates no better than random prediction, and -1 indicates total disagreement between prediction and observation.
+
+        Args:
+            y_true (np.ndarray): Ground truth (correct) target values.
+            y_pred (np.ndarray): Predicted target values.
+
+        Returns:
+            float: Matthews correlation coefficient.
+        """
+        return float(matthews_corrcoef(y_true, y_pred))
 
     def average_precision(self, y_true: np.ndarray, y_pred_proba: np.ndarray) -> float:
         """Average precision with safe multiclass handling.
