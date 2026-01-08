@@ -6,12 +6,12 @@ About PG-SUI
 PG-SUI Philosophy
 -----------------
 
-PG-SUI is a Python 3 toolkit for imputing missing genotypes in population genomic SNP matrices using **deterministic**, **unsupervised**, and **supervised** approaches. PG-SUI integrates with `SNPio <https://snpio.readthedocs.io/en/latest/>__` for I/O (file input/ output) and encoding, emphasizes robust handling of class imbalance, and follows a logical design with easy-to-use configurations and presets, optional **YAML** configs, and a consistent **instantiate → fit() → transform()** workflow. Unsupervised deep models build on representation learning and generative modeling ideas (Hinton & Salakhutdinov, 2006; Kingma & Welling, 2013; Scholz et al., 2005; Gashler et al., 2016).
+PG-SUI is a Python 3 toolkit for imputing missing genotypes in population genomic SNP matrices using **deterministic**, **unsupervised**, and **supervised** approaches. PG-SUI integrates with `SNPio <https://snpio.readthedocs.io/en/latest/>__` for I/O (file input/output) and encoding, emphasizes robust handling of class imbalance, and follows a logical design with easy-to-use configurations and presets, optional **YAML** configs, and a consistent **instantiate → fit() → transform()** workflow. Unsupervised deep models build on representation learning and generative modeling ideas (Hinton & Salakhutdinov, 2006; Kingma & Welling, 2013).
 
 Key Design (at a glance)
 ------------------------
 
-- **Typed configs**: each imputer uses a ``*Config`` dataclass (e.g., ``VAEConfig``, ``NLPCAConfig``, ``UBPConfig``) with presets (``fast``, ``balanced``, ``thorough``).
+- **Typed configs**: each imputer uses a ``*Config`` dataclass (e.g., ``VAEConfig``) with presets (``fast``, ``balanced``, ``thorough``).
 - **Workflow**: pass a SNPio ``GenotypeData`` at construction → ``fit()`` → ``transform()`` (no arguments).
 - **Overrides**: presets ⇢ YAML (optional) ⇢ explicit overrides via dot-keys; CLI mirrors the same precedence.
 - **CLI overrides**: ``pg-sui`` exposes ``--sim-strategy``, ``--sim-prop``, and ``--disable-simulate-missing`` so you can globally control missing-data simulation per run without editing YAML (``--disable-simulate-missing`` is for supervised/deterministic runs; unsupervised models require simulated masking).
@@ -29,8 +29,6 @@ Unsupervised models in PG-SUI are purpose-built for genomic data:
 
 - **Variational Autoencoder (VAE)** (Kingma & Welling, 2013) — latent probabilistic modeling with KL (Kullback-Leibler) regularization.
 - **Autoencoder** (Hinton & Salakhutdinov, 2006) — standard encoder-decoder reconstruction, without using a latent distribution.
-- **Non-linear PCA (NLPCA)** (Scholz et al., 2005) — decoder-style network with latent optimization.
-- **Unsupervised Backpropagation (UBP)** (Gashler et al., 2016) — joint training of latent vectors and decoder weights.
 
 These models learn structure from observed entries and then infer true missing genotypes:
 
@@ -42,8 +40,6 @@ Detailed Unsupervised Deep Learning Imputation
 
 - **Autoencoder**: compresses loci into a low-dimensional embedding and reconstructs the 0/1/2 matrix through a decoder (Hinton & Salakhutdinov, 2006).
 - **VAE**: learns (i.e., encodes) a distribution over the latent space (mean/variance), sampling latents during training for a regularized decoder (Kingma & Welling, 2013).
-- **NLPCA**: initializes reduced-dimensional inputs and iteratively refines them by minimizing reconstruction loss on observed entries (Scholz et al., 2005).
-- **UBP**: three-phase training that alternates/refines latent vectors and MLP weights for improved imputation on sparse, imbalanced data (Gashler et al., 2016).
 
 Supervised Imputation Methods
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -74,10 +70,6 @@ References
 
 Chawla, N. V., Bowyer, K. W., Hall, L. O., & Kegelmeyer, W. P. (2002). SMOTE: Synthetic Minority Over-sampling Technique. *Journal of Artificial Intelligence Research*, 16, 321-357.
 
-Gashler, M. S., Smith, M. R., Morris, R., & Martinez, T. (2016). Missing value imputation with unsupervised backpropagation. *Computational Intelligence*, 32(2), 196-215.
-
 Hinton, G. E., & Salakhutdinov, R. R. (2006). Reducing the dimensionality of data with neural networks. *Science*, 313(5786), 504-507.
 
 Kingma, D. P., & Welling, M. (2013). Auto-Encoding Variational Bayes. *arXiv preprint* arXiv:1312.6114.
-
-Scholz, M., Kaplan, F., Guy, C. L., Kopka, J., & Selbig, J. (2005). Non-linear PCA: a missing data approach. *Bioinformatics*, 21(20), 3887-3895.
