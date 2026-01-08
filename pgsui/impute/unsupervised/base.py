@@ -1,11 +1,11 @@
 import copy
 import gc
-import inspect
 import json
 import logging
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Mapping, Tuple, Type
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Type
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -15,7 +15,12 @@ import plotly.graph_objects as go
 import torch
 import torch.nn.functional as F
 from matplotlib.figure import Figure
-from sklearn.metrics import classification_report
+from sklearn.metrics import (
+    average_precision_score,
+    classification_report,
+    jaccard_score,
+    matthews_corrcoef,
+)
 from sklearn.model_selection import train_test_split
 from snpio import SNPioMultiQC
 from snpio.utils.logging import LoggerManager
@@ -30,6 +35,19 @@ from pgsui.utils.pretty_metrics import PrettyMetrics
 
 if TYPE_CHECKING:
     from snpio.read_input.genotype_data import GenotypeData
+
+
+class _MaskedNumpyDataset(torch.utils.data.Dataset):
+    def __init__(self, X: np.ndarray, y: np.ndarray, mask: np.ndarray):
+        self.X = X
+        self.y = y
+        self.mask = mask.astype(np.bool_, copy=False)
+
+    def __len__(self) -> int:
+        return self.X.shape[0]
+
+    def __getitem__(self, idx: int):
+        return self.X[idx], self.y[idx], self.mask[idx]
 
 
 class BaseNNImputer:
@@ -60,8 +78,7 @@ class BaseNNImputer:
         """
         self.model_name = model_name
         self.genotype_data = genotype_data
-        if not hasattr(self, "simulate_missing"):
-            self.simulate_missing = True
+
         if not hasattr(self, "tree_parser"):
             self.tree_parser = None
         if not hasattr(self, "sim_kwargs"):
@@ -97,10 +114,6 @@ class BaseNNImputer:
 
         self.logger.info(f"Using PyTorch device: {self.device.type}.")
 
-        self._float_genotype_cache: np.ndarray | None = None
-        self._sim_mask_cache: dict[tuple, np.ndarray] = {}
-        self._tune_ready: bool = False
-
         # To be initialized by child classes or fit method
         self.tune_save_db: bool = False
         self.tune_resume: bool = False
@@ -119,21 +132,16 @@ class BaseNNImputer:
         self.show_plots: bool = False
         self.scoring_averaging: Literal["macro", "micro", "weighted"] = "macro"
         self.pgenc: Any = None
-        self.is_haploid: bool = False
+        self.is_haploid_: bool = False
         self.ploidy: int = 2
         self.beta: float = 0.9999
-        self.max_ratio: float = 5.0
-        self.sim_strategy: str = "mcar"
-        self.sim_prop: float = 0.1
-        self.seed: int | None = 42
+        self.max_ratio: Optional[float] = None
+        self.sim_strategy: str = "random"
+        self.sim_prop: float = 0.2
+        self.seed: Optional[int] = None
         self.rng: np.random.Generator = np.random.default_rng(self.seed)
         self.ground_truth_: np.ndarray
-        self.tune_fast: bool = False
-        self.tune_max_samples: int = 1000
-        self.tune_max_loci: int = 500
         self.validation_split: float = 0.2
-        self.tune_batch_size: int = 64
-        self.tune_proxy_metric_batch: int = 512
         self.batch_size: int = 64
         self.best_params_: Dict[str, Any] = {}
 
@@ -142,9 +150,9 @@ class BaseNNImputer:
         self.plots_dir: Path
         self.metrics_dir: Path
         self.parameters_dir: Path
-        self.study_db: Path | None = None
-        self.X_model_input_: np.ndarray | None = None
-        self.sim_mask_global_: np.ndarray | None = None
+        self.study_db: Optional[Path] = None
+        self.X_model_input_: Optional[np.ndarray] = None
+        self.class_weights_: Optional[torch.Tensor] = None
 
     def tune_hyperparameters(self) -> Dict[str, Any]:
         """Tunes model hyperparameters using an Optuna study.
@@ -187,14 +195,14 @@ class BaseNNImputer:
             storage=storage,
             load_if_exists=load_if_exists,
             pruner=optuna.pruners.MedianPruner(
-                # Guard against pathological small `n_trials` values (e.g., 1)
-                # that can otherwise produce 0 for these settings.
+                # Guard against small `n_trials` values (e.g., 1)
+                # that can otherwise produce 0 startup/warmup/min trials.
                 n_startup_trials=max(
                     1, min(int(self.n_trials * 0.1), 10, int(self.n_trials))
                 ),
-                n_warmup_steps=25,
+                n_warmup_steps=150,
                 n_min_trials=max(
-                    1, min(int(0.5 * self.n_trials), 10, int(self.n_trials))
+                    1, min(int(0.5 * self.n_trials), 25, int(self.n_trials))
                 ),
             ),
         )
@@ -212,7 +220,7 @@ class BaseNNImputer:
         show_progress_bar = not self.verbose and not self.debug and self.n_jobs == 1
 
         # Set the best parameters.
-        # NOTE: `_set_best_params()` must be implemented in the child class.
+        # NOTE: _set_best_params() must be implemented in the child class.
         if not hasattr(self, "_set_best_params"):
             msg = "Method `_set_best_params()` must be implemented in the child class."
             self.logger.error(msg)
@@ -229,7 +237,7 @@ class BaseNNImputer:
         try:
             best_metric = study.best_value
             best_params = study.best_params
-        except ValueError:
+        except Exception:
             msg = "Tuning failed: No successful trials completed."
             self.logger.error(msg)
             raise RuntimeError(msg)
@@ -240,15 +248,6 @@ class BaseNNImputer:
         self.logger.info("Best parameters:")
         best_params_tmp = copy.deepcopy(best_params)
         best_params_tmp["learning_rate"] = self.learning_rate
-
-        title = f"{self.model_name} Optimized Parameters"
-
-        if self.verbose or self.debug:
-            pm = PrettyMetrics(best_params_tmp, precision=6, title=title)
-            pm.render()
-
-        # Save best parameters to a JSON file.
-        self._save_best_params(best_params_tmp, objective_mode=True)
 
         tn = f"{self.tune_metric} Value"
 
@@ -261,18 +260,16 @@ class BaseNNImputer:
 
     @staticmethod
     def initialize_weights(module: torch.nn.Module) -> None:
-        """Initializes model weights using the Kaiming Uniform distribution.
+        """Initializes model weights using Xavier/Glorot Uniform distribution.
 
-        This static method is intended to be applied to a PyTorch model to initialize the weights of its linear and convolutional layers. This initialization scheme is particularly effective for networks that use ReLU-family activation functions, as it helps maintain stable activation variances during training.
-
-        Args:
-            module (torch.nn.Module): The PyTorch module (e.g., a layer) to initialize.
+        Switching from Kaiming to Xavier is safer for deep VAEs to prevent
+        exploding gradients or dead neurons in the early epochs.
         """
         if isinstance(
             module, (torch.nn.Linear, torch.nn.Conv1d, torch.nn.ConvTranspose1d)
         ):
-            # Use Kaiming Uniform initialization for Linear and Conv layers
-            torch.nn.init.kaiming_uniform_(module.weight, nonlinearity="relu")
+            # Xavier is generally more stable for VAEs than Kaiming
+            torch.nn.init.xavier_uniform_(module.weight)
             if module.bias is not None:
                 torch.nn.init.zeros_(module.bias)
 
@@ -308,20 +305,16 @@ class BaseNNImputer:
             self.logger.error(msg)
             raise AttributeError(msg)
 
-        # Start with a base set of fixed (non-tuned) parameters.
-        base_num_classes = getattr(self, "output_classes_", None)
-        if base_num_classes is None:
-            base_num_classes = self.num_classes_
         all_params = {
             "n_features": self.num_features_,
             "prefix": self.prefix,
-            "num_classes": base_num_classes,
+            "num_classes": self.num_classes_,
             "verbose": self.verbose,
             "debug": self.debug,
             "device": self.device,
         }
 
-        # Update with the variable hyperparameters from the provided dictionary
+        # Update with the variable hyperparameters
         all_params.update(model_params)
 
         return Model(**all_params).to(self.device)
@@ -409,104 +402,6 @@ class BaseNNImputer:
         self.logger.error(msg)
         raise NotImplementedError(msg)
 
-    def _class_balanced_weights_from_mask(
-        self,
-        y: np.ndarray,
-        train_mask: np.ndarray,
-        num_classes: int,
-        beta: float = 0.9999,
-        max_ratio: float = 5.0,
-        mode: Literal["allele", "genotype10"] = "allele",
-    ) -> torch.Tensor:
-        """Class-balanced weights (Cui et al. 2019) with overflow-safe effective number.
-
-        mode="allele": y is 1D alleles in {0..3}, train_mask same shape. mode="genotype10": y is (nS,nF,2) alleles; train_mask is (nS,nF) loci where both alleles known.
-
-        Args:
-            y (np.ndarray): Ground truth labels.
-            train_mask (np.ndarray): Boolean mask of training examples (same shape as y or y without last dim for genotype10).
-            num_classes (int): Number of classes.
-            beta (float): Hyperparameter for effective number calculation. Clamped to (0,1). Default is 0.9999.
-            max_ratio (float): Maximum allowed ratio between largest and smallest non-zero weight. Default is 5.0.
-            mode (Literal["allele", "genotype10"]): Whether y contains allele labels or 10-class genotypes. Default is "allele".
-
-        Returns:
-            torch.Tensor: Class weights of shape (num_classes,). Mean weight is 1.0, zero-weight classes remain zero.
-        """
-        if mode == "allele":
-            valid = (y >= 0) & train_mask
-            cls, cnt = np.unique(y[valid].astype(np.int64), return_counts=True)
-            counts = np.zeros(num_classes, dtype=np.float64)
-            counts[cls] = cnt
-
-        elif mode == "genotype10":
-            if y.ndim != 3 or y.shape[-1] != 2:
-                msg = "For genotype10, y must be (nS,nF,2)."
-                self.logger.error(msg)
-                raise ValueError(msg)
-
-            if train_mask.shape != y.shape[:2]:
-                msg = "train_mask must be (nS,nF) for genotype10."
-                self.logger.error(msg)
-                raise ValueError(msg)
-
-            # only loci where both alleles known and in training
-            m = train_mask & np.all(y >= 0, axis=-1)
-            if not np.any(m):
-                counts = np.zeros(num_classes, dtype=np.float64)
-
-            else:
-                a1 = y[:, :, 0][m].astype(int)
-                a2 = y[:, :, 1][m].astype(int)
-                lo, hi = np.minimum(a1, a2), np.maximum(a1, a2)
-                # map to 10-class index
-                map10 = self.pgenc.map10
-                idx10 = map10[lo, hi]
-                idx10 = idx10[(idx10 >= 0) & (idx10 < num_classes)]
-                counts = np.bincount(idx10, minlength=num_classes).astype(np.float64)
-        else:
-            msg = f"Unknown mode supplied to _class_balanced_weights_from_mask: {mode}"
-            self.logger.error(msg)
-            raise ValueError(msg)
-
-        # ---- Effective number ----
-        beta = float(beta)
-
-        # clamp beta ∈ (0,1)
-        if not np.isfinite(beta):
-            beta = 0.9999
-
-        beta = min(max(beta, 1e-8), 1.0 - 1e-8)
-
-        logb = np.log(beta)  # < 0
-        t = counts * logb  # ≤ 0
-
-        # 1 - beta^n = 1 - exp(n*log(beta)) = -(exp(n*log(beta)) - 1)
-        # use expm1 for accuracy near 0; for very negative t, eff≈1.0
-        eff = np.where(t > -50.0, -np.expm1(t), 1.0)
-
-        # class-balanced weights
-        w = (1.0 - beta) / (eff + 1e-12)
-
-        # Give unseen classes the largest non-zero weight (keeps it learnable)
-        if np.any(counts == 0) and np.any(counts > 0):
-            w[counts == 0] = w[counts > 0].max()
-
-        # normalize by mean of non-zero
-        nz = w > 0
-        w[nz] /= w[nz].mean() + 1e-12
-
-        # cap spread consistently with a single 'cap'
-        cap = float(max_ratio) if max_ratio is not None else 10.0
-        cap = max(cap, 5.0)  # ensure we allow some differentiation
-        if np.any(nz):
-            spread = w[nz].max() / max(w[nz].min(), 1e-12)
-            if spread > cap:
-                scale = cap / spread
-                w[nz] = 1.0 + (w[nz] - 1.0) * scale
-
-        return torch.tensor(w.astype(np.float32), device=self.device)
-
     def _select_device(self, device: Literal["gpu", "cpu", "mps"]) -> torch.device:
         """Selects the appropriate PyTorch device based on user preference and availability.
 
@@ -559,27 +454,16 @@ class BaseNNImputer:
                 self.logger.error(msg)
                 raise Exception(msg)
 
-    def _clear_resources(
-        self,
-        model: torch.nn.Module,
-        train_loader: torch.utils.data.DataLoader,
-        latent_vectors: torch.nn.Parameter | None = None,
-    ) -> None:
+    def _clear_resources(self, model: torch.nn.Module) -> None:
         """Releases GPU and CPU memory after an Optuna trial.
 
         This is a crucial step during hyperparameter tuning to prevent memory leaks between trials, ensuring that each trial runs in a clean environment.
 
         Args:
             model (torch.nn.Module): The model from the completed trial.
-            train_loader (torch.utils.data.DataLoader): The data loader from the trial.
-            latent_vectors (torch.nn.Parameter | None): The latent vectors from the trial.
         """
         try:
-            del model, train_loader
-
-            if latent_vectors is not None:
-                del latent_vectors
-
+            del model
         except NameError:
             pass
 
@@ -633,6 +517,82 @@ class BaseNNImputer:
                 prefix=f"geno{n_labels}_{prefix}",
             )
 
+    def _additional_metrics(self, y_true, y_pred, labels, report_names, report):
+        """Compute additional metrics and augment the report dictionary.
+
+        Args:
+            y_true (np.ndarray): True genotypes.
+            y_pred (np.ndarray): Predicted genotypes.
+            labels (list[int]): List of label indices.
+            report_names (list[str]): List of report names corresponding to labels.
+            report (dict): Classification report dictionary to augment.
+
+        Returns:
+            dict[str, dict[str, float] | float]: Augmented report dictionary with additional metrics.
+        """
+        # Create an identity matrix and use the targets array as indices
+        y_score = np.eye(len(report_names))[y_pred]
+
+        # Per-class metrics
+        ap_pc = average_precision_score(y_true, y_score, average=None)
+        jaccard_pc = jaccard_score(
+            y_true, y_pred, average=None, labels=labels, zero_division=0
+        )
+
+        # Macro/weighted metrics
+        ap_macro = average_precision_score(y_true, y_score, average="macro")
+        ap_weighted = average_precision_score(y_true, y_score, average="weighted")
+        jaccard_macro = jaccard_score(y_true, y_pred, average="macro", zero_division=0)
+        jaccard_weighted = jaccard_score(
+            y_true, y_pred, average="weighted", zero_division=0
+        )
+
+        # Matthews correlation coefficient (MCC)
+        mcc = matthews_corrcoef(y_true, y_pred)
+
+        if not isinstance(ap_pc, np.ndarray):
+            msg = "average_precision_score or f1_score did not return np.ndarray as expected."
+            self.logger.error(msg)
+            raise TypeError(msg)
+
+        if not isinstance(jaccard_pc, np.ndarray):
+            msg = "jaccard_score did not return np.ndarray as expected."
+            self.logger.error(msg)
+            raise TypeError(msg)
+
+        # Add per-class metrics
+        report_full = {}
+        for i, class_name in enumerate(report_names):
+            class_report = report.get(class_name)
+
+            if isinstance(class_report, float):
+                continue
+
+            report_full[class_name] = dict(class_report)
+            report_full[class_name]["average-precision"] = float(ap_pc[i])
+            report_full[class_name]["jaccard"] = float(jaccard_pc[i])
+
+        macro_avg = report.get("macro avg")
+        if isinstance(macro_avg, dict):
+            report_full["macro avg"] = dict(macro_avg)
+            report_full["macro avg"]["average-precision"] = float(ap_macro)
+            report_full["macro avg"]["jaccard"] = float(jaccard_macro)
+
+        weighted_avg = report.get("weighted avg")
+        if isinstance(weighted_avg, dict):
+            report_full["weighted avg"] = dict(weighted_avg)
+            report_full["weighted avg"]["average-precision"] = float(ap_weighted)
+            report_full["weighted avg"]["jaccard"] = float(jaccard_weighted)
+
+        # Add scalar summary metrics
+        report_full["mcc"] = float(mcc)
+        accuracy_val = report.get("accuracy")
+
+        if isinstance(accuracy_val, (int, float)):
+            report_full["accuracy"] = float(accuracy_val)
+
+        return report_full
+
     def _make_class_reports(
         self,
         y_true: np.ndarray,
@@ -650,13 +610,12 @@ class BaseNNImputer:
             y_pred (np.ndarray): Predicted labels (1D array).
             metrics (Dict[str, float]): Computed metrics.
             y_pred_proba (np.ndarray | None): Predicted probabilities (2D array). Defaults to None.
-            labels (List[str]): Class label names
-                (default: ["REF", "HET", "ALT"] for 3-class).
+            labels (List[str]): Class label names (default: ["REF", "HET", "ALT"] for 3-class).
         """
-        report_name = "zygosity" if len(labels) == 3 else "iupac"
+        report_name = "zygosity" if len(labels) <= 3 else "iupac"
         middle = "IUPAC" if report_name == "iupac" else "Zygosity"
 
-        msg = f"{middle} Report (on {y_true.size} total genotypes)"
+        msg = f"{middle} Report (on {y_pred.size} total genotypes)"
         self.logger.info(msg)
 
         if y_pred_proba is not None:
@@ -687,27 +646,6 @@ class BaseNNImputer:
             msg = "Expected classification_report to return a dict."
             self.logger.error(msg, exc_info=True)
             raise ValueError(msg)
-
-        report_subset = {}
-        for k, v in report.items():
-            tmp = {}
-            if isinstance(v, dict) and "support" in v:
-                for k2, v2 in v.items():
-                    if k2 != "support":
-                        tmp[k2] = v2
-                if tmp:
-                    report_subset[k] = tmp
-
-        if report_subset and (self.verbose or self.debug):
-            pm = PrettyMetrics(
-                report_subset,
-                precision=3,
-                title=f"{self.model_name} {middle} Report",
-            )
-            pm.render()
-
-        with open(self.metrics_dir / f"{report_name}_report.json", "w") as f:
-            json.dump(report, f, indent=4)
 
         if self.show_plots:
             viz = ClassificationReportVisualizer(reset_kwargs=self.plotter_.param_dict)
@@ -741,9 +679,28 @@ class BaseNNImputer:
                         description=f"{self.model_name} {middle} {len(labels)}-base Radar Plot. This radar plot visualizes model performance for three metrics per-class: precision, recall, and F1-score. Each axis represents one of these metrics, allowing for a quick visual assessment of the model's strengths and weaknesses. Higher values towards the outer edge indicate better performance.",
                     )
 
-            if not self.is_haploid:
+            if not self.is_haploid_:
                 msg = f"Ploidy: {self.ploidy}. Evaluating per genotype (REF, HET, ALT)."
                 self.logger.info(msg)
+
+        report_full = self._additional_metrics(
+            y_true,
+            y_pred,
+            labels=list(range(len(labels))),
+            report_names=labels,
+            report=report,
+        )
+
+        if self.verbose or self.debug:
+            pm = PrettyMetrics(
+                report_full,
+                precision=2,
+                title=f"{self.model_name} {middle} Report",
+            )
+            pm.render()
+
+        with open(self.metrics_dir / f"{report_name}_report.json", "w") as f:
+            json.dump(report, f, indent=4)
 
     def _compute_hidden_layer_sizes(
         self,
@@ -751,6 +708,7 @@ class BaseNNImputer:
         n_outputs: int,
         n_samples: int,
         n_hidden: int,
+        latent_dim: int,
         *,
         alpha: float = 4.0,
         schedule: str = "pyramid",
@@ -762,150 +720,437 @@ class BaseNNImputer:
     ) -> list[int]:
         """Compute hidden layer sizes given problem scale and a layer count.
 
-        This method computes a list of hidden layer sizes based on the number of input features, output classes, training samples, and desired hidden layers. The sizes are determined using a specified schedule (pyramid, constant, or linear) and are constrained by minimum and maximum sizes, as well as rounding to multiples of a specified value.
+        Notes:
+            - Returns sizes for *hidden layers only* (length = n_hidden).
+            - Does NOT include the input layer (n_inputs) or the latent layer (latent_dim).
+            - Enforces a latent-aware minimum: one discrete level above latent_dim, where a level is `multiple_of`.
+            - Enforces *strictly decreasing* hidden sizes (no repeats). This may require bumping `base` upward.
 
         Args:
-            n_inputs (int): Number of input features.
-            n_outputs (int): Number of output classes.
-            n_samples (int): Number of training samples.
-            n_hidden (int): Number of hidden layers.
-            alpha (float): Scaling factor for base layer size. Default is 4.0.
-            schedule (Literal["pyramid", "constant", "linear"]): Size schedule. Default is "pyramid".
-            min_size (int): Minimum layer size. Default is 16.
-            max_size (int | None): Maximum layer size. Default is None (no limit).
-            multiple_of (int): Round layer sizes to be multiples of this. Default is 8.
-            decay (float | None): Decay factor for "pyramid" schedule. If None, it is computed automatically. Default is None.
-            cap_by_inputs (bool): If True, cap layer sizes to n_inputs. Default is True.
+            n_inputs: Number of input features (e.g., flattened one-hot: num_features * num_classes).
+            n_outputs: Number of output classes (often equals num_classes).
+            n_samples: Number of training samples.
+            n_hidden: Number of hidden layers (excluding input and latent layers).
+            latent_dim: Latent dimensionality (not returned, used only to set a floor).
+            alpha: Scaling factor for base layer size.
+            schedule: Size schedule ("pyramid" or "linear").
+            min_size: Minimum layer size floor before latent-aware adjustment.
+            max_size: Maximum layer size cap. If None, a heuristic cap is used.
+            multiple_of: Hidden sizes are multiples of this value.
+            decay: Pyramid decay factor. If None, computed to land near the target.
+            cap_by_inputs: If True, cap layer sizes to n_inputs.
 
         Returns:
-            list[int]: List of hidden layer sizes.
+            list[int]: Hidden layer sizes (len = n_hidden).
 
         Raises:
-            ValueError: If n_hidden < 0 or if alpha * (n_inputs + n_outputs) <= 0 or if schedule is unknown.
-            TypeError: If any argument is not of the expected type.
-
-        Notes:
-            - If n_hidden is 0, returns an empty list.
-            - The base layer size is computed as ceil(n_samples / (alpha * (n_inputs + n_outputs))).
-            - The sizes are adjusted according to the specified schedule and constraints.
+            ValueError: On invalid arguments or conflicting constraints.
         """
+        # ----------------------------
+        # Basic validation
+        # ----------------------------
         if n_hidden < 0:
             msg = f"n_hidden must be >= 0, got {n_hidden}."
-            self.logger.error(msg)
-            raise ValueError(msg)
-
-        if schedule not in {"pyramid", "constant", "linear"}:
-            msg = f"Unknown schedule '{schedule}'. Use 'pyramid', 'constant', or 'linear'."
             self.logger.error(msg)
             raise ValueError(msg)
 
         if n_hidden == 0:
             return []
 
-        denom = float(alpha) * float(n_inputs + n_outputs)
-
-        if denom <= 0:
-            msg = f"alpha * (n_inputs + n_outputs) must be > 0, got {denom}."
+        if n_inputs <= 0:
+            msg = f"n_inputs must be > 0, got {n_inputs}."
             self.logger.error(msg)
             raise ValueError(msg)
 
-        base = int(np.ceil(float(n_samples) / denom))
+        if n_outputs <= 0:
+            msg = f"n_outputs must be > 0, got {n_outputs}."
+            self.logger.error(msg)
+            raise ValueError(msg)
 
-        if max_size is None:
-            max_size = max(n_inputs, base)
+        if n_samples <= 0:
+            msg = f"n_samples must be > 0, got {n_samples}."
+            self.logger.error(msg)
+            raise ValueError(msg)
 
-        base = int(np.clip(base, min_size, max_size))
+        if latent_dim <= 0:
+            msg = f"latent_dim must be > 0, got {latent_dim}."
+            self.logger.error(msg)
+            raise ValueError(msg)
 
-        if schedule == "constant":
-            sizes = np.full(shape=(n_hidden,), fill_value=base, dtype=float)
+        if multiple_of <= 0:
+            msg = f"multiple_of must be > 0, got {multiple_of}."
+            self.logger.error(msg)
+            raise ValueError(msg)
 
-        elif schedule == "linear":
-            target = max(min_size, min(base, base // 4))
-            sizes = (
-                np.array([base], dtype=float)
-                if n_hidden == 1
-                else np.linspace(base, target, num=n_hidden, dtype=float)
+        if alpha <= 0:
+            msg = f"alpha must be > 0, got {alpha}."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        schedule = str(schedule).lower().strip()
+        if schedule not in {"pyramid", "linear"}:
+            msg = f"Invalid schedule '{schedule}'. Must be 'pyramid' or 'linear'."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        # ----------------------------
+        # Latent-aware minimum floor
+        # ----------------------------
+        # Smallest multiple_of strictly greater than latent_dim
+        min_hidden_floor = int(np.ceil((latent_dim + 1) / multiple_of) * multiple_of)
+        effective_min = max(int(min_size), min_hidden_floor)
+
+        if cap_by_inputs and n_inputs < effective_min:
+            msg = (
+                "Cannot satisfy latent-aware minimum hidden size with cap_by_inputs=True. "
+                f"Required hidden size >= {effective_min} (one level above latent_dim={latent_dim}), "
+                f"but n_inputs={n_inputs}. Set cap_by_inputs=False or reduce latent_dim/multiple_of."
+            )
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        # ----------------------------
+        # Infer num_features (if using flattened one-hot: n_inputs = num_features * num_classes)
+        # ----------------------------
+        if n_inputs % n_outputs == 0:
+            num_features = n_inputs // n_outputs
+        else:
+            num_features = n_inputs
+            self.logger.warning(
+                "n_inputs is not divisible by n_outputs; falling back to num_features=n_inputs "
+                f"(n_inputs={n_inputs}, n_outputs={n_outputs}). If using one-hot flattening, "
+                "pass n_outputs=num_classes so num_features can be inferred correctly."
             )
 
-        elif schedule == "pyramid":
-            if n_hidden == 1:
-                sizes = np.array([base], dtype=float)
-            else:
-                if decay is None:
-                    target = max(min_size, base // 4)
-                    if base <= 0 or target <= 0:
-                        dcy = 1.0
-                    else:
-                        dcy = (target / float(base)) ** (1.0 / (n_hidden - 1))
-                        dcy = float(np.clip(dcy, 0.25, 0.99))
-                exponents = np.arange(n_hidden, dtype=float)
-                sizes = base * (dcy**exponents)
+        # ----------------------------
+        # Base size heuristic (feature-matrix aware; avoids collapse for huge n_inputs)
+        # ----------------------------
+        obs_scale = (float(n_samples) * float(num_features)) / float(
+            num_features + n_outputs
+        )
+        base = int(np.ceil(float(alpha) * np.sqrt(obs_scale)))
 
-        else:
-            msg = f"Unknown schedule '{schedule}'. Use 'pyramid', 'constant', or 'linear'."
-            self.logger.error(msg)
-            raise ValueError(msg)
-
-        sizes = np.clip(sizes, min_size, max_size)
+        # ----------------------------
+        # Determine max_size
+        # ----------------------------
+        if max_size is None:
+            max_size = max(int(n_inputs), int(base), int(effective_min))
 
         if cap_by_inputs:
-            sizes = np.minimum(sizes, float(n_inputs))
+            max_size = min(int(max_size), int(n_inputs))
+        else:
+            max_size = int(max_size)
 
-        sizes = (np.ceil(sizes / multiple_of) * multiple_of).astype(int)
-        sizes = np.minimum.accumulate(sizes)
-        return np.clip(sizes, min_size, max_size).astype(int).tolist()
+        if max_size < effective_min:
+            msg = (
+                f"max_size ({max_size}) must be >= effective_min ({effective_min}), where effective_min "
+                f"is max(min_size={min_size}, one-level-above latent_dim={latent_dim})."
+            )
+            self.logger.error(msg)
+            raise ValueError(msg)
 
-    def _class_weights_from_zygosity(self, X: np.ndarray) -> torch.Tensor:
-        y = X[X != -1].ravel().astype(np.int64)
-        if y.size == 0:
-            return torch.ones(
-                self.num_classes_, dtype=torch.float32, device=self.device
+        # Round base up to a multiple and clip to bounds
+        base = int(np.clip(base, effective_min, max_size))
+        base = int(np.ceil(base / multiple_of) * multiple_of)
+        base = int(np.clip(base, effective_min, max_size))
+
+        # ----------------------------
+        # Enforce "no repeats" feasibility in discrete levels
+        # Need n_hidden distinct multiples between base and effective_min:
+        # base >= effective_min + (n_hidden - 1) * multiple_of
+        # ----------------------------
+        required_min_base = effective_min + (n_hidden - 1) * multiple_of
+
+        if required_min_base > max_size:
+            msg = (
+                "Cannot build strictly-decreasing (no-repeat) hidden sizes under current constraints. "
+                f"Need base >= {required_min_base} to fit n_hidden={n_hidden} distinct layers "
+                f"with multiple_of={multiple_of} down to effective_min={effective_min}, "
+                f"but max_size={max_size}. Reduce n_hidden, reduce multiple_of, lower latent_dim/min_size, "
+                "or increase max_size / set cap_by_inputs=False."
+            )
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        if base < required_min_base:
+            # Bump base upward so a strict staircase is possible
+            base = required_min_base
+            base = int(np.ceil(base / multiple_of) * multiple_of)
+            base = int(np.clip(base, effective_min, max_size))
+
+        # Work in "levels" of multiple_of for guaranteed uniqueness
+        start_level = base // multiple_of
+        end_level = effective_min // multiple_of
+
+        # Sanity: distinct levels available
+        if (start_level - end_level) < (n_hidden - 1):
+            # This should not happen due to required_min_base logic, but keep a hard guard.
+            msg = (
+                "Internal constraint failure: insufficient discrete levels to enforce no repeats. "
+                f"start_level={start_level}, end_level={end_level}, n_hidden={n_hidden}."
+            )
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        # ----------------------------
+        # Build schedule in level space (integers), then convert to sizes
+        # ----------------------------
+        if n_hidden == 1:
+            levels = np.array([start_level], dtype=int)
+
+        elif schedule == "linear":
+            # Linear interpolation in level space, then strictify
+            levels = np.round(np.linspace(start_level, end_level, num=n_hidden)).astype(
+                int
             )
 
-        if getattr(self, "is_haploid", False):
-            y = y.copy()
-            y[y == 2] = 1
+            # Enforce bounds then strict decrease
+            levels = np.clip(levels, end_level, start_level)
 
-        # If haploid, num_classes_ should be 2 for weights; enforce defensively
-        num_classes = (
-            2 if getattr(self, "is_haploid", False) else int(self.num_classes_)
-        )
+            for i in range(1, n_hidden):
+                if levels[i] >= levels[i - 1]:
+                    levels[i] = levels[i - 1] - 1
 
-        return self._class_balanced_weights_from_mask(
-            y=y,
-            train_mask=np.ones_like(y, dtype=bool),
-            num_classes=num_classes,
-            beta=self.beta,
-            max_ratio=self.max_ratio,
-            mode="allele",
-        ).to(self.device)
+            if levels[-1] < end_level:
+                msg = (
+                    "Failed to enforce strictly-decreasing linear schedule without violating the floor. "
+                    f"(levels[-1]={levels[-1]} < end_level={end_level}). "
+                    "Reduce n_hidden or multiple_of, or increase max_size."
+                )
+                self.logger.error(msg)
+                raise ValueError(msg)
 
-    @staticmethod
-    def _normalize_class_weights(
-        weights: torch.Tensor | None,
-    ) -> torch.Tensor | None:
-        """Normalize class weights once to keep loss scale stable.
+            # Force exact floor at the end (still strict because we have enough room by construction)
+            levels[-1] = end_level
+            for i in range(n_hidden - 2, -1, -1):
+                if levels[i] <= levels[i + 1]:
+                    levels[i] = levels[i + 1] + 1
 
-        Args:
-            weights (torch.Tensor | None): Class weights to normalize.
+            if levels[0] > start_level:
+                # If this happens, we would need an even larger base; handle by raising base once.
+                needed_base = int(levels[0] * multiple_of)
+                if needed_base > max_size:
+                    msg = (
+                        "Cannot enforce strictly-decreasing linear schedule after floor anchoring; "
+                        f"would require base={needed_base} > max_size={max_size}."
+                    )
+                    self.logger.error(msg)
+                    raise ValueError(msg)
+                # Rebuild with bumped base
+                start_level = needed_base // multiple_of
+                levels = np.arange(start_level, start_level - n_hidden, -1, dtype=int)
+                levels[-1] = end_level  # keep floor
+                # Ensure strict with backward adjust
+                for i in range(n_hidden - 2, -1, -1):
+                    if levels[i] <= levels[i + 1]:
+                        levels[i] = levels[i + 1] + 1
+
+        elif schedule == "pyramid":
+            # Geometric decay in level space (more aggressive early taper than linear)
+            if decay is not None:
+                dcy = float(decay)
+            else:
+                # Choose decay to land exactly at end_level (in float space)
+                dcy = (float(end_level) / float(start_level)) ** (
+                    1.0 / float(n_hidden - 1)
+                )
+
+            # Keep it in a sensible range
+            dcy = float(np.clip(dcy, 0.05, 0.99))
+
+            exponents = np.arange(n_hidden, dtype=float)
+            levels_float = float(start_level) * (dcy**exponents)
+
+            levels = np.round(levels_float).astype(int)
+            levels = np.clip(levels, end_level, start_level)
+
+            # Anchor the last layer at the floor, then strictify backward
+            levels[-1] = end_level
+            for i in range(n_hidden - 2, -1, -1):
+                if levels[i] <= levels[i + 1]:
+                    levels[i] = levels[i + 1] + 1
+
+            # If we overshot the start, bump base (once) if possible, then rebuild
+            if levels[0] > start_level:
+                needed_base = int(levels[0] * multiple_of)
+                if needed_base > max_size:
+                    msg = (
+                        "Cannot enforce strictly-decreasing pyramid schedule; "
+                        f"would require base={needed_base} > max_size={max_size}."
+                    )
+                    self.logger.error(msg)
+                    raise ValueError(msg)
+
+                start_level = needed_base // multiple_of
+                # Recompute with new start_level and same decay (or recompute decay if decay is None)
+                if decay is None:
+                    dcy = (float(end_level) / float(start_level)) ** (
+                        1.0 / float(n_hidden - 1)
+                    )
+                    dcy = float(np.clip(dcy, 0.05, 0.99))
+
+                levels_float = float(start_level) * (dcy**exponents)
+                levels = np.round(levels_float).astype(int)
+                levels = np.clip(levels, end_level, start_level)
+                levels[-1] = end_level
+                for i in range(n_hidden - 2, -1, -1):
+                    if levels[i] <= levels[i + 1]:
+                        levels[i] = levels[i + 1] + 1
+
+        else:
+            msg = f"Unknown schedule '{schedule}'. Use 'pyramid' or 'linear' (constant disallowed with no repeats)."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        # Convert levels -> sizes
+        sizes = (levels * multiple_of).astype(int)
+
+        # Final clip (should be redundant, but safe)
+        sizes = np.clip(sizes, effective_min, max_size).astype(int)
+
+        # Final strict no-repeat assertion
+        if np.any(np.diff(sizes) >= 0):
+            msg = (
+                "Internal error: produced non-decreasing or repeated hidden sizes after strict enforcement. "
+                f"sizes={sizes.tolist()}"
+            )
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        return sizes.tolist()
+
+    def _class_weights_from_zygosity(
+        self,
+        X: np.ndarray,
+        train_mask: Optional[np.ndarray] = None,
+        *,
+        inverse: bool = False,
+        normalize: bool = False,
+        power: float = 1.0,
+        max_ratio: float | None = None,
+        eps: float = 1e-12,
+    ) -> torch.Tensor:
+        """Compute class weights for zygosity labels.
+
+        If inverse=False (default):
+            w_c = N / (K * n_c)   ("balanced")
+
+        If inverse=True:
+            w_c = N / n_c         (same ratios, scaled by K)
+
+        If power != 1.0:
+            w_c <- w_c ** power   (amplifies or softens imbalance handling)
+
+        If normalize=True:
+            rescales nonzero weights so mean(nonzero_weights) == 1.
 
         Returns:
-            torch.Tensor | None: Normalized class weights or None if input is None.
+            torch.Tensor: Class weights of shape (num_classes,) on self.device.
         """
-        if weights is None:
-            return None
-        return weights / weights.mean().clamp_min(1e-8)
+        y = np.asarray(X).ravel().astype(np.int8)
+
+        m = y >= 0
+        if train_mask is not None:
+            tm = np.asarray(train_mask, dtype=bool).ravel()
+            if tm.shape != y.shape:
+                msg = "train_mask must have the same shape as X."
+                self.logger.error(msg)
+                raise ValueError(msg)
+            m &= tm
+
+        is_hap = bool(getattr(self, "is_haploid_", False))
+        num_classes = 2 if is_hap else int(self.num_classes_)
+
+        if not np.any(m):
+            return torch.ones(num_classes, dtype=torch.long, device=self.device)
+
+        if is_hap:
+            y = y.copy()
+            y[(y == 2) & m] = 1
+
+        y_m = y[m]
+        if y_m.size:
+            ymin = int(y_m.min())
+            ymax = int(y_m.max())
+            if ymin < 0 or ymax >= num_classes:
+                msg = (
+                    f"Found out-of-range labels under mask: min={ymin}, max={ymax}, "
+                    f"expected in [0, {num_classes - 1}]."
+                )
+                self.logger.error(msg)
+                raise ValueError(msg)
+
+        counts = np.bincount(y_m, minlength=num_classes).astype(np.float32)
+        N = float(counts.sum())
+        K = float(num_classes)
+
+        w = np.zeros(num_classes, dtype=np.float32)
+        nz = counts > 0
+
+        if np.any(nz):
+            if inverse:
+                w[nz] = N / (counts[nz] + eps)
+            else:
+                w[nz] = N / (K * (counts[nz] + eps))
+
+            # Amplify / soften class contrast
+            if power <= 0.0:
+                msg = "power must be > 0."
+                self.logger.error(msg)
+                raise ValueError(msg)
+            if power != 1.0:
+                w[nz] = np.power(w[nz], power)
+
+        if np.any(~nz):
+            self.logger.warning(
+                "Some classes have zero count under the provided mask: "
+                f"{np.where(~nz)[0].tolist()}. Setting their weights to 0."
+            )
+
+        # Cap ratio among observed classes
+        if max_ratio is not None and np.any(nz):
+            cap = float(max_ratio)
+            if cap <= 1.0:
+                msg = "max_ratio must be > 1.0 or None."
+                self.logger.error(msg)
+                raise ValueError(msg)
+
+            wmin = max(float(w[nz].min()), eps)
+            wmax = wmin * cap
+            w[nz] = np.clip(w[nz], wmin, wmax)
+
+        # Optional normalization: mean(nonzero) -> 1.0
+        if normalize and np.any(nz):
+            mean_nz = float(w[nz].mean())
+            if mean_nz > 0.0:
+                w[nz] /= mean_nz
+            else:
+                self.logger.warning(
+                    "normalize=True requested, but mean of nonzero weights is not positive; skipping normalization."
+                )
+
+        self.logger.debug(f"Class counts: {counts.astype(np.int8)}")
+        self.logger.debug(
+            f"Class weights (inverse={inverse}, power={power}, normalize={normalize}): {w}"
+        )
+
+        return torch.as_tensor(w, dtype=torch.long, device=self.device)
 
     def _one_hot_encode_012(
         self, X: np.ndarray | torch.Tensor, num_classes: int | None
     ) -> torch.Tensor:
-        """One-hot encode genotype calls with masking for missing (<0).
+        """One-hot encode genotype calls. Missing inputs (<0) result in a vector of -1s.
 
-        Contract:
+        Args:
+            X (np.ndarray | torch.Tensor): Input genotype calls as integers (0,1, 2, etc.).
+            num_classes (int | None): Number of classes (K). If None, uses self.num_classes_.
+
+        Returns:
+            torch.Tensor: One-hot encoded tensor of shape (B, L, K) with float32 dtype. Valid calls are 0/1, missing calls are all -1.
+
+        Notes:
             - Valid classes must be integers in [0, K-1]
-            - Missing is any value < 0
-
-        Special-case:
+            - Missing is any value < 0; these positions become [-1, -1, ..., -1]
             - If K==2 and values are in {0,2} (no 1s), map 2->1.
         """
         Xt = (
@@ -927,7 +1172,8 @@ class BaseNNImputer:
         # Missing is anything < 0 (covers -1, -9, etc.)
         valid = Xt >= 0
 
-        # If binary mode but data is {0,2} (haploid-like or "ref vs non-ref"), map 2->1
+        # If binary mode but data is {0,2}
+        # (haploid-like or "ref vs non-ref"), map 2->1
         if K == 2:
             has_het = torch.any(valid & (Xt == 1))
             has_alt2 = torch.any(valid & (Xt == 2))
@@ -939,175 +1185,46 @@ class BaseNNImputer:
         if torch.any(valid & (Xt >= K)):
             bad_vals = torch.unique(Xt[valid & (Xt >= K)]).detach().cpu().tolist()
             all_vals = torch.unique(Xt[valid]).detach().cpu().tolist()
-            raise ValueError(
-                f"_one_hot_encode_012 received class values outside [0, {K-1}]. "
-                f"num_classes={K}, offending_values={bad_vals}, observed_values={all_vals}. "
-                "Upstream encoding mismatch (e.g., passing 0/1/2 with num_classes=2)."
-            )
-
-        X_ohe = torch.zeros((B, L, K), dtype=torch.float32, device=self.device)
-        idx = Xt[valid]
-
-        if idx.numel() > 0:
-            X_ohe[valid] = F.one_hot(idx, num_classes=K).float()
-
-        return X_ohe
-
-    def _eval_for_pruning(
-        self,
-        *,
-        model: torch.nn.Module,
-        X_val: np.ndarray,
-        params: dict,
-        metric: str,
-        objective_mode: bool = True,
-        do_latent_infer: bool = False,
-        latent_steps: int = 50,
-        latent_lr: float = 1e-2,
-        latent_weight_decay: float = 0.0,
-        latent_seed: int | None = 123,
-        _latent_cache: dict | None = None,
-        _latent_cache_key: str | None = None,
-        y_true_matrix: np.ndarray | None = None,
-        eval_mask_override: np.ndarray | None = None,
-        GT_val: np.ndarray | None = None,
-    ) -> float:
-        """Compute a scalar metric (to MAXIMIZE) on a fixed validation set.
-
-        This method is used for Optuna pruning decisions. It optionally performs latent inference (for models like UBP that benefit from it), then calls `_evaluate_model()` and returns a single metric value. If `eval_mask_override` is provided (e.g., simulated-missing mask), you SHOULD provide `y_true_matrix` aligned to `X_val` to avoid scoring against masked (-1) values.
-
-        Returns:
-            float: Metric value to maximize. Returns -inf on failure/non-finite.
-        """
-        optimized_val_latents: torch.Tensor | None = None
-
-        # --- Optional latent inference path (cache-aware) ---
-        if do_latent_infer and hasattr(self, "_latent_infer_for_eval"):
-            try:
-                # Your _latent_infer_for_eval currently returns None; it writes into cache.
-                # We call it for side-effects then try to retrieve from the cache.
-                self._latent_infer_for_eval(  # type: ignore[attr-defined]
-                    model=model,
-                    X_val=X_val,
-                    steps=latent_steps,
-                    lr=latent_lr,
-                    weight_decay=latent_weight_decay,
-                    seed=latent_seed,
-                    cache=_latent_cache,
-                    cache_key=_latent_cache_key,
-                )
-
-                if _latent_cache is not None and _latent_cache_key is not None:
-                    cached = _latent_cache.get(_latent_cache_key, None)
-                    if cached is not None:
-                        optimized_val_latents = cached
-            except Exception as e:
-                # If latent inference fails, just prune hard (return -inf).
-                self.logger.warning(f"Latent inference for pruning failed: {e}")
-                return -np.inf
-
-        # --- If you thin the validation set (proxy metric), thin everything aligned ---
-        if getattr(self, "_tune_eval_slice", None) is not None:
-            sl = self._tune_eval_slice
-            X_val = X_val[sl]
-            if eval_mask_override is not None:
-                eval_mask_override = eval_mask_override[sl]
-            if y_true_matrix is not None:
-                y_true_matrix = y_true_matrix[sl]
-
-        # --- Build kwargs for evaluator with signature compatibility ---
-        eval_kwargs: dict[str, Any] = dict(
-            X_val=X_val,
-            model=model,
-            params=params,
-            objective_mode=objective_mode,
-            latent_vectors_val=optimized_val_latents,
-            eval_mask_override=eval_mask_override,
-        )
-
-        # Pass ground truth matrix under the correct parameter name:
-        # - Prefer GT_val (new)
-        # - Fall back to y_true_matrix (old)
-        if y_true_matrix is not None:
-            sig = inspect.signature(self._evaluate_model)  # type: ignore
-            if "GT_val" in sig.parameters:
-                eval_kwargs["GT_val"] = y_true_matrix
-            elif "y_true_matrix" in sig.parameters:
-                eval_kwargs["y_true_matrix"] = y_true_matrix
-            else:
-                # If evaluator doesn't accept GT at all, this is unsafe for mask_override scoring.
-                if eval_mask_override is not None:
-                    self.logger.error(
-                        "Evaluator does not accept ground truth matrix; "
-                        "cannot safely score with eval_mask_override."
-                    )
-                    return -np.inf
-
-        # --- Evaluate safely for pruning ---
-        try:
-            metrics = self._evaluate_model(**eval_kwargs)  # type: ignore[attr-defined]
-        except Exception as e:
-            self.logger.warning(f"Pruning-eval failed (returning -inf): {e}")
-            return -np.inf
-
-        # Prefer the requested metric; fall back to self.tune_metric if needed.
-        val = metrics.get(metric, metrics.get(getattr(self, "tune_metric", ""), None))
-
-        if val is None or not np.isfinite(val):
-            return -np.inf
-
-        return float(val)
-
-    def _first_linear_in_features(self, model: torch.nn.Module) -> int:
-        """Return in_features of the model's first Linear layer.
-
-        This method iterates through the modules of the provided PyTorch model to find the first instance of a Linear layer. It then retrieves and returns the `in_features` attribute of that layer, which indicates the number of input features expected by the layer.
-
-        Args:
-            model (torch.nn.Module): The model to inspect.
-
-        Returns:
-            int: The in_features of the first Linear layer.
-        """
-        for m in model.modules():
-            if isinstance(m, torch.nn.Linear):
-                return int(m.in_features)
-        raise RuntimeError("No Linear layers found in model.")
-
-    def decode_012(
-        self, X: np.ndarray | pd.DataFrame | List[List[int]], is_nuc: bool = False
-    ) -> np.ndarray:
-        """Decode 012 or 0-9 integer encodings to single-character IUPAC nucleotides.
-
-        Always returns single-character IUPAC codes:
-        - A, C, G, T for homozygotes
-        - R, Y, S, W, K, M (plus B, D, H, V when REF/ALT are ambiguous)
-        - N for missing/invalid
-
-        Modes:
-        1) Standard 012 (0=REF, 1=HET, 2=ALT, -9/-1=missing) using per-locus REF/ALT from GenotypeData.
-        Special case: ALT="." (or empty) is treated as monomorphic and defaults to REF.
-        2) IUPAC-integer mode (is_nuc=True) using SNPio's updated order:
-        A=0, C=1, G=2, T=3, W=4, R=5, M=6, K=7, Y=8, S=9, N=-9/-1.
-
-        Args:
-            X: Matrix of 012 or 0-9 IUPAC integers.
-            is_nuc: If True, interpret inputs as 0-9 IUPAC integers (A=0, C=1, G=2, T=3, ...).
-
-        Returns:
-            np.ndarray: Same shape as X, dtype '<U1', with single-character IUPAC codes.
-
-        Raises:
-            ValueError: If REF/ALT metadata are unavailable for 012 decoding.
-        """
-        df = validate_input_type(X, return_type="df")
-
-        if not isinstance(df, pd.DataFrame):
-            msg = "Internal error: expected DataFrame after validation."
+            msg = f"_one_hot_encode_012 received class values outside [0, {K-1}]. num_classes={K}, offending_values={bad_vals}, observed_values={all_vals}. Upstream encoding mismatch (e.g., passing 0/1/2 with num_classes=2)."
             self.logger.error(msg)
             raise ValueError(msg)
 
-        iupac_to_bases = {
+        # CHANGE: Initialize with -1.0 to ensure missing values are represented as [-1, -1, ... -1]
+        X_ohe = torch.full((B, L, K), -1.0, dtype=torch.long, device=self.device)
+
+        idx = Xt[valid]
+
+        if idx.numel() > 0:
+            # Overwrite valid positions (which were -1) with the correct one-hot vectors
+            X_ohe[valid] = F.one_hot(idx, num_classes=K).long()
+
+        return X_ohe
+
+    def decode_012(
+        self, X: np.ndarray | pd.DataFrame | list[list[int]], is_nuc: bool = False
+    ) -> np.ndarray:
+        """Decode 012-encodings to IUPAC chars with metadata repair.
+
+        This method converts genotype calls encoded as integers (0, 1, 2, etc.) into their corresponding IUPAC nucleotide codes. It supports two modes of decoding:
+        1. Nucleotide mode (`is_nuc=True`): Decodes integer codes (0-9) directly to IUPAC nucleotide codes.
+        2. Metadata mode (`is_nuc=False`): Uses reference and alternate allele metadata to determine the appropriate IUPAC codes.
+
+        Args:
+            X (np.ndarray | pd.DataFrame | list[list[int]]): Input genotype calls as integers.
+            is_nuc (bool): If True, decode 0-9 nucleotide codes; else use ref/alt metadata. Defaults to False.
+
+        Returns:
+            np.ndarray: IUPAC strings as a 2D array of shape (n_samples, n_snps).
+
+        Raises:
+            ValueError: If input is not a DataFrame.
+        """
+        df = validate_input_type(X, return_type="df")
+        if not isinstance(df, pd.DataFrame):
+            raise ValueError("Expected DataFrame.")
+
+        # IUPAC Definitions
+        iupac_to_bases: dict[str, set[str]] = {
             "A": {"A"},
             "C": {"C"},
             "G": {"G"},
@@ -1122,313 +1239,171 @@ class BaseNNImputer:
             "D": {"A", "G", "T"},
             "H": {"A", "C", "T"},
             "V": {"A", "C", "G"},
+            "N": set(),
         }
-        bases_to_iupac = {frozenset(v): k for k, v in iupac_to_bases.items()}
-        missing_codes = {"", ".", "N", "NONE"}
+        bases_to_iupac = {
+            frozenset(v): k for k, v in iupac_to_bases.items() if k != "N"
+        }
+        missing_codes = {"", ".", "N", "NONE", "-", "?", "./.", ".|.", "NAN", "nan"}
 
         def _normalize_iupac(value: object) -> str | None:
+            """Normalize an input into a single IUPAC code token or None."""
             if value is None:
                 return None
+
+            # Bytes -> str (make type narrowing explicit)
             if isinstance(value, (bytes, np.bytes_)):
-                value = value.decode("utf-8", errors="ignore")
-            if isinstance(value, (list, tuple, np.ndarray, pd.Series)):
-                for item in value:
+                value = bytes(value).decode("utf-8", errors="ignore")
+
+            # Handle list/tuple/array/Series: take first valid
+            if isinstance(value, (list, tuple, pd.Series, np.ndarray)):
+                # Convert Series to numpy array for consistent behavior
+                if isinstance(value, pd.Series):
+                    arr = value.to_numpy()
+                else:
+                    arr = value
+
+                # Scalar numpy array fast path
+                if isinstance(arr, np.ndarray) and arr.ndim == 0:
+                    return _normalize_iupac(arr.item())
+
+                # Empty sequence/array
+                if len(arr) == 0:
+                    return None
+
+                # First valid element wins
+                for item in arr:
                     code = _normalize_iupac(item)
                     if code is not None:
                         return code
                 return None
-            if isinstance(value, str):
-                for part in value.upper().split(","):
-                    part = part.strip()
-                    if not part or part in missing_codes:
-                        continue
-                    if part in iupac_to_bases:
-                        return part
+
+            s = str(value).upper().strip()
+            if not s or s in missing_codes:
                 return None
-            part = str(value).upper().strip()
-            if part in missing_codes:
+
+            if "," in s:
+                for tok in (t.strip() for t in s.split(",")):
+                    if tok and tok not in missing_codes and tok in iupac_to_bases:
+                        return tok
                 return None
-            if "," in part:
-                for token in part.split(","):
-                    token = token.strip()
-                    if token in iupac_to_bases:
-                        return token
-                return None
-            return part if part in iupac_to_bases else None
+
+            return s if s in iupac_to_bases else None
+
+        codes_df = df.apply(pd.to_numeric, errors="coerce")
+        codes = codes_df.fillna(-1).astype(np.int8).to_numpy()
+        n_rows, n_cols = codes.shape
 
         if is_nuc:
-            # UPDATED SNPio order: A=0, C=1, G=2, T=3, W=4, R=5, M=6, K=7, Y=8, S=9, N=-9/-1
-            iupac_list = ["A", "C", "G", "T", "W", "R", "M", "K", "Y", "S"]
-            mapping = {i: iupac_list[i] for i in range(10)}
-            mapping[-9] = "N"
-            mapping[-1] = "N"
-
-            # accept strings too
-            mapping.update({str(k): v for k, v in mapping.items()})
-            return df.replace(mapping).to_numpy(dtype="<U1")
-
-        # ---- Standard 012 decoding using REF/ALT per column ----
-        ref_alleles = getattr(self.genotype_data, "ref", None)
-        alt_alleles = getattr(self.genotype_data, "alt", None)
-
-        def _alleles_missing(value: object) -> bool:
-            try:
-                return value is None or len(value) == 0  # type: ignore[arg-type]
-            except TypeError:
-                return value is None
-
-        if _alleles_missing(ref_alleles):
-            ref_alleles = getattr(self.genotype_data, "_ref", None)
-        if _alleles_missing(ref_alleles):
-            ref_alleles = getattr(self, "_ref", None)
-
-        if _alleles_missing(alt_alleles):
-            alt_alleles = getattr(self.genotype_data, "_alt", None)
-        if _alleles_missing(alt_alleles):
-            alt_alleles = getattr(self, "_alt", None)
-
-        if ref_alleles is None or alt_alleles is None:
-            msg = (
-                "Reference and alternate alleles are not available in GenotypeData; "
-                "cannot decode 012 matrix."
+            iupac_list = np.array(
+                ["A", "C", "G", "T", "W", "R", "M", "K", "Y", "S"], dtype="<U1"
             )
-            self.logger.error(msg)
-            raise ValueError(msg)
+            out = np.full((n_rows, n_cols), "N", dtype="<U1")
+            mask = (codes >= 0) & (codes <= 9)
+            out[mask] = iupac_list[codes[mask]]
+            return out
 
-        df_out = df.copy().astype(object)
-        n_cols = len(df_out.columns)
+        # Metadata fetch
+        ref_alleles = getattr(self.genotype_data, "ref", [])
+        alt_alleles = getattr(self.genotype_data, "alt", [])
 
-        if isinstance(ref_alleles, np.ndarray):
-            ref_alleles = ref_alleles.tolist()
-        if isinstance(alt_alleles, np.ndarray):
-            alt_alleles = alt_alleles.tolist()
+        if len(ref_alleles) != n_cols:
+            ref_alleles = getattr(self, "_ref", [None] * n_cols)
+        if len(alt_alleles) != n_cols:
+            alt_alleles = getattr(self, "_alt", [None] * n_cols)
 
-        def _transpose_alt_alleles(alts: object) -> object:
-            if not isinstance(alts, list) or len(alts) == 0:
-                return alts
-            try:
-                if len(alts) != n_cols and all(
-                    not isinstance(a, (str, bytes))
-                    and hasattr(a, "__len__")
-                    and len(a) == n_cols
-                    for a in alts
-                ):
-                    return [[a[i] for a in alts] for i in range(n_cols)]
-            except TypeError:
-                return alts
-            return alts
+        # Ensure list length matches
+        if len(ref_alleles) != n_cols:
+            ref_alleles = [None] * n_cols
+        if len(alt_alleles) != n_cols:
+            alt_alleles = [None] * n_cols
 
-        alt_alleles = _transpose_alt_alleles(alt_alleles)
+        out = np.full((n_rows, n_cols), "N", dtype="<U1")
+        source_snp_data = None
 
-        if len(ref_alleles) != n_cols or len(alt_alleles) != n_cols:
-            try:
-                alleles = self.genotype_data.get_ref_alt_alleles(
-                    self.genotype_data.snp_data
-                )
-            except Exception:
-                alleles = None
-
-            if alleles:
-                ref_candidate = alleles[0]
-                if isinstance(ref_candidate, np.ndarray):
-                    ref_candidate = ref_candidate.tolist()
-                if len(ref_candidate) == n_cols:
-                    ref_alleles = ref_candidate
-
-                alt_candidate = [x for i, x in enumerate(alleles) if i > 0]
-                alt_candidate = _transpose_alt_alleles(alt_candidate)
-                if len(alt_candidate) == n_cols:
-                    alt_alleles = alt_candidate
-
-        if len(ref_alleles) != n_cols or len(alt_alleles) != n_cols:
-            msg = (
-                "Reference and alternate alleles do not align with genotype columns; "
-                "cannot decode 012 matrix."
-            )
-            self.logger.error(msg)
-            raise ValueError(msg)
-
-        for j, col in enumerate(df_out.columns):
+        for j in range(n_cols):
             ref = _normalize_iupac(ref_alleles[j])
             alt = _normalize_iupac(alt_alleles[j])
 
+            # --- REPAIR LOGIC ---
+            # If metadata is missing, scan the source column.
+            if ref is None or alt is None:
+                if source_snp_data is None and self.genotype_data.snp_data is not None:
+                    try:
+                        source_snp_data = np.asarray(self.genotype_data.snp_data)
+                    except Exception:
+                        pass  # if lazy loading fails
+
+                if source_snp_data is not None:
+                    try:
+                        col_data = source_snp_data[:, j]
+                        uniques = set()
+                        # Optimization: check up to 200 non-empty values
+                        count = 0
+                        for val in col_data:
+                            norm = _normalize_iupac(val)
+                            if norm:
+                                uniques.add(norm)
+                                count += 1
+                            if len(uniques) >= 2 or count > 200:
+                                break
+
+                        sorted_u = sorted(list(uniques))
+                        if len(sorted_u) >= 1 and ref is None:
+                            ref = sorted_u[0]
+                        if len(sorted_u) >= 2 and alt is None:
+                            alt = sorted_u[1]
+                    except Exception:
+                        pass
+
+            # --- DEFAULTS FOR MISSING ---
+            # If still missing, we cannot decode.
             if ref is None and alt is None:
-                ref = "A"
-                alt = "A"
+                ref = "N"
+                alt = "N"
             elif ref is None:
                 ref = alt
+            elif alt is None:
+                alt = ref  # Monomorphic site: ALT becomes REF
 
-            if alt is None:
-                alt = ref
-
+            # --- COMPUTE HET CODE ---
             if ref == alt:
                 het_code = ref
             else:
-                het_set = iupac_to_bases[ref] | iupac_to_bases[alt]
-                het_code = bases_to_iupac.get(frozenset(het_set), ref)
+                ref_set = iupac_to_bases.get(ref, set()) if ref is not None else set()
+                alt_set = iupac_to_bases.get(alt, set()) if alt is not None else set()
+                union_set = frozenset(ref_set | alt_set)
+                het_code = bases_to_iupac.get(union_set, "N")
 
-            col_map = {
-                0: ref,
-                "0": ref,
-                1: het_code,
-                "1": het_code,
-                2: alt,
-                "2": alt,
-                -9: "N",
-                "-9": "N",
-                -1: "N",
-                "-1": "N",
-            }
+            # --- ASSIGNMENT WITH SAFETY FALLBACKS ---
+            col_codes = codes[:, j]
 
-            df_out[col] = df_out[col].map(col_map)
+            # Case 0: REF
+            if ref != "N":
+                out[col_codes == 0, j] = ref
 
-        return df_out.to_numpy(dtype="<U1")
+            # Case 1: HET
+            if het_code != "N":
+                out[col_codes == 1, j] = het_code
+            else:
+                # If HET code is invalid (e.g. ref='A', alt='N'),
+                # fallback to REF
+                # Fix for an issue where a HET prediction at a monomorphic site
+                # produced 'N'
+                if ref != "N":
+                    out[col_codes == 1, j] = ref
 
-    def _assert_model_latent_compat(
-        self, model: torch.nn.Module, latent_vectors: torch.nn.Parameter
-    ) -> None:
-        """Raise if model's first Linear doesn't match latent_vectors width.
+            # Case 2: ALT
+            if alt != "N":
+                out[col_codes == 2, j] = alt
+            else:
+                # If ALT is invalid (e.g. ref='A', alt='N'), fallback to REF
+                # Fix for an issue where an ALT prediction on a monomorphic site
+                # produced 'N'
+                if ref != "N":
+                    out[col_codes == 2, j] = ref
 
-        This method checks that the dimensionality of the provided latent vectors matches the expected input feature size of the model's first linear layer. If there is a mismatch, it raises a ValueError with a descriptive message.
-
-        Args:
-            model (torch.nn.Module): The model to check.
-            latent_vectors (torch.nn.Parameter): The latent vectors to check.
-
-        Raises:
-            ValueError: If the latent dimension does not match the model's expected input features.
-        """
-        zdim = int(latent_vectors.shape[1])
-        first_in = self._first_linear_in_features(model)
-        if first_in != zdim:
-            raise ValueError(
-                f"Latent mismatch: zdim={zdim}, model first Linear expects in_features={first_in}"
-            )
-
-    def _prepare_tuning_artifacts(self) -> None:
-        """Prepare data and artifacts needed for hyperparameter tuning.
-
-        Optionally subsamples both samples (rows) and loci (columns) for fast tuning and ensures all derived artifacts remain row/column aligned, including simulated-missing masks.
-
-        Raises:
-            ValueError: If there are shape mismatches between ground truth, model input, or simulated-missing masks.
-        """
-        if getattr(self, "_tune_ready", False):
-            return
-
-        rng = self.rng
-        X_truth = self.ground_truth_
-        X_input = self.X_model_input_
-
-        if X_input is None:
-            msg = "X_model_input_ is None; cannot prepare tuning artifacts."
-            self.logger.error(msg)
-            raise ValueError(msg)
-
-        if X_truth.shape != X_input.shape:
-            msg = f"Shape mismatch between ground truth and model input."
-            self.logger.error(msg)
-            raise ValueError(msg)
-
-        sim_global = getattr(self, "sim_mask_global_", None)
-        if sim_global is not None and sim_global.shape != X_truth.shape:
-            msg = "Shape mismatch between sim_mask_global_ and ground truth."
-            self.logger.error(msg)
-            raise ValueError(msg)
-
-        n_samp, n_loci = X_truth.shape
-
-        # --- Build tune-fast subset (rows + loci), else use full ---
-        if self.tune_fast:
-            s = min(n_samp, int(self.tune_max_samples))
-            l = (
-                n_loci
-                if int(self.tune_max_loci) == 0
-                else min(n_loci, int(self.tune_max_loci))
-            )
-
-            samp_idx = np.sort(rng.choice(n_samp, size=s, replace=False))
-            loci_idx = np.sort(rng.choice(n_loci, size=l, replace=False))
-
-            self._tune_samp_idx = samp_idx
-            self._tune_loci_idx = loci_idx
-
-            X_truth_small = X_truth[np.ix_(samp_idx, loci_idx)]
-            X_input_small = X_input[np.ix_(samp_idx, loci_idx)]
-            sim_small = (
-                None
-                if sim_global is None
-                else sim_global[np.ix_(samp_idx, loci_idx)].astype(bool, copy=False)
-            )
-
-        else:
-            self._tune_samp_idx = None
-            self._tune_loci_idx = None
-
-            X_truth_small = X_truth
-            X_input_small = X_input
-            sim_small = (
-                None if sim_global is None else sim_global.astype(bool, copy=False)
-            )
-
-        # Persist tune-aligned artifacts (optional but useful for debugging)
-        self._tune_X_small = X_input_small
-        self._tune_GT_small = X_truth_small
-        self._tune_sim_mask_small = sim_small
-
-        # --- Ensure enough samples for train/val split ---
-        n_rows = X_input_small.shape[0]
-        if n_rows < 3:
-            msg = f"Not enough samples ({n_rows}) for train/val split. Increase tune_max_samples or disable tune_fast."
-            self.logger.error(msg)
-            raise ValueError(msg)
-
-        # --- Split rows of the tune set ---
-        idx = np.arange(X_input_small.shape[0])
-        tr, te = train_test_split(
-            idx, test_size=self.validation_split, random_state=self.seed
-        )
-
-        self._tune_train_idx = tr
-        self._tune_test_idx = te
-
-        self._tune_X_train = X_input_small[tr]
-        self._tune_X_test = X_input_small[te]
-        self._tune_GT_train = X_truth_small[tr]
-        self._tune_GT_test = X_truth_small[te]
-
-        if sim_small is not None:
-            self._tune_sim_mask_train = sim_small[tr]
-            self._tune_sim_mask_test = sim_small[te]
-        else:
-            self._tune_sim_mask_train = None
-            self._tune_sim_mask_test = None
-
-        # Class weights computed from TRAIN INPUT matrix (masked)
-        self._tune_class_weights = self._normalize_class_weights(
-            self._class_weights_from_zygosity(self._tune_X_train)
-        )
-
-        # Temporarily bump batch size only for tuning loader
-        orig_bs = self.batch_size
-        self.batch_size = self.tune_batch_size
-        self._tune_loader = self._get_data_loaders(self._tune_X_train)  # type: ignore
-        self.batch_size = orig_bs
-
-        self._tune_num_features = self._tune_X_train.shape[1]
-        self._tune_val_latents_source = None
-        self._tune_train_latents_source = None
-
-        # Optional: for huge val sets, thin them for proxy metric
-        if (
-            self.tune_proxy_metric_batch
-            and self._tune_X_test.shape[0] > self.tune_proxy_metric_batch
-        ):
-            self._tune_eval_slice = np.arange(self.tune_proxy_metric_batch)
-        else:
-            self._tune_eval_slice = None
-
-        self._tune_ready = True
+        return out
 
     def _save_best_params(
         self, best_params: Dict[str, Any], objective_mode: bool = False
@@ -1459,65 +1434,35 @@ class BaseNNImputer:
         """An abstract method for setting best parameters."""
         raise NotImplementedError
 
-    def _resolve_gamma(
-        self,
-        params: dict | Mapping[str, Any] | None = None,
-        model: torch.nn.Module | None = None,
-    ) -> float:
-        """Resolve focal gamma with precedence: params -> params['model_params'] -> model -> self.
+    def sim_missing_transform(
+        self, X: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Simulate missing data according to the specified strategy.
 
         Args:
-            params (dict | None): Parameter dictionary that may contain 'gamma' or 'model_params
-            model (torch.nn.Module | None): Model instance that may have a 'gamma' attribute.
+            X (np.ndarray): Genotype matrix to simulate missing data on.
 
         Returns:
-            float: Resolved gamma value, clamped to [0.0, 10.0].
+            X_for_model (np.ndarray): Genotype matrix with simulated missing data.
+            sim_mask (np.ndarray): Boolean mask of simulated missing entries.
+            orig_mask (np.ndarray): Boolean mask of original missing entries.
         """
-        g = None
-
-        if params is not None:
-            if isinstance(params, dict):
-                if "gamma" in params:
-                    g = params.get("gamma", None)
-                elif isinstance(params.get("model_params", None), dict):
-                    g = params["model_params"].get("gamma", None)
-
-        if g is None and model is not None:
-            g = getattr(model, "gamma", None)
-
-        if g is None:
-            g = getattr(self, "gamma", 0.0)
-
-        # clamp to sane range
-        try:
-            g = float(g)
-        except Exception:
-            g = 0.0
-        return max(0.0, min(g, 10.0))
-
-    def sim_missing_transform(self):
-        GT_full = self.pgenc.genotypes_012
-        GT_full[GT_full < 0] = -1  # ensure missing = -1
-        GT_full = np.nan_to_num(GT_full, nan=-1.0)  # just in case
-        self.ground_truth_ = GT_full.astype(np.int64)
-
-        if not self.simulate_missing:
-            msg = "Training without simulated missing data is not currently supported for UBP imputer. Please enable `simulate_missing`."
+        if (
+            not hasattr(self, "sim_prop")
+            or self.sim_prop <= 0.0
+            or self.sim_prop >= 1.0
+        ):
+            msg = "sim_prop must be set and between 0.0 and 1.0."
             self.logger.error(msg)
-            raise ValueError(msg)
-
-        if not hasattr(self, "sim_prop") or self.sim_prop <= 0.0:
-            msg = "simulate_missing is True but sim_prop is not set or <= 0.0."
-            self.logger.error(msg)
-            raise ValueError(msg)
+            raise AttributeError(msg)
 
         if not hasattr(self, "tree_parser") and "nonrandom" in self.sim_strategy:
-            msg = "simulate_missing is True but tree_parser is not set for 'nonrandom' or 'nonrandom_weighted' strategy."
+            msg = "tree_parser must be set for 'nonrandom' or 'nonrandom_weighted' sim_strategy."
             self.logger.error(msg)
-            raise ValueError(msg)
+            raise AttributeError(msg)
 
         # --- Simulate missing data ---
-        X_for_sim = self.ground_truth_.astype(np.float32, copy=True)
+        X_for_sim = X.astype(np.float32, copy=True)
         tr = SimMissingTransformer(
             genotype_data=self.genotype_data,
             tree_parser=self.tree_parser,
@@ -1526,11 +1471,359 @@ class BaseNNImputer:
             missing_val=-1,
             mask_missing=True,
             verbose=self.verbose,
+            seed=self.seed,
             **self.sim_kwargs,
         )
         tr.fit(X_for_sim.copy())
         X_for_model = tr.transform(X_for_sim.copy())
-        sim_mask_global = tr.sim_missing_mask_.astype(bool)
-        orig_mask_global = tr.original_missing_mask_.astype(bool)
+        sim_mask = tr.sim_missing_mask_.astype(bool)
+        orig_mask = tr.original_missing_mask_.astype(bool)
 
-        return X_for_model, sim_mask_global, orig_mask_global
+        return X_for_model, sim_mask, orig_mask
+
+    def _train_val_test_split(
+        self, X: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Split data into train, validation, and test sets.
+
+        Args:
+            X (np.ndarray): Genotype matrix to split.
+
+        Returns:
+            tuple[np.ndarray, np.ndarray, np.ndarray]: Indices for train, validation, and test sets.
+
+        Raises:
+            ValueError: If there are not enough samples for splitting.
+            AssertionError: If validation_split is not in (0.0, 1.0).
+        """
+        n_samples = X.shape[0]
+
+        if n_samples < 3:
+            msg = f"Not enough samples ({n_samples}) for train/val/test split."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        assert (
+            self.validation_split > 0.0 and self.validation_split < 1.0
+        ), f"validation_split must be in (0.0, 1.0), but got {self.validation_split}."
+
+        # Train/Val split
+        indices = np.arange(n_samples)
+        train_idx, val_test_idx = train_test_split(
+            indices,
+            test_size=self.validation_split,
+            random_state=self.seed,
+        )
+
+        if not val_test_idx.size >= 4:
+            msg = f"Not enough samples ({val_test_idx.size}) for validation/test split."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        # Split val and test equally
+        val_idx, test_idx = train_test_split(
+            val_test_idx, test_size=0.5, random_state=self.seed
+        )
+
+        return train_idx, val_idx, test_idx
+
+    def _get_data_loaders(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        mask: np.ndarray,
+        batch_size: int,
+        *,
+        shuffle: bool = True,
+    ) -> torch.utils.data.DataLoader:
+        """Create DataLoader for training and validation.
+
+        Args:
+            X (np.ndarray): 0/1/2-encoded input matrix.
+            y (np.ndarray): 0/1/2-encoded matrix with -1 for missing.
+            mask (np.ndarray): Boolean mask of entries to score in the loss.
+            batch_size (int): Batch size.
+            shuffle (bool): Whether to shuffle batches. Defaults to True.
+
+        Returns:
+            The DataLoader.
+        """
+        dataset = _MaskedNumpyDataset(X, y, mask)
+
+        return torch.utils.data.DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            pin_memory=(str(self.device).startswith("cuda")),
+        )
+
+    def _update_anneal_schedule(
+        self,
+        final: float,
+        warm: int,
+        ramp: int,
+        epoch: int,
+        *,
+        init_val: float = 0.0,
+    ) -> torch.Tensor:
+        """Update annealed hyperparameter value based on epoch.
+
+        Args:
+            final (float): Final value after annealing.
+            warm (int): Number of warm-up epochs.
+            ramp (int): Number of ramp-up epochs.
+            epoch (int): Current epoch number.
+            init_val (float): Initial value before annealing starts.
+
+        Returns:
+            torch.Tensor: Current value of the hyperparameter.
+        """
+        if epoch < warm:
+            val = torch.tensor(init_val)
+        elif epoch < warm + ramp:
+            val = torch.tensor(final * ((epoch - warm) / ramp))
+        else:
+            val = torch.tensor(final)
+
+        return val.to(self.device)
+
+    def _anneal_config(
+        self,
+        params: Optional[dict],
+        key: str,
+        default: float,
+        max_epochs: int,
+        *,
+        warm_alt: int = 50,
+        ramp_alt: int = 100,
+    ) -> Tuple[float, int, int]:
+        """Configure annealing schedule for a hyperparameter.
+
+        Args:
+            params (Optional[dict]): Dictionary of parameters to extract from.
+            key (str): Key to look for in params.
+            default (float): Default final value if not specified in params.
+            max_epochs (int): Total number of training epochs.
+            warm_alt (int): Alternative warm-up period if 10% of epochs is too long
+            ramp_alt (int): Alternative ramp-up period if 20% of epochs is too long
+
+        Returns:
+            Tuple[float, int, int]: Final value, warm-up epochs, ramp-up epochs.
+        """
+        val = None
+        if params is not None and params:
+            if not hasattr(self, key):
+                msg = f"Attribute '{key}' not found for anneal_config."
+                self.logger.error(msg)
+                raise AttributeError(msg)
+
+            val = params.get(key, getattr(self, key))
+
+        if val is not None and isinstance(val, (float, int)):
+            final = float(val)
+        else:
+            final = default
+
+        warm, ramp = min(int(0.1 * max_epochs), warm_alt), min(
+            int(0.2 * max_epochs), ramp_alt
+        )
+        return final, warm, ramp
+
+    def _repair_ref_alt_from_iupac(self, loci: np.ndarray) -> None:
+        """Repair REF/ALT for specific loci using observed IUPAC genotypes.
+
+        Args:
+            loci (np.ndarray): Array of locus indices to repair.
+
+        Notes:
+            - Modifies self.genotype_data.ref and self.genotype_data.alt in place.
+        """
+        iupac_to_bases = {
+            "A": {"A"},
+            "C": {"C"},
+            "G": {"G"},
+            "T": {"T"},
+            "R": {"A", "G"},
+            "Y": {"C", "T"},
+            "S": {"G", "C"},
+            "W": {"A", "T"},
+            "K": {"G", "T"},
+            "M": {"A", "C"},
+            "B": {"C", "G", "T"},
+            "D": {"A", "G", "T"},
+            "H": {"A", "C", "T"},
+            "V": {"A", "C", "G"},
+        }
+        missing_codes = {"", ".", "N", "NONE", "-", "?", "./.", ".|."}
+
+        def norm(v: object) -> str | None:
+            if v is None:
+                return None
+            s = str(v).upper().strip()
+            if not s or s in missing_codes:
+                return None
+            return s if s in iupac_to_bases else None
+
+        snp = np.asarray(self.genotype_data.snp_data, dtype=object)  # (N,L) IUPAC-ish
+        refs = list(getattr(self.genotype_data, "ref", [None] * snp.shape[1]))
+        alts = list(getattr(self.genotype_data, "alt", [None] * snp.shape[1]))
+
+        for j in loci:
+            cnt = Counter()
+            col = snp[:, int(j)]
+            for g in col:
+                code = norm(g)
+                if code is None:
+                    continue
+                for b in iupac_to_bases[code]:
+                    cnt[b] += 1
+
+            if not cnt:
+                continue
+
+            common = [b for b, _ in cnt.most_common()]
+            ref = common[0]
+            alt = common[1] if len(common) > 1 else None
+
+            refs[int(j)] = ref
+            alts[int(j)] = alt if alt is not None else "."
+
+        self.genotype_data.ref = np.asarray(refs, dtype=object)
+
+        if not isinstance(alts, np.ndarray):
+            alts = np.array(alts, dtype=object).tolist()
+
+        self.genotype_data.alt = alts
+
+    def _aligned_ref_alt(self, L: int) -> tuple[list[object], list[object]]:
+        """Return REF/ALT aligned to the genotype matrix columns.
+
+        Args:
+            L (int): Number of loci (columns in genotype matrix).
+
+        Returns:
+            tuple[list[object], list[object]]: Aligned REF and ALT lists.
+        """
+        refs = getattr(self.genotype_data, "ref", None)
+        alts = getattr(self.genotype_data, "alt", None)
+
+        if refs is None or alts is None:
+            msg = "genotype_data.ref/alt are required but missing."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        refs_arr = np.asarray(refs, dtype=object)
+        alts_arr = np.asarray(alts, dtype=object)
+
+        if refs_arr.shape[0] != L or alts_arr.shape[0] != L:
+            msg = f"REF/ALT length mismatch vs matrix columns: L={L}, len(ref)={refs_arr.shape[0]}, len(alt)={alts_arr.shape[0]}. You are using REF/ALT metadata that is not aligned to pgenc.genotypes_012 columns. Fix by subsetting/refiltering ref/alt with the same locus mask used for the genotype matrix."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        # Unwrap singleton ALT arrays like array(['T'], dtype=object)
+        def unwrap(x: object) -> object:
+            if isinstance(x, np.ndarray):
+                if x.size == 0:
+                    return None
+                if x.size == 1:
+                    return x.item()
+            return x
+
+        refs_list = [unwrap(x) for x in refs_arr.tolist()]
+        alts_list = [unwrap(x) for x in alts_arr.tolist()]
+        return refs_list, alts_list
+
+    def _build_valid_class_mask(self) -> torch.Tensor:
+        L = self.num_features_
+        K = self.num_classes_
+        mask = np.ones((L, K), dtype=bool)
+
+        # --- IUPAC helpers (single-character only) ---
+        iupac_to_bases: dict[str, set[str]] = {
+            "A": {"A"},
+            "C": {"C"},
+            "G": {"G"},
+            "T": {"T"},
+            "R": {"A", "G"},
+            "Y": {"C", "T"},
+            "S": {"G", "C"},
+            "W": {"A", "T"},
+            "K": {"G", "T"},
+            "M": {"A", "C"},
+            "B": {"C", "G", "T"},
+            "D": {"A", "G", "T"},
+            "H": {"A", "C", "T"},
+            "V": {"A", "C", "G"},
+        }
+        missing_codes = {"", ".", "N", "NONE", "-", "?", "./.", ".|."}
+
+        # get aligned ref/alt (should be exactly length L)
+        refs, alts = self._aligned_ref_alt(L)
+
+        def _normalize_iupac(value: object) -> str | None:
+            """Return a single-letter IUPAC code or None if missing/invalid."""
+            if value is None:
+                return None
+            if isinstance(value, (bytes, np.bytes_)):
+                value = value.decode("utf-8", errors="ignore")
+
+            # allow list/tuple/array containers (take first valid)
+            if isinstance(value, (list, tuple, np.ndarray, pd.Series)):
+                for item in value:
+                    code = _normalize_iupac(item)
+                    if code is not None:
+                        return code
+                return None
+
+            s = str(value).upper().strip()
+            if not s or s in missing_codes:
+                return None
+
+            # handle comma-separated values
+            if "," in s:
+                for tok in (t.strip() for t in s.split(",")):
+                    if tok and tok not in missing_codes and tok in iupac_to_bases:
+                        return tok
+                return None
+
+            return s if s in iupac_to_bases else None
+
+        # 1) metadata restriction
+        for j in range(L):
+            ref = _normalize_iupac(refs[j])
+            alt = _normalize_iupac(alts[j])
+
+            if alt is None or (ref is not None and alt == ref):
+                mask[j, :] = False
+                mask[j, 0] = True
+
+        # 2) data-driven override
+        y_train = getattr(self, "y_train_", None)
+        if y_train is not None:
+            y = np.asarray(y_train)
+            if y.ndim == 2 and y.shape[1] == L:
+                if K == 2:
+                    y = y.copy()
+                    y[y == 2] = 1
+                valid = y >= 0
+                if valid.any():
+                    observed = np.zeros((L, K), dtype=bool)
+                    for c in range(K):
+                        observed[:, c] = np.any(valid & (y == c), axis=0)
+
+                    conflict = observed & (~mask)
+                    if conflict.any():
+                        loci = np.where(conflict.any(axis=1))[0]
+                        self.valid_class_mask_conflict_loci_ = loci
+                        self.logger.warning(
+                            f"valid_class_mask_ metadata forbids observed classes at {loci.size} loci. "
+                            "Expanding mask to include observed classes."
+                        )
+                        mask |= observed
+
+        bad = np.where(~mask.any(axis=1))[0]
+        if bad.size:
+            mask[bad, :] = False
+            mask[bad, 0] = True
+
+        return torch.as_tensor(mask, dtype=torch.bool, device=self.device)
