@@ -8,7 +8,7 @@ refactored architecture:
 - **Instantiate → fit() → transform()** contract (no arguments to ``fit``/``transform``)
 - **BaseNNImputer** wrapper that manages IO, encoding/decoding, training loops, tuning, and plotting
 - **Objective function** compatible with Optuna tuning
-- **Top-level API imports** (``from pgsui import ...``), consistent with existing models (see ``ImputeNLPCA`` and ``NLPCAModel``)
+- **Top-level API imports** (``from pgsui import ...``), consistent with existing models (see ``ImputeAutoencoder`` and ``AutoencoderModel``)
 
 Prerequisites
 -------------
@@ -23,7 +23,7 @@ Model Development Overview
 A new model requires **three parts**:
 
 1. **A config dataclass**: ``MyNewModelConfig`` (typed, preset-aware)
-2. **A PyTorch module**: ``MyNewDecoder`` (or encoder-decoder) with a clearly shaped output
+2. **A PyTorch module**: ``MyNewAutoencoder`` (or encoder-decoder) with a clearly shaped output
 3. **An imputer wrapper**: ``ImputeMyNewModel(BaseNNImputer)`` that plugs your module into PG-SUI's training/tuning/eval pipeline
 
 .. note::
@@ -34,7 +34,7 @@ A new model requires **three parts**:
 Step 0 — Create a Config Dataclass
 ----------------------------------
 
-Define a typed config that mirrors the structure used by existing models (``io``, ``model``, ``train``, ``tune``, ``evaluate``, ``plot``) and provides ``from_preset`` plus optional dot-key overrides.
+Define a typed config that mirrors the structure used by existing models (``io``, ``model``, ``train``, ``tune``, ``plot``, ``sim``) and provides ``from_preset`` plus optional dot-key overrides.
 
 .. code-block:: python
 
@@ -43,7 +43,7 @@ Define a typed config that mirrors the structure used by existing models (``io``
     from typing import Any, Dict, Literal
 
     from pgsui.data_processing.containers import (
-        IOConfig, TrainConfig, TuneConfig, EvalConfig, PlotConfig, ModelConfig
+        IOConfig, TrainConfig, TuneConfig, PlotConfig, ModelConfig, SimConfig
     )
     from pgsui.data_processing.config import apply_dot_overrides
 
@@ -54,8 +54,8 @@ Define a typed config that mirrors the structure used by existing models (``io``
         model: ModelConfig = field(default_factory=ModelConfig)
         train: TrainConfig = field(default_factory=TrainConfig)
         tune: TuneConfig = field(default_factory=TuneConfig)
-        evaluate: EvalConfig = field(default_factory=EvalConfig)
         plot: PlotConfig = field(default_factory=PlotConfig)
+        sim: SimConfig = field(default_factory=SimConfig)
 
         @classmethod
         def from_preset(
@@ -86,7 +86,6 @@ Define a typed config that mirrors the structure used by existing models (``io``
                 cfg.train.batch_size = 128
                 cfg.train.learning_rate = 8e-4
                 cfg.tune.enabled = True
-                cfg.tune.fast = True
                 cfg.tune.n_trials = 100
             else:  # thorough
                 cfg.model.latent_dim = 16
@@ -95,7 +94,6 @@ Define a typed config that mirrors the structure used by existing models (``io``
                 cfg.train.batch_size = 64
                 cfg.train.learning_rate = 6e-4
                 cfg.tune.enabled = True
-                cfg.tune.fast = False
                 cfg.tune.n_trials = 250
 
             return cfg
@@ -111,7 +109,7 @@ Define a typed config that mirrors the structure used by existing models (``io``
 Step 1 — Implement the PyTorch Module
 -------------------------------------
 
-The module predicts per-SNP class logits. Match shapes used by your wrapper (e.g., ``(batch, n_features, n_classes)``). Keep the API similar to ``NLPCAModel``.
+The module predicts per-SNP class logits. Match shapes used by your wrapper (e.g., ``(batch, n_features, n_classes)``). Keep the API similar to ``AutoencoderModel``.
 
 .. code-block:: python
 
@@ -158,7 +156,7 @@ The module predicts per-SNP class logits. Match shapes used by your wrapper (e.g
 Step 2 — Write the Imputer Wrapper
 ----------------------------------
 
-Mirror the pattern in ``ImputeNLPCA``:
+Mirror the pattern in ``ImputeAutoencoder``:
 
 - Normalize a config (dataclass, dict, or YAML path) → concrete config
 - Initialize logging via ``LoggerManager``
@@ -181,7 +179,7 @@ Mirror the pattern in ``ImputeNLPCA``:
     from pgsui.impute.unsupervised.base import BaseNNImputer
     from pgsui.data_processing.config import load_yaml_to_dataclass, apply_dot_overrides
 
-    # -- Config normalization helper (like ensure_nlpca_config) -----------------
+    # -- Config normalization helper -------------------------------------------
     def ensure_my_config(config: MyNewModelConfig | dict | str | None) -> MyNewModelConfig:
         if config is None:
             return MyNewModelConfig.from_preset("balanced")
@@ -233,6 +231,8 @@ Mirror the pattern in ``ImputeNLPCA``:
             self.logger = logman.get_logger()
 
             super().__init__(
+                model_name=self.model_name,
+                genotype_data=self.genotype_data,
                 prefix=self.cfg.io.prefix,
                 device=self.cfg.train.device,
                 verbose=self.cfg.io.verbose,
@@ -258,7 +258,6 @@ Mirror the pattern in ``ImputeNLPCA``:
 
             # Tuning flags
             self.tune = self.cfg.tune.enabled
-            self.tune_fast = self.cfg.tune.fast
             self.n_trials = self.cfg.tune.n_trials
             self.tune_metric = self.cfg.tune.metric
 
@@ -283,26 +282,24 @@ Mirror the pattern in ``ImputeNLPCA``:
             n_samples, self.num_features_ = X.shape
 
             # Determine classes (diploid: 3; haploid collapses to 2)
-            is_haploid = self.pgenc.is_haploid  # if available; else infer
+            is_haploid = self.pgenc.is_haploid
             self.num_classes_ = 2 if is_haploid else 3
             if is_haploid:
                 X[X == 2] = 1  # map {0,2} -> {0,1}
 
-            # Split
-            idx = np.arange(n_samples)
-            tr, te = train_test_split(idx, test_size=self.validation_split, random_state=self.seed)
-            X_train, X_val = X[tr], X[te]
-            self.train_idx_, self.test_idx_ = tr, te
+            # Use base class helper for splitting
+            self.train_idx_, self.val_idx_, self.test_idx_ = self._train_val_test_split(X)
+            X_train = X[self.train_idx_]
+            X_val = X[self.val_idx_]
 
-            # Class weights on train
-            self.class_weights_ = self._class_weights_from_zygosity(X_train)
-
-            # Hidden sizes from config helper on Base (mirrors NLPCA flow)
+            # Hidden sizes from config helper on Base
+            input_dim = self.num_features_ * self.num_classes_
             hidden = self._compute_hidden_layer_sizes(
-                n_inputs=self.latent_dim,
-                n_outputs=self.num_features_ * self.num_classes_,
-                n_samples=len(tr),
+                n_inputs=input_dim,
+                n_outputs=self.num_classes_,
+                n_samples=len(self.train_idx_),
                 n_hidden=self.num_hidden_layers,
+                latent_dim=self.latent_dim,
                 alpha=getattr(self.cfg.model, "layer_scaling_factor", 4.0),
                 schedule=self.cfg.model.layer_schedule,
             )
@@ -320,28 +317,20 @@ Mirror the pattern in ``ImputeNLPCA``:
             model = self.build_model(self.Model, self.best_params_)
             model.apply(self.initialize_weights)
 
-            loader = self._get_label_loader(X_train)  # batch of (indices, labels)
-            loss, self.model_, self.history_, _ = self._train_and_validate_model(
+            # NOTE: Use appropriate data loader logic here (masked vs full)
+            train_loader = self._get_data_loaders(X_train, X_train, mask=np.ones_like(X_train, dtype=bool), batch_size=self.batch_size, shuffle=True)
+            val_loader = self._get_data_loaders(X_val, X_val, mask=np.ones_like(X_val, dtype=bool), batch_size=self.batch_size, shuffle=False)
+
+            loss, self.model_, self.history_ = self._train_and_validate_model(
                 model=model,
-                loader=loader,
+                X_train=X_train,
+                y_train=X_train,
+                val_loader=val_loader,
                 lr=self.learning_rate,
                 l1_penalty=getattr(self.cfg.train, "l1_penalty", 0.0),
-                return_history=True,
-                latent_vectors=self._create_latent_space(
-                    {"latent_dim": self.latent_dim}, len(X_train), X_train, self.cfg.model.latent_init
-                ),
-                lr_input_factor=getattr(self.cfg.train, "lr_input_factor", 1.0),
-                class_weights=torch.tensor(self.class_weights_, dtype=torch.float32, device=self.device),
-                X_val=X_val,
                 params=self.best_params_,
-                prune_metric=self.tune_metric,
-                eval_interval=1,
-                eval_latent_steps=0,
-                eval_latent_lr=0.0,
-                eval_latent_weight_decay=0.0,
             )
 
-            self._evaluate_model(X_val, self.model_, self.best_params_)
             self.is_fit_ = True
             return self
 
@@ -353,10 +342,7 @@ Mirror the pattern in ``ImputeNLPCA``:
             X_all = self.pgenc.genotypes_012.astype(np.int64, copy=True)
             X_all[X_all < 0] = -1
 
-            latents = self._optimize_latents_for_inference(
-                X_all, self.model_, self.best_params_, inference_epochs=200
-            )
-            labels, _ = self._predict(self.model_, latents)
+            labels, _ = self._predict(self.model_, X_all)
 
             miss = X_all == -1
             X_imp = X_all.copy()
@@ -364,18 +350,12 @@ Mirror the pattern in ``ImputeNLPCA``:
 
             return self.pgenc.decode_012(X_imp)
 
-        # --- Minimal helpers reused from NLPCA flow ---------------------------
-        def _get_label_loader(self, y: np.ndarray):
-            y_tensor = torch.from_numpy(y).long().to(self.device)
-            ds = torch.utils.data.TensorDataset(torch.arange(len(y_tensor), device=self.device), y_tensor)
-            return torch.utils.data.DataLoader(ds, batch_size=self.batch_size, shuffle=True)
-
 Step 3 — (Optional) Hyperparameter Tuning
 -----------------------------------------
 
-If your model supports Optuna tuning, mirror the ``ImputeNLPCA`` pattern:
+If your model supports Optuna tuning, mirror the ``ImputeAutoencoder`` pattern:
 
-- ``_objective(self, trial)`` samples hyperparameters → trains quickly → returns a scalar metric (e.g., ``pr_macro``)
+- ``_objective(self, trial)`` samples hyperparameters → trains quickly → returns a scalar metric (e.g., ``f1``)
 - ``_sample_hyperparameters(self, trial)`` returns a dictionary with both raw choices and a ``model_params`` payload
 - ``_set_best_params(self, best_params)`` converts the winning trial into the final ``model_params``
 
@@ -440,10 +420,10 @@ FAQ
 ---
 
 **Q: Do I pass arrays to ``fit`` or ``transform``?**
-A: No. Like ``ImputeNLPCA``, you pass ``genotype_data`` at construction; then call ``fit()`` and ``transform()`` with **no arguments**.
+A: No. Like ``ImputeAutoencoder``, you pass ``genotype_data`` at construction; then call ``fit()`` and ``transform()`` with **no arguments**.
 
 **Q: Can my module use a full autoencoder (encoder+decoder)?**
 A: Yes. Expose a consistent forward that returns per-SNP logits and adapt the wrapper's latent handling accordingly.
 
 **Q: How do I add Optuna tuning quickly?**
-A: Implement ``_objective``, ``_sample_hyperparameters``, and ``_set_best_params`` following the other models. Use ``self.tune_fast`` and smaller subset caps for speed.
+A: Implement ``_objective``, ``_sample_hyperparameters``, and ``_set_best_params`` following the other models.
