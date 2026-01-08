@@ -166,7 +166,7 @@ def load_yaml_to_dataclass(
 
     Notes:
         - `preset` is **CLI-only**. If the YAML contains `preset`, it will be ignored (default) or cause an error depending on `yaml_preset_behavior`.
-        - Pass a `base` instance that is already constructed from the CLI-selected preset (e.g., `NLPCAConfig.from_preset(args.preset)`), and this function will overlay the YAML on top of it. Any additional `overlays` (a nested dict) are applied last.
+        - Pass a `base` instance that is already constructed from the CLI-selected preset (e.g., `VAEConfig.from_preset(args.preset)`), and this function will overlay the YAML on top of it. Any additional `overlays` (a nested dict) are applied last.
 
     Args:
         path (str): Path to the YAML file.
@@ -479,7 +479,6 @@ def apply_dot_overrides(
         t.Any: The updated dataclass instance (same object identity is not guaranteed; a deep copy is made).
 
     Notes:
-        - No hard-coding of NLPCAConfig. Pass `root_cls=NLPCAConfig` (or UBPConfig, etc.) when starting from a dict.
         - Dict payloads encountered at intermediate nodes are merged into the expected dataclass type using schema introspection.
         - Enforces unknown-key errors to keep configs honest.
 
