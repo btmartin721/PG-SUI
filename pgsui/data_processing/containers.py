@@ -123,8 +123,7 @@ class ModelConfig:
         num_hidden_layers (int): Number of hidden layers in the neural network.
         activation (Literal["relu", "elu", "selu", "leaky_relu"]): Activation function.
         layer_scaling_factor (float): Scaling factor for the number of neurons in hidden layers.
-        layer_schedule (Literal["pyramid", "constant", "linear"]): Schedule for scaling hidden layer sizes.
-        gamma (float): Parameter for the focal loss function.
+        layer_schedule (Literal["pyramid", "linear"]): Schedule for scaling hidden layer sizes.
     """
 
     latent_init: Literal["random", "pca"] = "random"
@@ -133,8 +132,7 @@ class ModelConfig:
     num_hidden_layers: int = 2
     activation: Literal["relu", "elu", "selu", "leaky_relu"] = "relu"
     layer_scaling_factor: float = 5.0
-    layer_schedule: Literal["pyramid", "constant", "linear"] = "pyramid"
-    gamma: float = 2.0
+    layer_schedule: Literal["pyramid", "linear"] = "pyramid"
 
 
 @dataclass
@@ -144,28 +142,39 @@ class TrainConfig:
     Attributes:
         batch_size (int): Number of samples per training batch.
         learning_rate (float): Learning rate for the optimizer.
-        lr_input_factor (float): Factor to scale the learning rate for input layer.
         l1_penalty (float): L1 regularization penalty.
         early_stop_gen (int): Number of generations with no improvement to wait before early stopping.
         min_epochs (int): Minimum number of epochs to train.
         max_epochs (int): Maximum number of epochs to train.
         validation_split (float): Proportion of data to use for validation.
-        weights_beta (float): Smoothing factor for class weights.
-        weights_max_ratio (float): Maximum ratio for class weights to prevent extreme values.
+        weights_max_ratio (float | None): Maximum ratio for class weights to prevent extreme values.
+        gamma (float): Focusing parameter for focal loss.
         device (Literal["gpu", "cpu", "mps"]): Device to use for computation.
     """
 
-    batch_size: int = 32
+    batch_size: int = 64
     learning_rate: float = 1e-3
-    lr_input_factor: float = 1.0
     l1_penalty: float = 0.0
-    early_stop_gen: int = 20
+    early_stop_gen: int = 25
     min_epochs: int = 100
-    max_epochs: int = 5000
+    max_epochs: int = 2000
     validation_split: float = 0.2
-    weights_beta: float = 0.9999
-    weights_max_ratio: float = 1.0
     device: Literal["gpu", "cpu", "mps"] = "cpu"
+    weights_max_ratio: Optional[float] = None
+    weights_power: float = 1.0
+    weights_normalize: bool = True
+    weights_inverse: bool = False
+    gamma: float = 0.0
+    gamma_schedule: bool = False
+
+
+def _default_train_config() -> TrainConfig:
+    """Typed default factory for TrainConfig (helps some type checkers).
+
+    Using the class object directly (default_factory=TrainConfig) is valid at runtime but certain type checkers can fail to match dataclasses.field overloads.
+    """
+
+    return TrainConfig()
 
 
 @dataclass
@@ -174,19 +183,13 @@ class TuneConfig:
 
     Attributes:
         enabled (bool): If True, enables hyperparameter tuning.
-        metric (Literal["f1", "accuracy", "pr_macro"]): Metric to optimize during tuning.
+        metric (Literal["f1", "accuracy", "pr_macro", "average_precision", "roc_auc", "precision", "recall", "mcc", "jaccard"]): Metric to optimize during tuning.
         n_trials (int): Number of hyperparameter trials to run.
         resume (bool): If True, resumes tuning from a previous state.
         save_db (bool): If True, saves the tuning results to a database.
-        fast (bool): If True, uses a faster but less thorough tuning approach.
-        max_samples (int): Maximum number of samples to use for tuning. 0 means all samples.
-        max_loci (int): Maximum number of loci to use for tuning. 0 means all loci.
         epochs (int): Number of epochs to train each trial.
         batch_size (int): Batch size for training during tuning.
-        eval_interval (int): Interval (in epochs) at which to evaluate the model during tuning.
-        infer_epochs (int): Number of epochs for inference during tuning.
         patience (int): Number of evaluations with no improvement before stopping early.
-        proxy_metric_batch (int): If > 0, uses a subset of data for proxy metric evaluation.
     """
 
     enabled: bool = False
@@ -198,34 +201,15 @@ class TuneConfig:
         "roc_auc",
         "precision",
         "recall",
+        "mcc",
+        "jaccard",
     ] = "f1"
     n_trials: int = 100
     resume: bool = False
     save_db: bool = False
-    fast: bool = True
-    max_samples: int = 512
-    max_loci: int = 0  # 0 = all
     epochs: int = 500
     batch_size: int = 64
-    eval_interval: int = 20
-    infer_epochs: int = 100
     patience: int = 10
-    proxy_metric_batch: int = 0
-
-
-@dataclass
-class EvalConfig:
-    """Evaluation configuration.
-
-    Attributes:
-        eval_latent_steps (int): Number of optimization steps for latent space evaluation.
-        eval_latent_lr (float): Learning rate for latent space optimization.
-        eval_latent_weight_decay (float): Weight decay for latent space optimization.
-    """
-
-    eval_latent_steps: int = 50
-    eval_latent_lr: float = 1e-2
-    eval_latent_weight_decay: float = 0.0
 
 
 @dataclass
@@ -250,6 +234,8 @@ class PlotConfig:
 @dataclass
 class IOConfig:
     """I/O configuration.
+
+    Dataclass that includes configuration settings for file naming, logging verbosity, random seed, and parallelism.
 
     Attributes:
         prefix (str): Prefix for output files. Default is "pgsui".
@@ -289,347 +275,29 @@ class SimConfig:
         "nonrandom",
         "nonrandom_weighted",
     ] = "random"
-    sim_prop: float = 0.10
+    sim_prop: float = 0.20
     sim_kwargs: dict | None = None
-
-
-@dataclass
-class NLPCAConfig:
-    """Top-level configuration for ImputeNLPCA.
-
-    Attributes:
-        io (IOConfig): I/O configuration.
-        model (ModelConfig): Model architecture configuration.
-        train (TrainConfig): Training procedure configuration.
-        tune (TuneConfig): Hyperparameter tuning configuration.
-        evaluate (EvalConfig): Evaluation configuration.
-        plot (PlotConfig): Plotting configuration.
-        sim (SimConfig): Simulation configuration.
-    """
-
-    io: IOConfig = field(default_factory=IOConfig)
-    model: ModelConfig = field(default_factory=ModelConfig)
-    train: TrainConfig = field(default_factory=TrainConfig)
-    tune: TuneConfig = field(default_factory=TuneConfig)
-    evaluate: EvalConfig = field(default_factory=EvalConfig)
-    plot: PlotConfig = field(default_factory=PlotConfig)
-    sim: SimConfig = field(default_factory=SimConfig)
-
-    @classmethod
-    def from_preset(
-        cls, preset: Literal["fast", "balanced", "thorough"] = "balanced"
-    ) -> "NLPCAConfig":
-        """Build a NLPCAConfig from a named preset."""
-        if preset not in {"fast", "balanced", "thorough"}:
-            raise ValueError(f"Unknown preset: {preset}")
-
-        cfg = cls()
-
-        # Common baselines
-        cfg.io.verbose = False
-        cfg.io.ploidy = 2
-        cfg.train.validation_split = 0.20
-        cfg.model.activation = "relu"
-        cfg.model.layer_schedule = "pyramid"
-        cfg.model.latent_init = "random"
-        cfg.evaluate.eval_latent_lr = 1e-2
-        cfg.evaluate.eval_latent_weight_decay = 0.0
-        cfg.sim.simulate_missing = True
-        cfg.sim.sim_strategy = "random"
-        cfg.sim.sim_prop = 0.2
-
-        if preset == "fast":
-            # Model
-            cfg.model.latent_dim = 4
-            cfg.model.num_hidden_layers = 1
-            cfg.model.layer_scaling_factor = 2.0
-            cfg.model.dropout_rate = 0.10
-            cfg.model.gamma = 1.5
-            # Train
-            cfg.train.batch_size = 256
-            cfg.train.learning_rate = 2e-3
-            cfg.train.early_stop_gen = 5
-            cfg.train.min_epochs = 10
-            cfg.train.max_epochs = 150
-            cfg.train.weights_beta = 0.999
-            cfg.train.weights_max_ratio = 5.0
-            # Tuning
-            cfg.tune.enabled = True
-            cfg.tune.fast = True
-            cfg.tune.n_trials = 20
-            cfg.tune.epochs = 150
-            cfg.tune.batch_size = 256
-            cfg.tune.max_samples = 512
-            cfg.tune.max_loci = 0
-            cfg.tune.eval_interval = 20
-            cfg.tune.infer_epochs = 20
-            cfg.tune.patience = 5
-            cfg.tune.proxy_metric_batch = 0
-            # Eval
-            cfg.evaluate.eval_latent_steps = 20
-
-        elif preset == "balanced":
-            # Model
-            cfg.model.latent_dim = 8
-            cfg.model.num_hidden_layers = 2
-            cfg.model.layer_scaling_factor = 3.0
-            cfg.model.dropout_rate = 0.20
-            cfg.model.gamma = 2.0
-            # Train
-            cfg.train.batch_size = 128
-            cfg.train.learning_rate = 1e-3
-            cfg.train.early_stop_gen = 15
-            cfg.train.min_epochs = 50
-            cfg.train.max_epochs = 600
-            cfg.train.weights_beta = 0.9999
-            cfg.train.weights_max_ratio = 5.0
-            # Tuning
-            cfg.tune.enabled = True
-            cfg.tune.fast = False
-            cfg.tune.n_trials = 60
-            cfg.tune.epochs = 200
-            cfg.tune.batch_size = 128
-            cfg.tune.max_samples = 2048
-            cfg.tune.max_loci = 0
-            cfg.tune.eval_interval = 10
-            cfg.tune.infer_epochs = 50
-            cfg.tune.patience = 10
-            cfg.tune.proxy_metric_batch = 0
-            # Eval
-            cfg.evaluate.eval_latent_steps = 40
-
-        else:  # thorough
-            # Model
-            cfg.model.latent_dim = 16
-            cfg.model.num_hidden_layers = 3
-            cfg.model.layer_scaling_factor = 5.0
-            cfg.model.dropout_rate = 0.30
-            cfg.model.gamma = 2.5
-            # Train
-            cfg.train.batch_size = 64
-            cfg.train.learning_rate = 5e-4
-            cfg.train.early_stop_gen = 30
-            cfg.train.min_epochs = 100
-            cfg.train.max_epochs = 2000
-            cfg.train.weights_beta = 0.9999
-            cfg.train.weights_max_ratio = 5.0
-            # Tuning
-            cfg.tune.enabled = True
-            cfg.tune.fast = False  # Full search
-            cfg.tune.n_trials = 100
-            cfg.tune.epochs = 600
-            cfg.tune.batch_size = 64
-            cfg.tune.max_samples = 0  # No limit
-            cfg.tune.max_loci = 0
-            cfg.tune.eval_interval = 10
-            cfg.tune.infer_epochs = 80
-            cfg.tune.patience = 20
-            cfg.tune.proxy_metric_batch = 0
-            # Eval
-            cfg.evaluate.eval_latent_steps = 100
-
-        return cfg
-
-    def apply_overrides(self, overrides: Dict[str, Any] | None) -> "NLPCAConfig":
-        """Apply flat dot-key overrides."""
-        if not overrides:
-            return self
-        for k, v in overrides.items():
-            node = self
-            parts = k.split(".")
-            for p in parts[:-1]:
-                node = getattr(node, p)
-            last = parts[-1]
-            if hasattr(node, last):
-                setattr(node, last, v)
-            else:
-                raise KeyError(f"Unknown config key: {k}")
-        return self
-
-    def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
-
-
-@dataclass
-class UBPConfig:
-    """Top-level configuration for ImputeUBP.
-
-    Attributes:
-        io (IOConfig): I/O configuration.
-        model (ModelConfig): Model architecture configuration.
-        train (TrainConfig): Training procedure configuration.
-        tune (TuneConfig): Hyperparameter tuning configuration.
-        evaluate (EvalConfig): Evaluation configuration.
-        plot (PlotConfig): Plotting configuration.
-        sim (SimConfig): Simulated-missing configuration.
-    """
-
-    io: IOConfig = field(default_factory=IOConfig)
-    model: ModelConfig = field(default_factory=ModelConfig)
-    train: TrainConfig = field(default_factory=TrainConfig)
-    tune: TuneConfig = field(default_factory=TuneConfig)
-    evaluate: EvalConfig = field(default_factory=EvalConfig)
-    plot: PlotConfig = field(default_factory=PlotConfig)
-    sim: SimConfig = field(default_factory=SimConfig)
-
-    @classmethod
-    def from_preset(
-        cls, preset: Literal["fast", "balanced", "thorough"] = "balanced"
-    ) -> "UBPConfig":
-        """Build a UBPConfig from a named preset."""
-        if preset not in {"fast", "balanced", "thorough"}:
-            raise ValueError(f"Unknown preset: {preset}")
-
-        cfg = cls()
-
-        # Common baselines
-        cfg.io.verbose = False
-        cfg.io.ploidy = 2
-        cfg.model.activation = "relu"
-        cfg.model.layer_schedule = "pyramid"
-        cfg.model.latent_init = "random"
-        cfg.sim.simulate_missing = True
-        cfg.sim.sim_strategy = "random"
-        cfg.sim.sim_prop = 0.2
-
-        if preset == "fast":
-            # Model
-            cfg.model.latent_dim = 4
-            cfg.model.num_hidden_layers = 1
-            cfg.model.layer_scaling_factor = 2.0
-            cfg.model.dropout_rate = 0.10
-            cfg.model.gamma = 1.5
-            # Train
-            cfg.train.batch_size = 256
-            cfg.train.learning_rate = 2e-3
-            cfg.train.early_stop_gen = 5
-            cfg.train.min_epochs = 10
-            cfg.train.max_epochs = 150
-            cfg.train.weights_beta = 0.999
-            cfg.train.weights_max_ratio = 5.0
-            # Tuning
-            cfg.tune.enabled = True
-            cfg.tune.fast = True
-            cfg.tune.n_trials = 20
-            cfg.tune.epochs = 150
-            cfg.tune.batch_size = 256
-            cfg.tune.max_samples = 512
-            cfg.tune.max_loci = 0
-            cfg.tune.eval_interval = 20
-            cfg.tune.infer_epochs = 20
-            cfg.tune.patience = 5
-            cfg.tune.proxy_metric_batch = 0
-            # Eval
-            cfg.evaluate.eval_latent_steps = 20
-            cfg.evaluate.eval_latent_lr = 1e-2
-            cfg.evaluate.eval_latent_weight_decay = 0.0
-
-        elif preset == "balanced":
-            # Model
-            cfg.model.latent_dim = 8
-            cfg.model.num_hidden_layers = 2
-            cfg.model.layer_scaling_factor = 3.0
-            cfg.model.dropout_rate = 0.20
-            cfg.model.gamma = 2.0
-            # Train
-            cfg.train.batch_size = 128
-            cfg.train.learning_rate = 1e-3
-            cfg.train.early_stop_gen = 15
-            cfg.train.min_epochs = 50
-            cfg.train.max_epochs = 600
-            cfg.train.weights_beta = 0.9999
-            cfg.train.weights_max_ratio = 5.0
-            # Tuning
-            cfg.tune.enabled = True
-            cfg.tune.fast = False
-            cfg.tune.n_trials = 60
-            cfg.tune.epochs = 200
-            cfg.tune.batch_size = 128
-            cfg.tune.max_samples = 2048
-            cfg.tune.max_loci = 0
-            cfg.tune.eval_interval = 10
-            cfg.tune.infer_epochs = 50
-            cfg.tune.patience = 10
-            cfg.tune.proxy_metric_batch = 0
-            # Eval
-            cfg.evaluate.eval_latent_steps = 40
-            cfg.evaluate.eval_latent_lr = 1e-2
-            cfg.evaluate.eval_latent_weight_decay = 0.0
-
-        else:  # thorough
-            # Model
-            cfg.model.latent_dim = 16
-            cfg.model.num_hidden_layers = 3
-            cfg.model.layer_scaling_factor = 5.0
-            cfg.model.dropout_rate = 0.30
-            cfg.model.gamma = 2.5
-            # Train
-            cfg.train.batch_size = 64
-            cfg.train.learning_rate = 5e-4
-            cfg.train.early_stop_gen = 30
-            cfg.train.min_epochs = 100
-            cfg.train.max_epochs = 2000
-            cfg.train.weights_beta = 0.9999
-            cfg.train.weights_max_ratio = 5.0
-            # Tuning
-            cfg.tune.enabled = True
-            cfg.tune.fast = False
-            cfg.tune.n_trials = 100
-            cfg.tune.epochs = 600
-            cfg.tune.batch_size = 64
-            cfg.tune.max_samples = 0
-            cfg.tune.max_loci = 0
-            cfg.tune.eval_interval = 10
-            cfg.tune.infer_epochs = 80
-            cfg.tune.patience = 20
-            cfg.tune.proxy_metric_batch = 0
-            # Eval
-            cfg.evaluate.eval_latent_steps = 100
-            cfg.evaluate.eval_latent_lr = 1e-2
-            cfg.evaluate.eval_latent_weight_decay = 0.0
-
-        return cfg
-
-    def apply_overrides(self, overrides: Dict[str, Any] | None) -> "UBPConfig":
-        """Apply flat dot-key overrides."""
-        if not overrides:
-            return self
-
-        for k, v in overrides.items():
-            node = self
-            parts = k.split(".")
-            for p in parts[:-1]:
-                node = getattr(node, p)
-            last = parts[-1]
-            if hasattr(node, last):
-                setattr(node, last, v)
-            else:
-                raise KeyError(f"Unknown config key: {k}")
-        return self
-
-    def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
 
 
 @dataclass
 class AutoencoderConfig:
     """Top-level configuration for ImputeAutoencoder.
 
+    This configuration class encapsulates all settings required for the ImputeAutoencoder model, including I/O, model architecture, training, hyperparameter tuning, evaluation, plotting, and simulated-missing data configurations.
+
     Attributes:
         io (IOConfig): I/O configuration.
         model (ModelConfig): Model architecture configuration.
         train (TrainConfig): Training procedure configuration.
         tune (TuneConfig): Hyperparameter tuning configuration.
-        evaluate (EvalConfig): Evaluation configuration.
         plot (PlotConfig): Plotting configuration.
         sim (SimConfig): Simulated-missing configuration.
     """
 
     io: IOConfig = field(default_factory=IOConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
-    train: TrainConfig = field(default_factory=TrainConfig)
+    train: TrainConfig = field(default_factory=_default_train_config)
     tune: TuneConfig = field(default_factory=TuneConfig)
-    evaluate: EvalConfig = field(default_factory=EvalConfig)
     plot: PlotConfig = field(default_factory=PlotConfig)
     sim: SimConfig = field(default_factory=SimConfig)
 
@@ -637,107 +305,102 @@ class AutoencoderConfig:
     def from_preset(
         cls, preset: Literal["fast", "balanced", "thorough"] = "balanced"
     ) -> "AutoencoderConfig":
-        """Build a AutoencoderConfig from a named preset."""
+        """Build a AutoencoderConfig from a named preset.
+
+        Args:
+            preset (Literal["fast", "balanced", "thorough"]): Preset name.
+
+        Returns:
+            AutoencoderConfig: Configuration instance corresponding to the preset.
+        """
         if preset not in {"fast", "balanced", "thorough"}:
             raise ValueError(f"Unknown preset: {preset}")
 
         cfg = cls()
 
-        # Common baselines (no latent refinement at eval)
+        # Common baselines
         cfg.io.verbose = False
         cfg.io.ploidy = 2
-        cfg.train.validation_split = 0.20
+        cfg.train.validation_split = 0.2
         cfg.model.activation = "relu"
         cfg.model.layer_schedule = "pyramid"
-        cfg.evaluate.eval_latent_steps = 0
-        cfg.evaluate.eval_latent_lr = 0.0
-        cfg.evaluate.eval_latent_weight_decay = 0.0
-        cfg.sim.simulate_missing = True
+        cfg.model.layer_scaling_factor = 2.0
         cfg.sim.sim_strategy = "random"
         cfg.sim.sim_prop = 0.2
+        cfg.plot.show = True
+
+        # Train settings
+        cfg.train.weights_max_ratio = None
+        cfg.train.weights_power = 1.0
+        cfg.train.weights_normalize = True
+        cfg.train.weights_inverse = False
+        cfg.train.gamma = 0.0
+        cfg.train.gamma_schedule = False
+        cfg.train.min_epochs = 100
+
+        # Tune
+        cfg.tune.enabled = False
+        cfg.tune.n_trials = 100
 
         if preset == "fast":
+            # Model
             cfg.model.latent_dim = 4
             cfg.model.num_hidden_layers = 1
-            cfg.model.layer_scaling_factor = 2.0
             cfg.model.dropout_rate = 0.10
-            cfg.model.gamma = 1.5
-            cfg.train.batch_size = 256
+
+            # Train
+            cfg.train.batch_size = 128
             cfg.train.learning_rate = 2e-3
-            cfg.train.early_stop_gen = 5
-            cfg.train.min_epochs = 10
-            cfg.train.max_epochs = 150
-            cfg.train.weights_beta = 0.999
-            cfg.train.weights_max_ratio = 5.0
-            cfg.tune.enabled = True
-            cfg.tune.fast = True
-            cfg.tune.n_trials = 20
-            cfg.tune.epochs = 150
-            cfg.tune.batch_size = 256
-            cfg.tune.max_samples = 512
-            cfg.tune.max_loci = 0
-            cfg.tune.eval_interval = 20
-            cfg.tune.patience = 5
-            cfg.tune.proxy_metric_batch = 0
-            if hasattr(cfg.tune, "infer_epochs"):
-                cfg.tune.infer_epochs = 0
+            cfg.train.early_stop_gen = 15
+            cfg.train.max_epochs = 200
+            cfg.train.weights_max_ratio = None
+
+            # Tune
+            cfg.tune.patience = 15
 
         elif preset == "balanced":
+            # Model
             cfg.model.latent_dim = 8
             cfg.model.num_hidden_layers = 2
-            cfg.model.layer_scaling_factor = 3.0
             cfg.model.dropout_rate = 0.20
-            cfg.model.gamma = 2.0
-            cfg.train.batch_size = 128
+
+            # Train
+            cfg.train.batch_size = 64
             cfg.train.learning_rate = 1e-3
-            cfg.train.early_stop_gen = 15
-            cfg.train.min_epochs = 50
-            cfg.train.max_epochs = 600
-            cfg.train.weights_beta = 0.9999
-            cfg.train.weights_max_ratio = 5.0
-            cfg.tune.enabled = True
-            cfg.tune.fast = False
-            cfg.tune.n_trials = 60
-            cfg.tune.epochs = 200
-            cfg.tune.batch_size = 128
-            cfg.tune.max_samples = 2048
-            cfg.tune.max_loci = 0
-            cfg.tune.eval_interval = 10
-            cfg.tune.patience = 10
-            cfg.tune.proxy_metric_batch = 0
-            if hasattr(cfg.tune, "infer_epochs"):
-                cfg.tune.infer_epochs = 0
+            cfg.train.early_stop_gen = 25
+            cfg.train.max_epochs = 500
+            cfg.train.weights_max_ratio = None
+
+            # Tune
+            cfg.tune.patience = 25
 
         else:  # thorough
+            # Model
             cfg.model.latent_dim = 16
             cfg.model.num_hidden_layers = 3
-            cfg.model.layer_scaling_factor = 5.0
             cfg.model.dropout_rate = 0.30
-            cfg.model.gamma = 2.5
+
+            # Train
             cfg.train.batch_size = 64
             cfg.train.learning_rate = 5e-4
-            cfg.train.early_stop_gen = 30
-            cfg.train.min_epochs = 100
-            cfg.train.max_epochs = 2000
-            cfg.train.weights_beta = 0.9999
-            cfg.train.weights_max_ratio = 5.0
-            cfg.tune.enabled = True
-            cfg.tune.fast = False
-            cfg.tune.n_trials = 100
-            cfg.tune.epochs = 600
-            cfg.tune.batch_size = 64
-            cfg.tune.max_samples = 0
-            cfg.tune.max_loci = 0
-            cfg.tune.eval_interval = 10
-            cfg.tune.patience = 20
-            cfg.tune.proxy_metric_batch = 0
-            if hasattr(cfg.tune, "infer_epochs"):
-                cfg.tune.infer_epochs = 0
+            cfg.train.early_stop_gen = 50
+            cfg.train.max_epochs = 1000
+            cfg.train.weights_max_ratio = None
+
+            # Tune
+            cfg.tune.patience = 50
 
         return cfg
 
     def apply_overrides(self, overrides: Dict[str, Any] | None) -> "AutoencoderConfig":
-        """Apply flat dot-key overrides."""
+        """Apply flat dot-key overrides.
+
+        Args:
+            overrides (Dict[str, Any] | None): Dictionary of overrides with dot-separated keys.
+
+        Returns:
+            AutoencoderConfig: New configuration instance with overrides applied.
+        """
         if not overrides:
             return self
         for k, v in overrides.items():
@@ -758,13 +421,8 @@ class AutoencoderConfig:
 
 @dataclass
 class VAEExtraConfig:
-    """VAE-specific knobs.
-
-    Attributes:
-        kl_beta (float): Final β for KL divergence term.
-    """
-
     kl_beta: float = 1.0
+    kl_beta_schedule: bool = False
 
 
 @dataclass
@@ -776,7 +434,6 @@ class VAEConfig:
         model (ModelConfig): Model architecture configuration.
         train (TrainConfig): Training procedure configuration.
         tune (TuneConfig): Hyperparameter tuning configuration.
-        evaluate (EvalConfig): Evaluation configuration.
         plot (PlotConfig): Plotting configuration.
         vae (VAEExtraConfig): VAE-specific configuration.
         sim (SimConfig): Simulated-missing configuration.
@@ -784,9 +441,8 @@ class VAEConfig:
 
     io: IOConfig = field(default_factory=IOConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
-    train: TrainConfig = field(default_factory=TrainConfig)
+    train: TrainConfig = field(default_factory=_default_train_config)
     tune: TuneConfig = field(default_factory=TuneConfig)
-    evaluate: EvalConfig = field(default_factory=EvalConfig)
     plot: PlotConfig = field(default_factory=PlotConfig)
     vae: VAEExtraConfig = field(default_factory=VAEExtraConfig)
     sim: SimConfig = field(default_factory=SimConfig)
@@ -795,114 +451,92 @@ class VAEConfig:
     def from_preset(
         cls, preset: Literal["fast", "balanced", "thorough"] = "balanced"
     ) -> "VAEConfig":
-        """Build a VAEConfig from a named preset."""
+        """Build a VAEConfig from a named preset.
+
+        Args:
+            preset (Literal["fast", "balanced", "thorough"]): Preset name.
+
+        Returns:
+            VAEConfig: Configuration instance corresponding to the preset.
+        """
         if preset not in {"fast", "balanced", "thorough"}:
             raise ValueError(f"Unknown preset: {preset}")
 
         cfg = cls()
 
-        # Common baselines (match AE; no latent refinement at eval)
+        # General settings
         cfg.io.verbose = False
         cfg.io.ploidy = 2
-        cfg.train.validation_split = 0.20
+        cfg.train.validation_split = 0.2
         cfg.model.activation = "relu"
         cfg.model.layer_schedule = "pyramid"
-        cfg.evaluate.eval_latent_steps = 0
-        cfg.evaluate.eval_latent_lr = 0.0
-        cfg.evaluate.eval_latent_weight_decay = 0.0
+        cfg.model.layer_scaling_factor = 2.0
         cfg.sim.simulate_missing = True
         cfg.sim.sim_strategy = "random"
         cfg.sim.sim_prop = 0.2
+        cfg.plot.show = True
+
+        # Train settings
+        cfg.train.weights_max_ratio = None
+        cfg.train.weights_power = 1.0
+        cfg.train.weights_normalize = True
+        cfg.train.weights_inverse = False
+        cfg.train.gamma = 0.0
+        cfg.train.gamma_schedule = False
+        cfg.train.min_epochs = 100
+
+        # VAE-specific
+        cfg.vae.kl_beta = 1.0
+        cfg.vae.kl_beta_schedule = False
+
+        # Tune
+        cfg.tune.enabled = False
+        cfg.tune.n_trials = 100
 
         if preset == "fast":
+            # Model
             cfg.model.latent_dim = 4
-            cfg.model.num_hidden_layers = 1
-            cfg.model.layer_scaling_factor = 2.0
-            cfg.model.dropout_rate = 0.10
-            cfg.model.gamma = 1.5
-            # VAE specifics
-            cfg.vae.kl_beta = 0.5
-            # Train
-            cfg.train.batch_size = 256
-            cfg.train.learning_rate = 2e-3
-            cfg.train.early_stop_gen = 5
-            cfg.train.min_epochs = 10
-            cfg.train.max_epochs = 150
-            cfg.train.weights_beta = 0.999
-            cfg.train.weights_max_ratio = 5.0
-            # Tune
-            cfg.tune.enabled = True
-            cfg.tune.fast = True
-            cfg.tune.n_trials = 20
-            cfg.tune.epochs = 150
-            cfg.tune.batch_size = 256
-            cfg.tune.max_samples = 512
-            cfg.tune.max_loci = 0
-            cfg.tune.eval_interval = 20
-            cfg.tune.patience = 5
-            cfg.tune.proxy_metric_batch = 0
-            if hasattr(cfg.tune, "infer_epochs"):
-                cfg.tune.infer_epochs = 0
-
-        elif preset == "balanced":
-            cfg.model.latent_dim = 8
             cfg.model.num_hidden_layers = 2
-            cfg.model.layer_scaling_factor = 3.0
-            cfg.model.dropout_rate = 0.20
-            cfg.model.gamma = 2.0
-            # VAE specifics
-            cfg.vae.kl_beta = 1.0
+            cfg.model.dropout_rate = 0.10
+
             # Train
             cfg.train.batch_size = 128
-            cfg.train.learning_rate = 1e-3
+            cfg.train.learning_rate = 2e-3
             cfg.train.early_stop_gen = 15
-            cfg.train.min_epochs = 50
-            cfg.train.max_epochs = 600
-            cfg.train.weights_beta = 0.9999
-            cfg.train.weights_max_ratio = 5.0
+            cfg.train.max_epochs = 200
+
             # Tune
-            cfg.tune.enabled = True
-            cfg.tune.fast = False
-            cfg.tune.n_trials = 60
-            cfg.tune.epochs = 200
-            cfg.tune.batch_size = 128
-            cfg.tune.max_samples = 2048
-            cfg.tune.max_loci = 0
-            cfg.tune.eval_interval = 10
-            cfg.tune.patience = 10
-            cfg.tune.proxy_metric_batch = 0
-            if hasattr(cfg.tune, "infer_epochs"):
-                cfg.tune.infer_epochs = 0
+            cfg.tune.patience = 15
+
+        elif preset == "balanced":
+            # Model
+            cfg.model.latent_dim = 8
+            cfg.model.num_hidden_layers = 4
+            cfg.model.dropout_rate = 0.20
+
+            # Train
+            cfg.train.batch_size = 64
+            cfg.train.learning_rate = 1e-3
+            cfg.train.early_stop_gen = 25
+            cfg.train.max_epochs = 500
+
+            # Tune
+            cfg.tune.patience = 25
 
         else:  # thorough
+            # Model
             cfg.model.latent_dim = 16
-            cfg.model.num_hidden_layers = 3
-            cfg.model.layer_scaling_factor = 5.0
+            cfg.model.num_hidden_layers = 8
             cfg.model.dropout_rate = 0.30
-            cfg.model.gamma = 2.5
-            # VAE specifics
-            cfg.vae.kl_beta = 1.0
+
             # Train
             cfg.train.batch_size = 64
             cfg.train.learning_rate = 5e-4
-            cfg.train.early_stop_gen = 30
-            cfg.train.min_epochs = 100
-            cfg.train.max_epochs = 2000
-            cfg.train.weights_beta = 0.9999
-            cfg.train.weights_max_ratio = 5.0
+            cfg.train.early_stop_gen = 50
+            cfg.train.max_epochs = 1000
+
             # Tune
-            cfg.tune.enabled = True
-            cfg.tune.fast = False
-            cfg.tune.n_trials = 100
-            cfg.tune.epochs = 600
-            cfg.tune.batch_size = 64
-            cfg.tune.max_samples = 0
-            cfg.tune.max_loci = 0
-            cfg.tune.eval_interval = 10
-            cfg.tune.patience = 20
-            cfg.tune.proxy_metric_batch = 0
-            if hasattr(cfg.tune, "infer_epochs"):
-                cfg.tune.infer_epochs = 0
+            cfg.tune.patience = 50
 
         return cfg
 
@@ -931,9 +565,9 @@ class MostFrequentAlgoConfig:
     """Algorithmic knobs for ImputeMostFrequent.
 
     Attributes:
-        by_populations (bool): Whether to compute per-population modes.
-        default (int): Fallback mode if no valid entries in a locus.
-        missing (int): Code for missing genotypes in 0/1/2.
+        by_populations (bool): Whether to compute per-population modes. Default is False.
+        default (int): Fallback mode if no valid entries in a locus. Default is 0.
+        missing (int): Code for missing genotypes in 0/1/2. Default is -1.
     """
 
     by_populations: bool = False
@@ -946,8 +580,8 @@ class DeterministicSplitConfig:
     """Evaluation split configuration shared by deterministic imputers.
 
     Attributes:
-        test_size (float): Proportion of data to use as the test set.
-        test_indices (Optional[Sequence[int]]): Specific indices to use as the test set.
+        test_size (float): Proportion of data to use as the test set. Default is 0.2.
+        test_indices (Optional[Sequence[int]]): Specific indices to use as the test set. Default is None.
     """
 
     test_size: float = 0.2
@@ -974,14 +608,21 @@ class MostFrequentConfig:
     algo: MostFrequentAlgoConfig = field(default_factory=MostFrequentAlgoConfig)
     sim: SimConfig = field(default_factory=SimConfig)
     tune: TuneConfig = field(default_factory=TuneConfig)
-    train: TrainConfig = field(default_factory=TrainConfig)
+    train: TrainConfig = field(default_factory=_default_train_config)
 
     @classmethod
     def from_preset(
         cls,
         preset: Literal["fast", "balanced", "thorough"] = "balanced",
     ) -> "MostFrequentConfig":
-        """Construct a preset configuration."""
+        """Construct a preset configuration.
+
+        Args:
+            preset (Literal["fast", "balanced", "thorough"]): Preset name.
+
+        Returns:
+            MostFrequentConfig: Configuration instance corresponding to the preset.
+        """
         if preset not in {"fast", "balanced", "thorough"}:
             raise ValueError(f"Unknown preset: {preset}")
 
@@ -1046,13 +687,20 @@ class RefAlleleConfig:
     algo: RefAlleleAlgoConfig = field(default_factory=RefAlleleAlgoConfig)
     sim: SimConfig = field(default_factory=SimConfig)
     tune: TuneConfig = field(default_factory=TuneConfig)
-    train: TrainConfig = field(default_factory=TrainConfig)
+    train: TrainConfig = field(default_factory=_default_train_config)
 
     @classmethod
     def from_preset(
         cls, preset: Literal["fast", "balanced", "thorough"] = "balanced"
     ) -> "RefAlleleConfig":
-        """Presets mainly keep parity with logging/IO and split test_size."""
+        """Presets mainly keep parity with logging/IO and split test_size.
+
+        Args:
+            preset (Literal["fast", "balanced", "thorough"]): Preset name.
+
+        Returns:
+            RefAlleleConfig: Configuration instance corresponding to the preset.
+        """
         if preset not in {"fast", "balanced", "thorough"}:
             raise ValueError(f"Unknown preset: {preset}")
 
@@ -1271,7 +919,14 @@ class RFConfig:
 
     @classmethod
     def from_preset(cls, preset: str = "balanced") -> "RFConfig":
-        """Build a config from a named preset."""
+        """Build a config from a named preset.
+
+        Args:
+            preset (str): Preset name.
+
+        Returns:
+            RFConfig: Configuration instance corresponding to the preset.
+        """
         cfg = cls()
         if preset == "fast":
             cfg.model.n_estimators = 50
@@ -1363,7 +1018,14 @@ class HGBConfig:
 
     @classmethod
     def from_preset(cls, preset: str = "balanced") -> "HGBConfig":
-        """Build a config from a named preset."""
+        """Build a config from a named preset.
+
+        Args:
+            preset (str): Preset name.
+
+        Returns:
+            HGBConfig: Configuration instance corresponding to the preset.
+        """
         cfg = cls()
         if preset == "fast":
             cfg.model.n_estimators = 50
