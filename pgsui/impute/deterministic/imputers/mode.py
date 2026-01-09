@@ -1,7 +1,6 @@
 # Standard library imports
 import copy
 import json
-from collections import defaultdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union
 
@@ -13,14 +12,10 @@ from matplotlib.figure import Figure
 from plotly.graph_objs import Figure as PlotlyFigure
 from sklearn.exceptions import NotFittedError
 from sklearn.metrics import (
-    accuracy_score,
     average_precision_score,
     classification_report,
-    f1_score,
     jaccard_score,
     matthews_corrcoef,
-    precision_score,
-    recall_score,
 )
 from snpio import GenotypeEncoder
 from snpio.utils.logging import LoggerManager
@@ -84,9 +79,9 @@ def ensure_mostfrequent_config(
 
 
 class ImputeMostFrequent:
-    """Most-frequent (mode) imputer that mirrors DL evaluation on 0/1/2.
+    """Most-frequent (mode) deterministic imputer for 0/1/2 genotypes.
 
-    This imputer computes the most frequent genotype (mode) for each locus based on the training set and uses it to fill in missing values. It supports both global modes and population-specific modes if population data is provided. The imputer follows an evaluation protocol similar to deep learning models, including splitting the data into training and testing sets, masking observed cells in the test set for evaluation, and producing detailed classification reports and plots. It handles both diploid and haploid data, with special considerations for haploid scenarios. The imputer is designed to work seamlessly with genotype data encoded in 0/1/2 format, where -1 indicates missing values.
+    Computes the per-locus mode (globally or per population) from the training set and uses it to fill missing values. The evaluation protocol mirrors the DL imputers: train/test split with evaluation on either all observed test cells or a simulated-missing subset (depending on config), plus classification reports and plots. It handles both diploid and haploid data. Input genotypes are expected in 0/1/2 encoding with missing values represented by any negative integer. Output is returned as IUPAC strings via ``decode_012``.
     """
 
     def __init__(
@@ -116,14 +111,14 @@ class ImputeMostFrequent:
             tree_parser (TreeParser | None): Optional SNPio phylogenetic tree parser for nonrandom sim_strategy modes.
             config (MostFrequentConfig | dict | str | None): Configuration as a dataclass,
                 nested dict, or YAML path. If None, defaults are used.
-            overrides (dict | None): Flat dot-key overrides applied last with highest precedence, e.g. {'algo.by_populations': True, 'split.test_size': 0.3}.
+            overrides (Optional[dict]): Flat dot-key overrides applied last with highest precedence, e.g. {'algo.by_populations': True, 'split.test_size': 0.3}.
             simulate_missing (bool): Whether to simulate missing data if enabled in config. Defaults to True.
-            sim_strategy (Literal): Strategy for simulating missing data if enabled in config.
-            sim_prop (float): Proportion of data to simulate as missing if enabled in config.
+            sim_strategy (Literal["random", "random_weighted", "random_weighted_inv", "nonrandom", "nonrandom_weighted"]): Strategy for simulating missing data if enabled in config.
+            sim_prop (float): Proportion of data to simulate as missing if enabled in config. Default is 0.2.
             sim_kwargs (Optional[dict]): Additional keyword arguments for the simulated missing data transformer.
 
         Notes:
-            - This mirrors other config-driven models (AE/VAE/NLPCA/UBP).
+            - This mirrors other config-driven models (AE/VAE).
             - Evaluation split behavior uses cfg.split; plotting uses cfg.plot.
             - I/O/logging seeds and verbosity use cfg.io.
         """
@@ -170,7 +165,7 @@ class ImputeMostFrequent:
         self.X012_ = Xf.astype(np.int8, copy=False)
         self.num_features_ = self.X012_.shape[1]
 
-        # Simulated-missing controls (mirror VAE/AE/NLPCA semantics where possible)
+        # Simulated-missing controls (mirror VAE/AE semantics where possible)
         sim_cfg = getattr(self.cfg, "sim", None)
         sim_cfg_kwargs = dict(getattr(sim_cfg, "sim_kwargs", {}) or {})
 
@@ -319,11 +314,9 @@ class ImputeMostFrequent:
                 self.logger.error(msg)
                 raise ValueError(msg)
 
-        # ------------------------------
         # Simulated-missing mask (global → test-only)
-        # ------------------------------
         obs_mask = df_all.notna().to_numpy()  # observed = not NaN
-        n_samples, n_loci = obs_mask.shape
+        n_samples = obs_mask.shape[0]
 
         if self.simulate_missing:
             X_for_sim = self.ground_truth012_.astype(np.float32, copy=True)
@@ -373,7 +366,7 @@ class ImputeMostFrequent:
         self.X_train_df_ = df_sim
         self.is_fit_ = True
 
-        # Save parameters (unchanged)
+        # Save parameters
         best_params = self.cfg.to_dict()
         params_fp = self.parameters_dir / "best_parameters.json"
         with open(params_fp, "w") as f:
@@ -442,7 +435,7 @@ class ImputeMostFrequent:
             self.plotter_.plot_gt_distribution(gt_decoded, is_imputed=False)
             self.plotter_.plot_gt_distribution(imp_decoded, is_imputed=True)
 
-        # Return IUPAC strings (same as DL .transform())
+        # Return IUPAC strings
         return imp_decoded
 
     def _impute_df(self, df_in: pd.DataFrame) -> pd.DataFrame:
@@ -531,11 +524,13 @@ class ImputeMostFrequent:
         s_valid = s.dropna().astype(int)
         if s_valid.empty:
             return self.default
+
         # Mode among {0,1,2}; if ties, pandas picks the smallest (okay)
         mode_val = int(s_valid.mode().iloc[0])
         if mode_val not in (0, 1, 2):
             # Safety: clamp to valid zygosity in case of odd inputs
             mode_val = self.default if self.default in (0, 1, 2) else 0
+
         return mode_val
 
     def _evaluate_and_report(self) -> None:
@@ -605,14 +600,11 @@ class ImputeMostFrequent:
     def _evaluate_012_and_plot(self, y_true: np.ndarray, y_pred: np.ndarray) -> None:
         """0/1/2 zygosity report & confusion matrix.
 
-        This method generates a classification report and confusion matrix for genotypes encoded as 0 (REF), 1 (HET), and 2 (ALT). If the data is determined to be haploid (only 0 and 2 present), it folds the ALT genotype (2) into HET (1) for evaluation purposes. The method computes various performance metrics, logs the classification report, and creates visualizations of the results.
+        This method generates a classification report and confusion matrix for genotypes encoded as 0 (REF), 1 (HET), and 2 (ALT). If the data is haploid (only 0 and 2 present), it folds ALT (2) into the binary ALT/PRESENT class (1) for evaluation. The method computes metrics, logs the report, and creates visualizations of the results.
 
         Args:
             y_true (np.ndarray): True genotypes (0/1/2) for masked
             y_pred (np.ndarray): Predicted genotypes (0/1/2) for masked
-
-        Raises:
-            NotFittedError: If fit() and transform() have not been called.
         """
         labels: list[int] = [0, 1, 2]
         report_names: list[str] = ["REF", "HET", "ALT"]
@@ -677,83 +669,7 @@ class ImputeMostFrequent:
             pm.render()
 
         # Save JSON
-        self._save_report(report, suffix="zygosity")
-
-    def _additional_metrics(self, y_true, y_pred, labels, report_names, report):
-        """Compute additional metrics and augment the report dictionary.
-
-        Args:
-            y_true (np.ndarray): True genotypes.
-            y_pred (np.ndarray): Predicted genotypes.
-            labels (list[int]): List of label indices.
-            report_names (list[str]): List of report names corresponding to labels.
-            report (dict): Classification report dictionary to augment.
-
-        Returns:
-            dict[str, dict[str, float] | float]: Augmented report dictionary with additional metrics.
-        """
-        # Create an identity matrix and use the targets array as indices
-        y_score = np.eye(len(report_names))[y_pred]
-
-        # Per-class metrics
-        ap_pc = average_precision_score(y_true, y_score, average=None)
-        jaccard_pc = jaccard_score(
-            y_true, y_pred, average=None, labels=labels, zero_division=0
-        )
-
-        # Macro/weighted metrics
-        ap_macro = average_precision_score(y_true, y_score, average="macro")
-        ap_weighted = average_precision_score(y_true, y_score, average="weighted")
-        jaccard_macro = jaccard_score(y_true, y_pred, average="macro", zero_division=0)
-        jaccard_weighted = jaccard_score(
-            y_true, y_pred, average="weighted", zero_division=0
-        )
-
-        # Matthews correlation coefficient (MCC)
-        mcc = matthews_corrcoef(y_true, y_pred)
-
-        if not isinstance(ap_pc, np.ndarray):
-            msg = "average_precision_score or f1_score did not return np.ndarray as expected."
-            self.logger.error(msg)
-            raise TypeError(msg)
-
-        if not isinstance(jaccard_pc, np.ndarray):
-            msg = "jaccard_score did not return np.ndarray as expected."
-            self.logger.error(msg)
-            raise TypeError(msg)
-
-        # Add per-class metrics
-        report_full = {}
-        for i, class_name in enumerate(report_names):
-            class_report = report.get(class_name)
-
-            if isinstance(class_report, float):
-                continue
-
-            report_full[class_name] = dict(class_report)
-            report_full[class_name]["average-precision"] = float(ap_pc[i])
-            report_full[class_name]["jaccard"] = float(jaccard_pc[i])
-
-        macro_avg = report.get("macro avg")
-        if isinstance(macro_avg, dict):
-            report_full["macro avg"] = dict(macro_avg)
-            report_full["macro avg"]["average-precision"] = float(ap_macro)
-            report_full["macro avg"]["jaccard"] = float(jaccard_macro)
-
-        weighted_avg = report.get("weighted avg")
-        if isinstance(weighted_avg, dict):
-            report_full["weighted avg"] = dict(weighted_avg)
-            report_full["weighted avg"]["average-precision"] = float(ap_weighted)
-            report_full["weighted avg"]["jaccard"] = float(jaccard_weighted)
-
-        # Add scalar summary metrics
-        report_full["mcc"] = float(mcc)
-        accuracy_val = report.get("accuracy")
-
-        if isinstance(accuracy_val, (int, float)):
-            report_full["accuracy"] = float(accuracy_val)
-
-        return report_full
+        self._save_report(report_full, suffix="zygosity")
 
     def _evaluate_iupac10_and_plot(
         self, y_true: np.ndarray, y_pred: np.ndarray
@@ -765,9 +681,6 @@ class ImputeMostFrequent:
         Args:
             y_true (np.ndarray): True genotypes (0-9) for masked
             y_pred (np.ndarray): Predicted genotypes (0-9) for masked
-
-        Raises:
-            NotFittedError: If fit() and transform() have not been called.
         """
         labels_idx = list(range(10))
         report_names = ["A", "C", "G", "T", "W", "R", "M", "K", "Y", "S"]
@@ -822,10 +735,6 @@ class ImputeMostFrequent:
         report_full = self._additional_metrics(
             y_true, y_pred, labels_idx, report_names, report
         )
-        if report_full:
-            for k, v in report_full.items():
-                if k not in report:
-                    report[k] = v
 
         if self.verbose or self.debug:
             pm = PrettyMetrics(
@@ -836,7 +745,7 @@ class ImputeMostFrequent:
             pm.render()
 
         # Save JSON
-        self._save_report(report, suffix="iupac")
+        self._save_report(report_full, suffix="iupac")
 
     def _make_train_test_split(self) -> Tuple[np.ndarray, np.ndarray]:
         """Create train/test split indices.
@@ -932,21 +841,30 @@ class ImputeMostFrequent:
 
         This method converts genotype calls encoded as integers (0, 1, 2, etc.) into their corresponding IUPAC nucleotide codes. It supports two modes of decoding:
         1. Nucleotide mode (`is_nuc=True`): Decodes integer codes (0-9) directly to IUPAC nucleotide codes.
-        2. Metadata mode (`is_nuc=False`): Uses reference and alternate allele metadata to determine the appropriate IUPAC codes.
+        2. Metadata mode (`is_nuc=False`): Uses reference and alternate allele metadata to determine the appropriate IUPAC codes. If metadata is missing or inconsistent, the method attempts to repair the decoding by scanning the source SNP data for valid IUPAC codes.
 
         Args:
-            X (np.ndarray | pd.DataFrame | list[list[int]]): Input genotype calls as integers.
+            X (np.ndarray | pd.DataFrame | list[list[int]]): Input genotype calls as integers. Can be a NumPy array, Pandas DataFrame, or nested list.
             is_nuc (bool): If True, decode 0-9 nucleotide codes; else use ref/alt metadata. Defaults to False.
 
         Returns:
             np.ndarray: IUPAC strings as a 2D array of shape (n_samples, n_snps).
 
+        Notes:
+            - The method normalizes input values to handle various formats, including strings, lists, and arrays.
+            - It uses a predefined mapping of IUPAC codes to nucleotide bases and vice versa.
+            - Missing or invalid codes are represented as 'N' if they can't be resolved.
+            - The method includes repair logic to infer missing metadata from the source SNP data when necessary.
+
         Raises:
             ValueError: If input is not a DataFrame.
         """
         df = validate_input_type(X, return_type="df")
+
         if not isinstance(df, pd.DataFrame):
-            raise ValueError("Expected DataFrame.")
+            msg = f"Expected a pandas.DataFrame in 'decode_012', but got: {type(df)}."
+            self.logger.error(msg)
+            raise ValueError(msg)
 
         # IUPAC Definitions
         iupac_to_bases: dict[str, set[str]] = {
@@ -1129,3 +1047,91 @@ class ImputeMostFrequent:
                     out[col_codes == 2, j] = ref
 
         return out
+
+    def _additional_metrics(
+        self,
+        y_true: np.ndarray,
+        y_pred: np.ndarray,
+        labels: list[int],
+        report_names: list[str],
+        report: dict[str, dict[str, float] | float],
+    ) -> dict[str, dict[str, float] | float]:
+        """Compute additional metrics and augment the report dictionary.
+
+        Args:
+            y_true (np.ndarray): True genotypes.
+            y_pred (np.ndarray): Predicted genotypes.
+            labels (list[int]): List of label indices.
+            report_names (list[str]): List of report names corresponding to labels.
+            report (dict[str, dict[str, float] | float]): Classification report dictionary to augment.
+
+        Returns:
+            dict[str, dict[str, float] | float]: Augmented report dictionary with additional metrics.
+        """
+        # Create an identity matrix and use the targets array as indices
+        y_score = np.eye(len(report_names))[y_pred]
+
+        # Per-class metrics
+        ap_pc = average_precision_score(y_true, y_score, average=None)
+        jaccard_pc = jaccard_score(
+            y_true, y_pred, average=None, labels=labels, zero_division=0
+        )
+
+        # Macro/weighted metrics
+        ap_macro = average_precision_score(y_true, y_score, average="macro")
+        ap_weighted = average_precision_score(y_true, y_score, average="weighted")
+        jaccard_macro = jaccard_score(y_true, y_pred, average="macro", zero_division=0)
+        jaccard_weighted = jaccard_score(
+            y_true, y_pred, average="weighted", zero_division=0
+        )
+
+        # Matthews correlation coefficient (MCC)
+        mcc = matthews_corrcoef(y_true, y_pred)
+
+        if not isinstance(ap_pc, np.ndarray):
+            msg = "average_precision_score or f1_score did not return np.ndarray as expected."
+            self.logger.error(msg)
+            raise TypeError(msg)
+
+        if not isinstance(jaccard_pc, np.ndarray):
+            msg = "jaccard_score did not return np.ndarray as expected."
+            self.logger.error(msg)
+            raise TypeError(msg)
+
+        # Add per-class metrics
+        report_full = {}
+        dd_subset = {
+            k: v for k, v in report.items() if k in report_names and isinstance(v, dict)
+        }
+        for i, class_name in enumerate(report_names):
+            class_report: dict[str, float] = {}
+            if class_name in dd_subset:
+                class_report = dd_subset[class_name]
+
+            if isinstance(class_report, float) or not class_report:
+                continue
+
+            report_full[class_name] = dict(class_report)
+            report_full[class_name]["average-precision"] = float(ap_pc[i])
+            report_full[class_name]["jaccard"] = float(jaccard_pc[i])
+
+        macro_avg = report.get("macro avg")
+        if isinstance(macro_avg, dict):
+            report_full["macro avg"] = dict(macro_avg)
+            report_full["macro avg"]["average-precision"] = float(ap_macro)
+            report_full["macro avg"]["jaccard"] = float(jaccard_macro)
+
+        weighted_avg = report.get("weighted avg")
+        if isinstance(weighted_avg, dict):
+            report_full["weighted avg"] = dict(weighted_avg)
+            report_full["weighted avg"]["average-precision"] = float(ap_weighted)
+            report_full["weighted avg"]["jaccard"] = float(jaccard_weighted)
+
+        # Add scalar summary metrics
+        report_full["mcc"] = float(mcc)
+        accuracy_val = report.get("accuracy")
+
+        if isinstance(accuracy_val, (int, float)):
+            report_full["accuracy"] = float(accuracy_val)
+
+        return report_full
