@@ -9,7 +9,6 @@ Autoencoder Model for Genotype Data Imputation
 The Autoencoder model is designed to impute missing genotype data by encoding input data into a lower-dimensional latent representation and reconstructing the original input. This process helps capture complex patterns in the data and effectively handles missing values.
 
 .. image:: ../../img/autoencoder_neural-net_architecture.jpg
-    :scale: 85%
     :alt: Autoencoder neural network architecture with encoder, embedded latent space as a shaded rectangle, and decoder.
     :align: center
 
