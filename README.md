@@ -1,6 +1,6 @@
 # PG-SUI
 
-![PG-SUI Logo](https://github.com/btmartin721/PG-SUI/blob/master/img/pgsui-logo-faded.png)
+![PG-SUI Logo: Stylized blue and purple gradient design with faded appearance representing PG-SUI - Population Genomic Supervised and Unsupervised Imputation](https://github.com/btmartin721/PG-SUI/blob/master/img/pgsui-logo-faded.png)
 
 Population Genomic Supervised and Unsupervised Imputation.
 
@@ -18,14 +18,14 @@ Unsupervised imputers include three custom neural network models:
   + VAE models train themselves to reconstruct their input (i.e., the genotypes) [1](#1). To use VAE for imputation, the missing values are masked and the VAE model gets trained to reconstruct only on known values. Once the model is trained, it is then used to predict the missing values.
 + Autoencoder [2](#2)
   + A standard autoencoder that trains the input to predict itself [2](#2). As with VAE, missing values are masked and the model gets trained only on known values. Predictions are then made on the missing values.
-+ Non-linear Principal Component Analysis (NLPCA) [3](#3)
-  + NLPCA initializes random, reduced-dimensional input, then trains itself by using the known values (i.e., genotypes) as targets and refining the random input until it accurately predicts the genotype output [3](#3). The trained model can then predict the missing values.
-+ Unsupervised Backpropagation (UBP) [4](#4)
-  + UBP is an extension of NLPCA that runs over three phases [4](#4). Phase 1 refines the randomly generated, reduced-dimensional input in a single layer perceptron neural network to obtain good initial input values. Phase 2 uses the refined reduced-dimensional input from phase 1 as input into a multi-layer perceptron (MLP), but in Phase 2 only the neural network weights are refined. Phase three uses an MLP to refine both the weights and the reduced-dimensional input. Once the model is trained, it can be used to predict the missing values.
+
+See the below diagram for an overview of implemented features for each model.
+
+![Side-by-side comparison of two neural network architectures for genomic imputation. Left diagram with blue boxes shows ImputeAutoencoder workflow: input genotypes with missing data encoded as 0=REF, 1=HET, 2=ALT, -9 or -1=Missing flows through gamma Schedule, Encoder Network, Latent Space, Decoder Network, Reconstruction Loss, to produce Imputed Genotype Output. Right diagram with orange boxes shows ImputeVAE architecture: genotype input flows through Encoder Network to Mean and Log Variance outputs, then Sampling with Reparameterization, KL-beta Schedule, KL Divergence Loss, Decoder Network, Reconstruction Loss, producing Imputed Genotype Output. Both models output refilled missing values. The comparison illustrates how the autoencoder differs from VAE through additional scheduled parameters and loss components in the variational model.](./img/autoencoder_vae_model_diagrams.png)
 
 ### Supervised Imputation Methods
 
-Supervised methods utilze the scikit-learn's ``IterativeImputer``, which is based on the MICE (Multivariate Imputation by Chained Equations) algorithm [5](#5), and iterates over each SNP site (i.e., feature) while uses the N nearest neighbor features to inform the imputation. The number of nearest features can be adjusted by users. IterativeImputer currently works with the following scikit-learn classifiers:
+Supervised methods utilze the scikit-learn's ``IterativeImputer``, which is based on the MICE (Multivariate Imputation by Chained Equations) algorithm [3](#3), and iterates over each SNP site (i.e., feature) while uses the N nearest neighbor features to inform the imputation. The number of nearest features can be adjusted by users. IterativeImputer currently works with the following scikit-learn classifiers:
 
 + ImputeRandomForest
 + ImputeHistGradientBoosting
@@ -108,7 +108,7 @@ There are several supported algorithms PG-SUI uses to impute missing data. Each 
 You can import all the supported methods with the following:
 
 ``` python
-from pgsui import ImputeUBP, ImputeVAE, ImputeNLPCA, ImputeAutoencoder, ImputeRefAllele, ImputeMostFrequent, ImputeRandomForest, ImputeHistGradientBoosting
+from pgsui import ImputeVAE, ImputeAutoencoder, ImputeRefAllele, ImputeMostFrequent, ImputeRandomForest, ImputeHistGradientBoosting
 ```
 
 ### Unsupervised Imputers
@@ -120,14 +120,6 @@ The four unsupervised imputers can be run by initializing them with the SNPio ``
 vae = ImputeVAE(data) # Variational autoencoder
 vae.fit()
 vae_imputed = vae.transform()
-
-nlpca = ImputeNLPCA(data) # Nonlinear PCA
-nlpca.fit()
-nlpca_imputed = nlpca.transform()
-
-ubp = ImputeUBP(data) # Unsupervised backpropagation
-ubp.fit()
-ubp_imputed = ubp.transform()
 
 ae = ImputeAutoencoder(data) # standard autoencoder
 ae.fit()
@@ -188,19 +180,18 @@ Recent releases add explicit switches for the simulated-missingness workflow sha
 
 + ``--sim-strategy`` selects one of ``random``, ``random_weighted``, ``random_weighted_inv``, ``nonrandom``, ``nonrandom_weighted``.
 + ``--sim-prop`` sets the proportion of observed calls to temporarily mask when building the evaluation set.
-+ ``--disable-simulate-missing`` disables simulated masking for supervised/deterministic runs; unsupervised models require simulated masking.
 
 Example:
 
 ``` shell
 pg-sui \
-  --vcf data.vcf.gz \
+  --input data.vcf.gz \
   --popmap pops.popmap \
-  --models ImputeUBP ImputeVAE \
+  --models ImputeVAE ImputeAutoencoder \
   --preset balanced \
   --sim-strategy random_weighted_inv \
-  --sim-prop 0.25 \
-  --prefix ubp_and_vae \
+  --sim-prop 0.3 \
+  --prefix ae_and_vae \
   --n-jobs 4 \
   --tune-n-trials 100 \
   --set tune.enabled=True
@@ -225,8 +216,4 @@ pg-sui \
 
 2. Hinton, G.E., & Salakhutdinov, R.R. (2006). Reducing the dimensionality of data with neural networks. Science, 313(5786), 504-507.
 
-3. Scholz, M., Kaplan, F., Guy, C. L., Kopka, J., & Selbig, J. (2005). Non-linear PCA: a missing data approach. Bioinformatics, 21(20), 3887-3895.
-
-4. Gashler, M. S., Smith, M. R., Morris, R., & Martinez, T. (2016). Missing value imputation with unsupervised backpropagation. Computational Intelligence, 32(2), 196-215.
-
-5. Stef van Buuren, Karin Groothuis-Oudshoorn (2011). mice: Multivariate Imputation by Chained Equations in R. Journal of Statistical Software 45: 1-67.
+3. Stef van Buuren, Karin Groothuis-Oudshoorn (2011). mice: Multivariate Imputation by Chained Equations in R. Journal of Statistical Software 45: 1-67.

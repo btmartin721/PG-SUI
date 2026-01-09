@@ -1,12 +1,10 @@
 from __future__ import annotations
 
+import json
 import math
 from typing import Any, Iterable, List, Mapping, Optional, Sequence, Tuple
 
-try:
-    import numpy as np
-except Exception:
-    np = None  # type: ignore
+import numpy as np
 
 # Optional Rich console; falls back to ASCII if not installed.
 try:
@@ -152,8 +150,6 @@ class PrettyMetrics:
         Returns:
             str: Compact JSON representation, suitable for logging artifacts.
         """
-        import json
-
         return json.dumps(self.metrics, separators=(",", ":"), ensure_ascii=False)
 
     # ----------------------- Internal helpers -----------------------------

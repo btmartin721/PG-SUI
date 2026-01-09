@@ -272,7 +272,7 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
         """
         X = np.asarray(validate_input_type(X, return_type="array")).astype("float32")
 
-        self.logger.info(
+        self.logger.debug(
             f"Adding {self.prop_missing} missing data per column using strategy: {self.strategy}"
         )
 

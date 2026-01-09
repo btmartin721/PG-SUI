@@ -15,12 +15,12 @@ Notes
 
 Examples
 --------
-python cli.py --vcf data.vcf.gz --popmap pops.popmap --prefix run1
-python cli.py --vcf data.vcf.gz --popmap pops.popmap --prefix tuned --tune
-python cli.py --vcf data.vcf.gz --popmap pops.popmap --prefix demo \
-    --models ImputeUBP ImputeVAE ImputeMostFrequent --seed deterministic --verbose
-python cli.py --vcf data.vcf.gz --popmap pops.popmap --prefix subset \
-    --include-pops EA GU TT ON --device cpu
+pg-sui --vcf data.vcf.gz --popmap pops.popmap --prefix run1
+pg-sui --vcf data.vcf.gz --popmap pops.popmap --prefix tuned --tune
+pg-sui --vcf data.vcf.gz --popmap pops.popmap --prefix demo \
+    --models ImputeAutoencoder ImputeVAE ImputeMostFrequent --seed deterministic --verbose
+pg-sui --vcf data.vcf.gz --popmap pops.popmap --prefix subset \
+    --include-pops EA GU TT ON --device cpu --sim-prop 0.3 --sim-strategy nonrandom
 """
 
 from __future__ import annotations
@@ -48,25 +48,24 @@ from typing import (
     cast,
 )
 
-from snpio import GenePopReader, PhylipReader, SNPioMultiQC, TreeParser, VCFReader
-
-try:
-    from snpio import StructureReader
-except ImportError:
-    StructureReader = None
+from snpio import (
+    GenePopReader,
+    NRemover2,
+    PhylipReader,
+    SNPioMultiQC,
+    StructureReader,
+    TreeParser,
+    VCFReader,
+)
 
 from pgsui import (
     AutoencoderConfig,
     ImputeAutoencoder,
     ImputeMostFrequent,
-    ImputeNLPCA,
     ImputeRefAllele,
-    ImputeUBP,
     ImputeVAE,
     MostFrequentConfig,
-    NLPCAConfig,
     RefAlleleConfig,
-    UBPConfig,
     VAEConfig,
 )
 from pgsui.data_processing.config import (
@@ -78,10 +77,8 @@ from pgsui.data_processing.config import (
 
 # Canonical model order used everywhere (default and subset ordering)
 MODEL_ORDER: Tuple[str, ...] = (
-    "ImputeUBP",
     "ImputeVAE",
     "ImputeAutoencoder",
-    "ImputeNLPCA",
     "ImputeMostFrequent",
     "ImputeRefAllele",
 )
@@ -109,7 +106,7 @@ def _print_version() -> None:
 
 def _model_family(model_name: str) -> str:
     """Return output family folder name used by PG-SUI."""
-    if model_name in {"ImputeUBP", "ImputeVAE", "ImputeAutoencoder", "ImputeNLPCA"}:
+    if model_name in {"ImputeVAE", "ImputeAutoencoder"}:
         return "Unsupervised"
     if model_name in {"ImputeMostFrequent", "ImputeRefAllele"}:
         return "Deterministic"
@@ -143,7 +140,7 @@ def _force_tuning_off(cfg: Any, model_name: str) -> Any:
         return apply_dot_overrides(cfg, {"tune.enabled": False})
     except Exception as e:
         # Only strict for models that actually support tuning
-        if model_name in {"ImputeUBP", "ImputeVAE", "ImputeAutoencoder", "ImputeNLPCA"}:
+        if model_name in {"ImputeVAE", "ImputeAutoencoder"}:
             raise RuntimeError(
                 f"Failed to force tuning off for {model_name}: {e}"
             ) from e
@@ -354,7 +351,7 @@ def _normalize_input_format(fmt: str) -> str:
     return fmt
 
 
-def _normalize_plot_format(fmt: str) -> str:
+def _normalize_plot_format(fmt: str) -> Literal["pdf", "png", "jpg", "svg"]:
     """Normalize plot format aliases to reader-supported values."""
     fmt = fmt.lower()
     if fmt == "jpeg":
@@ -446,10 +443,6 @@ def _args_to_cli_overrides(args: argparse.Namespace) -> dict:
         overrides["sim.sim_strategy"] = args.sim_strategy
     if hasattr(args, "sim_prop"):
         overrides["sim.sim_prop"] = float(args.sim_prop)
-    if hasattr(args, "disable_simulate_missing"):
-        overrides["sim.simulate_missing"] = (
-            False if args.disable_simulate_missing else True
-        )
 
     # Tuning
     if getattr(args, "load_best_params", False):
@@ -552,7 +545,7 @@ def build_genotype_data(
         structure_allele_encoding (dict | None): STRUCTURE only; allele encoding map.
     """
     fmt_norm = _normalize_input_format(fmt)
-    plot_format = _normalize_plot_format(plot_format)
+    plot_format = _normalize_plot_format(cast(str, plot_format))
     logging.info(f"Loading {fmt_norm.upper()} and popmap data...")
 
     kwargs = {
@@ -572,11 +565,6 @@ def build_genotype_data(
     elif fmt_norm == "genepop":
         gd = GenePopReader(**kwargs)
     elif fmt_norm == "structure":
-        if StructureReader is None:
-            raise ImportError(
-                "StructureReader is not available in the installed snpio version. "
-                "Please upgrade snpio or use a supported format."
-            )
         kwargs.update(
             {
                 "has_popids": structure_has_popids,
@@ -621,8 +609,6 @@ def run_model_safely(model_name: str, builder, *, warn_only: bool = True) -> Non
 # -------------------------- Model Registry ------------------------------- #
 # Add config-driven models here by listing the class and its config dataclass.
 MODEL_REGISTRY: Dict[str, Dict[str, Any]] = {
-    "ImputeUBP": {"cls": ImputeUBP, "config_cls": UBPConfig},
-    "ImputeNLPCA": {"cls": ImputeNLPCA, "config_cls": NLPCAConfig},
     "ImputeAutoencoder": {"cls": ImputeAutoencoder, "config_cls": AutoencoderConfig},
     "ImputeVAE": {"cls": ImputeVAE, "config_cls": VAEConfig},
     "ImputeMostFrequent": {"cls": ImputeMostFrequent, "config_cls": MostFrequentConfig},
@@ -704,12 +690,7 @@ def _build_effective_config_for_model(
                 "Requested --load-best-params, but could not find a best parameters JSON "
                 f"for {model_name}. Looked under '.../optimize/<model>/parameters/best_tuned_parameters.json' and '{src_prefix}_output/{fam}/parameters/{model_name}/best_parameters.json'"
             )
-            if model_name in {
-                "ImputeUBP",
-                "ImputeVAE",
-                "ImputeAutoencoder",
-                "ImputeNLPCA",
-            }:
+            if model_name in {"ImputeVAE", "ImputeAutoencoder"}:
                 logging.error(msg)
                 raise FileNotFoundError(msg)
             logging.warning(msg)
@@ -735,12 +716,7 @@ def _build_effective_config_for_model(
         try:
             cfg = apply_dot_overrides(cfg, user_overrides)
         except Exception as e:
-            if model_name in {
-                "ImputeUBP",
-                "ImputeNLPCA",
-                "ImputeAutoencoder",
-                "ImputeVAE",
-            }:
+            if model_name in {"ImputeAutoencoder", "ImputeVAE"}:
                 logging.error(
                     f"Error applying --set overrides to {model_name} config: {e}"
                 )
@@ -875,7 +851,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument(
         "--config",
         default=argparse.SUPPRESS,
-        help="YAML config for config-driven models (NLPCA/UBP/Autoencoder/VAE). Overrides preset/defaults.",
+        help="YAML config for config-driven models (Autoencoder, VAE). Overrides preset and defaults.",
     )
     parser.add_argument(
         "--preset",
@@ -973,12 +949,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         default=argparse.SUPPRESS,
         help="Override the proportion of observed entries to mask during simulation (0-1).",
     )
-    parser.add_argument(
-        "--disable-simulate-missing",
-        action="store_true",
-        default=argparse.SUPPRESS,
-        help="Disable missing-data simulation regardless of preset/config (when provided).",
-    )
 
     # --------------------------- Seed & logging ---------------------------- #
     parser.add_argument(
@@ -1040,7 +1010,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         nargs="+",
         default=argparse.SUPPRESS,
         help=(
-            "Which models to run. Specify each model separated by a space. Choices: ImputeUBP ImputeVAE ImputeAutoencoder ImputeNLPCA ImputeMostFrequent ImputeRefAllele (Default is all models)."
+            "Which models to run. Specify each model separated by a space. Choices: ImputeVAE ImputeAutoencoder ImputeMostFrequent ImputeRefAllele (Default is all models)."
         ),
     )
 
@@ -1185,7 +1155,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Load genotype data
     gd, tp = build_genotype_data(
         input_path=input_path,
-        fmt=fmt_final,
+        fmt=cast(
+            Literal[
+                "vcf",
+                "vcf.gz",
+                "phy",
+                "phylip",
+                "genepop",
+                "gen",
+                "structure",
+                "str",
+            ],
+            fmt_final,
+        ),
         popmap_path=popmap_path,
         treefile=treefile,
         qmatrix=qmatrix,
@@ -1236,42 +1218,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
 
     # ------------------------- Model Builders ------------------------------ #
-    def build_impute_ubp():
-        cfg = cfgs_by_model.get("ImputeUBP")
-        if cfg is None:
-            cfg = (
-                UBPConfig.from_preset(args.preset)
-                if hasattr(args, "preset")
-                else UBPConfig()
-            )
-        return ImputeUBP(
-            genotype_data=gd,
-            tree_parser=tp,
-            config=cfg,
-            simulate_missing=cfg.sim.simulate_missing,
-            sim_strategy=cfg.sim.sim_strategy,
-            sim_prop=cfg.sim.sim_prop,
-            sim_kwargs=cfg.sim.sim_kwargs,
-        )
-
-    def build_impute_nlpca():
-        cfg = cfgs_by_model.get("ImputeNLPCA")
-        if cfg is None:
-            cfg = (
-                NLPCAConfig.from_preset(args.preset)
-                if hasattr(args, "preset")
-                else NLPCAConfig()
-            )
-        return ImputeNLPCA(
-            genotype_data=gd,
-            tree_parser=tp,
-            config=cfg,
-            simulate_missing=cfg.sim.simulate_missing,
-            sim_strategy=cfg.sim.sim_strategy,
-            sim_prop=cfg.sim.sim_prop,
-            sim_kwargs=cfg.sim.sim_kwargs,
-        )
-
     def build_impute_vae():
         cfg = cfgs_by_model.get("ImputeVAE")
         if cfg is None:
@@ -1284,7 +1230,6 @@ def main(argv: Optional[List[str]] = None) -> int:
             genotype_data=gd,
             tree_parser=tp,
             config=cfg,
-            simulate_missing=cfg.sim.simulate_missing,
             sim_strategy=cfg.sim.sim_strategy,
             sim_prop=cfg.sim.sim_prop,
             sim_kwargs=cfg.sim.sim_kwargs,
@@ -1302,7 +1247,6 @@ def main(argv: Optional[List[str]] = None) -> int:
             genotype_data=gd,
             tree_parser=tp,
             config=cfg,
-            simulate_missing=cfg.sim.simulate_missing,
             sim_strategy=cfg.sim.sim_strategy,
             sim_prop=cfg.sim.sim_prop,
             sim_kwargs=cfg.sim.sim_kwargs,
@@ -1320,7 +1264,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             gd,
             tree_parser=tp,
             config=cfg,
-            simulate_missing=cfg.sim.simulate_missing,
+            simulate_missing=True,
             sim_strategy=cfg.sim.sim_strategy,
             sim_prop=cfg.sim.sim_prop,
             sim_kwargs=cfg.sim.sim_kwargs,
@@ -1338,17 +1282,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             gd,
             tree_parser=tp,
             config=cfg,
-            simulate_missing=cfg.sim.simulate_missing,
+            simulate_missing=True,
             sim_strategy=cfg.sim.sim_strategy,
             sim_prop=cfg.sim.sim_prop,
             sim_kwargs=cfg.sim.sim_kwargs,
         )
 
     model_builders = {
-        "ImputeUBP": build_impute_ubp,
         "ImputeVAE": build_impute_vae,
         "ImputeAutoencoder": build_impute_autoencoder,
-        "ImputeNLPCA": build_impute_nlpca,
         "ImputeMostFrequent": build_impute_mostfreq,
         "ImputeRefAllele": build_impute_refallele,
     }
@@ -1363,7 +1305,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         gd_imp = gd.copy()
         gd_imp.snp_data = X_imputed
 
-        if name in {"ImputeUBP", "ImputeVAE", "ImputeAutoencoder", "ImputeNLPCA"}:
+        if name in {"ImputeVAE", "ImputeAutoencoder"}:
             family = "Unsupervised"
         elif name in {"ImputeMostFrequent", "ImputeRefAllele"}:
             family = "Deterministic"

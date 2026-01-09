@@ -395,7 +395,7 @@ class Plotting:
             ncol=2,
         )
 
-        # PR
+        # Precision-recall
         axes[1].plot(
             recall["micro"],
             precision["micro"],
@@ -493,121 +493,39 @@ class Plotting:
             history (dict[str, list[float]]): Dictionary with lists of history objects. Keys should be "Train" and "Validation".
 
         Raises:
-            ValueError: nn_method must be either 'ImputeNLPCA', 'ImputeUBP', 'ImputeAutoencoder', 'ImputeVAE'.
+            ValueError: self.model_name must be either 'ImputeAutoencoder' or 'ImputeVAE'.
         """
-        if self.model_name not in {
-            "ImputeNLPCA",
-            "ImputeVAE",
-            "ImputeAutoencoder",
-            "ImputeUBP",
-        }:
-            msg = "nn_method must be either 'ImputeNLPCA', 'ImputeVAE', 'ImputeAutoencoder', 'ImputeUBP'."
+        if self.model_name not in {"ImputeVAE", "ImputeAutoencoder"}:
+            msg = f"model_name must be 'ImputeVAE' or 'ImputeAutoencoder', but got: {self.model_name}."
             self.logger.error(msg)
             raise ValueError(msg)
 
-        if self.model_name != "ImputeUBP":
-            if history:
-                if not isinstance(history, dict) or "Train" not in history:
-                    msg = "history must be a dict containing at least a 'Train' key."
-                    self.logger.error(msg)
-                    raise TypeError(msg)
+        if not history:
+            msg = "history object passed to plot_history is empty."
+            self.logger.error(msg)
+            raise ValueError(msg)
 
-                fig, ax = plt.subplots(1, 1, figsize=(12, 8))
-                df_train = self._series_from_history(history["Train"]).iloc[1:]
+        if (
+            not isinstance(history, dict)
+            or "Train" not in history
+            or "Val" not in history
+        ):
+            msg = "history must be of type dict and contain 'Train' and 'Val' keys."
+            self.logger.error(msg)
+            raise TypeError(msg)
 
-                ax.plot(df_train, c="blue", lw=3)
+        fig, ax = plt.subplots(1, 1, figsize=(12, 8))
 
-                if "Val" in history:
-                    val = self._series_from_history(history["Val"]).iloc[1:]
+        train = self._series_from_history(history["Train"]).iloc[1:]
+        val = self._series_from_history(history["Val"]).iloc[1:]
 
-                    # Plot actual computed validation points as markers
-                    val_points = val.dropna()
-                    if not val_points.empty:
-                        ax.plot(
-                            val_points.index,
-                            val_points.to_numpy(),
-                            lw=0,
-                            marker="o",
-                            markersize=5,
-                        )
+        ax.plot(train.index, train.to_numpy(), c="blue", lw=3, linestyle="-")
+        ax.plot(val.index, val.to_numpy(), c="orange", lw=3, linestyle="-")
 
-                        val_i = self._interp_sparse(val)
-                        ax.plot(val_i.index, val_i.to_numpy(), lw=3, linestyle="--")
-
-                        ax.legend(
-                            ["Train", "Val (points)", "Val (interpolated)"],
-                            loc="best",
-                            shadow=True,
-                            fancybox=True,
-                        )
-                    else:
-                        ax.legend(["Train"], loc="best", shadow=True, fancybox=True)
-                else:
-                    ax.legend(["Train"], loc="best", shadow=True, fancybox=True)
-
-                ax.set_title(f"{self.model_name} Loss per Epoch")
-                ax.set_ylabel("Loss")
-                ax.set_xlabel("Epoch")
-                ax.legend(["Train"], loc="best", shadow=True, fancybox=True)
-
-        else:
-            fig, ax = plt.subplots(3, 1, figsize=(12, 8))
-
-            # Ensure history is the nested dictionary type for ImputeUBP
-            if not (
-                isinstance(history, dict)
-                and "Train" in history
-                and isinstance(history["Train"], dict)
-            ):
-                msg = "For ImputeUBP, history must be a nested dictionary with phases."
-                self.logger.error(msg)
-                raise TypeError(msg)
-
-            for i, phase in enumerate(range(1, 4)):
-                train_dict = cast(Dict[str, List[float]], history["Train"])
-                train = pd.Series(train_dict[f"Phase {phase}"])
-                train = train.iloc[1:]  # ignore first epoch
-
-                # Plot train accuracy
-                ax[i].plot(train, c="blue", lw=3)
-
-                if "Val" in history:
-                    val_dict = cast(Dict[str, List[float]], history["Val"])
-                    val = pd.Series(val_dict[f"Phase {phase}"])
-                    val = val.iloc[1:]  # ignore first epoch
-
-                    # Plot actual computed validation points as markers
-                    val_points = val.dropna()
-                    if not val_points.empty:
-                        ax[i].plot(
-                            val_points.index,
-                            val_points.to_numpy(),
-                            lw=0,
-                            marker="o",
-                            markersize=5,
-                        )
-
-                        val_i = self._interp_sparse(val)
-                        ax[i].plot(val_i.index, val_i.to_numpy(), lw=3, linestyle="--")
-
-                        ax[i].legend(
-                            ["Train", "Val (points)", "Val (interpolated)"],
-                            loc="best",
-                            shadow=True,
-                            fancybox=True,
-                        )
-                    else:
-                        ax[i].legend(["Train"], loc="best", shadow=True, fancybox=True)
-                else:
-                    ax[i].legend(["Train"], loc="best", shadow=True, fancybox=True)
-
-                ax[i].set_title(f"{self.model_name}: Phase {phase} Loss per Epoch")
-                ax[i].set_ylabel("Loss")
-                ax[i].set_xlabel("Epoch")
-                ax[i].legend([f"Phase {phase}"], loc="best", shadow=True, fancybox=True)
-
-        if self.model_name == "ImputeUBP":
-            fig.subplots_adjust(hspace=0.75)
+        ax.set_title(f"{self.model_name} Loss per Epoch")
+        ax.set_ylabel("Loss")
+        ax.set_xlabel("Epoch")
+        ax.legend(["Train", "Validation"], loc="best", shadow=True, fancybox=True)
 
         fn = f"{self.model_name.lower()}_history_plot.{self.plot_format}"
         fn = self.output_dir / fn
@@ -691,7 +609,7 @@ class Plotting:
         panel_suffix = f"{prefix}_" if prefix else ""
         panel_id = f"{self.model_name.lower()}_{panel_suffix}confusion_matrix"
 
-        if prefix != "":
+        if prefix != "" and not prefix.endswith("_"):
             prefix = f"{prefix}_"
 
         out_name = (

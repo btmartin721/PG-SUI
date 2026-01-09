@@ -110,16 +110,91 @@ def example_genotype_data(
         plot_format="pdf",
     )
 
-    # Ensure ref/alt alleles are populated for downstream decoding.
+    # Ensure ref/alt alleles are populated for downstream decoding and aligned.
+    snp_arr = np.asarray(gd.snp_data, dtype=object)
+    n_loci = snp_arr.shape[1]
+
+    def _coerce_alleles(candidate):
+        if candidate is None:
+            return None
+        arr = np.asarray(candidate, dtype=object)
+        if arr.shape[0] == n_loci:
+            return arr.tolist()
+        if arr.ndim > 1 and arr.shape[-1] == n_loci:
+            rows = arr.tolist()
+            if len(rows) == 1:
+                return list(rows[0])
+            return [[row[j] for row in rows] for j in range(n_loci)]
+        return None
+
     alleles = gd.get_ref_alt_alleles(gd.snp_data)
 
-    gd.ref = alleles[0].tolist() if isinstance(alleles[0], np.ndarray) else alleles[0]
-    alts = [x for i, x in enumerate(alleles) if i > 0]
+    ref_list = _coerce_alleles(getattr(gd, "ref", None))
+    if ref_list is None:
+        ref_list = _coerce_alleles(alleles[0])
+    if ref_list is None:
+        ref_list = (
+            alleles[0].tolist() if isinstance(alleles[0], np.ndarray) else list(alleles[0])
+        )
 
-    if isinstance(alts, np.ndarray):
-        gd.alt = alts.tolist()
-    else:
-        gd.alt = alts
+    alt_list = _coerce_alleles(getattr(gd, "alt", None))
+    if alt_list is None:
+        alt_list = _coerce_alleles([x for i, x in enumerate(alleles) if i > 0])
+    if alt_list is None:
+        alt_list = ["." for _ in range(n_loci)]
+
+    valid_bases = {"A", "C", "G", "T"}
+    missing_codes = {"", ".", "N", "NONE", "-", "?", "./.", ".|."}
+
+    def _normalize_token(value):
+        if value is None:
+            return None
+        if isinstance(value, (bytes, np.bytes_)):
+            value = value.decode("utf-8", errors="ignore")
+        s = str(value).upper().strip()
+        if not s or s in missing_codes:
+            return None
+        return s
+
+    def _clean_alt(value):
+        if isinstance(value, (list, tuple, np.ndarray)):
+            cleaned = []
+            for item in value:
+                tok = _normalize_token(item)
+                if tok in valid_bases:
+                    cleaned.append(tok)
+            return cleaned
+        tok = _normalize_token(value)
+        return tok if tok in valid_bases else None
+
+    keep_idx = []
+    cleaned_ref = []
+    cleaned_alt = []
+    for i, (ref_val, alt_val) in enumerate(zip(ref_list, alt_list)):
+        ref_tok = _normalize_token(ref_val)
+        if ref_tok not in valid_bases:
+            continue
+
+        alt_clean = _clean_alt(alt_val)
+        if isinstance(alt_clean, list):
+            alt_out = alt_clean if len(alt_clean) > 1 else (alt_clean[0] if alt_clean else ".")
+        else:
+            alt_out = alt_clean if alt_clean is not None else "."
+
+        keep_idx.append(i)
+        cleaned_ref.append(ref_tok)
+        cleaned_alt.append(alt_out)
+
+    if keep_idx and len(keep_idx) != n_loci:
+        snp_arr = snp_arr[:, keep_idx]
+
+    gd.snp_data = snp_arr
+    gd.ref = cleaned_ref
+    gd.alt = cleaned_alt
+
+    for attr in ("n_loci", "n_snps", "n_sites", "num_loci"):
+        if hasattr(gd, attr):
+            setattr(gd, attr, snp_arr.shape[1])
 
     # Patch GenotypeEncoder to carry ref/alt into the encoder instance and
     # avoid file-writing paths that expect VCF/PHYLIP context.
@@ -128,15 +203,34 @@ def example_genotype_data(
     def _patched_init(self, genotype_data):
         orig_init(self, genotype_data)
         if not hasattr(self, "_ref") or self._ref is None or len(getattr(self, "_ref", [])) == 0:  # type: ignore[attr-defined]
-            alleles = genotype_data.get_ref_alt_alleles(genotype_data.snp_data)
+            ref_candidate = getattr(genotype_data, "ref", None)
+            alt_candidate = getattr(genotype_data, "alt", None)
+            n_loci = None
+            if getattr(genotype_data, "snp_data", None) is not None:
+                n_loci = np.asarray(genotype_data.snp_data).shape[1]
 
-            if isinstance(alleles[0], np.ndarray):
-                self._ref = alleles[0].tolist()  # type: ignore[attr-defined]
-            else:
-                self._ref = alleles[0]  # type: ignore[attr-defined]
+            if ref_candidate is not None and alt_candidate is not None and n_loci:
+                if isinstance(ref_candidate, np.ndarray):
+                    ref_candidate = ref_candidate.tolist()
+                if isinstance(alt_candidate, np.ndarray):
+                    alt_candidate = alt_candidate.tolist()
+                if len(ref_candidate) == n_loci and len(alt_candidate) == n_loci:
+                    self._ref = ref_candidate  # type: ignore[attr-defined]
+                    self._alt = alt_candidate  # type: ignore[attr-defined]
+                else:
+                    ref_candidate = None
+                    alt_candidate = None
 
-            alts = [x for i, x in enumerate(alleles) if i > 0]
-            self._alt = alts.tolist() if isinstance(alts, np.ndarray) else alts  # type: ignore[attr-defined]
+            if ref_candidate is None or alt_candidate is None:
+                alleles = genotype_data.get_ref_alt_alleles(genotype_data.snp_data)
+
+                if isinstance(alleles[0], np.ndarray):
+                    self._ref = alleles[0].tolist()  # type: ignore[attr-defined]
+                else:
+                    self._ref = alleles[0]  # type: ignore[attr-defined]
+
+                alts = [x for i, x in enumerate(alleles) if i > 0]
+                self._alt = alts.tolist() if isinstance(alts, np.ndarray) else alts  # type: ignore[attr-defined]
 
         # Force a known filetype branch in decode_012.
         self.filetype = "vcf"

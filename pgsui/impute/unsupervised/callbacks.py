@@ -24,7 +24,7 @@ class EarlyStopping:
         delta: float = 0.0,
         verbose: int = 0,
         mode: str = "min",
-        min_epochs: int = 100,
+        min_epochs: int = 150,
         prefix: str = "pgsui_output",
         debug: bool = False,
     ):

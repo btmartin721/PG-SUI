@@ -1,0 +1,172 @@
+<svg width="1200" height="650" viewBox="0 0 1200 650" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="arrowhead-blue" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#1565C0" />
+    </marker>
+    <marker id="arrowhead-orange" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#E65100" />
+    </marker>
+    <style>
+      .text-title { font-family: sans-serif; font-size: 24px; font-weight: bold; text-anchor: middle; }
+      .text-label { font-family: sans-serif; font-size: 14px; text-anchor: middle; }
+      .text-small { font-family: sans-serif; font-size: 12px; text-anchor: middle; }
+      .box-ae { fill: #E3F2FD; stroke: #1565C0; stroke-width: 2; rx: 8; }
+      .box-vae { fill: #FFF3E0; stroke: #E65100; stroke-width: 2; rx: 8; }
+      .box-loss { fill: #F5F5F5; stroke: #424242; stroke-width: 2; rx: 8; stroke-dasharray: 4; }
+      .box-hidden { fill: none; stroke-width: 2; rx: 4; stroke-dasharray: 4; }
+      .path-ae { stroke: #1565C0; stroke-width: 2; fill: none; marker-end: url(#arrowhead-blue); }
+      .path-vae { stroke: #E65100; stroke-width: 2; fill: none; marker-end: url(#arrowhead-orange); }
+    </style>
+  </defs>
+
+  <text x="600" y="40" class="text-title">PG-SUI Model Architectures: ImputeAutoencoder &amp; ImputeVAE</text>
+
+  <g transform="translate(50, 80)">
+    <text x="275" y="0" class="text-title" font-size="20">ImputeAutoencoder</text>
+
+    <rect x="0" y="20" width="550" height="530" fill="#F0F8FF" rx="15" />
+
+    <rect x="175" y="460" width="200" height="50" class="box-ae" />
+    <text x="275" y="480" class="text-label" font-weight="bold">Genotype Input</text>
+    <text x="275" y="495" class="text-small">Missing Data (-1)</text>
+    <text x="275" y="507" class="text-small">Encoding: 0, 1, 2</text>
+
+    <path d="M 275 460 L 275 430" class="path-ae" />
+
+    <rect x="175" y="380" width="200" height="50" class="box-ae" />
+    <text x="275" y="400" class="text-label">Encoder Network</text>
+    <text x="275" y="415" class="text-small">(Stacked Linear Layers)</text>
+
+    <path d="M 275 380 L 275 360" class="path-ae" />
+
+    <rect x="200" y="330" width="150" height="30" class="box-hidden" stroke="#1565C0" />
+    <text x="275" y="350" class="text-small" fill="#1565C0">... Hidden Layers ...</text>
+
+    <path d="M 275 330 L 275 310" class="path-ae" />
+
+    <rect x="200" y="260" width="150" height="50" class="box-ae" fill="#BBDEFB" />
+    <text x="275" y="280" class="text-label" font-weight="bold">Latent Space (z)</text>
+    <text x="275" y="295" class="text-small">Compressed Representation</text>
+
+    <path d="M 275 260 L 275 240" class="path-ae" />
+
+    <rect x="175" y="190" width="200" height="50" class="box-ae" />
+    <text x="275" y="210" class="text-label">Decoder Network</text>
+    <text x="275" y="225" class="text-small">(Stacked Linear Layers)</text>
+
+    <path d="M 275 190 L 275 170" class="path-ae" />
+
+    <rect x="200" y="140" width="150" height="30" class="box-hidden" stroke="#1565C0" />
+    <text x="275" y="160" class="text-small" fill="#1565C0">... Hidden Layers ...</text>
+
+    <path d="M 275 140 L 275 120" class="path-ae" />
+
+    <rect x="175" y="70" width="200" height="50" class="box-ae" />
+    <text x="275" y="90" class="text-label" font-weight="bold">Imputed Output</text>
+    <text x="275" y="105" class="text-small">Probabilities (0, 1, 2)</text>
+
+    <rect x="400" y="260" width="130" height="50" class="box-loss" stroke="#1565C0" />
+    <text x="465" y="280" class="text-label" font-size="12">Reconstruction</text>
+    <text x="465" y="295" class="text-small">Loss</text>
+
+    <path d="M 375 95 L 465 95 L 465 250" class="path-ae" fill="none" />
+    <path d="M 375 485 L 465 485 L 465 320" class="path-ae" fill="none" />
+
+    <g transform="translate(20, 260)">
+        <text x="40" y="-10" class="text-small" font-weight="bold">Gamma Schedule</text>
+        <line x1="10" y1="40" x2="70" y2="40" stroke="#333" stroke-width="2" />
+        <line x1="10" y1="40" x2="10" y2="10" stroke="#333" stroke-width="2" />
+        <path d="M 10 40 Q 40 40 70 10" stroke="#1565C0" stroke-width="2" fill="none" />
+        <path d="M 80 25 L 170 25" class="path-ae" stroke-dasharray="4" />
+        <text x="125" y="20" class="text-small">Focal Loss</text>
+    </g>
+  </g>
+
+  <g transform="translate(620, 80)">
+    <text x="275" y="0" class="text-title" font-size="20">ImputeVAE</text>
+
+    <rect x="0" y="20" width="550" height="530" fill="#FFF8F0" rx="15" />
+
+    <rect x="175" y="460" width="200" height="50" class="box-vae" />
+    <text x="275" y="480" class="text-label" font-weight="bold">Genotype Input</text>
+    <text x="275" y="495" class="text-small">Missing Data (-1)</text>
+    <text x="275" y="507" class="text-small">Encoding: 0, 1, 2</text>
+
+    <path d="M 275 460 L 275 430" class="path-vae" />
+
+    <rect x="175" y="380" width="200" height="50" class="box-vae" />
+    <text x="275" y="400" class="text-label">Encoder Network</text>
+    <text x="275" y="415" class="text-small">(Stacked Linear Layers)</text>
+
+    <path d="M 275 380 L 275 360" class="path-vae" />
+
+    <rect x="200" y="330" width="150" height="30" class="box-hidden" stroke="#E65100" />
+    <text x="275" y="350" class="text-small" fill="#E65100">... Hidden Layers ...</text>
+
+    <path d="M 275 330 L 275 320" class="path-vae" marker-end="none" />
+    <path d="M 275 320 L 200 320 L 200 310" class="path-vae" />
+    <path d="M 275 320 L 350 320 L 350 310" class="path-vae" />
+
+    <rect x="140" y="270" width="120" height="40" class="box-vae" fill="#FFE0B2" />
+    <text x="200" y="295" class="text-label">Mean (μ)</text>
+
+    <rect x="290" y="270" width="120" height="40" class="box-vae" fill="#FFE0B2" />
+    <text x="350" y="290" class="text-label">Log Variance</text>
+    <text x="350" y="305" class="text-small">(log σ²)</text>
+
+    <rect x="420" y="270" width="110" height="40" class="box-loss" stroke="#E65100" />
+    <text x="475" y="295" class="text-label" font-size="12">KL Loss</text>
+
+    <path d="M 260 270 L 260 260 L 475 260 L 475 270" class="path-vae" stroke-width="1" />
+    <path d="M 350 270 L 350 260 L 475 260" class="path-vae" stroke-width="1" marker-end="none"/>
+
+    <g transform="translate(430, 320)">
+        <text x="40" y="45" class="text-small" font-weight="bold">KL-Beta</text>
+        <line x1="10" y1="30" x2="60" y2="30" stroke="#333" stroke-width="1" />
+        <line x1="10" y1="30" x2="10" y2="0" stroke="#333" stroke-width="1" />
+        <path d="M 10 30 L 30 30 L 60 5" stroke="#E65100" stroke-width="2" fill="none" />
+        <path d="M 35 0 L 35 -30" class="path-vae" />
+    </g>
+
+    <rect x="175" y="200" width="200" height="50" class="box-vae" fill="#FFCC80" />
+    <text x="275" y="220" class="text-label" font-weight="bold">Sampling (z)</text>
+    <text x="275" y="235" class="text-small">z = μ + ε · σ</text>
+
+    <path d="M 200 270 L 200 250" class="path-vae" />
+    <path d="M 350 270 L 350 250" class="path-vae" />
+
+    <rect x="175" y="130" width="200" height="50" class="box-vae" />
+    <text x="275" y="150" class="text-label">Decoder Network</text>
+    <text x="275" y="165" class="text-small">(Stacked Linear Layers)</text>
+
+    <path d="M 275 200 L 275 180" class="path-vae" />
+
+    <rect x="200" y="80" width="150" height="30" class="box-hidden" stroke="#E65100" />
+    <text x="275" y="100" class="text-small" fill="#E65100">... Hidden Layers ...</text>
+
+    <path d="M 275 130 L 275 110" class="path-vae" />
+
+    <rect x="175" y="10" width="200" height="50" class="box-vae" />
+    <text x="275" y="30" class="text-label" font-weight="bold">Imputed Output</text>
+    <text x="275" y="45" class="text-small">Probabilities (0, 1, 2)</text>
+
+    <path d="M 275 80 L 275 60" class="path-vae" />
+
+    <rect x="420" y="465" width="110" height="40" class="box-loss" stroke="#E65100" />
+    <text x="475" y="485" class="text-label" font-size="12">Recon Loss</text>
+    <text x="475" y="498" class="text-small">(Focal)</text>
+
+    <path d="M 375 35 L 530 35 L 530 460" class="path-vae" fill="none" />
+    <path d="M 375 485 L 420 485" class="path-vae" fill="none" />
+
+    <g transform="translate(490, 420)">
+        <text x="0" y="-5" class="text-small" font-weight="bold">Gamma</text>
+        <line x1="-20" y1="30" x2="20" y2="30" stroke="#333" stroke-width="1" />
+        <line x1="-20" y1="30" x2="-20" y2="0" stroke="#333" stroke-width="1" />
+        <path d="M -20 30 Q 0 30 20 5" stroke="#E65100" stroke-width="2" fill="none" />
+        <path d="M 0 35 L 0 45" class="path-vae" />
+    </g>
+
+  </g>
+
+</svg>

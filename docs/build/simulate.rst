@@ -17,24 +17,21 @@ so their evaluation masks are aligned.
 When simulated missingness is used
 ----------------------------------
 
-- Unsupervised models: simulated masking is required for training and
-  evaluation. The masked entries define the evaluation set; original missing
-  values are never scored.
-- Deterministic and supervised models: simulated masking is optional. If it
-  is disabled, evaluation is performed on all originally observed entries
-  within the test split.
+- **Unsupervised models (VAE, Autoencoder):** Simulated masking is required for
+  training and evaluation. The masked entries define the evaluation set;
+  original missing values are never scored because the models are trained to
+  reconstruct the input from a corrupted version of itself.
+- **Deterministic and supervised models (RF, HGB, Mode):** Simulated masking
+  is optional. If it is disabled, evaluation is performed on all originally
+  observed entries within the test split.
 
 Simulation process
 ------------------
 
-1. Start from the encoded genotype matrix (0/1/2 with negative values for
-   missing).
+1. Start from the encoded genotype matrix (0/1/2 with negative values for missing).
 2. Build an "original missing" mask for any pre-existing missing entries.
-3. Use :class:`pgsui.data_processing.transformers.SimMissingTransformer` to
-   select a subset of observed cells to mask based on ``sim_strategy`` and
-   ``sim_prop``.
-4. Produce a masked matrix for model training/inference plus three boolean
-   masks:
+3. Use :class:`pgsui.data_processing.transformers.SimMissingTransformer` to select a subset of observed cells to mask based on ``sim_strategy`` and ``sim_prop``.
+4. Produce a masked matrix for model training/inference plus three boolean masks:
 
    - ``original_missing_mask_``: missing in the input data.
    - ``sim_missing_mask_``: simulated missing on observed cells.
@@ -96,9 +93,9 @@ Evaluation workflow
 
 PG-SUI evaluates models only on cells with known truth:
 
-- Unsupervised models: the simulated mask defines the evaluation set. Metrics
+- **Unsupervised models:** the simulated mask defines the evaluation set. Metrics
   are computed by comparing predictions to the pre-mask ground truth values.
-- Deterministic and supervised models: a train/test split is created. If
+- **Deterministic and supervised models:** a train/test split is created. If
   simulated masking is enabled, the simulated mask is restricted to the test
   rows; if disabled, all observed test cells are scored.
 

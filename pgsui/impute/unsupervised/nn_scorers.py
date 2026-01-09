@@ -6,6 +6,8 @@ from sklearn.metrics import (
     accuracy_score,
     average_precision_score,
     f1_score,
+    jaccard_score,
+    matthews_corrcoef,
     precision_score,
     recall_score,
     roc_auc_score,
@@ -162,6 +164,34 @@ class Scorer:
             average_precision_score(y_true_ohe, y_pred_proba, average=self.average)
         )
 
+    def jaccard(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
+        """Compute the Jaccard score.
+
+        Args:
+            y_true (np.ndarray): Ground truth (correct) target values.
+            y_pred (np.ndarray): Estimated target values.
+
+        Returns:
+            float: The Jaccard score.
+        """
+        return float(
+            jaccard_score(y_true, y_pred, average=self.average, zero_division=0)
+        )
+
+    def mcc(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
+        """Compute the Matthews correlation coefficient (MCC).
+
+        MCC is a balanced measure that can be used even if the classes are of very different sizes. It returns a value between -1 and +1, where +1 indicates a perfect prediction, 0 indicates no better than random prediction, and -1 indicates total disagreement between prediction and observation.
+
+        Args:
+            y_true (np.ndarray): Ground truth (correct) target values.
+            y_pred (np.ndarray): Estimated target values.
+
+        Returns:
+            float: The Matthews correlation coefficient.
+        """
+        return float(matthews_corrcoef(y_true, y_pred))
+
     def pr_macro(self, y_true_ohe: np.ndarray, y_pred_proba: np.ndarray) -> float:
         """Compute the macro-average precision score.
 
@@ -198,6 +228,8 @@ class Scorer:
             "f1",
             "precision",
             "recall",
+            "mcc",
+            "jaccard",
         ] = "pr_macro",
     ) -> Dict[str, float]:
         """Evaluate the model using various metrics.
@@ -233,6 +265,8 @@ class Scorer:
                     np.asarray(y_true), np.asarray(y_pred)
                 ),
                 "recall": lambda: self.recall(np.asarray(y_true), np.asarray(y_pred)),
+                "mcc": lambda: self.mcc(np.asarray(y_true), np.asarray(y_pred)),
+                "jaccard": lambda: self.jaccard(np.asarray(y_true), np.asarray(y_pred)),
             }
             if tune_metric not in metric_calculators:
                 msg = f"Invalid tune_metric provided: '{tune_metric}'."
@@ -255,5 +289,7 @@ class Scorer:
                 "pr_macro": self.pr_macro(
                     np.asarray(y_true_ohe), np.asarray(y_pred_proba)
                 ),
+                "mcc": self.mcc(np.asarray(y_true), np.asarray(y_pred)),
+                "jaccard": self.jaccard(np.asarray(y_true), np.asarray(y_pred)),
             }
         return {k: float(v) for k, v in metrics.items()}

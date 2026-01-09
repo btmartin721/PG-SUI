@@ -25,30 +25,12 @@ Each imputer exposes the same top-level sections: ``io`` (run identity + logging
 Config Dataclasses
 ------------------
 
-Non-linear PCA (Config)
-^^^^^^^^^^^^^^^^^^^^^^^
-
-Captures latent-dimension, decoder depth, and latent-optimisation knobs (``model.latent_init``, ``train.lr_input_factor``) used by :class:`pgsui.impute.unsupervised.imputers.nlpca.ImputeNLPCA`.
-
-.. autoclass:: pgsui.data_processing.containers.NLPCAConfig
-   :members:
-   :noindex:
-
 Standard Autoencoder (Config)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 A standard autoencoder config capturing architecture and training settings for :class:`pgsui.impute.unsupervised.imputers.autoencoder.ImputeAutoencoder`.
 
 .. autoclass:: pgsui.data_processing.containers.AutoencoderConfig
-   :members:
-   :noindex:
-
-Unsupervised Backpropagation (Config)
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Extends the NLPCA options with UBP-specific presets tuned for class imbalance and latent re-optimisation.
-
-.. autoclass:: pgsui.data_processing.containers.UBPConfig
    :members:
    :noindex:
 

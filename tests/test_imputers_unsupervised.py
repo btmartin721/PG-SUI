@@ -7,16 +7,7 @@ from sklearn.exceptions import NotFittedError
 pytest.importorskip("snpio")
 from snpio import GenotypeEncoder
 
-from pgsui import (
-    AutoencoderConfig,
-    ImputeAutoencoder,
-    ImputeNLPCA,
-    ImputeUBP,
-    ImputeVAE,
-    NLPCAConfig,
-    UBPConfig,
-    VAEConfig,
-)
+from pgsui import AutoencoderConfig, ImputeAutoencoder, ImputeVAE, VAEConfig
 
 
 def _expected_shape(genotype_data) -> tuple[int, int]:
@@ -29,7 +20,7 @@ def _assert_unsupervised_transform(model, expected_shape: tuple[int, int]) -> No
     assert decoded.shape == expected_shape
     assert decoded.dtype.kind in {"U", "S", "O"}
 
-    iupac_codes = ["A", "C", "G", "T", "R", "Y", "S", "W", "K", "M", "B", "D", "H", "V"]
+    iupac_codes = ["A", "C", "G", "T", "R", "Y", "S", "W", "K", "M"]
     assert all(np.isin(np.unique(decoded), iupac_codes, assume_unique=True))
     assert np.count_nonzero(decoded == "N") == 0
 
@@ -68,40 +59,6 @@ def test_vae_end_to_end(example_genotype_data, tmp_path) -> None:
     cfg.vae.kl_beta = 0.5
 
     model = ImputeVAE(genotype_data=example_genotype_data, config=cfg)
-
-    with pytest.raises(NotFittedError):
-        model.transform()
-
-    model.fit()
-    _assert_unsupervised_transform(model, _expected_shape(example_genotype_data))
-
-
-def test_nlpca_end_to_end(example_genotype_data, tmp_path) -> None:
-    cfg = NLPCAConfig.from_preset("fast")
-    _configure_common(cfg, tmp_path, "nlpca_run")
-    cfg.train.max_epochs = 3
-    cfg.train.min_epochs = 1
-    cfg.train.batch_size = 8
-    cfg.model.latent_dim = 2
-
-    model = ImputeNLPCA(genotype_data=example_genotype_data, config=cfg)
-
-    with pytest.raises(NotFittedError):
-        model.transform()
-
-    model.fit()
-    _assert_unsupervised_transform(model, _expected_shape(example_genotype_data))
-
-
-def test_ubp_end_to_end(example_genotype_data, tmp_path) -> None:
-    cfg = UBPConfig.from_preset("fast")
-    _configure_common(cfg, tmp_path, "ubp_run")
-    cfg.train.max_epochs = 5
-    cfg.train.min_epochs = 1
-    cfg.train.batch_size = 8
-    cfg.model.latent_dim = 3
-
-    model = ImputeUBP(genotype_data=example_genotype_data, config=cfg)
 
     with pytest.raises(NotFittedError):
         model.transform()

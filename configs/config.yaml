@@ -4,51 +4,36 @@ io:
   debug: false
   seed: 42 # Random seed for reproducibility
   n_jobs: 1
-  scoring_averaging: "macro"
 
 model:
-  latent_init: "random" # random | pca
   latent_dim: 2
   dropout_rate: 0.2
   num_hidden_layers: 2
   activation: "relu" # relu | elu | selu | leaky_relu
-  layer_scaling_factor: 5.0
   layer_schedule: "pyramid" # pyramid | constant | linear
-  gamma: 2.0
 
 train:
-  batch_size: 32
+  batch_size: 64
   learning_rate: 0.001
-  lr_input_factor: 1.0
   l1_penalty: 0.0
-  early_stop_gen: 20
+  early_stop_gen: 25
   min_epochs: 100
-  max_epochs: 5000
+  max_epochs: 600
   validation_split: 0.2
-  weights_beta: 0.9999
   weights_max_ratio: 1.0
+  weights_power: 1.0
+  weights_inverse: false
+  weights_normalize: false
   device: "cpu" # cpu | gpu | mps
 
 tune:
   enabled: true
   metric: "f1" # f1 | accuracy | pr_macro
-  n_trials: 10
+  n_trials: 100
   resume: false
   save_db: false
   fast: true
-  max_samples: 512
-  max_loci: 0
-  epochs: 500
-  batch_size: 64
-  eval_interval: 1
-  infer_epochs: 100
-  patience: 10
-  proxy_metric_batch: 0
-
-evaluate:
-  eval_latent_steps: 50
-  eval_latent_lr: 0.01
-  eval_latent_weight_decay: 0.0
+  patience: 50
 
 plot:
   fmt: "pdf" # pdf | png | jpg | jpeg
@@ -58,4 +43,4 @@ plot:
   show: false
 
 vae:
-  kl_beta: 2.0
+  kl_beta: 1.0

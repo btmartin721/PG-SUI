@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import re
 import warnings
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union
@@ -29,6 +30,8 @@ class ClassificationReportVisualizer:
         background_hex: Matplotlib/Plotly dark background.
         grid_hex: Gridline color for dark theme.
         reset_kwargs: Keyword args for resetting Matplotlib rcParams.
+        genotype_order: Canonical ordering for genotype/IUPAC class labels in plots.
+        avg_order: Canonical ordering for average rows (when present).
     """
 
     retro_palette: List[str] = field(
@@ -47,11 +50,142 @@ class ClassificationReportVisualizer:
     grid_hex: str = "#2a2a3a"
     reset_kwargs: Dict[str, bool | str] | None = None
 
+    # Canonical label order used everywhere.
+    # Edit/extend this if you want additional IUPAC or special tokens
+    # ordered explicitly.
+    genotype_order: List[str] = field(
+        default_factory=lambda: ["A", "C", "G", "T", "K", "M", "R", "S", "W", "Y", "N"]
+    )
+    avg_order: List[str] = field(
+        default_factory=lambda: [
+            "micro avg",
+            "macro avg",
+            "weighted avg",
+            "samples avg",
+        ]
+    )
+
+    # ---------- Ordering helpers ----------
+    @staticmethod
+    def _normalize_label(label: str) -> str:
+        """Normalize class labels for ordering comparisons (case-insensitive)."""
+        return str(label).strip().upper()
+
+    @staticmethod
+    def _normalize_avg(label: str) -> str:
+        """Normalize avg labels for ordering comparisons (case-insensitive)."""
+        return str(label).strip().lower()
+
+    @staticmethod
+    def _natural_sort_key(s: str):
+        """Natural sort key so '10' sorts after '2'."""
+        parts = re.split(r"(\d+)", str(s))
+        key = []
+        for p in parts:
+            if p.isdigit():
+                key.append((0, int(p)))
+            else:
+                key.append((1, p.lower()))
+        return key
+
+    def _ordered_class_labels(self, labels: Union[pd.Index, List[str]]) -> List[str]:
+        """Order non-avg class labels with genotype_order first, then natural-sorted remainder."""
+        labels_list = [str(x) for x in list(labels)]
+        if not labels_list:
+            return []
+
+        # Map normalized -> first-seen original label to preserve original
+        #  formatting.
+        norm_to_orig: Dict[str, str] = {}
+        for lab in labels_list:
+            n = self._normalize_label(lab)
+            norm_to_orig.setdefault(n, lab)
+
+        desired_norm = [self._normalize_label(x) for x in self.genotype_order]
+        desired_set = set(desired_norm)
+
+        ordered = [norm_to_orig[n] for n in desired_norm if n in norm_to_orig]
+
+        # Append everything not in genotype_order
+        # (natural sort; stable + de-dup)
+        seen = set(self._normalize_label(x) for x in ordered)
+        remainder = [
+            lab
+            for lab in labels_list
+            if self._normalize_label(lab) not in desired_set
+            and self._normalize_label(lab) not in seen
+        ]
+        remainder_sorted = sorted(remainder, key=self._natural_sort_key)
+        return ordered + remainder_sorted
+
+    def _ordered_avg_labels(self, labels: Union[pd.Index, List[str]]) -> List[str]:
+        """Order avg labels with avg_order first, then alpha remainder.
+
+        Args:
+            labels (Union[pd.Index, List[str]]): List of avg labels.
+
+        Returns:
+            List[str]: Ordered list of avg labels.
+        """
+        labels_list = [str(x) for x in list(labels)]
+        if not labels_list:
+            return []
+
+        norm_to_orig: Dict[str, str] = {}
+        for lab in labels_list:
+            n = self._normalize_avg(lab)
+            norm_to_orig.setdefault(n, lab)
+
+        preferred = []
+        preferred_set = set(self.avg_order)
+        for pref in self.avg_order:
+            if pref in norm_to_orig:
+                preferred.append(norm_to_orig[pref])
+
+        seen = set(self._normalize_avg(x) for x in preferred)
+        remainder = [
+            lab
+            for lab in labels_list
+            if self._normalize_avg(lab) not in preferred_set
+            and self._normalize_avg(lab) not in seen
+        ]
+        remainder_sorted = sorted(remainder, key=lambda x: x.lower())
+        return preferred + remainder_sorted
+
+    def _ordered_report_index(self, idx: Union[pd.Index, List[str]]) -> List[str]:
+        """Order full report index: classes first (genotype_order), avg rows last (avg_order).
+
+        Args:
+            idx (Union[pd.Index, List[str]]): Index from classification report DataFrame.
+
+        Returns:
+            List[str]: Ordered list of index labels.
+        """
+        labels = [str(x) for x in list(idx)]
+        is_avg = [("avg" in lab.lower()) for lab in labels]
+        class_labels = [lab for lab, a in zip(labels, is_avg) if not a]
+        avg_labels = [lab for lab, a in zip(labels, is_avg) if a]
+        return self._ordered_class_labels(class_labels) + self._ordered_avg_labels(
+            avg_labels
+        )
+
+    def _apply_ordering(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Reindex df to canonical ordering (classes then avgs).
+
+        Args:
+            df (pd.DataFrame): DataFrame from classification report.
+
+        Returns:
+            pd.DataFrame: Reindexed DataFrame.
+        """
+        ordered = self._ordered_report_index(df.index)
+        # Only keep labels that exist (avoid introducing all genotype_order labels as NaN rows)
+        ordered = [x for x in ordered if x in df.index]
+        return df.reindex(ordered)
+
     # ---------- Core data prep ----------
     def to_dataframe(self, report: Dict[str, Dict[str, float]]) -> pd.DataFrame:
         """Convert sklearn classification_report output_dict to a tidy DataFrame.
-
-        This method standardizes the output of scikit-learn's classification_report function.
 
         Args:
             report (Dict[str, Dict[str, float]]): Dictionary from `classification_report(..., output_dict=True)`.
@@ -78,17 +212,12 @@ class ClassificationReportVisualizer:
 
         df.index = df.index.astype(str)
 
-        is_avg = df.index.str.contains("avg", case=False, regex=True)
-        class_df = df.loc[~is_avg].copy()
-        avg_df = df.loc[is_avg].copy()
-
         num_cols = ["precision", "recall", "f1-score", "support"]
-        class_df[num_cols] = class_df[num_cols].apply(pd.to_numeric, errors="coerce")
-        avg_df[num_cols] = avg_df[num_cols].apply(pd.to_numeric, errors="coerce")
+        df[num_cols] = df[num_cols].apply(pd.to_numeric, errors="coerce")
 
-        class_df = class_df.sort_index()
-        tidy = pd.concat([class_df, avg_df], axis=0)
-        return tidy
+        # Apply canonical ordering (classes then avg rows)
+        df = self._apply_ordering(df)
+        return df
 
     def compute_ci(
         self,
@@ -107,21 +236,21 @@ class ClassificationReportVisualizer:
             pd.DataFrame: Multi-index columns with (metric, ["lower","upper","mean"]). Index contains any class/avg labels present in the bootstrap reports.
         """
         if not boot_reports:
-            raise ValueError("boot_reports is empty; provide at least one dict.")
+            msg = "boot_reports is empty; provide at least one dict."
+            raise ValueError(msg)
 
-        # Gather frames; union of indices (classes/avg rows) across repeats
-        frames = []
-        for rep in boot_reports:
-            df = self.to_dataframe(rep)
-            frames.append(df)
+        frames = [self.to_dataframe(rep) for rep in boot_reports]
 
-        # Align on index, stack into 3D array (repeat x class x metric)
-        common_index = sorted(set().union(*[f.index for f in frames]))
+        # Union of indices across repeats, ordered canonically.
+        union_idx = set().union(*[set(f.index) for f in frames])
+        common_index = self._ordered_report_index(list(union_idx))
+        common_index = [x for x in common_index if x in union_idx]
+
         arrs = []
         for f in frames:
             sub = f.reindex(common_index)
             arrs.append(sub[[m for m in metrics]].to_numpy(dtype=float))
-        arr = np.stack(arrs, axis=0)  # shape: (B, C, M)
+        arr = np.stack(arrs, axis=0)  # (B, C, M)
 
         alpha = (1 - ci) / 2
         lower_q = 100 * alpha
@@ -146,22 +275,17 @@ class ClassificationReportVisualizer:
     def _retro_cmap(self, n: int = 256) -> LinearSegmentedColormap:
         """Create a neon gradient colormap.
 
-        This colormap transitions through a series of bright, neon colors.
-
         Args:
-            n (int): Number of discrete colors in the colormap. Defaults to 256.
+            n (int): Number of discrete colors in the colormap.
 
         Returns:
-            LinearSegmentedColormap: The generated colormap.
+            LinearSegmentedColormap: Neon-themed colormap.
         """
         anchors = ["#241937", "#7d00ff", "#ff00ff", "#ff6ec7", "#00f0ff", "#00ff9f"]
         return LinearSegmentedColormap.from_list("retro_neon", anchors, N=n)
 
     def _set_mpl_style(self) -> None:
-        """Apply a dark neon Matplotlib theme.
-
-        This method modifies global rcParams; call before plotting.
-        """
+        """Apply a dark neon Matplotlib theme."""
         plt.rcParams.update(
             {
                 "figure.facecolor": self.background_hex,
@@ -202,26 +326,29 @@ class ClassificationReportVisualizer:
     ):
         """Plot a per-class heatmap with an optional right-hand support strip.
 
-        This visualizes the classification metrics for each class.
-
         Args:
-            df (pd.DataFrame): DataFrame from `to_dataframe()`.
+            df (pd.DataFrame): DataFrame from to_dataframe().
             title (str): Plot title.
-            classes_only (bool): If True, exclude avg rows.
-            figsize (Tuple[int, int]): Matplotlib figure size.
+            classes_only (bool): Whether to include only classes (exclude avg rows).
+            figsize (Tuple[int, int]): Figure size.
             annot_decimals (int): Decimal places for annotations.
-            vmax (float): Max heatmap value.
-            vmin (float): Min heatmap value.
-            show_support_strip (bool): If True, draw normalized support strip at right.
+            vmax (float): Max value for colormap scaling.
+            vmin (float): Min value for colormap scaling.
+            show_support_strip (bool): Whether to show a support strip on the right.
 
         Returns:
-            matplotlib.figure.Figure: The created figure.
+            Figure: Matplotlib figure.
         """
         self._set_mpl_style()
 
         work = df.copy()
+        # Ensure canonical ordering even if caller didn't use to_dataframe().
+        work = self._apply_ordering(work)
+
         if classes_only:
             work = work[~work.index.str.contains("avg", case=False, regex=True)]
+            # Re-apply class ordering after filtering
+            work = work.reindex(self._ordered_class_labels(work.index))
 
         metric_cols = ["precision", "recall", "f1-score"]
         heat = work[metric_cols].astype(float)
@@ -244,7 +371,6 @@ class ClassificationReportVisualizer:
         ax.set_xlabel("Metric")
         ax.set_ylabel("Class")
 
-        # Optional support strip (normalized 0..1) as an inset axis
         if show_support_strip and "support" in work.columns:
             supports = work["support"].astype(float).fillna(0.0).to_numpy()
             sup_norm = (supports - supports.min()) / (np.ptp(supports) + 1e-9)
@@ -259,7 +385,6 @@ class ClassificationReportVisualizer:
             )
 
             strip_data = sup_norm[:, None]  # (n_classes, 1)
-
             sns.heatmap(
                 strip_data,
                 cmap=self._retro_cmap(),
@@ -272,8 +397,6 @@ class ClassificationReportVisualizer:
                 linewidths=0.0,
                 ax=ax_strip,
             )
-
-            # Align strip y-limits to main heatmap
             ax_strip.set_ylim(ax.get_ylim())
 
         return fig
@@ -290,34 +413,38 @@ class ClassificationReportVisualizer:
         """Plot grouped bars for P/R/F1 with support markers and optional CI.
 
         Args:
-            df (pd.DataFrame): DataFrame from `to_dataframe()`.
+            df (pd.DataFrame): DataFrame from to_dataframe().
             title (str): Plot title.
-            classes_only (bool): If True, exclude avg rows.
+            classes_only (bool): Whether to include only classes (exclude avg rows).
             figsize (Tuple[int, int]): Figure size.
-            bar_alpha (float): Bar alpha.
-            ci_df (Optional[pd.DataFrame]): Output of `compute_ci()`; adds error bars if provided.
+            bar_alpha (float): Alpha transparency for bars.
+            ci_df (Optional[pd.DataFrame]): DataFrame from compute_ci() for CI bars (optional).
 
         Returns:
-            matplotlib.figure.Figure: The created figure.
+            Figure: Matplotlib figure.
         """
         self._set_mpl_style()
+
         work = df.copy()
+        work = self._apply_ordering(work)
+
         if classes_only:
             work = work[~work.index.str.contains("avg", case=False, regex=True)]
+            classes = self._ordered_class_labels(work.index)
+            work = work.reindex(classes)
+        else:
+            # If including avgs, only plot classes on x-axis for bars.
+            classes = self._ordered_class_labels(
+                work.loc[~work.index.str.contains("avg", case=False, regex=True)].index
+            )
 
         metric_cols = ["precision", "recall", "f1-score"]
-
         lng = (
             work[metric_cols]
             .reset_index(names="class")
             .melt(id_vars="class", var_name="metric", value_name="score")
             .dropna(subset=["score"])
         )
-
-        homozygote_order = ["A", "C", "G", "T"]
-        classes = homozygote_order + [
-            c for c in lng["class"].unique().tolist() if c not in homozygote_order
-        ]
 
         metrics = metric_cols
         palette = self.retro_palette[: len(metrics)]
@@ -328,9 +455,12 @@ class ClassificationReportVisualizer:
 
         fig, ax = plt.subplots(figsize=figsize)
 
-        # Secondary axis for support markers
         ax2 = ax.twinx()
-        supports = work.reindex(classes)["support"].astype(float).fillna(0.0).values
+        supports = (
+            work.reindex(classes)["support"].astype(float).fillna(0.0).to_numpy()
+            if "support" in work.columns
+            else np.zeros(len(classes), dtype=float)
+        )
 
         ax2.plot(
             x,
@@ -344,13 +474,12 @@ class ClassificationReportVisualizer:
             label="Support",
         )
 
-        # Plot bars with optional CI error bars
         for i, m in enumerate(metrics):
             vals = (
                 lng.loc[lng["metric"].eq(m)]
                 .set_index("class")
                 .reindex(classes)["score"]
-                .values
+                .to_numpy(dtype=float)
             )
 
             yerr = None
@@ -358,14 +487,12 @@ class ClassificationReportVisualizer:
                 ci_reindexed = ci_df.reindex(classes)
                 lows = ci_reindexed[(m, "lower")].to_numpy(dtype=float)
                 ups = ci_reindexed[(m, "upper")].to_numpy(dtype=float)
-
-                # Convert to symmetric error around the point estimate
                 center = vals
                 yerr = np.vstack([center - lows, ups - center])
 
             ax.bar(
                 x + offsets[i],
-                np.asarray(vals),
+                vals,
                 width=width * 0.95,
                 label=m.title(),
                 color=palette[i % len(palette)],
@@ -383,10 +510,9 @@ class ClassificationReportVisualizer:
         ax.set_title(title, pad=12, fontweight="bold")
         ax.legend(ncols=3, frameon=True, loc="upper left")
 
-        # Configure secondary (support) axis
         ax2.set_ylabel("Support")
         ax2.grid(False)
-        ax2.set_ylim(0, max(1.0, np.asarray(supports).max() * 1.15))
+        ax2.set_ylim(0, max(1.0, float(np.asarray(supports).max()) * 1.15))
         ax2.legend(loc="upper right", frameon=True)
 
         ax.grid(axis="y", linestyle="--", alpha=0.6)
@@ -405,34 +531,54 @@ class ClassificationReportVisualizer:
     ) -> go.Figure:
         """Interactive radar chart of averages + top-k classes; optional CI bands.
 
-        This function creates a radar chart using Plotly, displaying the specified metrics for the top-k classes.
-
         Args:
-            df (pd.DataFrame): DataFrame from `to_dataframe()`.
-            title (str): Figure title.
-            top_k (int): Include up to top_k classes by support (descending).
-            include_micro (bool): Include micro avg trace if available.
-            include_macro (bool): Include macro avg trace.
-            include_weighted (bool): Include weighted avg trace.
-            ci_df (Optional[pd.DataFrame]): Output of `compute_ci()`; draws semi-transparent CI bands.
+            df (pd.DataFrame): DataFrame from to_dataframe().
+            title (str): Plot title.
+            top_k (int): Number of top classes by support to include.
+            include_micro (bool): Whether to include micro avg.
+            include_macro (bool): Whether to include macro avg.
+            include_weighted (bool): Whether to include weighted avg.
+            ci_df (Optional[pd.DataFrame]): DataFrame from compute_ci() for CI bands (optional).
 
         Returns:
-            plotly.graph_objects.Figure: The interactive radar chart.
+            go.Figure: Plotly radar figure.
         """
         work = df.copy()
+        work = self._apply_ordering(work)
 
         is_avg = work.index.str.contains("avg", case=False, regex=True)
-        classes = work.loc[~is_avg].copy().sort_values("support", ascending=False)
-        if top_k is not None and top_k > 0:
-            classes = classes.head(top_k)
 
+        # --- choose top-k by support, but order those chosen by canonical genotype order ---
+        class_block = work.loc[~is_avg].copy()
+        if top_k is not None and top_k > 0 and "support" in class_block.columns:
+            top_labels = (
+                (
+                    class_block["support"]
+                    .astype(float)
+                    .fillna(0.0)
+                    .sort_values(ascending=False)
+                )
+                .head(top_k)
+                .index.tolist()
+            )
+            ordered_top = self._ordered_class_labels(top_labels)
+            classes = class_block.reindex(
+                [x for x in ordered_top if x in class_block.index]
+            )
+        else:
+            classes = class_block.reindex(self._ordered_class_labels(class_block.index))
+
+        # --- averages in canonical order ---
+        include_map = {
+            "micro avg": include_micro,
+            "macro avg": include_macro,
+            "weighted avg": include_weighted,
+            "samples avg": True,  # keep if present; user can ignore via flags by removing from avg_order
+        }
         avgs = []
-        if include_macro and "macro avg" in work.index:
-            avgs.append(("macro avg", work.loc["macro avg"]))
-        if include_weighted and "weighted avg" in work.index:
-            avgs.append(("weighted avg", work.loc["weighted avg"]))
-        if include_micro and "micro avg" in work.index:
-            avgs.append(("micro avg", work.loc["micro avg"]))
+        for name in self.avg_order:
+            if include_map.get(name, True) and name in work.index:
+                avgs.append((name, work.loc[name]))
 
         metrics = ["precision", "recall", "f1-score"]
         theta = metrics + [metrics[0]]
@@ -457,7 +603,6 @@ class ClassificationReportVisualizer:
             lows.append(lows[0])
             ups.append(ups[0])
 
-            # Plotly polar CI band: plot upper path, then lower reversed with fill
             fig.add_trace(
                 go.Scatterpolar(
                     r=ups,
@@ -475,19 +620,14 @@ class ClassificationReportVisualizer:
                     mode="lines",
                     line=dict(width=0),
                     fill="toself",
-                    fillcolor=(
-                        color.replace("#", "rgba(") if False else None
-                    ),  # placeholder
                     hoverinfo="skip",
                     name=f"{name} CI",
                     showlegend=False,
                     opacity=0.20,
                 )
             )
-            # Workaround: directly set fillcolor via marker color on last trace
-            fig.data[-1].fillcolor = f"{color}33"  # add ~20% alpha
+            fig.data[-1].fillcolor = f"{color}33"  # 8-digit hex w/ alpha
 
-        # Add average traces with CI first
         for i, (name, row) in enumerate(avgs):
             r = [float(row.get(m, np.nan)) for m in metrics]
             r.append(r[0])
@@ -505,7 +645,6 @@ class ClassificationReportVisualizer:
                 )
             )
 
-        # Add class traces (top-k) with optional CI
         base_idx = len(avgs)
         for i, (cls, row) in enumerate(classes[metrics].iterrows()):
             r = [float(row.get(m, np.nan)) for m in metrics]
@@ -561,16 +700,17 @@ class ClassificationReportVisualizer:
         """Generate all visuals, with optional CI from bootstrap reports.
 
         Args:
-            report (Dict[str, Dict[str, float]]): The `output_dict=True` classification report (single run).
-            title_prefix (str): Common prefix for titles.
-            heatmap_classes_only (bool): Exclude averages in heatmap if True.
-            radar_top_k (int): Number of top classes (by support) on radar.
-            boot_reports (Optional[List[Dict[str, Dict[str, float]]]]): Optional list of bootstrap report dicts for CI.
-            ci (float): Confidence level (e.g., 0.95).
-            show (bool): If True, call plt.show() for Matplotlib figures.
+            report (Dict[str, Dict[str, float]]): Dictionary from `classification_report(..., output_dict=True)`.
+            title_prefix (str): Prefix for plot titles.
+            heatmap_classes_only (bool): Whether to only plot classes (exclude avg rows) in heatmap.
+            radar_top_k (int): Number of top classes by support to include in radar plot.
+            boot_reports (Optional[List[Dict[str, Dict[str, float]]]]): Optional list of bootstrap report dicts for CI computation.
+            ci (float): Confidence level for CIs.
+            show (bool): Whether to display the plots via plt.show().
 
         Returns:
-            Dict[str, Union[matplotlib.figure.Figure, plotly.graph_objects.Figure]]: Keys: {"heatmap_fig", "bars_fig", "radar_fig"}.
+            Dict[str, Union[Figure, go.Figure]]: Dictionary with keys:
+                "heatmap_fig", "bars_fig", "radar_fig".
         """
         df = self.to_dataframe(report)
         acc = df.attrs.get("accuracy", None)
