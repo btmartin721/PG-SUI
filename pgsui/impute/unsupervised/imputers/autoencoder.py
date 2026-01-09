@@ -4,7 +4,7 @@ from __future__ import annotations
 import copy
 import traceback
 from collections import defaultdict
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Union, cast
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -35,7 +35,7 @@ def _make_warmup_cosine_scheduler(
     max_epochs: int,
     warmup_epochs: int,
     start_factor: float = 0.1,
-) -> Any:
+) -> torch.optim.lr_scheduler.CosineAnnealingLR | torch.optim.lr_scheduler.SequentialLR:
     """Create a warmup->cosine LR scheduler.
 
     Args:
@@ -45,7 +45,7 @@ def _make_warmup_cosine_scheduler(
         start_factor: Starting LR factor for warmup.
 
     Returns:
-        A PyTorch LR scheduler (SequentialLR if warmup_epochs > 0 else CosineAnnealingLR).
+        torch.optim.lr_scheduler.CosineAnnealingLR | torch.optim.lr_scheduler.SequentialLR: LR scheduler (SequentialLR if warmup_epochs > 0 else CosineAnnealingLR).
     """
     warmup_epochs = int(max(0, warmup_epochs))
 
@@ -111,15 +111,17 @@ def ensure_autoencoder_config(
 
 
 class ImputeAutoencoder(BaseNNImputer):
-    """Impute missing genotypes with an Autoencoder on 0/1/2 encodings (missing=-1).
+    """Autoencoder imputer for 0/1/2 genotypes.
+
+    Trains a feedforward autoencoder on a genotype matrix encoded as 0/1/2 with missing values represented by any negative integer. Missingness is simulated once on the full matrix, then train/val/test splits reuse those masks. It supports haploid and diploid data, focal-CE reconstruction loss (optional scheduling), and Optuna-based hyperparameter tuning. Output is returned as IUPAC strings via ``decode_012``.
 
     Notes:
-        - Simulate missingness once on the full 0/1/2 matrix, then split indices on clean ground truth.
-        - Maintain clean targets and corrupted inputs per train/val/test, plus per-split masks.
-        - Haploid harmonization happens AFTER the single simulation (no re-simulation).
+        - Simulates missingness once on the full 0/1/2 matrix, then splits indices on clean ground truth.
+        - Maintains clean targets and corrupted inputs per train/val/test, plus per-split masks.
+        - Haploid harmonization happens after the single simulation (no re-simulation).
         - Training/validation loss is computed only where targets are known (~orig_mask_*).
         - Evaluation is computed only on simulated-missing sites (sim_mask_*).
-        - transform() fills ONLY originally-missing sites and hard-errors if decoding yields "N".
+        - ``transform()`` fills only originally missing sites and hard-errors if decoding yields "N".
     """
 
     def __init__(
@@ -145,13 +147,13 @@ class ImputeAutoencoder(BaseNNImputer):
         """Initialize the Autoencoder imputer with a unified config interface.
 
         Args:
-            genotype_data: Backing genotype data object.
-            tree_parser: Optional SNPio tree parser for nonrandom simulated-missing modes.
-            config: AutoencoderConfig, nested dict, YAML path, or None.
-            overrides: Optional dot-key overrides with highest precedence.
-            sim_strategy: Override sim strategy; if None, uses config default.
-            sim_prop: Override simulated missing proportion; if None, uses config default.
-            sim_kwargs: Override/extend simulated missing kwargs; if None, uses config default.
+            genotype_data (GenotypeData): Backing genotype data object.
+            tree_parser (Optional[TreeParser]): Optional SNPio tree parser for nonrandom simulated-missing modes.
+            config (Optional[Union[AutoencoderConfig, dict, str]]): AutoencoderConfig, nested dict, YAML path, or None.
+            overrides (Optional[dict]): Optional dot-key overrides with highest precedence.
+            sim_strategy (Literal["random", "random_weighted" "random_weighted_inv", "nonrandom", "nonrandom_weighted"]): Override sim strategy; if None, uses config default.
+            sim_prop (Optional[float]): Override simulated missing proportion; if None, uses config default. Default is None.
+            sim_kwargs (Optional[dict]): Override/extend simulated missing kwargs; if None, uses config default.
         """
         self.model_name = "ImputeAutoencoder"
         self.genotype_data = genotype_data
@@ -311,7 +313,7 @@ class ImputeAutoencoder(BaseNNImputer):
             11. Returns the fitted ImputeAutoencoder instance.
 
         Returns:
-            The fitted ImputeAutoencoder instance.
+            ImputeAutoencoder: The fitted ImputeAutoencoder instance.
         """
         self.logger.info(f"Fitting {self.model_name} model...")
 
@@ -600,6 +602,7 @@ class ImputeAutoencoder(BaseNNImputer):
         Raises:
             NotFittedError: If called before fit().
             RuntimeError: If any missing values remain or decoding yields "N".
+            RuntimeError: If loci contain 'N' after imputation due to missing REF/ALT metadata.
         """
         if not getattr(self, "is_fit_", False):
             msg = "Model is not fitted. Call fit() before transform()."
@@ -660,10 +663,10 @@ class ImputeAutoencoder(BaseNNImputer):
         params: Optional[dict[str, Any]] = None,
         class_weights: Optional[torch.Tensor] = None,
         gamma_schedule: bool = False,
-    ) -> Tuple[float, torch.nn.Module | None, dict[str, list[float]]]:
+    ) -> tuple[float, torch.nn.Module, dict[str, list[float]]]:
         """Train and validate the model.
 
-        This method sets up the optimizer and learning rate scheduler, then executes the training loop with early stopping and optional hyperparameter tuning via Optuna.
+        This method sets up the optimizer and learning rate scheduler, then executes the training loop with early stopping and optional hyperparameter tuning via Optuna. It returns the best validation loss, the best model, and the training history.
 
         Args:
             model (torch.nn.Module): Autoencoder model.
@@ -675,7 +678,7 @@ class ImputeAutoencoder(BaseNNImputer):
             gamma_schedule (bool): Whether to schedule gamma.
 
         Returns:
-            (best_loss, best_model, history)
+            tuple[float, torch.nn.Module, dict[str, list[float]]]: Best validation loss, best model, history.
         """
         max_epochs = int(self.epochs)
         optimizer = torch.optim.Adam(model.parameters(), lr=lr)
@@ -700,7 +703,10 @@ class ImputeAutoencoder(BaseNNImputer):
         self,
         *,
         optimizer: torch.optim.Optimizer,
-        scheduler: torch.optim.lr_scheduler._LRScheduler,
+        scheduler: (
+            torch.optim.lr_scheduler.CosineAnnealingLR
+            | torch.optim.lr_scheduler.SequentialLR
+        ),
         model: torch.nn.Module,
         l1_penalty: float,
         trial: Optional[optuna.Trial] = None,
@@ -712,7 +718,7 @@ class ImputeAutoencoder(BaseNNImputer):
 
         Args:
             optimizer (torch.optim.Optimizer): Optimizer for training.
-            scheduler (torch.optim.lr_scheduler._LRScheduler): LR scheduler.
+            scheduler (torch.optim.lr_scheduler.CosineAnnealingLR | torch.optim.lr_scheduler.SequentialLR): LR scheduler.
             model (torch.nn.Module): Autoencoder model.
             l1_penalty (float): L1 regularization coefficient.
             trial (Optional[optuna.Trial]): Optuna trial (optional).
@@ -1329,7 +1335,14 @@ class ImputeAutoencoder(BaseNNImputer):
         return params
 
     def _set_best_params(self, params: dict) -> dict:
-        """Update instance fields from tuned params and return model_params dict."""
+        """Update instance fields from tuned params and return model_params dict.
+
+        Args:
+            params (dict): Best hyperparameters from tuning.
+
+        Returns:
+            dict: Model parameters for building the final model.
+        """
         self.latent_dim = int(params["latent_dim"])
         self.dropout_rate = float(params["dropout_rate"])
         self.learning_rate = float(params["learning_rate"])
