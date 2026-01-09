@@ -12,11 +12,10 @@ from matplotlib.figure import Figure
 from plotly.graph_objs import Figure as PlotlyFigure
 from sklearn.exceptions import NotFittedError
 from sklearn.metrics import (
-    accuracy_score,
+    average_precision_score,
     classification_report,
-    f1_score,
-    precision_score,
-    recall_score,
+    jaccard_score,
+    matthews_corrcoef,
 )
 
 # Project
@@ -85,9 +84,9 @@ def ensure_refallele_config(
 
 
 class ImputeRefAllele:
-    """Deterministic imputer that replaces all missing 0/1/2 genotype values with the REF genotype (0).
+    """Deterministic imputer that fills missing genotypes with REF (0).
 
-    The imputer works on 0/1/2 with -1 as missing. Evaluation splits samples into TRAIN/TEST once. Masks ALL originally observed cells on TEST rows for eval. Produces: 0/1/2 (zygosity) classification report + confusion matrix 10-class IUPAC classification report (via decode_012) + confusion matrix. Plots genotype distribution before/after imputation.
+    Operates on 0/1/2 encodings with missing values represented by any negative integer. Evaluation splits samples into TRAIN/TEST once, then evaluates on either all observed test cells or a simulated-missing subset (depending on config). Produces 0/1/2 (zygosity) and 10-class IUPAC reports plus confusion matrices, and plots genotype distributions before/after imputation. Output is returned as IUPAC strings via ``decode_012``.
     """
 
     def __init__(
@@ -110,16 +109,16 @@ class ImputeRefAllele:
     ) -> None:
         """Initialize the Ref-Allele imputer from a unified config.
 
-        This constructor ensures that the provided configuration is valid and initializes the imputer's internal state. It sets up logging, random number generation, genotype encoding, and various parameters based on the configuration. The imputer is prepared to handle population-specific modes if specified in the configuration.
+        This constructor ensures that the provided configuration is valid and initializes the imputer's internal state. It sets up logging, random number generation, genotype encoding, and simulated-missing controls.
 
         Args:
             genotype_data (GenotypeData): Backing genotype data.
-            tree_parser (Optional[TreeParser]): Optional SNPio phylogenetic tree parser for population-specific modes.
+            tree_parser (Optional[TreeParser]): Optional SNPio tree parser for nonrandom simulated-missing modes.
             config (RefAlleleConfig | dict | str | None): Configuration as a dataclass, nested dict, or YAML path. If None, defaults are used.
-            overrides (dict | None): Flat dot-key overrides applied last with highest precedence, e.g. {'split.test_size': 0.25, 'algo.missing': -1}.
+            overrides (Optional[dict]): Flat dot-key overrides applied last with highest precedence, e.g. {'split.test_size': 0.25, 'algo.missing': -1}.
             simulate_missing (bool): Whether to simulate missing data during evaluation. Default is True.
-            sim_strategy (Literal): Strategy for simulating missing data if enabled in config.
-            sim_prop (float): Proportion of data to simulate as missing if enabled in config.
+            sim_strategy (Literal["random", "random_weighted", "random_weighted_inv", "nonrandom", "nonrandom_weighted"]): Strategy for simulating missing data if enabled in config.
+            sim_prop (float): Proportion of data to simulate as missing if enabled in config. Default is 0.2.
             sim_kwargs (Optional[dict]): Additional keyword arguments for the simulated missing data transformer.
         """
         # Normalize config then apply highest-precedence overrides
@@ -443,38 +442,23 @@ class ImputeRefAllele:
     def _evaluate_012_and_plot(self, y_true: np.ndarray, y_pred: np.ndarray) -> None:
         """0/1/2 zygosity report & confusion matrix.
 
-        This method generates a classification report and confusion matrix for genotypes encoded as 0 (REF), 1 (HET), and 2 (ALT). If the data is determined to be haploid (only 0 and 2 present), it folds the ALT genotype (2) into HET (1) for evaluation purposes. The method computes various performance metrics, logs the classification report, and creates visualizations of the results.
+        This method generates a classification report and confusion matrix for genotypes encoded as 0 (REF), 1 (HET), and 2 (ALT). If the data is haploid (only 0 and 2 present), it folds ALT (2) into the binary ALT/PRESENT class (1) for evaluation. The method computes metrics, logs the report, and creates visualizations of the results.
 
         Args:
             y_true (np.ndarray): True genotypes (0/1/2) for masked
-            y_pred (np.ndarray): Predicted genotypes (0/1/2) for
+            y_pred (np.ndarray): Predicted genotypes (0/1/2) for masked
         """
-        labels = [0, 1, 2]
-        report_names = ["REF", "HET", "ALT"]
+        labels: list[int] = [0, 1, 2]
+        report_names: list[str] = ["REF", "HET", "ALT"]
 
-        # Haploid parity: fold 2 -> 1
+        # Haploid parity: fold ALT (2) into ALT/Present (1)
         if self.is_haploid_:
-            y_true[y_true == 2] = 1
-            y_pred[y_pred == 2] = 1
-            labels = [0, 1]
-            report_names = ["REF", "ALT"]
+            y_true = np.where(y_true == 2, 1, y_true)
+            y_pred = np.where(y_pred == 2, 1, y_pred)
+            labels: list[int] = [0, 1]
+            report_names: list[str] = ["REF", "ALT"]
 
-        metrics = {
-            "n_masked_test": int(y_true.size),
-            "accuracy": accuracy_score(y_true, y_pred),
-            "f1": f1_score(
-                y_true, y_pred, average="macro", labels=labels, zero_division=0
-            ),
-            "precision": precision_score(
-                y_true, y_pred, average="macro", labels=labels, zero_division=0
-            ),
-            "recall": recall_score(
-                y_true, y_pred, average="macro", labels=labels, zero_division=0
-            ),
-        }
-        self.metrics_.update({f"zygosity_{k}": v for k, v in metrics.items()})
-
-        report: str | dict = classification_report(
+        report: dict | str = classification_report(
             y_true,
             y_pred,
             labels=labels,
@@ -488,31 +472,8 @@ class ImputeRefAllele:
             self.logger.error(msg)
             raise TypeError(msg)
 
-        report_subset = {}
-        for k, v in report.items():
-            tmp = {}
-            if isinstance(v, dict) and "support" in v:
-                for k2, v2 in v.items():
-                    if k2 != "support":
-                        tmp[k2] = v2
-                if tmp:
-                    report_subset[k] = tmp
-
-        if report_subset and (self.verbose or self.debug):
-            pm = PrettyMetrics(
-                report_subset,
-                precision=3,
-                title=f"{self.model_name} Zygosity Report",
-            )
-            pm.render()
-
         if self.show_plots:
             viz = ClassificationReportVisualizer(reset_kwargs=self.plotter_.param_dict)
-
-            if not isinstance(report, dict):
-                msg = "classification_report did not return a dict as expected."
-                self.logger.error(msg)
-                raise TypeError(msg)
 
             plots = viz.plot_all(
                 report,
@@ -520,9 +481,6 @@ class ImputeRefAllele:
                 show=self.show_plots,
                 heatmap_classes_only=True,
             )
-
-            # Reset the style from Optuna's plotting.
-            plt.rcParams.update(self.plotter_.param_dict)
 
             for name, fig in plots.items():
                 fout = self.plots_dir / f"zygosity_report_{name}.{self.plot_format}"
@@ -539,41 +497,44 @@ class ImputeRefAllele:
                 y_true, y_pred, label_names=report_names, prefix="zygosity"
             )
 
-        self._save_report(report, suffix="zygosity")
+        # ------ Additional metrics ------
+        report_full = self._additional_metrics(
+            y_true, y_pred, labels, report_names, report
+        )
+
+        if self.verbose or self.debug:
+            pm = PrettyMetrics(
+                report_full,
+                precision=2,
+                title=f"{self.model_name} Zygosity Report",
+            )
+            pm.render()
+
+        # Save JSON
+        self._save_report(report_full, suffix="zygosity")
 
     def _evaluate_iupac10_and_plot(
         self, y_true: np.ndarray, y_pred: np.ndarray
     ) -> None:
         """10-class IUPAC report & confusion matrix.
 
-        This method generates a classification report and confusion matrix for genotypes encoded using the 10 IUPAC codes (0-9). The IUPAC codes represent various nucleotide combinations, including ambiguous bases.
+        This method generates a classification report and confusion matrix for genotypes encoded as 10-class IUPAC codes (0-9). It computes various performance metrics, logs the classification report, and creates visualizations of the results.
 
         Args:
-            y_true (np.ndarray): True genotypes (0-9) for masked test cells.
-            y_pred (np.ndarray): Predicted genotypes (0-9) for masked test cells.
+            y_true (np.ndarray): True genotypes (0-9) for masked
+            y_pred (np.ndarray): Predicted genotypes (0-9) for masked
         """
         labels_idx = list(range(10))
-        labels_names = ["A", "C", "G", "T", "W", "R", "M", "K", "Y", "S"]
+        report_names = ["A", "C", "G", "T", "W", "R", "M", "K", "Y", "S"]
 
-        metrics = {
-            "accuracy": accuracy_score(y_true, y_pred),
-            "f1": f1_score(
-                y_true, y_pred, average="macro", labels=labels_idx, zero_division=0
-            ),
-            "precision": precision_score(
-                y_true, y_pred, average="macro", labels=labels_idx, zero_division=0
-            ),
-            "recall": recall_score(
-                y_true, y_pred, average="macro", labels=labels_idx, zero_division=0
-            ),
-        }
-        self.metrics_.update({f"iupac_{k}": v for k, v in metrics.items()})
+        # Create an identity matrix and use the targets array as indices
+        y_score = np.eye(len(report_names))[y_pred]
 
-        report = classification_report(
+        report: dict | str = classification_report(
             y_true,
             y_pred,
             labels=labels_idx,
-            target_names=labels_names,
+            target_names=report_names,
             zero_division=0,
             output_dict=True,
         )
@@ -583,31 +544,50 @@ class ImputeRefAllele:
             self.logger.error(msg)
             raise TypeError(msg)
 
-        report_subset = {}
-        for k, v in report.items():
-            tmp = {}
-            if isinstance(v, dict) and "support" in v:
-                for k2, v2 in v.items():
-                    if k2 != "support":
-                        tmp[k2] = v2
-                if tmp:
-                    report_subset[k] = tmp
+        if self.show_plots:
+            viz = ClassificationReportVisualizer(reset_kwargs=self.plotter_.param_dict)
 
-        if report_subset and (self.verbose or self.debug):
+            plots = viz.plot_all(
+                report,
+                title_prefix=f"{self.model_name} IUPAC Report",
+                show=self.show_plots,
+                heatmap_classes_only=True,
+            )
+
+            # Reset the style from Optuna's plotting.
+            plt.rcParams.update(self.plotter_.param_dict)
+
+            for name, fig in plots.items():
+                fout = self.plots_dir / f"iupac_report_{name}.{self.plot_format}"
+                if hasattr(fig, "savefig") and isinstance(fig, Figure):
+                    fig.savefig(fout, dpi=300, facecolor="#111122")
+                    plt.close(fig)
+                elif isinstance(fig, PlotlyFigure):
+                    fig.write_html(file=fout.with_suffix(".html"))
+
+            # Reset the style
+            viz._reset_mpl_style()
+
+            # Confusion matrix
+            self.plotter_.plot_confusion_matrix(
+                y_true, y_pred, label_names=report_names, prefix="iupac"
+            )
+
+        # ------ Additional metrics ------
+        report_full = self._additional_metrics(
+            y_true, y_pred, labels_idx, report_names, report
+        )
+
+        if self.verbose or self.debug:
             pm = PrettyMetrics(
-                report_subset,
-                precision=3,
+                report_full,
+                precision=2,
                 title=f"{self.model_name} IUPAC 10-Class Report",
             )
             pm.render()
 
-        self._save_report(report, suffix="iupac")
-
-        if self.show_plots:
-            # Confusion matrix
-            self.plotter_.plot_confusion_matrix(
-                y_true, y_pred, label_names=labels_names, prefix="iupac"
-            )
+        # Save JSON
+        self._save_report(report_full, suffix="iupac")
 
     def _make_train_test_split(self) -> Tuple[np.ndarray, np.ndarray]:
         """Create train/test split indices.
@@ -645,25 +625,28 @@ class ImputeRefAllele:
         train_idx = np.setdiff1d(all_idx, test_idx, assume_unique=False)
         return train_idx, test_idx
 
-    def _save_report(self, report_dict: Dict[str, float], suffix: str) -> None:
+    def _save_report(self, report_dict: Dict[str, Any], suffix: str) -> None:
         """Save classification report dictionary as a JSON file.
 
-        This method saves the provided classification report dictionary to a JSON file in the metrics directory. The filename includes a suffix to distinguish between different types of reports (e.g., 'zygosity' or 'iupac').
+        This method saves the provided classification report dictionary to a JSON file in the metrics directory, appending the specified suffix to the filename.
 
         Args:
-            report_dict (Dict[str, float]): The classification report dictionary to save.
+            report_dict (Dict[str, Any]): The classification report dictionary to save.
             suffix (str): Suffix to append to the filename (e.g., 'zygosity' or 'iupac').
 
         Raises:
             NotFittedError: If fit() and transform() have not been called.
         """
         if not self.is_fit_ or self.X_imputed012_ is None:
-            raise NotFittedError("No report to save. Ensure fit() and transform() ran.")
+            msg = "No report to save. Ensure fit() and transform() have been called."
+            raise NotFittedError(msg)
 
         out_fp = self.metrics_dir / f"classification_report_{suffix}.json"
         with open(out_fp, "w") as f:
             json.dump(report_dict, f, indent=4)
-        self.logger.info(f"{self.model_name} {suffix} report saved to {out_fp}.")
+
+        msg = f"{self.model_name} {suffix} report saved to {out_fp}."
+        self.logger.info(msg)
 
     def _create_model_directories(self, prefix: str, outdirs: List[str]) -> None:
         """Creates the directory structure for storing model outputs.
@@ -697,21 +680,30 @@ class ImputeRefAllele:
 
         This method converts genotype calls encoded as integers (0, 1, 2, etc.) into their corresponding IUPAC nucleotide codes. It supports two modes of decoding:
         1. Nucleotide mode (`is_nuc=True`): Decodes integer codes (0-9) directly to IUPAC nucleotide codes.
-        2. Metadata mode (`is_nuc=False`): Uses reference and alternate allele metadata to determine the appropriate IUPAC codes.
+        2. Metadata mode (`is_nuc=False`): Uses reference and alternate allele metadata to determine the appropriate IUPAC codes. If metadata is missing or inconsistent, the method attempts to repair the decoding by scanning the source SNP data for valid IUPAC codes.
 
         Args:
-            X (np.ndarray | pd.DataFrame | list[list[int]]): Input genotype calls as integers.
+            X (np.ndarray | pd.DataFrame | list[list[int]]): Input genotype calls as integers. Can be a NumPy array, Pandas DataFrame, or nested list.
             is_nuc (bool): If True, decode 0-9 nucleotide codes; else use ref/alt metadata. Defaults to False.
 
         Returns:
             np.ndarray: IUPAC strings as a 2D array of shape (n_samples, n_snps).
 
+        Notes:
+            - The method normalizes input values to handle various formats, including strings, lists, and arrays.
+            - It uses a predefined mapping of IUPAC codes to nucleotide bases and vice versa.
+            - Missing or invalid codes are represented as 'N' if they can't be resolved.
+            - The method includes repair logic to infer missing metadata from the source SNP data when necessary.
+
         Raises:
             ValueError: If input is not a DataFrame.
         """
         df = validate_input_type(X, return_type="df")
+
         if not isinstance(df, pd.DataFrame):
-            raise ValueError("Expected DataFrame.")
+            msg = f"Expected a pandas.DataFrame in 'decode_012', but got: {type(df)}."
+            self.logger.error(msg)
+            raise ValueError(msg)
 
         # IUPAC Definitions
         iupac_to_bases: dict[str, set[str]] = {
@@ -894,3 +886,91 @@ class ImputeRefAllele:
                     out[col_codes == 2, j] = ref
 
         return out
+
+    def _additional_metrics(
+        self,
+        y_true: np.ndarray,
+        y_pred: np.ndarray,
+        labels: list[int],
+        report_names: list[str],
+        report: dict[str, dict[str, float] | float],
+    ) -> dict[str, dict[str, float] | float]:
+        """Compute additional metrics and augment the report dictionary.
+
+        Args:
+            y_true (np.ndarray): True genotypes.
+            y_pred (np.ndarray): Predicted genotypes.
+            labels (list[int]): List of label indices.
+            report_names (list[str]): List of report names corresponding to labels.
+            report (dict[str, dict[str, float] | float]): Classification report dictionary to augment.
+
+        Returns:
+            dict[str, dict[str, float] | float]: Augmented report dictionary with additional metrics.
+        """
+        # Create an identity matrix and use the targets array as indices
+        y_score = np.eye(len(report_names))[y_pred]
+
+        # Per-class metrics
+        ap_pc = average_precision_score(y_true, y_score, average=None)
+        jaccard_pc = jaccard_score(
+            y_true, y_pred, average=None, labels=labels, zero_division=0
+        )
+
+        # Macro/weighted metrics
+        ap_macro = average_precision_score(y_true, y_score, average="macro")
+        ap_weighted = average_precision_score(y_true, y_score, average="weighted")
+        jaccard_macro = jaccard_score(y_true, y_pred, average="macro", zero_division=0)
+        jaccard_weighted = jaccard_score(
+            y_true, y_pred, average="weighted", zero_division=0
+        )
+
+        # Matthews correlation coefficient (MCC)
+        mcc = matthews_corrcoef(y_true, y_pred)
+
+        if not isinstance(ap_pc, np.ndarray):
+            msg = "average_precision_score or f1_score did not return np.ndarray as expected."
+            self.logger.error(msg)
+            raise TypeError(msg)
+
+        if not isinstance(jaccard_pc, np.ndarray):
+            msg = "jaccard_score did not return np.ndarray as expected."
+            self.logger.error(msg)
+            raise TypeError(msg)
+
+        # Add per-class metrics
+        report_full = {}
+        dd_subset = {
+            k: v for k, v in report.items() if k in report_names and isinstance(v, dict)
+        }
+        for i, class_name in enumerate(report_names):
+            class_report: dict[str, float] = {}
+            if class_name in dd_subset:
+                class_report = dd_subset[class_name]
+
+            if isinstance(class_report, float) or not class_report:
+                continue
+
+            report_full[class_name] = dict(class_report)
+            report_full[class_name]["average-precision"] = float(ap_pc[i])
+            report_full[class_name]["jaccard"] = float(jaccard_pc[i])
+
+        macro_avg = report.get("macro avg")
+        if isinstance(macro_avg, dict):
+            report_full["macro avg"] = dict(macro_avg)
+            report_full["macro avg"]["average-precision"] = float(ap_macro)
+            report_full["macro avg"]["jaccard"] = float(jaccard_macro)
+
+        weighted_avg = report.get("weighted avg")
+        if isinstance(weighted_avg, dict):
+            report_full["weighted avg"] = dict(weighted_avg)
+            report_full["weighted avg"]["average-precision"] = float(ap_weighted)
+            report_full["weighted avg"]["jaccard"] = float(jaccard_weighted)
+
+        # Add scalar summary metrics
+        report_full["mcc"] = float(mcc)
+        accuracy_val = report.get("accuracy")
+
+        if isinstance(accuracy_val, (int, float)):
+            report_full["accuracy"] = float(accuracy_val)
+
+        return report_full
