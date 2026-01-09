@@ -283,7 +283,9 @@ class SimConfig:
 class AutoencoderConfig:
     """Top-level configuration for ImputeAutoencoder.
 
-    This configuration class encapsulates all settings required for the ImputeAutoencoder model, including I/O, model architecture, training, hyperparameter tuning, evaluation, plotting, and simulated-missing data configurations.
+    This configuration class encapsulates all settings required for the
+    ImputeAutoencoder model, including I/O, model architecture, training,
+    hyperparameter tuning, plotting, and simulated-missing configuration.
 
     Attributes:
         io (IOConfig): I/O configuration.
@@ -428,6 +430,9 @@ class VAEExtraConfig:
 @dataclass
 class VAEConfig:
     """Top-level configuration for ImputeVAE (AE-parity + VAE extras).
+
+    Mirrors AutoencoderConfig sections and adds a ``vae`` block with KL-beta
+    controls for the VAE loss.
 
     Attributes:
         io (IOConfig): I/O configuration.
@@ -592,6 +597,10 @@ class DeterministicSplitConfig:
 class MostFrequentConfig:
     """Top-level configuration for ImputeMostFrequent.
 
+    Deterministic imputers primarily use ``io``, ``plot``, ``split``, ``algo``,
+    and ``sim``. The ``train`` and ``tune`` sections are retained for schema
+    parity with NN models but are not currently used by ImputeMostFrequent.
+
     Attributes:
         io (IOConfig): I/O configuration.
         plot (PlotConfig): Plotting configuration.
@@ -670,6 +679,10 @@ class RefAlleleAlgoConfig:
 @dataclass
 class RefAlleleConfig:
     """Top-level configuration for ImputeRefAllele.
+
+    Deterministic imputers primarily use ``io``, ``plot``, ``split``, ``algo``,
+    and ``sim``. The ``train`` and ``tune`` sections are retained for schema
+    parity with NN models but are not currently used by ImputeRefAllele.
 
     Attributes:
         io (IOConfig): I/O configuration.
