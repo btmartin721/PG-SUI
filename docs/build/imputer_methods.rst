@@ -8,9 +8,10 @@ Autoencoder Model for Genotype Data Imputation
 
 The Autoencoder model is designed to impute missing genotype data by encoding input data into a lower-dimensional latent representation and reconstructing the original input. This process helps capture complex patterns in the data and effectively handles missing values.
 
-
-
-[Image of Autoencoder neural network architecture]
+.. image:: ../../img/autoencoder_neural-net_architecture.jpg
+    :scale: 85%
+    :alt: Autoencoder neural network architecture with encoder, embedded latent space as a shaded rectangle, and decoder.
+    :align: center
 
 
 Model Overview
@@ -92,7 +93,6 @@ Variational Autoencoder (VAE) Model for Genotype Data Imputation
 The Variational Autoencoder (VAE) model is designed to impute missing genotype data using a probabilistic approach. The model learns a distribution over the latent space and samples from this distribution to reconstruct the input data.
 
 
-
 Model Overview
 ~~~~~~~~~~~~~~
 
@@ -148,15 +148,15 @@ The VAE loss consists of two components:
 
 1. **Reconstruction Loss:** Measures the difference between the original and reconstructed inputs using a masked focal loss:
 
-   .. math::
+    .. math::
 
-       \mathcal{L}_{\text{recon}} = \frac{1}{|M|} \sum_{(i,j) \in M} \alpha_t (1 - p_t)^{\gamma} \log(p_t)
+        \mathcal{L}_{\text{recon}} = \frac{1}{|M|} \sum_{(i,j) \in M} \alpha_t (1 - p_t)^{\gamma} \log(p_t)
 
 2. **KL Divergence:** Regularizes the learned latent distribution to be close to the prior distribution (a standard normal distribution):
 
-   .. math::
+    .. math::
 
-       \mathcal{L}_{\text{KL}} = D_{\text{KL}}(q(\mathbf{z} | \mathbf{X}) \| p(\mathbf{z}))
+        \mathcal{L}_{\text{KL}} = D_{\text{KL}}(q(\mathbf{z} | \mathbf{X}) \| p(\mathbf{z}))
 
 The total loss is given by:
 
@@ -173,8 +173,6 @@ IterativeImputer and the MICE Algorithm
 
 Multivariate Imputation by Chained Equations (MICE)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-
 
 MICE performs **sequential regression-based imputation**, where each missing value is predicted iteratively based on other features.
 
