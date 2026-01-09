@@ -43,8 +43,8 @@ class Encoder(nn.Module):
         for hidden_size in hidden_layer_sizes:
             layers.append(nn.Linear(input_dim, hidden_size))
             layers.append(nn.BatchNorm1d(hidden_size))
-            layers.append(nn.Dropout(dropout_rate))
             layers.append(activation)
+            layers.append(nn.Dropout(dropout_rate))
             input_dim = hidden_size
 
         self.hidden_layers = nn.Sequential(*layers)
@@ -97,8 +97,8 @@ class Decoder(nn.Module):
         for hidden_size in hidden_layer_sizes:
             layers.append(nn.Linear(input_dim, hidden_size))
             layers.append(nn.BatchNorm1d(hidden_size))
-            layers.append(nn.Dropout(dropout_rate))
             layers.append(activation)
+            layers.append(nn.Dropout(dropout_rate))
             input_dim = hidden_size
 
         self.hidden_layers = nn.Sequential(*layers)
@@ -137,11 +137,7 @@ class AutoencoderModel(nn.Module):
             \\hat{x} = g_{\\phi}(z)
             $$
 
-    Note:
-        Backslashes in LaTeX-like expressions are escaped (e.g., ``\\theta``) to avoid Python
-        "invalid/unsupported escape sequence" warnings in docstrings.
-
-    The model is trained by minimizing a reconstruction loss, $L(x, \\hat{x})$, which measures the dissimilarity between the original input and the reconstructed output. This implementation uses a `SafeFocalCELoss` to handle missing values and class imbalance effectively.
+    The model is trained by minimizing a reconstruction loss, $L(x, \\hat{x})$, which measures the dissimilarity between the original input and the reconstructed output. This implementation uses a ``FocalCELoss`` to handle missing values and class imbalance effectively.
     """
 
     def __init__(
