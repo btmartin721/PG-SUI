@@ -4,41 +4,41 @@ An overview of changes to **PG-SUI** by release. This mirrors the Sphinx/RST cha
 
 ---
 
-## v1.6.29 - 2026-01-08
+## v1.7.0 - 2026-01-08
 
-### Breaking Changes - v1.6.29
+### Breaking Changes - v1.7.0
 
 - Removed `ImputeNLPCA` and `ImputeUBP` models/configs from the public API, CLI, and tests (Autoencoder/VAE remain).
 - Dropped the `--disable-simulate-missing` CLI flag; use YAML overrides for `sim.simulate_missing` instead.
 - Removed `evaluate.*` config sections from Autoencoder/VAE dataclasses; delete or migrate those keys in custom YAMLs.
 
-### Features - v1.6.29
+### Features - v1.7.0
 
 - Added focal cross-entropy reconstruction loss support with optional reconstruction scaling for VAE training.
 - Added KL-beta and focal-gamma scheduling options to VAE/Autoencoder training and tuning.
 - Added Jaccard and Matthews correlation (MCC) metrics to tunable scorers; ImputeMostFrequent reporting now includes AP/Jaccard/MCC alongside core zygosity metrics.
 - Added `scripts/summarize_tuned_params.py` to aggregate tuned-parameter JSONs and plot parameter distributions.
 
-### Enhancements - v1.6.29
+### Enhancements - v1.7.0
 
 - Expanded class-weight handling with `weights_power`, `weights_inverse`, `weights_normalize`, and optional `weights_max_ratio` caps for imbalanced zygosity.
 - Simplified tuning config by removing legacy knobs (fast/max_samples/max_loci/eval_interval/proxy batches) and expanding supported tuning metrics.
 - Enforced canonical ordering for classification report plots (IUPAC classes first, averages last).
 
-### Improvements - v1.6.29
+### Improvements - v1.7.0
 
 - Rebalanced training defaults (batch size, early stopping, max epochs, `sim_prop`) and updated presets/config templates accordingly.
 - Hidden-layer schedules now enforce strictly decreasing sizes for pyramid/linear layouts with clearer validation errors.
 - Deterministic imputers now store 012 matrices as `int8` for lower memory; simulated-missing logging reduced to debug noise.
 - Plot history output is standardized to Train/Validation curves; confusion-matrix prefixes no longer double-underscore.
 
-### Bug Fixes - v1.6.29
+### Bug Fixes - v1.7.0
 
 - `_one_hot_encode_012` now preserves missing values as all `-1` vectors and validates out-of-range class encodings.
 - `decode_012` normalization now handles ambiguous/byte/missing tokens more robustly to avoid accidental mis-decoding.
 - `validate_input_type` now returns integer tensors for torch inputs to avoid dtype mismatches in loss functions.
 
-### Documentation - v1.6.29
+### Documentation - v1.7.0
 
 - Updated CLI/config/unsupervised docs to reflect the Autoencoder/VAE-only workflow and new weighting/tuning defaults.
 
