@@ -51,9 +51,9 @@ class _MaskedNumpyDataset(torch.utils.data.Dataset):
 
 
 class BaseNNImputer:
-    """An abstract base class for neural network-based imputers.
+    """Abstract base class for neural network-based imputers.
 
-    This class provides a shared framework and common functionality for all neural network imputers. It is not meant to be instantiated directly. Instead, child classes should inherit from it and implement the abstract methods. Provided functionality: Directory setup and logging initialization; A hyperparameter tuning pipeline using Optuna; Utility methods for building models (`build_model`), initializing weights (`initialize_weights`), and checking for fitted attributes (`ensure_attribute`); Helper methods for calculating class weights for imbalanced data; Setup for standardized plotting and model scoring classes.
+    This class provides shared infrastructure for NN imputers (e.g., directory/logging setup, Optuna tuning, model construction helpers, class-weight utilities, standardized plotting/scoring, and IUPAC decoding). It is not intended to be instantiated directly; subclasses must implement the abstract methods.
     """
 
     def __init__(
@@ -71,6 +71,8 @@ class BaseNNImputer:
         This constructor sets up the device (CPU, GPU, or MPS), creates the necessary output directories for models and results, and a logger. It also initializes a genotype encoder for handling genotype data.
 
         Args:
+            model_name (str): The model class name used in output paths and logs.
+            genotype_data (GenotypeData): Backing genotype data object.
             prefix (str): A prefix used to name the output directory (e.g., 'pgsui_output').
             device (Literal["gpu", "cpu", "mps"]): The device to use for PyTorch operations. If 'gpu' or 'mps' is chosen, it will fall back to 'cpu' if the required hardware is not available. Defaults to "cpu".
             verbose (bool): If True, enables detailed logging output. Defaults to False.
@@ -429,12 +431,15 @@ class BaseNNImputer:
     ) -> None:
         """Creates the directory structure for storing model outputs.
 
-        This method sets up a standardized folder hierarchy for saving models, plots, metrics, and optimization results, organized under a main directory named after the provided prefix.
+        This method sets up a standardized folder hierarchy for saving models,
+        plots, metrics, and optimization results, organized under a main directory
+        named after the provided prefix. The current implementation always uses
+        ``<cwd>/<prefix>_output`` regardless of ``outdir``.
 
         Args:
             prefix (str): The prefix for the main output directory.
             outdirs (List[str]): A list of subdirectory names to create within the main directory.
-            outdir (Path | str | None): The base output directory. If None, uses the current working directory. Defaults to None.
+            outdir (Path | str | None): Requested base output directory (currently ignored).
 
         Raises:
             Exception: If any of the directories cannot be created.
@@ -484,7 +489,7 @@ class BaseNNImputer:
         y_pred: np.ndarray,
         metrics: Dict[str, float],
         msg: str,
-    ):
+    ) -> None:
         """Generate and save evaluation visualizations.
 
         3-class (zygosity) or 10-class (IUPAC) depending on `labels` length.
@@ -517,7 +522,14 @@ class BaseNNImputer:
                 prefix=f"geno{n_labels}_{prefix}",
             )
 
-    def _additional_metrics(self, y_true, y_pred, labels, report_names, report):
+    def _additional_metrics(
+        self,
+        y_true: np.ndarray,
+        y_pred: np.ndarray,
+        labels: list[int],
+        report_names: list[str],
+        report: dict,
+    ) -> dict[str, dict[str, float] | float]:
         """Compute additional metrics and augment the report dictionary.
 
         Args:
@@ -562,10 +574,15 @@ class BaseNNImputer:
 
         # Add per-class metrics
         report_full = {}
+        dd_subset = {
+            k: v for k, v in report.items() if k in report_names and isinstance(v, dict)
+        }
         for i, class_name in enumerate(report_names):
-            class_report = report.get(class_name)
+            class_report: dict[str, float] = {}
+            if class_name in dd_subset:
+                class_report = dd_subset[class_name]
 
-            if isinstance(class_report, float):
+            if isinstance(class_report, float) or not class_report:
                 continue
 
             report_full[class_name] = dict(class_report)
@@ -700,7 +717,7 @@ class BaseNNImputer:
             pm.render()
 
         with open(self.metrics_dir / f"{report_name}_report.json", "w") as f:
-            json.dump(report, f, indent=4)
+            json.dump(report_full, f, indent=4)
 
     def _compute_hidden_layer_sizes(
         self,
@@ -1146,7 +1163,8 @@ class BaseNNImputer:
             num_classes (int | None): Number of classes (K). If None, uses self.num_classes_.
 
         Returns:
-            torch.Tensor: One-hot encoded tensor of shape (B, L, K) with float32 dtype. Valid calls are 0/1, missing calls are all -1.
+            torch.Tensor: One-hot encoded tensor of shape (B, L, K) with dtype
+                ``torch.long``. Valid calls are 0/1, missing calls are all -1.
 
         Notes:
             - Valid classes must be integers in [0, K-1]
@@ -1207,21 +1225,30 @@ class BaseNNImputer:
 
         This method converts genotype calls encoded as integers (0, 1, 2, etc.) into their corresponding IUPAC nucleotide codes. It supports two modes of decoding:
         1. Nucleotide mode (`is_nuc=True`): Decodes integer codes (0-9) directly to IUPAC nucleotide codes.
-        2. Metadata mode (`is_nuc=False`): Uses reference and alternate allele metadata to determine the appropriate IUPAC codes.
+        2. Metadata mode (`is_nuc=False`): Uses reference and alternate allele metadata to determine the appropriate IUPAC codes. If metadata is missing or inconsistent, the method attempts to repair the decoding by scanning the source SNP data for valid IUPAC codes.
 
         Args:
-            X (np.ndarray | pd.DataFrame | list[list[int]]): Input genotype calls as integers.
+            X (np.ndarray | pd.DataFrame | list[list[int]]): Input genotype calls as integers. Can be a NumPy array, Pandas DataFrame, or nested list.
             is_nuc (bool): If True, decode 0-9 nucleotide codes; else use ref/alt metadata. Defaults to False.
 
         Returns:
             np.ndarray: IUPAC strings as a 2D array of shape (n_samples, n_snps).
 
+        Notes:
+            - The method normalizes input values to handle various formats, including strings, lists, and arrays.
+            - It uses a predefined mapping of IUPAC codes to nucleotide bases and vice versa.
+            - Missing or invalid codes are represented as 'N' if they can't be resolved.
+            - The method includes repair logic to infer missing metadata from the source SNP data when necessary.
+
         Raises:
             ValueError: If input is not a DataFrame.
         """
         df = validate_input_type(X, return_type="df")
+
         if not isinstance(df, pd.DataFrame):
-            raise ValueError("Expected DataFrame.")
+            msg = f"Expected a pandas.DataFrame in 'decode_012', but got: {type(df)}."
+            self.logger.error(msg)
+            raise ValueError(msg)
 
         # IUPAC Definitions
         iupac_to_bases: dict[str, set[str]] = {
