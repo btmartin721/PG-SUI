@@ -20,7 +20,7 @@ def _assert_unsupervised_transform(model, expected_shape: tuple[int, int]) -> No
     assert decoded.shape == expected_shape
     assert decoded.dtype.kind in {"U", "S", "O"}
 
-    iupac_codes = ["A", "C", "G", "T", "R", "Y", "S", "W", "K", "M", "B", "D", "H", "V"]
+    iupac_codes = ["A", "C", "G", "T", "R", "Y", "S", "W", "K", "M"]
     assert all(np.isin(np.unique(decoded), iupac_codes, assume_unique=True))
     assert np.count_nonzero(decoded == "N") == 0
 
