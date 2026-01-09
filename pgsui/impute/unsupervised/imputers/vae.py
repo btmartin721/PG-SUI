@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 import traceback
 from collections import defaultdict
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Union, cast
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -35,7 +35,7 @@ def _make_warmup_cosine_scheduler(
     max_epochs: int,
     warmup_epochs: int,
     start_factor: float = 0.1,
-) -> Any:
+) -> torch.optim.lr_scheduler.CosineAnnealingLR | torch.optim.lr_scheduler.SequentialLR:
     """Create a warmup->cosine LR scheduler.
 
     Args:
@@ -45,7 +45,7 @@ def _make_warmup_cosine_scheduler(
         start_factor (float): Initial LR factor for warmup.
 
     Returns:
-        torch.optim.lr_scheduler._LRScheduler: The learning rate scheduler.
+        torch.optim.lr_scheduler.CosineAnnealingLR | torch.optim.lr_scheduler.SequentialLR: The learning rate scheduler.
     """
     warmup_epochs = int(max(0, warmup_epochs))
 
@@ -101,9 +101,9 @@ def ensure_vae_config(config: VAEConfig | dict | str | None) -> VAEConfig:
 
 
 class ImputeVAE(BaseNNImputer):
-    """Variational Autoencoder (VAE) imputer.
+    """Variational Autoencoder (VAE) imputer for 0/1/2 genotypes.
 
-    This module implements a Variational Autoencoder (VAE) for genotype imputation using 0/1/2 encoding, where -9 or -1 indicates missing genotypes. The VAE architecture consists of an encoder and decoder network, allowing for effective learning of latent representations of genotype data. The model supports both haploid and diploid data, with configurable hyperparameters for model architecture, training, and simulation of missingness with various strategies. Missingness can be simulated using five strategies ("random", "random_weighted", "random_weighted_inv", "nonrandom", "nonrandom_weighted"), with support for tree-based non-random missingness. The imputer supports hyperparameter tuning using Optuna.
+    Trains a VAE on a genotype matrix encoded as 0/1/2 with missing values represented by any negative integer. The workflow simulates missingness once on the full matrix, then creates train/val/test splits. It supports haploid and diploid data, focal-CE reconstruction loss with a KL term (optional scheduling), and Optuna-based hyperparameter tuning. Output is returned as IUPAC strings via ``decode_012``.
 
     Notes:
         - Training includes early stopping based on validation loss.
@@ -126,17 +126,17 @@ class ImputeVAE(BaseNNImputer):
         ] = "random",
         sim_prop: Optional[float] = None,
         sim_kwargs: Optional[dict] = None,
-    ):
+    ) -> None:
         """Initialize the ImputeVAE imputer.
 
         Args:
             genotype_data (GenotypeData): Genotype data for imputation.
-            tree_parser (Optional[TreeParser]): Tree parser for non-random missingness.
-            config (Optional[Union[VAEConfig, dict, str]]): Configuration for the VAE.
-            overrides (Optional[dict]): Overrides for configuration parameters.
-            sim_strategy (Literal): Strategy for simulating missingness.
-            sim_prop (Optional[float]): Proportion of missingness to simulate.
-            sim_kwargs (Optional[dict]): Additional arguments for missingness simulation.
+            tree_parser (Optional[TreeParser]): Tree parser required for nonrandom strategies.
+            config (Optional[Union[VAEConfig, dict, str]]): Config dataclass, nested dict, YAML path, or None.
+            overrides (Optional[dict]): Dot-key overrides applied last with highest precedence.
+            sim_strategy (Literal["random", "random_weighted", "random_weighted_inv", "nonrandom", "nonrandom_weighted"]): Missingness simulation strategy (overrides config).
+            sim_prop (Optional[float]): Proportion of entries to simulate as missing (overrides config). Default is None.
+            sim_kwargs (Optional[dict]): Extra missingness kwargs merged into config.
         """
         self.model_name = "ImputeVAE"
         self.genotype_data = genotype_data
@@ -646,10 +646,10 @@ class ImputeVAE(BaseNNImputer):
         class_weights: Optional[torch.Tensor] = None,
         kl_beta_schedule: bool = False,
         gamma_schedule: bool = False,
-    ) -> Tuple[float, torch.nn.Module | None, dict[str, list[float]]]:
+    ) -> tuple[float, torch.nn.Module, dict[str, list[float]]]:
         """Train and validate the model.
 
-        This method orchestrates the training of the model using the provided DataLoader. It sets up the optimizer and learning rate scheduler, and executes the training loop with support for early stopping and Optuna tuning based on validation performance. The method returns the best test-set loss, the best model state, and optionally the  history.
+        This method orchestrates training with early stopping and optional Optuna pruning based on validation performance. It returns the best validation loss, the best model (with best weights loaded), and training history.
 
         Args:
             model (torch.nn.Module): VAE model.
@@ -662,8 +662,8 @@ class ImputeVAE(BaseNNImputer):
             gamma_schedule (bool): Whether to use gamma scheduling for focal CE loss.
 
         Returns:
-            Tuple[float, torch.nn.Module | None, dict[str, list[float]]]:
-                Best test-set loss, best model, and training history.
+            tuple[float, torch.nn.Module, dict[str, list[float]]]:
+                Best validation loss, best model, and training history.
         """
         max_epochs = self.epochs
         optimizer = torch.optim.Adam(model.parameters(), lr=lr)
@@ -689,7 +689,10 @@ class ImputeVAE(BaseNNImputer):
         self,
         *,
         optimizer: torch.optim.Optimizer,
-        scheduler: torch.optim.lr_scheduler._LRScheduler,
+        scheduler: (
+            torch.optim.lr_scheduler.CosineAnnealingLR
+            | torch.optim.lr_scheduler.SequentialLR
+        ),
         model: torch.nn.Module,
         l1_penalty: float,
         trial: Optional[optuna.Trial] = None,
@@ -698,13 +701,13 @@ class ImputeVAE(BaseNNImputer):
         kl_beta_schedule: bool = False,
         gamma_schedule: bool = False,
     ) -> tuple[float, torch.nn.Module, dict[str, list[float]]]:
-        """Train the model (Weighted CE).
+        """Train the model with focal CE reconstruction + KL divergence.
 
         This method performs the training loop for the model using the provided optimizer and learning rate scheduler. It supports early stopping based on validation loss and integrates with Optuna for hyperparameter tuning. The method returns the best validation loss, the best model state, and the training history.
 
         Args:
             optimizer (torch.optim.Optimizer): Optimizer.
-            scheduler (torch.optim.lr_scheduler._LRScheduler): LR scheduler.
+            scheduler (torch.optim.lr_scheduler.CosineAnnealingLR | torch.optim.lr_scheduler.SequentialLR): Learning rate scheduler.
             model (torch.nn.Module): VAE model.
             l1_penalty (float): L1 regularization coefficient.
             trial (Optional[optuna.Trial]): Optuna trial for pruning (optional).
@@ -714,7 +717,7 @@ class ImputeVAE(BaseNNImputer):
             gamma_schedule (bool): Whether to use gamma scheduling for focal CE loss.
 
         Returns:
-            tuple[float, torch.nn.Module, dict[str, list[float]]]: Best loss, best model, training history.
+            tuple[float, torch.nn.Module, dict[str, list[float]]]: Best validation loss, best model, training history.
 
         Notes:
             - Use CE with class weights during training/validation.
@@ -841,7 +844,7 @@ class ImputeVAE(BaseNNImputer):
         l1_penalty: float,
         kl_beta: torch.Tensor | float,
     ) -> float:
-        """Single epoch train step across batches (weighted CE).
+        """Single epoch train step across batches (focal CE + KL + optional L1).
 
         Args:
             loader (torch.utils.data.DataLoader): Training data loader.
@@ -925,7 +928,7 @@ class ImputeVAE(BaseNNImputer):
         l1_penalty: float,
         kl_beta: torch.Tensor | float = 1.0,
     ) -> float:
-        """Validation step for a single epoch, across batches (weighted CE).
+        """Validation step for a single epoch (focal CE + KL + optional L1).
 
         Args:
             loader (torch.utils.data.DataLoader): Validation data loader.
@@ -1340,7 +1343,7 @@ class ImputeVAE(BaseNNImputer):
             ) from e
 
     def _sample_hyperparameters(self, trial: optuna.Trial) -> dict:
-        """Sample VAE hyperparameters; hidden sizes mirror AE/NLPCA helper.
+        """Sample VAE hyperparameters; hidden sizes use BaseNNImputer helper.
 
         Args:
             trial (optuna.Trial): Optuna trial object.
