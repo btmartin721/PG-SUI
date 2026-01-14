@@ -28,7 +28,7 @@ class Scorer:
     def __init__(
         self,
         prefix: str,
-        average: Literal["micro", "macro", "weighted"] = "macro",
+        average: Literal["macro", "weighted"] = "macro",
         verbose: bool = False,
         debug: bool = False,
     ) -> None:
@@ -38,12 +38,12 @@ class Scorer:
 
         Args:
             prefix (str): Prefix for logging messages.
-            average (Literal["micro", "macro", "weighted"]): Average method for metrics. Must be one of 'micro', 'macro', or 'weighted'.
+            average (Literal["macro", "weighted"]): Average method for metrics. Must be one of 'macro' or 'weighted'.
             verbose (bool): Verbosity level for logging messages. Default is False.
             debug (bool): Debug mode for logging messages. Default is False.
 
         Raises:
-            ValueError: If the average parameter is invalid. Must be one of 'micro', 'macro', or 'weighted'.
+            ValueError: If the average parameter is invalid. Must be one of 'macro' or 'weighted'.
         """
         logman = LoggerManager(
             name=__name__, prefix=prefix, debug=debug, verbose=verbose >= 1
@@ -52,12 +52,12 @@ class Scorer:
             logman.get_logger(), verbose=verbose >= 1, debug=debug
         )
 
-        if average not in {"micro", "macro", "weighted"}:
-            msg = f"Invalid average parameter: {average}. Must be one of 'micro', 'macro', or 'weighted'."
+        if average not in {"macro", "weighted"}:
+            msg = f"Invalid average parameter: {average}. Must be one of 'macro' or 'weighted'."
             self.logger.error(msg)
             raise ValueError(msg)
 
-        self.average: Literal["micro", "macro", "weighted"] = average
+        self.average: Literal["macro", "weighted"] = average
 
     def accuracy(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
         """Calculate the accuracy of the model.
@@ -138,18 +138,19 @@ class Scorer:
         if y_true.ndim == 2 and y_true.shape[1] == y_pred_proba.shape[1]:
             y_true = y_true.argmax(axis=1)
 
-        # Guard: need >1 class present for AUC
-        if np.unique(y_true).size < 2:
-            return 0.5
-
-        return float(
-            roc_auc_score(
+        try:
+            roc_auc = roc_auc_score(
                 y_true,
                 y_pred_proba,
                 multi_class="ovr",
                 average=self.average,
             )
-        )
+        except ValueError as e:
+            msg = "Error computing ROC-AUC. This may be due to only one class being present in y_true."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        return float(roc_auc)
 
     def evaluate(
         self,
