@@ -4,6 +4,14 @@ An overview of changes to **PG-SUI** by release. This mirrors the Sphinx/RST cha
 
 ---
 
+## Unreleased
+
+### Documentation - Unreleased
+
+- Added dedicated ImputeNLPCA and ImputeUBP algorithm pages with formulations, training phases, and projection details.
+- Expanded ImputeAutoencoder and ImputeVAE documentation to align with the full unsupervised model lineup.
+- Added an Optuna tuning guide and refreshed config/simulate/tutorial references to the automated tuning workflow.
+
 ## v1.7.0 - 2026-01-08
 
 ### Breaking Changes - v1.7.0
