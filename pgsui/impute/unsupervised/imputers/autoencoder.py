@@ -4,7 +4,8 @@ from __future__ import annotations
 import copy
 import traceback
 from collections import defaultdict
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, FrozenSet, Literal, Optional, Union, cast
+from xml.parsers.expat import model
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -22,6 +23,7 @@ from pgsui.impute.unsupervised.callbacks import EarlyStopping
 from pgsui.impute.unsupervised.loss_functions import FocalCELoss
 from pgsui.impute.unsupervised.models.autoencoder_model import AutoencoderModel
 from pgsui.utils.logging_utils import configure_logger
+from pgsui.utils.misc import OBJECTIVE_SPEC_AE
 from pgsui.utils.pretty_metrics import PrettyMetrics
 
 if TYPE_CHECKING:
@@ -198,7 +200,7 @@ class ImputeAutoencoder(BaseNNImputer):
         self.debug = self.cfg.io.debug
         self.rng = np.random.default_rng(self.seed)
 
-        # Simulation controls (match VAE pattern)
+        # Simulation controls
         sim_cfg = getattr(self.cfg, "sim", None)
         sim_cfg_kwargs = copy.deepcopy(getattr(sim_cfg, "sim_kwargs", None) or {})
         if sim_kwargs:
@@ -256,20 +258,10 @@ class ImputeAutoencoder(BaseNNImputer):
 
         # Hyperparameter tuning
         self.tune = bool(self.cfg.tune.enabled)
-        self.tune_metric = cast(
-            Literal[
-                "pr_macro",
-                "f1",
-                "accuracy",
-                "precision",
-                "recall",
-                "roc_auc",
-                "average_precision",
-                "mcc",
-                "jaccard",
-            ],
-            self.cfg.tune.metric or "f1",
-        )
+        self.tune_metric: str | list[str] | tuple[str, ...]
+        self.tune_metric = self.cfg.tune.metrics
+        self.primary_metric = self.validate_tuning_metric()
+
         self.n_trials = int(self.cfg.tune.n_trials)
         self.tune_save_db = bool(self.cfg.tune.save_db)
         self.tune_resume = bool(self.cfg.tune.resume)
@@ -295,6 +287,8 @@ class ImputeAutoencoder(BaseNNImputer):
         self.orig_mask_train_: np.ndarray
         self.orig_mask_val_: np.ndarray
         self.orig_mask_test_: np.ndarray
+
+        self.num_tuned_params_ = OBJECTIVE_SPEC_AE.count()
 
     def fit(self) -> "ImputeAutoencoder":
         """Fit the Autoencoder imputer model to the genotype data.
@@ -325,13 +319,14 @@ class ImputeAutoencoder(BaseNNImputer):
         self.ploidy = self.cfg.io.ploidy
         self.is_haploid_ = self.ploidy == 1
 
-        if self.ploidy > 2:
-            msg = (
-                f"{self.model_name} currently supports only haploid (1) or diploid (2) "
-                f"data; got ploidy={self.ploidy}."
-            )
+        if self.ploidy > 2 or self.ploidy < 1:
+            msg = f"{self.model_name} currently supports only haploid (1) or diploid (2) data; got ploidy={self.ploidy}."
             self.logger.error(msg)
             raise ValueError(msg)
+
+        self.logger.debug(
+            f"Ploidy set to {self.ploidy}, is_haploid: {self.is_haploid_}"
+        )
 
         self.num_classes_ = 2 if self.is_haploid_ else 3
 
@@ -350,14 +345,19 @@ class ImputeAutoencoder(BaseNNImputer):
             "activation": self.activation,
         }
 
+        self.logger.debug(f"Model parameters: {self.model_params}")
+
         # Simulate missingness ONCE on the full matrix
         X_for_model_full, self.sim_mask_, self.orig_mask_ = self.sim_missing_transform(
             self.ground_truth_
         )
 
         # Split indices based on clean ground truth
-        self.train_idx_, self.val_idx_, self.test_idx_ = self._train_val_test_split(
-            self.ground_truth_
+        indices = self._train_val_test_split(self.ground_truth_)
+        self.train_idx_, self.val_idx_, self.test_idx_ = indices
+
+        self.logger.info(
+            f"Train/val/test sizes: {len(self.train_idx_)}/{len(self.val_idx_)}/{len(self.test_idx_)}"
         )
 
         # --- Clean targets per split ---
@@ -379,6 +379,34 @@ class ImputeAutoencoder(BaseNNImputer):
         self.orig_mask_val_ = self.orig_mask_[self.val_idx_].copy()
         self.orig_mask_test_ = self.orig_mask_[self.test_idx_].copy()
 
+        self.eval_mask_train_ = self.sim_mask_train_ & ~self.orig_mask_train_
+        self.eval_mask_val_ = self.sim_mask_val_ & ~self.orig_mask_val_
+        self.eval_mask_test_ = self.sim_mask_test_ & ~self.orig_mask_test_
+
+        self.logger.info(
+            f"Train Set Simulated Counts: {np.count_nonzero(self.eval_mask_train_)}"
+        )
+        self.logger.info(
+            f"Val Set Simulated Counts: {np.count_nonzero(self.eval_mask_val_)}"
+        )
+        self.logger.info(
+            f"Test Set Simulated Counts: {np.count_nonzero(self.eval_mask_test_)}"
+        )
+
+        self.logger.info(
+            f"Train Set Real Missing Counts: {np.count_nonzero(self.orig_mask_train_)}"
+        )
+        self.logger.info(
+            f"Val Set Real Missing Counts: {np.count_nonzero(self.orig_mask_val_)}"
+        )
+        self.logger.info(
+            f"Test Set Real Missing Counts: {np.count_nonzero(self.orig_mask_test_)}"
+        )
+
+        self.logger.info(
+            f"Total known genotypes per split (sim_strategy={self.sim_strategy}): {np.count_nonzero(~self.orig_mask_train_)}, {np.count_nonzero(~self.orig_mask_val_)}, {np.count_nonzero(~self.orig_mask_test_)}"
+        )
+
         # Persist per-split matrices
         self.X_train_clean_ = X_train_clean
         self.X_val_clean_ = X_val_clean
@@ -390,6 +418,9 @@ class ImputeAutoencoder(BaseNNImputer):
 
         # Haploid harmonization (do NOT resimulate; just recode values)
         if self.is_haploid_:
+            self.logger.debug(
+                "Performing haploid harmonization on split inputs/targets..."
+            )
 
             def _haploidize(arr: np.ndarray) -> np.ndarray:
                 out = arr.copy()
@@ -413,39 +444,48 @@ class ImputeAutoencoder(BaseNNImputer):
         self.X_val_ = self.X_val_corrupted_
         self.y_val_ = self.X_val_clean_
 
-        self.X_test_ = self.X_test_corrupted_
         self.y_test_ = self.X_test_clean_
 
-        # One-hot for loaders/model input
-        X_train_ohe = self._one_hot_encode_012(
+        self.X_train_ = self._one_hot_encode_012(
             self.X_train_, num_classes=self.num_classes_
         )
-        X_val_ohe = self._one_hot_encode_012(self.X_val_, num_classes=self.num_classes_)
+
+        self.X_val_ = self._one_hot_encode_012(
+            self.X_val_, num_classes=self.num_classes_
+        )
+
+        if torch.is_tensor(self.X_train_):
+            if (self.X_train_.sum(dim=-1) > 1).any():
+                msg = (
+                    f"[{self.model_name}] Invalid one-hot: >1 active class in X_train_."
+                )
+                self.logger.error(msg)
+                raise RuntimeError(msg)
+
+        if torch.is_tensor(self.X_val_):
+            if (self.X_val_.sum(dim=-1) > 1).any():
+                msg = f"[{self.model_name}] Invalid one-hot: >1 active class in X_val_."
+                self.logger.error(msg)
+                raise RuntimeError(msg)
 
         # Plotters/scorers + valid-class mask repairs (copied from VAE flow)
         self.plotter_, self.scorers_ = self.initialize_plotting_and_scorers()
-        self.valid_class_mask_ = self._build_valid_class_mask()
 
-        loci = getattr(self, "valid_class_mask_conflict_loci_", None)
-        if loci is not None and loci.size:
-            self._repair_ref_alt_from_iupac(loci)
-            self.valid_class_mask_ = self._build_valid_class_mask()
-
+        # Create loaders
         train_loader = self._get_data_loaders(
-            X_train_ohe.detach().cpu().numpy(),
+            self.X_train_.detach().cpu().numpy(),
             self.y_train_,
-            ~self.orig_mask_train_,
+            self.eval_mask_train_,
             self.batch_size,
             shuffle=True,
         )
         val_loader = self._get_data_loaders(
-            X_val_ohe.detach().cpu().numpy(),
+            self.X_val_.detach().cpu().numpy(),
             self.y_val_,
-            ~self.orig_mask_val_,
+            self.eval_mask_val_,
             self.batch_size,
             shuffle=False,
         )
-
         self.train_loader_ = train_loader
         self.val_loader_ = val_loader
 
@@ -457,7 +497,7 @@ class ImputeAutoencoder(BaseNNImputer):
             self.model_tuned_ = False
             self.class_weights_ = self._class_weights_from_zygosity(
                 self.y_train_,
-                train_mask=self.sim_mask_train_ & ~self.orig_mask_train_,
+                train_mask=self.eval_mask_train_,
                 inverse=self.inverse,
                 normalize=self.normalize,
                 max_ratio=self.max_ratio,
@@ -482,7 +522,7 @@ class ImputeAutoencoder(BaseNNImputer):
 
         if self.class_weights_ is not None:
             self.logger.info(
-                f"class_weights={self.class_weights_.detach().cpu().numpy().tolist()}"
+                f"class_weights={self.class_weights_.detach().cpu().numpy().astype(float).tolist()}"
             )
 
         # Always start clean
@@ -561,9 +601,9 @@ class ImputeAutoencoder(BaseNNImputer):
         # Evaluate on simulated-missing sites only
         self._evaluate_model(
             self.model_,
-            X=self.X_test_,
+            X=self.X_test_corrupted_,
             y=self.y_test_,
-            eval_mask=self.sim_mask_test_ & ~self.orig_mask_test_,
+            eval_mask=self.eval_mask_test_,
             objective_mode=False,
         )
 
@@ -604,12 +644,12 @@ class ImputeAutoencoder(BaseNNImputer):
             RuntimeError: If any missing values remain or decoding yields "N".
             RuntimeError: If loci contain 'N' after imputation due to missing REF/ALT metadata.
         """
-        if not getattr(self, "is_fit_", False):
-            msg = "Model is not fitted. Call fit() before transform()."
+        if not self.is_fit_:
+            msg = f"{self.model_name} is not fitted. Must call 'fit()' before 'transform()'."
             self.logger.error(msg)
             raise NotFittedError(msg)
 
-        self.logger.info(f"Imputing entire dataset with {self.model_name} model...")
+        self.logger.info(f"Imputing entire dataset with {self.model_name}...")
         X_to_impute = self.ground_truth_.copy()
 
         pred_labels, _ = self._predict(self.model_, X=X_to_impute)
@@ -618,6 +658,7 @@ class ImputeAutoencoder(BaseNNImputer):
         imputed_array = X_to_impute.copy()
         imputed_array[missing_mask] = pred_labels[missing_mask]
 
+        # Sanity check: all missing values should be gone
         if np.any(imputed_array < 0):
             msg = f"[{self.model_name}] Some missing genotypes remain after imputation. This is unexpected."
             self.logger.error(msg)
@@ -630,13 +671,9 @@ class ImputeAutoencoder(BaseNNImputer):
 
         imputed_genotypes = self.decode_012(decode_input)
 
-        bad_loci = np.where((imputed_genotypes == "N").any(axis=0))[0]
-        if bad_loci.size > 0:
-            msg = f"[{self.model_name}] {bad_loci.size} loci contain 'N' after imputation (e.g., first 10 indices: {bad_loci[:10].tolist()}). This occurs when REF/ALT metadata is missing and cannot be inferred from the source data (e.g., loci with 100 percent missing genotypes). Try filtering out these loci before imputation."
+        if (imputed_genotypes == "N").any():
+            msg = f"Something went wrong: {self.model_name} imputation still contains {(imputed_genotypes == 'N').sum()} missing values ('N')."
             self.logger.error(msg)
-            self.logger.debug(
-                "All loci with 'N': " + ", ".join(map(str, bad_loci.tolist()))
-            )
             raise RuntimeError(msg)
 
         if self.show_plots:
@@ -681,10 +718,20 @@ class ImputeAutoencoder(BaseNNImputer):
             tuple[float, torch.nn.Module, dict[str, list[float]]]: Best validation loss, best model, history.
         """
         max_epochs = int(self.epochs)
-        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
+
+        # Calculate default warmup
+        warmup_epochs = max(int(0.1 * max_epochs), 10)
+
+        # Check if patience is too short for the calculated warmup
+        if self.early_stop_gen <= warmup_epochs:
+            warmup_epochs = max(0, self.early_stop_gen - 1)
+
+            msg = f"Early stopping patience ({self.early_stop_gen}) <= default warmup; adjusting warmup to {warmup_epochs}."
+            self.logger.warning(msg)
 
         scheduler = _make_warmup_cosine_scheduler(
-            optimizer, max_epochs=max_epochs, warmup_epochs=int(0.1 * max_epochs)
+            optimizer, max_epochs=max_epochs, warmup_epochs=warmup_epochs
         )
 
         best_loss, best_model, hist = self._execute_training_loop(
@@ -774,6 +821,7 @@ class ImputeAutoencoder(BaseNNImputer):
                 optimizer=optimizer,
                 model=model,
                 ce_criterion=ce_criterion,
+                trial=trial,
                 l1_penalty=l1_penalty,
             )
 
@@ -804,18 +852,11 @@ class ImputeAutoencoder(BaseNNImputer):
                 )
                 break
 
-            if trial is not None:
-                metric_vals = self._evaluate_model(
-                    model=model,
-                    X=self.X_val_,
-                    y=self.y_val_,
-                    eval_mask=self.sim_mask_val_ & ~self.orig_mask_val_,
-                    objective_mode=True,
-                )
-                trial.report(metric_vals[self.tune_metric], step=epoch + 1)
+            if trial is not None and isinstance(self.tune_metric, str):
+                trial.report(-val_loss, step=epoch)
                 if trial.should_prune():
                     raise optuna.exceptions.TrialPruned(
-                        f"[{self.model_name}] Trial {trial.number} pruned at epoch {epoch + 1}."
+                        f"[{self.model_name}] Trial {trial.number} pruned at epoch {epoch}. This is not an error, but indicates the trial was not promising and has been stopped early for efficiency."
                     )
 
         best_loss = float(early_stopping.best_score)
@@ -830,6 +871,7 @@ class ImputeAutoencoder(BaseNNImputer):
         optimizer: torch.optim.Optimizer,
         model: torch.nn.Module,
         ce_criterion: torch.nn.Module,
+        trial: Optional[optuna.Trial] = None,
         *,
         l1_penalty: float,
     ) -> float:
@@ -840,6 +882,7 @@ class ImputeAutoencoder(BaseNNImputer):
             optimizer (torch.optim.Optimizer): Optimizer for training.
             model (torch.nn.Module): Autoencoder model.
             ce_criterion (torch.nn.Module): Cross-entropy loss function.
+            trial (Optional[optuna.Trial]): Optuna trial object for hyperparameter tuning.
             l1_penalty (float): L1 regularization coefficient.
 
         Returns:
@@ -855,8 +898,8 @@ class ImputeAutoencoder(BaseNNImputer):
         running = 0.0
         num_batches = 0
 
-        nF_model = int(getattr(model, "n_features", self.num_features_))
-        nC_model = int(getattr(model, "num_classes", self.num_classes_))
+        nF_model = self.num_features_
+        nC_model = self.num_classes_
         l1_params = tuple(p for p in model.parameters() if p.requires_grad)
 
         for X_batch, y_batch, m_batch in loader:
@@ -865,33 +908,26 @@ class ImputeAutoencoder(BaseNNImputer):
             y_batch = y_batch.to(self.device, non_blocking=True).long()
             m_batch = m_batch.to(self.device, non_blocking=True).bool()
 
-            if (
-                X_batch.dim() != 3
-                or X_batch.shape[1] != nF_model
-                or X_batch.shape[2] != nC_model
-            ):
-                msg = (
-                    f"Train batch X shape mismatch: expected (B,{nF_model},{nC_model}), "
-                    f"got {tuple(X_batch.shape)}."
-                )
+            logits_flat = model(X_batch)
+            expected = X_batch.shape[0] * nF_model * nC_model
+            if logits_flat.numel() != expected:
+                msg = f"{self.model_name} logits size mismatch: got {logits_flat.numel()}, expected {expected}"
                 self.logger.error(msg)
                 raise ValueError(msg)
 
-            logits_flat = model(X_batch)
-            expected = (X_batch.shape[0], nF_model * nC_model)
-            if logits_flat.dim() != 2 or tuple(logits_flat.shape) != expected:
-                try:
-                    logits_flat = logits_flat.view(*expected)
-                except Exception as e:
-                    msg = f"Model logits expected shape {expected}, got {tuple(logits_flat.shape)}."
-                    self.logger.error(msg)
-                    raise ValueError(msg) from e
-
-            logits = logits_flat.view(-1, nF_model, nC_model)
-            logits_masked = logits.view(-1, nC_model)[m_batch.view(-1)]
+            logits_masked = logits_flat.view(-1, nC_model)
+            logits_masked = logits_masked[m_batch.view(-1)]
 
             targets_masked = y_batch.view(-1)
             targets_masked = targets_masked[m_batch.view(-1)]
+
+            if targets_masked.numel() == 0:
+                continue
+
+            if torch.any(targets_masked < 0):
+                msg = "Masked targets contain negative labels; mask/targets are inconsistent."
+                self.logger.error(msg)
+                raise ValueError(msg)
 
             loss = ce_criterion(logits_masked, targets_masked)
 
@@ -901,8 +937,15 @@ class ImputeAutoencoder(BaseNNImputer):
                     l1 = l1 + p.abs().sum()
                 loss = loss + l1_penalty * l1
 
-            if not torch.isfinite(loss):
-                continue
+            if trial is not None:
+                if not torch.isfinite(loss):
+                    msg = f"[{self.model_name}] Trial {trial.number} validation loss non-finite. Pruning trial."
+                    self.logger.warning(msg)
+                    raise optuna.exceptions.TrialPruned(msg)
+            elif trial is None and not torch.isfinite(loss):
+                msg = f"[{self.model_name}] Validation loss non-finite."
+                self.logger.error(msg)
+                raise RuntimeError(msg)
 
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -911,13 +954,19 @@ class ImputeAutoencoder(BaseNNImputer):
             running += float(loss.detach().item())
             num_batches += 1
 
-        return float("inf") if num_batches == 0 else running / num_batches
+        if num_batches == 0:
+            msg = f"[{self.model_name}] Training loss has no valid batches."
+            self.logger.error(msg)
+            raise RuntimeError(msg)
+
+        return running / num_batches
 
     def _val_step(
         self,
         loader: torch.utils.data.DataLoader,
         model: torch.nn.Module,
         ce_criterion: torch.nn.Module,
+        trial: Optional[optuna.Trial] = None,
         *,
         l1_penalty: float,
     ) -> float:
@@ -927,6 +976,7 @@ class ImputeAutoencoder(BaseNNImputer):
             loader (torch.utils.data.DataLoader): Validation data loader.
             model (torch.nn.Module): Autoencoder model.
             ce_criterion (torch.nn.Module): Cross-entropy loss function.
+            trial (Optional[optuna.Trial]): Optuna trial object for hyperparameter tuning.
             l1_penalty (float): L1 regularization coefficient.
 
         Returns:
@@ -947,8 +997,8 @@ class ImputeAutoencoder(BaseNNImputer):
                 m_batch = m_batch.to(self.device, non_blocking=True).bool()
 
                 logits_flat = model(X_batch)
-                expected = (X_batch.shape[0], nF_model * nC_model)
 
+                expected = (X_batch.shape[0], nF_model * nC_model)
                 if logits_flat.dim() != 2 or tuple(logits_flat.shape) != expected:
                     try:
                         logits_flat = logits_flat.view(*expected)
@@ -957,12 +1007,19 @@ class ImputeAutoencoder(BaseNNImputer):
                         self.logger.error(msg)
                         raise ValueError(msg) from e
 
-                logits = logits_flat.view(-1, nF_model, nC_model)
-                logits_masked = logits.view(-1, nC_model)[m_batch.view(-1)]
-                targets_masked = y_batch.view(-1)[m_batch.view(-1)]
+                logits_masked = logits_flat.view(-1, nC_model)
+                logits_masked = logits_masked[m_batch.view(-1)]
+
+                targets_masked = y_batch.view(-1)
+                targets_masked = targets_masked[m_batch.view(-1)]
 
                 if targets_masked.numel() == 0:
                     continue
+
+                if torch.any(targets_masked < 0):
+                    msg = "Masked targets contain negative labels; mask/targets are inconsistent."
+                    self.logger.error(msg)
+                    raise ValueError(msg)
 
                 loss = ce_criterion(logits_masked, targets_masked)
 
@@ -972,13 +1029,25 @@ class ImputeAutoencoder(BaseNNImputer):
                         l1 = l1 + p.abs().sum()
                     loss = loss + l1_penalty * l1
 
-                if not torch.isfinite(loss):
-                    continue
+                if trial is not None:
+                    if not torch.isfinite(loss):
+                        msg = f"[{self.model_name}] Trial {trial.number} validation loss non-finite. Pruning trial."
+                        self.logger.warning(msg)
+                        raise optuna.exceptions.TrialPruned(msg)
+                elif trial is None and not torch.isfinite(loss):
+                    msg = f"[{self.model_name}] Validation loss non-finite."
+                    self.logger.error(msg)
+                    raise RuntimeError(msg)
 
                 running += float(loss.item())
                 num_batches += 1
 
-        return float("inf") if num_batches == 0 else running / num_batches
+        if num_batches == 0:
+            msg = f"[{self.model_name}] Validation loss has no valid batches."
+            self.logger.error(msg)
+            raise RuntimeError(msg)
+
+        return running / num_batches
 
     def _predict(
         self,
@@ -989,26 +1058,30 @@ class ImputeAutoencoder(BaseNNImputer):
     ) -> tuple[np.ndarray, np.ndarray | None]:
         """Predict categorical genotype labels from logits.
 
+        This method uses the trained model to predict genotype labels for the provided input data. It handles both 0/1/2 encoded matrices and one-hot encoded matrices, converting them as necessary for model input. The method returns the predicted labels and, optionally, the predicted probabilities.
+
         Args:
             model (torch.nn.Module): Trained model.
-            X (np.ndarray | torch.Tensor): 2D 0/1/2 matrix with -1 for missing, or 3D one-hot (B, L, K).
-            return_proba (bool): If True, return probabilities (B, L, K).
+            X (np.ndarray | torch.Tensor): 0/1/2 matrix with -1 for missing, or one-hot encoded (B, L, K).
+            return_proba (bool): If True, return probabilities.
 
         Returns:
-            tuple[np.ndarray, np.ndarray | None]: Predicted labels and optionally probabilities.
+            tuple[np.ndarray, np.ndarray | None]: (labels, probas|None).
         """
         if model is None:
-            msg = "Model is not trained. Call fit() before predict()."
+            msg = (
+                "Model passed to predict() is not trained. "
+                "Call fit() before predict()."
+            )
             self.logger.error(msg)
             raise NotFittedError(msg)
+
+        model.eval()
 
         nF = self.num_features_
         nC = self.num_classes_
 
-        if isinstance(X, torch.Tensor):
-            X_tensor = X
-        else:
-            X_tensor = torch.from_numpy(X)
+        X_tensor = X if isinstance(X, torch.Tensor) else torch.from_numpy(X)
         X_tensor = X_tensor.float()
 
         if X_tensor.device != self.device:
@@ -1018,6 +1091,7 @@ class ImputeAutoencoder(BaseNNImputer):
             # 0/1/2 matrix -> one-hot for model input
             X_tensor = self._one_hot_encode_012(X_tensor, num_classes=nC)
             X_tensor = X_tensor.float()
+
             if X_tensor.device != self.device:
                 X_tensor = X_tensor.to(self.device)
 
@@ -1033,11 +1107,9 @@ class ImputeAutoencoder(BaseNNImputer):
 
         X_tensor = X_tensor.reshape(X_tensor.shape[0], nF * nC)
 
-        model.eval()
         with torch.no_grad():
-            logits_flat = model(X_tensor)
-            logits = logits_flat.view(-1, nF, nC)
-
+            raw = model(X_tensor)
+            logits = raw.view(-1, nF, nC)
             probas = torch.softmax(logits, dim=-1)
             labels = torch.argmax(probas, dim=-1)
 
@@ -1088,7 +1160,17 @@ class ImputeAutoencoder(BaseNNImputer):
         y_proba_flat = y_proba_flat[valid]
 
         if y_true_flat.size == 0:
-            return {self.tune_metric: 0.0}
+            self.logger.debug(
+                f"No valid ground truth genotypes found for evaluation in _evaluate_model(). Returning zeroed metrics."
+            )
+            if isinstance(self.tune_metric, str):
+                return {self.tune_metric: 0.0}
+            elif isinstance(self.tune_metric, (list, tuple)):
+                return {m: 0.0 for m in self.tune_metric}
+            else:
+                msg = f"[{self.model_name}] tune_metric must be a string or list/tuple of strings, but got: {type(self.tune_metric)}."
+                self.logger.error(msg)
+                raise ValueError(msg)
 
         if y_proba_flat.ndim != 2:
             msg = f"Expected y_proba_flat to be 2D (n_eval, n_classes); got {y_proba_flat.shape}."
@@ -1130,26 +1212,30 @@ class ImputeAutoencoder(BaseNNImputer):
 
         y_true_ohe = np.eye(len(labels_for_scoring), dtype=np.int8)[y_true_flat]
 
+        tm = cast(
+            Literal[
+                "pr_macro",
+                "roc_auc",
+                "accuracy",
+                "f1",
+                "average_precision",
+                "precision",
+                "recall",
+                "mcc",
+                "jaccard",
+            ]
+            | list[str]
+            | tuple[str, ...],
+            self.tune_metric,
+        )
+
         metrics = self.scorers_.evaluate(
             y_true_flat,
             y_pred_flat,
             y_true_ohe,
             y_proba_flat,
             objective_mode,
-            cast(
-                Literal[
-                    "pr_macro",
-                    "roc_auc",
-                    "accuracy",
-                    "f1",
-                    "average_precision",
-                    "precision",
-                    "recall",
-                    "mcc",
-                    "jaccard",
-                ],
-                self.tune_metric,
-            ),
+            tune_metric=tm,
         )
 
         if not objective_mode:
@@ -1213,14 +1299,20 @@ class ImputeAutoencoder(BaseNNImputer):
 
         return metrics
 
-    def _objective(self, trial: optuna.Trial) -> float:
-        """Optuna objective for AE (mirrors VAE flow, excluding KL-specific parts).
+    def _objective(self, trial: optuna.Trial) -> float | tuple[float, ...]:
+        """Optuna objective for model.
+
+        This method defines the objective function for hyperparameter tuning using Optuna. It samples hyperparameters, trains the VAE model with these parameters, and evaluates its performance on a validation set. The evaluation metric specified by ``self.tune_metric`` is returned for optimization. If training fails, the trial is pruned to keep the tuning process efficient.
 
         Args:
             trial (optuna.Trial): Optuna trial object.
 
         Returns:
-            float: Value of the tuning metric to optimize.
+            float | tuple[float, ...]: Value(s) of the tuning metric(s) to be optimized.
+
+        Raises:
+            RuntimeError: If model training returns None.
+            optuna.exceptions.TrialPruned: If training fails unexpectedly or is unpromising.
         """
         try:
             params = self._sample_hyperparameters(trial)
@@ -1228,19 +1320,19 @@ class ImputeAutoencoder(BaseNNImputer):
             model = self.build_model(self.Model, params["model_params"])
             model.apply(self.initialize_weights)
 
-            lr = float(params["learning_rate"])
-            l1_penalty = float(params["l1_penalty"])
+            lr: float = params["learning_rate"]
+            l1_penalty: float = params["l1_penalty"]
 
             class_weights = self._class_weights_from_zygosity(
                 self.y_train_,
-                train_mask=self.sim_mask_train_ & ~self.orig_mask_train_,
+                train_mask=self.eval_mask_train_,
                 inverse=params["inverse"],
                 normalize=params["normalize"],
-                max_ratio=self.max_ratio if self.max_ratio is not None else 5.0,
+                max_ratio=self.max_ratio,
                 power=params["power"],
             )
 
-            loss, model, _hist = self._train_and_validate_model(
+            res = self._train_and_validate_model(
                 model=model,
                 lr=lr,
                 l1_penalty=l1_penalty,
@@ -1249,42 +1341,48 @@ class ImputeAutoencoder(BaseNNImputer):
                 class_weights=class_weights,
                 gamma_schedule=params["gamma_schedule"],
             )
+            model = res[1]
 
-            if model is None or not np.isfinite(loss):
-                msg = "Model training returned None or non-finite loss in tuning objective."
+            if model is None:
+                msg = "Model training returned None in tuning objective."
                 self.logger.error(msg)
                 raise RuntimeError(msg)
 
             metrics = self._evaluate_model(
                 model=model,
-                X=self.X_val_,
+                X=self.X_val_corrupted_,
                 y=self.y_val_,
-                eval_mask=self.sim_mask_val_ & ~self.orig_mask_val_,
+                eval_mask=self.eval_mask_val_,
                 objective_mode=True,
             )
 
             self._clear_resources(model)
-            return float(metrics[self.tune_metric])
+
+            if isinstance(self.tune_metric, (list, tuple)):
+                # Multi-metric objective tuning
+                return tuple([metrics[k] for k in self.tune_metric])
+            return metrics[self.primary_metric]
 
         except Exception as e:
+            # Unexpected failure: surface full details in logs while still
+            # pruning the trial to keep sweeps moving.
             err_type = type(e).__name__
             self.logger.warning(
                 f"Trial {trial.number} failed due to exception {err_type}: {e}"
             )
             self.logger.debug(traceback.format_exc())
             raise optuna.exceptions.TrialPruned(
-                f"Trial {trial.number} failed due to an exception. {err_type}: {e}. "
-                "Enable debug logging for full traceback."
+                f"Trial {trial.number} failed due to an exception. {err_type}: {e}. Enable debug logging for full traceback."
             ) from e
 
     def _sample_hyperparameters(self, trial: optuna.Trial) -> dict:
-        """Sample AE hyperparameters; hidden sizes mirror VAE helper (excluding KL).
+        """Sample model hyperparameters; hidden sizes use BaseNNImputer helper.
 
         Args:
             trial (optuna.Trial): Optuna trial object.
 
         Returns:
-            dict: Sampled hyperparameters.
+            Dict[str, int | float | str]: Sampled hyperparameters.
         """
         params = {
             "latent_dim": trial.suggest_int("latent_dim", 2, 32),
@@ -1304,34 +1402,36 @@ class ImputeAutoencoder(BaseNNImputer):
             "power": trial.suggest_float("power", 0.1, 2.0, step=0.1),
             "normalize": trial.suggest_categorical("normalize", [True, False]),
             "inverse": trial.suggest_categorical("inverse", [True, False]),
-            "gamma": trial.suggest_float("gamma", 0.0, 10.0, step=0.1),
+            "gamma": trial.suggest_float("gamma", 0.0, 3.0, step=0.1),
             "gamma_schedule": trial.suggest_categorical(
                 "gamma_schedule", [True, False]
             ),
         }
 
-        nF = int(self.num_features_)
-        nC = int(self.num_classes_)
+        OBJECTIVE_SPEC_AE.validate(params)
+
+        nF: int = self.num_features_
+        nC: int = self.num_classes_
         input_dim = nF * nC
 
         hidden_layer_sizes = self._compute_hidden_layer_sizes(
             n_inputs=input_dim,
             n_outputs=nC,
-            n_samples=len(self.train_idx_),
-            n_hidden=int(params["num_hidden_layers"]),
-            latent_dim=int(params["latent_dim"]),
-            alpha=float(params["layer_scaling_factor"]),
-            schedule=str(params["layer_schedule"]),
+            n_samples=len(self.X_train_),
+            n_hidden=params["num_hidden_layers"],
+            latent_dim=params["latent_dim"],
+            alpha=params["layer_scaling_factor"],
+            schedule=params["layer_schedule"],
         )
 
         params["model_params"] = {
-            "n_features": nF,
-            "num_classes": nC,
-            "latent_dim": int(params["latent_dim"]),
-            "dropout_rate": float(params["dropout_rate"]),
+            "n_features": self.num_features_,
+            "num_classes": nC,  # categorical head: 2 or 3
+            "dropout_rate": params["dropout_rate"],
             "hidden_layer_sizes": hidden_layer_sizes,
-            "activation": str(params["activation"]),
+            "activation": params["activation"],
         }
+
         return params
 
     def _set_best_params(self, params: dict) -> dict:
@@ -1359,10 +1459,10 @@ class ImputeAutoencoder(BaseNNImputer):
 
         self.class_weights_ = self._class_weights_from_zygosity(
             self.y_train_,
-            train_mask=self.sim_mask_train_ & ~self.orig_mask_train_,
+            train_mask=self.eval_mask_train_,
             inverse=self.inverse,
             normalize=self.normalize,
-            max_ratio=self.max_ratio if self.max_ratio is not None else 5.0,
+            max_ratio=self.max_ratio,
             power=self.power,
         )
 
