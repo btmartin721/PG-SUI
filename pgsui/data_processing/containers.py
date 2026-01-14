@@ -183,7 +183,7 @@ class TuneConfig:
 
     Attributes:
         enabled (bool): If True, enables hyperparameter tuning.
-        metric (Literal["f1", "accuracy", "pr_macro", "average_precision", "roc_auc", "precision", "recall", "mcc", "jaccard"]): Metric to optimize during tuning.
+        metrics (Literal["f1", "accuracy", "pr_macro", "average_precision", "roc_auc", "precision", "recall", "mcc", "jaccard"] | list[str] | tuple[str, ...]): Metric(s) to optimize during tuning. Multi-objective tuning is supported by providing a list or tuple of metric names.
         n_trials (int): Number of hyperparameter trials to run.
         resume (bool): If True, resumes tuning from a previous state.
         save_db (bool): If True, saves the tuning results to a database.
@@ -193,17 +193,21 @@ class TuneConfig:
     """
 
     enabled: bool = False
-    metric: Literal[
-        "f1",
-        "accuracy",
-        "pr_macro",
-        "average_precision",
-        "roc_auc",
-        "precision",
-        "recall",
-        "mcc",
-        "jaccard",
-    ] = "f1"
+    metrics: (
+        Literal[
+            "f1",
+            "accuracy",
+            "pr_macro",
+            "average_precision",
+            "roc_auc",
+            "precision",
+            "recall",
+            "mcc",
+            "jaccard",
+        ]
+        | list[str]
+        | tuple[str, ...]
+    ) = "f1"
     n_trials: int = 100
     resume: bool = False
     save_db: bool = False
@@ -244,7 +248,7 @@ class IOConfig:
         debug (bool): If True, enables debug mode. Default is False.
         seed (int | None): Random seed for reproducibility. Default is None.
         n_jobs (int): Number of parallel jobs to run. Default is 1.
-        scoring_averaging (Literal["macro", "micro", "weighted"]): Averaging method.
+        scoring_averaging (Literal["macro", "weighted"]): Averaging method.
     """
 
     prefix: str = "pgsui"
@@ -253,7 +257,7 @@ class IOConfig:
     debug: bool = False
     seed: int | None = None
     n_jobs: int = 1
-    scoring_averaging: Literal["macro", "micro", "weighted"] = "macro"
+    scoring_averaging: Literal["macro", "weighted"] = "macro"
 
 
 @dataclass
@@ -547,6 +551,310 @@ class VAEConfig:
 
     def apply_overrides(self, overrides: Dict[str, Any] | None) -> "VAEConfig":
         """Apply flat dot-key overrides."""
+        if not overrides:
+            return self
+        for k, v in overrides.items():
+            node = self
+            parts = k.split(".")
+            for p in parts[:-1]:
+                node = getattr(node, p)
+            last = parts[-1]
+            if hasattr(node, last):
+                setattr(node, last, v)
+            else:
+                raise KeyError(f"Unknown config key: {k}")
+        return self
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class NLPCAExtraConfig:
+    projection_lr: float = 0.05
+    projection_epochs: int = 100
+
+
+@dataclass
+class NLPCAConfig:
+    """Top-level configuration for ImputeUBP.
+
+    This configuration class encapsulates all settings required for the ImputeUBP model, including I/O, model architecture, training, hyperparameter tuning, plotting, and simulated-missing configuration.
+
+    Attributes:
+        io (IOConfig): I/O configuration.
+        model (ModelConfig): Model architecture configuration.
+        train (TrainConfig): Training procedure configuration.
+        tune (TuneConfig): Hyperparameter tuning configuration.
+        plot (PlotConfig): Plotting configuration.
+        sim (SimConfig): Simulated-missing configuration.
+        nlpca (NLPCAExtraConfig): NLPCA-specific configuration.
+    """
+
+    io: IOConfig = field(default_factory=IOConfig)
+    model: ModelConfig = field(default_factory=ModelConfig)
+    train: TrainConfig = field(default_factory=_default_train_config)
+    tune: TuneConfig = field(default_factory=TuneConfig)
+    plot: PlotConfig = field(default_factory=PlotConfig)
+    sim: SimConfig = field(default_factory=SimConfig)
+    nlpca: NLPCAExtraConfig = field(default_factory=NLPCAExtraConfig)
+
+    @classmethod
+    def from_preset(
+        cls, preset: Literal["fast", "balanced", "thorough"] = "balanced"
+    ) -> "NLPCAConfig":
+        """Build a NLPCAConfig from a named preset.
+
+        Args:
+            preset (Literal["fast", "balanced", "thorough"]): Preset name.
+
+        Returns:
+            NLPCAConfig: Configuration instance corresponding to the preset.
+        """
+        if preset not in {"fast", "balanced", "thorough"}:
+            raise ValueError(f"Unknown preset: {preset}")
+
+        cfg = cls()
+
+        # Common baselines
+        cfg.io.verbose = False
+        cfg.io.ploidy = 2
+        cfg.train.validation_split = 0.2
+        cfg.model.activation = "relu"
+        cfg.model.layer_schedule = "pyramid"
+        cfg.model.layer_scaling_factor = 2.0
+        cfg.sim.sim_strategy = "random"
+        cfg.sim.sim_prop = 0.2
+        cfg.plot.show = True
+
+        # Train settings
+        cfg.train.weights_max_ratio = None
+        cfg.train.weights_power = 1.0
+        cfg.train.weights_normalize = True
+        cfg.train.weights_inverse = False
+        cfg.train.gamma = 0.0
+        cfg.train.gamma_schedule = False
+        cfg.train.min_epochs = 100
+
+        # Tune
+        cfg.tune.enabled = False
+        cfg.tune.n_trials = 100
+
+        # NLPCA-specific
+        cfg.nlpca.projection_lr = 0.05
+        cfg.nlpca.projection_epochs = 100
+
+        if preset == "fast":
+            # Model
+            cfg.model.latent_dim = 4
+            cfg.model.num_hidden_layers = 1
+            cfg.model.dropout_rate = 0.10
+
+            # Train
+            cfg.train.batch_size = 128
+            cfg.train.learning_rate = 2e-3
+            cfg.train.early_stop_gen = 15
+            cfg.train.max_epochs = 200
+            cfg.train.weights_max_ratio = None
+
+            # Tune
+            cfg.tune.patience = 15
+
+        elif preset == "balanced":
+            # Model
+            cfg.model.latent_dim = 8
+            cfg.model.num_hidden_layers = 2
+            cfg.model.dropout_rate = 0.20
+
+            # Train
+            cfg.train.batch_size = 64
+            cfg.train.learning_rate = 1e-3
+            cfg.train.early_stop_gen = 25
+            cfg.train.max_epochs = 500
+            cfg.train.weights_max_ratio = None
+
+            # Tune
+            cfg.tune.patience = 25
+
+        else:  # thorough
+            # Model
+            cfg.model.latent_dim = 16
+            cfg.model.num_hidden_layers = 3
+            cfg.model.dropout_rate = 0.30
+
+            # Train
+            cfg.train.batch_size = 64
+            cfg.train.learning_rate = 5e-4
+            cfg.train.early_stop_gen = 50
+            cfg.train.max_epochs = 1000
+            cfg.train.weights_max_ratio = None
+
+            # Tune
+            cfg.tune.patience = 50
+
+        return cfg
+
+    def apply_overrides(self, overrides: Dict[str, Any] | None) -> "NLPCAConfig":
+        """Apply flat dot-key overrides.
+
+        Args:
+            overrides (Dict[str, Any] | None): Dictionary of overrides with dot-separated keys.
+
+        Returns:
+            NLPCAConfig: New configuration instance with overrides applied.
+        """
+        if not overrides:
+            return self
+        for k, v in overrides.items():
+            node = self
+            parts = k.split(".")
+            for p in parts[:-1]:
+                node = getattr(node, p)
+            last = parts[-1]
+            if hasattr(node, last):
+                setattr(node, last, v)
+            else:
+                raise KeyError(f"Unknown config key: {k}")
+        return self
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class UBPExtraConfig:
+    projection_lr: float = 0.05
+    projection_epochs: int = 100
+
+
+@dataclass
+class UBPConfig:
+    """Top-level configuration for ImputeUBP.
+
+    This configuration class encapsulates all settings required for the ImputeUBP model, including I/O, model architecture, training, hyperparameter tuning, plotting, and simulated-missing configuration.
+
+    Attributes:
+        io (IOConfig): I/O configuration.
+        model (ModelConfig): Model architecture configuration.
+        train (TrainConfig): Training procedure configuration.
+        tune (TuneConfig): Hyperparameter tuning configuration.
+        plot (PlotConfig): Plotting configuration.
+        sim (SimConfig): Simulated-missing configuration.
+        ubp (UBPExtraConfig): UBP-specific configuration.
+    """
+
+    io: IOConfig = field(default_factory=IOConfig)
+    model: ModelConfig = field(default_factory=ModelConfig)
+    train: TrainConfig = field(default_factory=_default_train_config)
+    tune: TuneConfig = field(default_factory=TuneConfig)
+    plot: PlotConfig = field(default_factory=PlotConfig)
+    sim: SimConfig = field(default_factory=SimConfig)
+    ubp: UBPExtraConfig = field(default_factory=UBPExtraConfig)
+
+    @classmethod
+    def from_preset(
+        cls, preset: Literal["fast", "balanced", "thorough"] = "balanced"
+    ) -> "UBPConfig":
+        """Build a UBPConfig from a named preset.
+
+        Args:
+            preset (Literal["fast", "balanced", "thorough"]): Preset name.
+
+        Returns:
+            UBPConfig: Configuration instance corresponding to the preset.
+        """
+        if preset not in {"fast", "balanced", "thorough"}:
+            raise ValueError(f"Unknown preset: {preset}")
+
+        cfg = cls()
+
+        # Common baselines
+        cfg.io.verbose = False
+        cfg.io.ploidy = 2
+        cfg.train.validation_split = 0.2
+        cfg.model.activation = "relu"
+        cfg.model.layer_schedule = "pyramid"
+        cfg.model.layer_scaling_factor = 2.0
+        cfg.sim.sim_strategy = "random"
+        cfg.sim.sim_prop = 0.2
+        cfg.plot.show = True
+
+        # Train settings
+        cfg.train.weights_max_ratio = None
+        cfg.train.weights_power = 1.0
+        cfg.train.weights_normalize = True
+        cfg.train.weights_inverse = False
+        cfg.train.gamma = 0.0
+        cfg.train.gamma_schedule = False
+        cfg.train.min_epochs = 100
+
+        # Tune
+        cfg.tune.enabled = False
+        cfg.tune.n_trials = 100
+
+        # UBP-specific
+        cfg.ubp.projection_lr = 0.05
+        cfg.ubp.projection_epochs = 100
+
+        if preset == "fast":
+            # Model
+            cfg.model.latent_dim = 4
+            cfg.model.num_hidden_layers = 1
+            cfg.model.dropout_rate = 0.10
+
+            # Train
+            cfg.train.batch_size = 128
+            cfg.train.learning_rate = 2e-3
+            cfg.train.early_stop_gen = 15
+            cfg.train.max_epochs = 200
+            cfg.train.weights_max_ratio = None
+
+            # Tune
+            cfg.tune.patience = 15
+
+        elif preset == "balanced":
+            # Model
+            cfg.model.latent_dim = 8
+            cfg.model.num_hidden_layers = 2
+            cfg.model.dropout_rate = 0.20
+
+            # Train
+            cfg.train.batch_size = 64
+            cfg.train.learning_rate = 1e-3
+            cfg.train.early_stop_gen = 25
+            cfg.train.max_epochs = 500
+            cfg.train.weights_max_ratio = None
+
+            # Tune
+            cfg.tune.patience = 25
+
+        else:  # thorough
+            # Model
+            cfg.model.latent_dim = 16
+            cfg.model.num_hidden_layers = 3
+            cfg.model.dropout_rate = 0.30
+
+            # Train
+            cfg.train.batch_size = 64
+            cfg.train.learning_rate = 5e-4
+            cfg.train.early_stop_gen = 50
+            cfg.train.max_epochs = 1000
+            cfg.train.weights_max_ratio = None
+
+            # Tune
+            cfg.tune.patience = 50
+
+        return cfg
+
+    def apply_overrides(self, overrides: Dict[str, Any] | None) -> "UBPConfig":
+        """Apply flat dot-key overrides.
+
+        Args:
+            overrides (Dict[str, Any] | None): Dictionary of overrides with dot-separated keys.
+
+        Returns:
+            UBPConfig: New configuration instance with overrides applied.
+        """
         if not overrides:
             return self
         for k, v in overrides.items():
