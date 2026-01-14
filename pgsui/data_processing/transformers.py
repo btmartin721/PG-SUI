@@ -264,13 +264,13 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
         Missing data will be simulated in varying ways depending on the ``strategy`` setting.
 
         Args:
-            X (np.ndarray): Data with which to simulate missing data. It should have already been imputed with one of the non-machine learning simple imputers, and there should be no missing data present in X.
+            X (np.ndarray): Data with which to simulate missing data. It should have already been imputed with one of the non-machine learning simple imputers. ``X`` may contain original missing values; simulation is applied to eligible entries depending on mask_missing.
 
         Raises:
             TypeError: ``SimGenotypeDataTreeTransformer.tree`` must not be NoneType when using strategy="nonrandom" or "nonrandom_weighted".
             ValueError: Invalid ``strategy`` parameter provided.
         """
-        X = np.asarray(validate_input_type(X, return_type="array")).astype("float32")
+        X = np.asarray(validate_input_type(X, return_type="array")).astype(np.float32)
 
         self.logger.debug(
             f"Adding {self.prop_missing} missing data per column using strategy: {self.strategy}"
@@ -302,12 +302,18 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
 
         elif self.strategy == "random_weighted":
             self.mask_ = self.random_weighted_missing_data(
-                X, inv=False, target_rate=self.prop_missing
+                X,
+                inv=False,
+                target_rate=self.prop_missing,
+                mask_missing=self.mask_missing,
             )
 
         elif self.strategy == "random_weighted_inv":
             self.mask_ = self.random_weighted_missing_data(
-                X, inv=True, target_rate=self.prop_missing
+                X,
+                inv=True,
+                target_rate=self.prop_missing,
+                mask_missing=self.mask_missing,
             )
 
         elif self.strategy.startswith("nonrandom"):
@@ -461,6 +467,14 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
             self.all_missing_mask_, self.original_missing_mask_ == False
         )
 
+        if self.mask_missing:
+            overlap = self.sim_missing_mask_ & self.original_missing_mask_
+            if bool(overlap.any()):
+                n = int(overlap.sum())
+                msg = f"SimMissingTransformer produced {n} simulated-missing positions that overlap original missing values while mask_missing=True. This violates the no-overlap contract."
+                self.logger.error(msg)
+                raise ValueError(msg)
+
         self._validate_mask(use_non_original_only=self.mask_missing)
 
         return self
@@ -496,8 +510,10 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
         transform_fn: Literal["sqrt", "exp"] = "sqrt",
         power: float = 0.5,
         inv: bool = False,
-        rng: np.random.Generator | None = None,
-        target_rate: float | None = None,  # if None, use realized draw
+        rng: Optional[np.random.Generator] = None,
+        target_rate: float | None = None,
+        *,
+        mask_missing: bool = True,
     ) -> np.ndarray:
         """Simulate missing data proportional or inversely proportional to genotype frequencies.
 
@@ -508,12 +524,14 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
             transform_fn (Literal["sqrt", "exp"]): Transformation function to apply to base probabilities.
             power (float): Exponent to raise transformed probabilities.
             inv (bool): If True, use inverse genotype frequencies. If False, use direct frequencies to weight missingness.
-            rng (np.random.Generator | None): Optional NumPy Generator for reproducibility.
+            rng (Optional[np.random.Generator]): Optional NumPy Generator for reproducibility.
             target_rate (float | None): If provided, scales the probabilities to achieve this target missing rate.
 
         Returns:
             np.ndarray: Simulated missing mask.
         """
+        rng = rng if rng is not None else self.rng
+
         tf = transform_fn.lower()
         if tf not in {"sqrt", "exp"}:
             msg = f"transform_fn must be 'sqrt' or 'exp', got: {transform_fn}"
@@ -532,11 +550,14 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
         for j in range(n_snps):
             col = X[:, j]
             present = ~np.isnan(col)
-            if not np.any(present):
+            eligible = present if mask_missing else np.ones_like(present, dtype=bool)
+
+            if not np.any(eligible):
                 continue
 
-            vals = col[present]
+            vals = col[eligible]
             classes, counts = np.unique(vals, return_counts=True)
+
             if classes.size == 1:  # never wipe entire column
                 continue
 
@@ -553,7 +574,7 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
 
             probs = np.zeros(n_samples, dtype=float)
             for c, pw in zip(classes, w):
-                probs[present & (col == c)] = pw
+                probs[eligible & (col == c)] = pw
 
             if target_rate is not None:
                 mean_p = probs[present].mean()
@@ -561,15 +582,17 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
                     probs *= float(target_rate) / mean_p
             probs = np.clip(probs, 0.0, 1.0)
 
-            draws = self.rng.random(n_samples)
+            draws = rng.random(n_samples)
             out_mask[:, j] = draws < probs
-            out_mask[~present, j] = False  # never alter already-missing
+
+            if mask_missing:
+                out_mask[~present, j] = False  # never alter already-missing
 
             # guard against accidentally wiping this column (using only non-original-missing)
             col_after = out_mask[present, j]
             if col_after.sum() == col_after.size:
                 # clear a random observed index
-                k = self.rng.integers(0, col_after.size)
+                k = rng.integers(0, col_after.size)
                 out_mask[np.flatnonzero(present)[k], j] = False
 
         return out_mask
@@ -580,25 +603,26 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
         tips_only: bool = False,
         skip_root: bool = True,
         weighted: bool = False,
-        rng: np.random.Generator | None = None,
+        rng: Optional[np.random.Generator] = None,
     ) -> list[str]:
         """Sample a node and return descendant tip labels.
 
         This method samples a node from the genotype tree and retrieves the tip labels of all descendant nodes. The sampling can be restricted to internal nodes, tip nodes, or can exclude the root node. Additionally, the sampling can be weighted by branch lengths.
 
         Args:
-            internal_only: Sample only internal nodes.
-            tips_only: Sample only tip nodes.
-            skip_root: Exclude the root from sampling.
-            weighted: Weight node sampling by branch length.
-            rng: Optional NumPy Generator for reproducibility.
-
+            internal_only (bool): Sample only internal nodes.
+            tips_only (bool): Sample only tip nodes.
+            skip_root (bool): Exclude the root from sampling.
+            weighted (bool): Weight node sampling by branch length.
+            rng (Optional[np.random.Generator]): Optional NumPy Generator for reproducibility.
         Returns:
-            List[str]: Tip labels under the sampled node.
+            list[str]: Tip labels under the sampled node.
 
         Raises:
             ValueError: If no eligible nodes exist or both tips_only and internal_only are True.
         """
+        rng = rng if rng is not None else self.rng
+
         if tips_only and internal_only:
             msg = "tips_only and internal_only cannot both be True"
             self.logger.error(msg)
@@ -611,7 +635,8 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
             self.logger.error(msg)
             raise TypeError(msg)
 
-        # Traverse using the tree backend you have; be tolerant of API differences.
+        # Traverse using the tree backend you have;
+        # be tolerant of API differences.
         for node in self.tree_parser.tree.treenode.traverse("preorder"):
             # Robust root detection: prefer is_root(), then fall back to parent None, finally fall back to idx==nnodes-1 only if needed.
             is_root = False
@@ -652,8 +677,8 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
         def _choose_key() -> object:
             if weighted and weights.sum() > 0.0:
                 p = weights / weights.sum()
-                return self.rng.choice(keys, p=p)
-            return self.rng.choice(keys)
+                return rng.choice(keys, p=p)
+            return rng.choice(keys)
 
         tree = self.tree_parser.tree
         last_error: Optional[Exception] = None
@@ -723,8 +748,9 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
     def _mask_snps(self, X):
         """Mask positions in SimGenotypeData.snps and SimGenotypeData.onehot"""
         if X.ndim == 3:
-            # One-hot encoded.
-            mask_val = [0.0, 0.0, 0.0, 0.0]
+            # One-hot encoded: zero-out all channels at masked positions
+            mask_val = np.zeros((X.shape[-1],), dtype=X.dtype)
+
         elif X.ndim == 2:
             # 012-encoded.
             mask_val = (
