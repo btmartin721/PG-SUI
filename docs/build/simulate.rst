@@ -17,10 +17,7 @@ so their evaluation masks are aligned.
 When simulated missingness is used
 ----------------------------------
 
-- **Unsupervised models (VAE, Autoencoder):** Simulated masking is required for
-  training and evaluation. The masked entries define the evaluation set;
-  original missing values are never scored because the models are trained to
-  reconstruct the input from a corrupted version of itself.
+- **Unsupervised models (VAE, Autoencoder, NLPCA, UBP):** Simulated masking is required for training and evaluation. The masked entries define the evaluation set; original missing values are never scored because the models are trained to reconstruct the input from a corrupted version of itself.
 - **Deterministic and supervised models (RF, HGB, Mode):** Simulated masking
   is optional. If it is disabled, evaluation is performed on all originally
   observed entries within the test split.
