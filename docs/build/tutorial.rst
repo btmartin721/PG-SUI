@@ -13,6 +13,8 @@ Unsupervised Models
 
 - **ImputeAutoencoder**: Standard autoencoder architecture for genotype reconstruction (Hinton & Salakhutdinov, 2006).
 - **ImputeVAE**: Variational Autoencoder with KL regularization (Kingma & Welling, 2013).
+- **ImputeNLPCA**: Decoder-only non-linear PCA with per-sample latent embeddings and projection-based refinement.
+- **ImputeUBP**: Unsupervised Backpropagation with phased training and latent projection (Gashler et al., 2014).
 - These models learn structure from observed entries and then infer true missing genotypes by training on simulated missingness.
 
 .. image:: ../../img/autoencoder_vae_model_diagrams.png
@@ -61,6 +63,8 @@ Model Families
 
   - ``ImputeAutoencoder``: Standard autoencoder reconstruction (Hinton & Salakhutdinov, 2006).
   - ``ImputeVAE``: Variational Autoencoder with KL regularization (Kingma & Welling, 2013).
+  - ``ImputeNLPCA``: Decoder-only non-linear PCA with direct latent optimization.
+  - ``ImputeUBP``: Unsupervised Backpropagation with phased decoder-only training.
 
 - **Supervised (Tree-based)**
 
@@ -74,6 +78,9 @@ Model Families
 .. note::
 
    **Fit/ transform:** ``fit()`` and ``transform()`` do **not** accept genotype inputs. Each model is constructed with a `SNPio <https://snpio.readthedocs.io/en/latest/>`__ ``GenotypeData`` object and a typed ``*Config``. Then call ``fit()`` and ``transform()`` in sequence.
+
+See :doc:`impute_nlpca`, :doc:`impute_ubp`, and :doc:`optuna_tuning` for model
+details and tuning workflows.
 
 Installation
 ------------
@@ -128,7 +135,7 @@ CLI Quickstart (copy/paste)
 #. Prepare input files: a VCF (e.g., ``data.vcf.gz``) and optional population map (e.g., ``pops.popmap``).
 #. Run a preset with two deep models (edit paths/ models as needed):
 
-   .. code-block:: bash
+  .. code-block:: bash
 
       pg-sui \
         --input pgsui/example_data/vcf_files/phylogen_subset14K.vcf.gz \
@@ -147,7 +154,7 @@ CLI Quickstart (copy/paste)
 
 .. note::
 
-   The CLI supports ``--input`` as the primary input flag. ``--vcf`` is retained for backward compatibility but is deprecated in favor of ``--input``.
+  The CLI supports ``--input`` as the primary input flag. ``--vcf`` is retained for backward compatibility but is deprecated in favor of ``--input``.
 
 STRUCTURE inputs
 ^^^^^^^^^^^^^^^^
@@ -246,7 +253,7 @@ Quick Start (End-to-End VAE Example)
     cfg.model.latent_dim = 16
     cfg.tune.enabled = True
     cfg.tune.n_trials = 100
-    cfg.tune.metric = "pr_macro"
+    cfg.tune.metrics = "pr_macro"
     cfg.plot.show = False
 
     model = ImputeVAE(genotype_data=gd, config=cfg)
