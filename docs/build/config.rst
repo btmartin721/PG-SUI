@@ -6,7 +6,7 @@ This page summarizes the configuration surface exposed through the ``containers.
 Common Blocks (Unsupervised NN)
 -------------------------------
 
-The two deep imputer families (Autoencoder, VAE) share these structures.
+The four deep imputer families (Autoencoder, VAE, NLPCA, UBP) share these structures.
 
 .. list-table:: IOConfig
    :header-rows: 1
@@ -116,9 +116,9 @@ The two deep imputer families (Autoencoder, VAE) share these structures.
    * - ``enabled``
      - ``False``
      - Turn on Optuna.
-   * - ``metric``
+   * - ``metrics``
      - ``"f1"``
-     - Objective metric (``f1``, ``accuracy``, ``pr_macro``, ``average_precision``, ``roc_auc``, etc.).
+     - Objective metric (or list of metrics) used for Optuna tuning (``f1``, ``accuracy``, ``pr_macro``, ``average_precision``, ``roc_auc``, ``precision``, ``recall``, ``mcc``, ``jaccard``).
    * - ``n_trials``
      - ``100``
      - Number of trials.
@@ -127,10 +127,10 @@ The two deep imputer families (Autoencoder, VAE) share these structures.
      - Reuse or persist Optuna DB.
    * - ``epochs`` / ``batch_size``
      - ``500`` / ``64``
-     - Training envelope during tuning.
+     - Per-trial training limits used by model-specific tuning loops (when supported).
    * - ``patience``
      - ``10``
-     - Number of evaluation intervals with no improvement before pruning a trial.
+     - Model-specific patience setting used during tuning (when supported).
 
 .. list-table:: PlotConfig
    :header-rows: 1
@@ -188,13 +188,16 @@ Field-by-field notes
   - ``weights_power``: Adjusts the aggression of class weighting (e.g., 0.5 for sqrt, 1.0 for standard inverse frequency).
   - ``gamma``: Controls focal loss behavior. Use ``gamma_schedule=True`` to anneal it.
 
+- **TuneConfig**
+  - ``metrics``: Provide a string for single-objective tuning or a list/tuple for multi-objective tuning.
+
 - **SimConfig**
   - ``sim_strategy``: ``nonrandom`` strategies require a tree parser.
 
 Unsupervised NN presets
 -----------------------
 
-Each model exposes ``from_preset("fast" | "balanced" | "thorough")`` to seed a baseline, then allows overrides.
+Each model exposes ``from_preset("fast" | "balanced" | "thorough")`` to seed a baseline, then allows overrides. The presets apply to Autoencoder, VAE, NLPCA, and UBP configs.
 
 AutoencoderConfig
 ~~~~~~~~~~~~~~~~~
@@ -260,6 +263,50 @@ Preset overrides:
   - ``train``: ``batch_size=64``, ``learning_rate=5e-4``, ``early_stop_gen=50``, ``max_epochs=1000``.
   - ``vae``: ``kl_beta=1.0``.
   - ``tune``: ``patience=50``.
+
+NLPCAConfig + NLPCAExtraConfig
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Inherits structure from Autoencoder and adds projection controls for latent
+refinement.
+
+.. list-table:: NLPCAExtraConfig
+   :header-rows: 1
+
+   * - Field
+     - Default
+     - Description
+   * - ``projection_lr``
+     - ``0.05``
+     - Learning rate for projection refinement.
+   * - ``projection_epochs``
+     - ``100``
+     - Projection steps per evaluation or inference pass.
+
+Preset overrides mirror Autoencoder presets; NLPCA adds only projection
+controls.
+
+UBPConfig + UBPExtraConfig
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Inherits structure from Autoencoder and adds projection controls for latent
+refinement.
+
+.. list-table:: UBPExtraConfig
+   :header-rows: 1
+
+   * - Field
+     - Default
+     - Description
+   * - ``projection_lr``
+     - ``0.05``
+     - Learning rate for projection refinement.
+   * - ``projection_epochs``
+     - ``100``
+     - Projection steps per evaluation or inference pass.
+
+Preset overrides mirror Autoencoder presets; UBP adds only projection
+controls.
 
 Deterministic Imputers
 ----------------------
