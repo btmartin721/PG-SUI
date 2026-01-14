@@ -37,6 +37,11 @@ Welcome to PG-SUI's documentation!
    config
    gui
    unsupervised_imputers
+   impute_autoencoder
+   impute_vae
+   impute_nlpca
+   impute_ubp
+   optuna_tuning
    non_ml_imputers
    supervised_imputers
    imputer_methods
