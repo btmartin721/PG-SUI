@@ -1,8 +1,146 @@
-from typing import Literal
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, FrozenSet, Literal, Mapping
 
 import numpy as np
 import pandas as pd
 import torch
+
+
+@dataclass(frozen=True, slots=True)
+class OptunaParamSpec:
+    """Specification and validation for Optuna objective parameter keys.
+
+    Attributes:
+        keys: Canonical keys used in the Optuna objective `params` dict.
+    """
+
+    keys: FrozenSet[str]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.keys, frozenset):
+            raise TypeError(
+                f"`keys` must be a frozenset, got: {type(self.keys).__name__}"
+            )
+        if not self.keys:
+            raise ValueError("`keys` must be non-empty.")
+        if not all(isinstance(k, str) and k for k in self.keys):
+            raise TypeError("`keys` must contain only non-empty strings.")
+
+    def count(self) -> int:
+        """Return the integer count of tuned parameters."""
+        return len(self.keys)
+
+    def validate(self, params: Mapping[str, Any], *, allow_extra: bool = False) -> None:
+        """Validate that a params mapping matches this spec's keys.
+
+        Args:
+            params: Mapping of parameter names -> values (typically the objective `params` dict).
+            allow_extra: If True, extra keys are allowed; missing keys still error.
+
+        Raises:
+            TypeError: If `params` is not a Mapping.
+            KeyError: If required keys are missing (or extras exist when allow_extra=False).
+        """
+        if not isinstance(params, Mapping):
+            raise TypeError(f"`params` must be a Mapping, got: {type(params).__name__}")
+
+        got = frozenset(params.keys())
+        missing = self.keys - got
+        extra = got - self.keys
+
+        if missing or (extra and not allow_extra):
+            parts: list[str] = []
+            if missing:
+                parts.append(f"missing={sorted(missing)}")
+            if extra and not allow_extra:
+                parts.append(f"extra={sorted(extra)}")
+            raise KeyError("Objective params keys mismatch: " + "; ".join(parts))
+
+
+OBJECTIVE_SPEC_VAE = OptunaParamSpec(
+    keys=frozenset(
+        {
+            "latent_dim",
+            "learning_rate",
+            "dropout_rate",
+            "num_hidden_layers",
+            "activation",
+            "l1_penalty",
+            "layer_scaling_factor",
+            "layer_schedule",
+            "power",
+            "normalize",
+            "inverse",
+            "gamma",
+            "kl_beta",
+            "kl_beta_schedule",
+            "gamma_schedule",
+        }
+    )
+)
+
+OBJECTIVE_SPEC_AE = OptunaParamSpec(
+    keys=frozenset(
+        {
+            "latent_dim",
+            "learning_rate",
+            "dropout_rate",
+            "num_hidden_layers",
+            "activation",
+            "l1_penalty",
+            "layer_scaling_factor",
+            "layer_schedule",
+            "power",
+            "normalize",
+            "inverse",
+            "gamma",
+            "gamma_schedule",
+        }
+    )
+)
+
+OBJECTIVE_SPEC_UBP = OptunaParamSpec(
+    keys=frozenset(
+        {
+            "latent_dim",
+            "learning_rate",
+            "dropout_rate",
+            "num_hidden_layers",
+            "activation",
+            "l1_penalty",
+            "layer_scaling_factor",
+            "layer_schedule",
+            "power",
+            "normalize",
+            "inverse",
+            "gamma",
+            "gamma_schedule",
+        }
+    )
+)
+
+
+OBJECTIVE_SPEC_NLPCA = OptunaParamSpec(
+    keys=frozenset(
+        {
+            "latent_dim",
+            "learning_rate",
+            "dropout_rate",
+            "num_hidden_layers",
+            "activation",
+            "l1_penalty",
+            "layer_scaling_factor",
+            "layer_schedule",
+            "power",
+            "normalize",
+            "inverse",
+            "gamma",
+            "gamma_schedule",
+        }
+    )
+)
 
 
 def validate_input_type(
@@ -58,19 +196,19 @@ def validate_input_type(
         elif isinstance(X, np.ndarray):
             return X.tolist()
         elif isinstance(X, pd.DataFrame):
-            return X.values.tolist()
+            return X.to_numpy().tolist()
         elif isinstance(X, torch.Tensor):
-            return X.cpu().detach().numpy().tolist()
+            return X.detach().cpu().numpy().tolist()
 
     elif return_type == "tensor":
         if isinstance(X, torch.Tensor):
             return X
         elif isinstance(X, np.ndarray):
-            return torch.tensor(X, dtype=torch.long)
+            return torch.from_numpy(X)
         elif isinstance(X, pd.DataFrame):
-            return torch.tensor(X.to_numpy(), dtype=torch.long)
+            return torch.from_numpy(X.to_numpy())
         elif isinstance(X, list):
-            return torch.tensor(X, dtype=torch.long)
+            return torch.tensor(X)
 
 
 def detect_computing_device(
