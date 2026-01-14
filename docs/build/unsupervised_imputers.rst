@@ -16,11 +16,13 @@ Workflow Highlights
 Configuration
 -------------
 
-Each imputer exposes the same top-level sections: ``io`` (run identity + logging), ``model`` (architecture), ``train`` (optimizer schedule, class weighting, early stopping), ``tune`` (Optuna surface), ``evaluate`` (latent refinement controls), and ``plot`` (figure styling). Presets (``fast``, ``balanced``, ``thorough``) trade accuracy for runtime; select them via ``--preset`` or ``*.from_preset(...)`` and then overlay YAML/CLI overrides. Heavy class imbalance can be tempered by ``train.weights_beta`` / ``train.weights_max_ratio``; layer widths are governed by ``model.layer_schedule`` and ``model.layer_scaling_factor``.
+Each imputer exposes the same top-level sections: ``io`` (run identity + logging), ``model`` (architecture), ``train`` (optimizer schedule, class weighting, early stopping), ``tune`` (Optuna surface), ``plot`` (figure styling), and ``sim`` (simulated missingness). Model-specific extras add ``vae`` (VAE KL controls) or projection blocks (``nlpca`` / ``ubp``). Presets (``fast``, ``balanced``, ``thorough``) trade accuracy for runtime; select them via ``--preset`` or ``*.from_preset(...)`` and then overlay YAML/CLI overrides. Heavy class imbalance can be tempered by ``train.weights_power`` / ``train.weights_inverse`` / ``train.weights_max_ratio``; layer widths are governed by ``model.layer_schedule`` and ``model.layer_scaling_factor``.
 
 .. tip::
 
    The neural imputers honour ``cfg.io.prefix`` by creating ``models/``, ``plots/``, ``metrics/``, ``optimize/``, and ``parameters/`` subdirectories, mirroring the supervised toolkit.
+
+See :doc:`optuna_tuning` for details on automated hyperparameter optimization.
 
 Config Dataclasses
 ------------------
@@ -43,40 +45,62 @@ Adds a ``vae`` section (``kl_beta``) to the autoencoder defaults, controlling th
    :members:
    :noindex:
 
+Non-linear PCA (Config)
+^^^^^^^^^^^^^^^^^^^^^^^
+
+Adds an ``nlpca`` section with projection controls for latent refinement.
+
+.. autoclass:: pgsui.data_processing.containers.NLPCAConfig
+   :members:
+   :noindex:
+
+Unsupervised Backpropagation (Config)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Adds a ``ubp`` section with projection controls for latent refinement.
+
+.. autoclass:: pgsui.data_processing.containers.UBPConfig
+   :members:
+   :noindex:
+
 Model Summaries
 ---------------
+
+For algorithm details, see :doc:`impute_autoencoder`, :doc:`impute_vae`,
+:doc:`impute_nlpca`, and :doc:`impute_ubp`.
 
 Non-linear PCA (ImputeNLPCA)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 - Encodes genotypes to 0/1/2 (missing → -1) and detects haploid panels, collapsing ALT/HET where appropriate.
-- Supports latent initialisation via ``model.latent_init`` (``"random"`` or ``"pca"``) and keeps a learnable latent vector per sample.
-- Trains with focal cross-entropy (``model.gamma``) while jointly optimising decoder weights and latent vectors; ``train.lr_input_factor`` scales the latent optimiser.
-- ``evaluate.eval_latent_steps`` / ``eval_latent_lr`` govern latent refinement during validation and inference so reconstruction metrics use re-optimised latents.
-- Optional Optuna tuning uses the ``tune`` envelope (dataset subsampling, patience, metric selection) before the final training run.
+- Initializes per-sample latent embeddings with PCA and optimizes them directly (no encoder network).
+- Trains with focal cross-entropy (``train.gamma``) while jointly optimizing decoder weights and latent vectors, using class-weight controls from ``train.weights_*``.
+- Input refinement updates originally missing entries in the working matrix after selected epochs while keeping simulated-missing positions masked.
+- Projection-based evaluation refines latents with the decoder frozen, controlled by ``nlpca.projection_lr`` / ``nlpca.projection_epochs``.
+- Optional Optuna tuning uses the ``tune`` envelope (trial count, metric selection, and optional patience settings) before the final training run.
 
 Unsupervised Backpropagation (ImputeUBP)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-- Implements the three-phase schedule from Gashler et al. (decoder warm-up, decoder fine-tune, joint training) with shared focal loss and class-weighting.
-- Initial latent vectors come from ``model.latent_init`` and are re-used across phases; ``train.lr_input_factor`` controls the latent optimiser's step size.
-- Class weighting is capped by ``train.weights_max_ratio`` to prevent extreme rebalancing on sparse genotypes.
-- ``transform()`` re-optimises latent vectors for the full cohort before predicting, then saves IUPAC outputs plus genotype distribution plots.
-- Tunable through Optuna with the same search surface as NLPCA (``tune.*`` fields).
+- Uses a phased UBP schedule: PCA initialization, decoder-only refinement, then joint optimization of embeddings and decoder weights.
+- Trains with focal cross-entropy using ``train.weights_*`` settings and optional gamma scheduling.
+- Class weighting can be capped by ``train.weights_max_ratio`` to prevent extreme rebalancing on sparse genotypes.
+- Projection-based evaluation and inference refine embeddings with the decoder frozen (``ubp.projection_lr`` / ``ubp.projection_epochs``).
+- Tunable through Optuna with the same tuning surface as NLPCA (``tune.*`` fields).
 
 Autoencoder (ImputeAutoencoder)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 - Feed-forward encoder/decoder with symmetric hidden layers (``model.layer_schedule``) and dropout; no latent refinement is performed during evaluation.
-- Uses focal cross-entropy weighted by observed zygosity (``train.weights_beta``) and early stopping controlled by ``train.early_stop_gen`` / ``train.min_epochs``.
-- Optional Optuna tuning searches over latent dimension, dropout, and learning rate while respecting ``tune.max_samples`` / ``tune.max_loci`` caps.
+- Uses focal cross-entropy with class weighting from ``train.weights_*`` and early stopping controlled by ``train.early_stop_gen`` / ``train.min_epochs``.
+- Optional Optuna tuning searches over latent dimension, dropout, and learning rate using ``tune.metrics`` as the objective.
 - ``transform()`` applies the trained model to reconstructed logits, fills only previously missing calls, decodes to IUPAC, and plots original vs. imputed counts.
 
 Variational Autoencoder (ImputeVAE)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 - Extends the autoencoder with a KL divergence term weighted by ``vae.kl_beta`` (or tuned via Optuna).
-- Uses focal cross-entropy reconstruction with ``model.gamma`` (fixed unless tuned).
+- Uses focal cross-entropy reconstruction with ``train.gamma`` (fixed unless tuned).
 - Hyperparameter tuning reuses the autoencoder search surface while keeping the latent evaluator disabled (VAEs rely on decoder logits during validation).
 - ``transform()`` predicts class probabilities across genotypes, fills masked entries with MAP labels, and emits IUPAC arrays with paired distribution plots.
 
