@@ -193,7 +193,7 @@ class Plotting:
             study (optuna.study.Study): Optuna study object.
             model_name (str): Name of the model.
             optimize_dir (Path): Directory to save the optimization plots.
-            target_name (str, optional): Name of the target value. Defaults to 'Objective Value'.
+            target_name (str): Name of the target value. Defaults to 'Objective Value'.
         """
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=UserWarning)
@@ -202,9 +202,17 @@ class Plotting:
 
             target_name = target_name.title()
 
-            ax = optuna.visualization.matplotlib.plot_optimization_history(
-                study, target_name=target_name
-            )
+            try:
+                ax = optuna.visualization.matplotlib.plot_optimization_history(
+                    study, target_name=target_name
+                )
+                is_multi_obj = False
+            except ValueError:
+                ax = optuna.visualization.matplotlib.plot_optimization_history(
+                    study, target_name=target_name, target=lambda t: t.values[0]
+                )
+                is_multi_obj = True
+
             ax.set_title(f"{model_name} Optimization History")
             ax.set_xlabel("Trial")
             ax.set_ylabel(target_name)
@@ -224,9 +232,15 @@ class Plotting:
             plt.savefig(fn)
             plt.close()
 
-            ax = optuna.visualization.matplotlib.plot_edf(
-                study, target_name=target_name
-            )
+            if is_multi_obj:
+                ax = optuna.visualization.matplotlib.plot_edf(
+                    study, target_name=target_name, target=lambda t: t.values[0]
+                )
+            else:
+                ax = optuna.visualization.matplotlib.plot_edf(
+                    study, target_name=target_name
+                )
+
             ax.set_title(f"{model_name} Empirical Distribution Function (EDF)")
             ax.set_xlabel(target_name)
             ax.set_ylabel(f"{model_name} Cumulative Probability")
@@ -240,13 +254,18 @@ class Plotting:
             plt.savefig(fn.with_stem("optuna_edf_plot"))
             plt.close()
 
-            ax = optuna.visualization.matplotlib.plot_param_importances(
-                study, target_name=target_name
-            )
-            ax.set_xlabel("Parameter Importance")
+            if is_multi_obj:
+                ax = optuna.visualization.matplotlib.plot_param_importances(
+                    study, target_name=target_name, target=lambda t: t.values[0]
+                )
+            else:
+                ax = optuna.visualization.matplotlib.plot_param_importances(
+                    study, target_name=target_name
+                )
+
+            ax.set_xlabel("Importance")
             ax.set_ylabel("Parameter")
             ax.legend(loc="best", shadow=True, fancybox=True)
-
             plt.savefig(fn.with_stem("optuna_param_importances_plot"))
             plt.close()
 
@@ -258,8 +277,9 @@ class Plotting:
             plt.close()
 
             # Reset the style from Optuna's plotting.
-            sns.set_style("white", rc=self.param_dict)
+            sns.set_style("ticks", rc=self.param_dict)
             mpl.rcParams.update(self.param_dict)
+            plt.rcParams.update(self.param_dict)
 
         # ---- MultiQC: Optuna tuning line graph + best-params table --------
         if self._multiqc_enabled():
@@ -477,13 +497,6 @@ class Plotting:
         s[~np.isfinite(s.to_numpy())] = np.nan
         return s
 
-    def _interp_sparse(self, s: pd.Series) -> pd.Series:
-        """Interpolate internal gaps; keep leading/trailing NaNs."""
-        # Only interpolate if we have enough points to make it meaningful
-        if s.notna().sum() < 2:
-            return s
-        return s.interpolate(method="linear", limit_area="inside")
-
     def plot_history(self, history: dict[str, list[float]]) -> None:
         """Plot model history traces. Will be saved to file.
 
@@ -495,13 +508,13 @@ class Plotting:
         Raises:
             ValueError: self.model_name must be either 'ImputeAutoencoder' or 'ImputeVAE'.
         """
-        if self.model_name not in {"ImputeVAE", "ImputeAutoencoder"}:
-            msg = f"model_name must be 'ImputeVAE' or 'ImputeAutoencoder', but got: {self.model_name}."
+        if self.model_name not in {"ImputeUBP", "ImputeVAE", "ImputeAutoencoder"}:
+            msg = f"model_name must be 'ImputeUBP', 'ImputeVAE' or 'ImputeAutoencoder', but got: {self.model_name}."
             self.logger.error(msg)
             raise ValueError(msg)
 
         if not history:
-            msg = "history object passed to plot_history is empty."
+            msg = "history object passed to 'plot_history' is empty."
             self.logger.error(msg)
             raise ValueError(msg)
 
@@ -526,6 +539,9 @@ class Plotting:
         ax.set_ylabel("Loss")
         ax.set_xlabel("Epoch")
         ax.legend(["Train", "Validation"], loc="best", shadow=True, fancybox=True)
+
+        sns.set_style("ticks", rc=self.param_dict)
+        sns.despine(ax=ax)
 
         fn = f"{self.model_name.lower()}_history_plot.{self.plot_format}"
         fn = self.output_dir / fn
@@ -693,7 +709,6 @@ class Plotting:
 
         # --- Plot ---
         fig, ax = plt.subplots(figsize=(8, 5))
-        sns.despine(fig=fig)
 
         ax = sns.barplot(
             data=df,
@@ -707,6 +722,9 @@ class Plotting:
             legend=False,
             fill=True,
         )
+
+        sns.set_style("ticks", rc=self.param_dict)
+        sns.despine(ax=ax)
 
         ax.set_xlabel(x_label)
         ax.set_ylabel("Percent")
@@ -845,7 +863,8 @@ class Plotting:
 
         data: Dict[str, Dict[float, float]] = {}
 
-        # Only report the first three classes (MultiQC plot readability) plus micro/macro averages
+        # Only report the first three classes
+        # (MultiQC plot readability) plus micro/macro averages
         class_keys = sorted(k for k in fpr.keys() if isinstance(k, int))
         for idx in class_keys[:3]:
             label = label_names[idx] if idx < len(label_names) else f"Class {idx}"
