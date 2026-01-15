@@ -298,11 +298,13 @@ class ImputeNLPCA(BaseNNImputer):
             orig_mask: Original-missing mask for the same split (N_split, L).
             indices: Global sample indices for rows of X_work.
         """
-        # Predict only the rows in this split, then write back into split-local X_work.
+        # Predict only the rows in this split,
+        # then write back into split-local X_work.
         pred_labels, _ = self._predict(model, indices=indices, return_proba=False)
         pred_labels = np.asarray(pred_labels, dtype=np.int8)
 
-        # Map global indices -> split row order: X_work rows already correspond to `indices` order.
+        # Map global indices -> split row order:
+        # X_work rows already correspond to `indices` order.
         om = np.asarray(orig_mask, dtype=bool)
         if om.shape != X_work.shape:
             msg = f"orig_mask shape mismatch: {om.shape} != {X_work.shape}"
@@ -344,7 +346,8 @@ class ImputeNLPCA(BaseNNImputer):
         if self.is_haploid_:
             self.ground_truth_ = self._haploidize_012(self.ground_truth_)
 
-        # Simulate missingness (for self-supervised eval); do NOT overwrite orig missing.
+        # Simulate missingness
+        # (for self-supervised eval); do NOT overwrite orig missing.
         sim_tup = self.sim_missing_transform(self.ground_truth_)
         X_for_model_full = sim_tup[0].astype(np.int8, copy=False)
         self.sim_mask_ = sim_tup[1]
@@ -379,12 +382,14 @@ class ImputeNLPCA(BaseNNImputer):
         self.orig_mask_val_ = self.orig_mask_[self.val_idx_].copy()
         self.orig_mask_test_ = self.orig_mask_[self.test_idx_].copy()
 
-        # Evaluation masks (simulated-missing positions that were originally observed)
+        # Evaluation masks
+        # (simulated-missing positions that were originally observed)
         self.eval_mask_train_ = self.sim_mask_train_ & ~self.orig_mask_train_
         self.eval_mask_val_ = self.sim_mask_val_ & ~self.orig_mask_val_
         self.eval_mask_test_ = self.sim_mask_test_ & ~self.orig_mask_test_
 
-        # Persist baseline clean/corrupted (useful for plots and test evaluation)
+        # Persist baseline clean/corrupted
+        # (useful for plots and test evaluation)
         self.X_train_clean_ = X_train_clean
         self.X_val_clean_ = X_val_clean
         self.X_test_clean_ = X_test_clean
@@ -394,8 +399,8 @@ class ImputeNLPCA(BaseNNImputer):
         self.X_test_corrupted_ = X_test_corrupted
 
         # NLPCA working matrices:
-        # - Fill ONLY originally-missing entries with per-locus mode.
-        # - NEVER fill simulated-missing entries.
+        # Fill ONLY originally-missing entries with per-locus mode.
+        # NEVER fill simulated-missing entries.
         self.X_train_work_ = self._initialize_orig_missing_with_mode(
             X_train_corrupted, self.orig_mask_train_
         )
@@ -412,7 +417,8 @@ class ImputeNLPCA(BaseNNImputer):
         self.X_train_ = self.X_train_work_
         self.y_train_ = self.X_train_work_
 
-        # Validation targets remain the CLEAN matrix for val-loss (observed-only),
+        # Validation targets remain the CLEAN matrix for
+        # val-loss (observed-only),
         # to keep LR-halving anchored to real observed reconstruction quality.
         self.X_val_ = self.X_val_corrupted_
         self.y_val_ = self.X_val_clean_
@@ -423,8 +429,9 @@ class ImputeNLPCA(BaseNNImputer):
         self.plotter_, self.scorers_ = self.initialize_plotting_and_scorers()
 
         # Build loaders:
-        # - Train mask includes observed + filled orig-missing (>=0), excludes simulated-missing (-1)
-        # - Val mask uses observed entries from corrupted input (classic)
+        # Train mask includes observed entries from working input
+        # excludes simulated-missing (-1)
+        # Val mask uses observed entries from corrupted input (classic)
         train_mask = self.X_train_work_ >= 0
         val_mask = self.X_val_corrupted_ >= 0
 
@@ -443,10 +450,11 @@ class ImputeNLPCA(BaseNNImputer):
             shuffle=False,
         )
 
-        # Class weights (computed on observed TRAIN entries only; excludes simulated-missing)
+        # Class weights
+        # (computed on observed TRAIN entries only; excludes simulated-missing)
         train_loss_mask = self.X_train_corrupted_ >= 0
         self.class_weights_ = self._class_weights_from_zygosity(
-            self.X_train_clean_,  # safe: orig missing are -1 and excluded by train_loss_mask anyway
+            self.y_train_,
             train_mask=train_loss_mask,
             inverse=self.inverse,
             normalize=self.normalize,
@@ -514,30 +522,8 @@ class ImputeNLPCA(BaseNNImputer):
 
         model = self.build_model(self.Model, self.best_params_["model_params"])
 
-        if self.verbose or self.debug:
-
-            def sanitize_for_json(obj) -> dict | list:
-                if isinstance(obj, dict):
-                    return {
-                        k: sanitize_for_json(v)
-                        for k, v in obj.items()
-                        if not isinstance(v, (torch.Tensor, torch.device))
-                        and k != "debug"
-                    }
-                if isinstance(obj, (list, tuple)):
-                    return [
-                        sanitize_for_json(v)
-                        for v in obj
-                        if not isinstance(v, (torch.Tensor, torch.device))
-                        and v != "debug"
-                    ]
-                return obj
-
-            bp = cast(dict[str, Any], sanitize_for_json(self.best_params_))
-            PrettyMetrics(bp, precision=2, title="NLPCA Parameters").render()
-
         # Train (joint only + input refinement)
-        best_score, trained_model = self._execute_nlpca_training(
+        best_score, trained_model, self.history_ = self._execute_nlpca_training(
             model=model,
             lr=float(self.best_params_["learning_rate"]),
             l1_penalty=float(self.best_params_["l1_penalty"]),
@@ -554,7 +540,8 @@ class ImputeNLPCA(BaseNNImputer):
         self.model_ = trained_model
         self.is_fit_ = True
 
-        # Test eval (projection uses corrupted X; safe because sim-missing remain -1)
+        # Test eval
+        # Projection uses corrupted X; safe because sim-missing remain -1
         self._evaluate_model(
             self.model_,
             self.X_test_corrupted_,
@@ -568,9 +555,27 @@ class ImputeNLPCA(BaseNNImputer):
             persist_projection=False,
         )
 
-        self._save_best_params(self.best_params_)
+        if self.show_plots:
+            self.plotter_.plot_history(self.history_)
+
+        # Create the clean dictionary
+        bp = self._sanitize_for_json(self.best_params_)
+
+        if not isinstance(bp, dict):
+            msg = "Best parameters must be a dictionary after sanitization."
+            self.logger.error(msg)
+            raise TypeError(msg)
+
+        if self.verbose or self.debug:
+            title = f"{self.model_name} Optimized Parameters"
+            pm = PrettyMetrics(bp, precision=2, title=title)
+            pm.render()
+
         if self.model_tuned_:
-            self._save_best_params(self.best_params_, objective_mode=True)
+            # Save best parameters to a JSON file.
+            self._save_best_params(bp, objective_mode=True)
+
+        self._save_best_params(bp)
 
         return self
 
@@ -959,9 +964,9 @@ class ImputeNLPCA(BaseNNImputer):
         """Refine *stored* embeddings (model.embedding.weight) on observed entries only, with decoder frozen.
 
         This version is:
-        - Correct for both `indices=None` and `indices=subset` while `X_target` is full.
-        - Much faster than cloning v_batch + per-batch optimizer creation.
-        - Equivalent in effect: updates only the embedding rows that appear in each batch.
+            - Correct for both `indices=None` and `indices=subset` while `X_target` is full.
+            - Much faster than cloning v_batch + per-batch optimizer creation.
+            - Equivalent in effect: updates only the embedding rows that appear in each batch.
 
         Args:
             model (nn.Module): Trained NLPCA model with `embedding`, `hidden_layers`, `dense_output`.
@@ -1070,8 +1075,21 @@ class ImputeNLPCA(BaseNNImputer):
         trial: Optional[optuna.Trial],
         class_weights: Optional[torch.Tensor],
         gamma_schedule: bool,
-    ) -> Tuple[float, nn.Module]:
-        """Execute NLPCA training: joint refinement only + input refinement."""
+    ) -> tuple[float, nn.Module, dict[str, list[float]]]:
+        """Execute NLPCA training: joint refinement only + input refinement.
+
+        Args:
+            model (nn.Module): NLPCA model to train.
+            lr (float): Learning rate for joint training.
+            l1_penalty (float): L1 penalty coefficient.
+            params (dict[str, Any]): Hyperparameter dictionary.
+            trial (Optional[optuna.Trial]): Optuna trial for pruning / diagnostics.
+            class_weights (Optional[torch.Tensor]): Optional class weights for focal loss.
+            gamma_schedule (bool): Whether to use gamma annealing during training.
+
+        Returns:
+            tuple[float, nn.Module, dict[str, list[float]]]: Best validation score, trained model, and training history.
+        """
         gamma_target, gamma_warm, gamma_ramp = self._anneal_config(
             params, "gamma", default=self.gamma, max_epochs=self.epochs
         )
@@ -1084,7 +1102,7 @@ class ImputeNLPCA(BaseNNImputer):
             alpha=cw, gamma=gamma_target, reduction="mean", ignore_index=-1
         )
 
-        best_score = self._run_nlpca_loop(
+        best_score, history = self._run_nlpca_loop(
             model=model,
             lr=float(lr),
             l1=float(l1_penalty),
@@ -1093,7 +1111,7 @@ class ImputeNLPCA(BaseNNImputer):
             params=params,
             gamma_schedule=gamma_schedule,
         )
-        return best_score, model
+        return best_score, model, history
 
     def _train_epoch(
         self,
@@ -1232,7 +1250,7 @@ class ImputeNLPCA(BaseNNImputer):
         trial: Optional[optuna.Trial] = None,
         params: Optional[dict[str, Any]] = None,
         gamma_schedule: bool = False,
-    ) -> float:
+    ) -> tuple[float, dict[str, list[float]]]:
         """Run joint (phase-3-like) training with ReduceLROnPlateau + input refinement.
 
         This loop jointly optimizes embeddings (V) and decoder weights (W). It replaces the manual LR-halving-on-plateau logic with PyTorch's ReduceLROnPlateau, stepping on a validation loss computed via projection-based evaluation. Training stops when the LR reaches eta_min and the objective has plateaued, or when max epochs is reached.
@@ -1247,7 +1265,7 @@ class ImputeNLPCA(BaseNNImputer):
             gamma_schedule (bool): Whether to use gamma scheduling. Defaults to False.
 
         Returns:
-            float: Best validation score achieved during training.
+            tuple[float, dict[str, list[float]]]: Best validation score achieved during training and training history.
 
         Raises:
             optuna.exceptions.TrialPruned: If the trial is pruned due to lack of improvement.
@@ -1292,6 +1310,8 @@ class ImputeNLPCA(BaseNNImputer):
             params, "gamma", default=self.gamma, max_epochs=self.epochs
         )
 
+        train_history: list[float] = []
+        val_history: list[float] = []
         epoch = 0
         while epoch < int(self.epochs):
             if gamma_schedule:
@@ -1314,7 +1334,8 @@ class ImputeNLPCA(BaseNNImputer):
                 trial=trial,
             )
 
-            # Input refinement (EM-like): update ONLY orig-missing entries in the working matrix
+            # Input refinement (EM-like):
+            # update ONLY orig-missing entries in the working matrix
             if (
                 getattr(self, "input_refine_every", 0) > 0
                 and (epoch % int(self.input_refine_every)) == 0
@@ -1346,6 +1367,9 @@ class ImputeNLPCA(BaseNNImputer):
                 steps=max(10, min(int(self.projection_epochs) // 5, 20)),
                 lr=float(self.projection_lr),
             )
+
+            train_history.append(train_loss)
+            val_history.append(float(s))
 
             # Plateau tracking (mirrors your prior relative-improvement gating)
             if np.isfinite(s) and s < s_best:
@@ -1387,7 +1411,7 @@ class ImputeNLPCA(BaseNNImputer):
 
             epoch += 1
 
-        return float(s_best)
+        return float(s_best), {"Train": train_history, "Val": val_history}
 
     def _val_step_with_projection(
         self,
