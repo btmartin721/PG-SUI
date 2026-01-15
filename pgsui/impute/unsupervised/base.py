@@ -1499,6 +1499,22 @@ class BaseNNImputer:
 
         return out
 
+    def _sanitize_for_json(self, obj) -> dict | list:
+        """Recursively remove non-JSON-serializable objects (e.g., torch.Tensors)."""
+        if isinstance(obj, dict):
+            return {
+                k: self._sanitize_for_json(v)
+                for k, v in obj.items()
+                if not isinstance(v, (torch.Tensor, torch.device)) and k != "debug"
+            }
+        elif isinstance(obj, (list, tuple)):
+            return [
+                self._sanitize_for_json(v)
+                for v in obj
+                if not isinstance(v, (torch.Tensor, torch.device)) and v != "debug"
+            ]
+        return obj
+
     def _save_best_params(
         self, best_params: Dict[str, Any], objective_mode: bool = False
     ) -> None:
@@ -1521,24 +1537,8 @@ class BaseNNImputer:
 
         fout.parent.mkdir(parents=True, exist_ok=True)
 
-        def sanitize_for_json(obj) -> dict | list:
-            """Recursively remove non-JSON-serializable objects (e.g., torch.Tensors)."""
-            if isinstance(obj, dict):
-                return {
-                    k: sanitize_for_json(v)
-                    for k, v in obj.items()
-                    if not isinstance(v, (torch.Tensor, torch.device)) and k != "debug"
-                }
-            elif isinstance(obj, (list, tuple)):
-                return [
-                    sanitize_for_json(v)
-                    for v in obj
-                    if not isinstance(v, (torch.Tensor, torch.device)) and v != "debug"
-                ]
-            return obj
-
         # Create the clean dictionary
-        bp = sanitize_for_json(best_params)
+        bp = self._sanitize_for_json(best_params)
 
         if not isinstance(bp, dict):
             msg = "Best parameters must be a dictionary after sanitization."
