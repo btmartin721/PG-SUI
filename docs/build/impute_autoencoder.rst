@@ -41,13 +41,15 @@ parameter.
 Algorithm summary
 -----------------
 
-1. Encode genotypes to 0/1/2 and build masks for original and simulated
-   missingness.
+1. Encode genotypes to 0/1/2, simulate missingness once on the full matrix, and
+   build masks for original and simulated missingness (reused across splits).
 2. Train the encoder-decoder network on observed entries using masked focal
-   loss and class weighting.
-3. Monitor validation metrics and apply early stopping.
-4. ``transform()`` predicts genotype logits, fills only missing entries, and
-   decodes to IUPAC outputs.
+   loss with class weighting; optional gamma scheduling is supported.
+3. Optimize with AdamW and a warmup-to-cosine learning rate schedule, while
+   monitoring validation loss for early stopping; metrics are scored on
+   simulated-missing entries only.
+4. ``transform()`` predicts genotype logits, fills only originally missing
+   entries, and decodes to IUPAC outputs.
 
 Configuration highlights
 ------------------------
@@ -58,6 +60,7 @@ sections.
 
 - ``model.latent_dim`` and ``model.layer_schedule`` control architecture.
 - ``train.gamma`` and ``train.weights_*`` control focal loss and class weights.
+- ``train.gamma_schedule`` optionally anneals focal-loss gamma during training.
 - ``train.early_stop_gen`` / ``train.min_epochs`` gate early stopping.
 
 See :doc:`optuna_tuning` for Optuna-driven tuning details.
