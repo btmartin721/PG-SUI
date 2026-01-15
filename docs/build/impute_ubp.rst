@@ -15,6 +15,9 @@ PG-SUI follows a modified UBP schedule inspired by Gashler et al. (2014): latent
 vectors are initialized with PCA, the decoder is refined with the embeddings
 frozen, and then both embeddings and decoder weights are jointly optimized.
 
+Missingness is simulated once on the full matrix and reused across train/val/test
+splits; evaluation metrics are computed on simulated-missing positions only.
+
 Model formulation
 -----------------
 
@@ -63,6 +66,7 @@ The ``ubp`` section adds projection controls:
 
 - ``ubp.projection_lr``: learning rate for latent projection.
 - ``ubp.projection_epochs``: number of projection steps per evaluation.
+- ``train.gamma_schedule``: optionally anneal focal-loss gamma during training.
 
 See :doc:`optuna_tuning` for Optuna-driven tuning details.
 
