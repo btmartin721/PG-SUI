@@ -46,15 +46,17 @@ gamma.
 Algorithm summary
 -----------------
 
-1. Encode genotypes as 0/1/2 and build masks for original and simulated
-   missingness.
+1. Encode genotypes as 0/1/2, simulate missingness once on the full matrix, and
+   build masks for original and simulated missingness (reused across splits).
 2. Initialize latent embeddings with PCA on observed training data.
-3. Jointly optimize latent embeddings :math:`V` and decoder weights :math:`W`
+3. Initialize the working matrix by filling originally missing entries with
+   per-locus mode values; simulated-missing positions stay masked.
+4. Jointly optimize latent embeddings :math:`V` and decoder weights :math:`W`
    using focal cross-entropy on observed entries.
-4. Input refinement (EM-like): after selected epochs, replace **only**
+5. Input refinement (EM-like): after selected epochs, replace **only**
    originally missing entries in the working matrix with current reconstructions
    while keeping simulated-missing positions masked.
-5. During validation/inference, refine embeddings by projection (optimize
+6. During validation/inference, refine embeddings by projection (optimize
    :math:`V` with :math:`W` frozen) to improve reconstruction quality.
 
 Configuration highlights
