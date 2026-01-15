@@ -145,6 +145,8 @@ class Plotting:
             "savefig.bbox": "tight",
             "savefig.facecolor": "white",
             "savefig.dpi": self.plot_dpi,
+            "pdf.fonttype": 42,
+            "ps.fonttype": 42,
         }
 
         mpl.rcParams.update(self.param_dict)
@@ -497,19 +499,29 @@ class Plotting:
         s[~np.isfinite(s.to_numpy())] = np.nan
         return s
 
-    def plot_history(self, history: dict[str, list[float]]) -> None:
+    def plot_history(
+        self, history: dict[str, list[float]] | dict[str, dict[str, list[float]]]
+    ) -> None:
         """Plot model history traces. Will be saved to file.
 
         This method plots the deep learning model history traces. The plot is saved to disk as a ``<plot_format>`` file.
 
         Args:
-            history (dict[str, list[float]]): Dictionary with lists of history objects. Keys should be "Train" and "Validation".
+            history (dict[str, list[float]] | dict[str, dict[str, list[float]]]): Dictionary with lists of history objects. Keys should be "Train" and "Validation".
 
         Raises:
             ValueError: self.model_name must be either 'ImputeAutoencoder' or 'ImputeVAE'.
+            ValueError: history object passed to 'plot_history' is empty.
+            TypeError: history must be a dict containing {'Train', 'Val'} or {'Phase2', 'Phase3'}.
+            ValueError: For ImputeUBP, history must contain 'Phase2' and 'Phase3' keys.
         """
-        if self.model_name not in {"ImputeUBP", "ImputeVAE", "ImputeAutoencoder"}:
-            msg = f"model_name must be 'ImputeUBP', 'ImputeVAE' or 'ImputeAutoencoder', but got: {self.model_name}."
+        if self.model_name not in {
+            "ImputeUBP",
+            "ImputeNLPCA",
+            "ImputeVAE",
+            "ImputeAutoencoder",
+        }:
+            msg = f"model_name must be 'ImputeUBP', 'ImputeNLPCA', 'ImputeVAE' or 'ImputeAutoencoder', but got: {self.model_name}."
             self.logger.error(msg)
             raise ValueError(msg)
 
@@ -518,30 +530,164 @@ class Plotting:
             self.logger.error(msg)
             raise ValueError(msg)
 
-        if (
-            not isinstance(history, dict)
-            or "Train" not in history
-            or "Val" not in history
+        if not isinstance(history, dict) or not (
+            {"Train", "Val"} <= history.keys() or {"Phase2", "Phase3"} <= history.keys()
         ):
-            msg = "history must be of type dict and contain 'Train' and 'Val' keys."
+            msg = "history must be a dict containing {'Train', 'Val'} or {'Phase2', 'Phase3'}."
             self.logger.error(msg)
             raise TypeError(msg)
 
-        fig, ax = plt.subplots(1, 1, figsize=(12, 8))
+        if self.model_name == "ImputeUBP":
+            if "Phase2" in history and "Phase3" in history:
+                fig, axes = plt.subplots(2, 1, figsize=(6, 6), sharex=True)
 
-        train = self._series_from_history(history["Train"]).iloc[1:]
-        val = self._series_from_history(history["Val"]).iloc[1:]
+                # Phase 2
+                phase2_train = self._series_from_history(
+                    history["Phase2"]["Train"]  # type: ignore
+                )
+                phase2_val = self._series_from_history(
+                    history["Phase2"]["Val"]  # type: ignore
+                )
 
-        ax.plot(train.index, train.to_numpy(), c="blue", lw=3, linestyle="-")
-        ax.plot(val.index, val.to_numpy(), c="orange", lw=3, linestyle="-")
+                df_phase2 = pd.DataFrame(
+                    {"Train": phase2_train, "Validation": phase2_val}
+                )
 
-        ax.set_title(f"{self.model_name} Loss per Epoch")
-        ax.set_ylabel("Loss")
-        ax.set_xlabel("Epoch")
-        ax.legend(["Train", "Validation"], loc="best", shadow=True, fancybox=True)
+                df_phase2_melt = df_phase2.melt(
+                    var_name="Dataset", value_name="Loss", ignore_index=False
+                )
 
-        sns.set_style("ticks", rc=self.param_dict)
-        sns.despine(ax=ax)
+                axes[0] = sns.lineplot(
+                    data=df_phase2_melt,
+                    x=df_phase2_melt.index,
+                    y="Loss",
+                    hue="Dataset",
+                    hue_order=["Train", "Validation"],
+                    palette="Set2",
+                    dashes=False,
+                    lw=3,
+                    linestyle="-",
+                    ax=axes[0],
+                    legend=True,
+                )
+
+                axes[0].set_title(
+                    f"{self.model_name} Phase 2 - Loss per Epoch",
+                    fontsize=self.title_fontsize,
+                )
+                axes[0].set_xlabel("Epoch", fontsize=self.plot_fontsize)
+                axes[0].set_ylabel("Loss", fontsize=self.plot_fontsize)
+
+                axes[0].tick_params(
+                    axis="both", which="major", labelsize=self.plot_fontsize
+                )
+
+                axes[0].legend(
+                    fontsize=self.plot_fontsize,
+                    title_fontsize=self.plot_fontsize,
+                    fancybox=True,
+                    shadow=True,
+                )
+                sns.move_legend(axes[0], title="", loc="best")
+                sns.despine(ax=axes[0])
+
+                # Phase 3
+                phase3_train = self._series_from_history(
+                    history["Phase3"]["Train"]  # type: ignore
+                )
+                phase3_val = self._series_from_history(
+                    history["Phase3"]["Val"]  # type: ignore
+                )
+
+                df_phase3 = pd.DataFrame(
+                    {"Train": phase3_train, "Validation": phase3_val}
+                )
+
+                df_phase3_melt = df_phase3.melt(
+                    var_name="Dataset", value_name="Loss", ignore_index=False
+                )
+
+                axes[1] = sns.lineplot(
+                    data=df_phase3_melt,
+                    x=df_phase3_melt.index,
+                    y="Loss",
+                    hue="Dataset",
+                    hue_order=["Train", "Validation"],
+                    palette="Set2",
+                    dashes=False,
+                    lw=3,
+                    linestyle="-",
+                    ax=axes[1],
+                    legend=True,
+                )
+
+                axes[1].set_title(
+                    f"{self.model_name} Phase 3 - Loss per Epoch",
+                    fontsize=self.title_fontsize,
+                )
+                axes[1].set_xlabel("Epoch", fontsize=self.plot_fontsize)
+                axes[1].set_ylabel("Loss", fontsize=self.plot_fontsize)
+                axes[1].tick_params(
+                    axis="both", which="major", labelsize=self.plot_fontsize
+                )
+
+                axes[1].legend(
+                    fontsize=self.plot_fontsize,
+                    title_fontsize=self.plot_fontsize,
+                    fancybox=True,
+                    shadow=True,
+                )
+
+                sns.move_legend(axes[1], title="", loc="best")
+                sns.despine(ax=axes[1])
+
+                fig.suptitle(
+                    f"{self.model_name} Loss per Epoch", fontsize=self.title_fontsize
+                )
+
+            else:
+                msg = "For ImputeUBP, history must contain 'Phase2' and 'Phase3' keys."
+                self.logger.error(msg)
+                raise ValueError(msg)
+        else:
+            fig, ax = plt.subplots(1, 1, figsize=(6, 6))
+
+            train = self._series_from_history(history["Train"])  # type: ignore
+            val = self._series_from_history(history["Val"])  # type: ignore
+
+            df = pd.DataFrame({"Train": train, "Validation": val})
+            df_melt = df.melt(var_name="Dataset", value_name="Loss", ignore_index=False)
+
+            ax = sns.lineplot(
+                data=df_melt,
+                x=df_melt.index,
+                y="Loss",
+                hue="Dataset",
+                palette="Set2",
+                dashes=False,
+                lw=3,
+                linestyle="-",
+                ax=ax,
+                legend=True,
+            )
+            ax.set_title(
+                f"{self.model_name} - Loss per Epoch", fontsize=self.title_fontsize
+            )
+            ax.set_ylabel("Loss", fontsize=self.plot_fontsize)
+            ax.set_xlabel("Epoch", fontsize=self.plot_fontsize)
+
+            ax.tick_params(axis="both", which="major", labelsize=self.plot_fontsize)
+
+            ax.legend(
+                loc="best",
+                fontsize=self.plot_fontsize,
+                title_fontsize=self.plot_fontsize,
+                fancybox=True,
+                shadow=True,
+            )
+
+            sns.move_legend(ax, title="", loc="best")
+            sns.despine(ax=ax)
 
         fn = f"{self.model_name.lower()}_history_plot.{self.plot_format}"
         fn = self.output_dir / fn
@@ -611,15 +757,33 @@ class Plotting:
 
         fig, ax = plt.subplots(1, 1, figsize=(15, 15))
 
-        ConfusionMatrixDisplay.from_predictions(
-            y_true=y_true_1d,
-            y_pred=y_pred_1d,
-            labels=labels,
-            display_labels=display_labels,
-            ax=ax,
-            cmap="viridis",
-            colorbar=True,
-        )
+        if n_classes <= 3:
+            disp = ConfusionMatrixDisplay.from_predictions(
+                y_true=y_true_1d,
+                y_pred=y_pred_1d,
+                labels=labels,
+                display_labels=display_labels,
+                ax=ax,
+                cmap="viridis",
+                colorbar=True,
+                text_kw={"fontsize": 28},
+            )
+            ax.set_xlabel("Predicted Label", fontsize=28)
+            ax.set_ylabel("True Label", fontsize=28)
+            ax.tick_params(axis="both", which="major", labelsize=28)
+            ax.set_title(f"{self.model_name} Confusion Matrix", fontsize=28)
+            if disp.im_.colorbar is not None:
+                disp.im_.colorbar.ax.tick_params(labelsize=24)
+        else:
+            ConfusionMatrixDisplay.from_predictions(
+                y_true=y_true_1d,
+                y_pred=y_pred_1d,
+                labels=labels,
+                display_labels=display_labels,
+                ax=ax,
+                cmap="viridis",
+                colorbar=True,
+            )
 
         # Build a stable panel id before mutating prefix
         panel_suffix = f"{prefix}_" if prefix else ""
@@ -1042,25 +1206,40 @@ class Plotting:
             if not isinstance(history, dict) or "Train" not in history:
                 return
 
-            train_vals = pd.Series(history["Train"]).iloc[1:]
+            train_history = self._series_from_history(history["Train"])  # type: ignore
+            val_history = self._series_from_history(history.get("Val", []))  # type: ignore
 
             data["Train"] = {
-                epoch: val for epoch, val in enumerate(train_vals.values, start=1)
+                epoch: val
+                for epoch, val in enumerate(train_history.to_numpy(), start=1)
+            }
+            data["Val"] = {
+                epoch: val for epoch, val in enumerate(val_history.to_numpy(), start=1)
             }
         else:
-            if not (
-                isinstance(history, dict)
-                and "Train" in history
-                and isinstance(history["Train"], dict)
-            ):
-                return
-            for phase in range(1, 4):
-                key = f"Phase {phase}"
-                if key not in history["Train"]:
+            for phase in range(2, 4):
+                phase_key = f"Phase{phase}"
+                if (
+                    not isinstance(history, dict)
+                    or phase_key not in history
+                    or not isinstance(history[phase_key], dict)
+                ):
                     continue
-                series = pd.Series(history["Train"][key]).iloc[1:]
-                data[key] = {
-                    epoch: val for epoch, val in enumerate(series.values, start=1)
+
+                train_history = self._series_from_history(
+                    history[phase_key].get("Train", [])  # type: ignore
+                )
+                val_history = self._series_from_history(
+                    history[phase_key].get("Val", [])  # type: ignore
+                )
+
+                data[f"Phase {phase} Train"] = {
+                    epoch: val
+                    for epoch, val in enumerate(train_history.to_numpy(), start=1)
+                }
+                data[f"Phase {phase} Val"] = {
+                    epoch: val
+                    for epoch, val in enumerate(val_history.to_numpy(), start=1)
                 }
 
         if not data:
