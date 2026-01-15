@@ -79,12 +79,14 @@ The overall loss is computed only over valid (unmasked) entries:
 Training Procedure
 ~~~~~~~~~~~~~~~~~~
 
-The autoencoder is trained using backpropagation with the Adam optimizer and a learning rate scheduler. The key steps in training are:
+The autoencoder is trained using backpropagation with the AdamW optimizer and a warmup-to-cosine learning rate schedule. The key steps in training are:
 
 1. **Forward pass:** Compute the output of the model.
 2. **Compute loss:** Calculate the masked focal loss between the original and reconstructed inputs.
 3. **Backpropagation:** Compute the gradients of the loss.
 4. **Update parameters:** Update the weights and biases of the encoder and decoder.
+
+PG-SUI can anneal focal-loss gamma from 0 to the configured value when ``train.gamma_schedule`` is enabled.
 
 Variational Autoencoder (VAE) Model for Genotype Data Imputation
 -----------------------------------------------------------------
@@ -165,6 +167,8 @@ The total loss is given by:
 
 where :math:`\beta` is a weighting factor that balances the reconstruction and KL divergence losses.
 
+PG-SUI optionally anneals both :math:`\beta` and focal-loss gamma during training, and scales the reconstruction term by the average number of masked loci per sample to keep the KL term from dominating on large matrices.
+
 Non-linear PCA (NLPCA) Model for Genotype Data Imputation
 ---------------------------------------------------------
 
@@ -206,12 +210,14 @@ Training Procedure
 
 1. **PCA initialization:** latent vectors are initialized with PCA on observed
    training data.
-2. **Joint optimization:** embeddings and decoder weights are optimized
+2. **Working-matrix initialization:** originally missing entries are filled
+   with per-locus mode values; simulated-missing entries remain masked.
+3. **Joint optimization:** embeddings and decoder weights are optimized
    together via backpropagation.
-3. **Input refinement:** after selected epochs, originally missing entries are
+4. **Input refinement:** after selected epochs, originally missing entries are
    replaced with current reconstructions while simulated-missing entries remain
    masked.
-4. **Projection evaluation:** validation/inference refines latent vectors with
+5. **Projection evaluation:** validation/inference refines latent vectors with
    the decoder fixed, improving reconstruction before scoring.
 
 Unsupervised Backpropagation (UBP) Model for Genotype Data Imputation
