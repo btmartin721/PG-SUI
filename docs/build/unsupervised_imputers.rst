@@ -93,15 +93,15 @@ Autoencoder (ImputeAutoencoder)
 
 - Feed-forward encoder/decoder with symmetric hidden layers (``model.layer_schedule``) and dropout; no latent refinement is performed during evaluation.
 - Uses focal cross-entropy with class weighting from ``train.weights_*`` and early stopping controlled by ``train.early_stop_gen`` / ``train.min_epochs``.
-- Optional Optuna tuning searches over latent dimension, dropout, and learning rate using ``tune.metrics`` as the objective.
+- Optional Optuna tuning searches over architecture and loss/optimizer controls (latent_dim, layer schedule, dropout, learning rate, L1, weights, gamma, gamma_schedule) using ``tune.metrics`` as the objective.
 - ``transform()`` applies the trained model to reconstructed logits, fills only previously missing calls, decodes to IUPAC, and plots original vs. imputed counts.
 
 Variational Autoencoder (ImputeVAE)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 - Extends the autoencoder with a KL divergence term weighted by ``vae.kl_beta`` (or tuned via Optuna).
-- Uses focal cross-entropy reconstruction with ``train.gamma`` (fixed unless tuned).
-- Hyperparameter tuning reuses the autoencoder search surface while keeping the latent evaluator disabled (VAEs rely on decoder logits during validation).
+- Uses focal cross-entropy reconstruction with ``train.gamma`` plus optional ``train.gamma_schedule`` and KL scheduling via ``vae.kl_beta_schedule``.
+- Hyperparameter tuning extends the autoencoder search surface with ``vae.kl_beta`` and scheduling flags (``vae.kl_beta_schedule``, ``train.gamma_schedule``).
 - ``transform()`` predicts class probabilities across genotypes, fills masked entries with MAP labels, and emits IUPAC arrays with paired distribution plots.
 
 Usage Examples
@@ -137,4 +137,4 @@ CLI usage mirrors the Python API:
       --sim-strategy random_weighted \
       --sim-prop 0.20
 
-``--sim-strategy`` and ``--sim-prop`` apply to every selected neural model. Each imputer simulates missingness independently; set ``sim.sim_kwargs.seed`` if you need identical masks across runs. Unsupervised models require simulated masking, so keep ``sim.simulate_missing=True`` (disabling it raises an error). See :ref:`simulated_missingness` for how each strategy behaves.
+``--sim-strategy`` and ``--sim-prop`` apply to every selected neural model. Each imputer simulates missingness independently; set ``sim.sim_kwargs.seed`` if you need identical masks across runs. Unsupervised models always simulate missingness during training and evaluation; ``sim.simulate_missing`` is currently ignored for these models, so adjust ``sim.sim_prop`` and ``sim.sim_strategy`` instead. See :ref:`simulated_missingness` for how each strategy behaves.
