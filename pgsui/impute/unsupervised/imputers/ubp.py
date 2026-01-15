@@ -470,7 +470,7 @@ class ImputeUBP(BaseNNImputer):
         )
 
         self.logger.info(
-            f"Total known genotypes per split (sim_strategy={self.sim_strategy}): {np.count_nonzero(~self.orig_mask_train_)}, {np.count_nonzero(~self.orig_mask_val_)}, {np.count_nonzero(~self.orig_mask_test_)}"
+            f"Total known genotypes per split (sim_strategy={self.sim_strategy}): train set={np.count_nonzero(~self.orig_mask_train_)}, val set={np.count_nonzero(~self.orig_mask_val_)}, test set={np.count_nonzero(~self.orig_mask_test_)}"
         )
 
         self._validate_sim_and_orig_masks(
@@ -552,9 +552,15 @@ class ImputeUBP(BaseNNImputer):
         self.eval_mask_val_ = self.sim_mask_val_ & ~self.orig_mask_val_
         self.eval_mask_test_ = self.sim_mask_test_ & ~self.orig_mask_test_
 
-        self.logger.debug(f"Train Set Mask Counts: {np.sum(self.eval_mask_train_)}")
-        self.logger.debug(f"Validation Set Mask Counts: {np.sum(self.eval_mask_val_)}")
-        self.logger.debug(f"Test Set Mask Counts: {np.sum(self.eval_mask_test_)}")
+        self.logger.debug(
+            f"Train Set Evaluation Mask Counts: {np.sum(self.eval_mask_train_)}"
+        )
+        self.logger.debug(
+            f"Validation Set Evaluation Mask Counts: {np.sum(self.eval_mask_val_)}"
+        )
+        self.logger.debug(
+            f"Test Set Evaluation Mask Counts: {np.sum(self.eval_mask_test_)}"
+        )
 
         train_loader = self._get_ubp_loaders(
             self.train_idx_,
@@ -632,7 +638,7 @@ class ImputeUBP(BaseNNImputer):
         input_dim = int(self.num_features_ * self.num_classes_)
 
         self.logger.debug(
-            f"[{self.model_name}] Initializing PCA embedding for Phase 1..."
+            f"[{self.model_name}] Initializing PCA embedding as Phase 1..."
         )
 
         self.v_init_ = self._get_pca_embedding_init(
@@ -670,35 +676,8 @@ class ImputeUBP(BaseNNImputer):
         model = self.build_model(self.Model, self.best_params_["model_params"])
         # NOTE: No general init here; Model init handles V (PCA)
 
-        if self.verbose or self.debug:
-
-            def sanitize_for_json(obj) -> dict | list:
-                """Recursively remove non-JSON-serializable objects (e.g., torch.Tensors)."""
-                if isinstance(obj, dict):
-                    return {
-                        k: sanitize_for_json(v)
-                        for k, v in obj.items()
-                        if not isinstance(v, (torch.Tensor, torch.device))
-                        and k != "debug"
-                    }
-                elif isinstance(obj, (list, tuple)):
-                    return [
-                        sanitize_for_json(v)
-                        for v in obj
-                        if not isinstance(v, (torch.Tensor, torch.device))
-                        and v != "debug"
-                    ]
-                return obj
-
-            # Create the clean dictionary
-            bp = sanitize_for_json(self.best_params_)
-            bp = cast(dict[str, Any], bp)
-
-            pm = PrettyMetrics(bp, precision=2, title="UBP Parameters")
-            pm.render()
-
         # Run 3-Phase Training
-        loss, trained_model = self._execute_ubp_training(
+        loss, trained_model, self.history_ = self._execute_ubp_training(
             model=model,
             lr=float(self.best_params_["learning_rate"]),
             l1_penalty=float(self.best_params_["l1_penalty"]),
@@ -729,9 +708,27 @@ class ImputeUBP(BaseNNImputer):
             persist_projection=False,
         )
 
-        self._save_best_params(self.best_params_)
+        if self.show_plots:
+            self.plotter_.plot_history(self.history_)
+
+        # Create the clean dictionary
+        bp = self._sanitize_for_json(self.best_params_)
+
+        if not isinstance(bp, dict):
+            msg = "Best parameters must be a dictionary after sanitization."
+            self.logger.error(msg)
+            raise TypeError(msg)
+
+        if self.verbose or self.debug:
+            title = f"{self.model_name} Optimized Parameters"
+            pm = PrettyMetrics(bp, precision=2, title=title)
+            pm.render()
+
         if self.model_tuned_:
-            self._save_best_params(self.best_params_, objective_mode=True)
+            # Save best parameters to a JSON file.
+            self._save_best_params(bp, objective_mode=True)
+
+        self._save_best_params(bp)
 
         return self
 
@@ -812,7 +809,7 @@ class ImputeUBP(BaseNNImputer):
         trial: Optional[optuna.Trial],
         class_weights: Optional[torch.Tensor],
         gamma_schedule: bool,
-    ) -> Tuple[float, nn.Module]:
+    ) -> Tuple[float, nn.Module, dict[str, list[float]]]:
         """Execute the 3-phase UBP training procedure.
 
         This method orchestrates the training of the UBP model through its three distinct phases:
@@ -829,7 +826,7 @@ class ImputeUBP(BaseNNImputer):
             gamma_schedule (bool): Whether to use gamma scheduling.
 
         Returns:
-            Tuple[float, nn.Module]: Best validation score and trained model.
+            Tuple[float, nn.Module, dict[str, list[float]]]: Best validation score, trained model, and training histories.
 
         Raises:
             RuntimeError: If training fails to converge or produces non-finite loss.
@@ -851,7 +848,9 @@ class ImputeUBP(BaseNNImputer):
             f"[{self.model_name}] Starting Phase 2: Refine weights W (freeze V)..."
         )
 
-        self._run_phase_loop(
+        histories = {}
+
+        _, histories["Phase2"] = self._run_phase_loop(
             model=model,
             temp_layer=None,
             phase=2,
@@ -867,7 +866,7 @@ class ImputeUBP(BaseNNImputer):
             f"[{self.model_name}] Starting Phase 3: Joint refinement of V and W..."
         )
 
-        best_score = self._run_phase_loop(
+        best_score, histories["Phase3"] = self._run_phase_loop(
             model=model,
             temp_layer=None,
             phase=3,
@@ -879,7 +878,7 @@ class ImputeUBP(BaseNNImputer):
             gamma_schedule=gamma_schedule,
         )
 
-        return best_score, model
+        return best_score, model, histories
 
     def _train_epoch(
         self,
@@ -1019,7 +1018,7 @@ class ImputeUBP(BaseNNImputer):
         trial: Optional[optuna.Trial] = None,
         params: Optional[dict[str, Any]] = None,
         gamma_schedule: bool = False,
-    ) -> float:
+    ) -> tuple[float, dict[str, list[float]]]:
         """Run a UBP phase with ReduceLROnPlateau LR scheduling and optional gamma scheduling.
 
         This method implements the training loop for a specified UBP phase (1, 2, or 3). It uses a validation-metric-driven LR scheduler (ReduceLROnPlateau) to reduce LR when the validation score plateaus, and stops when LR reaches eta_min (or max epochs is hit). Optionally schedules gamma for the focal loss.
@@ -1036,7 +1035,7 @@ class ImputeUBP(BaseNNImputer):
             gamma_schedule (bool): Whether to use gamma scheduling.
 
         Returns:
-            float: Best validation score achieved during phase.
+            tuple[float, dict[str, list[float]]]: Best validation score achieved during phase and training histories.
 
         Raises:
             ValueError: If an invalid phase is specified.
@@ -1098,7 +1097,7 @@ class ImputeUBP(BaseNNImputer):
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer,
             mode="min",  # s is a loss-like quantity (lower is better)
-            factor=0.1,
+            factor=0.5,
             patience=int(patience),
             threshold=float(self.gamma_threshold),
             threshold_mode="rel",
@@ -1111,6 +1110,8 @@ class ImputeUBP(BaseNNImputer):
             params, "gamma", default=self.gamma, max_epochs=self.epochs
         )
 
+        train_history: list[float] = []
+        val_history: list[float] = []
         epoch = 0
         while epoch < int(self.epochs):
             if gamma_schedule:
@@ -1141,6 +1142,9 @@ class ImputeUBP(BaseNNImputer):
                 steps=max(int(self.projection_epochs) // 5, 20),
                 lr=float(self.projection_lr),
             )
+
+            train_history.append(float(train_loss))
+            val_history.append(float(s))
 
             # Track best val score and plateau counter
             # (used for optional early stop at LR floor)
@@ -1182,13 +1186,12 @@ class ImputeUBP(BaseNNImputer):
                 trial.report(-float(s), step=epoch)
                 if trial.should_prune():
                     raise optuna.exceptions.TrialPruned(
-                        f"[{self.model_name}] Trial {trial.number} pruned at epoch {epoch}. "
-                        "This indicates the trial was not promising and has been stopped early."
+                        f"[{self.model_name}] Trial {trial.number} pruned at epoch {epoch}. This indicates the trial was not promising and has been stopped early."
                     )
 
             epoch += 1
 
-        return float(s_best)
+        return float(s_best), {"Train": train_history, "Val": val_history}
 
     def _val_step_with_projection(
         self,
