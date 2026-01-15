@@ -39,14 +39,22 @@ The decoder predicts logits :math:`\hat{x}` and the total loss is:
 where :math:`\mathcal{L}_{\text{recon}}` is masked focal cross-entropy over
 observed entries, and :math:`\beta` is the KL weight.
 
+PG-SUI scales the reconstruction term by the average number of masked loci per
+sample to keep the KL term from dominating on large matrices, and can anneal
+both :math:`\beta` and focal-loss gamma during training.
+
 Algorithm summary
 -----------------
 
-1. Encode genotypes to 0/1/2 and build masks for original and simulated
-   missingness.
+1. Encode genotypes to 0/1/2, simulate missingness once on the full matrix, and
+   build masks for original and simulated missingness (reused across splits).
 2. Train the encoder-decoder with masked focal reconstruction loss plus KL
-   divergence (weighted by ``vae.kl_beta``).
-3. Validate using reconstruction metrics on simulated-missing entries.
+   divergence (weighted by ``vae.kl_beta``), scaling reconstruction by the
+   average masked loci per sample and optionally scheduling ``vae.kl_beta`` and
+   ``train.gamma``.
+3. Optimize with AdamW and a warmup-to-cosine learning rate schedule while
+   monitoring validation loss for early stopping; metrics are scored on
+   simulated-missing entries only.
 4. ``transform()`` predicts genotype probabilities and fills missing entries
    with MAP labels before decoding to IUPAC outputs.
 
@@ -59,6 +67,7 @@ extends the autoencoder config with a ``vae`` section:
 - ``vae.kl_beta`` controls the KL divergence weight.
 - ``vae.kl_beta_schedule`` enables optional KL annealing.
 - ``train.gamma`` and ``train.weights_*`` control reconstruction loss behavior.
+- ``train.gamma_schedule`` enables optional focal-loss gamma annealing.
 
 See :doc:`optuna_tuning` for Optuna-driven tuning details.
 
