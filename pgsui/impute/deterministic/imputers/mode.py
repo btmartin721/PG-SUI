@@ -162,7 +162,7 @@ class ImputeMostFrequent:
         Xf = X.astype(np.float32, copy=False)
         Xf = np.where(np.isnan(Xf), -1.0, Xf)
         Xf[Xf < 0] = -1.0
-        self.X012_ = Xf.astype(np.int8, copy=False)
+        self.X012_ = Xf.astype(np.float32, copy=False)
         self.num_features_ = self.X012_.shape[1]
 
         # Simulated-missing controls (mirror VAE/AE semantics where possible)
@@ -241,6 +241,7 @@ class ImputeMostFrequent:
         self.plot_despine = cfg.plot.despine
         self.plot_dpi = cfg.plot.dpi
         self.show_plots = cfg.plot.show
+        self.use_multiqc = bool(cfg.plot.multiqc)
 
         self.model_name = (
             "ImputeMostFrequentPerPop" if self.by_populations else "ImputeMostFrequent"
@@ -403,7 +404,7 @@ class ImputeMostFrequent:
 
         # 1) Impute the evaluation-masked copy (to compute metrics)
         imputed_eval_df = self._impute_df(self.X_train_df_)
-        X_imputed_eval = imputed_eval_df.to_numpy(dtype=np.int8)
+        X_imputed_eval = imputed_eval_df.to_numpy(dtype=np.float32)
         self.X_imputed012_ = X_imputed_eval
 
         # Evaluate like DL models (0/1/2, then 10-class from decoded strings)
@@ -414,7 +415,7 @@ class ImputeMostFrequent:
         df_missingonly[df_missingonly < 0] = np.nan
 
         imputed_full_df = self._impute_df(df_missingonly)
-        X_imputed_full_012 = imputed_full_df.to_numpy(dtype=np.int8)
+        X_imputed_full_012 = imputed_full_df.to_numpy(dtype=np.float32)
 
         neg = int(np.count_nonzero(X_imputed_full_012 < 0))
         if neg:
@@ -431,9 +432,8 @@ class ImputeMostFrequent:
         imp_decoded = self.decode_012(X_imputed_full_012)
 
         if self.show_plots:
-            gt_decoded = self.decode_012(self.ground_truth012_)
-            self.plotter_.plot_gt_distribution(gt_decoded, is_imputed=False)
-            self.plotter_.plot_gt_distribution(imp_decoded, is_imputed=True)
+            orig_dec = self.decode_012(self.ground_truth012_)
+            self.plotter_.plot_gt_distribution(imp_decoded, orig_dec, True)
 
         # Return IUPAC strings
         return imp_decoded
@@ -466,12 +466,12 @@ class ImputeMostFrequent:
         Returns:
             pd.DataFrame: DataFrame with missing values imputed.
         """
-        if df_in.isnull().values.any():
+        if df_in.isnull().to_numpy().any():
             modes = pd.Series(self.global_modes_)
             df = df_in.fillna(modes)
         else:
             df = df_in.copy()
-        return df.astype(np.int8)
+        return df.astype(np.float32)
 
     def _impute_by_population_mode(self, df_in: pd.DataFrame) -> pd.DataFrame:
         """Impute missing cells in df_in using population-specific modes.
@@ -484,8 +484,8 @@ class ImputeMostFrequent:
         Returns:
             pd.DataFrame: DataFrame with missing values imputed.
         """
-        if not df_in.isnull().values.any():
-            return df_in.astype(np.int8)
+        if not df_in.isnull().to_numpy().any():
+            return df_in.astype(np.float32)
 
         df = df_in.copy()
         pops = pd.Series(self.pops, index=df.index)
@@ -508,7 +508,9 @@ class ImputeMostFrequent:
         mask = np.isnan(values)
         values[mask] = replacements[mask]
 
-        return pd.DataFrame(values, columns=df.columns, index=df.index).astype(np.int8)
+        return pd.DataFrame(values, columns=df.columns, index=df.index).astype(
+            np.float32
+        )
 
     def _series_mode(self, s: pd.Series) -> int:
         """Compute the mode of a pandas Series, ignoring NaNs.
@@ -606,15 +608,20 @@ class ImputeMostFrequent:
             y_true (np.ndarray): True genotypes (0/1/2) for masked
             y_pred (np.ndarray): Predicted genotypes (0/1/2) for masked
         """
+        # Ensures haploid folding and sklearn metrics operate on integers.
+        y_true = y_true.astype(int)
+        y_pred = y_pred.astype(int)
+
         labels: list[int] = [0, 1, 2]
         report_names: list[str] = ["REF", "HET", "ALT"]
 
         # Haploid parity: fold ALT (2) into ALT/Present (1)
         if self.is_haploid_:
+            # Now safe to use integer literals
             y_true = np.where(y_true == 2, 1, y_true)
             y_pred = np.where(y_pred == 2, 1, y_pred)
-            labels: list[int] = [0, 1]
-            report_names: list[str] = ["REF", "ALT"]
+            labels = [0, 1]
+            report_names = ["REF", "ALT"]
 
         report: dict | str = classification_report(
             y_true,
@@ -682,10 +689,15 @@ class ImputeMostFrequent:
             y_true (np.ndarray): True genotypes (0-9) for masked
             y_pred (np.ndarray): Predicted genotypes (0-9) for masked
         """
+        # --- FIX: Cast to int immediately ---
+        # Guards against float inputs causing IndexError in np.eye indexing below
+        y_true = y_true.astype(int)
+        y_pred = y_pred.astype(int)
+
         labels_idx = list(range(10))
         report_names = ["A", "C", "G", "T", "W", "R", "M", "K", "Y", "S"]
 
-        # Create an identity matrix and use the targets array as indices
+        # This line would crash if y_pred were float
         y_score = np.eye(len(report_names))[y_pred]
 
         report: dict | str = classification_report(
@@ -934,7 +946,7 @@ class ImputeMostFrequent:
             return s if s in iupac_to_bases else None
 
         codes_df = df.apply(pd.to_numeric, errors="coerce")
-        codes = codes_df.fillna(-1).astype(np.int8).to_numpy()
+        codes = codes_df.fillna(-1).astype(np.float32).to_numpy()
         n_rows, n_cols = codes.shape
 
         if is_nuc:
@@ -1068,7 +1080,14 @@ class ImputeMostFrequent:
         Returns:
             dict[str, dict[str, float] | float]: Augmented report dictionary with additional metrics.
         """
+        # --- Cast inputs to integer ---
+        # y_true and y_pred enter as float32 from X_imputed012_.
+        # numpy indexing requires integers.
+        y_true = y_true.astype(int)
+        y_pred = y_pred.astype(int)
+
         # Create an identity matrix and use the targets array as indices
+        # This line was causing the IndexError
         y_score = np.eye(len(report_names))[y_pred]
 
         # Per-class metrics

@@ -1,7 +1,7 @@
 Imputation Methods Implemented in PG-SUI
 ========================================
 
-This page describes the mathematical formulations and methodologies behind the imputation models implemented in PG-SUI, including **deep learning-based methods (ImputeAutoencoder and ImputeVAE)** and **traditional machine learning methods (IterativeImputer and the MICE algorithm)**.
+This page describes the mathematical formulations and methodologies behind the imputation models implemented in PG-SUI, including **deep learning-based methods (ImputeAutoencoder, ImputeVAE, ImputeNLPCA, ImputeUBP)** and **traditional machine learning methods (IterativeImputer and the MICE algorithm)**.
 
 Autoencoder Model for Genotype Data Imputation
 ----------------------------------------------
@@ -79,12 +79,14 @@ The overall loss is computed only over valid (unmasked) entries:
 Training Procedure
 ~~~~~~~~~~~~~~~~~~
 
-The autoencoder is trained using backpropagation with the Adam optimizer and a learning rate scheduler. The key steps in training are:
+The autoencoder is trained using backpropagation with the AdamW optimizer and a warmup-to-cosine learning rate schedule. The key steps in training are:
 
 1. **Forward pass:** Compute the output of the model.
 2. **Compute loss:** Calculate the masked focal loss between the original and reconstructed inputs.
 3. **Backpropagation:** Compute the gradients of the loss.
 4. **Update parameters:** Update the weights and biases of the encoder and decoder.
+
+PG-SUI can anneal focal-loss gamma from 0 to the configured value when ``train.gamma_schedule`` is enabled.
 
 Variational Autoencoder (VAE) Model for Genotype Data Imputation
 -----------------------------------------------------------------
@@ -165,6 +167,97 @@ The total loss is given by:
 
 where :math:`\beta` is a weighting factor that balances the reconstruction and KL divergence losses.
 
+PG-SUI optionally anneals both :math:`\beta` and focal-loss gamma during training, and scales the reconstruction term by the average number of masked loci per sample to keep the KL term from dominating on large matrices.
+
+Non-linear PCA (NLPCA) Model for Genotype Data Imputation
+---------------------------------------------------------
+
+Non-linear PCA (NLPCA) in PG-SUI is a **decoder-only** neural model. Instead of
+learning an encoder, it directly optimizes a latent embedding for each sample
+and learns a decoder that maps the embedding to genotype logits.
+
+Model Overview
+~~~~~~~~~~~~~~
+
+Let :math:`X \in \mathbb{R}^{N \times L}` be the genotype matrix (0/1/2 with
+missing entries set to -1). Each sample :math:`i` has a latent vector
+:math:`v_i \in \mathbb{R}^K`, and a shared decoder :math:`f_W` predicts
+per-locus class logits:
+
+.. math::
+
+    \hat{X}_i = f_W(v_i)
+
+Loss Function
+^^^^^^^^^^^^^
+
+The NLPCA objective uses a masked focal cross-entropy loss evaluated only on
+observed entries, with optional class weights and L1 regularization:
+
+.. math::
+
+    \mathcal{L} =
+    \frac{1}{|M|} \sum_{(i,j) \in M}
+    w_{y_{ij}} (1 - p_{ij})^{\gamma} \log(p_{ij})
+    + \lambda \lVert W \rVert_1
+
+where :math:`M` indexes non-missing entries, :math:`p_{ij}` is the probability
+assigned to the true genotype class, and :math:`\gamma` is the focal-loss
+parameter.
+
+Training Procedure
+~~~~~~~~~~~~~~~~~~
+
+1. **PCA initialization:** latent vectors are initialized with PCA on observed
+   training data.
+2. **Working-matrix initialization:** originally missing entries are filled
+   with per-locus mode values; simulated-missing entries remain masked.
+3. **Joint optimization:** embeddings and decoder weights are optimized
+   together via backpropagation.
+4. **Input refinement:** after selected epochs, originally missing entries are
+   replaced with current reconstructions while simulated-missing entries remain
+   masked.
+5. **Projection evaluation:** validation/inference refines latent vectors with
+   the decoder fixed, improving reconstruction before scoring.
+
+Unsupervised Backpropagation (UBP) Model for Genotype Data Imputation
+---------------------------------------------------------------------
+
+Unsupervised Backpropagation (UBP) also uses a decoder-only model with
+per-sample latent embeddings. PG-SUI follows a phased optimization schedule
+based on Gashler et al. (2014), combining PCA initialization with joint
+refinement.
+
+Model Overview
+~~~~~~~~~~~~~~
+
+Like NLPCA, UBP predicts genotypes via a decoder :math:`f_W`:
+
+.. math::
+
+    \hat{X}_i = f_W(v_i)
+
+The loss uses the same masked focal cross-entropy with optional L1 regularizer
+on decoder weights:
+
+.. math::
+
+    \mathcal{L} =
+    \frac{1}{|M|} \sum_{(i,j) \in M}
+    w_{y_{ij}} (1 - p_{ij})^{\gamma} \log(p_{ij})
+    + \lambda \lVert W \rVert_1
+
+Training Phases
+~~~~~~~~~~~~~~~
+
+1. **Initialization:** PCA provides a warm-start for the latent embeddings.
+2. **Decoder refinement:** freeze embeddings and optimize decoder weights.
+3. **Joint refinement:** optimize embeddings and decoder weights together,
+   allowing the latent manifold to become non-linear.
+
+During evaluation and inference, PG-SUI refines embeddings via projection with
+the decoder frozen, then scores or imputes genotypes.
+
 IterativeImputer and the MICE Algorithm
 ---------------------------------------
 
@@ -205,6 +298,6 @@ For additional details, refer to the **scikit-learn documentation**:
 Conclusion
 ----------
 
-PG-SUI provides a range of **deep learning, machine learning, and statistical methods** for SNP imputation. **ImputeVAE** and **ImputeAutoencoder** are fully functional deep learning models, and the **IterativeImputer framework** enables regression-based imputation.
+PG-SUI provides a range of **deep learning, machine learning, and statistical methods** for SNP imputation. **ImputeAutoencoder**, **ImputeVAE**, **ImputeNLPCA**, and **ImputeUBP** cover deep learning approaches, and the **IterativeImputer framework** enables regression-based imputation.
 
 For more details, see the `PG-SUI API documentation <pgsui.impute>`_.

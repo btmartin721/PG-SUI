@@ -259,7 +259,7 @@ Mirror the pattern in ``ImputeAutoencoder``:
             # Tuning flags
             self.tune = self.cfg.tune.enabled
             self.n_trials = self.cfg.tune.n_trials
-            self.tune_metric = self.cfg.tune.metric
+            self.tune_metric = self.cfg.tune.metrics
 
             # Plotting
             self.plot_dpi = self.cfg.plot.dpi

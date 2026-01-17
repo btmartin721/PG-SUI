@@ -1,7 +1,6 @@
-from typing import TYPE_CHECKING, Dict, Literal
+from typing import Literal
 
 import numpy as np
-import pandas as pd
 from sklearn.metrics import (
     accuracy_score,
     average_precision_score,
@@ -13,10 +12,8 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 from snpio.utils.logging import LoggerManager
-from torch import Tensor
 
 from pgsui.utils.logging_utils import configure_logger
-from pgsui.utils.misc import validate_input_type
 
 
 class Scorer:
@@ -28,7 +25,7 @@ class Scorer:
     def __init__(
         self,
         prefix: str,
-        average: Literal["weighted", "macro", "micro"] = "macro",
+        average: Literal["weighted", "macro"] = "macro",
         verbose: bool = False,
         debug: bool = False,
     ) -> None:
@@ -38,7 +35,7 @@ class Scorer:
 
         Args:
             prefix (str): The prefix to use for logging.
-            average (Literal["weighted", "macro", "micro"]): The averaging method to use for metrics. Must be one of 'micro', 'macro', or 'weighted'. Defaults to 'weighted'.
+            average (Literal["weighted", "macro"]): The averaging method to use for metrics. Must be one of 'macro' or 'weighted'. Defaults to 'macro'.
             verbose (bool): If True, enable verbose logging. Defaults to False.
             debug (bool): If True, enable debug logging. Defaults to False.
         """
@@ -49,12 +46,12 @@ class Scorer:
             logman.get_logger(), verbose=verbose, debug=debug
         )
 
-        if average not in {"weighted", "micro", "macro"}:
-            msg = f"Invalid average parameter: {average}. Must be one of 'micro', 'macro', or 'weighted'."
+        if average not in {"weighted", "macro"}:
+            msg = f"Invalid average parameter: {average}. Must be one of 'macro' or 'weighted'."
             self.logger.error(msg)
             raise ValueError(msg)
 
-        self.average: Literal["micro", "macro", "weighted"] = average
+        self.average: Literal["macro", "weighted"] = average
 
     def accuracy(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
         """Compute the accuracy score.
@@ -108,61 +105,161 @@ class Scorer:
             recall_score(y_true, y_pred, average=self.average, zero_division=0)
         )
 
-    def roc_auc(self, y_true_ohe: np.ndarray, y_pred_proba: np.ndarray) -> float:
-        """Compute the ROC AUC score.
+    def _prepare_ohe_proba(
+        self, y_true_ohe: np.ndarray, y_pred_proba: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Coerce y_true_ohe / y_pred_proba into 2D (N_eval, K) arrays and drop invalid rows.
+
+        Rules:
+            - If inputs are 3D (N, L, K), flatten to (N*L, K).
+            - Class dimension must be last.
+            - Drop rows where y_true_ohe is not a valid one-hot vector (sum != 1). This protects against ignored/masked entries leaking into metrics.
 
         Args:
-            y_true_ohe (np.ndarray): One-hot encoded ground truth (correct) target values.
-            y_pred_proba (np.ndarray): Predicted probabilities.
+            y_true_ohe (np.ndarray): One-hot encoded ground truth; shape (N_eval, K) or (N, L, K).
+            y_pred_proba (np.ndarray): Predicted probabilities; shape (N_eval, K) or (N, L, K).
 
         Returns:
-            float: The ROC AUC score.
+            (y_true_2d, y_proba_2d): Filtered 2D arrays with matching first dimension.
         """
-        if np.all(np.count_nonzero(y_true_ohe[..., 1]) == 0) or np.all(
-            np.count_nonzero(y_true_ohe[..., 2]) == 0
-        ):
-            # ROC AUC is not defined in that case
-            msg = "No positive samples in y_true; ROC AUC score is undefined. Setting to 0.5 (random classification chance)."
+        yt = np.asarray(y_true_ohe)
+        yp = np.asarray(y_pred_proba)
+
+        if yt.ndim == 3:
+            yt = yt.reshape(-1, yt.shape[-1])
+        if yp.ndim == 3:
+            yp = yp.reshape(-1, yp.shape[-1])
+
+        if yt.ndim != 2 or yp.ndim != 2:
+            msg = f"Expected 2D or 3D arrays; got y_true_ohe.ndim={yt.ndim}, y_pred_proba.ndim={yp.ndim}."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        if yt.shape[0] != yp.shape[0]:
+            msg = f"Mismatched rows: y_true_ohe has {yt.shape[0]}, y_pred_proba has {yp.shape[0]}."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        if yt.shape[1] != yp.shape[1]:
+            msg = f"Mismatched class dimension: y_true_ohe K={yt.shape[1]}, y_pred_proba K={yp.shape[1]}."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        # Valid one-hot rows: sum == 1 (and non-negative)
+        row_sums = yt.sum(axis=1)
+        valid = (row_sums == 1) & np.all(yt >= 0, axis=1)
+
+        if not np.any(valid):
+            # No valid rows to score
+            return yt[:0], yp[:0]
+
+        return yt[valid], yp[valid]
+
+    def roc_auc(self, y_true_ohe: np.ndarray, y_pred_proba: np.ndarray) -> float:
+        """Compute ROC AUC (binary or multiclass OVR) robustly."""
+        yt, yp = self._prepare_ohe_proba(y_true_ohe, y_pred_proba)
+
+        if yt.shape[0] == 0:
+            self.logger.warning("No valid rows for ROC AUC; returning 0.0.")
+            return 0.0
+
+        K = yt.shape[1]
+
+        # Determine which classes are present in truth
+        present = np.where(yt.sum(axis=0) > 0)[0]
+        if present.size < 2:
+            msg = "ROC AUC: fewer than 2 classes in y_true returning 0.0."
             self.logger.warning(msg)
-            return 0.5  # Return a neutral score
+            return 0.0
 
-        if y_pred_proba.shape[-1] == 2:
-            # Binary classification case
-            # Use probabilities for the positive class
-            # Otherwise it throws an error.
-            y_pred_proba = y_pred_proba[:, 1]
+        if K == 2:
+            # Binary: score positive class only (class 1)
+            y_true_bin = yt[:, 1]
+            y_score = yp[:, 1]
 
-        return float(
-            roc_auc_score(
-                y_true_ohe, y_pred_proba, average=self.average, multi_class="ovr"
-            )
-        )
+            print(y_true_bin)
+            print(y_score)
+            try:
+                return float(roc_auc_score(y_true_bin, y_score))
+            except ValueError as e:
+                msg = f"ROC AUC failed binary case; returning 0.0. Details: {e}"
+                self.logger.warning(msg)
+                return 0.0
 
-    # This method now correctly expects one-hot encoded true labels
+        # Multiclass: one-vs-rest
+        try:
+            roc_auc = roc_auc_score(yt, yp, average=self.average, multi_class="ovr")
+            return float(roc_auc)
+        except ValueError as e:
+            msg = f"ROC AUC failed multiclass case; returning 0.0. Details: {e}"
+            self.logger.warning(msg)
+            return 0.0
+
     def average_precision(
         self, y_true_ohe: np.ndarray, y_pred_proba: np.ndarray
     ) -> float:
-        """Compute the average precision score.
+        """Compute Average Precision (binary or multiclass) robustly."""
+        yt, yp = self._prepare_ohe_proba(y_true_ohe, y_pred_proba)
+        if yt.shape[0] == 0:
+            msg = "No valid rows for Average Precision; returning 0.0."
+            self.logger.warning(msg)
+            return 0.0
 
-        Args:
-            y_true_ohe (np.ndarray): One-hot encoded ground truth target values.
-            y_pred_proba (np.ndarray): Predicted probabilities.
+        K = yt.shape[1]
+        present = np.where(yt.sum(axis=0) > 0)[0]
+        if present.size == 0:
+            msg = "Average Precision undefined (no positives); returning 0.0."
+            self.logger.warning(msg)
+            return 0.0
 
-        Returns:
-            float: The average precision score.
-        """
-        if y_pred_proba.shape[-1] == 2:
-            # Binary classification case
-            # Use probabilities for the positive class
-            y_pred_proba = y_pred_proba[:, 1]
+        if K == 2:
+            # Binary: positive class only
+            y_true_bin = yt[:, 1]
+            y_score = yp[:, 1]
+            try:
+                return float(average_precision_score(y_true_bin, y_score))
+            except ValueError as e:
+                msg = (
+                    f"Average Precision failed binary case; returning 0.0. Details: {e}"
+                )
+                self.logger.warning(msg)
+                return 0.0
 
-        if y_true_ohe.shape[1] == 2:
-            # Binary classification case
-            y_true_ohe = y_true_ohe[:, 1]
+        # Multiclass: sklearn expects indicator matrix + score matrix
+        try:
+            return float(average_precision_score(yt, yp, average=self.average))
+        except ValueError as e:
+            msg = (
+                f"Average Precision failed multiclass case; returning 0.0. Details: {e}"
+            )
+            self.logger.warning(msg)
+            return 0.0
 
-        return float(
-            average_precision_score(y_true_ohe, y_pred_proba, average=self.average)
-        )
+    def pr_macro(self, y_true_ohe: np.ndarray, y_pred_proba: np.ndarray) -> float:
+        """Compute macro-average precision (PR-AUC macro) robustly."""
+        yt, yp = self._prepare_ohe_proba(y_true_ohe, y_pred_proba)
+        if yt.shape[0] == 0:
+            self.logger.warning("No valid rows for PR macro; returning 0.0.")
+            return 0.0
+
+        K = yt.shape[1]
+        if K == 2:
+            # Binary: macro is effectively binary AP; use positive class
+            y_true_bin = yt[:, 1]
+            y_score = yp[:, 1]
+            try:
+                return float(average_precision_score(y_true_bin, y_score))
+            except ValueError as e:
+                msg = f"PR macro failed binary case; returning 0.0. Details: {e}"
+                self.logger.warning(msg)
+                return 0.0
+
+        try:
+            return float(average_precision_score(yt, yp, average="macro"))
+        except ValueError as e:
+            msg = f"PR-macro failed multiclass case; returning 0. Details: {e}"
+            self.logger.warning(msg)
+            return 0.0
 
     def jaccard(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
         """Compute the Jaccard score.
@@ -192,104 +289,138 @@ class Scorer:
         """
         return float(matthews_corrcoef(y_true, y_pred))
 
-    def pr_macro(self, y_true_ohe: np.ndarray, y_pred_proba: np.ndarray) -> float:
-        """Compute the macro-average precision score.
-
-        Args:
-            y_true_ohe (np.ndarray): One-hot encoded ground truth target values.
-            y_pred_proba (np.ndarray): Predicted probabilities.
-
-        Returns:
-            float: The macro-average precision score.
-        """
-        if y_pred_proba.shape[-1] == 2:
-            # Binary classification case
-            # Use probabilities for the positive class
-            y_pred_proba = y_pred_proba[:, 1]
-
-        if y_true_ohe.shape[1] == 2:
-            # Binary classification case
-            y_true_ohe = y_true_ohe[:, 1]
-
-        return float(average_precision_score(y_true_ohe, y_pred_proba, average="macro"))
-
     def evaluate(
         self,
-        y_true: pd.DataFrame | np.ndarray | Tensor | list,
-        y_pred: pd.DataFrame | np.ndarray | Tensor | list,
-        y_true_ohe: pd.DataFrame | np.ndarray | Tensor | list,
-        y_pred_proba: pd.DataFrame | np.ndarray | Tensor | list,
+        y_true: np.ndarray,
+        y_pred: np.ndarray,
+        y_true_ohe: np.ndarray,
+        y_pred_proba: np.ndarray,
         objective_mode: bool = False,
-        tune_metric: Literal[
-            "pr_macro",
-            "roc_auc",
-            "average_precision",
-            "accuracy",
-            "f1",
-            "precision",
-            "recall",
-            "mcc",
-            "jaccard",
-        ] = "pr_macro",
-    ) -> Dict[str, float]:
+        tune_metric: (
+            Literal[
+                "pr_macro",
+                "roc_auc",
+                "average_precision",
+                "accuracy",
+                "f1",
+                "precision",
+                "recall",
+                "mcc",
+                "jaccard",
+            ]
+            | list[str]
+            | tuple[str, ...]
+        ) = "f1",
+    ) -> dict[str, float]:
         """Evaluate the model using various metrics.
 
         Args:
-            y_true: Ground truth (correct) target values.
-            y_pred: Estimated target values.
-            y_true_ohe: One-hot encoded ground truth target values.
-            y_pred_proba: Predicted probabilities.
-            objective_mode: If True, only compute the metric specified by ``tune_metric``. Defaults to False.
-            tune_metric: The metric to optimize during tuning. Defaults to "pr_macro".
+            y_true (np.ndarray): Ground truth (correct) target values; shape (N_eval,).
+            y_pred (np.ndarray): Estimated target values; shape (N_eval,).
+            y_true_ohe (np.ndarray): One-hot encoded ground truth; shape (N_eval, K) or (N, L, K).
+            y_pred_proba (np.ndarray): Predicted probabilities; shape (N_eval, K) or (N, L, K).
+            objective_mode (bool): If True, compute only the tune_metric(s). Defaults to False.
+            tune_metric (str | list[str] | tuple[str, ...]): The metric(s) to compute in objective mode.
+                Valid options are: 'pr_macro', 'roc_auc', 'average_precision', 'accuracy', 'f1', 'precision', 'recall', 'mcc', 'jaccard'.
+                Defaults to 'f1'.
+
+        Returns:
+            dict[str, float]: A dictionary mapping metric names to their computed values.
         """
-        y_true, y_pred, y_true_ohe, y_pred_proba = [
-            validate_input_type(x) for x in (y_true, y_pred, y_true_ohe, y_pred_proba)
-        ]
+        if not all(
+            isinstance(y, np.ndarray)
+            for y in (y_true, y_pred, y_true_ohe, y_pred_proba)
+        ):
+            msg = "y inputs to 'Scorer.evaluate()' must be numpy arrays."
+            self.logger.error(msg)
+            raise TypeError(msg)
+
+        y_true = np.asarray(y_true).astype(np.int8, copy=False).reshape(-1)
+        y_pred = np.asarray(y_pred).astype(np.int8, copy=False).reshape(-1)
+        y_pred_proba = np.asarray(y_pred_proba).astype(np.float32, copy=False)
+
+        if y_pred_proba.ndim == 3:
+            y_pred_proba = y_pred_proba.reshape(-1, y_pred_proba.shape[-1])
+        elif y_pred_proba.ndim != 2:
+            msg = f"y_pred_proba must be 2D or 3D; got shape {y_pred_proba.shape}."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        K = int(y_pred_proba.shape[-1])
+
+        y_true_ohe = np.asarray(y_true_ohe).astype(np.float32, copy=False)
+        if y_true_ohe.ndim == 3:
+            if y_true_ohe.shape[-1] != K:
+                msg = f"y_true_ohe K={y_true_ohe.shape[-1]} does not match y_pred_proba K={K}."
+                self.logger.error(msg)
+                raise ValueError(msg)
+            y_true_ohe = y_true_ohe.reshape(-1, K)
+
+        elif y_true_ohe.ndim == 2:
+            if y_true_ohe.shape[1] != K:
+                msg = f"y_true_ohe K={y_true_ohe.shape[1]} does not match y_pred_proba K={K}."
+                self.logger.error(msg)
+                raise ValueError(msg)
+        else:
+            msg = f"y_true_ohe must be 2D or 3D; got shape {y_true_ohe.shape}."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        # Ensure valid onehots
+        if sum(y_true_ohe.sum(axis=-1) != 1) > 0:
+            msg = "y_true_ohe contains invalid one-hots that do not sum to 1."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        if y_true.shape[0] != y_pred.shape[0]:
+            msg = f"y_true and y_pred length mismatch: {y_true.shape[0]} vs {y_pred.shape[0]}."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        if y_true_ohe.shape[0] != y_pred_proba.shape[0]:
+            msg = f"y_true_ohe and y_pred_proba row mismatch: {y_true_ohe.shape[0]} vs {y_pred_proba.shape[0]}."
+            self.logger.error(msg)
+            raise ValueError(msg)
 
         if objective_mode:
             metric_calculators = {
-                "pr_macro": lambda: self.pr_macro(
-                    np.asarray(y_true_ohe), np.asarray(y_pred_proba)
-                ),
-                "roc_auc": lambda: self.roc_auc(
-                    np.asarray(y_true_ohe), np.asarray(y_pred_proba)
-                ),
+                "pr_macro": lambda: self.pr_macro(y_true_ohe, y_pred_proba),
+                "roc_auc": lambda: self.roc_auc(y_true_ohe, y_pred_proba),
                 "average_precision": lambda: self.average_precision(
-                    np.asarray(y_true_ohe), np.asarray(y_pred_proba)
+                    y_true_ohe, y_pred_proba
                 ),
-                "accuracy": lambda: self.accuracy(
-                    np.asarray(y_true), np.asarray(y_pred)
-                ),
-                "f1": lambda: self.f1(np.asarray(y_true), np.asarray(y_pred)),
-                "precision": lambda: self.precision(
-                    np.asarray(y_true), np.asarray(y_pred)
-                ),
-                "recall": lambda: self.recall(np.asarray(y_true), np.asarray(y_pred)),
-                "mcc": lambda: self.mcc(np.asarray(y_true), np.asarray(y_pred)),
-                "jaccard": lambda: self.jaccard(np.asarray(y_true), np.asarray(y_pred)),
+                "accuracy": lambda: self.accuracy(y_true, y_pred),
+                "f1": lambda: self.f1(y_true, y_pred),
+                "precision": lambda: self.precision(y_true, y_pred),
+                "recall": lambda: self.recall(y_true, y_pred),
+                "mcc": lambda: self.mcc(y_true, y_pred),
+                "jaccard": lambda: self.jaccard(y_true, y_pred),
             }
-            if tune_metric not in metric_calculators:
-                msg = f"Invalid tune_metric provided: '{tune_metric}'."
-                self.logger.error(msg)
-                raise ValueError(msg)
 
-            metrics = {tune_metric: metric_calculators[tune_metric]()}
+            if isinstance(tune_metric, (list, tuple)):
+                invalid = [tm for tm in tune_metric if tm not in metric_calculators]
+                if invalid:
+                    msg = f"Invalid tune_metric(s) provided: {invalid}. Valid options are: {list(metric_calculators.keys())}."
+                    self.logger.error(msg)
+                    raise ValueError(msg)
+                metrics = {tm: metric_calculators[tm]() for tm in tune_metric}
+            else:
+                if tune_metric not in metric_calculators:
+                    msg = f"Invalid tune_metric provided: '{tune_metric}'."
+                    self.logger.error(msg)
+                    raise ValueError(msg)
+                metrics = {tune_metric: metric_calculators[tune_metric]()}
         else:
             metrics = {
-                "accuracy": self.accuracy(np.asarray(y_true), np.asarray(y_pred)),
-                "f1": self.f1(np.asarray(y_true), np.asarray(y_pred)),
-                "precision": self.precision(np.asarray(y_true), np.asarray(y_pred)),
-                "recall": self.recall(np.asarray(y_true), np.asarray(y_pred)),
-                "roc_auc": self.roc_auc(
-                    np.asarray(y_true_ohe), np.asarray(y_pred_proba)
-                ),
-                "average_precision": self.average_precision(
-                    np.asarray(y_true_ohe), np.asarray(y_pred_proba)
-                ),
-                "pr_macro": self.pr_macro(
-                    np.asarray(y_true_ohe), np.asarray(y_pred_proba)
-                ),
-                "mcc": self.mcc(np.asarray(y_true), np.asarray(y_pred)),
-                "jaccard": self.jaccard(np.asarray(y_true), np.asarray(y_pred)),
+                "accuracy": self.accuracy(y_true, y_pred),
+                "f1": self.f1(y_true, y_pred),
+                "precision": self.precision(y_true, y_pred),
+                "recall": self.recall(y_true, y_pred),
+                "roc_auc": self.roc_auc(y_true_ohe, y_pred_proba),
+                "average_precision": self.average_precision(y_true_ohe, y_pred_proba),
+                "pr_macro": self.pr_macro(y_true_ohe, y_pred_proba),
+                "mcc": self.mcc(y_true, y_pred),
+                "jaccard": self.jaccard(y_true, y_pred),
             }
+
         return {k: float(v) for k, v in metrics.items()}

@@ -2,10 +2,12 @@ import copy
 import gc
 import json
 import logging
-from collections import Counter
-from datetime import datetime
+import math
+import pprint
+from datetime import timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Type
+from typing import TYPE_CHECKING, Any, Literal, Optional, Type
+from uuid import uuid4
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -29,7 +31,10 @@ from snpio.utils.misc import validate_input_type
 from pgsui.data_processing.transformers import SimMissingTransformer
 from pgsui.impute.unsupervised.nn_scorers import Scorer
 from pgsui.utils.classification_viz import ClassificationReportVisualizer
-from pgsui.utils.logging_utils import configure_logger
+from pgsui.utils.logging_utils import (
+    configure_logger,
+    configure_optuna_best_trial_logger,
+)
 from pgsui.utils.plotting import Plotting
 from pgsui.utils.pretty_metrics import PrettyMetrics
 
@@ -102,6 +107,8 @@ class BaseNNImputer:
             lg.propagate = False
 
         self.device = self._select_device(device)
+        self.num_embeddings: int = 0
+        self.total_samples_: int = 0
 
         # Prepare directory structure
         outdirs = ["models", "plots", "metrics", "optimize", "parameters"]
@@ -113,6 +120,7 @@ class BaseNNImputer:
         self.logger = configure_logger(
             logman.get_logger(), verbose=self.verbose, debug=self.debug
         )
+        self.logger.propagate = False
 
         self.logger.info(f"Using PyTorch device: {self.device.type}.")
 
@@ -120,19 +128,22 @@ class BaseNNImputer:
         self.tune_save_db: bool = False
         self.tune_resume: bool = False
         self.n_trials: int = 100
-        self.model_params: Dict[str, Any] = {}
+        self.model_params: dict[str, Any] = {}
         self.tune_metric: str = "f1"
+        self.primary_metric: str
         self.learning_rate: float = 1e-3
         self.plotter_: "Plotting"
         self.num_features_: int = 0
+        self.num_tuned_params_: int = 0
         self.num_classes_: int = 3
         self.plot_format: Literal["pdf", "png", "jpg", "jpeg", "svg"] = "pdf"
         self.plot_fontsize: int = 10
         self.plot_dpi: int = 300
         self.title_fontsize: int = 12
+        self.use_multiqc: bool = True
         self.despine: bool = True
         self.show_plots: bool = False
-        self.scoring_averaging: Literal["macro", "micro", "weighted"] = "macro"
+        self.scoring_averaging: Literal["macro", "weighted"] = "macro"
         self.pgenc: Any = None
         self.is_haploid_: bool = False
         self.ploidy: int = 2
@@ -145,118 +156,228 @@ class BaseNNImputer:
         self.ground_truth_: np.ndarray
         self.validation_split: float = 0.2
         self.batch_size: int = 64
-        self.best_params_: Dict[str, Any] = {}
+        self.best_params_: dict[str, Any] = {}
 
         self.optimize_dir: Path
         self.models_dir: Path
         self.plots_dir: Path
         self.metrics_dir: Path
         self.parameters_dir: Path
+        self.epochs: int
         self.study_db: Optional[Path] = None
         self.X_model_input_: Optional[np.ndarray] = None
         self.class_weights_: Optional[torch.Tensor] = None
 
-    def tune_hyperparameters(self) -> Dict[str, Any]:
+        self.sim_mask_train_: np.ndarray
+        self.sim_mask_val_: np.ndarray
+        self.sim_mask_test_: np.ndarray
+        self.orig_mask_train_: np.ndarray
+        self.orig_mask_val_: np.ndarray
+        self.orig_mask_test_: np.ndarray
+
+    def tune_hyperparameters(self) -> dict[str, Any]:
         """Tunes model hyperparameters using an Optuna study.
 
-        This method orchestrates the hyperparameter search process. It creates an Optuna study that aims to maximize the metric defined in `self.tune_metric`. The search is driven by the `_objective` method, which must be implemented by the child class. After the search, the best parameters are logged, saved to a JSON file, and visualizations of the study are generated.
+        This method orchestrates the hyperparameter search process. It creates an Optuna study that aims to maximize the metric defined in ``self.tune_metric``. The search is driven by the ``_objective`` method, which must be implemented by the child class. After the search, the best parameters are logged, saved to a JSON file, and visualizations of the study are generated.
 
         Raises:
-            NotImplementedError: If the `_objective` or `_set_best_params` methods are not implemented in the inheriting child class.
+            NotImplementedError: If the ``_objective`` or ``_set_best_params`` methods are not implemented in the inheriting child class.
         """
         self.logger.info("Tuning hyperparameters. This might take a while...")
 
-        if self.verbose or self.debug:
-            optuna.logging.set_verbosity(optuna.logging.INFO)
-        else:
-            optuna.logging.set_verbosity(optuna.logging.WARNING)
+        # NOTE: _objective() must be implemented in the child class.
+        if not hasattr(self, "_objective") or not hasattr(self, "_set_best_params"):
+            if not hasattr(self, "_objective"):
+                msg = "_objective() must be implemented in the child class."
+                self.logger.error(msg)
+                raise NotImplementedError(msg)
+            if not hasattr(self, "_set_best_params"):
+                msg = "_set_best_params() must be implemented in the child class."
+                self.logger.error(msg)
+                raise NotImplementedError(msg)
+
+        is_verbose = self.verbose or self.debug
+        lvl = optuna.logging.INFO if is_verbose else optuna.logging.WARNING
+        optuna.logging.set_verbosity(lvl)
 
         study_db = None
         load_if_exists = False
         if self.tune_save_db:
-            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-            study_db = (
-                self.optimize_dir / "study_database" / f"optuna_study_{timestamp}.db"
-            )
-            study_db.parent.mkdir(parents=True, exist_ok=True)
+            uid = uuid4().hex
+            outdir = self.optimize_dir / "study_database"
+            study_db = outdir / f"optuna_study_{uid}.db"
+            outdir.mkdir(parents=True, exist_ok=True)
 
-            if self.tune_resume and study_db.exists():
-                load_if_exists = True
-
-            if not self.tune_resume and study_db.exists():
-                timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-                study_db = study_db.with_name(f"optuna_study_{timestamp}.db")
+            if study_db.exists():
+                msg = f"Optuna study database already exists at: {study_db}"
+                self.logger.info(msg)
+                if self.tune_resume:
+                    msg = "Resuming tuning from existing database."
+                    self.logger.info(msg)
+                    load_if_exists = True
+                else:
+                    msg = "Creating a new study database with a unique ID."
+                    self.logger.info(msg)
+                    uid = uuid4().hex
+                    study_db = study_db.with_name(f"optuna_study_{uid}.db")
 
         self.study_db = study_db
         study_name = f"{self.prefix} {self.model_name} Model Optimization"
         storage = f"sqlite:///{study_db}" if self.tune_save_db else None
 
-        study = optuna.create_study(
-            direction="maximize",
-            study_name=study_name,
-            storage=storage,
-            load_if_exists=load_if_exists,
-            pruner=optuna.pruners.MedianPruner(
-                # Guard against small `n_trials` values (e.g., 1)
-                # that can otherwise produce 0 startup/warmup/min trials.
-                n_startup_trials=max(
-                    1, min(int(self.n_trials * 0.1), 10, int(self.n_trials))
-                ),
-                n_warmup_steps=150,
-                n_min_trials=max(
-                    1, min(int(0.5 * self.n_trials), 25, int(self.n_trials))
-                ),
-            ),
-        )
+        if self.num_tuned_params_ == 0:
+            msg = "Number of tuned parameters is zero. Ensure that the child class sets 'num_tuned_params_'."
+            self.logger.warning(msg)
+            n_params = None
+        else:
+            n_params = self.num_tuned_params_
 
-        if not hasattr(self, "_objective"):
-            msg = "`_objective()` must be implemented in the child class."
-            self.logger.error(msg)
-            raise NotImplementedError(msg)
+        n_startup = self._compute_tpe_startup_trials(
+            n_trials=self.n_trials, n_params=n_params
+        )
+        sampler = optuna.samplers.TPESampler(seed=self.seed, n_startup_trials=n_startup)
+
+        # 1. Define the base pruner (Hyperband for efficiency)
+        base_pruner = optuna.pruners.HyperbandPruner(
+            min_resource=max(10, int(self.epochs * 0.2)),  # 10 or 20% of epochs
+            max_resource=self.epochs,  # Max number of epochs
+            reduction_factor=3,  # 1/3 of trials survive each round
+        )
+        pruner = optuna.pruners.PatientPruner(
+            base_pruner,
+            patience=3,  # Non-improving steps before pruning
+            min_delta=0,  # Minimum improvement to reset patience
+        )
+        study_kwargs = {
+            "study_name": study_name,
+            "storage": storage,
+            "load_if_exists": load_if_exists,
+            "pruner": pruner,
+            "sampler": sampler,
+        }
+
+        direction, directions = "maximize", ["maximize"] * len(self.tune_metric)
+        if isinstance(self.tune_metric, (list, tuple)):
+            msg = f"Tuning multiple metrics: {', '.join(self.tune_metric)}"
+            self.logger.info(msg)
+            study = optuna.create_study(directions=directions, **study_kwargs)
+        else:
+            msg = f"Tuning single metric: {self.tune_metric}"
+            self.logger.info(msg)
+            study = optuna.create_study(direction=direction, **study_kwargs)
 
         self.n_jobs = getattr(self, "n_jobs", 1)
         if self.n_jobs < -1 or self.n_jobs == 0:
-            self.logger.warning(f"Invalid n_jobs={self.n_jobs}. Setting n_jobs=1.")
+            msg = f"Invalid n_jobs={self.n_jobs}. Setting n_jobs=1."
+            self.logger.warning(msg)
             self.n_jobs = 1
 
-        show_progress_bar = not self.verbose and not self.debug and self.n_jobs == 1
+        bar = not self.verbose and not self.debug and self.n_jobs == 1
 
-        # Set the best parameters.
-        # NOTE: _set_best_params() must be implemented in the child class.
-        if not hasattr(self, "_set_best_params"):
-            msg = "Method `_set_best_params()` must be implemented in the child class."
-            self.logger.error(msg)
-            raise NotImplementedError(msg)
-
+        # Custom logger
+        optlog = configure_optuna_best_trial_logger(min_delta=0.0)
+        optlog.start(study, self.n_trials)
         study.optimize(
             lambda trial: self._objective(trial),
             n_trials=self.n_trials,
             n_jobs=self.n_jobs,
             gc_after_trial=True,
-            show_progress_bar=show_progress_bar,
+            show_progress_bar=bar,
+            callbacks=[optlog.callback],
         )
+        optlog.finish(study)
 
         try:
             best_metric = study.best_value
             best_params = study.best_params
         except Exception:
-            msg = "Tuning failed: No successful trials completed."
-            self.logger.error(msg)
-            raise RuntimeError(msg)
+            try:
+                best_metric = study.best_trials[0].values
+                best_params = study.best_trials[0].params
+            except Exception:
+                msg = f"[{self.model_name}] Tuning failed: No successful trials completed. Try enabling debug mode for more details."
+                self.logger.error(msg)
+                raise RuntimeError(msg)
+
+        if isinstance(best_metric, (list, tuple)) and isinstance(
+            self.tune_metric, (list, tuple)
+        ):
+            best_metric_str = ", ".join(
+                f"Best {m} metric: {v:.4f}"
+                for m, v in zip(self.tune_metric, best_metric)
+            )
+        else:
+            best_metric_str = f"Best {self.tune_metric} metric: {best_metric:.4f}"
 
         self.best_params_ = self._set_best_params(best_params)
         self.model_params.update(self.best_params_)
-        self.logger.info(f"Best {self.tune_metric} metric: {best_metric}")
-        self.logger.info("Best parameters:")
         best_params_tmp = copy.deepcopy(best_params)
         best_params_tmp["learning_rate"] = self.learning_rate
 
-        tn = f"{self.tune_metric} Value"
+        tn = f"{self.primary_metric} Value"
 
         if self.show_plots:
             self.plotter_.plot_tuning(
                 study, self.model_name, self.optimize_dir / "plots", target_name=tn
             )
+
+        if study.trials:
+            start_time = study.trials[0].datetime_start
+            end_time = study.trials[-1].datetime_complete
+            mean_trial_duration = None
+            if start_time is not None and end_time is not None:
+                duration = end_time - start_time
+                if len(study.trials) > 0:
+                    mean_trial_duration = sum(
+                        (
+                            t.duration
+                            for t in study.trials
+                            if study.trials is not None and t.duration is not None
+                        ),
+                        timedelta(0),
+                    ) / len(study.trials)
+                    stddev_trial_duration_seconds = (
+                        sum(
+                            (
+                                (t.duration - mean_trial_duration).total_seconds() ** 2
+                                for t in study.trials
+                                if study.trials is not None and t.duration is not None
+                            ),
+                        )
+                        / len(study.trials)
+                    ) ** 0.5
+                    stddev_trial_duration = timedelta(
+                        seconds=stddev_trial_duration_seconds
+                    )
+        else:
+            duration = None
+            mean_trial_duration = None
+            stddev_trial_duration = None
+
+        self.logger.info("")
+        self.logger.info("************ TUNING SUMMARY ************")
+        self.logger.info("")
+        if duration is not None:
+            self.logger.info(
+                f"Tuning completed in: {duration} (HH:MM:SS) for {len(study.trials)} trials."
+            )
+        if mean_trial_duration is not None:
+            self.logger.info("")
+            self.logger.info(f"Average trial duration: {mean_trial_duration}")
+        if stddev_trial_duration is not None:
+            self.logger.info("")
+            self.logger.info(
+                f"Trial duration standard deviation: {stddev_trial_duration}"
+            )
+        self.logger.info("")
+        self.logger.info(best_metric_str)
+        self.logger.info("")
+        self.logger.info("Best tuned parameters:")
+        self.logger.info("")
+        self.logger.info(pprint.pformat(self.best_params_, indent=4, width=72))
+        self.logger.info("")
+
+        self.logger.info("Tuning completed!")
 
         return best_params_tmp
 
@@ -278,7 +399,7 @@ class BaseNNImputer:
     def build_model(
         self,
         Model: Type[torch.nn.Module],
-        model_params: Dict[str, Any],
+        model_params: dict[str, Any],
     ) -> torch.nn.Module:
         """Builds and initializes a neural network model instance.
 
@@ -286,7 +407,7 @@ class BaseNNImputer:
 
         Args:
             Model (torch.nn.Module): The model class to be instantiated.
-            model_params (Dict[str, Any]): A dictionary of variable model hyperparameters, typically sampled during a hyperparameter search.
+            model_params (dict[str, Any]): A dictionary of variable model hyperparameters, typically sampled during a hyperparameter search.
 
         Returns:
             torch.nn.Module: The constructed model instance, ready for training.
@@ -316,18 +437,25 @@ class BaseNNImputer:
             "device": self.device,
         }
 
+        if self.model_name in {f"ImputeUBP", "ImputeNLPCA"}:
+            all_params["num_embeddings"] = getattr(self, "total_samples_", 0)
+            if self.total_samples_ == 0:
+                msg = "Attribute 'total_samples_' is not set. Call fit() before build_model()."
+                self.logger.error(msg)
+                raise AttributeError(msg)
+
         # Update with the variable hyperparameters
         all_params.update(model_params)
 
         return Model(**all_params).to(self.device)
 
-    def initialize_plotting_and_scorers(self) -> Tuple[Plotting, Scorer]:
+    def initialize_plotting_and_scorers(self) -> tuple[Plotting, Scorer]:
         """Initializes and returns the plotting and scoring utility classes.
 
         This method should be called within a `fit` method to set up the standardized utilities for generating plots and calculating performance metrics.
 
         Returns:
-            Tuple[Plotting, Scorer]: A tuple containing the initialized Plotting and Scorer objects.
+            tuple[Plotting, Scorer]: A tuple containing the initialized Plotting and Scorer objects.
         """
         fmt = self.plot_format
 
@@ -343,7 +471,7 @@ class BaseNNImputer:
             show_plots=self.show_plots,
             verbose=self.verbose,
             debug=self.debug,
-            multiqc=True,
+            multiqc=self.use_multiqc,
             multiqc_section=f"PG-SUI: {self.model_name} Model Imputation",
         )
 
@@ -417,28 +545,32 @@ class BaseNNImputer:
         """
         dvc = device.lower().strip()
         if dvc == "cpu":
+            self.logger.debug("Using CPU as the compute device.")
             return torch.device("cpu")
         if dvc == "mps":
             if torch.backends.mps.is_available():
+                self.logger.debug("Using Apple MPS as the compute device.")
                 return torch.device("mps")
+
+            self.logger.debug("Apple MPS is unavailable. Falling back to CPU.")
             return torch.device("cpu")
         if torch.cuda.is_available():
+            self.logger.debug("Using CUDA GPU as the compute device.")
             return torch.device("cuda")
+
+        self.logger.debug("CUDA GPU is unavailable. Falling back to CPU.")
         return torch.device("cpu")
 
     def _create_model_directories(
-        self, prefix: str, outdirs: List[str], *, outdir: Path | str | None = None
+        self, prefix: str, outdirs: list[str], *, outdir: Path | str | None = None
     ) -> None:
         """Creates the directory structure for storing model outputs.
 
-        This method sets up a standardized folder hierarchy for saving models,
-        plots, metrics, and optimization results, organized under a main directory
-        named after the provided prefix. The current implementation always uses
-        ``<cwd>/<prefix>_output`` regardless of ``outdir``.
+        This method sets up a standardized folder hierarchy for saving models, plots, metrics, and optimization results, organized under a main directory named after the provided prefix. The current implementation always uses `<cwd>/<prefix>_output`` regardless of ``outdir``.
 
         Args:
             prefix (str): The prefix for the main output directory.
-            outdirs (List[str]): A list of subdirectory names to create within the main directory.
+            outdirs (list[str]): A list of subdirectory names to create within the main directory.
             outdir (Path | str | None): Requested base output directory (currently ignored).
 
         Raises:
@@ -448,6 +580,8 @@ class BaseNNImputer:
         formatted_output_dir = base_root / f"{prefix}_output"
         formatted_output_dir = Path(f"{prefix}_output")
         base_dir = formatted_output_dir / "Unsupervised"
+
+        self.logger.debug(f"Creating output directories under: {base_dir}")
 
         for d in outdirs:
             subdir = base_dir / d / self.model_name
@@ -480,47 +614,6 @@ class BaseNNImputer:
                 torch.mps.empty_cache()
             except Exception:
                 pass
-
-    def _make_eval_visualizations(
-        self,
-        labels: List[str],
-        y_pred_proba: np.ndarray,
-        y_true: np.ndarray,
-        y_pred: np.ndarray,
-        metrics: Dict[str, float],
-        msg: str,
-    ) -> None:
-        """Generate and save evaluation visualizations.
-
-        3-class (zygosity) or 10-class (IUPAC) depending on `labels` length.
-
-        Args:
-            labels (List[str]): Class label names.
-            y_pred_proba (np.ndarray): Predicted probabilities (2D array).
-            y_true (np.ndarray): True labels (1D array).
-            y_pred (np.ndarray): Predicted labels (1D array).
-            metrics (Dict[str, float]): Computed metrics.
-            msg (str): Message to log before generating plots.
-        """
-        self.logger.info(msg)
-
-        prefix = "zygosity" if len(labels) == 3 else "iupac"
-        n_labels = len(labels)
-
-        if self.show_plots:
-            self.plotter_.plot_metrics(
-                y_true=y_true,
-                y_pred_proba=y_pred_proba,
-                metrics=metrics,
-                label_names=labels,
-                prefix=f"geno{n_labels}_{prefix}",
-            )
-            self.plotter_.plot_confusion_matrix(
-                y_true_1d=y_true,
-                y_pred_1d=y_pred,
-                label_names=labels,
-                prefix=f"geno{n_labels}_{prefix}",
-            )
 
     def _additional_metrics(
         self,
@@ -614,9 +707,9 @@ class BaseNNImputer:
         self,
         y_true: np.ndarray,
         y_pred: np.ndarray,
-        metrics: Dict[str, float],
+        metrics: dict[str, float],
         y_pred_proba: np.ndarray | None = None,
-        labels: List[str] = ["REF", "HET", "ALT"],
+        labels: list[str] = ["REF", "HET", "ALT"],
     ) -> None:
         """Generate and save detailed classification reports and visualizations.
 
@@ -625,9 +718,9 @@ class BaseNNImputer:
         Args:
             y_true (np.ndarray): True labels (1D array).
             y_pred (np.ndarray): Predicted labels (1D array).
-            metrics (Dict[str, float]): Computed metrics.
+            metrics (dict[str, float]): Computed metrics.
             y_pred_proba (np.ndarray | None): Predicted probabilities (2D array). Defaults to None.
-            labels (List[str]): Class label names (default: ["REF", "HET", "ALT"] for 3-class).
+            labels (list[str]): Class label names (default: ["REF", "HET", "ALT"] for 3-class).
         """
         report_name = "zygosity" if len(labels) <= 3 else "iupac"
         middle = "IUPAC" if report_name == "iupac" else "Zygosity"
@@ -763,9 +856,7 @@ class BaseNNImputer:
         Raises:
             ValueError: On invalid arguments or conflicting constraints.
         """
-        # ----------------------------
         # Basic validation
-        # ----------------------------
         if n_hidden < 0:
             msg = f"n_hidden must be >= 0, got {n_hidden}."
             self.logger.error(msg)
@@ -810,9 +901,7 @@ class BaseNNImputer:
             self.logger.error(msg)
             raise ValueError(msg)
 
-        # ----------------------------
         # Latent-aware minimum floor
-        # ----------------------------
         # Smallest multiple_of strictly greater than latent_dim
         min_hidden_floor = int(np.ceil((latent_dim + 1) / multiple_of) * multiple_of)
         effective_min = max(int(min_size), min_hidden_floor)
@@ -826,9 +915,8 @@ class BaseNNImputer:
             self.logger.error(msg)
             raise ValueError(msg)
 
-        # ----------------------------
-        # Infer num_features (if using flattened one-hot: n_inputs = num_features * num_classes)
-        # ----------------------------
+        # Infer num_features
+        # (if using flattened one-hot: n_inputs = num_features * num_classes)
         if n_inputs % n_outputs == 0:
             num_features = n_inputs // n_outputs
         else:
@@ -839,17 +927,14 @@ class BaseNNImputer:
                 "pass n_outputs=num_classes so num_features can be inferred correctly."
             )
 
-        # ----------------------------
-        # Base size heuristic (feature-matrix aware; avoids collapse for huge n_inputs)
-        # ----------------------------
-        obs_scale = (float(n_samples) * float(num_features)) / float(
-            num_features + n_outputs
-        )
-        base = int(np.ceil(float(alpha) * np.sqrt(obs_scale)))
+        # Base size heuristic
+        # (feature-matrix aware; avoids collapse for huge n_inputs)
+        # Conservative scaling: depends on sample size,
+        # but also grows slowly with feature count.
+        feature_factor = float(np.sqrt(np.log1p(float(num_features))))
+        base = int(np.ceil(float(alpha) * np.sqrt(float(n_samples)) * feature_factor))
 
-        # ----------------------------
         # Determine max_size
-        # ----------------------------
         if max_size is None:
             max_size = max(int(n_inputs), int(base), int(effective_min))
 
@@ -871,11 +956,9 @@ class BaseNNImputer:
         base = int(np.ceil(base / multiple_of) * multiple_of)
         base = int(np.clip(base, effective_min, max_size))
 
-        # ----------------------------
         # Enforce "no repeats" feasibility in discrete levels
         # Need n_hidden distinct multiples between base and effective_min:
         # base >= effective_min + (n_hidden - 1) * multiple_of
-        # ----------------------------
         required_min_base = effective_min + (n_hidden - 1) * multiple_of
 
         if required_min_base > max_size:
@@ -909,9 +992,7 @@ class BaseNNImputer:
             self.logger.error(msg)
             raise ValueError(msg)
 
-        # ----------------------------
         # Build schedule in level space (integers), then convert to sizes
-        # ----------------------------
         if n_hidden == 1:
             levels = np.array([start_level], dtype=int)
 
@@ -944,7 +1025,8 @@ class BaseNNImputer:
                     levels[i] = levels[i + 1] + 1
 
             if levels[0] > start_level:
-                # If this happens, we would need an even larger base; handle by raising base once.
+                # If this happens, we would need an even larger base;
+                # handle by raising base once.
                 needed_base = int(levels[0] * multiple_of)
                 if needed_base > max_size:
                     msg = (
@@ -963,7 +1045,8 @@ class BaseNNImputer:
                         levels[i] = levels[i + 1] + 1
 
         elif schedule == "pyramid":
-            # Geometric decay in level space (more aggressive early taper than linear)
+            # Geometric decay in level space
+            # (more aggressive early taper than linear)
             if decay is not None:
                 dcy = float(decay)
             else:
@@ -987,7 +1070,8 @@ class BaseNNImputer:
                 if levels[i] <= levels[i + 1]:
                     levels[i] = levels[i + 1] + 1
 
-            # If we overshot the start, bump base (once) if possible, then rebuild
+            # If we overshot the start,
+            # bump base (once) if possible, then rebuild
             if levels[0] > start_level:
                 needed_base = int(levels[0] * multiple_of)
                 if needed_base > max_size:
@@ -999,7 +1083,8 @@ class BaseNNImputer:
                     raise ValueError(msg)
 
                 start_level = needed_base // multiple_of
-                # Recompute with new start_level and same decay (or recompute decay if decay is None)
+                # Recompute with new start_level and same decay
+                # (or recompute decay if decay is None)
                 if decay is None:
                     dcy = (float(end_level) / float(start_level)) ** (
                         1.0 / float(n_hidden - 1)
@@ -1027,12 +1112,11 @@ class BaseNNImputer:
 
         # Final strict no-repeat assertion
         if np.any(np.diff(sizes) >= 0):
-            msg = (
-                "Internal error: produced non-decreasing or repeated hidden sizes after strict enforcement. "
-                f"sizes={sizes.tolist()}"
-            )
+            msg = f"Internal error: produced non-decreasing or repeated hidden sizes after strict enforcement. sizes={sizes.tolist()}"
             self.logger.error(msg)
             raise ValueError(msg)
+
+        self.logger.debug(f"Final hidden layer sizes: {sizes.tolist()}")
 
         return sizes.tolist()
 
@@ -1079,11 +1163,11 @@ class BaseNNImputer:
         num_classes = 2 if is_hap else int(self.num_classes_)
 
         if not np.any(m):
-            return torch.ones(num_classes, dtype=torch.long, device=self.device)
+            return torch.ones(num_classes, dtype=torch.float32).to(self.device)
 
         if is_hap:
             y = y.copy()
-            y[(y == 2) & m] = 1
+            y[(y > 0) & m] = 1
 
         y_m = y[m]
         if y_m.size:
@@ -1143,20 +1227,20 @@ class BaseNNImputer:
                 w[nz] /= mean_nz
             else:
                 self.logger.warning(
-                    "normalize=True requested, but mean of nonzero weights is not positive; skipping normalization."
+                    "normalize=True requested, but mean of nonzero weights is negative or zero; skipping normalization."
                 )
 
-        self.logger.debug(f"Class counts: {counts.astype(np.int8)}")
+        self.logger.debug(f"Class counts: {counts.astype(np.int64)}")
         self.logger.debug(
             f"Class weights (inverse={inverse}, power={power}, normalize={normalize}): {w}"
         )
 
-        return torch.as_tensor(w, dtype=torch.long, device=self.device)
+        return torch.as_tensor(w, dtype=torch.float32).to(self.device)
 
     def _one_hot_encode_012(
         self, X: np.ndarray | torch.Tensor, num_classes: int | None
     ) -> torch.Tensor:
-        """One-hot encode genotype calls. Missing inputs (<0) result in a vector of -1s.
+        """One-hot encode genotype calls. Missing inputs (<0) result in a vector of -1 values.
 
         Args:
             X (np.ndarray | torch.Tensor): Input genotype calls as integers (0,1, 2, etc.).
@@ -1164,7 +1248,7 @@ class BaseNNImputer:
 
         Returns:
             torch.Tensor: One-hot encoded tensor of shape (B, L, K) with dtype
-                ``torch.long``. Valid calls are 0/1, missing calls are all -1.
+                ``torch.int``. Valid calls are 0/1, missing calls are all -1.
 
         Notes:
             - Valid classes must be integers in [0, K-1]
@@ -1179,10 +1263,10 @@ class BaseNNImputer:
 
         # Make sure we have integer class labels
         if Xt.dtype.is_floating_point:
-            # Convert NaN -> -1 and cast to long
-            Xt = torch.nan_to_num(Xt, nan=-1.0).long()
+            # Convert NaN -> -1 and cast to int
+            Xt = torch.nan_to_num(Xt, nan=-1.0).int()
         else:
-            Xt = Xt.long()
+            Xt = Xt.int()
 
         B, L = Xt.shape
         K = int(num_classes) if num_classes is not None else int(self.num_classes_)
@@ -1207,14 +1291,18 @@ class BaseNNImputer:
             self.logger.error(msg)
             raise ValueError(msg)
 
-        # CHANGE: Initialize with -1.0 to ensure missing values are represented as [-1, -1, ... -1]
-        X_ohe = torch.full((B, L, K), -1.0, dtype=torch.long, device=self.device)
+        # Initialize with -1 to ensure missing values are represented
+        X_ohe = torch.full((B, L, K), -1).long().to(self.device)
 
-        idx = Xt[valid]
+        idx = Xt[valid].long()
 
         if idx.numel() > 0:
-            # Overwrite valid positions (which were -1) with the correct one-hot vectors
+            # Overwrite valid positions with the correct one-hot vectors
             X_ohe[valid] = F.one_hot(idx, num_classes=K).long()
+
+        self.logger.debug(
+            f"_one_hot_encode_012: input shape {X.shape} -> output shape {X_ohe.shape}"
+        )
 
         return X_ohe
 
@@ -1432,15 +1520,31 @@ class BaseNNImputer:
 
         return out
 
+    def _sanitize_for_json(self, obj) -> dict | list:
+        """Recursively remove non-JSON-serializable objects (e.g., torch.Tensors)."""
+        if isinstance(obj, dict):
+            return {
+                k: self._sanitize_for_json(v)
+                for k, v in obj.items()
+                if not isinstance(v, (torch.Tensor, torch.device)) and k != "debug"
+            }
+        elif isinstance(obj, (list, tuple)):
+            return [
+                self._sanitize_for_json(v)
+                for v in obj
+                if not isinstance(v, (torch.Tensor, torch.device)) and v != "debug"
+            ]
+        return obj
+
     def _save_best_params(
-        self, best_params: Dict[str, Any], objective_mode: bool = False
+        self, best_params: dict[str, Any], objective_mode: bool = False
     ) -> None:
         """Save the best hyperparameters to a JSON file.
 
         This method saves the best hyperparameters found during hyperparameter tuning to a JSON file in the optimization directory. The filename includes the model name for easy identification.
 
         Args:
-            best_params (Dict[str, Any]): A dictionary of the best hyperparameters to save.
+            best_params (dict[str, Any]): A dictionary of the best hyperparameters to save.
         """
         if not hasattr(self, "parameters_dir"):
             msg = "Attribute 'parameters_dir' not found. Ensure _create_model_directories() has been called."
@@ -1454,10 +1558,20 @@ class BaseNNImputer:
 
         fout.parent.mkdir(parents=True, exist_ok=True)
 
-        with open(fout, "w") as f:
-            json.dump(best_params, f, indent=4)
+        # Create the clean dictionary
+        bp = self._sanitize_for_json(best_params)
 
-    def _set_best_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(bp, dict):
+            msg = "Best parameters must be a dictionary after sanitization."
+            self.logger.error(msg)
+            raise TypeError(msg)
+
+        with open(fout, "w") as f:
+            json.dump(bp, f, indent=4)
+
+    def _set_best_params(
+        self, params: dict[str, Any], objective_mode: bool = False
+    ) -> dict[str, Any]:
         """An abstract method for setting best parameters."""
         raise NotImplementedError
 
@@ -1479,17 +1593,24 @@ class BaseNNImputer:
             or self.sim_prop <= 0.0
             or self.sim_prop >= 1.0
         ):
-            msg = "sim_prop must be set and between 0.0 and 1.0."
+            msg = f"sim_prop must be set and between 0.0 and 1.0, but got: {self.sim_prop}."
             self.logger.error(msg)
             raise AttributeError(msg)
 
         if not hasattr(self, "tree_parser") and "nonrandom" in self.sim_strategy:
-            msg = "tree_parser must be set for 'nonrandom' or 'nonrandom_weighted' sim_strategy."
+            msg = f"tree_parser must be set to use 'nonrandom' or 'nonrandom_weighted' sim_strategy, but got: {getattr(self, 'tree_parser', None)}."
             self.logger.error(msg)
             raise AttributeError(msg)
 
         # --- Simulate missing data ---
         X_for_sim = X.astype(np.float32, copy=True)
+
+        self.logger.debug(
+            f"Simulating missing data with strategy: {self.sim_strategy}, proportion: {self.sim_prop}"
+        )
+
+        self.logger.debug(f"Input data shape for simulation: {X_for_sim.shape}")
+
         tr = SimMissingTransformer(
             genotype_data=self.genotype_data,
             tree_parser=self.tree_parser,
@@ -1506,6 +1627,36 @@ class BaseNNImputer:
         sim_mask = tr.sim_missing_mask_.astype(bool)
         orig_mask = tr.original_missing_mask_.astype(bool)
 
+        self.logger.debug(f"Simulated data shape: {X_for_model.shape}")
+        self.logger.debug(f"Simulated missing mask shape: {sim_mask.shape}")
+        self.logger.debug(f"Original missing mask shape: {orig_mask.shape}")
+
+        # --- Hard leakage guards ---
+        if sim_mask.shape != orig_mask.shape:
+            msg = (
+                f"[{self.model_name}] Mask shape mismatch: "
+                f"sim_mask{sim_mask.shape} vs orig_mask{orig_mask.shape}."
+            )
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        overlap = sim_mask & orig_mask
+        if bool(overlap.any()):
+            n = int(overlap.sum())
+            msg = (
+                f"[{self.model_name}] sim_missing_mask overlaps original_missing_mask "
+                f"at {n} positions. This violates the no-overlap contract and biases evaluation."
+            )
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        self.logger.debug(
+            f"Percent missing in simulated mask: {100.0 * sim_mask.sum() / sim_mask.size:.2f}%"
+        )
+        self.logger.debug(
+            f"Percent missing in original mask: {100.0 * orig_mask.sum() / orig_mask.size:.2f}%"
+        )
+
         return X_for_model, sim_mask, orig_mask
 
     def _train_val_test_split(
@@ -1521,7 +1672,7 @@ class BaseNNImputer:
 
         Raises:
             ValueError: If there are not enough samples for splitting.
-            AssertionError: If validation_split is not in (0.0, 1.0).
+            ValueError: If validation_split is not in (0.0, 1.0).
         """
         n_samples = X.shape[0]
 
@@ -1530,9 +1681,10 @@ class BaseNNImputer:
             self.logger.error(msg)
             raise ValueError(msg)
 
-        assert (
-            self.validation_split > 0.0 and self.validation_split < 1.0
-        ), f"validation_split must be in (0.0, 1.0), but got {self.validation_split}."
+        if not (0.0 < float(self.validation_split) < 1.0):
+            msg = f"validation_split must be in (0.0, 1.0), but got {self.validation_split}."
+            self.logger.error(msg)
+            raise ValueError(msg)
 
         # Train/Val split
         indices = np.arange(n_samples)
@@ -1566,7 +1718,7 @@ class BaseNNImputer:
         """Create DataLoader for training and validation.
 
         Args:
-            X (np.ndarray): 0/1/2-encoded input matrix.
+            X (np.ndarray): One-hot encoded 0/1/2 (diploid) or 0/1 (haploid) input matrix.
             y (np.ndarray): 0/1/2-encoded matrix with -1 for missing.
             mask (np.ndarray): Boolean mask of entries to score in the loss.
             batch_size (int): Batch size.
@@ -1606,12 +1758,11 @@ class BaseNNImputer:
             torch.Tensor: Current value of the hyperparameter.
         """
         if epoch < warm:
-            val = torch.tensor(init_val)
+            val = torch.tensor(init_val, dtype=torch.float32)
         elif epoch < warm + ramp:
-            val = torch.tensor(final * ((epoch - warm) / ramp))
+            val = torch.tensor(final * ((epoch - warm) / ramp), dtype=torch.float32)
         else:
-            val = torch.tensor(final)
-
+            val = torch.tensor(final, dtype=torch.float32)
         return val.to(self.device)
 
     def _anneal_config(
@@ -1623,7 +1774,7 @@ class BaseNNImputer:
         *,
         warm_alt: int = 50,
         ramp_alt: int = 100,
-    ) -> Tuple[float, int, int]:
+    ) -> tuple[float, int, int]:
         """Configure annealing schedule for a hyperparameter.
 
         Args:
@@ -1635,7 +1786,7 @@ class BaseNNImputer:
             ramp_alt (int): Alternative ramp-up period if 20% of epochs is too long
 
         Returns:
-            Tuple[float, int, int]: Final value, warm-up epochs, ramp-up epochs.
+            tuple[float, int, int]: Final value, warm-up epochs, ramp-up epochs.
         """
         val = None
         if params is not None and params:
@@ -1655,72 +1806,6 @@ class BaseNNImputer:
             int(0.2 * max_epochs), ramp_alt
         )
         return final, warm, ramp
-
-    def _repair_ref_alt_from_iupac(self, loci: np.ndarray) -> None:
-        """Repair REF/ALT for specific loci using observed IUPAC genotypes.
-
-        Args:
-            loci (np.ndarray): Array of locus indices to repair.
-
-        Notes:
-            - Modifies self.genotype_data.ref and self.genotype_data.alt in place.
-        """
-        iupac_to_bases = {
-            "A": {"A"},
-            "C": {"C"},
-            "G": {"G"},
-            "T": {"T"},
-            "R": {"A", "G"},
-            "Y": {"C", "T"},
-            "S": {"G", "C"},
-            "W": {"A", "T"},
-            "K": {"G", "T"},
-            "M": {"A", "C"},
-            "B": {"C", "G", "T"},
-            "D": {"A", "G", "T"},
-            "H": {"A", "C", "T"},
-            "V": {"A", "C", "G"},
-        }
-        missing_codes = {"", ".", "N", "NONE", "-", "?", "./.", ".|."}
-
-        def norm(v: object) -> str | None:
-            if v is None:
-                return None
-            s = str(v).upper().strip()
-            if not s or s in missing_codes:
-                return None
-            return s if s in iupac_to_bases else None
-
-        snp = np.asarray(self.genotype_data.snp_data, dtype=object)  # (N,L) IUPAC-ish
-        refs = list(getattr(self.genotype_data, "ref", [None] * snp.shape[1]))
-        alts = list(getattr(self.genotype_data, "alt", [None] * snp.shape[1]))
-
-        for j in loci:
-            cnt = Counter()
-            col = snp[:, int(j)]
-            for g in col:
-                code = norm(g)
-                if code is None:
-                    continue
-                for b in iupac_to_bases[code]:
-                    cnt[b] += 1
-
-            if not cnt:
-                continue
-
-            common = [b for b, _ in cnt.most_common()]
-            ref = common[0]
-            alt = common[1] if len(common) > 1 else None
-
-            refs[int(j)] = ref
-            alts[int(j)] = alt if alt is not None else "."
-
-        self.genotype_data.ref = np.asarray(refs, dtype=object)
-
-        if not isinstance(alts, np.ndarray):
-            alts = np.array(alts, dtype=object).tolist()
-
-        self.genotype_data.alt = alts
 
     def _aligned_ref_alt(self, L: int) -> tuple[list[object], list[object]]:
         """Return REF/ALT aligned to the genotype matrix columns.
@@ -1760,97 +1845,280 @@ class BaseNNImputer:
         alts_list = [unwrap(x) for x in alts_arr.tolist()]
         return refs_list, alts_list
 
-    def _build_valid_class_mask(self) -> torch.Tensor:
-        L = self.num_features_
-        K = self.num_classes_
-        mask = np.ones((L, K), dtype=bool)
+    def validate_tuning_metric(self) -> str:
+        """Validate and return the primary tuning metric.
 
-        # --- IUPAC helpers (single-character only) ---
-        iupac_to_bases: dict[str, set[str]] = {
-            "A": {"A"},
-            "C": {"C"},
-            "G": {"G"},
-            "T": {"T"},
-            "R": {"A", "G"},
-            "Y": {"C", "T"},
-            "S": {"G", "C"},
-            "W": {"A", "T"},
-            "K": {"G", "T"},
-            "M": {"A", "C"},
-            "B": {"C", "G", "T"},
-            "D": {"A", "G", "T"},
-            "H": {"A", "C", "T"},
-            "V": {"A", "C", "G"},
-        }
-        missing_codes = {"", ".", "N", "NONE", "-", "?", "./.", ".|."}
+        Returns:
+            str: The primary tuning metric.
 
-        # get aligned ref/alt (should be exactly length L)
-        refs, alts = self._aligned_ref_alt(L)
+        Raises:
+            ValueError: If the tuning metric is invalid.
+            TypeError: If the tuning metric is not a string or list/tuple of strings.
+        """
+        if isinstance(self.tune_metric, (list, tuple)):
+            if len(self.tune_metric) == 0:
+                msg = f"[{self.model_name}] tune_metric list cannot be empty."
+                self.logger.error(msg)
+                raise ValueError(msg)
+            return self.tune_metric[0]
 
-        def _normalize_iupac(value: object) -> str | None:
-            """Return a single-letter IUPAC code or None if missing/invalid."""
-            if value is None:
-                return None
-            if isinstance(value, (bytes, np.bytes_)):
-                value = value.decode("utf-8", errors="ignore")
+        elif isinstance(self.tune_metric, str):
+            return self.tune_metric
 
-            # allow list/tuple/array containers (take first valid)
-            if isinstance(value, (list, tuple, np.ndarray, pd.Series)):
-                for item in value:
-                    code = _normalize_iupac(item)
-                    if code is not None:
-                        return code
-                return None
+        else:
+            msg = f"[{self.model_name}] tune_metric must be a string or list/tuple of strings."
+            self.logger.error(msg)
+            raise TypeError(msg)
 
-            s = str(value).upper().strip()
-            if not s or s in missing_codes:
-                return None
+    def _compute_tpe_startup_trials(
+        self,
+        n_trials: int,
+        *,
+        n_params: Optional[int] = None,
+        frac: float = 0.10,
+        min_startup: int = 5,
+        max_startup: int = 50,
+        min_tpe_trials: int = 5,
+    ) -> int:
+        """Compute a meaningful ``n_startup_trials`` for Optuna's TPESampler.
 
-            # handle comma-separated values
-            if "," in s:
-                for tok in (t.strip() for t in s.split(",")):
-                    if tok and tok not in missing_codes and tok in iupac_to_bases:
-                        return tok
-                return None
+        Notes:
+            - Allocate ~`frac` of the total budget to pure-random exploration.
+            - Enforce absolute lower/upper bounds (min_startup/max_startup).
+            - Ensure at least `min_tpe_trials` remain for model-based TPE suggestions.
+            - Optionally scale startup with the number of tuned parameters (n_params).
 
-            return s if s in iupac_to_bases else None
+        Args:
+            n_trials (int): Total trial budget for the study (must be >= 1).
+            n_params (Optional[int]): Optional count of parameters being tuned (dimensionality proxy).
+            frac (float): Fraction of trials to use as startup (random) trials.
+            min_startup (int): Minimum number of startup trials (when budget permits).
+            max_startup (int): Maximum number of startup trials.
+            min_tpe_trials (int): Minimum number of trials reserved for TPE after startup.
 
-        # 1) metadata restriction
-        for j in range(L):
-            ref = _normalize_iupac(refs[j])
-            alt = _normalize_iupac(alts[j])
+        Returns:
+            int: ``n_startup_trials`` to pass to optuna.samplers.TPESampler.
+        """
+        if n_trials <= 0:
+            msg = "n_trials must be >= 1."
+            self.logger.error(msg)
+            raise ValueError(msg)
 
-            if alt is None or (ref is not None and alt == ref):
-                mask[j, :] = False
-                mask[j, 0] = True
+        # If there's essentially no budget, don't pretend TPE will help.
+        if n_trials <= 2:
+            self.logger.warning(
+                f"[{self.model_name}] n_trials <= 2; Optuna tuning may not be effective. It essentially reduces to random parameter search."
+            )
+            return max(0, n_trials - 1)
 
-        # 2) data-driven override
-        y_train = getattr(self, "y_train_", None)
-        if y_train is not None:
-            y = np.asarray(y_train)
-            if y.ndim == 2 and y.shape[1] == L:
-                if K == 2:
-                    y = y.copy()
-                    y[y == 2] = 1
-                valid = y >= 0
-                if valid.any():
-                    observed = np.zeros((L, K), dtype=bool)
-                    for c in range(K):
-                        observed[:, c] = np.any(valid & (y == c), axis=0)
+        # Leave room for TPE to actually run.
+        max_allowed = max(1, n_trials - min_tpe_trials)
 
-                    conflict = observed & (~mask)
-                    if conflict.any():
-                        loci = np.where(conflict.any(axis=1))[0]
-                        self.valid_class_mask_conflict_loci_ = loci
-                        self.logger.warning(
-                            f"valid_class_mask_ metadata forbids observed classes at {loci.size} loci. "
-                            "Expanding mask to include observed classes."
-                        )
-                        mask |= observed
+        # Fractional exploration budget (ceil avoids 0 for small n_trials).
+        startup = math.ceil(frac * n_trials)
 
-        bad = np.where(~mask.any(axis=1))[0]
-        if bad.size:
-            mask[bad, :] = False
-            mask[bad, 0] = True
+        # Dimensionality-aware floor (mild, not overly aggressive).
+        if n_params is not None and n_params > 0:
+            startup = max(startup, min_startup, min(n_params, max_startup))
+        else:
+            startup = max(startup, min_startup)
 
-        return torch.as_tensor(mask, dtype=torch.bool, device=self.device)
+        # Hard caps.
+        startup = min(startup, max_startup, max_allowed)
+
+        p = "None" if n_params is None else int(n_params)
+        self.logger.debug(
+            f"[{self.model_name}] n_startup_trials={int(startup)} for Optuna TPE sampler. Total trials={int(n_trials)}, n_params={p}."
+        )
+
+        return int(startup)
+
+    def _validate_sim_and_orig_masks(
+        self,
+        *,
+        sim_mask: np.ndarray,
+        orig_mask: np.ndarray,
+        context: str,
+        min_eval: int = 100,
+    ) -> None:
+        """Sanity checks to prevent leakage and degenerate evaluation.
+
+        Args:
+            sim_mask (np.ndarray): True where simulated missingness was applied.
+            orig_mask (np.ndarray): True where original (real) missingness exists.
+            context (str): Label used in error messages (e.g., "full", "train", "val", "test").
+            min_eval (int): Minimum number of evaluable positions required (sim & ~orig).
+        """
+        if sim_mask.shape != orig_mask.shape:
+            msg = f"[{self.model_name}] Mask shape mismatch ({context}): sim_mask ({sim_mask.shape}) vs orig_mask ({orig_mask.shape})."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        if sim_mask.dtype != bool:
+            sim_mask = sim_mask.astype(bool, copy=False)
+        if orig_mask.dtype != bool:
+            orig_mask = orig_mask.astype(bool, copy=False)
+
+        overlap = sim_mask & orig_mask
+        if bool(overlap.any()):
+            n = int(overlap.sum())
+            msg = f"[{self.model_name}] sim_mask overlaps orig_mask context=({context}) at {n} positions. This violates the no-overlap contract and can bias metrics."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        eval_mask = sim_mask & ~orig_mask
+        n_eval = int(eval_mask.sum())
+        if n_eval < int(min_eval):
+            # This can happen with tiny datasets, sim_prop ~ 0,
+            #  or heavy original missingness.
+            self.logger.warning(
+                f"[{self.model_name}] Only {n_eval} evaluable positions ({context}) after applying sim_mask and excluding orig_mask. Consider increasing sim_prop or using a larger dataset to ensure reliable evaluation."
+            )
+
+        self.logger.debug(
+            f"[{self.model_name}] {n_eval} evaluable positions after applying sim_mask and excluding orig_mask."
+        )
+
+    def _log_class_weights(self) -> None:
+        """Log the computed class weights.
+
+        Outputs class weights (if available) to logs.
+        """
+        if self.class_weights_ is not None:
+            genotypes = self.class_weights_.numpy(force=True)
+            ref, het, alt = genotypes.astype(float).tolist()
+            self.logger.info(
+                f"class_weights=[REF={ref:.2f}, HET={het:.2f}, ALT={alt:.2f}]"
+            )
+
+    def _richprint_best_params(
+        self, d: dict[str, Any], title: str, *, precision=3
+    ) -> None:
+        """Pretty-print the best hyperparameters using PrettyMetrics.
+
+        This method utilizes the PrettyMetrics utility to display the best hyperparameters in a structured format. It checks if verbose or debug logging is enabled before printing.
+
+        Args:
+            d (dict[str, Any]): A dictionary of the best hyperparameters to print.
+            precision (int): Number of decimal places for floating-point values. Defaults to 3.
+        """
+        if self.verbose or self.debug:
+            self.logger.info(f"[{self.model_name}] model parameters:")
+            title = f"[{self.model_name}] Model Hyperparameters"
+            pm = PrettyMetrics(d, precision=precision, title=title)
+            pm.render()
+
+    def _save_display_model_params(self, *, is_tuned: bool) -> None:
+        """Save and display the model hyperparameters.
+
+        This method handles the saving and displaying of model hyperparameters. It sanitizes the best parameters for JSON serialization, saves them to a file, and pretty-prints them if verbose or debug logging is enabled.
+
+        Args:
+            is_tuned (bool): Whether the model was tuned or used fixed parameters.
+
+        Notes:
+            - Saves the best parameters to a JSON file.
+            - Pretty-prints the parameters if verbose or debug logging is enabled.
+        """
+        bp = self._sanitize_for_json(self.best_params_)
+
+        if not isinstance(bp, dict):
+            msg = "Best parameters must be a dictionary after sanitization."
+            self.logger.error(msg)
+            raise TypeError(msg)
+
+        # Save model parameters to a JSON file.
+        self._save_best_params(bp, objective_mode=False)
+
+        if is_tuned:
+            # Pretty print best params
+            title = f"[{self.model_name}] Optimized Model Parameters"
+            self._richprint_best_params(bp, title, precision=3)
+
+            # Save best parameters to a JSON file.
+            self._save_best_params(bp, objective_mode=True)
+        else:
+            self.logger.info(f"[{self.model_name}] Model used fixed parameters")
+            title = f"[{self.model_name}] Fixed Model Parameters"
+            self._richprint_best_params(bp, title, precision=3)
+
+    def _validate_mask_splits(
+        self, sim_mask: np.ndarray, orig_mask: np.ndarray, *, context: str = "full"
+    ) -> None:
+        """Validate simulated and original masks for train/val/test splits.
+
+        Args:
+            sim_mask (np.ndarray): The simulated mask to validate.
+            orig_mask (np.ndarray): The original mask to validate.
+            context (str): Context label for error messages (e.g., "full", "train", "val", "test").
+        """
+        self._validate_sim_and_orig_masks(
+            sim_mask=sim_mask, orig_mask=orig_mask, context=context
+        )
+
+    def _log_mask_counts(
+        self, train: np.ndarray, val: np.ndarray, test: np.ndarray, dset: str
+    ) -> None:
+        """Log counts of missing entries in train/val/test splits.
+
+        Args:
+            train (np.ndarray): Mask for the training set.
+            val (np.ndarray): Mask for the validation set.
+            test (np.ndarray): Mask for the test set.
+            dset (str): Dataset type label (e.g., "Simulated" or "Real").
+        """
+        self.logger.info(f"Train Set {dset} Counts: {np.count_nonzero(train)}")
+        self.logger.info(f"Val Set {dset} Counts: {np.count_nonzero(val)}")
+        self.logger.info(f"Test Set {dset} Counts: {np.count_nonzero(test)}")
+
+        self.logger.info(
+            f"Total known genotypes per split (sim_strategy={self.sim_strategy}): train set={np.count_nonzero(~train)}, val set={np.count_nonzero(~val)}, test set={np.count_nonzero(~test)}"
+        )
+
+    def validate_and_log_masks(self) -> None:
+        """Validate and log simulated and original masks for train/val/test splits.
+
+        Raises:
+            TypeError: If any of the required masks are not set.
+        """
+        masks = [
+            (self.sim_mask_train_, self.sim_mask_val_, self.sim_mask_test_),
+            (self.orig_mask_train_, self.orig_mask_val_, self.orig_mask_test_),
+        ]
+        if any(mask is None for masks_pair in masks for mask in masks_pair):
+            msg = "Simulated and original masks for train/val/test splits must be set before validation."
+            self.logger.error(msg)
+            raise TypeError(msg)
+
+        for i, mask in enumerate(masks):
+            self._log_mask_counts(*mask, "Simulated" if i == 0 else "Real")
+
+        sm = (self.sim_mask_train_, self.sim_mask_val_, self.sim_mask_test_)
+        om = (self.orig_mask_train_, self.orig_mask_val_, self.orig_mask_test_)
+        contexts = ("train", "val", "test")
+        for sim_mask, orig_mask, context in zip(sm, om, contexts):
+            self._validate_mask_splits(sim_mask, orig_mask, context=context)
+
+    def _extract_masks_indices(
+        self, mask: np.ndarray, indices: tuple[np.ndarray, np.ndarray, np.ndarray]
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Extract train/val/test masks from full mask using provided indices.
+
+        Args:
+            mask (np.ndarray): Full mask array of shape (n_samples, n_loci).
+            indices (tuple[np.ndarray, np.ndarray, np.ndarray]): Tuple of train, val, test indices.
+
+        Returns:
+            tuple[np.ndarray, np.ndarray, np.ndarray]: Train, val, test masks.
+        """
+        if not len(indices) == 3:
+            msg = "Indices tuple must contain exactly three elements: (train_idx, val_idx, test_idx)."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        train_idx, val_idx, test_idx = indices
+
+        train_mask = mask[train_idx].copy()
+        val_mask = mask[val_idx].copy()
+        test_mask = mask[test_idx].copy()
+        return train_mask, val_mask, test_mask

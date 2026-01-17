@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal, cast
+from typing import Literal
 
 import torch
 import torch.nn as nn
@@ -71,16 +71,14 @@ class FocalCELoss(nn.Module):
             logits = logits.permute(0, *range(2, logits.dim()), 1)
 
         logits_flat = logits.reshape(-1, logits.size(-1))
-        targets_flat = targets.reshape(-1).long()
+        targets_flat = targets.reshape(-1).int()
 
         valid_mask = targets_flat != self.ignore_index
 
         # Early exit if everything is ignored
         if not bool(valid_mask.any()):
-            out = torch.tensor(0.0, device=logits.device, dtype=logits.dtype)
             # preserve grad path behavior if caller expects it
-            out = out.requires_grad_(True)
-            return out
+            return logits.sum() * 0.0
 
         logits_v = logits_flat[valid_mask]
         targets_v = targets_flat[valid_mask]

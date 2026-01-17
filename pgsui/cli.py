@@ -18,7 +18,7 @@ Examples
 pg-sui --vcf data.vcf.gz --popmap pops.popmap --prefix run1
 pg-sui --vcf data.vcf.gz --popmap pops.popmap --prefix tuned --tune
 pg-sui --vcf data.vcf.gz --popmap pops.popmap --prefix demo \
-    --models ImputeAutoencoder ImputeVAE ImputeMostFrequent --seed deterministic --verbose
+    --models ImputeAutoencoder ImputeVAE ImputeUBP --seed deterministic --verbose
 pg-sui --vcf data.vcf.gz --popmap pops.popmap --prefix subset \
     --include-pops EA GU TT ON --device cpu --sim-prop 0.3 --sim-strategy nonrandom
 """
@@ -50,7 +50,6 @@ from typing import (
 
 from snpio import (
     GenePopReader,
-    NRemover2,
     PhylipReader,
     SNPioMultiQC,
     StructureReader,
@@ -62,11 +61,15 @@ from pgsui import (
     AutoencoderConfig,
     ImputeAutoencoder,
     ImputeMostFrequent,
+    ImputeNLPCA,
+    ImputeUBP,
     ImputeRefAllele,
     ImputeVAE,
     MostFrequentConfig,
     RefAlleleConfig,
     VAEConfig,
+    NLPCAConfig,
+    UBPConfig,
 )
 from pgsui.data_processing.config import (
     apply_dot_overrides,
@@ -74,9 +77,12 @@ from pgsui.data_processing.config import (
     load_yaml_to_dataclass,
     save_dataclass_yaml,
 )
+from pgsui.data_processing.containers import NLPCAConfig, UBPConfig
 
 # Canonical model order used everywhere (default and subset ordering)
 MODEL_ORDER: Tuple[str, ...] = (
+    "ImputeUBP",
+    "ImputeNLPCA",
     "ImputeVAE",
     "ImputeAutoencoder",
     "ImputeMostFrequent",
@@ -106,7 +112,7 @@ def _print_version() -> None:
 
 def _model_family(model_name: str) -> str:
     """Return output family folder name used by PG-SUI."""
-    if model_name in {"ImputeVAE", "ImputeAutoencoder"}:
+    if model_name in {"ImputeUBP", "ImputeNLPCA", "ImputeVAE", "ImputeAutoencoder"}:
         return "Unsupervised"
     if model_name in {"ImputeMostFrequent", "ImputeRefAllele"}:
         return "Deterministic"
@@ -140,7 +146,7 @@ def _force_tuning_off(cfg: Any, model_name: str) -> Any:
         return apply_dot_overrides(cfg, {"tune.enabled": False})
     except Exception as e:
         # Only strict for models that actually support tuning
-        if model_name in {"ImputeVAE", "ImputeAutoencoder"}:
+        if model_name in {"ImputeUBP", "ImputeNLPCA", "ImputeVAE", "ImputeAutoencoder"}:
             raise RuntimeError(
                 f"Failed to force tuning off for {model_name}: {e}"
             ) from e
@@ -187,36 +193,75 @@ def _load_best_params(best_params_path: Path) -> dict:
 def _apply_best_params_to_cfg(cfg: Any, best_params: dict, model_name: str) -> Any:
     """Apply best params into cfg using dot-path keys or inferred dot-paths.
 
-    - If JSON is nested, flatten to dot keys.
-    - If key already contains '.', treat as dot-path and apply directly.
-    - If key has no '.', try common sections in order: model., train., sim., tune., io., plot.
-    - Unknown keys are ignored with a warning.
+    Remaps legacy JSON keys to Config attribute names (e.g. power -> weights_power). Remaps 'model_params' dict to 'model' dot-paths. Ignores known metadata keys (n_features, num_classes) to prevent warning spam. Applies keys via prefixes (model., train., etc.) if explicit paths fail.
     """
-    # Flatten if nested (but keep existing dot keys as-is too)
+    # 1. Map JSON keys to Config attribute names
+    #    (JSON Key -> Dataclass Attribute Name)
+    key_aliases = {
+        "power": "weights_power",
+        "inverse": "weights_inverse",
+        "normalize": "weights_normalize",
+    }
+
+    # 2. Define keys to explicitly ignore (metadata in JSON that isn't a config setting)
+    #    This prevents "Best param 'n_features' not recognized" warnings.
+    ignored_keys = {
+        "n_features",
+        "num_classes",
+        "hidden_layer_sizes",  # This is derived from layer_schedule/scaling_factor
+        "model_params.n_features",
+        "model_params.num_classes",
+        "model_params.hidden_layer_sizes",
+    }
+
+    # 3. Flatten dictionary with intelligence
     flat = {}
     for k, v in best_params.items():
+        # A. Handle the specific 'model_params' block
+        if str(k) == "model_params" and isinstance(v, dict):
+            # Map "model_params.x" -> "model.x"
+            # We force the parent to be "model" so it targets ModelConfig
+            nested = _flatten_dict(v, parent="model")
+            flat.update(nested)
+            continue
+
+        # B. Standard Flattening
         if isinstance(v, dict):
             flat.update(_flatten_dict(v, str(k)))
         else:
-            flat[str(k)] = v
+            # C. Apply Aliases for root keys
+            final_k = str(k)
+            if final_k in key_aliases:
+                final_k = key_aliases[final_k]
+            flat[final_k] = v
 
-    candidate_prefixes = ("", "model.", "train.", "sim.", "tune.", "io.", "plot.")
+    # 4. Apply settings
+    # NOTE: 'tune.' is usually not needed for best_params
+    # (which are the result of tuning),
+    # but kept for safety.
+    candidate_prefix = ("", "model.", "train.", "sim.", "tune.", "io.", "plot.")
 
-    # Apply one by one so we can try multiple candidate destinations for
-    # non-dot keys
     for raw_k, v in flat.items():
+        # Skip explicitly ignored metadata
+        if raw_k in ignored_keys or any(
+            raw_k.endswith(f".{ik}") for ik in ignored_keys
+        ):
+            continue
+
+        # CASE 1: Key already has dots (e.g. "model.latent_dim")
+        # Because we remapped model_params -> model above, these should now be valid.
         if "." in raw_k:
             try:
                 cfg = apply_dot_overrides(cfg, {raw_k: v})
                 continue
-            except Exception as e:
-                logging.warning(
-                    f"Could not apply best param '{raw_k}' to {model_name} (dot key). Skipping. Error: {e}"
-                )
-                continue
+            except Exception:
+                # If exact dot-path failed, fall through to prefix search
+                pass
 
+        # CASE 2: Prefix Search
+        # Try applying empty prefix, then model., train., etc.
         applied = False
-        for pref in candidate_prefixes:
+        for pref in candidate_prefix:
             k = f"{pref}{raw_k}" if pref else raw_k
             try:
                 cfg = apply_dot_overrides(cfg, {k: v})
@@ -437,6 +482,11 @@ def _args_to_cli_overrides(args: argparse.Namespace) -> dict:
             "Disabling plotting for all models as per --disable-plotting flag."
         )
         overrides["plot.show"] = False
+    if getattr(args, "disable_multiqc", False):
+        logging.info(
+            "Disabling MultiQC-compatible plots as per --disable-multiqc flag."
+        )
+        overrides["plot.multiqc"] = False
 
     # Simulation overrides
     if hasattr(args, "sim_strategy"):
@@ -445,6 +495,9 @@ def _args_to_cli_overrides(args: argparse.Namespace) -> dict:
         overrides["sim.sim_prop"] = float(args.sim_prop)
 
     # Tuning
+    if hasattr(args, "tune_metrics"):
+        overrides["tune.metrics"] = args.tune_metrics
+
     if getattr(args, "load_best_params", False):
         # Never allow CLI flags to re-enable tuning when loading params
         if hasattr(args, "tune") and bool(getattr(args, "tune", False)):
@@ -609,6 +662,8 @@ def run_model_safely(model_name: str, builder, *, warn_only: bool = True) -> Non
 # -------------------------- Model Registry ------------------------------- #
 # Add config-driven models here by listing the class and its config dataclass.
 MODEL_REGISTRY: Dict[str, Dict[str, Any]] = {
+    "ImputeUBP": {"cls": ImputeUBP, "config_cls": UBPConfig},
+    "ImputeNLPCA": {"cls": ImputeNLPCA, "config_cls": NLPCAConfig},
     "ImputeAutoencoder": {"cls": ImputeAutoencoder, "config_cls": AutoencoderConfig},
     "ImputeVAE": {"cls": ImputeVAE, "config_cls": VAEConfig},
     "ImputeMostFrequent": {"cls": ImputeMostFrequent, "config_cls": MostFrequentConfig},
@@ -690,7 +745,12 @@ def _build_effective_config_for_model(
                 "Requested --load-best-params, but could not find a best parameters JSON "
                 f"for {model_name}. Looked under '.../optimize/<model>/parameters/best_tuned_parameters.json' and '{src_prefix}_output/{fam}/parameters/{model_name}/best_parameters.json'"
             )
-            if model_name in {"ImputeVAE", "ImputeAutoencoder"}:
+            if model_name in {
+                "ImputeUBP",
+                "ImputeNLPCA",
+                "ImputeVAE",
+                "ImputeAutoencoder",
+            }:
                 logging.error(msg)
                 raise FileNotFoundError(msg)
             logging.warning(msg)
@@ -716,7 +776,12 @@ def _build_effective_config_for_model(
         try:
             cfg = apply_dot_overrides(cfg, user_overrides)
         except Exception as e:
-            if model_name in {"ImputeAutoencoder", "ImputeVAE"}:
+            if model_name in {
+                "ImputeUBP",
+                "ImputeNLPCA",
+                "ImputeAutoencoder",
+                "ImputeVAE",
+            }:
                 logging.error(
                     f"Error applying --set overrides to {model_name} config: {e}"
                 )
@@ -890,6 +955,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="Optuna trials when --tune is set.",
     )
     parser.add_argument(
+        "--tune-metrics",
+        nargs="+",
+        type=str,
+        default=argparse.SUPPRESS,
+        help="Metric(s) to optimize during hyperparameter tuning. Applies to all models that support tuning. Choices: accuracy, f1, precision, recall, pr_macro, roc_auc, average_precision, mcc, jaccard. You can supply multiple metrics for multi-objective Optuna tuning by separating with spaces (Default: f1).",
+    )
+    parser.add_argument(
         "--batch-size",
         type=int,
         default=argparse.SUPPRESS,
@@ -1010,7 +1082,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         nargs="+",
         default=argparse.SUPPRESS,
         help=(
-            "Which models to run. Specify each model separated by a space. Choices: ImputeVAE ImputeAutoencoder ImputeMostFrequent ImputeRefAllele (Default is all models)."
+            "Which models to run. Specify each model separated by a space. Choices: ImputeUBP ImputeNLPCA ImputeVAE ImputeAutoencoder ImputeMostFrequent ImputeRefAllele (Default is all models)."
         ),
     )
 
@@ -1252,6 +1324,40 @@ def main(argv: Optional[List[str]] = None) -> int:
             sim_kwargs=cfg.sim.sim_kwargs,
         )
 
+    def build_impute_ubp():
+        cfg = cfgs_by_model.get("ImputeUBP")
+        if cfg is None:
+            cfg = (
+                UBPConfig.from_preset(args.preset)
+                if hasattr(args, "preset")
+                else UBPConfig()
+            )
+        return ImputeUBP(
+            genotype_data=gd,
+            tree_parser=tp,
+            config=cfg,
+            sim_strategy=cfg.sim.sim_strategy,
+            sim_prop=cfg.sim.sim_prop,
+            sim_kwargs=cfg.sim.sim_kwargs,
+        )
+
+    def build_impute_nlpca():
+        cfg = cfgs_by_model.get("ImputeNLPCA")
+        if cfg is None:
+            cfg = (
+                NLPCAConfig.from_preset(args.preset)
+                if hasattr(args, "preset")
+                else NLPCAConfig()
+            )
+        return ImputeNLPCA(
+            genotype_data=gd,
+            tree_parser=tp,
+            config=cfg,
+            sim_strategy=cfg.sim.sim_strategy,
+            sim_prop=cfg.sim.sim_prop,
+            sim_kwargs=cfg.sim.sim_kwargs,
+        )
+
     def build_impute_mostfreq():
         cfg = cfgs_by_model.get("ImputeMostFrequent")
         if cfg is None:
@@ -1289,6 +1395,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
 
     model_builders = {
+        "ImputeUBP": build_impute_ubp,
+        "ImputeNLPCA": build_impute_nlpca,
         "ImputeVAE": build_impute_vae,
         "ImputeAutoencoder": build_impute_autoencoder,
         "ImputeMostFrequent": build_impute_mostfreq,
@@ -1305,7 +1413,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         gd_imp = gd.copy()
         gd_imp.snp_data = X_imputed
 
-        if name in {"ImputeVAE", "ImputeAutoencoder"}:
+        if name in {"ImputeUBP", "ImputeNLPCA", "ImputeVAE", "ImputeAutoencoder"}:
             family = "Unsupervised"
         elif name in {"ImputeMostFrequent", "ImputeRefAllele"}:
             family = "Deterministic"

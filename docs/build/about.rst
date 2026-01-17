@@ -16,8 +16,8 @@ Key Design (at a glance)
 - **Overrides**: presets ⇢ YAML (optional) ⇢ explicit overrides via dot-keys; CLI mirrors the same precedence.
 - **CLI overrides**: ``pg-sui`` exposes ``--sim-strategy``, ``--sim-prop``, and ``--disable-simulate-missing`` so you can globally control missing-data simulation per run without editing YAML (``--disable-simulate-missing`` is for supervised/deterministic runs; unsupervised models require simulated masking).
 - **Evaluation**: macro-F1 and macro-PR with zygosity-aware summaries to address genomic class imbalance.
-- **Plotting**: confusion matrices, PR curves, and imputation accuracy stratified by MAF bins.
-- **Hyperparameter tuning**: built-in support for automated hyperparameter optimization with flexible search spaces.
+- **Plotting**: confusion matrices, PR curves, and imputation accuracy stratified by Minor Allele Frequency (MAF) bins.
+- **Hyperparameter tuning**: built-in support for automated hyperparameter optimization with flexible search spaces (see :doc:`optuna_tuning`).
 - **Reproducibility**: random seeds for data splits, model initialization, and training procedures.
 - **Extensibility**: base classes for unsupervised and supervised imputers make it easy to implement new models.
 - **Documentation**: detailed usage instructions, API references, and developer guides.
@@ -29,6 +29,8 @@ Unsupervised models in PG-SUI are purpose-built for genomic data:
 
 - **Variational Autoencoder (VAE)** (Kingma & Welling, 2013) — latent probabilistic modeling with KL (Kullback-Leibler) regularization.
 - **Autoencoder** (Hinton & Salakhutdinov, 2006) — standard encoder-decoder reconstruction, without using a latent distribution.
+- **Non-linear PCA (NLPCA)** — decoder-only model that optimizes per-sample latent vectors directly.
+- **Unsupervised Backpropagation (UBP)** (Gashler et al., 2014) — decoder-only model with phased training and latent refinement.
 
 These models learn structure from observed entries and then infer true missing genotypes:
 
@@ -40,6 +42,8 @@ Detailed Unsupervised Deep Learning Imputation
 
 - **Autoencoder**: compresses loci into a low-dimensional embedding and reconstructs the 0/1/2 matrix through a decoder (Hinton & Salakhutdinov, 2006).
 - **VAE**: learns (i.e., encodes) a distribution over the latent space (mean/variance), sampling latents during training for a regularized decoder (Kingma & Welling, 2013).
+- **NLPCA**: optimizes a latent embedding for each sample directly, using a decoder-only network with projection-based evaluation.
+- **UBP**: trains a decoder-only network with per-sample latent vectors, using phased optimization and projection refinement.
 
 Supervised Imputation Methods
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -73,3 +77,5 @@ Chawla, N. V., Bowyer, K. W., Hall, L. O., & Kegelmeyer, W. P. (2002). SMOTE: Sy
 Hinton, G. E., & Salakhutdinov, R. R. (2006). Reducing the dimensionality of data with neural networks. *Science*, 313(5786), 504-507.
 
 Kingma, D. P., & Welling, M. (2013). Auto-Encoding Variational Bayes. *arXiv preprint* arXiv:1312.6114.
+
+Gashler, M. S., Smith, M. R., Morris, R., & Martinez, T. R. (2014). Missing Value Imputation with Unsupervised Backpropagation. *Computational Intelligence*, 32(2), 196-215.

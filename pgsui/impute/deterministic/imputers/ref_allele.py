@@ -176,7 +176,7 @@ class ImputeRefAllele:
         self.encoder = GenotypeEncoder(self.genotype_data)
 
         # Work in 0/1/2 with -1 for missing
-        X012 = self.encoder.genotypes_012.astype(np.int8, copy=True)
+        X012 = self.encoder.genotypes_012.astype(np.float32, copy=True)
         X012[X012 < 0] = -1
         self.X012_ = X012
         self.num_features_ = X012.shape[1]
@@ -210,6 +210,7 @@ class ImputeRefAllele:
         self.plot_despine = cfg.plot.despine
         self.plot_dpi = cfg.plot.dpi
         self.show_plots = cfg.plot.show
+        self.use_multiqc = bool(cfg.plot.multiqc)
 
         self.model_name = "ImputeRefAllele"
         self.plotter_ = Plotting(
@@ -331,7 +332,7 @@ class ImputeRefAllele:
 
         # 1) Impute the evaluation-masked copy (compute metrics)
         imputed_eval_df = self._impute_ref(df_in=self.X_train_df_)
-        X_imputed_eval = imputed_eval_df.to_numpy(dtype=np.int8)
+        X_imputed_eval = imputed_eval_df.to_numpy(dtype=np.float32)
         self.X_imputed012_ = X_imputed_eval
 
         # Evaluate parity with DL models
@@ -342,7 +343,7 @@ class ImputeRefAllele:
         df_missingonly[df_missingonly < 0] = np.nan
 
         imputed_full_df = self._impute_ref(df_in=df_missingonly)
-        X_imputed_full_012 = imputed_full_df.to_numpy(dtype=np.int8)
+        X_imputed_full_012 = imputed_full_df.to_numpy(dtype=np.float32)
 
         # Plot distributions (like DL .transform())
 
@@ -354,9 +355,8 @@ class ImputeRefAllele:
         imp_decoded = self.decode_012(X_imputed_full_012)
 
         if self.show_plots:
-            gt_decoded = self.decode_012(self.ground_truth012_)
-            self.plotter_.plot_gt_distribution(gt_decoded, is_imputed=False)
-            self.plotter_.plot_gt_distribution(imp_decoded, is_imputed=True)
+            orig_dec = self.decode_012(self.ground_truth012_)
+            self.plotter_.plot_gt_distribution(imp_decoded, orig_dec, True)
 
         # Return IUPAC strings
         return imp_decoded
@@ -375,7 +375,7 @@ class ImputeRefAllele:
         df = df_in.copy()
         # Fill all NaNs with 0 (homozygous REF) column-wise; constant so vectorized is fine
         df = df.fillna(0)
-        return df.astype(np.int8)
+        return df.astype(np.float32)
 
     def _evaluate_and_report(self) -> None:
         """Evaluate imputed vs. ground truth on masked test cells; produce reports and plots.
@@ -448,6 +448,11 @@ class ImputeRefAllele:
             y_true (np.ndarray): True genotypes (0/1/2) for masked
             y_pred (np.ndarray): Predicted genotypes (0/1/2) for masked
         """
+        # --- FIX: Cast to int immediately ---
+        # Ensures haploid folding and sklearn metrics operate on integers.
+        y_true = y_true.astype(int)
+        y_pred = y_pred.astype(int)
+
         labels: list[int] = [0, 1, 2]
         report_names: list[str] = ["REF", "HET", "ALT"]
 
@@ -455,8 +460,8 @@ class ImputeRefAllele:
         if self.is_haploid_:
             y_true = np.where(y_true == 2, 1, y_true)
             y_pred = np.where(y_pred == 2, 1, y_pred)
-            labels: list[int] = [0, 1]
-            report_names: list[str] = ["REF", "ALT"]
+            labels = [0, 1]
+            report_names = ["REF", "ALT"]
 
         report: dict | str = classification_report(
             y_true,
@@ -524,6 +529,11 @@ class ImputeRefAllele:
             y_true (np.ndarray): True genotypes (0-9) for masked
             y_pred (np.ndarray): Predicted genotypes (0-9) for masked
         """
+        # --- FIX: Cast to int immediately ---
+        # Guards against float inputs causing IndexError in np.eye indexing below
+        y_true = y_true.astype(int)
+        y_pred = y_pred.astype(int)
+
         labels_idx = list(range(10))
         report_names = ["A", "C", "G", "T", "W", "R", "M", "K", "Y", "S"]
 
@@ -773,7 +783,7 @@ class ImputeRefAllele:
             return s if s in iupac_to_bases else None
 
         codes_df = df.apply(pd.to_numeric, errors="coerce")
-        codes = codes_df.fillna(-1).astype(np.int8).to_numpy()
+        codes = codes_df.fillna(-1).astype(np.float32).to_numpy()
         n_rows, n_cols = codes.shape
 
         if is_nuc:
@@ -782,7 +792,7 @@ class ImputeRefAllele:
             )
             out = np.full((n_rows, n_cols), "N", dtype="<U1")
             mask = (codes >= 0) & (codes <= 9)
-            out[mask] = iupac_list[codes[mask]]
+            out[mask] = iupac_list[codes[mask].astype(int)]
             return out
 
         # Metadata fetch
@@ -907,6 +917,9 @@ class ImputeRefAllele:
         Returns:
             dict[str, dict[str, float] | float]: Augmented report dictionary with additional metrics.
         """
+        y_true = y_true.astype(int)
+        y_pred = y_pred.astype(int)
+
         # Create an identity matrix and use the targets array as indices
         y_score = np.eye(len(report_names))[y_pred]
 
