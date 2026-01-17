@@ -226,6 +226,7 @@ class PlotConfig:
         fontsize (int): Font size for text in the plots.
         despine (bool): If True, removes the top and right spines from plots.
         show (bool): If True, displays the plot interactively.
+        multiqc (bool): If True, generates MultiQC-compatible plots.
     """
 
     fmt: Literal["pdf", "png", "jpg", "jpeg", "svg"] = "pdf"
@@ -233,6 +234,7 @@ class PlotConfig:
     fontsize: int = 18
     despine: bool = True
     show: bool = True
+    multiqc: bool = True
 
 
 @dataclass
