@@ -1,7 +1,6 @@
-from typing import TYPE_CHECKING, Dict, Literal
+from typing import Literal
 
 import numpy as np
-import pandas as pd
 from sklearn.metrics import (
     accuracy_score,
     average_precision_score,
@@ -13,10 +12,8 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 from snpio.utils.logging import LoggerManager
-from torch import Tensor
 
 from pgsui.utils.logging_utils import configure_logger
-from pgsui.utils.misc import validate_input_type
 
 
 class Scorer:
@@ -161,40 +158,42 @@ class Scorer:
     def roc_auc(self, y_true_ohe: np.ndarray, y_pred_proba: np.ndarray) -> float:
         """Compute ROC AUC (binary or multiclass OVR) robustly."""
         yt, yp = self._prepare_ohe_proba(y_true_ohe, y_pred_proba)
+
         if yt.shape[0] == 0:
-            self.logger.warning("No valid rows for ROC AUC; returning 0.5.")
-            return 0.5
+            self.logger.warning("No valid rows for ROC AUC; returning 0.0.")
+            return 0.0
 
         K = yt.shape[1]
 
         # Determine which classes are present in truth
         present = np.where(yt.sum(axis=0) > 0)[0]
         if present.size < 2:
-            self.logger.warning(
-                "ROC AUC undefined (fewer than 2 classes present in y_true); returning 0.5."
-            )
-            return 0.5
+            msg = "ROC AUC: fewer than 2 classes in y_true returning 0.0."
+            self.logger.warning(msg)
+            return 0.0
 
         if K == 2:
             # Binary: score positive class only (class 1)
             y_true_bin = yt[:, 1]
             y_score = yp[:, 1]
+
+            print(y_true_bin)
+            print(y_score)
             try:
                 return float(roc_auc_score(y_true_bin, y_score))
             except ValueError as e:
-                self.logger.warning(
-                    f"ROC AUC failed for binary case; returning 0.5. Details: {e}"
-                )
-                return 0.5
+                msg = f"ROC AUC failed binary case; returning 0.0. Details: {e}"
+                self.logger.warning(msg)
+                return 0.0
 
         # Multiclass: one-vs-rest
         try:
-            return float(roc_auc_score(yt, yp, average=self.average, multi_class="ovr"))
+            roc_auc = roc_auc_score(yt, yp, average=self.average, multi_class="ovr")
+            return float(roc_auc)
         except ValueError as e:
-            self.logger.warning(
-                f"ROC AUC failed for multiclass case; returning 0.5. Details: {e}"
-            )
-            return 0.5
+            msg = f"ROC AUC failed multiclass case; returning 0.0. Details: {e}"
+            self.logger.warning(msg)
+            return 0.0
 
     def average_precision(
         self, y_true_ohe: np.ndarray, y_pred_proba: np.ndarray
@@ -202,15 +201,15 @@ class Scorer:
         """Compute Average Precision (binary or multiclass) robustly."""
         yt, yp = self._prepare_ohe_proba(y_true_ohe, y_pred_proba)
         if yt.shape[0] == 0:
-            self.logger.warning("No valid rows for Average Precision; returning 0.0.")
+            msg = "No valid rows for Average Precision; returning 0.0."
+            self.logger.warning(msg)
             return 0.0
 
         K = yt.shape[1]
         present = np.where(yt.sum(axis=0) > 0)[0]
         if present.size == 0:
-            self.logger.warning(
-                "Average Precision undefined (no positives); returning 0.0."
-            )
+            msg = "Average Precision undefined (no positives); returning 0.0."
+            self.logger.warning(msg)
             return 0.0
 
         if K == 2:
@@ -220,18 +219,20 @@ class Scorer:
             try:
                 return float(average_precision_score(y_true_bin, y_score))
             except ValueError as e:
-                self.logger.warning(
-                    f"Average Precision failed for binary case; returning 0.0. Details: {e}"
+                msg = (
+                    f"Average Precision failed binary case; returning 0.0. Details: {e}"
                 )
+                self.logger.warning(msg)
                 return 0.0
 
         # Multiclass: sklearn expects indicator matrix + score matrix
         try:
             return float(average_precision_score(yt, yp, average=self.average))
         except ValueError as e:
-            self.logger.warning(
-                f"Average Precision failed for multiclass case; returning 0.0. Details: {e}"
+            msg = (
+                f"Average Precision failed multiclass case; returning 0.0. Details: {e}"
             )
+            self.logger.warning(msg)
             return 0.0
 
     def pr_macro(self, y_true_ohe: np.ndarray, y_pred_proba: np.ndarray) -> float:
@@ -249,17 +250,15 @@ class Scorer:
             try:
                 return float(average_precision_score(y_true_bin, y_score))
             except ValueError as e:
-                self.logger.warning(
-                    f"PR macro failed for binary case; returning 0.0. Details: {e}"
-                )
+                msg = f"PR macro failed binary case; returning 0.0. Details: {e}"
+                self.logger.warning(msg)
                 return 0.0
 
         try:
             return float(average_precision_score(yt, yp, average="macro"))
         except ValueError as e:
-            self.logger.warning(
-                f"PR macro failed for multiclass case; returning 0.0. Details: {e}"
-            )
+            msg = f"PR-macro failed multiclass case; returning 0. Details: {e}"
+            self.logger.warning(msg)
             return 0.0
 
     def jaccard(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
