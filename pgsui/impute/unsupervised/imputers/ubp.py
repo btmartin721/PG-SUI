@@ -2,11 +2,10 @@
 from __future__ import annotations
 
 import copy
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Literal, Optional, Tuple, Union, cast
 
 import numpy as np
 import optuna
-from sympy import gamma
 import torch
 import torch.nn as nn
 from sklearn.decomposition import PCA
@@ -305,12 +304,13 @@ class ImputeUBP(BaseNNImputer):
 
         # Plotting
         self.show_plots = bool(self.cfg.plot.show)
+        self.use_multiqc = bool(self.cfg.plot.multiqc)
 
         # State
         self.is_haploid_: bool = False
         self.num_classes_: int = 3
         self.total_samples_: int = 0
-        self.model_params: Dict[str, Any] = {}
+        self.model_params: dict[str, Any] = {}
 
         # UBP-specific
         self.projection_lr = float(self.cfg.ubp.projection_lr)
@@ -374,11 +374,6 @@ class ImputeUBP(BaseNNImputer):
             f"Ploidy set to {self.ploidy}, is_haploid: {self.is_haploid_}"
         )
 
-        if self.ploidy > 2 or self.ploidy < 1:
-            msg = f"{self.model_name} currently supports only haploid (1) or diploid (2) data; got ploidy={self.ploidy}."
-            self.logger.error(msg)
-            raise ValueError(msg)
-
         # Prepare Data
         gt_full = self.pgenc.genotypes_012.copy()
         gt_full[gt_full < 0] = -1
@@ -430,103 +425,47 @@ class ImputeUBP(BaseNNImputer):
             f"Train/val/test sizes: {len(self.train_idx_)}/{len(self.val_idx_)}/{len(self.test_idx_)}"
         )
 
-        # --- Clean (targets) per split ---
-        X_train_clean = self.ground_truth_[self.train_idx_].copy()
-        X_val_clean = self.ground_truth_[self.val_idx_].copy()
-        X_test_clean = self.ground_truth_[self.test_idx_].copy()
+        # --- Split matrices ---
+        corrupteds = self._extract_masks_indices(X_for_model_full, indices)
+        X_train_corrupted, X_val_corrupted, X_test_corrupted = corrupteds
 
-        # --- Corrupted (inputs) per split (from the single simulation) ---
-        X_train_corrupted = X_for_model_full[self.train_idx_].copy()
-        X_val_corrupted = X_for_model_full[self.val_idx_].copy()
-        X_test_corrupted = X_for_model_full[self.test_idx_].copy()
+        cleans = self._extract_masks_indices(self.ground_truth_, indices)
+        X_train_clean, X_val_clean, X_test_clean = cleans
 
         # --- Masks per split ---
-        self.sim_mask_train_ = self.sim_mask_[self.train_idx_].copy()
-        self.sim_mask_val_ = self.sim_mask_[self.val_idx_].copy()
-        self.sim_mask_test_ = self.sim_mask_[self.test_idx_].copy()
+        sm = self._extract_masks_indices(self.sim_mask_, indices)
+        self.sim_mask_train_, self.sim_mask_val_, self.sim_mask_test_ = sm
 
-        self.orig_mask_train_ = self.orig_mask_[self.train_idx_].copy()
-        self.orig_mask_val_ = self.orig_mask_[self.val_idx_].copy()
-        self.orig_mask_test_ = self.orig_mask_[self.test_idx_].copy()
+        om = self._extract_masks_indices(self.orig_mask_, indices)
+        self.orig_mask_train_, self.orig_mask_val_, self.orig_mask_test_ = om
 
-        self.logger.info(
-            f"Train Set Simulated Counts: {np.count_nonzero(self.sim_mask_train_)}"
-        )
-        self.logger.info(
-            f"Val Set Simulated Counts: {np.count_nonzero(self.sim_mask_val_)}"
-        )
-        self.logger.info(
-            f"Test Set Simulated Counts: {np.count_nonzero(self.sim_mask_test_)}"
-        )
+        self.validate_and_log_masks()
 
-        self.logger.info(
-            f"Train Set Real Missing Counts: {np.count_nonzero(self.orig_mask_train_)}"
-        )
-        self.logger.info(
-            f"Val Set Real Missing Counts: {np.count_nonzero(self.orig_mask_val_)}"
-        )
-        self.logger.info(
-            f"Test Set Real Missing Counts: {np.count_nonzero(self.orig_mask_test_)}"
-        )
-
-        self.logger.info(
-            f"Total known genotypes per split (sim_strategy={self.sim_strategy}): train set={np.count_nonzero(~self.orig_mask_train_)}, val set={np.count_nonzero(~self.orig_mask_val_)}, test set={np.count_nonzero(~self.orig_mask_test_)}"
-        )
-
-        self._validate_sim_and_orig_masks(
-            sim_mask=self.sim_mask_train_,
-            orig_mask=self.orig_mask_train_,
-            context="train",
-        )
-        self._validate_sim_and_orig_masks(
-            sim_mask=self.sim_mask_val_,
-            orig_mask=self.orig_mask_val_,
-            context="val",
-        )
-        self._validate_sim_and_orig_masks(
-            sim_mask=self.sim_mask_test_,
-            orig_mask=self.orig_mask_test_,
-            context="test",
-        )
-
-        # Persist clean/corrupted matrices if you want them accessible later
-        self.X_train_clean_ = X_train_clean
-        self.X_val_clean_ = X_val_clean
-        self.X_test_clean_ = X_test_clean
-
-        self.X_train_corrupted_ = X_train_corrupted
-        self.X_val_corrupted_ = X_val_corrupted
-        self.X_test_corrupted_ = X_test_corrupted
-
-        # Haploid conversion if needed
+        # --- Haploid harmonization ---
         if self.is_haploid_:
             self.logger.debug(
-                "Performing haploid conversion on split inputs/targets..."
+                "Performing haploid harmonization on split inputs/targets..."
             )
 
-            def _haploidize(arr: np.ndarray) -> np.ndarray:
-                out = arr.copy()
-                miss = out < 0
-                out = np.where(out > 0, 1, out).astype(np.int8, copy=False)
-                out[miss] = -1
+            def _haploidize(arr):
+                out = np.where(arr > 0, 1, arr).astype(np.int8, copy=True)
+                out[arr < 0] = -1
                 return out
 
             X_train_clean = _haploidize(X_train_clean)
             X_val_clean = _haploidize(X_val_clean)
             X_test_clean = _haploidize(X_test_clean)
-
             X_train_corrupted = _haploidize(X_train_corrupted)
             X_val_corrupted = _haploidize(X_val_corrupted)
             X_test_corrupted = _haploidize(X_test_corrupted)
 
-            # Write back the persisted versions too
-            self.X_train_clean_ = X_train_clean
-            self.X_val_clean_ = X_val_clean
-            self.X_test_clean_ = X_test_clean
-
-            self.X_train_corrupted_ = X_train_corrupted
-            self.X_val_corrupted_ = X_val_corrupted
-            self.X_test_corrupted_ = X_test_corrupted
+        # Persist matrices
+        self.X_train_clean_ = X_train_clean
+        self.X_val_clean_ = X_val_clean
+        self.X_test_clean_ = X_test_clean
+        self.X_train_corrupted_ = X_train_corrupted
+        self.X_val_corrupted_ = X_val_corrupted
+        self.X_test_corrupted_ = X_test_corrupted
 
         # Final training tensors/matrices used by the pipeline
         # Convention: X_* are corrupted inputs; y_* are clean targets
@@ -551,16 +490,6 @@ class ImputeUBP(BaseNNImputer):
         self.eval_mask_train_ = self.sim_mask_train_ & ~self.orig_mask_train_
         self.eval_mask_val_ = self.sim_mask_val_ & ~self.orig_mask_val_
         self.eval_mask_test_ = self.sim_mask_test_ & ~self.orig_mask_test_
-
-        self.logger.debug(
-            f"Train Set Evaluation Mask Counts: {np.sum(self.eval_mask_train_)}"
-        )
-        self.logger.debug(
-            f"Validation Set Evaluation Mask Counts: {np.sum(self.eval_mask_val_)}"
-        )
-        self.logger.debug(
-            f"Test Set Evaluation Mask Counts: {np.sum(self.eval_mask_test_)}"
-        )
 
         train_loader = self._get_ubp_loaders(
             self.train_idx_,
@@ -602,36 +531,15 @@ class ImputeUBP(BaseNNImputer):
                 power=self.power,
             )
 
-            self.tuned_params_ = {
-                "latent_dim": self.latent_dim,
-                "learning_rate": self.learning_rate,
-                "dropout_rate": self.dropout_rate,
-                "num_hidden_layers": self.num_hidden_layers,
-                "activation": self.activation,
-                "l1_penalty": self.l1_penalty,
-                "layer_scaling_factor": self.layer_scaling_factor,
-                "layer_schedule": self.layer_schedule,
-            }
+            keys = OBJECTIVE_SPEC_UBP.keys
+            self.tuned_params_ = {k: getattr(self, k) for k in keys}
             self.tuned_params_["model_params"] = self.model_params
-            self.tuned_params_.update(
-                {
-                    "gamma": self.gamma,
-                    "gamma_schedule": self.gamma_schedule,
-                    "power": self.power,
-                    "normalize": self.normalize,
-                    "inverse": self.inverse,
-                }
-            )
 
         self.logger.debug(f"Tuned Parameters Dictionary: {self.tuned_params_}")
 
-        if self.class_weights_ is not None:
-            self.logger.info(
-                f"class_weights={self.class_weights_.detach().cpu().numpy().astype(float).tolist()}"
-            )
-
-        # Always start clean
         self.best_params_ = copy.deepcopy(self.tuned_params_)
+
+        self._log_class_weights()
 
         # Final model params
         # (compute hidden sizes using n_inputs=L*K)
@@ -677,7 +585,7 @@ class ImputeUBP(BaseNNImputer):
         # NOTE: No general init here; Model init handles V (PCA)
 
         # Run 3-Phase Training
-        loss, trained_model, self.history_ = self._execute_ubp_training(
+        loss, trained_model, history = self._execute_ubp_training(
             model=model,
             lr=float(self.best_params_["learning_rate"]),
             l1_penalty=float(self.best_params_["l1_penalty"]),
@@ -686,6 +594,17 @@ class ImputeUBP(BaseNNImputer):
             class_weights=self.class_weights_,
             gamma_schedule=self.gamma_schedule,
         )
+
+        if history is None:
+            hist = {"Train": []}
+        else:
+            hist = (
+                dict(history)
+                if isinstance(history, dict)
+                else {"Train": list(history["Train"]), "Val": list(history["Val"])}
+            )
+
+        self.history_ = hist
 
         torch.save(
             trained_model.state_dict(),
@@ -711,25 +630,9 @@ class ImputeUBP(BaseNNImputer):
         if self.show_plots:
             self.plotter_.plot_history(self.history_)
 
-        # Create the clean dictionary
-        bp = self._sanitize_for_json(self.best_params_)
+        self._save_display_model_params(is_tuned=self.model_tuned_)
 
-        if not isinstance(bp, dict):
-            msg = "Best parameters must be a dictionary after sanitization."
-            self.logger.error(msg)
-            raise TypeError(msg)
-
-        if self.verbose or self.debug:
-            title = f"{self.model_name} Optimized Parameters"
-            pm = PrettyMetrics(bp, precision=2, title=title)
-            pm.render()
-
-        if self.model_tuned_:
-            # Save best parameters to a JSON file.
-            self._save_best_params(bp, objective_mode=True)
-
-        self._save_best_params(bp)
-
+        self.logger.info(f"{self.model_name} fitting complete!")
         return self
 
     def transform(self) -> np.ndarray:
@@ -744,7 +647,7 @@ class ImputeUBP(BaseNNImputer):
             NotFittedError: If the model has not been trained yet.
             RuntimeError: If imputation results in 'N' (invalid) characters.
         """
-        if not self.is_fit_:
+        if not getattr(self, "is_fit_", False):
             msg = f"{self.model_name} is not fitted. Must call 'fit()' before 'transform()'."
             self.logger.error(msg)
             raise NotFittedError(msg)
@@ -778,7 +681,7 @@ class ImputeUBP(BaseNNImputer):
 
         # 3. Handle Haploid mapping (2->1) before decoding if needed
         decode_input = imputed
-        if self.is_haploid_:
+        if getattr(self, "is_haploid_", False):
             decode_input = imputed.copy()
             decode_input[decode_input == 1] = 2
 
@@ -791,10 +694,12 @@ class ImputeUBP(BaseNNImputer):
 
         if self.show_plots:
             orig = self.ground_truth_.copy()
-            if self.is_haploid_:
+
+            if getattr(self, "is_haploid_", False):
                 orig[orig == 1] = 2
-            self.plotter_.plot_gt_distribution(self.decode_012(orig), is_imputed=False)
-            self.plotter_.plot_gt_distribution(decoded, is_imputed=True)
+
+            orig_dec = self.decode_012(orig)
+            self.plotter_.plot_gt_distribution(decoded, orig_dec, True)
 
         self.logger.info(f"{self.model_name} Imputation complete!")
 
@@ -890,7 +795,7 @@ class ImputeUBP(BaseNNImputer):
         phase: int,
         trial: Optional[optuna.Trial] = None,
     ) -> float:
-        """Train one epoch for a given UBP phase (Algorithm 2 style).
+        """Train one epoch for a given UBP phase.
 
         Args:
             model (nn.Module): UBP model to train.
@@ -931,6 +836,7 @@ class ImputeUBP(BaseNNImputer):
                         raise RuntimeError(msg)
 
                     z = model.embedding(idx)  # type: ignore[attr-defined]
+
                     logits = temp_layer(z).view(
                         -1, self.num_features_, self.num_classes_
                     )
@@ -1090,6 +996,20 @@ class ImputeUBP(BaseNNImputer):
             self.logger.error(msg)
             raise ValueError(msg)
 
+        if self.debug:
+            total_params = sum(p.numel() for p in model.parameters())
+            if temp_layer is not None:
+                total_params += sum(p.numel() for p in temp_layer.parameters())
+            trainable_params = sum(p.numel() for p in params_to_opt)
+            ratio = (
+                (float(trainable_params) / float(total_params))
+                if total_params > 0
+                else 0.0
+            )
+            self.logger.debug(
+                f"[{self.model_name}] Phase {phase} trainable params={trainable_params}/{total_params} ({ratio:.2%})."
+            )
+
         optimizer = torch.optim.AdamW(params_to_opt, lr=eta0)
 
         # Metric-driven LR decay
@@ -1208,6 +1128,7 @@ class ImputeUBP(BaseNNImputer):
         """
         model.eval()
         total_loss = 0.0
+        total_loss_pre = 0.0
         count = 0
 
         # --- Save/disable grads for decoder (and temp_layer, if used) ---
@@ -1238,6 +1159,23 @@ class ImputeUBP(BaseNNImputer):
 
                     # Optimize only the batch embeddings
                     v_batch = model.embedding(idx).detach().clone()  # type: ignore[attr-defined]
+
+                    with torch.no_grad():
+                        if temp_layer is not None:
+                            out_pre = temp_layer(v_batch).view(
+                                -1, self.num_features_, self.num_classes_
+                            )
+
+                        else:
+                            out_pre = model(override_embeddings=v_batch)
+
+                        loss_pre = criterion(
+                            out_pre.view(-1, self.num_classes_)[flat_mask],
+                            y.view(-1)[flat_mask],
+                        )
+
+                        total_loss_pre += float(loss_pre.item())
+
                     v_batch.requires_grad_(True)
 
                     proj_opt = torch.optim.AdamW([v_batch], lr=lr)
@@ -1278,6 +1216,12 @@ class ImputeUBP(BaseNNImputer):
                 msg = f"[{self.model_name}] Validation loss has no valid batches."
                 self.logger.error(msg)
                 raise RuntimeError(msg)
+
+            if self.debug:
+                delta = (total_loss_pre - total_loss) / float(count)
+                self.logger.debug(
+                    f"[{self.model_name}] Projection val loss delta (pre-post)={delta:.6f} over {count} batches."
+                )
 
             return total_loss / count
 
@@ -2261,10 +2205,23 @@ class ImputeUBP(BaseNNImputer):
             X_filled[rows, cols] = col_means[cols]
         else:
             X_filled = X
+        if self.debug:
+            n_missing = int(missing_full.sum())
+            if n_missing > 0:
+                missing_pct = (100.0 * n_missing) / float(X.size)
+                self.logger.debug(
+                    f"[{self.model_name}] PCA init filled {n_missing} missing values ({missing_pct:.2f}%)."
+                )
 
         pca = PCA(n_components=int(latent_dim), random_state=self.seed)
         pca.fit(X_filled[train_idx])
         V = pca.transform(X_filled)  # (N, latent_dim)
+        if self.debug and hasattr(pca, "explained_variance_ratio_"):
+            evr = np.asarray(pca.explained_variance_ratio_, dtype=float)
+            head = evr[: min(5, evr.size)].tolist()
+            self.logger.debug(
+                f"[{self.model_name}] PCA init EVR head={head}, total={float(evr.sum()):.4f}."
+            )
 
         return torch.as_tensor(V, dtype=torch.float32, device=self.device)
 
