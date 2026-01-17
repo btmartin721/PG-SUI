@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import copy
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Literal, Optional, Tuple, Union, cast
 
 import numpy as np
 import optuna
@@ -206,13 +206,14 @@ class ImputeNLPCA(BaseNNImputer):
 
         # Plotting
         self.show_plots = bool(self.cfg.plot.show)
+        self.use_multiqc = bool(self.cfg.plot.multiqc)
 
         # State
         self.is_haploid_: bool = False
         self.num_classes_: int = 3
         self.total_samples_: int = 0
         self.num_features_: int = 0
-        self.model_params: Dict[str, Any] = {}
+        self.model_params: dict[str, Any] = {}
         self.class_weights_: torch.Tensor | None = None
 
         self.num_tuned_params_ = OBJECTIVE_SPEC_NLPCA.count()
@@ -361,26 +362,28 @@ class ImputeNLPCA(BaseNNImputer):
         )
 
         # Split indices
-        self.train_idx_, self.val_idx_, self.test_idx_ = self._train_val_test_split(
-            self.ground_truth_
+        indices = self._train_val_test_split(self.ground_truth_)
+        self.train_idx_, self.val_idx_, self.test_idx_ = indices
+
+        self.logger.info(
+            f"Train/val/test sizes: {len(self.train_idx_)}/{len(self.val_idx_)}/{len(self.test_idx_)}"
         )
 
         # --- Split matrices ---
-        X_train_corrupted = X_for_model_full[self.train_idx_].copy()
-        X_val_corrupted = X_for_model_full[self.val_idx_].copy()
-        X_test_corrupted = X_for_model_full[self.test_idx_].copy()
+        corrupteds = self._extract_masks_indices(X_for_model_full, indices)
+        X_train_corrupted, X_val_corrupted, X_test_corrupted = corrupteds
 
-        X_train_clean = self.ground_truth_[self.train_idx_].copy()
-        X_val_clean = self.ground_truth_[self.val_idx_].copy()
-        X_test_clean = self.ground_truth_[self.test_idx_].copy()
+        cleans = self._extract_masks_indices(self.ground_truth_, indices)
+        X_train_clean, X_val_clean, X_test_clean = cleans
 
-        self.sim_mask_train_ = self.sim_mask_[self.train_idx_].copy()
-        self.sim_mask_val_ = self.sim_mask_[self.val_idx_].copy()
-        self.sim_mask_test_ = self.sim_mask_[self.test_idx_].copy()
+        # --- Masks per split ---
+        sm = self._extract_masks_indices(self.sim_mask_, indices)
+        self.sim_mask_train_, self.sim_mask_val_, self.sim_mask_test_ = sm
 
-        self.orig_mask_train_ = self.orig_mask_[self.train_idx_].copy()
-        self.orig_mask_val_ = self.orig_mask_[self.val_idx_].copy()
-        self.orig_mask_test_ = self.orig_mask_[self.test_idx_].copy()
+        om = self._extract_masks_indices(self.orig_mask_, indices)
+        self.orig_mask_train_, self.orig_mask_val_, self.orig_mask_test_ = om
+
+        self.validate_and_log_masks()
 
         # Evaluation masks
         # (simulated-missing positions that were originally observed)
@@ -398,9 +401,9 @@ class ImputeNLPCA(BaseNNImputer):
         self.X_val_corrupted_ = X_val_corrupted
         self.X_test_corrupted_ = X_test_corrupted
 
-        # NLPCA working matrices:
-        # Fill ONLY originally-missing entries with per-locus mode.
-        # NEVER fill simulated-missing entries.
+        # NLPCA working matrices
+        # Fill only originally-missing entries with per-locus mode.
+        # Never fill simulated-missing entries.
         self.X_train_work_ = self._initialize_orig_missing_with_mode(
             X_train_corrupted, self.orig_mask_train_
         )
@@ -468,24 +471,12 @@ class ImputeNLPCA(BaseNNImputer):
             self.model_tuned_ = True
         else:
             self.model_tuned_ = False
-            self.tuned_params_ = {
-                "latent_dim": self.latent_dim,
-                "learning_rate": self.learning_rate,
-                "dropout_rate": self.dropout_rate,
-                "num_hidden_layers": self.num_hidden_layers,
-                "activation": self.activation,
-                "l1_penalty": self.l1_penalty,
-                "layer_scaling_factor": self.layer_scaling_factor,
-                "layer_schedule": self.layer_schedule,
-                "gamma": self.gamma,
-                "gamma_schedule": self.gamma_schedule,
-                "power": self.power,
-                "normalize": self.normalize,
-                "inverse": self.inverse,
-                "model_params": {},
-            }
+            keys = OBJECTIVE_SPEC_NLPCA.keys
+            self.tuned_params_ = {k: getattr(self, k) for k in keys}
 
         self.best_params_ = copy.deepcopy(self.tuned_params_)
+
+        self._log_class_weights()
 
         # PCA init for embeddings V
         self.v_init_ = self._get_pca_embedding_init(
@@ -523,7 +514,7 @@ class ImputeNLPCA(BaseNNImputer):
         model = self.build_model(self.Model, self.best_params_["model_params"])
 
         # Train (joint only + input refinement)
-        best_score, trained_model, self.history_ = self._execute_nlpca_training(
+        best_score, trained_model, history = self._execute_nlpca_training(
             model=model,
             lr=float(self.best_params_["learning_rate"]),
             l1_penalty=float(self.best_params_["l1_penalty"]),
@@ -532,6 +523,16 @@ class ImputeNLPCA(BaseNNImputer):
             class_weights=self.class_weights_,
             gamma_schedule=bool(self.best_params_["gamma_schedule"]),
         )
+
+        if history is None:
+            hist = {"Train": []}
+        else:
+            hist = (
+                dict(history)
+                if isinstance(history, dict)
+                else {"Train": list(history["Train"]), "Val": list(history["Val"])}
+            )
+        self.history_ = hist
 
         torch.save(
             trained_model.state_dict(),
@@ -558,25 +559,9 @@ class ImputeNLPCA(BaseNNImputer):
         if self.show_plots:
             self.plotter_.plot_history(self.history_)
 
-        # Create the clean dictionary
-        bp = self._sanitize_for_json(self.best_params_)
+        self._save_display_model_params(is_tuned=self.model_tuned_)
 
-        if not isinstance(bp, dict):
-            msg = "Best parameters must be a dictionary after sanitization."
-            self.logger.error(msg)
-            raise TypeError(msg)
-
-        if self.verbose or self.debug:
-            title = f"{self.model_name} Optimized Parameters"
-            pm = PrettyMetrics(bp, precision=2, title=title)
-            pm.render()
-
-        if self.model_tuned_:
-            # Save best parameters to a JSON file.
-            self._save_best_params(bp, objective_mode=True)
-
-        self._save_best_params(bp)
-
+        self.logger.info(f"{self.model_name} fitting complete!")
         return self
 
     def transform(self) -> np.ndarray:
@@ -612,7 +597,7 @@ class ImputeNLPCA(BaseNNImputer):
         imputed[missing_mask] = pred_labels[missing_mask]
 
         decode_input = imputed
-        if self.is_haploid_:
+        if getattr(self, "is_haploid_", False):
             decode_input = imputed.copy()
             decode_input[decode_input == 1] = 2
 
@@ -625,12 +610,15 @@ class ImputeNLPCA(BaseNNImputer):
 
         if self.show_plots:
             orig = self.ground_truth_.copy()
-            if self.is_haploid_:
+
+            if getattr(self, "is_haploid_", False):
                 orig[orig == 1] = 2
-            self.plotter_.plot_gt_distribution(self.decode_012(orig), is_imputed=False)
-            self.plotter_.plot_gt_distribution(decoded, is_imputed=True)
+
+            orig_dec = self.decode_012(orig)
+            self.plotter_.plot_gt_distribution(decoded, orig_dec, True)
 
         self.logger.info(f"{self.model_name} Imputation complete!")
+
         return decoded
 
     def _get_nlpca_loaders(
@@ -1341,7 +1329,14 @@ class ImputeNLPCA(BaseNNImputer):
                 and (epoch % int(self.input_refine_every)) == 0
                 and getattr(self, "X_train_work_", None) is not None
             ):
-                for _ in range(max(1, int(getattr(self, "input_refine_steps", 1)))):
+                refine_steps = max(1, int(getattr(self, "input_refine_steps", 1)))
+                orig_mask = getattr(self, "orig_mask_train_", None)
+                if self.debug and orig_mask is not None:
+                    before_vals = self.X_train_work_[orig_mask].copy()  # type: ignore[index]
+                else:
+                    before_vals = None
+
+                for _ in range(refine_steps):
                     self._update_orig_missing_from_model(
                         model=model,
                         X_work=self.X_train_work_,  # type: ignore[arg-type]
@@ -1358,6 +1353,22 @@ class ImputeNLPCA(BaseNNImputer):
                     batch_size=self.batch_size,
                     shuffle=True,
                 )
+
+                if self.debug:
+                    n_obs = int((self.X_train_work_ >= 0).sum())  # type: ignore[operator]
+                    n_total = int(self.X_train_work_.size)  # type: ignore[union-attr]
+                    updated = None
+                    total_targets = None
+                    if before_vals is not None and orig_mask is not None:
+                        after_vals = self.X_train_work_[orig_mask]  # type: ignore[index]
+                        updated = int(np.count_nonzero(before_vals != after_vals))
+                        total_targets = int(orig_mask.sum())
+                    update_msg = ""
+                    if updated is not None and total_targets is not None:
+                        update_msg = f", updated={updated}/{total_targets}"
+                    self.logger.debug(
+                        f"[{self.model_name}] Input refine epoch {epoch}: steps={refine_steps}{update_msg}, observed={n_obs}/{n_total} ({(100.0 * n_obs / float(n_total)):.2f}%)."
+                    )
 
             # Validation: projection-based observed-loss
             s = self._val_step_with_projection(
@@ -2050,10 +2061,23 @@ class ImputeNLPCA(BaseNNImputer):
             X_filled[rows, cols] = col_means[cols]
         else:
             X_filled = X
+        if self.debug:
+            n_missing = int(missing_full.sum())
+            if n_missing > 0:
+                missing_pct = (100.0 * n_missing) / float(X.size)
+                self.logger.debug(
+                    f"[{self.model_name}] PCA init filled {n_missing} missing values ({missing_pct:.2f}%)."
+                )
 
         pca = PCA(n_components=int(latent_dim), random_state=self.seed)
         pca.fit(X_filled[train_idx])
         V = pca.transform(X_filled)  # (N, latent_dim)
+        if self.debug and hasattr(pca, "explained_variance_ratio_"):
+            evr = np.asarray(pca.explained_variance_ratio_, dtype=float)
+            head = evr[: min(5, evr.size)].tolist()
+            self.logger.debug(
+                f"[{self.model_name}] PCA init EVR head={head}, total={float(evr.sum()):.4f}."
+            )
 
         return torch.as_tensor(V, dtype=torch.float32, device=self.device)
 
