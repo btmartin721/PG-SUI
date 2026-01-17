@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 import traceback
 from collections import defaultdict
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Literal, Optional, Union, cast
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -241,11 +241,12 @@ class ImputeVAE(BaseNNImputer):
         self.title_fontsize = self.cfg.plot.fontsize
         self.despine = self.cfg.plot.despine
         self.show_plots = self.cfg.plot.show
+        self.use_multiqc = bool(self.cfg.plot.multiqc)
 
         # Internal attributes set during fitting
         self.is_haploid_: bool = False
         self.num_classes_: int = 3
-        self.model_params: Dict[str, Any] = {}
+        self.model_params: dict[str, Any] = {}
         self.sim_mask_test_: np.ndarray
 
         if self.tree_parser is None and self.sim_strategy.startswith("nonrandom"):
@@ -295,11 +296,6 @@ class ImputeVAE(BaseNNImputer):
             f"Ploidy set to {self.ploidy}, is_haploid: {self.is_haploid_}"
         )
 
-        if self.ploidy > 2 or self.ploidy < 1:
-            msg = f"{self.model_name} currently supports only haploid (1) or diploid (2) data; got ploidy={self.ploidy}."
-            self.logger.error(msg)
-            raise ValueError(msg)
-
         self.num_classes_ = 2 if self.is_haploid_ else 3
 
         gt_full = self.pgenc.genotypes_012.copy()
@@ -338,81 +334,27 @@ class ImputeVAE(BaseNNImputer):
             f"Train/val/test sizes: {len(self.train_idx_)}/{len(self.val_idx_)}/{len(self.test_idx_)}"
         )
 
-        # --- Clean (targets) per split ---
-        X_train_clean = self.ground_truth_[self.train_idx_].copy()
-        X_val_clean = self.ground_truth_[self.val_idx_].copy()
-        X_test_clean = self.ground_truth_[self.test_idx_].copy()
+        # --- Split matrices ---
+        corrupteds = self._extract_masks_indices(X_for_model_full, indices)
+        X_train_corrupted, X_val_corrupted, X_test_corrupted = corrupteds
 
-        # --- Corrupted (inputs) per split (from the single simulation) ---
-        X_train_corrupted = X_for_model_full[self.train_idx_].copy()
-        X_val_corrupted = X_for_model_full[self.val_idx_].copy()
-        X_test_corrupted = X_for_model_full[self.test_idx_].copy()
+        cleans = self._extract_masks_indices(self.ground_truth_, indices)
+        X_train_clean, X_val_clean, X_test_clean = cleans
 
         # --- Masks per split ---
-        self.sim_mask_train_ = self.sim_mask_[self.train_idx_].copy()
-        self.sim_mask_val_ = self.sim_mask_[self.val_idx_].copy()
-        self.sim_mask_test_ = self.sim_mask_[self.test_idx_].copy()
+        sm = self._extract_masks_indices(self.sim_mask_, indices)
+        self.sim_mask_train_, self.sim_mask_val_, self.sim_mask_test_ = sm
 
-        self.orig_mask_train_ = self.orig_mask_[self.train_idx_].copy()
-        self.orig_mask_val_ = self.orig_mask_[self.val_idx_].copy()
-        self.orig_mask_test_ = self.orig_mask_[self.test_idx_].copy()
+        om = self._extract_masks_indices(self.orig_mask_, indices)
+        self.orig_mask_train_, self.orig_mask_val_, self.orig_mask_test_ = om
 
-        self.eval_mask_train_ = self.sim_mask_train_ & ~self.orig_mask_train_
-        self.eval_mask_val_ = self.sim_mask_val_ & ~self.orig_mask_val_
-        self.eval_mask_test_ = self.sim_mask_test_ & ~self.orig_mask_test_
+        self.validate_and_log_masks()
 
         self.eval_mask_train_ = self.sim_mask_train_ & ~self.orig_mask_train_
         self.eval_mask_val_ = self.sim_mask_val_ & ~self.orig_mask_val_
         self.eval_mask_test_ = self.sim_mask_test_ & ~self.orig_mask_test_
 
-        self.logger.info(
-            f"Train Set Simulated Counts: {np.count_nonzero(self.eval_mask_train_)}"
-        )
-        self.logger.info(
-            f"Val Set Simulated Counts: {np.count_nonzero(self.eval_mask_val_)}"
-        )
-        self.logger.info(
-            f"Test Set Simulated Counts: {np.count_nonzero(self.eval_mask_test_)}"
-        )
-
-        self.logger.info(
-            f"Train Set Real Missing Counts: {np.count_nonzero(self.orig_mask_train_)}"
-        )
-        self.logger.info(
-            f"Val Set Real Missing Counts: {np.count_nonzero(self.orig_mask_val_)}"
-        )
-        self.logger.info(
-            f"Test Set Real Missing Counts: {np.count_nonzero(self.orig_mask_test_)}"
-        )
-
-        self.logger.info(
-            f"Total known genotypes per split (sim_strategy={self.sim_strategy}): {np.count_nonzero(~self.orig_mask_train_)}, {np.count_nonzero(~self.orig_mask_val_)}, {np.count_nonzero(~self.orig_mask_test_)}"
-        )
-
-        self._validate_sim_and_orig_masks(
-            sim_mask=self.sim_mask_train_,
-            orig_mask=self.orig_mask_train_,
-            context="train",
-        )
-        self._validate_sim_and_orig_masks(
-            sim_mask=self.sim_mask_val_,
-            orig_mask=self.orig_mask_val_,
-            context="val",
-        )
-        self._validate_sim_and_orig_masks(
-            sim_mask=self.sim_mask_test_,
-            orig_mask=self.orig_mask_test_,
-            context="test",
-        )
-
-        # Persist clean/corrupted matrices if you want them accessible later
-        self.X_train_clean_ = X_train_clean
-        self.X_val_clean_ = X_val_clean
-        self.X_test_clean_ = X_test_clean
-
-        self.X_train_corrupted_ = X_train_corrupted
-        self.X_val_corrupted_ = X_val_corrupted
-        self.X_test_corrupted_ = X_test_corrupted
+        self.validate_and_log_masks()
 
         # --- Haploid harmonization (do NOT resimulate; just recode values) ---
         if self.is_haploid_:
@@ -423,26 +365,24 @@ class ImputeVAE(BaseNNImputer):
             def _haploidize(arr: np.ndarray) -> np.ndarray:
                 out = arr.copy()
                 miss = out < 0
-                out = np.where(out > 0, 1, out).astype(np.int8, copy=False)
+                out = np.where(out > 0, 1, out).astype(np.int8, copy=True)
                 out[miss] = -1
                 return out
 
             X_train_clean = _haploidize(X_train_clean)
             X_val_clean = _haploidize(X_val_clean)
             X_test_clean = _haploidize(X_test_clean)
-
             X_train_corrupted = _haploidize(X_train_corrupted)
             X_val_corrupted = _haploidize(X_val_corrupted)
             X_test_corrupted = _haploidize(X_test_corrupted)
 
-            # Write back the persisted versions too
-            self.X_train_clean_ = X_train_clean
-            self.X_val_clean_ = X_val_clean
-            self.X_test_clean_ = X_test_clean
-
-            self.X_train_corrupted_ = X_train_corrupted
-            self.X_val_corrupted_ = X_val_corrupted
-            self.X_test_corrupted_ = X_test_corrupted
+        # Write back the persisted versions too
+        self.X_train_clean_ = X_train_clean
+        self.X_val_clean_ = X_val_clean
+        self.X_test_clean_ = X_test_clean
+        self.X_train_corrupted_ = X_train_corrupted
+        self.X_val_corrupted_ = X_val_corrupted
+        self.X_test_corrupted_ = X_test_corrupted
 
         # Final training tensors/matrices used by the pipeline
         # Convention: X_* are corrupted inputs; y_* are clean targets
@@ -462,24 +402,16 @@ class ImputeVAE(BaseNNImputer):
             self.X_val_, num_classes=self.num_classes_
         )
 
-        if torch.is_tensor(self.X_train_):
-            if (self.X_train_.sum(dim=-1) > 1).any():
-                msg = (
-                    f"[{self.model_name}] Invalid one-hot: >1 active class in X_train_."
-                )
-                self.logger.error(msg)
-                raise RuntimeError(msg)
-
-        if torch.is_tensor(self.X_val_):
-            if (self.X_val_.sum(dim=-1) > 1).any():
-                msg = f"[{self.model_name}] Invalid one-hot: >1 active class in X_val_."
+        for name, tensor in [("X_train_", self.X_train_), ("X_val_", self.X_val_)]:
+            if torch.is_tensor(tensor) and (tensor.sum(dim=-1) > 1).any():
+                msg = f"[{self.model_name}] Invalid one-hot: >1 active class in {name}."
                 self.logger.error(msg)
                 raise RuntimeError(msg)
 
         self.plotter_, self.scorers_ = self.initialize_plotting_and_scorers()
 
         train_loader = self._get_data_loaders(
-            self.X_train_.detach().cpu().numpy(),
+            self.X_train_.numpy(force=True),
             self.y_train_,
             self.eval_mask_train_,
             self.batch_size,
@@ -487,7 +419,7 @@ class ImputeVAE(BaseNNImputer):
         )
 
         val_loader = self._get_data_loaders(
-            self.X_val_.detach().cpu().numpy(),
+            self.X_val_.numpy(force=True),
             self.y_val_,
             self.eval_mask_val_,
             self.batch_size,
@@ -510,37 +442,14 @@ class ImputeVAE(BaseNNImputer):
                 max_ratio=self.max_ratio,
                 power=self.power,
             )
-            self.tuned_params_ = {
-                "latent_dim": self.latent_dim,
-                "learning_rate": self.learning_rate,
-                "dropout_rate": self.dropout_rate,
-                "num_hidden_layers": self.num_hidden_layers,
-                "activation": self.activation,
-                "l1_penalty": self.l1_penalty,
-                "layer_scaling_factor": self.layer_scaling_factor,
-                "layer_schedule": self.layer_schedule,
-            }
-            self.tuned_params_.update(
-                {
-                    "kl_beta": self.kl_beta,
-                    "kl_beta_schedule": self.kl_beta_schedule,
-                    "gamma": self.gamma,
-                    "gamma_schedule": self.gamma_schedule,
-                    "inverse": self.inverse,
-                    "normalize": self.normalize,
-                    "power": self.power,
-                }
-            )
-
+            keys = OBJECTIVE_SPEC_VAE.keys
+            self.tuned_params_ = {k: getattr(self, k) for k in keys}
             self.tuned_params_["model_params"] = self.model_params
-
-        if self.class_weights_ is not None:
-            self.logger.info(
-                f"class_weights={self.class_weights_.detach().cpu().numpy().astype(float).tolist()}"
-            )
 
         # Always start clean
         self.best_params_ = copy.deepcopy(self.tuned_params_)
+
+        self._log_class_weights()
 
         model_params_final = {
             "n_features": self.num_features_,
@@ -604,14 +513,16 @@ class ImputeVAE(BaseNNImputer):
 
         if history is None:
             hist = {"Train": []}
-        elif isinstance(history, dict):
-            hist = dict(history)
         else:
-            hist = {"Train": list(history["Train"]), "Val": list(history["Val"])}
+            hist = (
+                dict(history)
+                if isinstance(history, dict)
+                else {"Train": list(history["Train"]), "Val": list(history["Val"])}
+            )
+        self.history_ = hist
 
         self.best_loss_ = loss
         self.model_ = trained_model
-        self.history_ = hist
         self.is_fit_ = True
 
         self._evaluate_model(
@@ -625,17 +536,9 @@ class ImputeVAE(BaseNNImputer):
         if self.show_plots:
             self.plotter_.plot_history(self.history_)
 
-        self._save_best_params(self.best_params_)
+        self._save_display_model_params(is_tuned=self.model_tuned_)
 
-        if self.model_tuned_:
-            title = f"{self.model_name} Optimized Parameters"
-
-            if self.verbose or self.debug:
-                pm = PrettyMetrics(self.best_params_, precision=2, title=title)
-                pm.render()
-
-            # Save best parameters to a JSON file.
-            self._save_best_params(self.best_params_, objective_mode=True)
+        self.logger.info(f"{self.model_name} fitting complete!")
         return self
 
     def transform(self) -> np.ndarray:
@@ -659,7 +562,7 @@ class ImputeVAE(BaseNNImputer):
             - For haploid data, genotypes encoded as '1' are treated as '2' during decoding.
             - The method checks for decoding failures (i.e., resulting in 'N') and raises an error if any are found.
         """
-        if not self.is_fit_:
+        if not getattr(self, "is_fit_", False):
             msg = f"{self.model_name} is not fitted. Must call 'fit()' before 'transform()'."
             self.logger.error(msg)
             raise NotFittedError(msg)
@@ -683,31 +586,33 @@ class ImputeVAE(BaseNNImputer):
 
         # 3. Handle Haploid mapping (2->1) before decoding if needed
         decode_input = imputed_array
-        if self.is_haploid_:
+        if getattr(self, "is_haploid_", False):
             decode_input = imputed_array.copy()
             decode_input[decode_input == 1] = 2
 
         # 4. Decode integers to IUPAC strings
-        imputed_genotypes = self.decode_012(decode_input)
+        imputed_gt = self.decode_012(decode_input)
 
-        if (imputed_genotypes == "N").any():
-            msg = f"Something went wrong: {self.model_name} imputation still contains {(imputed_genotypes == 'N').sum()} missing values ('N')."
+        if (imputed_gt == "N").any():
+            msg = f"Something went wrong: {self.model_name} imputation still contains {(imputed_gt == 'N').sum()} missing values ('N')."
             self.logger.error(msg)
             raise RuntimeError(msg)
 
         if self.show_plots:
             original_input = X_to_impute
-            if self.is_haploid_:
+
+            if getattr(self, "is_haploid_", False):
                 original_input = X_to_impute.copy()
                 original_input[original_input == 1] = 2
 
-            original_genotypes = self.decode_012(original_input)
-
             plt.rcParams.update(self.plotter_.param_dict)
-            self.plotter_.plot_gt_distribution(original_genotypes, is_imputed=False)
-            self.plotter_.plot_gt_distribution(imputed_genotypes, is_imputed=True)
 
-        return imputed_genotypes
+            orig_dec = self.decode_012(original_input)
+            self.plotter_.plot_gt_distribution(imputed_gt, orig_dec, True)
+
+        self.logger.info(f"{self.model_name} Imputation complete!")
+
+        return imputed_gt
 
     def _train_and_validate_model(
         self,
@@ -743,7 +648,7 @@ class ImputeVAE(BaseNNImputer):
         optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
 
         # Calculate default warmup
-        warmup_epochs = max(int(0.1 * max_epochs), 10)
+        warmup_epochs = max(int(0.02 * max_epochs), 10)
 
         # Check if patience is too short for the calculated warmup
         if self.early_stop_gen <= warmup_epochs:
@@ -887,7 +792,22 @@ class ImputeVAE(BaseNNImputer):
                 kl_beta=kl_beta_current,
             )
 
+            if self.debug and epoch % 10 == 0:
+                self.logger.debug(
+                    f"[{self.model_name}] Epoch {epoch + 1}/{self.epochs}"
+                )
+                msg = f"Learning Rate: {scheduler.get_last_lr()[0]:.6f}"
+                self.logger.debug(msg)
+                self.logger.debug(f"KL Beta: {kl_beta_current:.6f}")
+
+                if gamma_schedule:
+                    msg2 = f"Focal CE Gamma: {ce_criterion.gamma:.6f}"
+                    self.logger.debug(msg2)
+                self.logger.debug(f"Train Loss: {train_loss:.6f}")
+                self.logger.debug(f"Val Loss: {val_loss:.6f}")
+
             scheduler.step()
+
             history["Train"].append(float(train_loss))
             history["Val"].append(float(val_loss))
 
@@ -1197,7 +1117,7 @@ class ImputeVAE(BaseNNImputer):
         eval_mask: np.ndarray,
         *,
         objective_mode: bool = False,
-    ) -> Dict[str, float]:
+    ) -> dict[str, float]:
         """Evaluate model performance on masked genotypes.
 
         This method evaluates the performance of the trained model on a given dataset using a specified evaluation mask. It computes various classification metrics based on the predicted labels and probabilities, comparing them to the ground truth labels. The method returns a dictionary of evaluation metrics.
@@ -1210,7 +1130,7 @@ class ImputeVAE(BaseNNImputer):
             objective_mode (bool): If True, suppresses verbose output.
 
         Returns:
-            Dict[str, float]: Evaluation metrics.
+            dict[str, float]: Evaluation metrics.
         """
         if model is None:
             msg = "Model passed to _evaluate_model() is not fitted. Call fit() before evaluation."
@@ -1483,7 +1403,7 @@ class ImputeVAE(BaseNNImputer):
             trial (optuna.Trial): Optuna trial object.
 
         Returns:
-            Dict[str, int | float | str]: Sampled hyperparameters.
+            dict[str, int | float | str]: Sampled hyperparameters.
         """
         params = {
             "latent_dim": trial.suggest_int("latent_dim", 2, 32),
