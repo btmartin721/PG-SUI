@@ -10,9 +10,41 @@ Unreleased
 Documentation - Unreleased
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+- None.
+
+v1.7.1 - 2026-01-17
+-------------------
+
+Enhancements - v1.7.1
+^^^^^^^^^^^^^^^^^^^^^
+
+- Added ``plot.multiqc`` config toggles and wired ``--disable-multiqc`` to suppress MultiQC-compatible plots.
+- Genotype distribution plots now compare imputed vs. original datasets with Jensen-Shannon distance plus MultiQC comparison panels.
+- Refined ROC/PR visualizations to macro-only curves with improved labeling and log-scaled confusion matrices.
+
+Improvements - v1.7.1
+^^^^^^^^^^^^^^^^^^^^^
+
+- Centralized simulated/original mask splitting, validation, and logging across unsupervised imputers.
+- Optuna tuning database filenames now use UUIDs with clearer resume logging.
+- Standardized unsupervised model parameter saving/pretty-printing, class-weight logging, and shorter warmup schedules with richer debug output.
+
+Bug Fixes - v1.7.1
+^^^^^^^^^^^^^^^^^^
+
+- ROC AUC/average precision scorers now return 0.0 when undefined to avoid misleading defaults.
+
+Documentation - v1.7.1
+^^^^^^^^^^^^^^^^^^^^^^
+
 - Added dedicated ImputeNLPCA and ImputeUBP algorithm pages with formulations, training phases, and projection details.
 - Expanded ImputeAutoencoder and ImputeVAE documentation to align with the full unsupervised model lineup.
 - Added an Optuna tuning guide and refreshed config/simulate/tutorial references to the automated tuning workflow.
+
+Tests - v1.7.1
+^^^^^^^^^^^^^^
+
+- Updated the scorer ROC AUC unit test fixture to a multi-class example.
 
 v1.7.0 - 2026-01-08
 -------------------
