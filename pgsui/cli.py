@@ -236,9 +236,10 @@ def _apply_best_params_to_cfg(cfg: Any, best_params: dict, model_name: str) -> A
             flat[final_k] = v
 
     # 4. Apply settings
-    #    Note: 'tune.' is usually not needed for best_params (which are the result of tuning),
-    #    but kept for safety.
-    candidate_prefixes = ("", "model.", "train.", "sim.", "tune.", "io.", "plot.")
+    # NOTE: 'tune.' is usually not needed for best_params
+    # (which are the result of tuning),
+    # but kept for safety.
+    candidate_prefix = ("", "model.", "train.", "sim.", "tune.", "io.", "plot.")
 
     for raw_k, v in flat.items():
         # Skip explicitly ignored metadata
@@ -260,7 +261,7 @@ def _apply_best_params_to_cfg(cfg: Any, best_params: dict, model_name: str) -> A
         # CASE 2: Prefix Search
         # Try applying empty prefix, then model., train., etc.
         applied = False
-        for pref in candidate_prefixes:
+        for pref in candidate_prefix:
             k = f"{pref}{raw_k}" if pref else raw_k
             try:
                 cfg = apply_dot_overrides(cfg, {k: v})
@@ -481,6 +482,11 @@ def _args_to_cli_overrides(args: argparse.Namespace) -> dict:
             "Disabling plotting for all models as per --disable-plotting flag."
         )
         overrides["plot.show"] = False
+    if getattr(args, "disable_multiqc", False):
+        logging.info(
+            "Disabling MultiQC-compatible plots as per --disable-multiqc flag."
+        )
+        overrides["plot.multiqc"] = False
 
     # Simulation overrides
     if hasattr(args, "sim_strategy"):
