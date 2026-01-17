@@ -4,10 +4,10 @@ import json
 import logging
 import math
 import pprint
-from collections import Counter
-from datetime import datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Type, cast
+from typing import TYPE_CHECKING, Any, Literal, Optional, Type
+from uuid import uuid4
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -31,10 +31,12 @@ from snpio.utils.misc import validate_input_type
 from pgsui.data_processing.transformers import SimMissingTransformer
 from pgsui.impute.unsupervised.nn_scorers import Scorer
 from pgsui.utils.classification_viz import ClassificationReportVisualizer
-from pgsui.utils.logging_utils import configure_logger
+from pgsui.utils.logging_utils import (
+    configure_logger,
+    configure_optuna_best_trial_logger,
+)
 from pgsui.utils.plotting import Plotting
 from pgsui.utils.pretty_metrics import PrettyMetrics
-from pgsui.utils.logging_utils import configure_optuna_best_trial_logger
 
 if TYPE_CHECKING:
     from snpio.read_input.genotype_data import GenotypeData
@@ -126,7 +128,7 @@ class BaseNNImputer:
         self.tune_save_db: bool = False
         self.tune_resume: bool = False
         self.n_trials: int = 100
-        self.model_params: Dict[str, Any] = {}
+        self.model_params: dict[str, Any] = {}
         self.tune_metric: str = "f1"
         self.primary_metric: str
         self.learning_rate: float = 1e-3
@@ -138,6 +140,7 @@ class BaseNNImputer:
         self.plot_fontsize: int = 10
         self.plot_dpi: int = 300
         self.title_fontsize: int = 12
+        self.use_multiqc: bool = True
         self.despine: bool = True
         self.show_plots: bool = False
         self.scoring_averaging: Literal["macro", "weighted"] = "macro"
@@ -153,7 +156,7 @@ class BaseNNImputer:
         self.ground_truth_: np.ndarray
         self.validation_split: float = 0.2
         self.batch_size: int = 64
-        self.best_params_: Dict[str, Any] = {}
+        self.best_params_: dict[str, Any] = {}
 
         self.optimize_dir: Path
         self.models_dir: Path
@@ -165,7 +168,14 @@ class BaseNNImputer:
         self.X_model_input_: Optional[np.ndarray] = None
         self.class_weights_: Optional[torch.Tensor] = None
 
-    def tune_hyperparameters(self) -> Dict[str, Any]:
+        self.sim_mask_train_: np.ndarray
+        self.sim_mask_val_: np.ndarray
+        self.sim_mask_test_: np.ndarray
+        self.orig_mask_train_: np.ndarray
+        self.orig_mask_val_: np.ndarray
+        self.orig_mask_test_: np.ndarray
+
+    def tune_hyperparameters(self) -> dict[str, Any]:
         """Tunes model hyperparameters using an Optuna study.
 
         This method orchestrates the hyperparameter search process. It creates an Optuna study that aims to maximize the metric defined in ``self.tune_metric``. The search is driven by the ``_objective`` method, which must be implemented by the child class. After the search, the best parameters are logged, saved to a JSON file, and visualizations of the study are generated.
@@ -187,24 +197,29 @@ class BaseNNImputer:
                 raise NotImplementedError(msg)
 
         is_verbose = self.verbose or self.debug
-        v = optuna.logging.INFO if is_verbose else optuna.logging.WARNING
-        optuna.logging.set_verbosity(v)
+        lvl = optuna.logging.INFO if is_verbose else optuna.logging.WARNING
+        optuna.logging.set_verbosity(lvl)
 
         study_db = None
         load_if_exists = False
         if self.tune_save_db:
-            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-            study_db = (
-                self.optimize_dir / "study_database" / f"optuna_study_{timestamp}.db"
-            )
-            study_db.parent.mkdir(parents=True, exist_ok=True)
+            uid = uuid4().hex
+            outdir = self.optimize_dir / "study_database"
+            study_db = outdir / f"optuna_study_{uid}.db"
+            outdir.mkdir(parents=True, exist_ok=True)
 
-            if self.tune_resume and study_db.exists():
-                load_if_exists = True
-
-            if not self.tune_resume and study_db.exists():
-                timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-                study_db = study_db.with_name(f"optuna_study_{timestamp}.db")
+            if study_db.exists():
+                msg = f"Optuna study database already exists at: {study_db}"
+                self.logger.info(msg)
+                if self.tune_resume:
+                    msg = "Resuming tuning from existing database."
+                    self.logger.info(msg)
+                    load_if_exists = True
+                else:
+                    msg = "Creating a new study database with a unique ID."
+                    self.logger.info(msg)
+                    uid = uuid4().hex
+                    study_db = study_db.with_name(f"optuna_study_{uid}.db")
 
         self.study_db = study_db
         study_name = f"{self.prefix} {self.model_name} Model Optimization"
@@ -384,7 +399,7 @@ class BaseNNImputer:
     def build_model(
         self,
         Model: Type[torch.nn.Module],
-        model_params: Dict[str, Any],
+        model_params: dict[str, Any],
     ) -> torch.nn.Module:
         """Builds and initializes a neural network model instance.
 
@@ -392,7 +407,7 @@ class BaseNNImputer:
 
         Args:
             Model (torch.nn.Module): The model class to be instantiated.
-            model_params (Dict[str, Any]): A dictionary of variable model hyperparameters, typically sampled during a hyperparameter search.
+            model_params (dict[str, Any]): A dictionary of variable model hyperparameters, typically sampled during a hyperparameter search.
 
         Returns:
             torch.nn.Module: The constructed model instance, ready for training.
@@ -434,13 +449,13 @@ class BaseNNImputer:
 
         return Model(**all_params).to(self.device)
 
-    def initialize_plotting_and_scorers(self) -> Tuple[Plotting, Scorer]:
+    def initialize_plotting_and_scorers(self) -> tuple[Plotting, Scorer]:
         """Initializes and returns the plotting and scoring utility classes.
 
         This method should be called within a `fit` method to set up the standardized utilities for generating plots and calculating performance metrics.
 
         Returns:
-            Tuple[Plotting, Scorer]: A tuple containing the initialized Plotting and Scorer objects.
+            tuple[Plotting, Scorer]: A tuple containing the initialized Plotting and Scorer objects.
         """
         fmt = self.plot_format
 
@@ -456,7 +471,7 @@ class BaseNNImputer:
             show_plots=self.show_plots,
             verbose=self.verbose,
             debug=self.debug,
-            multiqc=True,
+            multiqc=self.use_multiqc,
             multiqc_section=f"PG-SUI: {self.model_name} Model Imputation",
         )
 
@@ -530,28 +545,32 @@ class BaseNNImputer:
         """
         dvc = device.lower().strip()
         if dvc == "cpu":
+            self.logger.debug("Using CPU as the compute device.")
             return torch.device("cpu")
         if dvc == "mps":
             if torch.backends.mps.is_available():
+                self.logger.debug("Using Apple MPS as the compute device.")
                 return torch.device("mps")
+
+            self.logger.debug("Apple MPS is unavailable. Falling back to CPU.")
             return torch.device("cpu")
         if torch.cuda.is_available():
+            self.logger.debug("Using CUDA GPU as the compute device.")
             return torch.device("cuda")
+
+        self.logger.debug("CUDA GPU is unavailable. Falling back to CPU.")
         return torch.device("cpu")
 
     def _create_model_directories(
-        self, prefix: str, outdirs: List[str], *, outdir: Path | str | None = None
+        self, prefix: str, outdirs: list[str], *, outdir: Path | str | None = None
     ) -> None:
         """Creates the directory structure for storing model outputs.
 
-        This method sets up a standardized folder hierarchy for saving models,
-        plots, metrics, and optimization results, organized under a main directory
-        named after the provided prefix. The current implementation always uses
-        ``<cwd>/<prefix>_output`` regardless of ``outdir``.
+        This method sets up a standardized folder hierarchy for saving models, plots, metrics, and optimization results, organized under a main directory named after the provided prefix. The current implementation always uses `<cwd>/<prefix>_output`` regardless of ``outdir``.
 
         Args:
             prefix (str): The prefix for the main output directory.
-            outdirs (List[str]): A list of subdirectory names to create within the main directory.
+            outdirs (list[str]): A list of subdirectory names to create within the main directory.
             outdir (Path | str | None): Requested base output directory (currently ignored).
 
         Raises:
@@ -561,6 +580,8 @@ class BaseNNImputer:
         formatted_output_dir = base_root / f"{prefix}_output"
         formatted_output_dir = Path(f"{prefix}_output")
         base_dir = formatted_output_dir / "Unsupervised"
+
+        self.logger.debug(f"Creating output directories under: {base_dir}")
 
         for d in outdirs:
             subdir = base_dir / d / self.model_name
@@ -686,9 +707,9 @@ class BaseNNImputer:
         self,
         y_true: np.ndarray,
         y_pred: np.ndarray,
-        metrics: Dict[str, float],
+        metrics: dict[str, float],
         y_pred_proba: np.ndarray | None = None,
-        labels: List[str] = ["REF", "HET", "ALT"],
+        labels: list[str] = ["REF", "HET", "ALT"],
     ) -> None:
         """Generate and save detailed classification reports and visualizations.
 
@@ -697,9 +718,9 @@ class BaseNNImputer:
         Args:
             y_true (np.ndarray): True labels (1D array).
             y_pred (np.ndarray): Predicted labels (1D array).
-            metrics (Dict[str, float]): Computed metrics.
+            metrics (dict[str, float]): Computed metrics.
             y_pred_proba (np.ndarray | None): Predicted probabilities (2D array). Defaults to None.
-            labels (List[str]): Class label names (default: ["REF", "HET", "ALT"] for 3-class).
+            labels (list[str]): Class label names (default: ["REF", "HET", "ALT"] for 3-class).
         """
         report_name = "zygosity" if len(labels) <= 3 else "iupac"
         middle = "IUPAC" if report_name == "iupac" else "Zygosity"
@@ -1516,14 +1537,14 @@ class BaseNNImputer:
         return obj
 
     def _save_best_params(
-        self, best_params: Dict[str, Any], objective_mode: bool = False
+        self, best_params: dict[str, Any], objective_mode: bool = False
     ) -> None:
         """Save the best hyperparameters to a JSON file.
 
         This method saves the best hyperparameters found during hyperparameter tuning to a JSON file in the optimization directory. The filename includes the model name for easy identification.
 
         Args:
-            best_params (Dict[str, Any]): A dictionary of the best hyperparameters to save.
+            best_params (dict[str, Any]): A dictionary of the best hyperparameters to save.
         """
         if not hasattr(self, "parameters_dir"):
             msg = "Attribute 'parameters_dir' not found. Ensure _create_model_directories() has been called."
@@ -1549,8 +1570,8 @@ class BaseNNImputer:
             json.dump(bp, f, indent=4)
 
     def _set_best_params(
-        self, params: Dict[str, Any], objective_mode: bool = False
-    ) -> Dict[str, Any]:
+        self, params: dict[str, Any], objective_mode: bool = False
+    ) -> dict[str, Any]:
         """An abstract method for setting best parameters."""
         raise NotImplementedError
 
@@ -1572,17 +1593,24 @@ class BaseNNImputer:
             or self.sim_prop <= 0.0
             or self.sim_prop >= 1.0
         ):
-            msg = "sim_prop must be set and between 0.0 and 1.0."
+            msg = f"sim_prop must be set and between 0.0 and 1.0, but got: {self.sim_prop}."
             self.logger.error(msg)
             raise AttributeError(msg)
 
         if not hasattr(self, "tree_parser") and "nonrandom" in self.sim_strategy:
-            msg = "tree_parser must be set for 'nonrandom' or 'nonrandom_weighted' sim_strategy."
+            msg = f"tree_parser must be set to use 'nonrandom' or 'nonrandom_weighted' sim_strategy, but got: {getattr(self, 'tree_parser', None)}."
             self.logger.error(msg)
             raise AttributeError(msg)
 
         # --- Simulate missing data ---
         X_for_sim = X.astype(np.float32, copy=True)
+
+        self.logger.debug(
+            f"Simulating missing data with strategy: {self.sim_strategy}, proportion: {self.sim_prop}"
+        )
+
+        self.logger.debug(f"Input data shape for simulation: {X_for_sim.shape}")
+
         tr = SimMissingTransformer(
             genotype_data=self.genotype_data,
             tree_parser=self.tree_parser,
@@ -1598,6 +1626,10 @@ class BaseNNImputer:
         X_for_model = tr.transform(X_for_sim.copy())
         sim_mask = tr.sim_missing_mask_.astype(bool)
         orig_mask = tr.original_missing_mask_.astype(bool)
+
+        self.logger.debug(f"Simulated data shape: {X_for_model.shape}")
+        self.logger.debug(f"Simulated missing mask shape: {sim_mask.shape}")
+        self.logger.debug(f"Original missing mask shape: {orig_mask.shape}")
 
         # --- Hard leakage guards ---
         if sim_mask.shape != orig_mask.shape:
@@ -1617,6 +1649,13 @@ class BaseNNImputer:
             )
             self.logger.error(msg)
             raise ValueError(msg)
+
+        self.logger.debug(
+            f"Percent missing in simulated mask: {100.0 * sim_mask.sum() / sim_mask.size:.2f}%"
+        )
+        self.logger.debug(
+            f"Percent missing in original mask: {100.0 * orig_mask.sum() / orig_mask.size:.2f}%"
+        )
 
         return X_for_model, sim_mask, orig_mask
 
@@ -1735,7 +1774,7 @@ class BaseNNImputer:
         *,
         warm_alt: int = 50,
         ramp_alt: int = 100,
-    ) -> Tuple[float, int, int]:
+    ) -> tuple[float, int, int]:
         """Configure annealing schedule for a hyperparameter.
 
         Args:
@@ -1747,7 +1786,7 @@ class BaseNNImputer:
             ramp_alt (int): Alternative ramp-up period if 20% of epochs is too long
 
         Returns:
-            Tuple[float, int, int]: Final value, warm-up epochs, ramp-up epochs.
+            tuple[float, int, int]: Final value, warm-up epochs, ramp-up epochs.
         """
         val = None
         if params is not None and params:
@@ -1939,3 +1978,147 @@ class BaseNNImputer:
         self.logger.debug(
             f"[{self.model_name}] {n_eval} evaluable positions after applying sim_mask and excluding orig_mask."
         )
+
+    def _log_class_weights(self) -> None:
+        """Log the computed class weights.
+
+        Outputs class weights (if available) to logs.
+        """
+        if self.class_weights_ is not None:
+            genotypes = self.class_weights_.numpy(force=True)
+            ref, het, alt = genotypes.astype(float).tolist()
+            self.logger.info(
+                f"class_weights=[REF={ref:.2f}, HET={het:.2f}, ALT={alt:.2f}]"
+            )
+
+    def _richprint_best_params(
+        self, d: dict[str, Any], title: str, *, precision=3
+    ) -> None:
+        """Pretty-print the best hyperparameters using PrettyMetrics.
+
+        This method utilizes the PrettyMetrics utility to display the best hyperparameters in a structured format. It checks if verbose or debug logging is enabled before printing.
+
+        Args:
+            d (dict[str, Any]): A dictionary of the best hyperparameters to print.
+            precision (int): Number of decimal places for floating-point values. Defaults to 3.
+        """
+        if self.verbose or self.debug:
+            self.logger.info(f"[{self.model_name}] model parameters:")
+            title = f"[{self.model_name}] Model Hyperparameters"
+            pm = PrettyMetrics(d, precision=precision, title=title)
+            pm.render()
+
+    def _save_display_model_params(self, *, is_tuned: bool) -> None:
+        """Save and display the model hyperparameters.
+
+        This method handles the saving and displaying of model hyperparameters. It sanitizes the best parameters for JSON serialization, saves them to a file, and pretty-prints them if verbose or debug logging is enabled.
+
+        Args:
+            is_tuned (bool): Whether the model was tuned or used fixed parameters.
+
+        Notes:
+            - Saves the best parameters to a JSON file.
+            - Pretty-prints the parameters if verbose or debug logging is enabled.
+        """
+        bp = self._sanitize_for_json(self.best_params_)
+
+        if not isinstance(bp, dict):
+            msg = "Best parameters must be a dictionary after sanitization."
+            self.logger.error(msg)
+            raise TypeError(msg)
+
+        # Save model parameters to a JSON file.
+        self._save_best_params(bp, objective_mode=False)
+
+        if is_tuned:
+            # Pretty print best params
+            title = f"[{self.model_name}] Optimized Model Parameters"
+            self._richprint_best_params(bp, title, precision=3)
+
+            # Save best parameters to a JSON file.
+            self._save_best_params(bp, objective_mode=True)
+        else:
+            self.logger.info(f"[{self.model_name}] Model used fixed parameters")
+            title = f"[{self.model_name}] Fixed Model Parameters"
+            self._richprint_best_params(bp, title, precision=3)
+
+    def _validate_mask_splits(
+        self, sim_mask: np.ndarray, orig_mask: np.ndarray, *, context: str = "full"
+    ) -> None:
+        """Validate simulated and original masks for train/val/test splits.
+
+        Args:
+            sim_mask (np.ndarray): The simulated mask to validate.
+            orig_mask (np.ndarray): The original mask to validate.
+            context (str): Context label for error messages (e.g., "full", "train", "val", "test").
+        """
+        self._validate_sim_and_orig_masks(
+            sim_mask=sim_mask, orig_mask=orig_mask, context=context
+        )
+
+    def _log_mask_counts(
+        self, train: np.ndarray, val: np.ndarray, test: np.ndarray, dset: str
+    ) -> None:
+        """Log counts of missing entries in train/val/test splits.
+
+        Args:
+            train (np.ndarray): Mask for the training set.
+            val (np.ndarray): Mask for the validation set.
+            test (np.ndarray): Mask for the test set.
+            dset (str): Dataset type label (e.g., "Simulated" or "Real").
+        """
+        self.logger.info(f"Train Set {dset} Counts: {np.count_nonzero(train)}")
+        self.logger.info(f"Val Set {dset} Counts: {np.count_nonzero(val)}")
+        self.logger.info(f"Test Set {dset} Counts: {np.count_nonzero(test)}")
+
+        self.logger.info(
+            f"Total known genotypes per split (sim_strategy={self.sim_strategy}): train set={np.count_nonzero(~train)}, val set={np.count_nonzero(~val)}, test set={np.count_nonzero(~test)}"
+        )
+
+    def validate_and_log_masks(self) -> None:
+        """Validate and log simulated and original masks for train/val/test splits.
+
+        Raises:
+            TypeError: If any of the required masks are not set.
+        """
+        masks = [
+            (self.sim_mask_train_, self.sim_mask_val_, self.sim_mask_test_),
+            (self.orig_mask_train_, self.orig_mask_val_, self.orig_mask_test_),
+        ]
+        if any(mask is None for masks_pair in masks for mask in masks_pair):
+            msg = "Simulated and original masks for train/val/test splits must be set before validation."
+            self.logger.error(msg)
+            raise TypeError(msg)
+
+        for i, mask in enumerate(masks):
+            self._log_mask_counts(*mask, "Simulated" if i == 0 else "Real")
+
+        sm = (self.sim_mask_train_, self.sim_mask_val_, self.sim_mask_test_)
+        om = (self.orig_mask_train_, self.orig_mask_val_, self.orig_mask_test_)
+        contexts = ("train", "val", "test")
+        for sim_mask, orig_mask, context in zip(sm, om, contexts):
+            self._validate_mask_splits(sim_mask, orig_mask, context=context)
+
+    def _extract_masks_indices(
+        self, mask: np.ndarray, indices: tuple[np.ndarray, np.ndarray, np.ndarray]
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Extract train/val/test masks from full mask using provided indices.
+
+        Args:
+            mask (np.ndarray): Full mask array of shape (n_samples, n_loci).
+            indices (tuple[np.ndarray, np.ndarray, np.ndarray]): Tuple of train, val, test indices.
+
+        Returns:
+            tuple[np.ndarray, np.ndarray, np.ndarray]: Train, val, test masks.
+        """
+        if not len(indices) == 3:
+            msg = "Indices tuple must contain exactly three elements: (train_idx, val_idx, test_idx)."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        train_idx, val_idx, test_idx = indices
+
+        train_mask = mask[train_idx].copy()
+        val_mask = mask[val_idx].copy()
+        test_mask = mask[test_idx].copy()
+        return train_mask, val_mask, test_mask
