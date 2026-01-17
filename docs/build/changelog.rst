@@ -15,31 +15,37 @@ Documentation - Unreleased
 v1.7.1 - 2026-01-17
 -------------------
 
+Features - v1.7.1
+^^^^^^^^^^^^^^^^^
+
+- Added ImputeNLPCA and ImputeUBP models with configs/presets, CLI integration, and new NLPCAModel/UBPModel architectures.
+- Added Optuna tuning utilities (OptunaParamSpec validation and best-trial logging) to standardize objective params and study output.
+
 Enhancements - v1.7.1
 ^^^^^^^^^^^^^^^^^^^^^
 
-- Added ``plot.multiqc`` config toggles and wired ``--disable-multiqc`` to suppress MultiQC-compatible plots.
+- Added ``plot.multiqc`` config support and propagated MultiQC-compatible plotting across deterministic and unsupervised models.
 - Genotype distribution plots now compare imputed vs. original datasets with Jensen-Shannon distance plus MultiQC comparison panels.
-- Refined ROC/PR visualizations to macro-only curves with improved labeling and log-scaled confusion matrices.
+- Plotting updates include multi-phase history handling, macro-only ROC/PR curves, and log-scaled confusion matrices.
 
 Improvements - v1.7.1
 ^^^^^^^^^^^^^^^^^^^^^
 
-- Centralized simulated/original mask splitting, validation, and logging across unsupervised imputers.
-- Optuna tuning database filenames now use UUIDs with clearer resume logging.
-- Standardized unsupervised model parameter saving/pretty-printing, class-weight logging, and shorter warmup schedules with richer debug output.
+- Refactored BaseNNImputer and unsupervised imputers for clearer mask handling, logging, and parameter saving.
+- Updated Autoencoder/UBP training schedules (AdamW + warmup-to-cosine) and improved hyperparameter validation/logging.
+- SimMissingTransformer gains ``mask_missing`` control to avoid simulated-missing overlaps with existing missingness.
+- Optuna study database filenames now use UUIDs with clearer resume logging.
 
 Bug Fixes - v1.7.1
 ^^^^^^^^^^^^^^^^^^
 
-- ROC AUC/average precision scorers now return 0.0 when undefined to avoid misleading defaults.
+- Scorer ROC AUC/AP now handle undefined cases consistently and return 0.0 with clearer warnings.
+- Focal cross-entropy loss now uses integer targets and a safe zero-loss early exit.
 
 Documentation - v1.7.1
 ^^^^^^^^^^^^^^^^^^^^^^
 
-- Added dedicated ImputeNLPCA and ImputeUBP algorithm pages with formulations, training phases, and projection details.
-- Expanded ImputeAutoencoder and ImputeVAE documentation to align with the full unsupervised model lineup.
-- Added an Optuna tuning guide and refreshed config/simulate/tutorial references to the automated tuning workflow.
+- Added algorithm pages for Autoencoder, VAE, NLPCA, and UBP plus updated configs/tutorials and an Optuna tuning guide.
 
 Tests - v1.7.1
 ^^^^^^^^^^^^^^
