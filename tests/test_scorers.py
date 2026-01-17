@@ -56,7 +56,7 @@ def test_scorer_evaluate_and_objective_mode() -> None:
 
 def test_scorer_roc_auc_single_class_defaults() -> None:
     scorer = Scorer(prefix="unit", average="macro")
-    y_true = np.array([1, 1, 1])
-    y_pred_proba = np.array([[0.4, 0.6], [0.3, 0.7], [0.1, 0.9]])
+    y_true = np.array([0, 1, 2])
+    y_pred_proba = np.array([[0.6, 0.3, 0.1], [0.1, 0.4, 0.5], [0.0, 1.0, 0.0]])
 
     assert scorer.roc_auc(y_true, y_pred_proba) == pytest.approx(0.5)
