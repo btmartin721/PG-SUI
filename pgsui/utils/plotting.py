@@ -1,13 +1,14 @@
 import logging
 import warnings
 from pathlib import Path
-from typing import Dict, List, Literal, Optional, Sequence, Mapping, cast
+from typing import Dict, List, Literal, Mapping, Optional, Sequence, cast
 
 import matplotlib as mpl
 
 # Use Agg backend for headless plotting
 mpl.use("Agg")
 
+import matplotlib.colors as colors
 import matplotlib.pyplot as plt
 import numpy as np
 import optuna
@@ -15,6 +16,7 @@ import pandas as pd
 import seaborn as sns
 import torch
 from optuna.exceptions import ExperimentalWarning
+from scipy.spatial.distance import jensenshannon
 from sklearn.metrics import (
     ConfusionMatrixDisplay,
     auc,
@@ -349,18 +351,6 @@ class Plotting:
                 y_true_bin[:, i], y_pred_proba[:, i]
             )
 
-        # Micro-averages
-        fpr["micro"], tpr["micro"], _ = roc_curve(
-            y_true_bin.ravel(), y_pred_proba.ravel()
-        )
-        roc_auc_vals["micro"] = auc(fpr["micro"], tpr["micro"])
-        precision["micro"], recall["micro"], _ = precision_recall_curve(
-            y_true_bin.ravel(), y_pred_proba.ravel()
-        )
-        average_precision_vals["micro"] = average_precision_score(
-            y_true_bin, y_pred_proba, average="micro"
-        )
-
         # Macro-average ROC
         all_fpr = np.unique(np.concatenate([fpr[i] for i in range(num_classes)]))
         mean_tpr = np.zeros_like(all_fpr)
@@ -374,7 +364,8 @@ class Plotting:
         all_recall = np.unique(np.concatenate([recall[i] for i in range(num_classes)]))
         mean_precision = np.zeros_like(all_recall)
         for i in range(num_classes):
-            # recall[i] increases, but precision[i] is given over decreasing thresholds
+            # recall[i] increases,
+            # but precision[i] is given over decreasing thresholds
             mean_precision += np.interp(all_recall, recall[i][::-1], precision[i][::-1])
         mean_precision /= num_classes
         average_precision_vals["macro"] = average_precision_score(
@@ -386,16 +377,9 @@ class Plotting:
 
         # ROC
         axes[0].plot(
-            fpr["micro"],
-            tpr["micro"],
-            label=f"Micro-average ROC (AUC = {roc_auc_vals['micro']:.2f})",
-            linestyle=":",
-            linewidth=4,
-        )
-        axes[0].plot(
             fpr["macro"],
             tpr["macro"],
-            label=f"Macro-average ROC (AUC = {roc_auc_vals['macro']:.2f})",
+            label=f"Macro ROC-AUC={roc_auc_vals['macro']:.2f})",
             linestyle="--",
             linewidth=4,
         )
@@ -403,32 +387,34 @@ class Plotting:
             axes[0].plot(
                 fpr[i],
                 tpr[i],
-                label=f"{label_names[i]} ROC (AUC = {roc_auc_vals[i]:.2f})",
+                label=f"{label_names[i]} ROC-AUC={roc_auc_vals[i]:.2f})",
             )
-        axes[0].plot([0, 1], [0, 1], linestyle="--", color="black", label="Random")
-        axes[0].set_xlabel("False Positive Rate")
-        axes[0].set_ylabel("True Positive Rate")
-        axes[0].set_title("Multi-class ROC-AUC Curve")
+        axes[0].plot(
+            [0, 1], [0, 1], linestyle="--", color="black", label="Random Baseline"
+        )
+        axes[0].set_xlabel("False Positive Rate", fontsize=self.plot_fontsize + 10)
+        axes[0].set_ylabel("True Positive Rate", fontsize=self.plot_fontsize + 10)
+        axes[0].tick_params(
+            axis="both", which="major", labelsize=self.plot_fontsize + 10
+        )
+        axes[0].set_title(
+            "Multi-class ROC-AUC Curves", fontsize=self.plot_fontsize + 10
+        )
+
         axes[0].legend(
             loc="upper center",
             bbox_to_anchor=(0.5, -0.15),
             fancybox=True,
             shadow=True,
             ncol=2,
+            fontsize=self.plot_fontsize + 5,
         )
 
         # Precision-recall
         axes[1].plot(
-            recall["micro"],
-            precision["micro"],
-            label=f"Micro-average PR (AP = {average_precision_vals['micro']:.2f})",
-            linestyle=":",
-            linewidth=4,
-        )
-        axes[1].plot(
             all_recall,
             mean_precision,
-            label=f"Macro-average PR (AP = {average_precision_vals['macro']:.2f})",
+            label=f"Macro AP={average_precision_vals['macro']:.2f})",
             linestyle="--",
             linewidth=4,
         )
@@ -436,22 +422,34 @@ class Plotting:
             axes[1].plot(
                 recall[i],
                 precision[i],
-                label=f"{label_names[i]} PR (AP = {average_precision_vals[i]:.2f})",
+                label=f"{label_names[i]} AP={average_precision_vals[i]:.2f})",
             )
-        axes[1].plot([0, 1], [1, 0], linestyle="--", color="black", label="Random")
-        axes[1].set_xlabel("Recall")
-        axes[1].set_ylabel("Precision")
-        axes[1].set_title("Multi-class Precision-Recall Curve")
+        axes[1].plot(
+            [0, 1], [1, 0], linestyle="--", color="black", label="Random Baseline"
+        )
+        axes[1].set_xlabel("Recall", fontsize=self.plot_fontsize + 10)
+        axes[1].set_ylabel("Precision", fontsize=self.plot_fontsize + 10)
+        axes[1].tick_params(
+            axis="both", which="major", labelsize=self.plot_fontsize + 10
+        )
+        axes[1].set_title(
+            "Multi-class Precision-Recall Curves", fontsize=self.plot_fontsize + 10
+        )
         axes[1].legend(
             loc="upper center",
             bbox_to_anchor=(0.5, -0.15),
             fancybox=True,
             shadow=True,
             ncol=2,
+            fontsize=self.plot_fontsize + 5,
         )
 
         # Title & save
-        fig.suptitle("\n".join([f"{k}: {v:.2f}" for k, v in metrics.items()]), y=1.35)
+        fig.suptitle(
+            "\n".join([f"{k}: {v:.2f}" for k, v in metrics.items()]),
+            fontsize=self.title_fontsize + 8,
+            y=1.45,
+        )
 
         prefix_for_name = f"{prefix}_" if prefix != "" else ""
         out_name = (
@@ -757,6 +755,11 @@ class Plotting:
 
         fig, ax = plt.subplots(1, 1, figsize=(15, 15))
 
+        true_values, true_counts = np.unique(y_true_1d, return_counts=True)
+        pred_values, pred_counts = np.unique(y_pred_1d, return_counts=True)
+        vmin = int(min(true_counts.min(), pred_counts.min()))
+        vmax = int(max(true_counts.max(), pred_counts.max()))
+
         if n_classes <= 3:
             disp = ConfusionMatrixDisplay.from_predictions(
                 y_true=y_true_1d,
@@ -767,6 +770,7 @@ class Plotting:
                 cmap="viridis",
                 colorbar=True,
                 text_kw={"fontsize": 28},
+                im_kw={"norm": colors.LogNorm(vmin=1, vmax=vmax)},
             )
             ax.set_xlabel("Predicted Label", fontsize=28)
             ax.set_ylabel("True Label", fontsize=28)
@@ -783,7 +787,12 @@ class Plotting:
                 ax=ax,
                 cmap="viridis",
                 colorbar=True,
+                im_kw={"norm": colors.LogNorm(vmin=1, vmax=vmax)},
             )
+            ax.set_xlabel("Predicted Label")
+            ax.set_ylabel("True Label")
+            ax.tick_params(axis="both", which="major")
+            ax.set_title(f"{self.model_name} Confusion Matrix")
 
         # Build a stable panel id before mutating prefix
         panel_suffix = f"{prefix}_" if prefix else ""
@@ -818,86 +827,160 @@ class Plotting:
     def plot_gt_distribution(
         self,
         X: np.ndarray | pd.DataFrame | list | torch.Tensor,
+        X_compare: np.ndarray | pd.DataFrame | list | torch.Tensor | None = None,
         is_imputed: bool = False,
     ) -> None:
-        """Plot genotype distribution (IUPAC or integer-encoded).
+        """Plot genotype distribution, optionally comparing two datasets.
 
-        This plots counts for all genotypes present in X. It supports IUPAC single-letter genotypes and integer encodings. Missing markers '-', '.', '?' are normalized to 'N'. Bars are annotated with counts and percentages.
+        Plots counts for all genotypes. If `X_compare` is provided, it plots side-by-side bars and calculates the Jensen-Shannon distance between
+            the distributions.
 
         Args:
-            X (np.ndarray | pd.DataFrame | list | torch.Tensor): Array-like genotype matrix. Rows=loci, cols=samples (any orientation is OK). Elements are IUPAC one-letter genotypes (e.g., 'A','C','G','T','N','R',...) or integers (e.g., 0/1/2[/3]).
-            is_imputed (bool): Whether these genotypes are imputed. Affects the title only. Defaults to False.
+            X (np.ndarray | pd.DataFrame | list | torch.Tensor): Primary genotype matrix (usually the imputed/final one).
+            X_compare (np.ndarray | pd.DataFrame | list | torch.Tensor | None): Optional baseline genotype matrix to compare against
+                (e.g., the original dataset with missing values).
+            is_imputed (bool): Labeling flag. If True, X is labeled "Imputed".
         """
-        # Flatten X to a 1D Series
-        if isinstance(X, pd.DataFrame):
-            arr = X.values
-        elif torch.is_tensor(X):
-            arr = X.detach().cpu().numpy()
-        else:
-            arr = np.asarray(X)
 
-        s = pd.Series(arr.ravel())
+        # --- Helper to process raw input into a normalized Series ---
+        def _process_input(data, name) -> tuple[pd.Series, str, list]:
+            if isinstance(data, pd.DataFrame):
+                arr = data.to_numpy()
+            elif torch.is_tensor(data):
+                arr = data.detach().cpu().numpy()
+            else:
+                arr = np.asarray(data)
 
-        # Detect string vs numeric encodings and normalize
-        if s.dtype.kind in ("O", "U", "S"):  # string-like → IUPAC path
-            s = s.astype(str).str.upper().replace({"-": "N", ".": "N", "?": "N"})
-            x_label = "Genotype (IUPAC)"
+            s = pd.Series(arr.ravel())
 
-            # Define canonical order: N, A/C/T/G, then IUPAC ambiguity codes.
-            canonical = ["A", "C", "T", "G"]
-            iupac_ambiguity = sorted(["M", "R", "W", "S", "Y", "K", "V", "H", "D", "B"])
-            base_order = ["N"] + canonical + iupac_ambiguity
-        else:  # numeric path (e.g., 0/1/2/[3], -1 for missing)
-            # Map common missing sentinels to 'N', keep others as strings for
-            # labeling
-            s = s.astype(float)  # allow NaN comparisons
-            s = s.where(~np.isin(s, [-1, np.nan]), other=np.nan)
-            s = s.fillna("N").astype(int, errors="ignore").astype(str)
+            # Detect string vs numeric encodings
+            if s.dtype.kind in ("O", "U", "S"):
+                s = s.astype(str).str.upper().replace({"-": "N", ".": "N", "?": "N"})
+                lbl = "Genotype (IUPAC)"
+                canonical = ["A", "C", "T", "G"]
+                ambig = sorted(["M", "R", "W", "S", "Y", "K", "V", "H", "D", "B"])
+                order = ["N"] + canonical + ambig
+            else:
+                s = s.astype(float)
+                s = s.where(~np.isin(s, [-1, np.nan]), other=np.nan)
+                s = s.fillna("N").astype(int, errors="ignore").astype(str)
+                lbl = "Genotype (Integer-encoded)"
+                order = ["N", "0", "1", "2", "3"]
 
-            x_label = "Genotype (Integer-encoded)"
+            return s, lbl, order
 
-            # Support both ternary and quaternary encodings; keep a stable order
-            base_order = ["N", "0", "1", "2", "3"]
+        # --- Process Datasets ---
+        # Define labels based on is_imputed flag or comparison logic
+        label_main = "Imputed" if is_imputed else "Dataset A"
+        label_compare = "Original" if is_imputed else "Dataset B"
 
-        # Include any unexpected symbols at the end (sorted) so nothing is
-        # dropped
-        extras = sorted(set(s.unique()) - set(base_order))
+        s_main, x_label, base_order = _process_input(X, label_main)
+
+        datasets = {label_main: s_main}
+        if X_compare is not None:
+            s_comp, _, _ = _process_input(X_compare, label_compare)
+            datasets[label_compare] = s_comp
+
+        # --- Unified Ordering ---
+        # Collect all unique keys from all datasets to ensure alignment
+        all_uniques = set()
+        for s in datasets.values():
+            all_uniques.update(s.unique())
+
+        extras = sorted(all_uniques - set(base_order))
         full_order = base_order + [e for e in extras if e not in base_order]
 
-        # Count and reindex to show zero-count categories
-        counts = s.value_counts().reindex(full_order, fill_value=0)
-        df = counts.rename_axis("Genotype").reset_index(name="Count")
-        df["Percent"] = df["Count"] / df["Count"].sum() * 100
+        # --- Build Frequency Table ---
+        stats_data = []
+        plot_df_list = []
 
-        title = "Imputed Genotype Counts" if is_imputed else "Genotype Counts"
+        for name, series in datasets.items():
+            # Get counts reindexed to the full unified order
+            counts = series.value_counts().reindex(full_order, fill_value=0)
+
+            # Normalize to probabilities for JS distance calc
+            probs = counts[1:] / counts[1:].sum()
+            stats_data.append(probs.to_numpy())
+
+            # Prepare plotting DF
+            _df = counts.rename_axis("Genotype").reset_index(name="Count")
+            _df["Percent"] = _df["Count"] / _df["Count"].sum() * 100
+            _df["Dataset"] = name
+            plot_df_list.append(_df)
+
+        df_final = pd.concat(plot_df_list, ignore_index=True)
+
+        # --- Calculate Distance (if comparing) ---
+        dist_text = ""
+        if len(stats_data) == 2:
+            # Jensen-Shannon Distance is sqrt(JSD). Base 2 gives range [0, 1]
+            js_dist = jensenshannon(stats_data[0], stats_data[1], base=2)
+            dist_text = f"JS Dist: {js_dist:.2f}"
 
         # --- Plot ---
-        fig, ax = plt.subplots(figsize=(8, 5))
+        fig, ax = plt.subplots(figsize=(10, 6) if X_compare is not None else (8, 5))
 
-        ax = sns.barplot(
-            data=df,
+        # If comparing, use 'Dataset' as hue.
+        # If not, map color to 'Genotype' as before.
+        hue_col = "Dataset" if X_compare is not None else "Genotype"
+        palette = "Set2" if X_compare is not None else "Set1"
+
+        sns.barplot(
+            data=df_final,
             x="Genotype",
             y="Percent",
-            hue="Genotype",
+            hue=hue_col,
             order=full_order,
             errorbar=None,
             ax=ax,
-            palette="Set1",
-            legend=False,
-            fill=True,
+            palette=palette,
+            edgecolor="black",  # Add border to distinguish side-by-side bars
+            linewidth=0.5,
         )
 
         sns.set_style("ticks", rc=self.param_dict)
         sns.despine(ax=ax)
 
-        ax.set_xlabel(x_label)
-        ax.set_ylabel("Percent")
-        ax.set_title(title)
-        ax.set_ylim((0.0, 50.0))
+        ax.set_xlabel(x_label, fontsize=self.plot_fontsize + 10)
+        ax.set_ylabel("Percent", fontsize=self.plot_fontsize + 10)
+        ax.tick_params(axis="both", which="major", labelsize=self.plot_fontsize + 10)
+
+        title = (
+            "Genotype Distribution Comparison"
+            if X_compare is not None
+            else ("Imputed Genotype Counts" if is_imputed else "Genotype Counts")
+        )
+        ax.set_title(title, fontsize=self.plot_fontsize + 12)
+
+        # Add distance statistic to plot
+        if dist_text:
+            ax.annotate(
+                dist_text,
+                xy=(0.95, 0.95),
+                xycoords="axes fraction",
+                ha="right",
+                va="top",
+                fontsize=self.plot_fontsize + 10,
+            )
+
+        if X_compare is not None:
+            ax.legend(
+                title="Dataset",
+                fontsize=self.plot_fontsize + 10,
+                title_fontsize=self.plot_fontsize + 10,
+                loc="best",
+            )
+        else:
+            leg = ax.legend()
+            leg.set_visible(False)
 
         fig.tight_layout()
 
-        suffix = "imputed" if is_imputed else "original"
+        suffix = (
+            "comparison"
+            if X_compare is not None
+            else ("imputed" if is_imputed else "original")
+        )
         fn = self.output_dir / f"gt_distributions_{suffix}.{self.plot_format}"
         fig.savefig(fn, dpi=300)
 
@@ -907,11 +990,17 @@ class Plotting:
                 plt.show()
         plt.close(fig)
 
-        # ---- MultiQC: genotype-distribution barplot -----------------------
+        # ---- MultiQC -----------------------
         if self._multiqc_enabled():
             try:
-                self._queue_multiqc_gt_distribution(df=df, is_imputed=is_imputed)
-            except Exception as exc:  # pragma: no cover
+                # Assuming queue supports the combined DF logic, or pass main
+                # You may need to adapt your MultiQC handler to accept the comparison DF
+                self._queue_multiqc_gt_distribution(
+                    df=df_final,
+                    is_imputed=is_imputed,
+                    is_comparison=X_compare is not None,
+                )
+            except Exception as exc:
                 self.logger.warning(
                     f"Failed to queue MultiQC genotype distribution: {exc}"
                 )
@@ -1034,10 +1123,10 @@ class Plotting:
             label = label_names[idx] if idx < len(label_names) else f"Class {idx}"
             data[label] = _curve_to_mapping(fpr[idx], tpr[idx])
 
-        for agg in ("micro", "macro"):
-            if agg in fpr and agg in tpr:
-                pretty_name = f"{agg.title()} Average"
-                data[pretty_name] = _curve_to_mapping(fpr[agg], tpr[agg])
+        agg = "macro"
+        if agg in fpr and agg in tpr:
+            pretty_name = f"{agg.title()} Average"
+            data[pretty_name] = _curve_to_mapping(fpr[agg], tpr[agg])
 
         if not data:
             return
@@ -1086,10 +1175,10 @@ class Plotting:
             label = label_names[idx] if idx < len(label_names) else f"Class {idx}"
             data[label] = _curve_to_mapping(recall[idx], precision[idx])
 
-        for agg in ("micro", "macro"):
-            if agg in precision and agg in recall:
-                pretty_name = f"{agg.title()} Average"
-                data[pretty_name] = _curve_to_mapping(recall[agg], precision[agg])
+        agg = "macro"
+        if agg in precision and agg in recall:
+            pretty_name = f"{agg.title()} Average"
+            data[pretty_name] = _curve_to_mapping(recall[agg], precision[agg])
 
         if not data:
             return
@@ -1159,15 +1248,15 @@ class Plotting:
                 }
             )
 
-        for agg in ("micro", "macro"):
-            if agg in roc_auc:
-                rows.append(
-                    {
-                        "Class": agg,
-                        "ROC_AUC": float(roc_auc.get(agg, np.nan)),
-                        "AveragePrecision": float(average_precision.get(agg, np.nan)),
-                    }
-                )
+        agg = "macro"
+        if agg in roc_auc:
+            rows.append(
+                {
+                    "Class": agg,
+                    "ROC_AUC": float(roc_auc.get(agg, np.nan)),
+                    "AveragePrecision": float(average_precision.get(agg, np.nan)),
+                }
+            )
 
         if not rows:
             return
@@ -1295,6 +1384,7 @@ class Plotting:
         *,
         df: pd.DataFrame,
         is_imputed: bool,
+        is_comparison: bool = False,
     ) -> None:
         """Queue genotype-distribution barplot for MultiQC.
 
@@ -1308,22 +1398,44 @@ class Plotting:
         if "Genotype" not in df.columns or "Percent" not in df.columns:
             return
 
-        series = df.set_index("Genotype")["Percent"]
-        suffix = "imputed" if is_imputed else "original"
-        title = (
-            f"{self.model_name} Imputed Genotype Distribution"
-            if is_imputed
-            else f"{self.model_name} Genotype Distribution"
-        )
+        if is_comparison:
+            df_imputed = df[df["Dataset"] == "Imputed"]
+            df_original = df[df["Dataset"] == "Original"]
 
-        SNPioMultiQC.queue_barplot(
-            df=series,
-            panel_id=f"{self.model_name}_gt_distribution_{suffix}",
-            section=self.multiqc_section,
-            title=title,
-            index_label="Genotype",
-            value_label="Percent",
-            description=(
-                "Genotype frequency distribution (percent of calls per genotype) computed by PG-SUI."
-            ),
-        )
+            series1 = df_original.set_index("Genotype")["Percent"]
+            series2 = df_imputed.set_index("Genotype")["Percent"]
+            df_final = pd.DataFrame(
+                {"Original": series1, "Imputed": series2},
+                index=series1.index,
+                columns=["Original", "Imputed"],
+            ).fillna(0)
+
+            SNPioMultiQC.queue_barplot(
+                df=df_final,
+                panel_id=f"{self.model_name}_gt_distribution_comparison",
+                section=self.multiqc_section,
+                title=f"{self.model_name} Genotype Distribution Comparison",
+                index_label="Genotype",
+                value_label="Percent",
+                description=(
+                    "Genotype frequency distribution (percent per genotype) computed by PG-SUI for both original and imputed datasets."
+                ),
+            )
+        else:
+            series = df.set_index("Genotype")["Percent"]
+            suffix = "imputed" if is_imputed else "original"
+
+            dataset = "Imputed" if is_imputed else "Original"
+            title = f"{self.model_name} {dataset} Genotype Distribution"
+
+            SNPioMultiQC.queue_barplot(
+                df=series,
+                panel_id=f"{self.model_name}_gt_distribution_{suffix}",
+                section=self.multiqc_section,
+                title=title,
+                index_label="Genotype",
+                value_label="Percent",
+                description=(
+                    "Genotype frequency distribution (percent of calls per genotype) computed by PG-SUI."
+                ),
+            )
