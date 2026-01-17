@@ -241,6 +241,7 @@ class ImputeMostFrequent:
         self.plot_despine = cfg.plot.despine
         self.plot_dpi = cfg.plot.dpi
         self.show_plots = cfg.plot.show
+        self.use_multiqc = bool(cfg.plot.multiqc)
 
         self.model_name = (
             "ImputeMostFrequentPerPop" if self.by_populations else "ImputeMostFrequent"
@@ -431,9 +432,8 @@ class ImputeMostFrequent:
         imp_decoded = self.decode_012(X_imputed_full_012)
 
         if self.show_plots:
-            gt_decoded = self.decode_012(self.ground_truth012_)
-            self.plotter_.plot_gt_distribution(gt_decoded, is_imputed=False)
-            self.plotter_.plot_gt_distribution(imp_decoded, is_imputed=True)
+            orig_dec = self.decode_012(self.ground_truth012_)
+            self.plotter_.plot_gt_distribution(imp_decoded, orig_dec, True)
 
         # Return IUPAC strings
         return imp_decoded
