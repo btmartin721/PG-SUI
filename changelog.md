@@ -4,7 +4,12 @@ An overview of changes to **PG-SUI** by release. This mirrors the Sphinx/RST cha
 
 ---
 
-## Unreleased
+## Unreleased Changes
+
+### Bug Fix - Unreleased
+
+- Fixed issue where small n_samples would crash with tuning.
+- The issue had to do with the trial suggestions for latent_dim.
 
 ### Documentation - Unreleased
 
