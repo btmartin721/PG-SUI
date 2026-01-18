@@ -1595,7 +1595,11 @@ class ImputeNLPCA(BaseNNImputer):
         input_dim = int(self.num_features_ * nC)
 
         params = {
-            "latent_dim": trial.suggest_int("latent_dim", 4, 64),
+            "latent_dim": trial.suggest_int(
+                "latent_dim",
+                2,
+                min(32, int(self.num_features_), int(len(self.train_idx_))),
+            ),
             "learning_rate": trial.suggest_float("learning_rate", 1e-4, 3e-2, log=True),
             "dropout_rate": trial.suggest_float("dropout_rate", 0.0, 0.5, step=0.05),
             "num_hidden_layers": trial.suggest_int("num_hidden_layers", 1, 8),
@@ -2040,12 +2044,6 @@ class ImputeNLPCA(BaseNNImputer):
         X = np.asarray(X_full, dtype=np.float32)
         N, L = X.shape
         train_idx = np.asarray(train_idx, dtype=np.int64)
-
-        max_components = min(len(train_idx), L)
-        if latent_dim > max_components:
-            msg = f"latent_dim={latent_dim} exceeds PCA limit min(n_train={len(train_idx)}, n_features={L})={max_components}."
-            self.logger.error(msg)
-            raise ValueError(msg)
 
         # Compute training column means ignoring -1
         X_train = X[train_idx]
