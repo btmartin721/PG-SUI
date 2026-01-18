@@ -1741,8 +1741,8 @@ class ImputeUBP(BaseNNImputer):
         params = {
             "latent_dim": trial.suggest_int(
                 "latent_dim",
-                2,
-                min(32, int(self.num_features_), int(len(self.train_idx_))),
+                4,
+                min(64, int(self.num_features_), int(len(self.train_idx_))),
             ),
             "learning_rate": trial.suggest_float("learning_rate", 1e-4, 3e-2, log=True),
             "dropout_rate": trial.suggest_float("dropout_rate", 0.0, 0.5, step=0.05),
