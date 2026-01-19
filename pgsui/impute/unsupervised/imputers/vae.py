@@ -1405,8 +1405,13 @@ class ImputeVAE(BaseNNImputer):
         Returns:
             dict[str, int | float | str]: Sampled hyperparameters.
         """
+        lower_bound = 2
+        # 1. Enforce strict bottleneck: max size is features - 1
+        # 2. Enforce hard cap: max size is 32
+        # 3. Safety net: ensure upper_bound is never lower than lower_bound
+        upper_bound = max(lower_bound, min(32, self.num_features_ - 1))
         params = {
-            "latent_dim": trial.suggest_int("latent_dim", 2, 32),
+            "latent_dim": trial.suggest_int("latent_dim", lower_bound, upper_bound),
             "learning_rate": trial.suggest_float("learning_rate", 3e-6, 1e-3, log=True),
             "dropout_rate": trial.suggest_float("dropout_rate", 0.0, 0.5, step=0.025),
             "num_hidden_layers": trial.suggest_int("num_hidden_layers", 1, 20),
@@ -1447,6 +1452,7 @@ class ImputeVAE(BaseNNImputer):
             latent_dim=params["latent_dim"],
             alpha=params["layer_scaling_factor"],
             schedule=params["layer_schedule"],
+            min_size=max(16, 2 * int(params["latent_dim"])),
         )
 
         params["model_params"] = {
@@ -1503,6 +1509,7 @@ class ImputeVAE(BaseNNImputer):
             latent_dim=params["latent_dim"],
             alpha=params["layer_scaling_factor"],
             schedule=params["layer_schedule"],
+            min_size=max(16, 2 * int(params["latent_dim"])),
         )
 
         return {
