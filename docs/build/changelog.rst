@@ -4,14 +4,16 @@ Changelog
 
 An overview of changes to **PG-SUI** by release. This file mirrors the GitHub Markdown changelog and reflects the refactor-era docs: dataclass-first configs, presets, unified scikit-learn framework-based ``fit()/transform()`` methods, CLI precedence, and updated deterministic/supervised docs.
 
-Unreleased Changes
-------------------
+v1.7.2 - 2026-01-19
+-------------------
 
-Bug Fix - Unreleased
-^^^^^^^^^^^^^^^^^^^^
+Bug Fix - v1.7.2
+^^^^^^^^^^^^^^^^
 
 - Fixed issue where small n_samples would crash with tuning.
 - The issue had to do with the trial suggestions for latent_dim.
+- Fixed issue where ``latent_dim`` was not set correctly
+- Fixed issue where ``_compute_hidden_layer_sizes`` was not called with consistently the same options among models.
 
 v1.7.1 - 2026-01-17
 -------------------
