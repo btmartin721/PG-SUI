@@ -1738,12 +1738,14 @@ class ImputeUBP(BaseNNImputer):
         nC = int(self.num_classes_)
         input_dim = int(self.num_features_ * nC)
 
+        lower_bound = 2
+        # 1. Enforce strict bottleneck: max size is features - 1
+        # 2. Enforce hard cap: max size is 32
+        # 3. Safety net: ensure upper_bound is never lower than lower_bound
+        upper_bound = max(lower_bound, min(32, self.num_features_ - 1))
+
         params = {
-            "latent_dim": trial.suggest_int(
-                "latent_dim",
-                4,
-                min(64, int(self.num_features_), int(len(self.train_idx_))),
-            ),
+            "latent_dim": trial.suggest_int("latent_dim", lower_bound, upper_bound),
             "learning_rate": trial.suggest_float("learning_rate", 1e-4, 3e-2, log=True),
             "dropout_rate": trial.suggest_float("dropout_rate", 0.0, 0.5, step=0.05),
             "num_hidden_layers": trial.suggest_int("num_hidden_layers", 1, 8),
@@ -1777,8 +1779,7 @@ class ImputeUBP(BaseNNImputer):
             latent_dim=int(params["latent_dim"]),
             alpha=float(params["layer_scaling_factor"]),
             schedule=str(params["layer_schedule"]),
-            min_size=max(32, 4 * int(params["latent_dim"])),
-            cap_by_inputs=False,
+            min_size=max(16, 2 * int(params["latent_dim"])),
         )
 
         params["model_params"] = {
@@ -1842,6 +1843,7 @@ class ImputeUBP(BaseNNImputer):
             latent_dim=int(params["latent_dim"]),
             alpha=float(params["layer_scaling_factor"]),
             schedule=str(params["layer_schedule"]),
+            min_size=max(16, 2 * int(params["latent_dim"])),
         )
 
         return {
