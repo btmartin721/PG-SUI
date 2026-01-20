@@ -180,6 +180,7 @@ class ImputeNLPCA(BaseNNImputer):
         self.gamma_threshold = 1e-4
         self.eta_min = 1e-6
         self.epochs = int(self.cfg.train.max_epochs)
+        self.validation_split = float(self.cfg.train.validation_split)
 
         # Loss / weighting
         self.gamma = float(getattr(self.cfg.train, "gamma", 2.0))
