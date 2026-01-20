@@ -283,6 +283,7 @@ class ImputeUBP(BaseNNImputer):
         self.l1_penalty = float(self.cfg.train.l1_penalty)  # lambda
         self.gamma_threshold = 1e-4
         self.eta_min = 1e-6
+        self.validation_split = float(self.cfg.train.validation_split)
 
         # Loss / Weighting
         self.gamma = float(getattr(self.cfg.train, "gamma", 2.0))
