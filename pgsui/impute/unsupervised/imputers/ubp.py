@@ -1294,6 +1294,7 @@ class ImputeUBP(BaseNNImputer):
         gamma: float,
         project_embedding: bool = False,
         objective_mode: bool = False,
+        trial: Optional[optuna.Trial] = None,
         class_weights: Optional[torch.Tensor] = None,
         *,
         persist_projection: bool = False,
@@ -1309,9 +1310,15 @@ class ImputeUBP(BaseNNImputer):
             gamma (float): Gamma parameter for projection refinement.
             project_embedding (bool): If True, perform embedding refinement for the provided indices before evaluation.
             objective_mode (bool): If True, suppresses verbose output and reports only the objective metric.
+            trial (Optional[optuna.Trial]): Optuna trial for hyperparameter tuning (if applicable).
             class_weights (Optional[torch.Tensor]): Optional class weights for projection refinement.
             persist_projection (bool): If False (recommended), embedding refinement performed for evaluation is reverted after scoring so evaluation does not mutate model state.
         """
+        if objective_mode and trial is None:
+            msg = "objective_mode=True requires a valid Optuna trial for pruning."
+            self.logger.error(msg)
+            raise TypeError(msg)
+
         # --- Optional: Non-persistent projection ---
         saved_rows = None
         idx_t = None
@@ -1334,6 +1341,7 @@ class ImputeUBP(BaseNNImputer):
                 lr=self.projection_lr,
                 class_weights=class_weights,
                 iterations=self.projection_epochs,
+                trial=trial,
             )
 
         try:
@@ -1558,6 +1566,7 @@ class ImputeUBP(BaseNNImputer):
         lr: float = 0.05,
         class_weights: torch.Tensor | None = None,
         iterations: int = 100,
+        trial: Optional[optuna.Trial] = None,
     ) -> None:
         """Refine embeddings V for given indices using observed entries only.
 
@@ -1569,6 +1578,7 @@ class ImputeUBP(BaseNNImputer):
             lr (float): Learning rate for refinement.
             class_weights (torch.Tensor | None): Optional class weights for Focal Loss.
             iterations (int): Number of refinement iterations.
+            trial (Optional[optuna.Trial]): Optuna trial for hyperparameter tuning (if applicable).
 
         Notes:
             Temporarily disables grads on decoder weights so we only compute gradients w.r.t v_batch, then restores previous requires_grad states afterwards.
@@ -1656,6 +1666,13 @@ class ImputeUBP(BaseNNImputer):
                         )
                         opt.step()
 
+        except Exception as e:
+            if trial is not None:
+                msg = f"[{self.model_name}] Trial {trial.number} pruned during embedding refinement due to exception: {str(e)}"
+                raise optuna.exceptions.TrialPruned(msg) from e
+            else:
+                raise e
+
         finally:
             # Restore requires_grad flags exactly as they were
             for p, req in saved:
@@ -1718,6 +1735,7 @@ class ImputeUBP(BaseNNImputer):
             gamma=float(params["gamma"]),
             project_embedding=True,
             objective_mode=True,
+            trial=trial,
             class_weights=class_weights,
             persist_projection=False,
         )

@@ -4,6 +4,12 @@ An overview of changes to **PG-SUI** by release. This mirrors the Sphinx/RST cha
 
 ---
 
+## v1.7.4 - 2026-01-20
+
+### Bug Fix - v1.7.4
+
+- Added exception handling to ``refine_all_embeddings()`` when Optuna tried bad paramter combinations.
+
 ## v1.7.3 - 2026-01-19
 
 ### Bug Fix - v1.7.3

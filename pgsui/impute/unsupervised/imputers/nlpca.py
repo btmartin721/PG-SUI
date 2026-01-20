@@ -685,6 +685,7 @@ class ImputeNLPCA(BaseNNImputer):
         gamma: float,
         project_embedding: bool = False,
         objective_mode: bool = False,
+        trial: Optional[optuna.trial.Trial] = None,
         class_weights: Optional[torch.Tensor] = None,
         *,
         persist_projection: bool = False,
@@ -700,9 +701,15 @@ class ImputeNLPCA(BaseNNImputer):
             gamma (float): Gamma parameter for projection refinement.
             project_embedding (bool): If True, perform embedding refinement for the provided indices before evaluation.
             objective_mode (bool): If True, suppresses verbose output and reports only the objective metric.
+            trial (Optional[optuna.trial.Trial]): Optuna trial object for hyperparameter tuning (if applicable).
             class_weights (Optional[torch.Tensor]): Optional class weights for projection refinement.
             persist_projection (bool): If False (recommended), embedding refinement performed for evaluation is reverted after scoring so evaluation does not mutate model state.
         """
+        if objective_mode and trial is None:
+            msg = "objective_mode requires a valid Optuna trial."
+            self.logger.error(msg)
+            raise TypeError(msg)
+
         # --- Optional: Non-persistent projection ---
         saved_rows = None
         idx_t = None
@@ -725,6 +732,7 @@ class ImputeNLPCA(BaseNNImputer):
                 lr=self.projection_lr,
                 class_weights=class_weights,
                 iterations=self.projection_epochs,
+                trial=trial,
             )
 
         try:
@@ -949,6 +957,7 @@ class ImputeNLPCA(BaseNNImputer):
         lr: float = 0.05,
         class_weights: torch.Tensor | None = None,
         iterations: int = 100,
+        trial: Optional[optuna.Trial] = None,
     ) -> None:
         """Refine *stored* embeddings (model.embedding.weight) on observed entries only, with decoder frozen.
 
@@ -966,6 +975,7 @@ class ImputeNLPCA(BaseNNImputer):
             lr (float): Learning rate for embedding refinement.
             class_weights (torch.Tensor | None): Optional alpha for focal loss.
             iterations (int): Number of refinement passes over the selected rows.
+            trial (Optional[optuna.Trial]): Optuna trial for pruning / diagnostics.
         """
         model.eval()
 
@@ -1049,6 +1059,13 @@ class ImputeNLPCA(BaseNNImputer):
                             opt.param_groups[0]["params"], max_norm=1.0
                         )
                         opt.step()
+
+        except Exception as e:
+            if trial is not None:
+                msg = f"[{self.model_name}] Trial pruned during embedding refinement due to exception: {e}"
+                raise optuna.exceptions.TrialPruned(msg) from e
+            else:
+                raise e
 
         finally:
             # Restore requires_grad flags exactly as they were
@@ -1571,6 +1588,7 @@ class ImputeNLPCA(BaseNNImputer):
                 gamma=float(params["gamma"]),
                 project_embedding=True,
                 objective_mode=True,
+                trial=trial,
                 class_weights=class_weights,
                 persist_projection=False,
             )
