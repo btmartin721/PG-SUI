@@ -4,6 +4,12 @@ An overview of changes to **PG-SUI** by release. This mirrors the Sphinx/RST cha
 
 ---
 
+## v1.7.3 - 2026-01-19
+
+### Bug Fix - v1.7.3
+
+- Fixed bug where ``validation_split`` was not being set in ``ImputeUBP`` and ``ImputeNLPCA``.
+
 ## v1.7.2 - 2026-01-19
 
 ### Bug Fix - v1.7.2
