@@ -1727,6 +1727,27 @@ class BaseNNImputer:
         Returns:
             The DataLoader.
         """
+        if not isinstance(X, np.ndarray):
+            msg = "_get_data_loaders requires X to be a numpy ndarray."
+            self.logger.error(msg)
+            raise TypeError(msg)
+        if not isinstance(y, np.ndarray):
+            msg = "_get_data_loaders requires y to be a numpy ndarray."
+            self.logger.error(msg)
+            raise TypeError(msg)
+        if not isinstance(mask, np.ndarray):
+            msg = "_get_data_loaders requires mask to be a numpy ndarray."
+            self.logger.error(msg)
+            raise TypeError(msg)
+        if X.shape[0] != y.shape[0] or X.shape[0] != mask.shape[0]:
+            msg = f"Shape mismatch among X, y, and mask: X{X.shape}, y{y.shape}, mask{mask.shape}."
+            self.logger.error(msg)
+            raise ValueError(msg)
+        if not X.ndim == 2 or not y.ndim == 2 or not mask.ndim == 2:
+            msg = f"_get_data_loaders requires X, y, and mask to be 2D, but got shapes X{X.shape}, y{y.shape}, mask{mask.shape}."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
         dataset = _MaskedNumpyDataset(X, y, mask)
 
         return torch.utils.data.DataLoader(
