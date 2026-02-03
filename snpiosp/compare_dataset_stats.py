@@ -9,6 +9,7 @@ Updates:
 - Refactored SNPioMultiQC integration to use static queuing methods.
 - Reversed effect size plot colors (High Effect = Dark/Bold).
 - Added Histogram Barplots to MultiQC.
+- Added --strict-strategies to toggle partial vs full strategy completion requirements.
 
 Usage:
 ------
@@ -17,7 +18,8 @@ python compare_dataset_stats.py \
     --output-dir /path/to/output \
     --out-prefix pg_sui_validation \
     --transform \
-    --plots
+    --plots \
+    --completed-metrics-long /path/to/metrics.csv
 """
 
 from __future__ import annotations
@@ -27,7 +29,7 @@ import copy
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Mapping, Optional, Sequence
+from typing import List, Optional, Sequence
 
 import matplotlib as mpl
 import matplotlib.cm as cm
@@ -43,14 +45,20 @@ from statsmodels.stats.oneway import anova_oneway
 # Use non-interactive backend
 plt.switch_backend("Agg")
 
-_RESULTS_KEY_RE = re.compile(r"(results\d+)", flags=re.IGNORECASE)
+# Updated regex to allow optional underscore (e.g. results01 OR results_01)
+_RESULTS_KEY_RE = re.compile(r"(results[_]?\d+)", flags=re.IGNORECASE)
+
 SIM_STRATEGY_LABELS = [
-    ("random_output", "Random"),
-    ("random_weighted_output", "Random Weighted"),
-    ("random_weighted_inv_output", "Random Weighted Inv"),
-    ("nonrandom_weighted_output", "Nonrandom Weighted"),
+    ("nonrandom_weighted", "Nonrandom Weighted"),
     ("nonrandom_output", "Nonrandom"),
+    ("nonrandom", "Nonrandom"),
+    ("random_weighted_inv", "Random Weighted Inv"),
+    ("random_weighted_inverse", "Random Weighted Inv"),
+    ("random_weighted", "Random Weighted"),
+    ("random_output", "Random"),
+    ("random", "Random"),
 ]
+
 
 PLOT_FONTSIZE = 14
 PLOT_TITLESIZE = 16
@@ -161,6 +169,37 @@ def analyze_deviations(
         f"Wrote outlier analysis (datasets contributing most to variance): {out_path}"
     )
     return dev_df
+
+
+def _normalize_model_name(val: str) -> str:
+    """Normalize model name variants to canonical names used in downstream gating.
+
+    Args:
+        val (str): Raw model name.
+
+    Returns:
+        str: Canonical model name (e.g., "MostFrequent").
+    """
+    s = re.sub(r"[^a-z0-9]+", "", str(val).strip().lower())
+
+    aliases = {
+        # Baseline/deterministic
+        "mostfrequent": "MostFrequent",
+        "imputemostfrequent": "MostFrequent",
+        "mostfreq": "MostFrequent",
+        "refallele": "RefAllele",
+        "imputerefallele": "RefAllele",
+        # Unsupervised
+        "autoencoder": "Autoencoder",
+        "imputeautoencoder": "Autoencoder",
+        "vae": "VAE",
+        "imputevae": "VAE",
+        "nlpca": "NLPCA",
+        "imputenlpca": "NLPCA",
+        "ubp": "UBP",
+        "imputeubp": "UBP",
+    }
+    return aliases.get(s, str(val).strip())
 
 
 def plot_metric_histograms(
@@ -347,9 +386,25 @@ def find_dataset_files(root: Path) -> List[DatasetFiles]:
 
 
 def read_locus_stats(dset: DatasetFiles) -> pd.DataFrame:
+    """Read a Total_LocusStats.csv and attach stable dataset identifiers.
+
+    Key point:
+        Total_LocusStats.csv is computed on the ORIGINAL (unsimulated) dataset,
+        so it must NOT be labeled or keyed by simulation strategy. We keep only
+        a dataset-level join key: resultsNNN.
+
+    Returns:
+        pd.DataFrame: Locus-level stats with added columns:
+            - dataset_raw: full relative path under --root (for debugging)
+            - dataset_key: extracted resultsNNN (lowercased) if found, else fallback
+            - dataset: canonical dataset label (same as dataset_key)
+    """
     df = pd.read_csv(dset.locus_csv)
-    # Keep dataset_id (includes path context such as sim strategy) and a short key
+
+    # Keep the full relative path context (may include sim strategy dirs, etc.)
     df["dataset_raw"] = dset.dataset_id
+
+    # Prefer extracting "resultsNNN" from the Filename column (most stable).
     dataset_key = dset.dataset_id
     if "Filename" in df.columns:
         first_fn = df["Filename"].dropna().astype(str)
@@ -357,46 +412,50 @@ def read_locus_stats(dset: DatasetFiles) -> pd.DataFrame:
             extracted = extract_dataset_key_from_filename(first_fn.iloc[0])
             if extracted:
                 dataset_key = extracted
+
+    # Canonical join key
+    dataset_key = str(dataset_key).strip().lower()
     df["dataset_key"] = dataset_key
 
-    def infer_sim_strategy(path: Path) -> str:
-        parts = [p.lower() for p in path.parts]
-        for slug, label in SIM_STRATEGY_LABELS:
-            if any(slug in part for part in parts):
-                return label
-        return "Unknown"
+    # Canonical dataset label used downstream for grouping/testing
+    # (must be dataset-level; NO strategy)
+    df["dataset"] = dataset_key
 
-    sim_strategy = infer_sim_strategy(dset.locus_csv)
-    label_base = dataset_key if dataset_key else dset.dataset_id
-    df["sim_strategy"] = sim_strategy
-    df["dataset"] = (
-        f"{label_base}__{sim_strategy}" if sim_strategy != "Unknown" else label_base
-    )
+    # Optional: keep a column for debugging; it's expected to be Unknown / irrelevant here.
+    df["sim_strategy"] = "Unknown"
+
     return df
 
 
 def deduplicate_datasets_by_key(df: pd.DataFrame) -> pd.DataFrame:
+    """Deduplicate locus-stats rows in case multiple copies exist per dataset_key.
+
+    Since Total_LocusStats.csv is dataset-level (unsimulated), we must not
+    deduplicate by sim_strategy. We keep the "richest" dataset_key entry
+    (largest number of loci).
+
+    Args:
+        df (pd.DataFrame): Combined locus-stats dataframe.
+
+    Returns:
+        pd.DataFrame: Filtered df containing only the best entry per dataset_key.
+    """
     if "dataset_key" not in df.columns:
         return df
-    # Deduplicate within each dataset_key + sim_strategy to keep the richest entry,
-    # but do not collapse across simulation strategies.
-    group_cols = ["dataset_key"]
-    if "sim_strategy" in df.columns:
-        group_cols.append("sim_strategy")
 
+    # Count loci per dataset_key and keep the largest
     counts = (
-        df.groupby(group_cols + ["dataset"])
+        df.groupby(["dataset_key", "dataset"])
         .size()
         .reset_index(name="n_loci")
-        .sort_values(
-            group_cols + ["n_loci"],
-            ascending=[True] * len(group_cols) + [False],
-        )
+        .sort_values(["dataset_key", "n_loci"], ascending=[True, False])
     )
-    keep = counts.drop_duplicates(group_cols)
+
+    keep = counts.drop_duplicates(["dataset_key"])
+
     return df.merge(
-        keep[group_cols + ["dataset"]],
-        on=group_cols + ["dataset"],
+        keep[["dataset_key", "dataset"]],
+        on=["dataset_key", "dataset"],
         how="inner",
     )
 
@@ -404,8 +463,9 @@ def deduplicate_datasets_by_key(df: pd.DataFrame) -> pd.DataFrame:
 def extract_dataset_key_from_filename(filename: str) -> Optional[str]:
     if not isinstance(filename, str):
         return None
+    # Use global regex which handles optional underscores
     m = _RESULTS_KEY_RE.search(filename)
-    return m.group(1).lower() if m else None
+    return m.group(1).lower().replace("_", "") if m else None
 
 
 def infer_metrics(df: pd.DataFrame) -> List[str]:
@@ -778,6 +838,128 @@ def run_multiqc_integration(
     print("MultiQC Report generation queued/built successfully.")
 
 
+def load_completed_dataset_labels(
+    metrics_long_csv: Path,
+    *,
+    require_baseline_model: str = "MostFrequent",
+    require_all_strategies: bool = True,
+    expected_strategies: Optional[set[str]] = None,
+) -> set[str]:
+    """Load completed dataset KEYS (resultsNNN) from zygosity_metrics_long.csv.
+
+    Why dataset-only?
+        Total_LocusStats.csv is unsimulated and therefore cannot be joined to
+        strategy-level labels. Completion gating must therefore be applied at
+        the dataset_key level.
+
+    How strategies are enforced:
+        If require_all_strategies=True (default), a dataset_key is only considered "complete" if the baseline model appears for EVERY strategy in expected_strategies.
+
+    Args:
+        metrics_long_csv (Path): Path to zygosity_metrics_long.csv.
+        require_baseline_model (str): Baseline model name to require (canonicalized).
+        require_all_strategies (bool): If True, require baseline rows for all strategies.
+            If False, require baseline rows for at least one strategy.
+        expected_strategies (Optional[set[str]]): If None, defaults to the canonical 5.
+
+    Returns:
+        set[str]: Allowed dataset keys like {"results105", "results117"}.
+    """
+    if expected_strategies is None:
+        expected_strategies = {
+            "Random",
+            "Random Weighted",
+            "Random Weighted Inv",
+            "Nonrandom",
+            "Nonrandom Weighted",
+        }
+
+    df = pd.read_csv(metrics_long_csv)
+
+    required_cols = {"dataset", "sim_strategy", "model"}
+    missing = required_cols - set(df.columns)
+    if missing:
+        raise ValueError(
+            f"Completion gating requires columns {sorted(required_cols)} in metrics CSV. Missing: {sorted(missing)}"
+        )
+
+    sub = df.loc[:, ["dataset", "sim_strategy", "model"]].copy()
+    sub["dataset"] = sub["dataset"].astype(str)
+
+    # Extract resultsNNN join key from the dataset column
+    sub["join_key"] = sub["dataset"].map(_extract_join_key)
+    sub = sub.dropna(subset=["join_key"])
+
+    # Canonicalize strategy and model names
+    sub["sim_strategy"] = sub["sim_strategy"].map(_canonicalize_strategy)
+    sub["model"] = sub["model"].astype(str).map(_normalize_model_name)
+
+    # Filter to baseline model rows only
+    baseline = _normalize_model_name(require_baseline_model)
+    sub = sub[sub["model"].eq(baseline)]
+
+    if sub.empty:
+        return set()
+
+    # Map dataset_key -> set of strategies observed for baseline
+    strat_by_ds = (
+        sub.groupby("join_key")["sim_strategy"].apply(lambda x: set(x)).to_dict()
+    )
+
+    if require_all_strategies:
+        complete = {
+            ds_key
+            for ds_key, sset in strat_by_ds.items()
+            if expected_strategies.issubset(sset)
+        }
+        return complete
+
+    # Permissive: any strategy is enough
+    return set(strat_by_ds.keys())
+
+
+def _extract_join_key(val: str) -> Optional[str]:
+    """Extract results\\d+ join key (lowercased) from an identifier.
+
+    Args:
+        val (str): Dataset identifier.
+
+    Returns:
+        Optional[str]: Join key like "results52" if found else None.
+    """
+    if not isinstance(val, str):
+        return None
+    # Updated to handle potential underscores via the global regex
+    m = _RESULTS_KEY_RE.search(val)
+    if m:
+        # Standardize: lower case, remove underscores to ensure 'results_01' matches 'results01'
+        return m.group(1).lower().replace("_", "")
+    return None
+
+
+def _canonicalize_strategy(val: str) -> str:
+    """Canonicalize simulation strategy labels to your display names.
+
+    Args:
+        val (str): Strategy string.
+
+    Returns:
+        str: Canonical strategy label.
+    """
+    s = re.sub(r"[^a-z0-9]+", "", str(val).lower())
+    if "nonrandom" in s and "weighted" in s:
+        return "Nonrandom Weighted"
+    if "nonrandom" in s:
+        return "Nonrandom"
+    if "random" in s and "weighted" in s and ("inv" in s or "inverse" in s):
+        return "Random Weighted Inv"
+    if "random" in s and "weighted" in s:
+        return "Random Weighted"
+    if "random" in s:
+        return "Random"
+    return "Unknown"
+
+
 def main() -> None:
     args = parse_args()
     root: Path = args.root.resolve()
@@ -788,7 +970,6 @@ def main() -> None:
         out_dir = args.output_dir.resolve()
     else:
         out_dir = Path.cwd() / "dataset_stats_output"
-
     out_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Searching for datasets in {root}...")
@@ -799,6 +980,49 @@ def main() -> None:
     frames = [read_locus_stats(d) for d in datasets]
     combined = pd.concat(frames, ignore_index=True)
     combined = deduplicate_datasets_by_key(combined)
+
+    # Gate to PG-SUI-completed datasets if requested
+    if args.completed_metrics_long is not None:
+        metrics_path = args.completed_metrics_long.resolve()
+
+        # Check if strict strategies are required (defaults to FALSE now)
+        strict = args.strict_strategies
+
+        print(
+            f"[Completion gate] Strategy Strictness: {'STRICT (All 5)' if strict else 'PERMISSIVE (Any 1)'}"
+        )
+
+        # Require strategies at the metrics layer, but return dataset_keys only.
+        allowed_keys = load_completed_dataset_labels(
+            metrics_path,
+            require_baseline_model="MostFrequent",
+            require_all_strategies=strict,
+        )
+
+        before_keys = set(combined["dataset_key"].astype(str).unique().tolist())
+        inter = before_keys & allowed_keys
+
+        print(
+            f"[Completion gate] Allowed dataset_keys (from {metrics_path.name}): {len(allowed_keys)}\n"
+            f"[Completion gate] dataset_keys in locus stats before:            {len(before_keys)}\n"
+            f"[Completion gate] Intersection size:                             {len(inter)}"
+        )
+
+        combined = combined[combined["dataset_key"].isin(allowed_keys)].copy()
+
+        if combined.empty:
+            # Extra debugging help: show examples from both sides
+            ex_allowed = sorted(list(allowed_keys))[:10]
+            ex_have = sorted(list(before_keys))[:10]
+            raise ValueError(
+                "After completion gating, no datasets remained.\n"
+                f"- Example allowed dataset_keys: {ex_allowed}\n"
+                f"- Example locus dataset_keys:   {ex_have}\n"
+                "This indicates a join-key mismatch (extract/join_key parsing) or missing baseline rows."
+            )
+
+        n_after = combined["dataset_key"].nunique()
+        print(f"[Completion gate] Datasets retained after: {n_after}")
 
     metrics = args.metrics if args.metrics else infer_metrics(combined)
     if not metrics:
@@ -857,16 +1081,6 @@ def main() -> None:
 
         print(f"Plots written to: {plot_dir}")
 
-    # 5. MultiQC Report Integration
-    # Note: MultiQC report file will be generated in `output_dir`
-    run_multiqc_integration(
-        output_dir=out_dir,
-        prefix=args.out_prefix,
-        anova_df=anova_res,
-        outliers_df=outliers_df,
-        desc=desc,  # Passed for histograms
-    )
-
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
@@ -900,6 +1114,28 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--plots", action="store_true", help="Generate static matplotlib plots."
+    )
+
+    # NEW: completion gating
+    p.add_argument(
+        "--completed-metrics-long",
+        type=Path,
+        default=None,
+        help=(
+            "Optional: path to zygosity_metrics_long.csv. If provided, popgen stats "
+            "will be computed ONLY for datasets (and strategies) that have produced "
+            "baseline PG-SUI metrics."
+        ),
+    )
+
+    # NEW: Control gating strictness
+    p.add_argument(
+        "--strict-strategies",
+        action="store_true",
+        help=(
+            "If set, datasets are only included if the baseline model has results for ALL 5 simulation strategies. "
+            "Defaults to False (include datasets even if some strategies are missing)."
+        ),
     )
     return p.parse_args()
 
