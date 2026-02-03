@@ -4,6 +4,13 @@ An overview of changes to **PG-SUI** by release. This mirrors the Sphinx/RST cha
 
 ---
 
+## v1.7.7 - 2026-02-03
+
+### Bug Fix - v1.7.7
+
+- Fixed bug where ``ImputeMostFrequent`` would fail with missing data remaining in the outputs.
+- Fixed several crashes with deterministic methods related to improper pandas/ numpy indexing, particularly with only some Python/ Pandas/ Numpy versions.
+
 ## v1.7.6 - 2026-02-02
 
 ### Bug Fix - v1.7.6
