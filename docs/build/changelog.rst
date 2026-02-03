@@ -4,19 +4,32 @@ Changelog
 
 An overview of changes to **PG-SUI** by release. This file mirrors the GitHub Markdown changelog and reflects the refactor-era docs: dataclass-first configs, presets, unified scikit-learn framework-based ``fit()/transform()`` methods, CLI precedence, and updated deterministic/supervised docs.
 
+v1.7.6 - 2026-02-02
+-------------------
+
+Bug Fix - v1.7.6
+^^^^^^^^^^^^^^^^
+
+- `ImputeRefAllele` and `ImputeMostFrequent` bug fixed where it was trying to slice with a boolean mask by accessing the deprecated ``df.values[mask]``. It was trying to update the DataFrame, but ``df.values`` is read-only.
+
+Enhancements - v1.7.6
+^^^^^^^^^^^^^^^^^^^^^
+
+- Improved error handling and code hardening in strategic places for all deep learning models, particularly pertaining to tuning.
+
 v1.7.4 - 2026-01-20
 -------------------
 
-### Bug Fix - v1.7.4
-^^^^^^^^^^^^^^^^^^^^
+Bug Fix - v1.7.4
+^^^^^^^^^^^^^^^^
 
 - Added exception handling to ``refine_all_embeddings()`` when Optuna tried bad paramter combinations.
 
 v1.7.3 - 2026-01-19
 -------------------
 
-### Bug Fix - v1.7.3
-^^^^^^^^^^^^^^^^^^^^
+Bug Fix - v1.7.3
+^^^^^^^^^^^^^^^^
 
 - Fixed bug where ``validation_split`` was not being set in ``ImputeUBP`` and ``ImputeNLPCA``.
 

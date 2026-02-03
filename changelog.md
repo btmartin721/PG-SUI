@@ -4,6 +4,16 @@ An overview of changes to **PG-SUI** by release. This mirrors the Sphinx/RST cha
 
 ---
 
+## v1.7.6 - 2026-02-02
+
+### Bug Fix - v1.7.6
+
+- `ImputeRefAllele` and `ImputeMostFrequent` bug fixed where it was trying to slice with a boolean mask by accessing the deprecated ``df.values[mask]``. It was trying to update the DataFrame, but ``df.values`` is read-only.
+
+### Enhancements - v1.7.6
+
+- Improved error handling and code hardening in strategic places for all deep learning models, particularly pertaining to tuning.
+
 ## v1.7.4 - 2026-01-20
 
 ### Bug Fix - v1.7.4
