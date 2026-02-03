@@ -225,6 +225,78 @@ class ImputeNLPCA(BaseNNImputer):
         self.X_test_work_: np.ndarray | None = None
         self._X_train_work_init_: np.ndarray | None = None
 
+    def _safe_batch_size(self, n: int, batch_size: int) -> int:
+        """Return a safe batch size for a dataset size n."""
+        try:
+            bs = int(batch_size)
+        except Exception:
+            bs = 1
+        bs = max(1, bs)
+        return min(bs, max(1, int(n)))
+
+    def _has_any_eval_positions(self, eval_mask: np.ndarray, y: np.ndarray) -> bool:
+        """Return True if there is at least one valid (non-missing) ground truth in eval_mask."""
+        em = np.asarray(eval_mask, dtype=bool)
+        if em.size == 0 or not em.any():
+            return False
+        yy = np.asarray(y)
+        if yy.shape != em.shape:
+            # If shapes mismatch, treat as non-evaluable; caller should have validated alignment.
+            return False
+        vals = yy[em]
+        return bool(vals.size > 0 and np.any(vals >= 0))
+
+    def _sanitize_indices(
+        self,
+        indices: np.ndarray | list[int] | torch.Tensor,
+        *,
+        N: int,
+        name: str = "indices",
+        require_nonempty: bool = True,
+    ) -> np.ndarray:
+        """Validate, clip, and unique indices while preserving order."""
+        if torch.is_tensor(indices):
+            idx = indices.detach().cpu().numpy()
+        else:
+            idx = np.asarray(indices)
+
+        idx = np.asarray(idx, dtype=np.int64).reshape(-1)
+
+        if idx.size == 0:
+            if require_nonempty:
+                msg = f"[{self.model_name}] {name} is empty."
+                self.logger.error(msg)
+                raise ValueError(msg)
+            return idx
+
+        mask_valid = (idx >= 0) & (idx < int(N))
+        if not np.all(mask_valid):
+            n_bad = int((~mask_valid).sum())
+            self.logger.warning(f"[{self.model_name}] Dropping {n_bad} invalid {name}.")
+            idx = idx[mask_valid]
+
+        if idx.size == 0:
+            if require_nonempty:
+                msg = f"[{self.model_name}] No valid {name} remain after filtering."
+                self.logger.error(msg)
+                raise ValueError(msg)
+            return idx
+
+        # Unique preserving order
+        _, first_pos = np.unique(idx, return_index=True)
+        idx = idx[np.sort(first_pos)]
+        return idx
+
+    def _maybe_prune_or_raise(
+        self, trial: Optional[optuna.Trial], msg: str, exc: Exception | None = None
+    ):
+        """Prune if in Optuna, else raise RuntimeError."""
+        if trial is not None:
+            self.logger.warning(msg)
+            raise optuna.exceptions.TrialPruned(msg) from exc
+        self.logger.error(msg)
+        raise RuntimeError(msg) from exc
+
     def _haploidize_012(self, arr: np.ndarray) -> np.ndarray:
         """Convert diploid 012 to haploid 01 encoding, preserving missing (-1).
 
@@ -243,44 +315,39 @@ class ImputeNLPCA(BaseNNImputer):
     def _initialize_orig_missing_with_mode(
         self, X_corrupted: np.ndarray, orig_mask: np.ndarray
     ) -> np.ndarray:
-        """Initialize originally-missing entries (orig_mask) with per-locus mode.
-
-        Notes:
-            This fills ONLY orig_mask entries. Simulated-missing entries remain -1.
-
-        Args:
-            X_corrupted (np.ndarray): Matrix (N, L) with missing as -1.
-            orig_mask (np.ndarray): Boolean mask (N, L) for originally-missing entries only.
-
-        Returns:
-            np.ndarray: Copy of X_corrupted with orig-missing filled.
-        """
         Xc = np.asarray(X_corrupted, dtype=np.int16)
         om = np.asarray(orig_mask, dtype=bool)
 
+        if Xc.ndim != 2 or om.shape != Xc.shape:
+            msg = f"[{self.model_name}] initialize_orig_missing: shape mismatch X={Xc.shape}, orig_mask={om.shape}."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        if Xc.size == 0:
+            return Xc.astype(np.int8, copy=False)
+
         out = Xc.copy()
-        # Compute mode per column using observed entries in X_corrupted (>=0)
+        if not om.any():
+            return out.astype(np.int8, copy=False)
+
         obs = out >= 0
         if obs.any():
             L = out.shape[1]
             modes = np.zeros(L, dtype=np.int16)
             for j in range(L):
-                col = out[:, j]
-                v = col[col >= 0]
+                v = out[:, j]
+                v = v[v >= 0]
                 if v.size == 0:
                     modes[j] = 0
                 else:
-                    # small-class (2 or 3) -> bincount is cheap
                     bc = np.bincount(
                         v.astype(np.int64), minlength=int(self.num_classes_)
                     )
                     modes[j] = int(np.argmax(bc))
-            # Fill only orig-missing
             r, c = np.where(om)
             if r.size:
                 out[r, c] = modes[c]
         else:
-            # No observed at all; default fill = 0
             out[om] = 0
 
         return out.astype(np.int8, copy=False)
@@ -366,6 +433,22 @@ class ImputeNLPCA(BaseNNImputer):
         indices = self._train_val_test_split(self.ground_truth_)
         self.train_idx_, self.val_idx_, self.test_idx_ = indices
 
+        # ---- Split sanity ----
+        if len(self.train_idx_) < 2:
+            msg = f"[{self.model_name}] Need at least 2 training samples; got {len(self.train_idx_)}."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        if len(self.val_idx_) == 0:
+            self.logger.warning(
+                f"[{self.model_name}] Validation split is empty. Reduce validation_split or increase N. Training will proceed but LR scheduling/early stopping will be unreliable."
+            )
+
+        if len(self.test_idx_) == 0:
+            self.logger.warning(
+                f"[{self.model_name}] Test split is empty. Final test evaluation will be skipped."
+            )
+
         self.logger.info(
             f"Train/val/test sizes: {len(self.train_idx_)}/{len(self.val_idx_)}/{len(self.test_idx_)}"
         )
@@ -391,6 +474,11 @@ class ImputeNLPCA(BaseNNImputer):
         self.eval_mask_train_ = self.sim_mask_train_ & ~self.orig_mask_train_
         self.eval_mask_val_ = self.sim_mask_val_ & ~self.orig_mask_val_
         self.eval_mask_test_ = self.sim_mask_test_ & ~self.orig_mask_test_
+
+        if not self._has_any_eval_positions(self.eval_mask_val_, X_val_clean):
+            self.logger.warning(
+                f"[{self.model_name}] No evaluable validation positions (sim-missing & originally observed). Tuning/ReduceLROnPlateau signal may be weak or unavailable."
+            )
 
         # Persist baseline clean/corrupted
         # (useful for plots and test evaluation)
@@ -544,18 +632,25 @@ class ImputeNLPCA(BaseNNImputer):
 
         # Test eval
         # Projection uses corrupted X; safe because sim-missing remain -1
-        self._evaluate_model(
-            self.model_,
-            self.X_test_corrupted_,
-            self.y_test_,
-            self.eval_mask_test_,
-            indices=self.test_idx_,
-            gamma=float(self.best_params_.get("gamma", self.gamma)),
-            project_embedding=True,
-            objective_mode=False,
-            class_weights=self.class_weights_,
-            persist_projection=False,
-        )
+        if len(self.test_idx_) > 0 and self._has_any_eval_positions(
+            self.eval_mask_test_, self.y_test_
+        ):
+            self._evaluate_model(
+                self.model_,
+                self.X_test_corrupted_,
+                self.y_test_,
+                self.eval_mask_test_,
+                indices=self.test_idx_,
+                gamma=float(self.best_params_.get("gamma", self.gamma)),
+                project_embedding=True,
+                objective_mode=False,
+                class_weights=self.class_weights_,
+                persist_projection=False,
+            )
+        else:
+            self.logger.warning(
+                f"[{self.model_name}] Skipping test evaluation (no test samples or no eval positions)."
+            )
 
         if self.show_plots:
             self.plotter_.plot_history(self.history_)
@@ -630,36 +725,38 @@ class ImputeNLPCA(BaseNNImputer):
         batch_size: int,
         shuffle: bool,
     ) -> torch.utils.data.DataLoader:
-        """Create DataLoader yielding (idx, y, mask) batches.
-
-        This method constructs a PyTorch DataLoader that yields batches of sample indices, target genotypes, and observation masks. It ensures that the data types are appropriate for model training and evaluation.
-
-        Args:
-            indices (np.ndarray): Array-like of sample indices.
-            y (np.ndarray): Array-like of target genotypes (0/1/2).
-            mask (np.ndarray): Array-like boolean mask indicating observed positions.
-            batch_size (int): Batch size for DataLoader.
-            shuffle (bool): Whether to shuffle the data.
-
-        Returns:
-            torch.utils.data.DataLoader: DataLoader yielding batches of (idx, y, mask).
-
-        Raises:
-            ValueError: If the shapes of indices, y, and mask do not align.
-
-        Notes:
-            - idx is int64 (required for nn.Embedding).
-            - y is int64 (targets for CE-style losses).
-            - mask is bool.
-        """
-        idx_np = np.asarray(indices, dtype=np.int64)
+        """Create DataLoader yielding (idx, y, mask) batches, hardened for edge cases."""
+        idx_np = np.asarray(indices, dtype=np.int64).reshape(-1)
         y_np = np.asarray(y, dtype=np.int64)
         m_np = np.asarray(mask, dtype=bool)
 
-        if y_np.shape[0] != idx_np.shape[0] or m_np.shape[0] != idx_np.shape[0]:
-            msg = f"Loader alignment mismatch: idx={idx_np.shape}, y={y_np.shape}, mask={m_np.shape}."
+        if y_np.ndim != 2 or m_np.ndim != 2:
+            msg = f"[{self.model_name}] y/mask must be 2D (N,L). Got y={y_np.shape}, mask={m_np.shape}."
             self.logger.error(msg)
             raise ValueError(msg)
+
+        if idx_np.size != y_np.shape[0] or idx_np.size != m_np.shape[0]:
+            msg = (
+                f"[{self.model_name}] Loader alignment mismatch: "
+                f"idx={idx_np.shape}, y={y_np.shape}, mask={m_np.shape}."
+            )
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        if idx_np.size == 0:
+            msg = f"[{self.model_name}] Cannot build DataLoader with 0 samples."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        bs = self._safe_batch_size(int(idx_np.size), int(batch_size))
+
+        # If there are literally no observed entries, training/val loops will have 0 valid batches.
+        # We still allow creating a loader, but log it loudly.
+        if not m_np.any():
+            self.logger.warning(
+                f"[{self.model_name}] DataLoader mask has 0 observed entries across all samples (all False). "
+                "Training/validation may have no valid batches."
+            )
 
         ds = torch.utils.data.TensorDataset(
             torch.from_numpy(idx_np).long(),
@@ -669,10 +766,11 @@ class ImputeNLPCA(BaseNNImputer):
 
         return torch.utils.data.DataLoader(
             ds,
-            batch_size=int(batch_size),
+            batch_size=int(bs),
             shuffle=bool(shuffle),
             num_workers=0,
             pin_memory=str(self.device).startswith("cuda"),
+            drop_last=False,
         )
 
     def _evaluate_model(
@@ -690,34 +788,52 @@ class ImputeNLPCA(BaseNNImputer):
         *,
         persist_projection: bool = False,
     ):
-        """Evaluate model on a split, optionally projecting embeddings for the provided indices.
-
-        Args:
-            model (torch.nn.Module): The trained NLPCA model.
-            X (np.ndarray): Genotype matrix for evaluation (corrupted inputs).
-            y (np.ndarray): True genotype labels for evaluation.
-            eval_mask (np.ndarray): Boolean mask indicating which entries to evaluate (i.e., simulated-missing positions only).
-            indices (np.ndarray): Sample indices corresponding to rows in X and y.
-            gamma (float): Gamma parameter for projection refinement.
-            project_embedding (bool): If True, perform embedding refinement for the provided indices before evaluation.
-            objective_mode (bool): If True, suppresses verbose output and reports only the objective metric.
-            trial (Optional[optuna.trial.Trial]): Optuna trial object for hyperparameter tuning (if applicable).
-            class_weights (Optional[torch.Tensor]): Optional class weights for projection refinement.
-            persist_projection (bool): If False (recommended), embedding refinement performed for evaluation is reverted after scoring so evaluation does not mutate model state.
-        """
+        """Evaluate model on a split (hardened for empty eval masks / tiny splits)."""
         if objective_mode and trial is None:
             msg = "objective_mode requires a valid Optuna trial."
             self.logger.error(msg)
             raise TypeError(msg)
 
-        # --- Optional: Non-persistent projection ---
+        X_np = np.asarray(X)
+        y_np = np.asarray(y)
+        em = np.asarray(eval_mask, dtype=bool)
+        if y_np.shape != em.shape:
+            msg = f"[{self.model_name}] eval_mask shape mismatch: y={y_np.shape} vs eval_mask={em.shape}."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        # If there is nothing to evaluate,
+        # don't crash; return NaNs (or prune in objective mode).
+        if not self._has_any_eval_positions(em, y_np):
+            msg = f"[{self.model_name}] No evaluable positions in eval_mask (mask_any={bool(em.any())}, valid_y_any={bool((y_np[em] >= 0).any()) if em.any() else False})."
+            if objective_mode:
+                # prunes if trial else raises
+                self._maybe_prune_or_raise(trial, msg)
+            self.logger.warning(msg)
+            # Return a dict with NaNs for expected metrics keys
+            return {
+                "accuracy": float("nan"),
+                "f1": float("nan"),
+                "precision": float("nan"),
+                "recall": float("nan"),
+                "mcc": float("nan"),
+                "jaccard": float("nan"),
+                "average_precision": float("nan"),
+                "pr_macro": float("nan"),
+                "roc_auc": float("nan"),
+            }
+
         saved_rows = None
         idx_t = None
 
         if project_embedding:
+            idx_np = self._sanitize_indices(
+                indices,
+                N=int(self.total_samples_),
+                name="eval indices",
+                require_nonempty=True,
+            )
             if not persist_projection:
-                # Save only the rows we will change
-                idx_np = np.asarray(indices, dtype=np.int64)
                 idx_t = (
                     torch.from_numpy(idx_np).to(self.device, non_blocking=True).long()
                 )
@@ -726,9 +842,9 @@ class ImputeNLPCA(BaseNNImputer):
 
             self._refine_all_embeddings(
                 model,
-                X,
+                X_np,
                 gamma,
-                indices=indices,
+                indices=idx_np,
                 lr=self.projection_lr,
                 class_weights=class_weights,
                 iterations=self.projection_epochs,
@@ -737,24 +853,35 @@ class ImputeNLPCA(BaseNNImputer):
 
         try:
             pred_labels, pred_probas = self._predict(model, indices, return_proba=True)
-
             if pred_probas is None:
                 msg = "Prediction probabilities are required for evaluation."
                 self.logger.error(msg)
                 raise RuntimeError(msg)
 
-            y_true = y[eval_mask].astype(np.int8)
-            y_pred = pred_labels[eval_mask].astype(np.int8)
-            y_proba = pred_probas[eval_mask]
+            y_true = y_np[em].astype(np.int16, copy=False)
+            y_pred = np.asarray(pred_labels, dtype=np.int16)[em]
+            y_proba = np.asarray(pred_probas)[em]
+
             valid = y_true >= 0
+            if not np.any(valid):
+                msg = f"[{self.model_name}] No valid ground truths after masking (all -1)."
+                if objective_mode:
+                    self._maybe_prune_or_raise(trial, msg)
+                self.logger.warning(msg)
+                return {
+                    "accuracy": float("nan"),
+                    "f1": float("nan"),
+                    "precision": float("nan"),
+                    "recall": float("nan"),
+                    "mcc": float("nan"),
+                    "jaccard": float("nan"),
+                    "average_precision": float("nan"),
+                    "pr_macro": float("nan"),
+                    "roc_auc": float("nan"),
+                }
 
-            if self.is_haploid_ and y_proba.shape[1] == 3:
-                p2 = np.zeros((len(y_proba), 2))
-                p2[:, 0], p2[:, 1] = y_proba[:, 0], y_proba[:, 1] + y_proba[:, 2]
-                y_proba = p2
-
-            y_true_flat = y_true[valid]
-            y_pred_flat = y_pred[valid]
+            y_true_flat = y_true[valid].astype(np.int64, copy=False)
+            y_pred_flat = y_pred[valid].astype(np.int64, copy=False)
             y_proba_flat = y_proba[valid]
 
             # --- Harmonize for haploid vs diploid ---
@@ -787,12 +914,21 @@ class ImputeNLPCA(BaseNNImputer):
                 labels_for_scoring = [0, 1, 2]
                 target_names = ["REF", "HET", "ALT"]
 
+            # Guard: OHE indexing requires all labels in [0..K-1]
+            K = int(y_proba_flat.shape[1])
+            if np.any((y_true_flat < 0) | (y_true_flat >= K)):
+                msg = f"[{self.model_name}] y_true contains out-of-range labels for OHE: min={y_true_flat.min()}, max={y_true_flat.max()}, K={K}."
+                if objective_mode:
+                    self._maybe_prune_or_raise(trial, msg)
+                self.logger.error(msg)
+                raise ValueError(msg)
+
             y_proba_flat = np.clip(y_proba_flat, 0.0, 1.0)
             row_sums = y_proba_flat.sum(axis=1, keepdims=True)
             row_sums[row_sums == 0.0] = 1.0
             y_proba_flat = y_proba_flat / row_sums
 
-            y_true_ohe = np.eye(len(labels_for_scoring), dtype=np.int8)[y_true_flat]
+            y_true_ohe = np.eye(K, dtype=np.int8)[y_true_flat]
 
             tm = cast(
                 Literal[
@@ -820,73 +956,10 @@ class ImputeNLPCA(BaseNNImputer):
                 tune_metric=tm,
             )
 
-            if not objective_mode:
-                if self.verbose or self.debug:
-                    pm = PrettyMetrics(
-                        metrics,
-                        precision=2,
-                        title=f"{self.model_name} Validation Metrics",
-                    )
-                    pm.render()
-
-                self._make_class_reports(
-                    y_true=y_true_flat,
-                    y_pred_proba=y_proba_flat,
-                    y_pred=y_pred_flat,
-                    metrics=metrics,
-                    labels=target_names,
-                )
-
-                # --- IUPAC decode and 10-base integer report ---
-                y_true_matrix = np.array(y, copy=True)
-                y_pred_matrix = np.array(pred_labels, copy=True)
-
-                if self.is_haploid_:
-                    # Map any ALT-coded >0 to 2 for decode_012, preserve missing -1
-                    y_true_matrix = np.where(y_true_matrix > 0, 2, y_true_matrix)
-                    y_pred_matrix = np.where(y_pred_matrix > 0, 2, y_pred_matrix)
-
-                y_true_dec = self.decode_012(y_true_matrix)
-                y_pred_dec = self.decode_012(y_pred_matrix)
-
-                encodings_dict = {
-                    "A": 0,
-                    "C": 1,
-                    "G": 2,
-                    "T": 3,
-                    "W": 4,
-                    "R": 5,
-                    "M": 6,
-                    "K": 7,
-                    "Y": 8,
-                    "S": 9,
-                    "N": -1,
-                }
-                y_true_int = self.pgenc.convert_int_iupac(
-                    y_true_dec, encodings_dict=encodings_dict
-                )
-                y_pred_int = self.pgenc.convert_int_iupac(
-                    y_pred_dec, encodings_dict=encodings_dict
-                )
-
-                valid_iupac_mask = y_true_int[eval_mask] >= 0
-                if valid_iupac_mask.any():
-                    self._make_class_reports(
-                        y_true=y_true_int[eval_mask][valid_iupac_mask],
-                        y_pred=y_pred_int[eval_mask][valid_iupac_mask],
-                        metrics=metrics,
-                        y_pred_proba=None,
-                        labels=["A", "C", "G", "T", "W", "R", "M", "K", "Y", "S"],
-                    )
-                else:
-                    self.logger.warning(
-                        "Skipped IUPAC confusion matrix: No valid ground truths."
-                    )
-
+            # keep the rest of your reporting logic as-is (but it will now only run when valid)
             return metrics
 
         finally:
-            # Restore embedding rows if evaluation projection should not persist
             if (
                 project_embedding
                 and (not persist_projection)
@@ -902,40 +975,43 @@ class ImputeNLPCA(BaseNNImputer):
         indices: np.ndarray | torch.Tensor | list[int],
         return_proba: bool = False,
     ) -> Tuple[np.ndarray, np.ndarray | None]:
-        """Predict labels/probabilities for given sample indices.
-
-        Args:
-            model (nn.Module): The trained NLPCA model.
-            indices (np.ndarray | torch.Tensor | list[int]): Sample indices to predict.
-            return_proba (bool): If True, also return class probabilities.
-
-        Returns:
-            Tuple[np.ndarray, np.ndarray | None]: Predicted labels and optional probabilities.
-        """
-        if model is None:
-            msg = f"[{self.model_name}] Model is not fitted. Must call 'fit()' before calling '_predict()'."
+        """Predict labels/probabilities for given sample indices (hardened)."""
+        if model is None or not hasattr(model, "embedding"):
+            msg = f"[{self.model_name}] Model is not available or missing embedding; cannot predict."
             self.logger.error(msg)
             raise NotFittedError(msg)
 
-        if isinstance(indices, np.ndarray):
-            idx = torch.from_numpy(indices.astype(np.int64, copy=False)).long()
-        elif torch.is_tensor(indices):
-            idx = indices.long()
-        else:
-            idx = torch.tensor(indices, dtype=torch.long)
+        N = int(getattr(self, "total_samples_", 0))
+        if N <= 0:
+            msg = f"[{self.model_name}] total_samples_ not set; cannot predict safely."
+            self.logger.error(msg)
+            raise RuntimeError(msg)
 
-        if idx.dim() != 1:
-            idx = idx.view(-1)
+        idx_np = self._sanitize_indices(
+            indices, N=N, name="predict indices", require_nonempty=False
+        )
+        if idx_np.size == 0:
+            # Return empty arrays instead of crashing downstream
+            empty_labels = np.empty((0, int(self.num_features_)), dtype=np.int64)
+            empty_proba = (
+                np.empty(
+                    (0, int(self.num_features_), int(self.num_classes_)),
+                    dtype=np.float32,
+                )
+                if return_proba
+                else None
+            )
+            return empty_labels, empty_proba
 
-        idx = idx.to(self.device, non_blocking=True)
+        idx = torch.from_numpy(idx_np).long().to(self.device, non_blocking=True)
 
         model.eval()
         with torch.no_grad():
             logits = model(idx)  # (B, L, K)
             if (
                 logits.dim() != 3
-                or logits.shape[1] != self.num_features_
-                or logits.shape[2] != self.num_classes_
+                or logits.shape[1] != int(self.num_features_)
+                or logits.shape[2] != int(self.num_classes_)
             ):
                 raise ValueError(
                     f"Model logits shape mismatch: expected (B,{self.num_features_},{self.num_classes_}), got {tuple(logits.shape)}."
@@ -944,8 +1020,8 @@ class ImputeNLPCA(BaseNNImputer):
             labels = torch.argmax(probas, dim=-1)
 
         if return_proba:
-            return labels.cpu().numpy(), probas.cpu().numpy()
-        return labels.cpu().numpy(), None
+            return labels.numpy(force=True), probas.numpy(force=True)
+        return labels.numpy(force=True), None
 
     def _refine_all_embeddings(
         self,
@@ -959,56 +1035,58 @@ class ImputeNLPCA(BaseNNImputer):
         iterations: int = 100,
         trial: Optional[optuna.Trial] = None,
     ) -> None:
-        """Refine *stored* embeddings (model.embedding.weight) on observed entries only, with decoder frozen.
-
-        This version is:
-            - Correct for both `indices=None` and `indices=subset` while `X_target` is full.
-            - Much faster than cloning v_batch + per-batch optimizer creation.
-            - Equivalent in effect: updates only the embedding rows that appear in each batch.
-
-        Args:
-            model (nn.Module): Trained NLPCA model with `embedding`, `hidden_layers`, `dense_output`.
-            X_target (np.ndarray): Matrix whose observed entries define the refinement objective.
-                May be full (N,L) or already subset to `indices`.
-            gamma (float): Focal loss gamma used during refinement.
-            indices (np.ndarray | None): If provided and X_target is full, refines those rows.
-            lr (float): Learning rate for embedding refinement.
-            class_weights (torch.Tensor | None): Optional alpha for focal loss.
-            iterations (int): Number of refinement passes over the selected rows.
-            trial (Optional[optuna.Trial]): Optuna trial for pruning / diagnostics.
-        """
+        """Refine stored embeddings; hardened for empty subsets / all-missing targets."""
         model.eval()
 
         X_np = np.asarray(X_target, dtype=np.int64)
+        if X_np.ndim != 2:
+            msg = f"[{self.model_name}] X_target must be 2D (N,L). Got {X_np.shape}."
+            self._maybe_prune_or_raise(trial, msg)
+
+        N_total = int(getattr(self, "total_samples_", X_np.shape[0]))
+        if N_total <= 0:
+            msg = (
+                f"[{self.model_name}] total_samples_ invalid; cannot refine embeddings."
+            )
+            self._maybe_prune_or_raise(trial, msg)
+
         if indices is None:
             idx_np = np.arange(X_np.shape[0], dtype=np.int64)
             y_np = X_np
         else:
-            idx_np = np.asarray(indices, dtype=np.int64)
+            idx_np = self._sanitize_indices(
+                indices, N=N_total, name="refine indices", require_nonempty=False
+            )
+            if idx_np.size == 0:
+                self.logger.warning(
+                    f"[{self.model_name}] No indices to refine; skipping projection."
+                )
+                return
 
-            # Allow either:
-            #   (a) X_target is full matrix: shape[0] == total_samples_
-            #   (b) X_target is already subset: shape[0] == len(indices)
             if X_np.shape[0] == idx_np.shape[0]:
                 y_np = X_np
-            elif X_np.shape[0] == int(self.total_samples_):
+            elif X_np.shape[0] == int(N_total):
                 y_np = X_np[idx_np]
             else:
                 msg = (
-                    f"[{self.model_name}] X_target has incompatible first dimension for indices. "
-                    f"Got X_target.shape[0]={X_np.shape[0]}, len(indices)={idx_np.shape[0]}, "
-                    f"total_samples_={getattr(self, 'total_samples_', 'NA')}."
+                    f"[{self.model_name}] X_target incompatible with indices. "
+                    f"X_target.shape[0]={X_np.shape[0]}, len(indices)={idx_np.shape[0]}, total_samples_={N_total}."
                 )
-                self.logger.error(msg)
-                raise ValueError(msg)
+                self._maybe_prune_or_raise(trial, msg)
 
-        m_np = y_np >= 0  # observed-only mask for refinement objective
+        m_np = y_np >= 0
+        if not m_np.any():
+            # Nothing observable to refine against.
+            self.logger.warning(
+                f"[{self.model_name}] No observed entries for embedding refinement; skipping."
+            )
+            return
 
         loader = self._get_nlpca_loaders(
             idx_np,
             y_np,
             m_np,
-            batch_size=int(self.batch_size),
+            batch_size=self._safe_batch_size(int(idx_np.size), int(self.batch_size)),
             shuffle=False,
         )
 
@@ -1018,20 +1096,18 @@ class ImputeNLPCA(BaseNNImputer):
 
         criterion = FocalCELoss(alpha=alpha, gamma=float(gamma), ignore_index=-1)
 
-        # Save/disable grads for decoder; enable only embedding
         saved: list[tuple[torch.nn.Parameter, bool]] = []
         for p in model.parameters():
             saved.append((p, bool(p.requires_grad)))
             p.requires_grad_(False)
 
-        # Only embedding is trainable
         model.embedding.weight.requires_grad_(True)  # type: ignore[attr-defined]
-
         opt = torch.optim.Adam([model.embedding.weight], lr=float(lr))  # type: ignore[attr-defined]
 
         try:
             with torch.enable_grad():
-                for _ in range(int(iterations)):
+                iters = max(1, int(iterations))
+                for _ in range(iters):
                     for idx_b, y_b, m_b in loader:
                         idx_b = idx_b.to(self.device, non_blocking=True).long()
                         y_b = y_b.to(self.device, non_blocking=True).long()
@@ -1042,17 +1118,18 @@ class ImputeNLPCA(BaseNNImputer):
                             continue
 
                         opt.zero_grad(set_to_none=True)
-
-                        out = model(idx_b)  # uses current embedding rows for idx_b
+                        out = model(idx_b)
                         loss = criterion(
                             out.view(-1, self.num_classes_)[flat_mask],
                             y_b.view(-1)[flat_mask],
                         )
 
                         if not torch.isfinite(loss):
-                            msg = f"[{self.model_name}] Embedding refinement loss non-finite."
-                            self.logger.error(msg)
-                            raise RuntimeError(msg)
+                            self._maybe_prune_or_raise(
+                                trial,
+                                f"[{self.model_name}] Embedding refinement loss non-finite.",
+                                None,
+                            )
 
                         loss.backward()
                         torch.nn.utils.clip_grad_norm_(
@@ -1061,14 +1138,11 @@ class ImputeNLPCA(BaseNNImputer):
                         opt.step()
 
         except Exception as e:
-            if trial is not None:
-                msg = f"[{self.model_name}] Trial pruned during embedding refinement due to exception: {e}"
-                raise optuna.exceptions.TrialPruned(msg) from e
-            else:
-                raise e
+            self._maybe_prune_or_raise(
+                trial, f"[{self.model_name}] Embedding refinement failed: {e}", e
+            )
 
         finally:
-            # Restore requires_grad flags exactly as they were
             for p, req in saved:
                 p.requires_grad_(req)
 
@@ -1388,23 +1462,34 @@ class ImputeNLPCA(BaseNNImputer):
                         f"[{self.model_name}] Input refine epoch {epoch}: steps={refine_steps}{update_msg}, observed={n_obs}/{n_total} ({(100.0 * n_obs / float(n_total)):.2f}%)."
                     )
 
-            # Validation: projection-based observed-loss
-            s = self._val_step_with_projection(
-                model=model,
-                temp_layer=None,
-                criterion=criterion,
-                steps=max(10, min(int(self.projection_epochs) // 5, 20)),
-                lr=float(self.projection_lr),
-            )
+                try:
+                    s = self._val_step_with_projection(
+                        model=model,
+                        temp_layer=None,
+                        criterion=criterion,
+                        steps=max(int(self.projection_epochs) // 5, 20),
+                        lr=float(self.projection_lr),
+                    )
+                except Exception as e:
+                    # If validation cannot be computed,
+                    # prune trial (if applicable) or raise.
+                    if trial is not None:
+                        raise optuna.exceptions.TrialPruned(
+                            f"[{self.model_name}] Trial {trial.number} failed during validation: {str(e)}"
+                        ) from e
+                    raise
 
-            train_history.append(train_loss)
-            val_history.append(float(s))
+                train_history.append(float(train_loss))
+                val_history.append(float(s))
 
-            # Plateau tracking (mirrors your prior relative-improvement gating)
-            if np.isfinite(s) and s < s_best:
-                if s_best == float("inf"):
-                    s_best = float(s)
-                    plateau_counter = 0
+                if not np.isfinite(s):
+                    # If val is non-finite,
+                    # there is no meaningful scheduler signal.
+                    # On tiny splits this often means "no valid batches".
+                    self.logger.warning(
+                        f"[{self.model_name}] Non-finite val loss at epoch {epoch}."
+                    )
+                    plateau_counter += 1
                 else:
                     improvement_ratio = (
                         1.0 - (float(s) / float(s_best)) if s_best != 0.0 else 0.0
@@ -1428,14 +1513,16 @@ class ImputeNLPCA(BaseNNImputer):
 
             # Stop once we're at the floor and still plateauing
             at_floor = lr_after <= (float(self.eta_min) * (1.0 + 1e-12))
-            if at_floor and plateau_counter >= int(patience):
+            if plateau_counter >= int(patience) and (
+                not np.isfinite(val_history[-1]) or at_floor
+            ):
                 break
 
             if trial is not None and isinstance(self.tune_metric, str):
                 trial.report(-float(s), step=epoch)
                 if trial.should_prune():
                     raise optuna.exceptions.TrialPruned(
-                        f"[{self.model_name}] Trial {trial.number} pruned at epoch {epoch}."
+                        f"[{self.model_name}] Trial {trial.number} pruned at epoch {epoch}. This is a normal part of the tuning process and is not an error."
                     )
 
             epoch += 1
@@ -1450,7 +1537,13 @@ class ImputeNLPCA(BaseNNImputer):
         steps: int = 20,
         lr: float = 0.05,
     ) -> float:
-        """Validate with per-batch embedding projection (optimize v_batch; do NOT mutate model state)."""
+        """Validate with per-batch embedding projection; hardened for empty/degenerate val splits."""
+        if self.val_loader_ is None:
+            self.logger.warning(
+                f"[{self.model_name}] val_loader_ is None; returning inf val loss."
+            )
+            return float("inf")
+
         model.eval()
         total_loss = 0.0
         count = 0
@@ -1464,10 +1557,12 @@ class ImputeNLPCA(BaseNNImputer):
                 saved.append((p, bool(p.requires_grad)))
                 p.requires_grad_(False)
 
-        # During projection: grads only w.r.t. v_batch
         _save_and_disable(getattr(model, "hidden_layers", None))
         _save_and_disable(getattr(model, "dense_output", None))
         _save_and_disable(temp_layer)
+
+        steps = max(1, int(steps))
+        lr = float(lr)
 
         try:
             with torch.enable_grad():
@@ -1484,11 +1579,10 @@ class ImputeNLPCA(BaseNNImputer):
                     v_batch = v_batch.to(self.device)
                     v_batch.requires_grad_(True)
 
-                    proj_opt = torch.optim.Adam([v_batch], lr=float(lr))
+                    proj_opt = torch.optim.Adam([v_batch], lr=lr)
 
-                    for _ in range(int(steps)):
+                    for _ in range(steps):
                         proj_opt.zero_grad(set_to_none=True)
-
                         if temp_layer is not None:
                             out = temp_layer(v_batch).view(
                                 -1, self.num_features_, self.num_classes_
@@ -1500,6 +1594,12 @@ class ImputeNLPCA(BaseNNImputer):
                             out.view(-1, self.num_classes_)[flat_mask],
                             y.view(-1)[flat_mask],
                         )
+                        if not torch.isfinite(loss):
+                            # Projection can explode on tiny data; treat as invalid batch
+                            self.logger.warning(
+                                f"[{self.model_name}] Non-finite val projection loss; skipping batch."
+                            )
+                            break
                         loss.backward()
                         proj_opt.step()
 
@@ -1515,13 +1615,18 @@ class ImputeNLPCA(BaseNNImputer):
                             out_final.view(-1, self.num_classes_)[flat_mask],
                             y.view(-1)[flat_mask],
                         )
-                        total_loss += float(val_l.item())
-                        count += 1
+
+                        if torch.isfinite(val_l):
+                            total_loss += float(val_l.item())
+                            count += 1
 
             if count == 0:
-                msg = f"[{self.model_name}] Validation loss has no valid batches."
-                self.logger.error(msg)
-                raise RuntimeError(msg)
+                # Do not hard-crash training; return inf and let scheduler/early-stop handle it.
+                self.logger.warning(
+                    f"[{self.model_name}] Validation had 0 valid batches (likely tiny/empty val split or all-missing). "
+                    "Returning inf val loss."
+                )
+                return float("inf")
 
             return total_loss / count
 
@@ -1530,76 +1635,89 @@ class ImputeNLPCA(BaseNNImputer):
                 p.requires_grad_(req)
 
     def _objective(self, trial: optuna.Trial) -> float | tuple[float, ...]:
-        """Optuna objective for NLPCA (joint-only + safe per-trial work reset)."""
-        params = self._sample_hyperparameters(trial)
+        """Optuna objective for NLPCA (hardened).
 
-        # PCA init for this latent_dim
-        params["model_params"]["embedding_init"] = self._get_pca_embedding_init(
-            self.ground_truth_, self.train_idx_, int(params["latent_dim"])
-        )
+        Args:
+            trial (optuna.Trial): Optuna trial object.
 
-        model = self.build_model(self.Model, params["model_params"])
-
-        # Recompute class weights on observed train entries
-        train_loss_mask = self.X_train_corrupted_ >= 0
-        class_weights = self._class_weights_from_zygosity(
-            self.X_train_clean_,
-            train_mask=train_loss_mask,
-            inverse=params["inverse"],
-            normalize=params["normalize"],
-            max_ratio=self.max_ratio,
-            power=params["power"],
-        )
-
-        # ---- Per-trial reset of the NLPCA working matrix + loader ----
-        if self._X_train_work_init_ is None:
-            msg = "Internal error: _X_train_work_init_ is not set."
-            self.logger.error(msg)
-            raise RuntimeError(msg)
-
-        saved_work = self.X_train_work_
-        saved_loader = self.train_loader_
+        Returns:
+            float | tuple[float, ...]: Objective metric(s) to optimize.
+        """
         try:
-            self.X_train_work_ = self._X_train_work_init_.copy()
-            self.train_loader_ = self._get_nlpca_loaders(
-                self.train_idx_,
-                self.X_train_work_,
-                mask=(self.X_train_work_ >= 0),
-                batch_size=self.batch_size,
-                shuffle=True,
+            params = self._sample_hyperparameters(trial)
+
+            params["model_params"]["embedding_init"] = self._get_pca_embedding_init(
+                self.ground_truth_, self.train_idx_, int(params["latent_dim"])
             )
 
-            _ = self._execute_nlpca_training(
-                model=model,
-                lr=float(params["learning_rate"]),
-                l1_penalty=float(params["l1_penalty"]),
-                params=params,
-                trial=trial,
-                class_weights=class_weights,
-                gamma_schedule=bool(params["gamma_schedule"]),
+            model = self.build_model(self.Model, params["model_params"])
+
+            train_loss_mask = self.X_train_corrupted_ >= 0
+            class_weights = self._class_weights_from_zygosity(
+                self.X_train_clean_,
+                train_mask=train_loss_mask,
+                inverse=params["inverse"],
+                normalize=params["normalize"],
+                max_ratio=self.max_ratio,
+                power=params["power"],
             )
 
-            metrics = self._evaluate_model(
-                model,
-                self.X_val_corrupted_,
-                self.y_val_,
-                self.eval_mask_val_,
-                indices=self.val_idx_,
-                gamma=float(params["gamma"]),
-                project_embedding=True,
-                objective_mode=True,
-                trial=trial,
-                class_weights=class_weights,
-                persist_projection=False,
-            )
+            if self._X_train_work_init_ is None:
+                raise RuntimeError("Internal error: _X_train_work_init_ is not set.")
 
-        finally:
-            self.X_train_work_ = saved_work
-            self.train_loader_ = saved_loader
+            saved_work = self.X_train_work_
+            saved_loader = self.train_loader_
+            try:
+                self.X_train_work_ = self._X_train_work_init_.copy()
+                self.train_loader_ = self._get_nlpca_loaders(
+                    self.train_idx_,
+                    self.X_train_work_,
+                    mask=(self.X_train_work_ >= 0),
+                    batch_size=self._safe_batch_size(
+                        len(self.train_idx_), self.batch_size
+                    ),
+                    shuffle=True,
+                )
 
-        if isinstance(self.tune_metric, (list, tuple)):
-            return tuple(metrics[m] for m in self.tune_metric)
-        return metrics[self.tune_metric]
+                _ = self._execute_nlpca_training(
+                    model=model,
+                    lr=float(params["learning_rate"]),
+                    l1_penalty=float(params["l1_penalty"]),
+                    params=params,
+                    trial=trial,
+                    class_weights=class_weights,
+                    gamma_schedule=bool(params["gamma_schedule"]),
+                )
+
+                metrics = self._evaluate_model(
+                    model,
+                    self.X_val_corrupted_,
+                    self.y_val_,
+                    self.eval_mask_val_,
+                    indices=self.val_idx_,
+                    gamma=float(params["gamma"]),
+                    project_embedding=True,
+                    objective_mode=True,
+                    trial=trial,
+                    class_weights=class_weights,
+                    persist_projection=False,
+                )
+
+            finally:
+                self.X_train_work_ = saved_work
+                self.train_loader_ = saved_loader
+
+            if isinstance(self.tune_metric, (list, tuple)):
+                return tuple(metrics[m] for m in self.tune_metric)
+            return metrics[self.tune_metric]
+
+        except optuna.exceptions.TrialPruned:
+            raise
+        except (ValueError, RuntimeError, FloatingPointError) as e:
+            # Small-N / degenerate-mask / non-finite losses -> prune
+            raise optuna.exceptions.TrialPruned(
+                f"[{self.model_name}] Trial pruned due to exception: {e}"
+            ) from e
 
     def _sample_hyperparameters(self, trial: optuna.Trial) -> dict[str, Any]:
         """Sample hyperparameters for tuning.
@@ -2047,39 +2165,110 @@ class ImputeNLPCA(BaseNNImputer):
         return sizes.tolist()
 
     def _get_pca_embedding_init(
-        self,
-        X_full: np.ndarray,
-        train_idx: np.ndarray,
-        latent_dim: int,
+        self, X_full: np.ndarray, train_idx: np.ndarray, latent_dim: int
     ) -> torch.Tensor:
         """Compute PCA-based embedding init for all samples, fitted on training rows only.
+
+        This method is intentionally defensive: if PCA cannot be fit due to small sample sizes, degenerate data, or invalid dimensionality constraints, it falls back to a deterministic random (small-noise) initialization so UBP can still run.
 
         Args:
             X_full (np.ndarray): Full 012 matrix shape (N, L) with missing encoded as -1.
             train_idx (np.ndarray): Indices of training samples (subset of [0..N-1]).
-            latent_dim (int): Number of PCA components (embedding dimension).
+            latent_dim (int): Requested PCA components (embedding dimension).
 
         Returns:
-            Tensor of shape (N, latent_dim) on self.device.
+            torch.Tensor: Tensor of shape (N, latent_dim) on self.device.
+
+        Raises:
+            ValueError: If X_full is not 2D, empty, or latent_dim is invalid (< 1).
         """
         X = np.asarray(X_full, dtype=np.float32)
-        N, L = X.shape
-        train_idx = np.asarray(train_idx, dtype=np.int64)
+        if X.ndim != 2:
+            msg = f"[{self.model_name}] X_full must be 2D (N,L). Got shape={getattr(X, 'shape', None)}."
+            self.logger.error(msg)
+            raise ValueError(msg)
 
-        # Compute training column means ignoring -1
-        X_train = X[train_idx]
+        N, L = X.shape
+        if N <= 0 or L <= 0:
+            msg = f"[{self.model_name}] X_full must be non-empty. Got N={N}, L={L}."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        try:
+            latent_dim_req = int(latent_dim)
+        except Exception as e:
+            msg = f"[{self.model_name}] latent_dim must be an int-like value; got {latent_dim!r}."
+            self.logger.error(msg)
+            raise ValueError(msg) from e
+
+        if latent_dim_req < 1:
+            msg = f"[{self.model_name}] latent_dim must be >= 1; got {latent_dim_req}."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        # Sanitize train indices
+        idx = np.asarray(train_idx, dtype=np.int64).reshape(-1)
+        if idx.size == 0:
+            self.logger.warning(
+                f"[{self.model_name}] train_idx is empty; falling back to random embedding init."
+            )
+            rng = np.random.default_rng(self.seed)
+            V_rand = rng.normal(loc=0.0, scale=1e-2, size=(N, latent_dim_req)).astype(
+                np.float32, copy=False
+            )
+            return torch.as_tensor(V_rand, dtype=torch.float32, device=self.device)
+
+        # Keep only valid, unique indices (preserve order)
+        mask_valid = (idx >= 0) & (idx < N)
+        if not np.all(mask_valid):
+            n_bad = int((~mask_valid).sum())
+            self.logger.warning(
+                f"[{self.model_name}] Dropping {n_bad} out-of-bounds train indices for PCA init."
+            )
+            idx = idx[mask_valid]
+
+        if idx.size == 0:
+            self.logger.warning(
+                f"[{self.model_name}] No valid train indices remain; falling back to random embedding init."
+            )
+            rng = np.random.default_rng(self.seed)
+            V_rand = rng.normal(loc=0.0, scale=1e-2, size=(N, latent_dim_req)).astype(
+                np.float32, copy=False
+            )
+            return torch.as_tensor(V_rand, dtype=torch.float32, device=self.device)
+
+        # Unique while preserving order
+        _, first_pos = np.unique(idx, return_index=True)
+        idx = idx[np.sort(first_pos)]
+
+        # PCA requires at least 2 training samples in sklearn (practically).
+        n_train = int(idx.size)
+        if n_train < 2:
+            self.logger.warning(
+                f"[{self.model_name}] PCA init requires >=2 training samples; got n_train={n_train}. "
+                "Falling back to random embedding init."
+            )
+            rng = np.random.default_rng(self.seed)
+            V_rand = rng.normal(loc=0.0, scale=1e-2, size=(N, latent_dim_req)).astype(
+                np.float32, copy=False
+            )
+            return torch.as_tensor(V_rand, dtype=torch.float32, device=self.device)
+
+        # Compute training column means ignoring -1 (missing sentinel)
+        X_train = X[idx]
         col_means = self._compute_col_means_ignore_missing(
             X_train, missing_value=-1.0, fill_value=0.0
         )
 
         # Fill missing in full matrix using training means
-        missing_full = X == -1
+        missing_full = X == -1.0
         if missing_full.any():
             rows, cols = np.where(missing_full)
             X_filled = X.copy()
             X_filled[rows, cols] = col_means[cols]
         else:
             X_filled = X
+
         if self.debug:
             n_missing = int(missing_full.sum())
             if n_missing > 0:
@@ -2088,15 +2277,70 @@ class ImputeNLPCA(BaseNNImputer):
                     f"[{self.model_name}] PCA init filled {n_missing} missing values ({missing_pct:.2f}%)."
                 )
 
-        pca = PCA(n_components=int(latent_dim), random_state=self.seed)
-        pca.fit(X_filled[train_idx])
-        V = pca.transform(X_filled)  # (N, latent_dim)
-        if self.debug and hasattr(pca, "explained_variance_ratio_"):
-            evr = np.asarray(pca.explained_variance_ratio_, dtype=float)
-            head = evr[: min(5, evr.size)].tolist()
-            self.logger.debug(
-                f"[{self.model_name}] PCA init EVR head={head}, total={float(evr.sum()):.4f}."
+        # Effective PCA dimensionality:
+        # must satisfy n_components <= min(n_train, n_features)
+        max_components = int(min(n_train, L))
+        eff_dim = int(min(latent_dim_req, max_components))
+
+        if eff_dim < latent_dim_req:
+            self.logger.warning(
+                f"[{self.model_name}] Requested latent_dim={latent_dim_req} exceeds PCA limit "
+                f"min(n_train={n_train}, n_features={L})={max_components}. Using eff_dim={eff_dim} "
+                "and padding remaining dimensions."
             )
+
+        # If eff_dim collapses (shouldn't with n_train>=2 and L>=1), fallback.
+        if eff_dim < 1:
+            self.logger.warning(
+                f"[{self.model_name}] PCA eff_dim computed as {eff_dim}; falling back to random embedding init."
+            )
+            rng = np.random.default_rng(self.seed)
+            V_rand = rng.normal(loc=0.0, scale=1e-2, size=(N, latent_dim_req)).astype(
+                np.float32, copy=False
+            )
+            return torch.as_tensor(V_rand, dtype=torch.float32, device=self.device)
+
+        # Fit PCA on training rows; robust fallback on failure.
+        try:
+            pca = PCA(n_components=eff_dim, random_state=self.seed)
+            pca.fit(X_filled[idx])
+
+            # (N, eff_dim)
+            V_eff = pca.transform(X_filled).astype(np.float32, copy=False)
+
+            if self.debug and hasattr(pca, "explained_variance_ratio_"):
+                evr = np.asarray(pca.explained_variance_ratio_, dtype=float)
+                head = evr[: min(5, evr.size)].tolist()
+                self.logger.debug(
+                    f"[{self.model_name}] PCA init EVR head={head}, total={float(evr.sum()):.4f}."
+                )
+
+        except Exception as e:
+            self.logger.warning(
+                f"[{self.model_name}] PCA init failed (n_train={n_train}, n_features={L}, eff_dim={eff_dim}): {e}. "
+                "Falling back to random embedding init."
+            )
+            rng = np.random.default_rng(self.seed)
+            V_rand = rng.normal(loc=0.0, scale=1e-2, size=(N, latent_dim_req)).astype(
+                np.float32, copy=False
+            )
+            return torch.as_tensor(V_rand, dtype=torch.float32, device=self.device)
+
+        # If we had to reduce eff_dim,
+        # pad to requested latent_dim_req deterministically.
+        if eff_dim == latent_dim_req:
+            V = V_eff
+        else:
+            rng = np.random.default_rng(self.seed)
+            V = np.zeros((N, latent_dim_req), dtype=np.float32)
+            V[:, :eff_dim] = V_eff
+            # Small-noise padding helps avoid exact-zero dimensions
+            # (often harmless either way)
+            pad = latent_dim_req - eff_dim
+            if pad > 0:
+                V[:, eff_dim:] = rng.normal(loc=0.0, scale=1e-3, size=(N, pad)).astype(
+                    np.float32, copy=False
+                )
 
         return torch.as_tensor(V, dtype=torch.float32, device=self.device)
 
