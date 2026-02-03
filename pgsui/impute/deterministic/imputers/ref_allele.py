@@ -245,7 +245,7 @@ class ImputeRefAllele:
         self.ground_truth012_ = self.X012_.copy()
 
         # Use NaN for missing inside a DataFrame to leverage fillna
-        df_all = pd.DataFrame(self.ground_truth012_).astype("float32", copy=False)
+        df_all = pd.DataFrame(self.ground_truth012_).astype("float32", copy=True)
         df_all[df_all < 0] = np.nan
 
         # Observed mask in the ORIGINAL data (before any simulated-missing)

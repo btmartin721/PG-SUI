@@ -159,10 +159,10 @@ class ImputeMostFrequent:
         self.missing_aliases = {int(cfg.algo.missing), -9, -1}
 
         X = np.asarray(self.encoder.genotypes_012)
-        Xf = X.astype(np.float32, copy=False)
+        Xf = X.astype(np.float32, copy=True)
         Xf = np.where(np.isnan(Xf), -1.0, Xf)
         Xf[Xf < 0] = -1.0
-        self.X012_ = Xf.astype(np.float32, copy=False)
+        self.X012_ = Xf.astype(np.float32, copy=True)
         self.num_features_ = self.X012_.shape[1]
 
         # Simulated-missing controls (mirror VAE/AE semantics where possible)
@@ -283,7 +283,7 @@ class ImputeMostFrequent:
         self.ground_truth012_ = self.X012_.copy()
 
         # Work in DataFrame with NaN as missing for mode computation
-        df_all = pd.DataFrame(self.ground_truth012_).astype("float32", copy=False)
+        df_all = pd.DataFrame(self.ground_truth012_).astype("float32", copy=True)
         df_all[df_all < 0] = np.nan
 
         # Modes from TRAIN rows only (per-locus)
@@ -424,6 +424,11 @@ class ImputeMostFrequent:
         imputed_full_df = self._impute_df(df_missingonly)
         X_imputed_full_012 = imputed_full_df.to_numpy(dtype=np.float32)
 
+        if np.isnan(X_imputed_full_012).any():
+            msg = "NaN entries remain after imputation; cannot decode safely."
+            self.logger.error(msg)
+            raise RuntimeError(msg)
+
         neg = int(np.count_nonzero(X_imputed_full_012 < 0))
         if neg:
             msg = f"{neg} negative entries remain after REF imputation. Unique: {np.unique(X_imputed_full_012[X_imputed_full_012 < 0])[:10]}"
@@ -481,23 +486,32 @@ class ImputeMostFrequent:
         return df.astype(np.float32)
 
     def _impute_by_population_mode(self, df_in: pd.DataFrame) -> pd.DataFrame:
-        """Impute missing cells in df_in using population-specific modes.
+        """Impute missing cells in df_in using population-specific modes with safe fallbacks.
 
-        This method imputes missing values in the provided DataFrame using population-specific modes. It fills in missing values (NaNs) with the most frequent genotype for each locus within the corresponding population. If a population-specific mode is not available for a locus, it falls back to the global mode.
-
-        Args:
-            df_in (pd.DataFrame): Input DataFrame with missing values as NaN.
-
-        Returns:
-            pd.DataFrame: DataFrame with missing values imputed.
+        Notes:
+            - No NaNs remain after imputation.
+            - Falls back to global mode if a population has no learned mode (e.g., pop absent from train).
+            - Falls back to `self.default` if everything else fails (should not happen).
         """
+        # Fast path
         if not df_in.isnull().to_numpy().any():
             return df_in.astype(np.float32)
 
         df = df_in.copy()
-        pops = pd.Series(self.pops, index=df.index)
-        global_modes = pd.Series(self.global_modes_)
 
+        # Map population labels to df rows robustly by original sample index
+        pops = pd.Series(self.pops, index=np.arange(len(self.pops))).reindex(df.index)
+        if pops.isna().any():
+            # If any rows cannot be mapped,
+            # we still proceed with global fallback.
+            self.logger.warning(
+                "Some df rows could not be mapped to populations; using global fallback for those rows."
+            )
+
+        # Global modes: enforce exact column alignment + float32 dtype
+        global_modes = pd.Series(self.global_modes_, index=df.columns, dtype="float32")
+
+        # Population modes table: rows=pop, cols=loci; enforce columns + float32
         pop_modes = pd.DataFrame.from_dict(self.group_modes_, orient="index")
         if pop_modes.empty:
             pop_modes = pd.DataFrame(
@@ -505,34 +519,73 @@ class ImputeMostFrequent:
             )
 
         pop_modes = pop_modes.reindex(columns=df.columns)
+        # Ensure numeric and fill any missing entries with global modes
+        pop_modes = pop_modes.apply(pd.to_numeric, errors="coerce").astype("float32")
         pop_modes = pop_modes.fillna(global_modes)
 
-        aligned_modes = pop_modes.reindex(pops.to_numpy(), fill_value=np.nan)
+        # Align per-row modes: index by population label for each row
+        aligned_modes = pop_modes.reindex(pops.to_numpy())
+        # Rows with unknown populations or missing pop modes -> global
         aligned_modes = aligned_modes.fillna(global_modes)
 
-        values = df.to_numpy(dtype=np.float32)
-        replacements = aligned_modes.to_numpy(dtype=np.float32)
-        mask = np.isnan(values)
-        values[mask] = replacements[mask]
+        # Impute: use aligned_modes only where df is NaN
+        out = df.where(df.notna(), aligned_modes)
 
-        return pd.DataFrame(values, columns=df.columns, index=df.index).astype(
-            np.float32
-        )
+        # Guarantee: no NaNs remain (otherwise they'll decode to 'N')
+        if out.isna().to_numpy().any():
+            # Fill remaining NaNs deterministically
+            out = out.fillna(global_modes).fillna(float(self.default))
+
+            # If still any NaN, that's a serious structural issue
+            if out.isna().to_numpy().any():
+                msg = "NaNs remain after population+global+default fallback; cannot safely decode."
+                self.logger.error(msg)
+                raise RuntimeError(msg)
+
+        return out.astype(np.float32)
 
     def _series_mode(self, s: pd.Series) -> int:
-        """Compute the mode of a pandas Series with deterministic tie-breaking.
+        """Compute the mode of a pandas Series with deterministic tie-breaking,
+        excluding invalid (<0) codes.
+
+        Rules:
+            - Ignore NaNs.
+            - Ignore any values < 0 (e.g., -1, -9), which represent missing ('N').
+            - Choose the most frequent remaining value.
+            - If multiple values are tied for max frequency, choose the smallest value.
+            - If no valid values remain, return self.default.
 
         Args:
             s (pd.Series): Input pandas Series.
 
         Returns:
-            int: The mode of the Series. If multiple values are tied for the mode, the smallest value is returned. If the Series is empty after dropping NaNs, returns the default value.
+            int: Deterministic mode among valid genotype/base codes.
         """
         s_valid = s.dropna()
+
         if s_valid.empty:
             return int(self.default)
-        vc = s_valid.value_counts()
-        m = vc.index[vc.to_numpy() == vc.to_numpy().max()].min()
+
+        # Coerce to numeric; drop anything non-numeric
+        vals = pd.to_numeric(s_valid, errors="coerce").dropna()
+
+        if vals.empty:
+            return int(self.default)
+
+        # Exclude missing/invalid sentinel codes (<0)
+        vals = vals[vals >= 0]
+
+        if vals.empty:
+            return int(self.default)
+
+        vc = vals.value_counts()
+        max_count = vc.max()
+
+        # Deterministic tie-break: smallest value among ties
+        tied = vc.index[vc.to_numpy() == max_count]
+
+        # value_counts index can be float; safe-cast after choosing
+        m = float(tied.min())
         return int(m)
 
     def _evaluate_and_report(self) -> None:
