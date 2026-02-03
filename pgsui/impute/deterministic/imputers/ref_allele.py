@@ -245,7 +245,7 @@ class ImputeRefAllele:
         self.ground_truth012_ = self.X012_.copy()
 
         # Use NaN for missing inside a DataFrame to leverage fillna
-        df_all = pd.DataFrame(self.ground_truth012_, dtype=np.float32)
+        df_all = pd.DataFrame(self.ground_truth012_).astype("float32", copy=False)
         df_all[df_all < 0] = np.nan
 
         # Observed mask in the ORIGINAL data (before any simulated-missing)
@@ -273,7 +273,13 @@ class ImputeRefAllele:
                 **(self.sim_kwargs or {}),
             )
             tr.fit(X_for_sim)
+
             sim_mask_global = tr.sim_missing_mask_.astype(bool)
+
+            if sim_mask_global.shape != obs_mask.shape:
+                msg = f"sim_missing_mask_ shape {sim_mask_global.shape} != obs_mask shape {obs_mask.shape}"
+                self.logger.error(msg)
+                raise ValueError(msg)
 
             # Only consider cells that were originally observed
             sim_mask_global = sim_mask_global & obs_mask
@@ -281,14 +287,21 @@ class ImputeRefAllele:
             # Restrict evaluation to TEST rows only
             sim_mask = sim_mask_global & test_rows_mask[:, None]
             mode_desc = "simulated missing on TEST rows"
+
+            self.sim_mask_global_ = sim_mask_global
+            self.sim_mask_test_only_ = sim_mask
+
         else:
             # Legacy behavior: mask ALL originally observed TEST cells
             sim_mask = obs_mask & test_rows_mask[:, None]
             mode_desc = "all originally observed cells on TEST rows"
 
-        # Apply eval mask: set these cells to NaN in the eval DataFrame
+            self.sim_mask_global_ = None
+            self.sim_mask_test_only_ = sim_mask
+
+        # Apply the mask to create the evaluation DataFrame
         df_sim = df_all.copy()
-        df_sim.values[sim_mask] = np.nan
+        df_sim = df_sim.mask(sim_mask, other=np.nan)
 
         # Store state
         self.sim_mask_ = sim_mask
@@ -537,8 +550,12 @@ class ImputeRefAllele:
         labels_idx = list(range(10))
         report_names = ["A", "C", "G", "T", "W", "R", "M", "K", "Y", "S"]
 
-        # Create an identity matrix and use the targets array as indices
-        y_score = np.eye(len(report_names))[y_pred]
+        m = (y_true >= 0) & (y_true < 10) & (y_pred >= 0) & (y_pred < 10)
+        y_true, y_pred = y_true[m], y_pred[m]
+
+        if y_true.size == 0:
+            self.logger.warning("No valid IUPAC labels in 0..9; skipping.")
+            return
 
         report: dict | str = classification_report(
             y_true,
@@ -920,8 +937,22 @@ class ImputeRefAllele:
         y_true = y_true.astype(int)
         y_pred = y_pred.astype(int)
 
-        # Create an identity matrix and use the targets array as indices
-        y_score = np.eye(len(report_names))[y_pred]
+        K = len(report_names)
+        m = (y_true >= 0) & (y_true < K) & (y_pred >= 0) & (y_pred < K)
+        y_true = y_true[m].astype(int)
+        y_pred = y_pred[m].astype(int)
+
+        if y_true.size == 0:
+            self.logger.warning(
+                "No valid labels for AP/Jaccard/MCC computation; skipping."
+            )
+            return {
+                k: v
+                for k, v in report.items()
+                if k in report_names or k.endswith("avg") or k == "accuracy"
+            }
+
+        y_score = np.eye(K, dtype=float)[y_pred]
 
         # Per-class metrics
         ap_pc = average_precision_score(y_true, y_score, average=None)
