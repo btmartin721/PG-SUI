@@ -283,7 +283,7 @@ class ImputeMostFrequent:
         self.ground_truth012_ = self.X012_.copy()
 
         # Work in DataFrame with NaN as missing for mode computation
-        df_all = pd.DataFrame(self.ground_truth012_, dtype=np.float32)
+        df_all = pd.DataFrame(self.ground_truth012_).astype("float32", copy=False)
         df_all[df_all < 0] = np.nan
 
         # Modes from TRAIN rows only (per-locus)
@@ -293,11 +293,14 @@ class ImputeMostFrequent:
         for col in df_train.columns:
             s = df_train[col].dropna()
             if s.empty:
-                modes[col] = self.default
+                modes[col] = int(self.default)
             else:
                 vc = s.value_counts()
+
                 # deterministic tie-break: smallest genotype among ties
-                modes[col] = int(vc.index[vc.to_numpy() == vc.to_numpy().max()].min())
+                m = int(vc.index[vc.to_numpy() == vc.to_numpy().max()].min())
+                modes[col] = m
+
         self.global_modes_ = modes
 
         self.group_modes_.clear()
@@ -335,9 +338,13 @@ class ImputeMostFrequent:
                 **self.sim_kwargs,
             )
             tr.fit(X_for_sim)
-            sim_mask_global = tr.sim_missing_mask_.astype(bool)
 
-            # Don't simulate on already-missing cells
+            sim_mask_global = tr.sim_missing_mask_.astype(bool)
+            if sim_mask_global.shape != obs_mask.shape:
+                msg = f"sim_missing_mask_ shape {sim_mask_global.shape} != obs_mask shape {obs_mask.shape}"
+                self.logger.error(msg)
+                raise ValueError(msg)
+
             sim_mask_global &= obs_mask
 
             # Restrict evaluation to TEST rows only
@@ -361,7 +368,7 @@ class ImputeMostFrequent:
 
         # Apply the mask to create the evaluation DataFrame
         df_sim = df_all.copy()
-        df_sim.values[self.sim_mask_test_only_] = np.nan
+        df_sim = df_sim.mask(sim_mask, other=np.nan)
 
         self.sim_mask_ = self.sim_mask_test_only_
         self.X_train_df_ = df_sim
@@ -467,7 +474,7 @@ class ImputeMostFrequent:
             pd.DataFrame: DataFrame with missing values imputed.
         """
         if df_in.isnull().to_numpy().any():
-            modes = pd.Series(self.global_modes_)
+            modes = pd.Series(self.global_modes_, index=df_in.columns, dtype="float32")
             df = df_in.fillna(modes)
         else:
             df = df_in.copy()
@@ -513,27 +520,20 @@ class ImputeMostFrequent:
         )
 
     def _series_mode(self, s: pd.Series) -> int:
-        """Compute the mode of a pandas Series, ignoring NaNs.
-
-        This method computes the mode of a pandas Series, ignoring NaN values. If the Series is empty after removing NaNs, it returns a default value. The method ensures that the mode is one of the valid genotype values (0, 1, or 2), clamping to the default if necessary.
+        """Compute the mode of a pandas Series with deterministic tie-breaking.
 
         Args:
             s (pd.Series): Input pandas Series.
 
         Returns:
-            int: The mode of the series, or the default value if no valid entries exist.
+            int: The mode of the Series. If multiple values are tied for the mode, the smallest value is returned. If the Series is empty after dropping NaNs, returns the default value.
         """
-        s_valid = s.dropna().astype(int)
+        s_valid = s.dropna()
         if s_valid.empty:
-            return self.default
-
-        # Mode among {0,1,2}; if ties, pandas picks the smallest (okay)
-        mode_val = int(s_valid.mode().iloc[0])
-        if mode_val not in (0, 1, 2):
-            # Safety: clamp to valid zygosity in case of odd inputs
-            mode_val = self.default if self.default in (0, 1, 2) else 0
-
-        return mode_val
+            return int(self.default)
+        vc = s_valid.value_counts()
+        m = vc.index[vc.to_numpy() == vc.to_numpy().max()].min()
+        return int(m)
 
     def _evaluate_and_report(self) -> None:
         """Evaluate imputed vs. ground truth on masked test cells; produce reports and plots.
@@ -696,9 +696,6 @@ class ImputeMostFrequent:
 
         labels_idx = list(range(10))
         report_names = ["A", "C", "G", "T", "W", "R", "M", "K", "Y", "S"]
-
-        # This line would crash if y_pred were float
-        y_score = np.eye(len(report_names))[y_pred]
 
         report: dict | str = classification_report(
             y_true,
@@ -1088,7 +1085,16 @@ class ImputeMostFrequent:
 
         # Create an identity matrix and use the targets array as indices
         # This line was causing the IndexError
-        y_score = np.eye(len(report_names))[y_pred]
+        K = len(report_names)
+        m = (y_true >= 0) & (y_true < K) & (y_pred >= 0) & (y_pred < K)
+        y_true = y_true[m].astype(int)
+        y_pred = y_pred[m].astype(int)
+
+        if y_true.size == 0:
+            self.logger.warning("No valid labels for AP/Jaccard computation; skipping.")
+            return report
+
+        y_score = np.eye(K)[y_pred]
 
         # Per-class metrics
         ap_pc = average_precision_score(y_true, y_score, average=None)
