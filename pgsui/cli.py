@@ -62,15 +62,16 @@ from pgsui import (
     ImputeAutoencoder,
     ImputeMostFrequent,
     ImputeNLPCA,
-    ImputeUBP,
     ImputeRefAllele,
+    ImputeUBP,
     ImputeVAE,
     MostFrequentConfig,
-    RefAlleleConfig,
-    VAEConfig,
     NLPCAConfig,
+    RefAlleleConfig,
     UBPConfig,
+    VAEConfig,
 )
+from pgsui import __version__ as version
 from pgsui.data_processing.config import (
     apply_dot_overrides,
     dataclass_to_yaml,
@@ -103,11 +104,9 @@ R = TypeVar("R")
 
 
 # ----------------------------- CLI Utilities ----------------------------- #
-def _print_version() -> None:
+def _print_version(logger: logging.Logger) -> None:
     """Print PG-SUI version and exit."""
-    from pgsui import __version__ as version
-
-    logging.info(f"Using PG-SUI version: {version}")
+    logger.info(f"PG-SUI version: {version}")
 
 
 def _model_family(model_name: str) -> str:
@@ -278,12 +277,15 @@ def _apply_best_params_to_cfg(cfg: Any, best_params: dict, model_name: str) -> A
     return cfg
 
 
-def _configure_logging(verbose: bool, log_file: Optional[str] = None) -> None:
+def _configure_logging(verbose: bool, log_file: Optional[str] = None) -> logging.Logger:
     """Configure root logger.
 
     Args:
         verbose (bool): If True, INFO; else ERROR.
         log_file (Optional[str]): Optional file to tee logs to.
+
+    Returns:
+        logging.Logger: Configured root logger.
     """
     level = logging.INFO if verbose else logging.ERROR
     handlers: List[logging.Handler] = [logging.StreamHandler(sys.stdout)]
@@ -294,6 +296,7 @@ def _configure_logging(verbose: bool, log_file: Optional[str] = None) -> None:
         format="%(asctime)s - %(levelname)s - %(message)s",
         handlers=handlers,
     )
+    return logging.getLogger()
 
 
 def _parse_seed(seed_arg: str) -> Optional[int]:
@@ -1124,24 +1127,24 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     args = parser.parse_args(argv)
 
-    if getattr(args, "version", False):
-        _print_version()
-        return 0
-
     # Logging (verbose default is False unless passed)
-    _configure_logging(
+    logger = _configure_logging(
         verbose=getattr(args, "verbose", False),
         log_file=getattr(args, "log_file", None),
     )
 
-    logging.info("Starting PG-SUI imputation...")
-    _print_version()
+    if args.version:
+        print(f"PG-SUI version: {version}")
+        return 0
+
+    logger.info("Starting PG-SUI imputation...")
+    _print_version(logger)
 
     # Models selection (default to all if not explicitly provided)
     try:
         selected_models = _parse_models(getattr(args, "models", ()))
     except argparse.ArgumentTypeError as e:
-        logging.error(str(e))
+        logger.error(str(e))
         parser.error(str(e))
         return 2
 
@@ -1153,7 +1156,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             setattr(args, "format", "vcf")
 
     if input_path is None:
-        logging.error("You must provide --input (or legacy --vcf).")
+        logger.error("You must provide --input (or legacy --vcf).")
         parser.error("You must provide --input (or legacy --vcf).")
         return 2
 
@@ -1169,7 +1172,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         elif input_path.endswith((".str", ".stru", ".structure")):
             fmt_final = "structure"
         else:
-            logging.error(
+            logger.error(
                 "Could not infer input format from file extension. Please provide --format."
             )
             parser.error(
@@ -1216,7 +1219,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if any(x is not None for x in (treefile, qmatrix, siterates)):
         if not all(x is not None for x in (treefile, qmatrix, siterates)):
-            logging.error(
+            logger.error(
                 "--treefile, --qmatrix, and --siterates must all be provided together or they should all be omitted."
             )
             parser.error(
@@ -1255,7 +1258,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
 
     if getattr(args, "dry_run", False):
-        logging.info("Dry run complete. Exiting without training models.")
+        logger.info("Dry run complete. Exiting without training models.")
         return 0
 
     # ---------------- Build config(s) per selected model ------------------- #
@@ -1267,7 +1270,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         _config_needs_tree(cfg) for cfg in cfgs_by_model.values() if cfg is not None
     )
     if needs_tree and not all(x is not None for x in (treefile, qmatrix, siterates)):
-        logging.error(
+        logger.error(
             "Nonrandom simulated missingness requires --treefile, --qmatrix, and --siterates."
         )
         parser.error(
@@ -1275,7 +1278,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
         return 2
     if needs_tree and tp is None:
-        logging.error(
+        logger.error(
             "Tree parser was not initialized for nonrandom simulation. "
             "Please verify --treefile, --qmatrix, and --siterates."
         )
@@ -1403,12 +1406,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         "ImputeRefAllele": build_impute_refallele,
     }
 
-    logging.info(f"Selected models: {', '.join(selected_models)}")
+    logger.info(f"Selected models: {', '.join(selected_models)}")
     for name in selected_models:
-        logging.info("")
-        logging.info("=" * 60)
-        logging.info("")
-        logging.info(f"Processing model: {name} ...")
+        logger.info("")
+        logger.info("=" * 60)
+        logger.info("")
+        logger.info(f"Processing model: {name} ...")
         X_imputed = run_model_safely(name, model_builders[name], warn_only=False)
         gd_imp = gd.copy()
         gd_imp.snp_data = X_imputed
@@ -1420,13 +1423,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         elif name in {"ImputeHistGradientBoosting", "ImputeRandomForest"}:
             family = "Supervised"
         else:
-            logging.error(f"Unknown model family for {name}")
+            logger.error(f"Unknown model family for {name}")
             raise ValueError(f"Unknown model family for {name}")
 
         pth = Path(f"{prefix}_output/{family}/imputed/{name}")
         pth.mkdir(parents=True, exist_ok=True)
 
-        logging.info(f"Writing imputed VCF for {name} to {pth} ...")
+        logger.info(f"Writing imputed VCF for {name} to {pth} ...")
 
         if fmt_final == "vcf":
             gd_imp.write_vcf(pth / f"{name.lower()}_imputed.vcf.gz")
@@ -1435,22 +1438,22 @@ def main(argv: Optional[List[str]] = None) -> int:
         elif fmt_final == "genepop":
             gd_imp.write_genepop(pth / f"{name.lower()}_imputed.gen")
         else:
-            logging.warning(
+            logger.warning(
                 f"Output format {fmt_final} not supported for imputed data export."
             )
 
-        logging.info("")
-        logging.info(f"Successfully finished imputation for model: {name}!")
-        logging.info("")
-        logging.info("=" * 60)
+        logger.info("")
+        logger.info(f"Successfully finished imputation for model: {name}!")
+        logger.info("")
+        logger.info("=" * 60)
 
-    logging.info(f"All requested models processed for input: {input_path}")
+    logger.info(f"All requested models processed for input: {input_path}")
 
     disable_mqc = bool(getattr(args, "disable_multiqc", False))
 
     if disable_mqc:
-        logging.info("MultiQC report generation disabled via --disable-multiqc.")
-        logging.info("PG-SUI imputation run complete!")
+        logger.info("MultiQC report generation disabled via --disable-multiqc.")
+        logger.info("PG-SUI imputation run complete!")
         return 0
 
     # -------------------------- MultiQC builder ---------------------------- #
@@ -1459,7 +1462,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     mqc_title = getattr(args, "multiqc_title", f"PG-SUI MultiQC Report - {prefix}")
     overwrite = bool(getattr(args, "multiqc_overwrite", False))
 
-    logging.info(
+    logger.info(
         f"Building MultiQC report in '{mqc_output_dir}' (title={mqc_title}, overwrite={overwrite})..."
     )
 
@@ -1470,11 +1473,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             title=mqc_title,
             overwrite=overwrite,
         )
-        logging.info("MultiQC report successfully built.")
+        logger.info("MultiQC report successfully built.")
     except Exception as exc2:
-        logging.error(f"Failed to build MultiQC report: {exc2}", exc_info=True)
+        logger.error(f"Failed to build MultiQC report: {exc2}", exc_info=True)
 
-    logging.info("PG-SUI imputation run complete!")
+    logger.info("PG-SUI imputation run complete!")
     return 0
 
 
