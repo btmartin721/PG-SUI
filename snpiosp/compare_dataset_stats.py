@@ -3,23 +3,7 @@
 
 """
 Recursively aggregate per-locus summary stats across many datasets and test which metrics differ by dataset.
-
-Updates:
-- Added --output-dir support.
-- Refactored SNPioMultiQC integration to use static queuing methods.
-- Reversed effect size plot colors (High Effect = Dark/Bold).
-- Added Histogram Barplots to MultiQC.
-- Added --strict-strategies to toggle partial vs full strategy completion requirements.
-
-Usage:
-------
-python compare_dataset_stats.py \
-    --root /path/to/results_root \
-    --output-dir /path/to/output \
-    --out-prefix pg_sui_validation \
-    --transform \
-    --plots \
-    --completed-metrics-long /path/to/metrics.csv
+Includes diagnostic debugging for dataset completion gating.
 """
 
 from __future__ import annotations
@@ -48,17 +32,14 @@ plt.switch_backend("Agg")
 # Updated regex to allow optional underscore (e.g. results01 OR results_01)
 _RESULTS_KEY_RE = re.compile(r"(results[_]?\d+)", flags=re.IGNORECASE)
 
-SIM_STRATEGY_LABELS = [
-    ("nonrandom_weighted", "Nonrandom Weighted"),
-    ("nonrandom_output", "Nonrandom"),
-    ("nonrandom", "Nonrandom"),
-    ("random_weighted_inv", "Random Weighted Inv"),
-    ("random_weighted_inverse", "Random Weighted Inv"),
-    ("random_weighted", "Random Weighted"),
-    ("random_output", "Random"),
-    ("random", "Random"),
-]
-
+# --- STRICT REQUIREMENTS ---
+ALL_STRATEGIES = {
+    "Nonrandom",
+    "Nonrandom Weighted",
+    "Random",
+    "Random Weighted",
+    "Random Weighted Inv",
+}
 
 PLOT_FONTSIZE = 14
 PLOT_TITLESIZE = 16
@@ -118,7 +99,7 @@ class DatasetFiles:
 def analyze_deviations(
     desc: pd.DataFrame, metrics: Sequence[str], out_dir: Path, out_prefix: str
 ) -> pd.DataFrame:
-    """Post-hoc "Analysis of Means" to identify which datasets contribute most to variance. Calculates Z-scores of dataset means."""
+    """Post-hoc "Analysis of Means" to identify which datasets contribute most to variance."""
     deviation_rows = []
 
     for m in metrics:
@@ -126,17 +107,13 @@ def analyze_deviations(
         if mean_col not in desc.columns:
             continue
 
-        # Extract the means for this metric across all datasets
         series = desc.set_index("dataset")[mean_col].astype(float)
-
-        # Calculate Grand Mean of Means and Std Dev of Means
         grand_mean = series.mean()
         std_dev = series.std(ddof=1)
 
         if std_dev == 0:
             continue
 
-        # Calculate Z-score for each dataset
         z_scores = (series - grand_mean) / std_dev
 
         for dataset, z in z_scores.items():
@@ -144,7 +121,6 @@ def analyze_deviations(
                 {
                     "dataset": dataset,
                     "metric": m,
-                    # Explicitly use .loc[index] to keep type-checkers happy
                     "dataset_mean": series.loc[series.index == dataset].iloc[0],
                     "global_mean_of_means": grand_mean,
                     "z_score": z,
@@ -158,11 +134,7 @@ def analyze_deviations(
         return pd.DataFrame()
 
     dev_df = pd.DataFrame(deviation_rows)
-
-    # Sort by 'Impact' (Absolute Z-score)
     dev_df = dev_df.sort_values("abs_z_score", ascending=False)
-
-    # Write to CSV
     out_path = out_dir / f"{out_prefix}_outlier_rankings.csv"
     dev_df.to_csv(out_path, index=False)
     print(
@@ -172,24 +144,15 @@ def analyze_deviations(
 
 
 def _normalize_model_name(val: str) -> str:
-    """Normalize model name variants to canonical names used in downstream gating.
-
-    Args:
-        val (str): Raw model name.
-
-    Returns:
-        str: Canonical model name (e.g., "MostFrequent").
-    """
+    """Normalize model name variants to canonical names."""
     s = re.sub(r"[^a-z0-9]+", "", str(val).strip().lower())
-
     aliases = {
-        # Baseline/deterministic
         "mostfrequent": "MostFrequent",
         "imputemostfrequent": "MostFrequent",
         "mostfreq": "MostFrequent",
+        "mostfrequentbaseline": "MostFrequent",  # Synced with plot_dnasp_pgsui.py
         "refallele": "RefAllele",
         "imputerefallele": "RefAllele",
-        # Unsupervised
         "autoencoder": "Autoencoder",
         "imputeautoencoder": "Autoencoder",
         "vae": "VAE",
@@ -199,7 +162,13 @@ def _normalize_model_name(val: str) -> str:
         "ubp": "UBP",
         "imputeubp": "UBP",
     }
-    return aliases.get(s, str(val).strip())
+
+    if s not in aliases:
+        raise ValueError(
+            f"Unrecognized model name variant: '{val}' (normalized to '{s}')."
+        )
+
+    return aliases[s]
 
 
 def plot_metric_histograms(
@@ -208,7 +177,6 @@ def plot_metric_histograms(
     metric: str,
     outpath: Path,
 ) -> None:
-    """Plot histograms: Dataset Means (Panel A) and Global Raw Values (Panel B)."""
     mean_col = f"{metric}_mean"
     if mean_col not in desc.columns:
         return
@@ -221,7 +189,6 @@ def plot_metric_histograms(
 
     fig, axes = plt.subplots(1, 2, figsize=(12, 6))
 
-    # Panel A: Dataset Means
     ax0 = axes[0]
     ax0.hist(dataset_means, bins=30, color="#2c7bb6", edgecolor="k", alpha=0.8)
     ax0.set_title(f"Distribution of Dataset Means: {metric}")
@@ -234,7 +201,6 @@ def plot_metric_histograms(
     )
     ax0.legend()
 
-    # Panel B: Global Raw Values
     ax1 = axes[1]
     ax1.hist(raw_values, bins=50, color="#d7191c", edgecolor="none", alpha=0.6)
     ax1.set_title(f"Global Distribution of Raw Locus Values: {metric}")
@@ -256,27 +222,18 @@ def plot_metric_histograms(
 
 
 def plot_effectsize_summary(anova_res: pd.DataFrame, outpath: Path) -> None:
-    """Plot Eta-squared as a bar plot, sorted by magnitude."""
-    # Filter for valid eta_sq values and sort
     sub = anova_res.dropna(subset=["eta_sq"]).copy()
-
     if sub.empty:
         return
-
     sub = sub.sort_values("eta_sq", ascending=False)
-
-    # Map metric codes to human-readable labels
     sub["metric"] = sub["metric"].map(METRIC_MAP).fillna(sub["metric"])
 
-    # Define a consistent colormap and normalize
     cmap = sns.color_palette("viridis", as_cmap=True, n_colors=len(sub))
     norm = mcolors.Normalize(
         vmin=min(sub["eta_sq"].min(), 0), vmax=max(sub["eta_sq"].max(), 1)
     )
 
     fig, ax = plt.subplots(figsize=(10, 6))
-
-    # Create the bar plot
     ax = sns.barplot(
         data=sub,
         x="metric",
@@ -290,21 +247,14 @@ def plot_effectsize_summary(anova_res: pd.DataFrame, outpath: Path) -> None:
         errorbar=None,
         legend=False,
     )
-
-    # Customize axes and title
     ax.set_ylabel("η² (Effect Size)")
     ax.set_xlabel("Summary Statistic")
     ax.set_title("Metric Differentiation Power (from Welch's ANOVA)", pad=15)
-
-    # Add y-axis grid for easier reading
     ax.grid(True, axis="y", linestyle="--", alpha=0.7)
-
-    # Rotate x-axis labels to prevent overlap
     plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
 
-    # Add a colorbar to act as a legend for the bar colors
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
-    sm.set_array([])  # Required for ScalarMappable
+    sm.set_array([])
     cbar = fig.colorbar(sm, ax=ax)
     cbar.set_label("η² (Eta-squared) Value")
 
@@ -319,7 +269,6 @@ def plot_dataset_metric_heatmap(
     outpath: Path,
     zscore: bool = True,
 ) -> None:
-    """Scalable heatmap of per-dataset means."""
     mean_cols = [f"{m}_mean" for m in metrics if f"{m}_mean" in desc.columns]
     if not mean_cols:
         return
@@ -386,25 +335,9 @@ def find_dataset_files(root: Path) -> List[DatasetFiles]:
 
 
 def read_locus_stats(dset: DatasetFiles) -> pd.DataFrame:
-    """Read a Total_LocusStats.csv and attach stable dataset identifiers.
-
-    Key point:
-        Total_LocusStats.csv is computed on the ORIGINAL (unsimulated) dataset,
-        so it must NOT be labeled or keyed by simulation strategy. We keep only
-        a dataset-level join key: resultsNNN.
-
-    Returns:
-        pd.DataFrame: Locus-level stats with added columns:
-            - dataset_raw: full relative path under --root (for debugging)
-            - dataset_key: extracted resultsNNN (lowercased) if found, else fallback
-            - dataset: canonical dataset label (same as dataset_key)
-    """
     df = pd.read_csv(dset.locus_csv)
-
-    # Keep the full relative path context (may include sim strategy dirs, etc.)
     df["dataset_raw"] = dset.dataset_id
 
-    # Prefer extracting "resultsNNN" from the Filename column (most stable).
     dataset_key = dset.dataset_id
     if "Filename" in df.columns:
         first_fn = df["Filename"].dropna().astype(str)
@@ -413,46 +346,24 @@ def read_locus_stats(dset: DatasetFiles) -> pd.DataFrame:
             if extracted:
                 dataset_key = extracted
 
-    # Canonical join key
     dataset_key = str(dataset_key).strip().lower()
     df["dataset_key"] = dataset_key
-
-    # Canonical dataset label used downstream for grouping/testing
-    # (must be dataset-level; NO strategy)
     df["dataset"] = dataset_key
-
-    # Optional: keep a column for debugging; it's expected to be Unknown / irrelevant here.
     df["sim_strategy"] = "Unknown"
-
     return df
 
 
 def deduplicate_datasets_by_key(df: pd.DataFrame) -> pd.DataFrame:
-    """Deduplicate locus-stats rows in case multiple copies exist per dataset_key.
-
-    Since Total_LocusStats.csv is dataset-level (unsimulated), we must not
-    deduplicate by sim_strategy. We keep the "richest" dataset_key entry
-    (largest number of loci).
-
-    Args:
-        df (pd.DataFrame): Combined locus-stats dataframe.
-
-    Returns:
-        pd.DataFrame: Filtered df containing only the best entry per dataset_key.
-    """
     if "dataset_key" not in df.columns:
         return df
 
-    # Count loci per dataset_key and keep the largest
     counts = (
         df.groupby(["dataset_key", "dataset"])
         .size()
         .reset_index(name="n_loci")
         .sort_values(["dataset_key", "n_loci"], ascending=[True, False])
     )
-
     keep = counts.drop_duplicates(["dataset_key"])
-
     return df.merge(
         keep[["dataset_key", "dataset"]],
         on=["dataset_key", "dataset"],
@@ -463,7 +374,6 @@ def deduplicate_datasets_by_key(df: pd.DataFrame) -> pd.DataFrame:
 def extract_dataset_key_from_filename(filename: str) -> Optional[str]:
     if not isinstance(filename, str):
         return None
-    # Use global regex which handles optional underscores
     m = _RESULTS_KEY_RE.search(filename)
     return m.group(1).lower().replace("_", "") if m else None
 
@@ -514,7 +424,6 @@ def welch_anova_by_metric(
             continue
 
         y = sub[metric].to_numpy(dtype=float)
-        # Jitter to fix zero-variance constant metrics
         jitter = np.random.normal(0, 1e-9, size=y.shape)
         y = y + jitter
 
@@ -531,15 +440,8 @@ def welch_anova_by_metric(
             continue
 
         with np.errstate(invalid="ignore", divide="ignore"):
-            # anova_oneway returns a statsmodels HolderTuple which is dynamically
-            # populated with result attributes (e.g., statistic, pvalue,
-            # n_groups, nobs_t). These attributes are not declared on the
-            # HolderTuple stub, which confuses static type checkers. Access
-            # via a plain object and use getattr with fallbacks to keep
-            # type-checkers satisfied while preserving runtime behavior.
             res_obj = anova_oneway(groups, use_var="unequal", welch_correction=True)
 
-        # Extract fields from the result using getattr to avoid static-analysis errors.
         F_val = float(getattr(res_obj, "statistic", np.nan))
         p_val = float(getattr(res_obj, "pvalue", np.nan))
         n_groups = int(getattr(res_obj, "n_groups", len(groups)))
@@ -600,10 +502,6 @@ def run_multiqc_integration(
     outliers_df: pd.DataFrame,
     desc: pd.DataFrame,
 ) -> None:
-    """
-    Summarize results into a MultiQC report using SNPioMultiQC static methods.
-    Added logic to generate histograms (as BarPlots) for top metrics.
-    """
     try:
         from snpio import SNPioMultiQC
     except ImportError:
@@ -614,15 +512,10 @@ def run_multiqc_integration(
 
     print(f"Queuing results for MultiQC report...")
 
-    # 1. Queue ANOVA Table (Table)
     if not anova_df.empty:
-        # Sort for display and clean up columns
         disp_df = anova_df.sort_values("eta_sq", ascending=False).copy()
-
-        # Preserve internal metric ID for column lookups and panel IDs
         disp_df["metric_id"] = disp_df["metric"].astype(str)
 
-        # Human-readable display label
         disp_df["metric"] = disp_df["metric"].astype(str)
         disp_df.loc[disp_df["metric"] == "F_inbreeding", "metric"] = (
             "F<sub>IS</sub> (Inbreeding Coefficient)"
@@ -642,7 +535,6 @@ def run_multiqc_integration(
         disp_df.loc[disp_df["metric"] == "Hap", "metric"] = "Number of Haplotypes"
         disp_df.loc[disp_df["metric"] == "Hd", "metric"] = "Haplotype Diversity"
 
-        # Rename columns for the ANOVA table
         disp_df = disp_df.rename(
             columns={
                 "p_raw": "P-value (raw)",
@@ -655,7 +547,6 @@ def run_multiqc_integration(
             }
         )
 
-        # Add table
         SNPioMultiQC.queue_table(
             df=disp_df,
             panel_id="anova_results",
@@ -681,7 +572,6 @@ def run_multiqc_integration(
             },
         )
 
-        # Effect size barplot: use the *display* labels on the x-axis
         effect_size_data = disp_df.set_index("metric")["Eta-Squared (η²)"]
 
         SNPioMultiQC.queue_barplot(
@@ -707,8 +597,6 @@ def run_multiqc_integration(
             },
         )
 
-        # 4. Queue Histograms (Distributions of Means) for metrics
-        # Use metric_id (internal) for column lookups and panel ids; use 'metric' (display) for titles
         metric_ids = disp_df["metric_id"].tolist()
 
         for metric_id in metric_ids:
@@ -720,14 +608,11 @@ def run_multiqc_integration(
             if data.empty:
                 continue
 
-            # Get pretty display label for this metric
             row = disp_df.loc[disp_df["metric_id"] == metric_id].iloc[0]
             metric_display = str(row["metric"])
 
-            # Calculate Histogram counts
             counts, edges = np.histogram(data, bins=15)
 
-            # Create generic bin labels (ranges)
             bin_labels = [
                 (
                     f"{edges[i]:.2G}-{edges[i+1]:.2G}"
@@ -737,10 +622,7 @@ def run_multiqc_integration(
                 for i in range(len(edges) - 1)
             ]
 
-            # MultiQC Barplot format: Rows=Samples, Cols=Categories.
-            # Here: one "sample" row per metric_id, columns are histogram bins.
             hist = pd.Series(counts, index=bin_labels, name=metric_id)
-
             panel_id = f"hist_{metric_id}"
 
             SNPioMultiQC.queue_barplot(
@@ -765,7 +647,6 @@ def run_multiqc_integration(
                 },
             )
 
-    # 2. Queue Outlier/Deviation Table
     if not outliers_df.empty:
         outliers_df = outliers_df.copy()
         outliers_df.loc[outliers_df["metric"] == "F_inbreeding", "metric"] = (
@@ -801,7 +682,6 @@ def run_multiqc_integration(
         )
         outliers_df.loc[outliers_df["metric"] == "Hd", "metric"] = "Haplotype Diversity"
 
-        # Limit to top 50 deviations to prevent massive tables
         top_deviations = outliers_df[outliers_df["abs_z_score"] > 1.96].copy()
         top_deviations["Index"] = (
             top_deviations["dataset"].astype(str)
@@ -827,7 +707,6 @@ def run_multiqc_integration(
             },
         )
 
-    # 3. Build Report
     print("Building MultiQC report...")
     SNPioMultiQC.build(
         prefix=prefix,
@@ -841,40 +720,19 @@ def run_multiqc_integration(
 def load_completed_dataset_labels(
     metrics_long_csv: Path,
     *,
-    require_baseline_model: str = "MostFrequent",
+    require_baseline_model: str = "RefAllele",
     require_all_strategies: bool = True,
     expected_strategies: Optional[set[str]] = None,
+    debug_missing: bool = False,
 ) -> set[str]:
-    """Load completed dataset KEYS (resultsNNN) from zygosity_metrics_long.csv.
+    """Load completed dataset KEYS (resultsNNN) from zygosity_metrics_long.csv."""
+    print(f"\n[Completion Gate] Loading metrics from: {metrics_long_csv}")
 
-    Why dataset-only?
-        Total_LocusStats.csv is unsimulated and therefore cannot be joined to
-        strategy-level labels. Completion gating must therefore be applied at
-        the dataset_key level.
-
-    How strategies are enforced:
-        If require_all_strategies=True (default), a dataset_key is only considered "complete" if the baseline model appears for EVERY strategy in expected_strategies.
-
-    Args:
-        metrics_long_csv (Path): Path to zygosity_metrics_long.csv.
-        require_baseline_model (str): Baseline model name to require (canonicalized).
-        require_all_strategies (bool): If True, require baseline rows for all strategies.
-            If False, require baseline rows for at least one strategy.
-        expected_strategies (Optional[set[str]]): If None, defaults to the canonical 5.
-
-    Returns:
-        set[str]: Allowed dataset keys like {"results105", "results117"}.
-    """
-    if expected_strategies is None:
-        expected_strategies = {
-            "Random",
-            "Random Weighted",
-            "Random Weighted Inv",
-            "Nonrandom",
-            "Nonrandom Weighted",
-        }
-
-    df = pd.read_csv(metrics_long_csv)
+    try:
+        df = pd.read_csv(metrics_long_csv)
+    except Exception as e:
+        print(f"[Completion Gate] Error reading CSV: {e}")
+        return set()
 
     required_cols = {"dataset", "sim_strategy", "model"}
     missing = required_cols - set(df.columns)
@@ -883,28 +741,133 @@ def load_completed_dataset_labels(
             f"Completion gating requires columns {sorted(required_cols)} in metrics CSV. Missing: {sorted(missing)}"
         )
 
+    # 1. Initial Load
     sub = df.loc[:, ["dataset", "sim_strategy", "model"]].copy()
     sub["dataset"] = sub["dataset"].astype(str)
+    raw_unique_datasets = sub["dataset"].nunique()
+    print(
+        f"[Completion Gate] Step 1: Found {raw_unique_datasets} unique datasets in CSV."
+    )
 
-    # Extract resultsNNN join key from the dataset column
+    # 2. Key Extraction Filter
     sub["join_key"] = sub["dataset"].map(_extract_join_key)
-    sub = sub.dropna(subset=["join_key"])
+    failed_keys = sub[sub["join_key"].isna()]["dataset"].unique()
+    if len(failed_keys) > 0:
+        print(
+            f"[Completion Gate] Warning: Could not extract 'resultsNN' key from {len(failed_keys)} datasets (e.g., {failed_keys[:3]})."
+        )
 
-    # Canonicalize strategy and model names
+    sub = sub.dropna(subset=["join_key"])
+    unique_with_keys = sub["join_key"].nunique()
+    print(
+        f"[Completion Gate] Step 2: {unique_with_keys} datasets have valid join keys (e.g., 'results01')."
+    )
+
+    # 3. Model Filter
+    sub["sim_strategy_raw"] = sub["sim_strategy"].astype(str)
+
     sub["sim_strategy"] = sub["sim_strategy"].map(_canonicalize_strategy)
     sub["model"] = sub["model"].astype(str).map(_normalize_model_name)
 
-    # Filter to baseline model rows only
     baseline = _normalize_model_name(require_baseline_model)
-    sub = sub[sub["model"].eq(baseline)]
 
+    model_counts = sub.groupby("join_key")["model"].apply(
+        lambda x: baseline in x.values
+    )
+    datasets_with_model = model_counts[model_counts].index.tolist()
+
+    if len(datasets_with_model) < unique_with_keys:
+        print(
+            f"[Completion Gate] CRITICAL: Only {len(datasets_with_model)} datasets contain the model '{baseline}'."
+        )
+        print(
+            f"                  (Dropped {unique_with_keys - len(datasets_with_model)} datasets because they lack '{baseline}' rows)"
+        )
+
+    sub = sub[sub["model"].eq(baseline)]
     if sub.empty:
+        print(f"[Warning] No rows found for baseline model '{baseline}' (normalized).")
         return set()
 
-    # Map dataset_key -> set of strategies observed for baseline
-    strat_by_ds = (
+    observed_strategies = set(sub["sim_strategy"].dropna().unique().tolist())
+    observed_strategies.discard("Unknown")
+
+    if expected_strategies is None:
+        expected_strategies = observed_strategies
+
+    # Group by join key
+    strat_by_ds: dict[str, set[str]] = (
         sub.groupby("join_key")["sim_strategy"].apply(lambda x: set(x)).to_dict()
     )
+
+    raw_strat_by_ds: dict[str, list[str]] = (
+        sub.groupby("join_key")["sim_strategy_raw"]
+        .apply(lambda x: sorted(list(set(x))))
+        .to_dict()
+    )
+
+    # Always summarize strategy USED + MISSING counts (strict ON or OFF) Counts are per-dataset (a dataset contributes at most 1 to a strategy).
+    expected = set(expected_strategies)  # alias
+
+    # Explode canonical strategies present per dataset
+    used_records: list[tuple[str, str]] = []
+    for ds_key, sset in strat_by_ds.items():
+        # Optionally ignore "Unknown" even if it somehow got in
+        for strat in set(sset) - {"Unknown"}:
+            used_records.append((ds_key, str(strat)))
+
+    used_df = pd.DataFrame(used_records, columns=["dataset_key", "strategy_used"])
+
+    used_counts = (
+        used_df["strategy_used"]
+        .value_counts()
+        .reindex(sorted(expected), fill_value=0)  # ensure all expected shown
+    )
+
+    # MISSING: explode missing strategies per dataset relative to expected set
+    miss_records: list[tuple[str, str]] = []
+    for ds_key, sset in strat_by_ds.items():
+        missing_set = expected - sset
+        if not missing_set:
+            miss_records.append((ds_key, "<NONE>"))
+        else:
+            for strat in missing_set:
+                miss_records.append((ds_key, str(strat)))
+
+    miss_df = pd.DataFrame(miss_records, columns=["dataset_key", "strategy_missing"])
+
+    missing_counts = (
+        miss_df.loc[miss_df["strategy_missing"].ne("<NONE>"), "strategy_missing"]
+        .value_counts()
+        .reindex(sorted(expected), fill_value=0)  # ensure all expected shown
+    )
+
+    n_complete = int((miss_df["strategy_missing"] == "<NONE>").sum())
+    n_total = len(strat_by_ds)
+
+    # Combine into one table for a clean print
+    summary = (
+        pd.DataFrame(
+            {
+                "strategy": sorted(expected),
+                "n_datasets_used": [
+                    int(used_counts.get(s, 0)) for s in sorted(expected)
+                ],
+                "n_datasets_missing": [
+                    int(missing_counts.get(s, 0)) for s in sorted(expected)
+                ],
+            }
+        )
+        .sort_values(["n_datasets_missing", "n_datasets_used"], ascending=[False, True])
+        .reset_index(drop=True)
+    )
+
+    print("\n[Completion Gate] Strategy coverage (per-dataset counts):")
+    print(summary.to_string(index=False))
+    print(
+        f"\n[Completion Gate] Complete datasets (missing nothing): {n_complete}/{n_total}"
+    )
+    # ------------------------------------------------------------------
 
     if require_all_strategies:
         complete = {
@@ -912,27 +875,72 @@ def load_completed_dataset_labels(
             for ds_key, sset in strat_by_ds.items()
             if expected_strategies.issubset(sset)
         }
+
+        if debug_missing:
+            dropped_keys = set(strat_by_ds.keys()) - complete
+            print(
+                f"[Completion Gate] Step 3: {len(complete)} datasets passed strict strategy check (Required: {len(expected_strategies)} strategies)."
+            )
+
+            if dropped_keys:
+                print(
+                    f"[Completion Gate][Debug] Dropping {len(dropped_keys)} datasets due to missing strategies."
+                )
+                miss_rows_dbg = []
+                sorted_dropped = sorted(list(dropped_keys))
+
+                print(f"[Completion Gate][Debug] Sample Rejected Datasets:")
+                for ds_key in sorted_dropped[:5]:
+                    sset = strat_by_ds[ds_key]
+                    raw_s = raw_strat_by_ds.get(ds_key, [])
+                    missing = sorted(expected_strategies - sset)
+
+                    print(f"  -- Dataset: {ds_key}")
+                    print(f"     Found Canonical: {sorted(sset)}")
+                    print(f"     Raw Strategies: {raw_s}")
+                    print(f"     MISSING: {missing}")
+                    miss_rows_dbg.append(
+                        (ds_key, ",".join(missing) if missing else "<NONE>")
+                    )
+
+                if len(sorted_dropped) > 5:
+                    for ds_key in sorted_dropped[5:]:
+                        sset = strat_by_ds[ds_key]
+                        missing = sorted(expected_strategies - sset)
+                        miss_rows_dbg.append(
+                            (ds_key, ",".join(missing) if missing else "<NONE>")
+                        )
+
+                if miss_rows_dbg:
+                    miss_df_dbg = pd.DataFrame(
+                        miss_rows_dbg, columns=["dataset_key", "missing_strategies"]
+                    )
+                    top = (
+                        miss_df_dbg["missing_strategies"]
+                        .value_counts()
+                        .reset_index()
+                        .rename(
+                            columns={
+                                "index": "missing_strategies",
+                                "missing_strategies": "n_datasets",
+                            }
+                        )
+                    )
+                    print(
+                        "\n[Completion Gate][Debug] Top missing-strategy patterns summary:"
+                    )
+                    print(top.head(15).to_string(index=False))
+
         return complete
 
-    # Permissive: any strategy is enough
     return set(strat_by_ds.keys())
 
 
 def _extract_join_key(val: str) -> Optional[str]:
-    """Extract results\\d+ join key (lowercased) from an identifier.
-
-    Args:
-        val (str): Dataset identifier.
-
-    Returns:
-        Optional[str]: Join key like "results52" if found else None.
-    """
     if not isinstance(val, str):
         return None
-    # Updated to handle potential underscores via the global regex
     m = _RESULTS_KEY_RE.search(val)
     if m:
-        # Standardize: lower case, remove underscores to ensure 'results_01' matches 'results01'
         return m.group(1).lower().replace("_", "")
     return None
 
@@ -940,23 +948,30 @@ def _extract_join_key(val: str) -> Optional[str]:
 def _canonicalize_strategy(val: str) -> str:
     """Canonicalize simulation strategy labels to your display names.
 
-    Args:
-        val (str): Strategy string.
-
-    Returns:
-        str: Canonical strategy label.
+    Strict, mutually exclusive matching order.
     """
-    s = re.sub(r"[^a-z0-9]+", "", str(val).lower())
-    if "nonrandom" in s and "weighted" in s:
-        return "Nonrandom Weighted"
-    if "nonrandom" in s:
-        return "Nonrandom"
+    s = str(val).lower().strip()
+
+    # 1. Random Weighted Inv
     if "random" in s and "weighted" in s and ("inv" in s or "inverse" in s):
         return "Random Weighted Inv"
+
+    # 2. Nonrandom Weighted (Check before Nonrandom)
+    if "nonrandom" in s and "weighted" in s:
+        return "Nonrandom Weighted"
+
+    # 3. Random Weighted (Check before Random)
     if "random" in s and "weighted" in s:
         return "Random Weighted"
+
+    # 4. Nonrandom
+    if "nonrandom" in s:
+        return "Nonrandom"
+
+    # 5. Random
     if "random" in s:
         return "Random"
+
     return "Unknown"
 
 
@@ -965,7 +980,6 @@ def main() -> None:
     root: Path = args.root.resolve()
     root.mkdir(parents=True, exist_ok=True)
 
-    # Setup Output Directory
     if args.output_dir is not None:
         out_dir = args.output_dir.resolve()
     else:
@@ -981,22 +995,20 @@ def main() -> None:
     combined = pd.concat(frames, ignore_index=True)
     combined = deduplicate_datasets_by_key(combined)
 
-    # Gate to PG-SUI-completed datasets if requested
     if args.completed_metrics_long is not None:
         metrics_path = args.completed_metrics_long.resolve()
-
-        # Check if strict strategies are required (defaults to FALSE now)
         strict = args.strict_strategies
 
         print(
             f"[Completion gate] Strategy Strictness: {'STRICT (All 5)' if strict else 'PERMISSIVE (Any 1)'}"
         )
 
-        # Require strategies at the metrics layer, but return dataset_keys only.
         allowed_keys = load_completed_dataset_labels(
             metrics_path,
-            require_baseline_model="MostFrequent",
+            require_baseline_model="RefAllele",
             require_all_strategies=strict,
+            expected_strategies=ALL_STRATEGIES if strict else None,
+            debug_missing=True,
         )
 
         before_keys = set(combined["dataset_key"].astype(str).unique().tolist())
@@ -1011,7 +1023,6 @@ def main() -> None:
         combined = combined[combined["dataset_key"].isin(allowed_keys)].copy()
 
         if combined.empty:
-            # Extra debugging help: show examples from both sides
             ex_allowed = sorted(list(allowed_keys))[:10]
             ex_have = sorted(list(before_keys))[:10]
             raise ValueError(
@@ -1029,12 +1040,10 @@ def main() -> None:
         raise ValueError("No numeric metrics found to test.")
     print(f"Analyzing metrics: {metrics}")
 
-    # 1. Summary Stats
     desc = per_dataset_descriptives(combined, metrics)
     summary_csv_path = out_dir / f"{args.out_prefix}_all_datasets_summary_stats.csv"
     desc.to_csv(summary_csv_path, index=False)
 
-    # 2. ANOVA
     print("Running Welch ANOVA...")
     transform = not args.no_transform
     anova_res = welch_anova_by_metric(
@@ -1050,15 +1059,12 @@ def main() -> None:
             out_dir / f"{args.out_prefix}_metrics_welch_anova.csv", index=False
         )
 
-        # Ensure correct dtypes
         anova_res = anova_res.drop(columns=["welch_F"])
         anova_res["eta_sq"] = anova_res["eta_sq"].astype(float)
 
-    # 3. Post-Hoc: Outlier Analysis
     print("Running Post-Hoc Outlier Analysis...")
     outliers_df = analyze_deviations(desc, metrics, out_dir, args.out_prefix)
 
-    # 4. Plots (Static PNGs)
     plot_dir = out_dir / f"{args.out_prefix}_plots"
     if args.plots and not anova_res.empty:
         plot_dir.mkdir(parents=True, exist_ok=True)
@@ -1073,7 +1079,6 @@ def main() -> None:
             "metric"
         ].tolist()
 
-        # Limit histogram generation to top 10 metrics to save time/space
         for m in sorted_metrics[:10]:
             plot_metric_histograms(
                 combined, desc, m, plot_dir / f"{m}_distributions.png"
@@ -1116,7 +1121,6 @@ def parse_args() -> argparse.Namespace:
         "--plots", action="store_true", help="Generate static matplotlib plots."
     )
 
-    # NEW: completion gating
     p.add_argument(
         "--completed-metrics-long",
         type=Path,
@@ -1128,7 +1132,6 @@ def parse_args() -> argparse.Namespace:
         ),
     )
 
-    # NEW: Control gating strictness
     p.add_argument(
         "--strict-strategies",
         action="store_true",
