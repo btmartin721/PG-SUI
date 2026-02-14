@@ -213,3 +213,7 @@ iqtree_results_GTR_merged.nosync/
 results189*_output/
 summarize_tuned_params.py
 new_ubp_output/
+.github/
+covid/
+skills/
+pgsui_subset_phylip_results_refactor2.tar.gz
