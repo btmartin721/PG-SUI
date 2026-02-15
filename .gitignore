@@ -217,3 +217,5 @@ new_ubp_output/
 covid/
 skills/
 pgsui_subset_phylip_results_refactor2.tar.gz
+covid_test_output/
+tmpfile.phy
