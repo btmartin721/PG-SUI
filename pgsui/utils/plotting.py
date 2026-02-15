@@ -333,8 +333,13 @@ class Plotting:
         if label_names is None:
             label_names = [f"Class {i}" for i in range(num_classes)]
 
-        # Binarize y_true for one-vs-rest curves
-        y_true_bin = np.asarray(label_binarize(y_true, classes=np.arange(num_classes)))
+        # --- One-Hot Encoding ---
+        # 1. Ensure y_true is int for indexing
+        # 2. Use np.eye to create a dense (N, num_classes) array immediately.
+        #    This avoids label_binarize's inconsistent shape for binary cases (N,1 vs N,2)
+        #    and avoids the sparse matrix wrapper bug.
+        y_true = np.array(y_true, dtype=int).ravel()
+        y_true_bin = np.eye(num_classes, dtype=int)[y_true]
 
         # Containers
         fpr, tpr, roc_auc_vals = {}, {}, {}
@@ -342,6 +347,7 @@ class Plotting:
 
         # Per-class ROC & PR
         for i in range(num_classes):
+            # Safe to slice [:, i] now because y_true_bin is guaranteed (N, num_classes)
             fpr[i], tpr[i], _ = roc_curve(y_true_bin[:, i], y_pred_proba[:, i])
             roc_auc_vals[i] = auc(fpr[i], tpr[i])
             precision[i], recall[i], _ = precision_recall_curve(

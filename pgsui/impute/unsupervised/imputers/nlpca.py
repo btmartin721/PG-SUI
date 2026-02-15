@@ -412,6 +412,18 @@ class ImputeNLPCA(BaseNNImputer):
         self.num_features_ = int(self.ground_truth_.shape[1])
         self.total_samples_ = int(self.ground_truth_.shape[0])
 
+        self.model_params = {
+            "num_embeddings": self.total_samples_,
+            "n_features": self.num_features_,
+            "prefix": self.prefix,
+            "num_classes": self.num_classes_,
+            "latent_dim": self.latent_dim,
+            "dropout_rate": self.dropout_rate,
+            "activation": self.activation,
+            "device": self.device,
+            "debug": self.debug,
+        }
+
         if self.is_haploid_:
             self.ground_truth_ = self._haploidize_012(self.ground_truth_)
 
@@ -507,7 +519,7 @@ class ImputeNLPCA(BaseNNImputer):
         # For NLPCA training, targets are the working matrix itself.
         # Missing (-1) are ignored by loss via ignore_index and by mask.
         self.X_train_ = self.X_train_work_
-        self.y_train_ = self.X_train_work_
+        self.y_train_ = self.X_train_clean_
 
         # Validation targets remain the CLEAN matrix for
         # val-loss (observed-only),
@@ -520,20 +532,19 @@ class ImputeNLPCA(BaseNNImputer):
 
         self.plotter_, self.scorers_ = self.initialize_plotting_and_scorers()
 
-        # Build loaders:
-        # Train mask includes observed entries from working input
+        # Train mask includes observed entries from the corrupted input
         # excludes simulated-missing (-1)
-        # Val mask uses observed entries from corrupted input (classic)
-        train_mask = self.X_train_work_ >= 0
+        train_mask = self.X_train_corrupted_ >= 0
         val_mask = self.X_val_corrupted_ >= 0
 
         self.train_loader_ = self._get_nlpca_loaders(
             self.train_idx_,
-            self.y_train_,
+            self.X_train_work_,
             mask=train_mask,
             batch_size=self.batch_size,
             shuffle=True,
         )
+
         self.val_loader_ = self._get_nlpca_loaders(
             self.val_idx_,
             self.y_val_,
@@ -545,14 +556,6 @@ class ImputeNLPCA(BaseNNImputer):
         # Class weights
         # (computed on observed TRAIN entries only; excludes simulated-missing)
         train_loss_mask = self.X_train_corrupted_ >= 0
-        self.class_weights_ = self._class_weights_from_zygosity(
-            self.y_train_,
-            train_mask=train_loss_mask,
-            inverse=self.inverse,
-            normalize=self.normalize,
-            max_ratio=self.max_ratio,
-            power=self.power,
-        )
 
         # Tuning
         if self.tune:
@@ -560,8 +563,39 @@ class ImputeNLPCA(BaseNNImputer):
             self.model_tuned_ = True
         else:
             self.model_tuned_ = False
+
+            self.class_weights_ = self._class_weights_from_zygosity(
+                self.y_train_,
+                train_mask=train_loss_mask,  # NOTE: # not sim_mask
+                inverse=self.inverse,
+                normalize=self.normalize,
+                max_ratio=self.max_ratio,
+                power=self.power,
+            )
+
+            # --- Sanitize Haploid/Invalid Weights ---
+            if self.class_weights_ is not None:
+                # 1. Truncate dimension if needed
+                # (Haploid returns 3 weights for 2 classes)
+                if self.is_haploid_ and self.class_weights_.numel() > self.num_classes_:
+                    self.logger.warning(
+                        f"Haploid mode: Truncating class weights from {self.class_weights_.shape} to {self.num_classes_}."
+                    )
+                    self.class_weights_ = self.class_weights_[: self.num_classes_]
+
+                # 2. Check for NaN/Inf (caused by 0 counts in inverse freq)
+                if not torch.isfinite(self.class_weights_).all():
+                    self.logger.warning(
+                        f"Class weights contain NaN/Inf ({self.class_weights_}). "
+                        "This usually happens with rare variants in small splits. Resetting to uniform weights."
+                    )
+                    self.class_weights_ = torch.ones(
+                        self.num_classes_, device=self.device
+                    )
+
             keys = OBJECTIVE_SPEC_NLPCA.keys
             self.tuned_params_ = {k: getattr(self, k) for k in keys}
+            self.tuned_params_["model_params"] = copy.deepcopy(self.model_params)
 
         self.best_params_ = copy.deepcopy(self.tuned_params_)
 
@@ -660,6 +694,25 @@ class ImputeNLPCA(BaseNNImputer):
         self.logger.info(f"{self.model_name} fitting complete!")
         return self
 
+    def _rebuild_train_loader_from_work(self) -> None:
+        """Rebuild train_loader_ from the current X_train_work_.
+
+        Needed because TensorDataset captures a snapshot of y at creation time.
+        """
+        if self.X_train_work_ is None:
+            msg = f"[{self.model_name}] X_train_work_ is None; cannot rebuild train loader."
+            self.logger.error(msg)
+            raise RuntimeError(msg)
+
+        train_mask = self.X_train_corrupted_ >= 0
+        self.train_loader_ = self._get_nlpca_loaders(
+            self.train_idx_,
+            self.X_train_work_,
+            mask=train_mask,
+            batch_size=self.batch_size,
+            shuffle=True,
+        )
+
     def transform(self) -> np.ndarray:
         """Impute missing values via final projection and decoding.
 
@@ -673,6 +726,16 @@ class ImputeNLPCA(BaseNNImputer):
             self.logger.error(msg)
             raise NotFittedError(msg)
 
+        if getattr(self, "model_", None) is None:
+            msg = f"{self.model_name}.model_ is missing; fit() did not complete successfully."
+            self.logger.error(msg)
+            raise NotFittedError(msg)
+
+        if getattr(self, "ground_truth_", None) is None:
+            msg = f"{self.model_name}.ground_truth_ is missing; cannot transform."
+            self.logger.error(msg)
+            raise RuntimeError(msg)
+
         self.logger.info(f"Imputing entire dataset with {self.model_name}...")
 
         # Final projection: refine V for all samples with W fixed
@@ -682,22 +745,38 @@ class ImputeNLPCA(BaseNNImputer):
             float(self.best_params_.get("gamma", self.gamma)),
             class_weights=self.class_weights_,
             lr=self.projection_lr,
-            iterations=self.projection_epochs,
+            iterations=int(self.projection_epochs * 5),  # Final projection (UBP parity)
         )
+
+        if self.ground_truth_.ndim != 2:
+            msg = f"{self.model_name}.ground_truth_ must be 2D; got shape {self.ground_truth_.shape}."
+            self.logger.error(msg)
+            raise ValueError(msg)
 
         full_indices = np.arange(self.total_samples_)
         pred_labels, _ = self._predict(self.model_, indices=full_indices)
+        if pred_labels.shape != self.ground_truth_.shape:
+            msg = (
+                f"{self.model_name} prediction shape mismatch: "
+                f"pred_labels={pred_labels.shape}, ground_truth_={self.ground_truth_.shape}."
+            )
+            self.logger.error(msg)
+            raise RuntimeError(msg)
 
         imputed = self.ground_truth_.copy()
         missing_mask = imputed < 0
         imputed[missing_mask] = pred_labels[missing_mask]
 
+        # --- Haploid decode uses diploid decoder semantics: map haploid ALT=1 -> diploid ALT-hom=2
         decode_input = imputed
         if getattr(self, "is_haploid_", False):
             decode_input = imputed.copy()
             decode_input[decode_input == 1] = 2
 
         decoded = self.decode_012(decode_input)
+
+        if getattr(self, "is_haploid_", False):
+            decoded = self._sanitize_haploid_decoded_output(decoded)
 
         if (decoded == "N").any():
             msg = f"Imputation still contains {(decoded == 'N').sum()} missing values ('N')."
@@ -714,7 +793,6 @@ class ImputeNLPCA(BaseNNImputer):
             self.plotter_.plot_gt_distribution(decoded, orig_dec, True)
 
         self.logger.info(f"{self.model_name} Imputation complete!")
-
         return decoded
 
     def _get_nlpca_loaders(
@@ -783,57 +861,57 @@ class ImputeNLPCA(BaseNNImputer):
         gamma: float,
         project_embedding: bool = False,
         objective_mode: bool = False,
-        trial: Optional[optuna.trial.Trial] = None,
+        trial: Optional[optuna.Trial] = None,
         class_weights: Optional[torch.Tensor] = None,
         *,
         persist_projection: bool = False,
     ):
-        """Evaluate model on a split (hardened for empty eval masks / tiny splits)."""
+        """Evaluate model on a split, optionally projecting embeddings for the provided indices.
+
+        Preserves your semantics, but adds robust edge handling for:
+        - empty eval masks / no valid evaluation rows
+        - invalid/non-finite probabilities
+        - consistent prune behavior for Optuna objective_mode
+
+        Args:
+            model (nn.Module): Trained model.
+            X (np.ndarray): Corrupted input matrix (N_split, L) or full.
+            y (np.ndarray): Clean target matrix aligned to X (N_split, L) or full.
+            eval_mask (np.ndarray): Boolean mask of entries to evaluate (simulated-missing & not orig-missing).
+            indices (np.ndarray): Sample indices for this split (rows).
+            gamma (float): Gamma used for projection refinement objective.
+            project_embedding (bool): Whether to refine embeddings before evaluation.
+            objective_mode (bool): If True, suppresses verbose outputs and supports pruning.
+            trial (Optional[optuna.Trial]): Trial handle when objective_mode=True.
+            class_weights (Optional[torch.Tensor]): Optional class weights for projection refinement.
+            persist_projection (bool): If False, revert any embedding projection applied during evaluation.
+
+        Returns:
+            dict[str, float]: Metrics dict.
+
+        Raises:
+            TypeError: If objective_mode=True but trial is None.
+            RuntimeError: If evaluation cannot be computed.
+            optuna.exceptions.TrialPruned: For objective_mode trial failures.
+        """
         if objective_mode and trial is None:
-            msg = "objective_mode requires a valid Optuna trial."
+            msg = "objective_mode=True requires a valid Optuna trial for pruning."
             self.logger.error(msg)
             raise TypeError(msg)
 
-        X_np = np.asarray(X)
-        y_np = np.asarray(y)
-        em = np.asarray(eval_mask, dtype=bool)
-        if y_np.shape != em.shape:
-            msg = f"[{self.model_name}] eval_mask shape mismatch: y={y_np.shape} vs eval_mask={em.shape}."
-            self.logger.error(msg)
-            raise ValueError(msg)
-
-        # If there is nothing to evaluate,
-        # don't crash; return NaNs (or prune in objective mode).
-        if not self._has_any_eval_positions(em, y_np):
-            msg = f"[{self.model_name}] No evaluable positions in eval_mask (mask_any={bool(em.any())}, valid_y_any={bool((y_np[em] >= 0).any()) if em.any() else False})."
-            if objective_mode:
-                # prunes if trial else raises
-                self._maybe_prune_or_raise(trial, msg)
+        if eval_mask is None or not bool(np.asarray(eval_mask).any()):
+            msg = f"[{self.model_name}] Evaluation mask is empty; no entries to score."
+            if trial is not None:
+                raise optuna.exceptions.TrialPruned(msg)
             self.logger.warning(msg)
-            # Return a dict with NaNs for expected metrics keys
-            return {
-                "accuracy": float("nan"),
-                "f1": float("nan"),
-                "precision": float("nan"),
-                "recall": float("nan"),
-                "mcc": float("nan"),
-                "jaccard": float("nan"),
-                "average_precision": float("nan"),
-                "pr_macro": float("nan"),
-                "roc_auc": float("nan"),
-            }
+            raise RuntimeError(msg)
 
         saved_rows = None
         idx_t = None
 
         if project_embedding:
-            idx_np = self._sanitize_indices(
-                indices,
-                N=int(self.total_samples_),
-                name="eval indices",
-                require_nonempty=True,
-            )
             if not persist_projection:
+                idx_np = np.asarray(indices, dtype=np.int64).reshape(-1)
                 idx_t = (
                     torch.from_numpy(idx_np).to(self.device, non_blocking=True).long()
                 )
@@ -842,9 +920,9 @@ class ImputeNLPCA(BaseNNImputer):
 
             self._refine_all_embeddings(
                 model,
-                X_np,
+                X,
                 gamma,
-                indices=idx_np,
+                indices=indices,
                 lr=self.projection_lr,
                 class_weights=class_weights,
                 iterations=self.projection_epochs,
@@ -858,77 +936,43 @@ class ImputeNLPCA(BaseNNImputer):
                 self.logger.error(msg)
                 raise RuntimeError(msg)
 
-            y_true = y_np[em].astype(np.int16, copy=False)
-            y_pred = np.asarray(pred_labels, dtype=np.int16)[em]
-            y_proba = np.asarray(pred_probas)[em]
+            # Pull evaluated entries
+            y_true = np.asarray(y)[eval_mask].astype(np.int64, copy=False)
+            y_pred = np.asarray(pred_labels)[eval_mask].astype(np.int64, copy=False)
+            y_proba = np.asarray(pred_probas)[eval_mask]
 
-            valid = y_true >= 0
-            if not np.any(valid):
-                msg = f"[{self.model_name}] No valid ground truths after masking (all -1)."
-                if objective_mode:
-                    self._maybe_prune_or_raise(trial, msg)
-                self.logger.warning(msg)
-                return {
-                    "accuracy": float("nan"),
-                    "f1": float("nan"),
-                    "precision": float("nan"),
-                    "recall": float("nan"),
-                    "mcc": float("nan"),
-                    "jaccard": float("nan"),
-                    "average_precision": float("nan"),
-                    "pr_macro": float("nan"),
-                    "roc_auc": float("nan"),
-                }
+            # Haploid probability folding if needed (keep your behavior)
+            if self.is_haploid_ and y_proba.shape[1] == 3:
+                p2 = np.zeros((len(y_proba), 2), dtype=y_proba.dtype)
+                p2[:, 0], p2[:, 1] = y_proba[:, 0], y_proba[:, 1] + y_proba[:, 2]
+                y_proba = p2
 
-            y_true_flat = y_true[valid].astype(np.int64, copy=False)
-            y_pred_flat = y_pred[valid].astype(np.int64, copy=False)
-            y_proba_flat = y_proba[valid]
-
-            # --- Harmonize for haploid vs diploid ---
+            # Harmonize haploid labels
             if self.is_haploid_:
-                y_true_flat = (y_true_flat > 0).astype(np.int8, copy=False)
-                y_pred_flat = (y_pred_flat > 0).astype(np.int8, copy=False)
-
-                K = y_proba_flat.shape[1]
-                if K == 2:
-                    pass
-                elif K == 3:
-                    proba_2 = np.empty(
-                        (y_proba_flat.shape[0], 2), dtype=y_proba_flat.dtype
-                    )
-                    proba_2[:, 0] = y_proba_flat[:, 0]
-                    proba_2[:, 1] = y_proba_flat[:, 1] + y_proba_flat[:, 2]
-                    y_proba_flat = proba_2
-                else:
-                    msg = f"Haploid evaluation expects 2 or 3 prob columns; got {K}"
-                    self.logger.error(msg)
-                    raise ValueError(msg)
-
+                y_true = (y_true > 0).astype(np.int64, copy=False)
+                y_pred = (y_pred > 0).astype(np.int64, copy=False)
                 labels_for_scoring = [0, 1]
                 target_names = ["REF", "ALT"]
             else:
-                if y_proba_flat.shape[1] != 3:
-                    msg = f"Diploid evaluation expects 3 prob columns; got {y_proba_flat.shape[1]}"
-                    self.logger.error(msg)
-                    raise ValueError(msg)
                 labels_for_scoring = [0, 1, 2]
                 target_names = ["REF", "HET", "ALT"]
 
-            # Guard: OHE indexing requires all labels in [0..K-1]
-            K = int(y_proba_flat.shape[1])
-            if np.any((y_true_flat < 0) | (y_true_flat >= K)):
-                msg = f"[{self.model_name}] y_true contains out-of-range labels for OHE: min={y_true_flat.min()}, max={y_true_flat.max()}, K={K}."
-                if objective_mode:
-                    self._maybe_prune_or_raise(trial, msg)
+            # Shared validation/cleaning + one-hot construction
+            try:
+                y_true_flat, y_pred_flat, y_true_ohe, y_proba_flat = (
+                    self._prepare_eval_arrays(
+                        y_true=y_true,
+                        y_pred=y_pred,
+                        y_proba=y_proba,
+                        labels_for_scoring=labels_for_scoring,
+                    )
+                )
+            except Exception as e:
+                msg = f"[{self.model_name}] Evaluation arrays invalid: {str(e)}"
+                if trial is not None:
+                    raise optuna.exceptions.TrialPruned(msg) from e
                 self.logger.error(msg)
-                raise ValueError(msg)
-
-            y_proba_flat = np.clip(y_proba_flat, 0.0, 1.0)
-            row_sums = y_proba_flat.sum(axis=1, keepdims=True)
-            row_sums[row_sums == 0.0] = 1.0
-            y_proba_flat = y_proba_flat / row_sums
-
-            y_true_ohe = np.eye(K, dtype=np.int8)[y_true_flat]
+                raise RuntimeError(msg) from e
 
             tm = cast(
                 Literal[
@@ -956,7 +1000,108 @@ class ImputeNLPCA(BaseNNImputer):
                 tune_metric=tm,
             )
 
-            # keep the rest of your reporting logic as-is (but it will now only run when valid)
+            if not objective_mode:
+                if self.verbose or self.debug:
+                    pm = PrettyMetrics(
+                        metrics,
+                        precision=2,
+                        title=f"{self.model_name} Validation Metrics",
+                    )
+                    pm.render()
+
+                self._make_class_reports(
+                    y_true=y_true_flat,
+                    y_pred_proba=y_proba_flat,
+                    y_pred=y_pred_flat,
+                    metrics=metrics,
+                    labels=target_names,
+                )
+
+                # --- IUPAC decode and 10-base integer report ---
+                y_true_matrix = np.array(y, copy=True)
+                y_pred_matrix = np.array(pred_labels, copy=True)
+
+                if self.is_haploid_:
+                    y_true_matrix = np.where(y_true_matrix > 0, 2, y_true_matrix)
+                    y_pred_matrix = np.where(y_pred_matrix > 0, 2, y_pred_matrix)
+
+                y_true_dec = self.decode_012(y_true_matrix)
+                y_pred_dec = self.decode_012(y_pred_matrix)
+
+                # Diploid mapping dict (kept for ploidy=2 path)
+                encodings_dict_diploid = {
+                    "A": 0,
+                    "C": 1,
+                    "G": 2,
+                    "T": 3,
+                    "W": 4,
+                    "R": 5,
+                    "M": 6,
+                    "K": 7,
+                    "Y": 8,
+                    "S": 9,
+                    "N": -1,
+                }
+
+                # Haploid mapping dict
+                encodings_dict_haploid = {"A": 0, "C": 1, "G": 2, "T": 3, "N": -1}
+
+                y_true_int = self._convert_int_iupac_ploidy(
+                    y_true_dec,
+                    ploidy=self.ploidy,
+                    encodings_dict=(
+                        encodings_dict_haploid
+                        if self.is_haploid_
+                        else encodings_dict_diploid
+                    ),
+                    ref=getattr(self.genotype_data, "ref", None),
+                    alt=getattr(self.genotype_data, "alt", None),
+                    ambiguity_mode="ref_alt",  # or "first_base" if you don’t trust ref/alt
+                )
+                y_pred_int = self._convert_int_iupac_ploidy(
+                    y_pred_dec,
+                    ploidy=self.ploidy,
+                    encodings_dict=(
+                        encodings_dict_haploid
+                        if self.is_haploid_
+                        else encodings_dict_diploid
+                    ),
+                    ref=getattr(self.genotype_data, "ref", None),
+                    alt=getattr(self.genotype_data, "alt", None),
+                    ambiguity_mode="ref_alt",
+                )
+
+                y_true_eval = y_true_int[eval_mask]
+                y_pred_eval = y_pred_int[eval_mask]
+                n_iupac_classes = 4 if self.num_classes_ == 2 else 10
+                valid_iupac_mask = (
+                    (y_true_eval >= 0)
+                    & (y_true_eval < n_iupac_classes)
+                    & (y_pred_eval >= 0)
+                    & (y_pred_eval < n_iupac_classes)
+                )
+
+                if bool(valid_iupac_mask.any()) and self.num_classes_ > 2:
+                    self._make_class_reports(
+                        y_true=y_true_eval[valid_iupac_mask],
+                        y_pred=y_pred_eval[valid_iupac_mask],
+                        metrics=metrics,
+                        y_pred_proba=None,
+                        labels=["A", "C", "G", "T", "W", "R", "M", "K", "Y", "S"],
+                    )
+                elif bool(valid_iupac_mask.any()) and self.num_classes_ == 2:
+                    self._make_class_reports(
+                        y_true=y_true_eval[valid_iupac_mask],
+                        y_pred=y_pred_eval[valid_iupac_mask],
+                        metrics=metrics,
+                        y_pred_proba=None,
+                        labels=["A", "C", "G", "T"],
+                    )
+                else:
+                    self.logger.warning(
+                        "Skipped IUPAC confusion matrix: No valid ground truths."
+                    )
+
             return metrics
 
         finally:
@@ -969,29 +1114,118 @@ class ImputeNLPCA(BaseNNImputer):
                 with torch.no_grad():
                     model.embedding.weight.index_copy_(0, idx_t, saved_rows)  # type: ignore[attr-defined]
 
+    def _prepare_eval_arrays(
+        self,
+        *,
+        y_true: np.ndarray,
+        y_pred: np.ndarray,
+        y_proba: np.ndarray,
+        labels_for_scoring: list[int],
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Validate/clean eval arrays and build one-hot y_true.
+
+        This is the shared guardrail that prevents downstream metric crashes
+        (e.g., average_precision_score) due to bad shapes, NaNs, rows that don't
+        sum properly, or label-range issues.
+
+        Args:
+            y_true (np.ndarray): 1D int labels (N,).
+            y_pred (np.ndarray): 1D int labels (N,).
+            y_proba (np.ndarray): 2D float probs (N, K).
+            labels_for_scoring (list[int]): The expected label set (e.g., [0,1] or [0,1,2]).
+
+        Returns:
+            tuple: (y_true_clean, y_pred_clean, y_true_ohe_clean, y_proba_clean)
+
+        Raises:
+            ValueError: If shapes are incompatible or labels are out of range.
+            RuntimeError: If no valid rows remain after filtering.
+        """
+        y_true = np.asarray(y_true).reshape(-1)
+        y_pred = np.asarray(y_pred).reshape(-1)
+        y_proba = np.asarray(y_proba)
+
+        if y_proba.ndim != 2:
+            raise ValueError(f"y_proba must be 2D (N,K); got shape={y_proba.shape}.")
+
+        if y_true.shape[0] != y_pred.shape[0] or y_true.shape[0] != y_proba.shape[0]:
+            raise ValueError(
+                f"Eval alignment mismatch: y_true={y_true.shape}, y_pred={y_pred.shape}, y_proba={y_proba.shape}."
+            )
+
+        K = int(len(labels_for_scoring))
+        if y_proba.shape[1] != K:
+            raise ValueError(f"Expected y_proba.shape[1]=={K}, got {y_proba.shape[1]}.")
+
+        # Filter invalid labels (-1 etc.) first
+        valid = (y_true >= 0) & (y_true < K)
+        if not bool(valid.any()):
+            raise RuntimeError("No valid evaluation labels remain after filtering.")
+
+        y_true = y_true[valid].astype(np.int64, copy=False)
+        y_pred = y_pred[valid].astype(np.int64, copy=False)
+        y_pred = np.clip(y_pred, 0, K - 1).astype(np.int64, copy=False)
+        y_proba = y_proba[valid]
+
+        # Numeric cleanup for proba
+        y_proba = np.nan_to_num(y_proba, nan=0.0, posinf=0.0, neginf=0.0)
+        y_proba = np.clip(y_proba, 0.0, 1.0)
+
+        row_sums = y_proba.sum(axis=1, keepdims=True)
+        good_rows = row_sums[:, 0] > 0.0
+        if not bool(good_rows.any()):
+            raise RuntimeError(
+                "No valid probability rows remain (all row sums are zero)."
+            )
+
+        y_true = y_true[good_rows]
+        y_pred = y_pred[good_rows]
+        y_proba = y_proba[good_rows]
+        row_sums = row_sums[good_rows]
+        y_proba = y_proba / row_sums
+
+        # One-hot ground truth (guaranteed valid by construction)
+        y_true_ohe = np.eye(K, dtype=np.int8)[y_true]
+
+        return (
+            y_true.astype(np.int8, copy=False),
+            y_pred.astype(np.int8, copy=False),
+            y_true_ohe,
+            y_proba,
+        )
+
     def _predict(
         self,
         model: nn.Module,
         indices: np.ndarray | torch.Tensor | list[int],
         return_proba: bool = False,
     ) -> Tuple[np.ndarray, np.ndarray | None]:
-        """Predict labels/probabilities for given sample indices (hardened)."""
-        if model is None or not hasattr(model, "embedding"):
-            msg = f"[{self.model_name}] Model is not available or missing embedding; cannot predict."
+        """Predict labels/probabilities for given sample indices.
+
+        Args:
+            model (nn.Module): The trained model.
+            indices (np.ndarray | torch.Tensor | list[int]): Sample indices to predict.
+            return_proba (bool): If True, also return class probabilities.
+
+        Returns:
+            Tuple[np.ndarray, np.ndarray | None]: Predicted labels and optional probabilities.
+        """
+        if model is None:
+            msg = f"[{self.model_name}] Model is not fitted. Must call 'fit()' before calling '_predict()'."
             self.logger.error(msg)
             raise NotFittedError(msg)
 
-        N = int(getattr(self, "total_samples_", 0))
-        if N <= 0:
-            msg = f"[{self.model_name}] total_samples_ not set; cannot predict safely."
-            self.logger.error(msg)
-            raise RuntimeError(msg)
+        if isinstance(indices, np.ndarray):
+            idx = torch.from_numpy(indices.astype(np.int64, copy=False)).long()
+        elif torch.is_tensor(indices):
+            idx = indices.long()
+        else:
+            idx = torch.tensor(indices, dtype=torch.long)
 
-        idx_np = self._sanitize_indices(
-            indices, N=N, name="predict indices", require_nonempty=False
-        )
-        if idx_np.size == 0:
-            # Return empty arrays instead of crashing downstream
+        if idx.dim() != 1:
+            idx = idx.view(-1)
+
+        if idx.numel() == 0:
             empty_labels = np.empty((0, int(self.num_features_)), dtype=np.int64)
             empty_proba = (
                 np.empty(
@@ -1003,15 +1237,30 @@ class ImputeNLPCA(BaseNNImputer):
             )
             return empty_labels, empty_proba
 
-        idx = torch.from_numpy(idx_np).long().to(self.device, non_blocking=True)
+        n_samples = int(getattr(self, "total_samples_", 0))
+        if n_samples <= 0:
+            msg = f"[{self.model_name}] total_samples_ must be > 0; got {n_samples}."
+            self.logger.error(msg)
+            raise RuntimeError(msg)
+
+        bad = (idx < 0) | (idx >= n_samples)
+        if bool(bad.any()):
+            msg = (
+                f"[{self.model_name}] indices out of range for embedding table size "
+                f"{n_samples}: min={int(idx.min().item())}, max={int(idx.max().item())}."
+            )
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        idx = idx.to(self.device, non_blocking=True)
 
         model.eval()
         with torch.no_grad():
             logits = model(idx)  # (B, L, K)
             if (
                 logits.dim() != 3
-                or logits.shape[1] != int(self.num_features_)
-                or logits.shape[2] != int(self.num_classes_)
+                or logits.shape[1] != self.num_features_
+                or logits.shape[2] != self.num_classes_
             ):
                 raise ValueError(
                     f"Model logits shape mismatch: expected (B,{self.num_features_},{self.num_classes_}), got {tuple(logits.shape)}."
@@ -1020,8 +1269,8 @@ class ImputeNLPCA(BaseNNImputer):
             labels = torch.argmax(probas, dim=-1)
 
         if return_proba:
-            return labels.numpy(force=True), probas.numpy(force=True)
-        return labels.numpy(force=True), None
+            return labels.detach().cpu().numpy(), probas.detach().cpu().numpy()
+        return labels.detach().cpu().numpy(), None
 
     def _refine_all_embeddings(
         self,
@@ -1114,6 +1363,12 @@ class ImputeNLPCA(BaseNNImputer):
                         m_b = m_b.to(self.device, non_blocking=True).bool()
 
                         flat_mask = m_b.view(-1)
+
+                        # Ensure we never compute loss on invalid labels
+                        y_flat = y_b.view(-1)
+                        valid_targets = (y_flat >= 0) & (y_flat < self.num_classes_)
+                        flat_mask = flat_mask & valid_targets
+
                         if flat_mask.sum().item() == 0:
                             continue
 
@@ -1156,42 +1411,172 @@ class ImputeNLPCA(BaseNNImputer):
         class_weights: Optional[torch.Tensor],
         gamma_schedule: bool,
     ) -> tuple[float, nn.Module, dict[str, list[float]]]:
-        """Execute NLPCA training: joint refinement only + input refinement.
+        """Execute NLPCA training: UBP Phase 3 only + input refinement.
 
-        Args:
-            model (nn.Module): NLPCA model to train.
-            lr (float): Learning rate for joint training.
-            l1_penalty (float): L1 penalty coefficient.
-            params (dict[str, Any]): Hyperparameter dictionary.
-            trial (Optional[optuna.Trial]): Optuna trial for pruning / diagnostics.
-            class_weights (Optional[torch.Tensor]): Optional class weights for focal loss.
-            gamma_schedule (bool): Whether to use gamma annealing during training.
-
-        Returns:
-            tuple[float, nn.Module, dict[str, list[float]]]: Best validation score, trained model, and training history.
+        Consistency target: match ImputeUBP Phase 3 training behavior, except:
+        - No Phase 2.
+        - After certain epochs, update *originally missing* entries in X_train_work_
+            using current model reconstructions (EM-like). Simulated-missing is never filled.
         """
-        gamma_target, gamma_warm, gamma_ramp = self._anneal_config(
-            params, "gamma", default=self.gamma, max_epochs=self.epochs
-        )
-
+        # Configure focal loss exactly like UBP
         cw = class_weights
         if cw is not None and cw.device != self.device:
             cw = cw.to(self.device)
 
-        criterion = FocalCELoss(
+        gamma_target, gamma_warm, gamma_ramp = self._anneal_config(
+            params, "gamma", default=self.gamma, max_epochs=self.epochs
+        )
+
+        ce_criterion = FocalCELoss(
             alpha=cw, gamma=gamma_target, reduction="mean", ignore_index=-1
         )
 
-        best_score, history = self._run_nlpca_loop(
-            model=model,
-            lr=float(lr),
-            l1=float(l1_penalty),
-            criterion=criterion,
-            trial=trial,
-            params=params,
-            gamma_schedule=gamma_schedule,
+        # ---- Run the joint loop (UBP Phase 3 semantics) but with input refinement injected ----
+        # We reuse the core mechanics from _run_phase_loop, but we need a hook per-epoch.
+        # The easiest reliable way is to implement a small wrapper loop here, keeping the
+        # freeze/unfreeze + scheduler logic identical to UBP.
+
+        eta0 = float(lr)
+        s_best = float("inf")
+        patience = 5
+        plateau_counter = 0
+
+        # Freeze everything first
+        for p in model.parameters():
+            p.requires_grad_(False)
+
+        # Phase 3 trainables: embeddings + decoder weights
+        params_to_opt: list[torch.nn.Parameter] = []
+        model.embedding.weight.requires_grad_(True)  # type: ignore[attr-defined]
+        params_to_opt.append(model.embedding.weight)  # type: ignore[attr-defined]
+        for p in model.hidden_layers.parameters():  # type: ignore[attr-defined]
+            p.requires_grad_(True)
+        for p in model.dense_output.parameters():  # type: ignore[attr-defined]
+            p.requires_grad_(True)
+        params_to_opt.extend(list(model.hidden_layers.parameters()))  # type: ignore[attr-defined]
+        params_to_opt.extend(list(model.dense_output.parameters()))  # type: ignore[attr-defined]
+
+        optimizer = torch.optim.AdamW(params_to_opt, lr=eta0)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode="min",
+            factor=0.5,
+            patience=int(patience),
+            threshold=float(self.gamma_threshold),
+            threshold_mode="rel",
+            cooldown=0,
+            min_lr=float(self.eta_min),
         )
-        return best_score, model, history
+
+        train_history: list[float] = []
+        val_history: list[float] = []
+
+        for epoch in range(int(self.epochs)):
+            # Gamma schedule (same as UBP)
+            if gamma_schedule:
+                gamma_current = self._update_anneal_schedule(
+                    gamma_target,
+                    warm=gamma_warm,
+                    ramp=gamma_ramp,
+                    epoch=epoch,
+                    init_val=float(getattr(self, "gamma_init", 0.0)),
+                )
+                ce_criterion.gamma = gamma_current  # type: ignore[attr-defined]
+
+            # ---- Train epoch ----
+            # Reuse UBP _train_epoch mechanics, but note NLPCA train_loader_ yields (idx, y, m)
+            # with y being X_train_work_ (targets) and mask = observed-only.
+            train_loss = self._train_epoch(
+                model=model,
+                temp_layer=None,
+                optimizer=optimizer,
+                criterion=ce_criterion,
+                l1=float(l1_penalty),
+                phase=3,
+                trial=trial,
+            )
+
+            # ---- Input refinement hook (EM-like) ----
+            # Update only originally-missing entries in X_train_work_ from model predictions.
+            # Because the loader snapshots y at creation time, we MUST rebuild the loader.
+            if self.input_refine_every > 0 and (
+                (epoch + 1) % int(self.input_refine_every) == 0
+            ):
+                if self.X_train_work_ is None:
+                    self._maybe_prune_or_raise(
+                        trial,
+                        f"[{self.model_name}] X_train_work_ is None during input refinement.",
+                    )
+                self._update_orig_missing_from_model(
+                    model=model,
+                    X_work=self.X_train_work_,
+                    orig_mask=self.orig_mask_train_,
+                    indices=self.train_idx_,
+                )
+                self._rebuild_train_loader_from_work()
+
+            # ---- Validation (projection-based), same as UBP ----
+            try:
+                s = self._val_step_with_projection(
+                    model=model,
+                    temp_layer=None,
+                    criterion=ce_criterion,
+                    steps=max(int(self.projection_epochs) // 5, 20),
+                    lr=float(self.projection_lr),
+                )
+            except Exception as e:
+                self._maybe_prune_or_raise(
+                    trial,
+                    f"[{self.model_name}] Validation failed during training: {e}",
+                    e,
+                )
+
+            train_history.append(float(train_loss))
+            val_history.append(float(s))
+
+            # Non-finite handling (same as UBP)
+            if not np.isfinite(s):
+                if trial is not None:
+                    raise optuna.exceptions.TrialPruned(
+                        f"[{self.model_name}] Trial {trial.number} produced non-finite val score (s={s})."
+                    )
+                s_for_sched = float("inf")
+                plateau_counter += 1
+            else:
+                s_for_sched = float(s)
+                if s < s_best:
+                    if s_best == float("inf"):
+                        s_best = s
+                        plateau_counter = 0
+                    else:
+                        improvement_ratio = (
+                            (1.0 - (s / s_best)) if s_best != 0.0 else 0.0
+                        )
+                        if improvement_ratio > float(self.gamma_threshold):
+                            s_best = s
+                            plateau_counter = 0
+                        else:
+                            plateau_counter += 1
+                else:
+                    plateau_counter += 1
+
+            lr_before = float(optimizer.param_groups[0]["lr"])
+            scheduler.step(s_for_sched)
+            lr_after = float(optimizer.param_groups[0]["lr"])
+
+            at_floor = lr_after <= (float(self.eta_min) * (1.0 + 1e-12))
+            if at_floor and plateau_counter >= int(patience):
+                break
+
+            if trial is not None and isinstance(self.tune_metric, str):
+                trial.report(-float(s_for_sched), step=epoch)
+                if trial.should_prune():
+                    raise optuna.exceptions.TrialPruned(
+                        f"[{self.model_name}] Trial {trial.number} pruned at epoch {epoch}."
+                    )
+
+        histories = {"Train": train_history, "Val": val_history}
+        return float(s_best), model, histories
 
     def _train_epoch(
         self,
@@ -1203,23 +1588,7 @@ class ImputeNLPCA(BaseNNImputer):
         phase: int,
         trial: Optional[optuna.Trial] = None,
     ) -> float:
-        """Train one epoch (NLPCA uses phase=3 only).
-
-        Args:
-            model (nn.Module): Decoder model with an nn.Embedding named `embedding`.
-            temp_layer (Optional[nn.Module]): Only used for phase=1 legacy paths.
-            optimizer (torch.optim.Optimizer): Optimizer over the currently-unfrozen params.
-            criterion (nn.Module): Loss function (e.g., FocalCELoss).
-            l1 (float): L1 penalty coefficient.
-            phase (int): Training phase identifier (1, 2, or 3).
-            trial (Optional[optuna.Trial]): Optuna trial for pruning / diagnostics.
-
-        Returns:
-            float: Average training loss for the epoch.
-
-        Raises:
-            RuntimeError: If no valid batches or non-finite loss occurs.
-        """
+        """Train one epoch (NLPCA uses phase=3 only usually, but supports 1/2)."""
         model.train()
         if temp_layer is not None:
             temp_layer.train()
@@ -1234,6 +1603,10 @@ class ImputeNLPCA(BaseNNImputer):
                 m = m.to(self.device, non_blocking=True).bool()
 
                 flat_mask = m.view(-1)
+                y_flat = y.view(-1)
+                valid_targets = (y_flat >= 0) & (y_flat < self.num_classes_)
+                flat_mask = flat_mask & valid_targets
+
                 if flat_mask.sum().item() == 0:
                     continue
 
@@ -1254,17 +1627,17 @@ class ImputeNLPCA(BaseNNImputer):
                 logits_2d = logits.view(-1, self.num_classes_)[flat_mask]
                 targets_1d = y.view(-1)[flat_mask]
 
+                # NOTE: consider moving stability into the loss implementation instead.
+                logits_2d = torch.clamp(logits_2d, min=-30.0, max=30.0)
+
                 loss = criterion(logits_2d, targets_1d)
 
-                # L1 regularization (only on trainable blocks for the phase)
                 if l1 > 0.0:
                     reg = torch.zeros((), device=self.device)
                     if phase == 1:
                         reg = reg + model.embedding.weight.abs().sum()  # type: ignore[attr-defined]
                         reg = reg + temp_layer.weight.abs().sum()  # type: ignore[union-attr]
                     else:
-                        # NLPCA/phase-3:
-                        # decoder weights + embedding may be trainable
                         if hasattr(model, "hidden_layers"):
                             for p in model.hidden_layers.parameters():  # type: ignore[attr-defined]
                                 if p.requires_grad:
@@ -1306,9 +1679,17 @@ class ImputeNLPCA(BaseNNImputer):
                     raise RuntimeError(msg)
 
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(
-                    optimizer.param_groups[0]["params"], max_norm=1.0
-                )
+
+                # Clip across all param groups, not just group 0
+                all_params = [
+                    p
+                    for pg in optimizer.param_groups
+                    for p in pg["params"]
+                    if p.grad is not None
+                ]
+                if all_params:
+                    torch.nn.utils.clip_grad_norm_(all_params, max_norm=1.0)
+
                 optimizer.step()
 
                 running += float(loss.detach().item())
@@ -1331,32 +1712,13 @@ class ImputeNLPCA(BaseNNImputer):
         params: Optional[dict[str, Any]] = None,
         gamma_schedule: bool = False,
     ) -> tuple[float, dict[str, list[float]]]:
-        """Run joint (phase-3-like) training with ReduceLROnPlateau + input refinement.
-
-        This loop jointly optimizes embeddings (V) and decoder weights (W). It replaces the manual LR-halving-on-plateau logic with PyTorch's ReduceLROnPlateau, stepping on a validation loss computed via projection-based evaluation. Training stops when the LR reaches eta_min and the objective has plateaued, or when max epochs is reached.
-
-        Args:
-            model (nn.Module): NLPCA model to train.
-            lr (float): Initial learning rate.
-            l1 (float): L1 penalty.
-            criterion (nn.Module): Loss criterion to use.
-            trial (Optional[optuna.Trial]): Optuna trial for pruning. Can be None.
-            params (Optional[dict[str, Any]]): Full parameter dict (for scheduling). Can be None.
-            gamma_schedule (bool): Whether to use gamma scheduling. Defaults to False.
-
-        Returns:
-            tuple[float, dict[str, list[float]]]: Best validation score achieved during training and training history.
-
-        Raises:
-            optuna.exceptions.TrialPruned: If the trial is pruned due to lack of improvement.
-        """
+        """Run joint (phase-3-like) training with ReduceLROnPlateau + input refinement."""
         eta0 = float(lr)
         s_best = float("inf")
 
         patience = 5
         plateau_counter = 0
 
-        # Joint optimization only (V + W)
         for p in model.parameters():
             p.requires_grad_(False)
 
@@ -1392,6 +1754,7 @@ class ImputeNLPCA(BaseNNImputer):
 
         train_history: list[float] = []
         val_history: list[float] = []
+
         epoch = 0
         while epoch < int(self.epochs):
             if gamma_schedule:
@@ -1414,15 +1777,17 @@ class ImputeNLPCA(BaseNNImputer):
                 trial=trial,
             )
 
-            # Input refinement (EM-like):
-            # update ONLY orig-missing entries in the working matrix
+            # Input refinement (only on schedule)
+            did_refine = False
             if (
                 getattr(self, "input_refine_every", 0) > 0
                 and (epoch % int(self.input_refine_every)) == 0
                 and getattr(self, "X_train_work_", None) is not None
             ):
+                did_refine = True
                 refine_steps = max(1, int(getattr(self, "input_refine_steps", 1)))
                 orig_mask = getattr(self, "orig_mask_train_", None)
+
                 if self.debug and orig_mask is not None:
                     before_vals = self.X_train_work_[orig_mask].copy()  # type: ignore[index]
                 else:
@@ -1436,15 +1801,7 @@ class ImputeNLPCA(BaseNNImputer):
                         indices=self.train_idx_,
                     )
 
-                # Rebuild train loader mask so filled orig-missing participate as "observed"
-                # (sim-missing remain -1 and stay excluded)
-                self.train_loader_ = self._get_nlpca_loaders(
-                    self.train_idx_,
-                    self.X_train_work_,  # type: ignore[arg-type]
-                    mask=(self.X_train_work_ >= 0),  # type: ignore[operator]
-                    batch_size=self.batch_size,
-                    shuffle=True,
-                )
+                self._rebuild_train_loader_from_work()
 
                 if self.debug:
                     n_obs = int((self.X_train_work_ >= 0).sum())  # type: ignore[operator]
@@ -1459,63 +1816,59 @@ class ImputeNLPCA(BaseNNImputer):
                     if updated is not None and total_targets is not None:
                         update_msg = f", updated={updated}/{total_targets}"
                     self.logger.debug(
-                        f"[{self.model_name}] Input refine epoch {epoch}: steps={refine_steps}{update_msg}, observed={n_obs}/{n_total} ({(100.0 * n_obs / float(n_total)):.2f}%)."
+                        f"[{self.model_name}] Input refine epoch {epoch}: steps={refine_steps}{update_msg}, "
+                        f"observed={n_obs}/{n_total} ({(100.0 * n_obs / float(n_total)):.2f}%)."
                     )
 
-                try:
-                    s = self._val_step_with_projection(
-                        model=model,
-                        temp_layer=None,
-                        criterion=criterion,
-                        steps=max(int(self.projection_epochs) // 5, 20),
-                        lr=float(self.projection_lr),
-                    )
-                except Exception as e:
-                    # If validation cannot be computed,
-                    # prune trial (if applicable) or raise.
-                    if trial is not None:
-                        raise optuna.exceptions.TrialPruned(
-                            f"[{self.model_name}] Trial {trial.number} failed during validation: {str(e)}"
-                        ) from e
-                    raise
+            # Always compute validation signal (scheduler needs it)
+            try:
+                s = self._val_step_with_projection(
+                    model=model,
+                    temp_layer=None,
+                    criterion=criterion,
+                    steps=max(int(self.projection_epochs) // 5, 20),
+                    lr=float(self.projection_lr),
+                )
+            except Exception as e:
+                if trial is not None:
+                    raise optuna.exceptions.TrialPruned(
+                        f"[{self.model_name}] Trial {trial.number} failed during validation: {str(e)}"
+                    ) from e
+                raise
 
-                train_history.append(float(train_loss))
-                val_history.append(float(s))
+            train_history.append(float(train_loss))
+            val_history.append(float(s))
 
-                if not np.isfinite(s):
-                    # If val is non-finite,
-                    # there is no meaningful scheduler signal.
-                    # On tiny splits this often means "no valid batches".
-                    self.logger.warning(
-                        f"[{self.model_name}] Non-finite val loss at epoch {epoch}."
-                    )
-                    plateau_counter += 1
-                else:
-                    improvement_ratio = (
-                        1.0 - (float(s) / float(s_best)) if s_best != 0.0 else 0.0
-                    )
-                    if improvement_ratio > float(self.gamma_threshold):
-                        s_best = float(s)
-                        plateau_counter = 0
-                    else:
-                        plateau_counter += 1
-            else:
+            # Plateau accounting + best tracking
+            if not np.isfinite(s):
+                self.logger.warning(
+                    f"[{self.model_name}] Non-finite val loss at epoch {epoch}."
+                )
                 plateau_counter += 1
+            else:
+                improvement_ratio = (
+                    (1.0 - (float(s) / float(s_best))) if s_best != 0.0 else 0.0
+                )
+                if improvement_ratio > float(self.gamma_threshold):
+                    s_best = float(s)
+                    plateau_counter = 0
+                else:
+                    plateau_counter += 1
 
+            # Scheduler: only step on finite metric
             lr_before = float(optimizer.param_groups[0]["lr"])
-            scheduler.step(float(s))
+            if np.isfinite(s):
+                scheduler.step(float(s))
             lr_after = float(optimizer.param_groups[0]["lr"])
 
             if lr_after < lr_before:
                 self.logger.debug(
-                    f"NLPCA: ReduceLROnPlateau LR {lr_before:.2e} -> {lr_after:.2e} (train={train_loss:.4f}, val={float(s):.4f}, gamma={float(getattr(criterion, 'gamma', 0.0)):.3f})"
+                    f"NLPCA: ReduceLROnPlateau LR {lr_before:.2e} -> {lr_after:.2e} "
+                    f"(train={train_loss:.4f}, val={float(s):.4f}, gamma={float(getattr(criterion, 'gamma', 0.0)):.3f}, refine={did_refine})"
                 )
 
-            # Stop once we're at the floor and still plateauing
             at_floor = lr_after <= (float(self.eta_min) * (1.0 + 1e-12))
-            if plateau_counter >= int(patience) and (
-                not np.isfinite(val_history[-1]) or at_floor
-            ):
+            if plateau_counter >= int(patience) and (not np.isfinite(s) or at_floor):
                 break
 
             if trial is not None and isinstance(self.tune_metric, str):
@@ -1537,15 +1890,29 @@ class ImputeNLPCA(BaseNNImputer):
         steps: int = 20,
         lr: float = 0.05,
     ) -> float:
-        """Validate with per-batch embedding projection; hardened for empty/degenerate val splits."""
-        if self.val_loader_ is None:
-            self.logger.warning(
-                f"[{self.model_name}] val_loader_ is None; returning inf val loss."
-            )
-            return float("inf")
+        """Validate using per-batch projection of embeddings (V) while holding decoder fixed.
 
+        Robustness ported from ImputeUBP:
+        - explicit guards for empty/degenerate batches
+        - explicit non-finite loss checks (pre and post)
+        - restores requires_grad state exactly even if exceptions occur
+
+        Args:
+            model (nn.Module): NLPCA model.
+            temp_layer (Optional[nn.Module]): Temp layer for phase 1 validation, if used.
+            criterion (nn.Module): Loss criterion.
+            steps (int): Projection steps per batch.
+            lr (float): Projection learning rate.
+
+        Returns:
+            float: Mean validation loss across valid batches.
+
+        Raises:
+            RuntimeError: If there are no valid batches or loss becomes non-finite.
+        """
         model.eval()
         total_loss = 0.0
+        total_loss_pre = 0.0
         count = 0
 
         saved: list[tuple[torch.nn.Parameter, bool]] = []
@@ -1561,9 +1928,6 @@ class ImputeNLPCA(BaseNNImputer):
         _save_and_disable(getattr(model, "dense_output", None))
         _save_and_disable(temp_layer)
 
-        steps = max(1, int(steps))
-        lr = float(lr)
-
         try:
             with torch.enable_grad():
                 for idx, y, m in self.val_loader_:
@@ -1572,17 +1936,47 @@ class ImputeNLPCA(BaseNNImputer):
                     m = m.to(self.device, non_blocking=True).bool()
 
                     flat_mask = m.view(-1)
+
+                    # Ensure we never compute loss on invalid labels
+                    y_flat = y.view(-1)
+                    valid_targets = (y_flat >= 0) & (y_flat < self.num_classes_)
+                    flat_mask = flat_mask & valid_targets
+
                     if flat_mask.sum().item() == 0:
                         continue
 
+                    # Optimize only the batch embeddings
                     v_batch = model.embedding(idx).detach().clone()  # type: ignore[attr-defined]
-                    v_batch = v_batch.to(self.device)
+
+                    with torch.no_grad():
+                        if temp_layer is not None:
+                            out_pre = temp_layer(v_batch).view(
+                                -1, self.num_features_, self.num_classes_
+                            )
+                        else:
+                            out_pre = model(override_embeddings=v_batch)
+
+                        # NOTE: consider moving stability into the loss implementation instead.
+                        out_pre = torch.clamp(out_pre, min=-30.0, max=30.0)
+
+                        loss_pre = criterion(
+                            out_pre.view(-1, self.num_classes_)[flat_mask],
+                            y.view(-1)[flat_mask],
+                        )
+
+                        if not torch.isfinite(loss_pre):
+                            raise RuntimeError(
+                                f"[{self.model_name}] Pre-projection val loss non-finite."
+                            )
+                        total_loss_pre += float(loss_pre.item())
+
                     v_batch.requires_grad_(True)
+                    # Switch to AdamW to match UBP robustness
+                    proj_opt = torch.optim.AdamW([v_batch], lr=float(lr))
 
-                    proj_opt = torch.optim.Adam([v_batch], lr=lr)
-
-                    for _ in range(steps):
+                    for _ in range(int(steps)):
                         proj_opt.zero_grad(set_to_none=True)
+
                         if temp_layer is not None:
                             out = temp_layer(v_batch).view(
                                 -1, self.num_features_, self.num_classes_
@@ -1594,12 +1988,11 @@ class ImputeNLPCA(BaseNNImputer):
                             out.view(-1, self.num_classes_)[flat_mask],
                             y.view(-1)[flat_mask],
                         )
+
                         if not torch.isfinite(loss):
-                            # Projection can explode on tiny data; treat as invalid batch
-                            self.logger.warning(
-                                f"[{self.model_name}] Non-finite val projection loss; skipping batch."
+                            raise RuntimeError(
+                                f"[{self.model_name}] Projection-step val loss non-finite."
                             )
-                            break
                         loss.backward()
                         proj_opt.step()
 
@@ -1615,20 +2008,25 @@ class ImputeNLPCA(BaseNNImputer):
                             out_final.view(-1, self.num_classes_)[flat_mask],
                             y.view(-1)[flat_mask],
                         )
-
-                        if torch.isfinite(val_l):
-                            total_loss += float(val_l.item())
-                            count += 1
+                        if not torch.isfinite(val_l):
+                            raise RuntimeError(
+                                f"[{self.model_name}] Post-projection val loss non-finite."
+                            )
+                        total_loss += float(val_l.item())
+                        count += 1
 
             if count == 0:
-                # Do not hard-crash training; return inf and let scheduler/early-stop handle it.
-                self.logger.warning(
-                    f"[{self.model_name}] Validation had 0 valid batches (likely tiny/empty val split or all-missing). "
-                    "Returning inf val loss."
-                )
-                return float("inf")
+                msg = f"[{self.model_name}] Validation loss has no valid batches."
+                self.logger.error(msg)
+                raise RuntimeError(msg)
 
-            return total_loss / count
+            if self.debug:
+                delta = (total_loss_pre - total_loss) / float(count)
+                self.logger.debug(
+                    f"[{self.model_name}] Projection val loss delta (pre-post)={delta:.6f} over {count} batches."
+                )
+
+            return float(total_loss / count)
 
         finally:
             for p, req in saved:
@@ -1653,14 +2051,33 @@ class ImputeNLPCA(BaseNNImputer):
             model = self.build_model(self.Model, params["model_params"])
 
             train_loss_mask = self.X_train_corrupted_ >= 0
-            class_weights = self._class_weights_from_zygosity(
-                self.X_train_clean_,
-                train_mask=train_loss_mask,
-                inverse=params["inverse"],
-                normalize=params["normalize"],
+
+            class_weights_ = self._class_weights_from_zygosity(
+                self.y_train_,
+                train_mask=train_loss_mask,  # NOTE: # not sim_mask
+                inverse=bool(params["inverse"]),
+                normalize=bool(params["normalize"]),
                 max_ratio=self.max_ratio,
-                power=params["power"],
+                power=float(params["power"]),
             )
+
+            # --- Sanitize Haploid/Invalid Weights ---
+            if class_weights_ is not None:
+                # 1. Truncate dimension if needed
+                # (Haploid returns 3 weights for 2 classes)
+                if self.is_haploid_ and class_weights_.numel() > self.num_classes_:
+                    self.logger.warning(
+                        f"Haploid mode: Truncating class weights from {class_weights_.shape} to {self.num_classes_}."
+                    )
+                    class_weights_ = class_weights_[: self.num_classes_]
+
+                # 2. Check for NaN/Inf (caused by 0 counts in inverse freq)
+                if not torch.isfinite(class_weights_).all():
+                    self.logger.warning(
+                        f"Class weights contain NaN/Inf ({class_weights_}). "
+                        "This usually happens with rare variants in small splits. Resetting to uniform weights."
+                    )
+                    class_weights_ = torch.ones(self.num_classes_, device=self.device)
 
             if self._X_train_work_init_ is None:
                 raise RuntimeError("Internal error: _X_train_work_init_ is not set.")
@@ -1669,15 +2086,7 @@ class ImputeNLPCA(BaseNNImputer):
             saved_loader = self.train_loader_
             try:
                 self.X_train_work_ = self._X_train_work_init_.copy()
-                self.train_loader_ = self._get_nlpca_loaders(
-                    self.train_idx_,
-                    self.X_train_work_,
-                    mask=(self.X_train_work_ >= 0),
-                    batch_size=self._safe_batch_size(
-                        len(self.train_idx_), self.batch_size
-                    ),
-                    shuffle=True,
-                )
+                self._rebuild_train_loader_from_work()
 
                 _ = self._execute_nlpca_training(
                     model=model,
@@ -1685,7 +2094,7 @@ class ImputeNLPCA(BaseNNImputer):
                     l1_penalty=float(params["l1_penalty"]),
                     params=params,
                     trial=trial,
-                    class_weights=class_weights,
+                    class_weights=class_weights_,
                     gamma_schedule=bool(params["gamma_schedule"]),
                 )
 
@@ -1699,7 +2108,7 @@ class ImputeNLPCA(BaseNNImputer):
                     project_embedding=True,
                     objective_mode=True,
                     trial=trial,
-                    class_weights=class_weights,
+                    class_weights=class_weights_,
                     persist_projection=False,
                 )
 
@@ -1784,7 +2193,6 @@ class ImputeNLPCA(BaseNNImputer):
             "hidden_layer_sizes": hidden_layer_sizes,
             "dropout_rate": float(params["dropout_rate"]),
             "activation": str(params["activation"]),
-            "prefix": self.prefix,
             "device": self.device,
             "verbose": self.verbose,
             "debug": self.debug,
@@ -1823,6 +2231,24 @@ class ImputeNLPCA(BaseNNImputer):
             max_ratio=self.max_ratio,
             power=self.power,
         )
+
+        # --- Sanitize Haploid/Invalid Weights ---
+        if self.class_weights_ is not None:
+            # 1. Truncate dimension if needed
+            # (Haploid returns 3 weights for 2 classes)
+            if self.is_haploid_ and self.class_weights_.numel() > self.num_classes_:
+                self.logger.warning(
+                    f"Haploid mode: Truncating class weights from {self.class_weights_.shape} to {self.num_classes_}."
+                )
+                self.class_weights_ = self.class_weights_[: self.num_classes_]
+
+            # 2. Check for NaN/Inf (caused by 0 counts in inverse freq)
+            if not torch.isfinite(self.class_weights_).all():
+                self.logger.warning(
+                    f"Class weights contain NaN/Inf ({self.class_weights_}). "
+                    "This usually happens with rare variants in small splits. Resetting to uniform weights."
+                )
+                self.class_weights_ = torch.ones(self.num_classes_, device=self.device)
 
         nF = int(self.num_features_)
         nC = int(self.num_classes_)
@@ -1888,23 +2314,6 @@ class ImputeNLPCA(BaseNNImputer):
             - Does NOT include the input layer (n_inputs) or the latent layer (latent_dim).
             - Enforces a latent-aware minimum: one discrete level above latent_dim, where a level is `multiple_of`.
             - Enforces *strictly decreasing* hidden sizes (no repeats). This may require bumping `base` upward.
-
-        Args:
-            n_inputs: Number of input features (e.g., flattened one-hot: num_features * num_classes).
-            n_outputs: Number of output classes (often equals num_classes).
-            n_samples: Number of training samples.
-            n_hidden: Number of hidden layers (excluding input and latent layers).
-            latent_dim: Latent dimensionality (not returned, used only to set a floor).
-            alpha: Scaling factor for base layer size.
-            schedule: Size schedule ("pyramid" or "linear").
-            min_size: Minimum layer size floor before latent-aware adjustment.
-            max_size: Maximum layer size cap. If None, a heuristic cap is used.
-            multiple_of: Hidden sizes are multiples of this value.
-            decay: Pyramid decay factor. If None, computed to land near the target.
-            cap_by_inputs: If True, cap layer sizes to n_inputs.
-
-        Returns:
-            list[int]: Hidden layer sizes (len = n_hidden).
 
         Raises:
             ValueError: On invalid arguments or conflicting constraints.
@@ -2169,7 +2578,7 @@ class ImputeNLPCA(BaseNNImputer):
     ) -> torch.Tensor:
         """Compute PCA-based embedding init for all samples, fitted on training rows only.
 
-        This method is intentionally defensive: if PCA cannot be fit due to small sample sizes, degenerate data, or invalid dimensionality constraints, it falls back to a deterministic random (small-noise) initialization so UBP can still run.
+        This method is intentionally defensive: if PCA cannot be fit due to small sample sizes, degenerate data, or invalid dimensionality constraints, it falls back to a deterministic random (small-noise) initialization so NLPCA can still run.
 
         Args:
             X_full (np.ndarray): Full 012 matrix shape (N, L) with missing encoded as -1.

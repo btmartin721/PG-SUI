@@ -436,6 +436,13 @@ class ImputeVAE(BaseNNImputer):
         self.ground_truth_ = gt_full.astype(np.int8, copy=False)
         self.num_features_ = int(self.ground_truth_.shape[1])
 
+        if self.is_haploid_:
+            gt_h = np.where(self.ground_truth_ > 0, 1, self.ground_truth_).astype(
+                np.int8, copy=False
+            )
+            gt_h[self.ground_truth_ < 0] = -1
+            self.ground_truth_ = gt_h
+
         if self.num_features_ < 2:
             msg = f"{self.model_name} requires at least 2 loci/features; got {self.num_features_}."
             self.logger.error(msg)
@@ -539,7 +546,7 @@ class ImputeVAE(BaseNNImputer):
                 f"[{self.model_name}] eval_mask_test_ has no True entries; test metrics will be 0.0."
             )
 
-        # --- Haploid harmonization (do NOT resimulate; just recode values) ---
+        # --- Haploid harmonization (do not resimulate; just recode values) ---
         if self.is_haploid_:
             self.logger.debug(
                 "Performing haploid harmonization on split inputs/targets..."
@@ -600,8 +607,8 @@ class ImputeVAE(BaseNNImputer):
 
         # Data loaders expect numpy arrays; force CPU materialization safely
         try:
-            Xtr_np = self.X_train_.numpy(force=True)
-            Xva_np = self.X_val_.numpy(force=True)
+            Xtr_np = self.X_train_.detach().cpu().numpy()
+            Xva_np = self.X_val_.detach().cpu().numpy()
 
             if Xtr_np.ndim == 3:
                 Xtr_np = Xtr_np.reshape(
@@ -655,6 +662,26 @@ class ImputeVAE(BaseNNImputer):
                 max_ratio=self.max_ratio,
                 power=self.power,
             )
+
+            # --- Sanitize Haploid/Invalid Weights ---
+            if self.class_weights_ is not None:
+                # 1. Truncate dimension if needed
+                # (Haploid returns 3 weights for 2 classes)
+                if self.is_haploid_ and self.class_weights_.numel() > self.num_classes_:
+                    self.logger.warning(
+                        f"Haploid mode: Truncating class weights from {self.class_weights_.shape} to {self.num_classes_}."
+                    )
+                    self.class_weights_ = self.class_weights_[: self.num_classes_]
+
+                # 2. Check for NaN/Inf (caused by 0 counts in inverse freq)
+                if not torch.isfinite(self.class_weights_).all():
+                    self.logger.warning(
+                        f"Class weights contain NaN/Inf ({self.class_weights_}). "
+                        "This usually happens with rare variants in small splits. Resetting to uniform weights."
+                    )
+                    self.class_weights_ = torch.ones(
+                        self.num_classes_, device=self.device
+                    )
             keys = OBJECTIVE_SPEC_VAE.keys
             self.tuned_params_ = {k: getattr(self, k) for k in keys}
             self.tuned_params_["model_params"] = self.model_params
@@ -821,7 +848,7 @@ class ImputeVAE(BaseNNImputer):
             self.logger.error(msg)
             raise RuntimeError(msg)
 
-        # 3. Handle Haploid mapping (2->1) before decoding if needed
+        # 3. Haploid decode uses diploid decoder semantics: map ALT=1 -> 2
         decode_input = imputed_array
         if getattr(self, "is_haploid_", False):
             decode_input = imputed_array.copy()
@@ -829,6 +856,9 @@ class ImputeVAE(BaseNNImputer):
 
         # 4. Decode integers to IUPAC strings
         imputed_gt = self.decode_012(decode_input)
+
+        if getattr(self, "is_haploid_", False):
+            imputed_gt = self._sanitize_haploid_decoded_output(imputed_gt)
 
         if not isinstance(imputed_gt, np.ndarray):
             raise RuntimeError(
@@ -1240,6 +1270,10 @@ class ImputeVAE(BaseNNImputer):
                 X_batch = X_batch.to(self.device, non_blocking=True).float()
                 y_batch = y_batch.to(self.device, non_blocking=True).long()
                 m_batch = m_batch.to(self.device, non_blocking=True).bool()
+                flat_mask = m_batch.view(-1)
+                y_flat = y_batch.view(-1)
+                valid_targets = (y_flat >= 0) & (y_flat < nC_model)
+                flat_mask = flat_mask & valid_targets
 
                 raw = model(X_batch)
 
@@ -1256,14 +1290,14 @@ class ImputeVAE(BaseNNImputer):
                     self.logger.error(msg)
                     raise ValueError(msg)
 
-                logits_masked = logits0.view(-1, nC_model)[m_batch.view(-1)]
-                targets_masked = y_batch.view(-1)[m_batch.view(-1)]
+                logits_masked = logits0.view(-1, nC_model)[flat_mask]
+                targets_masked = y_flat[flat_mask]
 
                 if targets_masked.numel() == 0:
                     continue
 
-                if torch.any(targets_masked < 0):
-                    msg = f"[{self.model_name}] Masked targets contain negative labels; mask/targets are inconsistent."
+                if torch.any((targets_masked < 0) | (targets_masked >= nC_model)):
+                    msg = f"[{self.model_name}] Masked targets contain out-of-range labels; expected in [0, {nC_model - 1}]."
                     self.logger.error(msg)
                     raise ValueError(msg)
 
@@ -1386,6 +1420,10 @@ class ImputeVAE(BaseNNImputer):
                     X_batch = X_batch.to(self.device, non_blocking=True).float()
                     y_batch = y_batch.to(self.device, non_blocking=True).long()
                     m_batch = m_batch.to(self.device, non_blocking=True).bool()
+                    flat_mask = m_batch.view(-1)
+                    y_flat = y_batch.view(-1)
+                    valid_targets = (y_flat >= 0) & (y_flat < nC_model)
+                    flat_mask = flat_mask & valid_targets
 
                     raw = model(X_batch)
 
@@ -1402,14 +1440,14 @@ class ImputeVAE(BaseNNImputer):
                         self.logger.error(msg)
                         raise ValueError(msg)
 
-                    logits_masked = logits0.view(-1, nC_model)[m_batch.view(-1)]
-                    targets_masked = y_batch.view(-1)[m_batch.view(-1)]
+                    logits_masked = logits0.view(-1, nC_model)[flat_mask]
+                    targets_masked = y_flat[flat_mask]
 
                     if targets_masked.numel() == 0:
                         continue
 
-                    if torch.any(targets_masked < 0):
-                        msg = f"[{self.model_name}] Masked targets contain negative labels; mask/targets are inconsistent."
+                    if torch.any((targets_masked < 0) | (targets_masked >= nC_model)):
+                        msg = f"[{self.model_name}] Masked targets contain out-of-range labels; expected in [0, {nC_model - 1}]."
                         self.logger.error(msg)
                         raise ValueError(msg)
 
@@ -1543,6 +1581,10 @@ class ImputeVAE(BaseNNImputer):
                 raise RuntimeError(msg)
 
             logits0 = raw[0]
+            if not torch.is_tensor(logits0):
+                msg = f"[{self.model_name}] VAE logits must be a torch.Tensor; got {type(logits0).__name__}."
+                self.logger.error(msg)
+                raise RuntimeError(msg)
             # expected flat size: B*nF*nC
             expected = X_tensor.shape[0] * nF * nC
             if logits0.numel() != expected:
@@ -1762,7 +1804,8 @@ class ImputeVAE(BaseNNImputer):
                 y_true_dec = self.decode_012(y_true_matrix)
                 y_pred_dec = self.decode_012(y_pred_matrix)
 
-                encodings_dict = {
+                # Diploid mapping dict (kept for ploidy=2 path)
+                encodings_dict_diploid = {
                     "A": 0,
                     "C": 1,
                     "G": 2,
@@ -1775,26 +1818,65 @@ class ImputeVAE(BaseNNImputer):
                     "S": 9,
                     "N": -1,
                 }
-                y_true_int = self.pgenc.convert_int_iupac(
-                    y_true_dec, encodings_dict=encodings_dict
+
+                # Haploid mapping dict
+                encodings_dict_haploid = {"A": 0, "C": 1, "G": 2, "T": 3, "N": -1}
+
+                y_true_int = self._convert_int_iupac_ploidy(
+                    y_true_dec,
+                    ploidy=self.ploidy,
+                    encodings_dict=(
+                        encodings_dict_haploid
+                        if self.is_haploid_
+                        else encodings_dict_diploid
+                    ),
+                    ref=getattr(self.genotype_data, "ref", None),
+                    alt=getattr(self.genotype_data, "alt", None),
+                    ambiguity_mode="ref_alt",
                 )
-                y_pred_int = self.pgenc.convert_int_iupac(
-                    y_pred_dec, encodings_dict=encodings_dict
+                y_pred_int = self._convert_int_iupac_ploidy(
+                    y_pred_dec,
+                    ploidy=self.ploidy,
+                    encodings_dict=(
+                        encodings_dict_haploid
+                        if self.is_haploid_
+                        else encodings_dict_diploid
+                    ),
+                    ref=getattr(self.genotype_data, "ref", None),
+                    alt=getattr(self.genotype_data, "alt", None),
+                    ambiguity_mode="ref_alt",
                 )
 
-                valid_iupac_mask = y_true_int[m_arr] >= 0
-                if valid_iupac_mask.any():
+                y_true_eval = y_true_int[eval_mask]
+                y_pred_eval = y_pred_int[eval_mask]
+                n_iupac_classes = 4 if self.num_classes_ == 2 else 10
+                valid_iupac_mask = (
+                    (y_true_eval >= 0)
+                    & (y_true_eval < n_iupac_classes)
+                    & (y_pred_eval >= 0)
+                    & (y_pred_eval < n_iupac_classes)
+                )
+                if bool(valid_iupac_mask.any()) and self.num_classes_ > 2:
                     self._make_class_reports(
-                        y_true=y_true_int[m_arr][valid_iupac_mask],
-                        y_pred=y_pred_int[m_arr][valid_iupac_mask],
+                        y_true=y_true_eval[valid_iupac_mask],
+                        y_pred=y_pred_eval[valid_iupac_mask],
                         metrics=metrics,
                         y_pred_proba=None,
                         labels=["A", "C", "G", "T", "W", "R", "M", "K", "Y", "S"],
                     )
+                elif bool(valid_iupac_mask.any()) and self.num_classes_ == 2:
+                    self._make_class_reports(
+                        y_true=y_true_eval[valid_iupac_mask],
+                        y_pred=y_pred_eval[valid_iupac_mask],
+                        metrics=metrics,
+                        y_pred_proba=None,
+                        labels=["A", "C", "G", "T"],
+                    )
                 else:
                     self.logger.warning(
-                        f"[{self.model_name}] Skipped IUPAC confusion matrix: No ground truths."
+                        "Skipped IUPAC confusion matrix: No valid ground truths."
                     )
+
             except Exception as e:
                 self.logger.warning(f"[{self.model_name}] IUPAC reporting failed: {e}")
 
@@ -1828,7 +1910,7 @@ class ImputeVAE(BaseNNImputer):
             lr: float = float(params["learning_rate"])
             l1_penalty: float = float(params["l1_penalty"])
 
-            class_weights = self._class_weights_from_zygosity(
+            class_weights_ = self._class_weights_from_zygosity(
                 self.y_train_,
                 train_mask=self.eval_mask_train_,
                 inverse=params["inverse"],
@@ -1837,13 +1919,31 @@ class ImputeVAE(BaseNNImputer):
                 power=params["power"],
             )
 
+            # --- Sanitize Haploid/Invalid Weights ---
+            if class_weights_ is not None:
+                # 1. Truncate dimension if needed
+                # (Haploid returns 3 weights for 2 classes)
+                if self.is_haploid_ and class_weights_.numel() > self.num_classes_:
+                    self.logger.warning(
+                        f"Haploid mode: Truncating class weights from {class_weights_.shape} to {self.num_classes_}."
+                    )
+                    class_weights_ = class_weights_[: self.num_classes_]
+
+                # 2. Check for NaN/Inf (caused by 0 counts in inverse freq)
+                if not torch.isfinite(class_weights_).all():
+                    self.logger.warning(
+                        f"Class weights contain NaN/Inf ({class_weights_}). "
+                        "This usually happens with rare variants in small splits. Resetting to uniform weights."
+                    )
+                    class_weights_ = torch.ones(self.num_classes_, device=self.device)
+
             _, trained_model, _ = self._train_and_validate_model(
                 model=model,
                 lr=lr,
                 l1_penalty=l1_penalty,
                 params=params,
                 trial=trial,
-                class_weights=class_weights,
+                class_weights=class_weights_,
                 kl_beta_schedule=params["kl_beta_schedule"],
                 gamma_schedule=params["gamma_schedule"],
             )
@@ -2056,6 +2156,24 @@ class ImputeVAE(BaseNNImputer):
             max_ratio=self.max_ratio,
             power=self.power,
         )
+
+        # --- Sanitize Haploid/Invalid Weights ---
+        if self.class_weights_ is not None:
+            # 1. Truncate dimension if needed
+            # (Haploid returns 3 weights for 2 classes)
+            if self.is_haploid_ and self.class_weights_.numel() > self.num_classes_:
+                self.logger.warning(
+                    f"Haploid mode: Truncating class weights from {self.class_weights_.shape} to {self.num_classes_}."
+                )
+                self.class_weights_ = self.class_weights_[: self.num_classes_]
+
+            # 2. Check for NaN/Inf (caused by 0 counts in inverse freq)
+            if not torch.isfinite(self.class_weights_).all():
+                self.logger.warning(
+                    f"Class weights contain NaN/Inf ({self.class_weights_}). "
+                    "This usually happens with rare variants in small splits. Resetting to uniform weights."
+                )
+                self.class_weights_ = torch.ones(self.num_classes_, device=self.device)
 
         nF = int(self.num_features_)
         nC = int(self.num_classes_)

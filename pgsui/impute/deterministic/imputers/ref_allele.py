@@ -245,7 +245,7 @@ class ImputeRefAllele:
         self.ground_truth012_ = self.X012_.copy()
 
         # Use NaN for missing inside a DataFrame to leverage fillna
-        df_all = pd.DataFrame(self.ground_truth012_).astype("float32", copy=True)
+        df_all = pd.DataFrame(self.ground_truth012_).astype("float32").copy()
         df_all[df_all < 0] = np.nan
 
         # Observed mask in the ORIGINAL data (before any simulated-missing)
@@ -365,14 +365,32 @@ class ImputeRefAllele:
             self.logger.error(msg, exc_info=True)
             raise NotFittedError(msg)
 
-        imp_decoded = self.decode_012(X_imputed_full_012)
+        decode_input = (
+            self._canonicalize_haploid_decode_input(X_imputed_full_012)
+            if self.is_haploid_
+            else X_imputed_full_012
+        )
+        imp_decoded = self.decode_012(decode_input)
 
         if self.show_plots:
-            orig_dec = self.decode_012(self.ground_truth012_)
+            orig_input = (
+                self._canonicalize_haploid_decode_input(self.ground_truth012_)
+                if self.is_haploid_
+                else self.ground_truth012_
+            )
+            orig_dec = self.decode_012(orig_input)
             self.plotter_.plot_gt_distribution(imp_decoded, orig_dec, True)
 
         # Return IUPAC strings
         return imp_decoded
+
+    def _canonicalize_haploid_decode_input(self, X: np.ndarray) -> np.ndarray:
+        """Map haploid ALT calls to diploid-style ALT-hom code before decode_012."""
+        arr = np.asarray(X).copy()
+        miss = arr < 0
+        arr = np.where(arr > 0, 2, arr)
+        arr[miss] = -1
+        return arr
 
     def _impute_ref(self, df_in: pd.DataFrame) -> pd.DataFrame:
         """Replace every NaN with the REF genotype code (0) across all loci.
@@ -417,40 +435,53 @@ class ImputeRefAllele:
         X_pred_eval = self.ground_truth012_.copy()
         X_pred_eval[self.sim_mask_] = self.X_imputed012_[self.sim_mask_]
 
-        y_true_dec = self.decode_012(self.ground_truth012_)
-        y_pred_dec = self.decode_012(X_pred_eval)
+        y_true_eval_input = (
+            self._canonicalize_haploid_decode_input(self.ground_truth012_)
+            if self.is_haploid_
+            else self.ground_truth012_
+        )
+        y_pred_eval_input = (
+            self._canonicalize_haploid_decode_input(X_pred_eval)
+            if self.is_haploid_
+            else X_pred_eval
+        )
 
-        encodings_dict = {
-            "A": 0,
-            "C": 1,
-            "G": 2,
-            "T": 3,
-            "W": 4,
-            "R": 5,
-            "M": 6,
-            "K": 7,
-            "Y": 8,
-            "S": 9,
-            "N": -1,
-        }
+        y_true_dec = self.decode_012(y_true_eval_input)
+        y_pred_dec = self.decode_012(y_pred_eval_input)
+
+        encodings_dict = (
+            {"A": 0, "C": 1, "G": 2, "T": 3, "N": -1}
+            if self.is_haploid_
+            else {
+                "A": 0,
+                "C": 1,
+                "G": 2,
+                "T": 3,
+                "W": 4,
+                "R": 5,
+                "M": 6,
+                "K": 7,
+                "Y": 8,
+                "S": 9,
+                "N": -1,
+            }
+        )
         y_true_int = self.encoder.convert_int_iupac(
             y_true_dec, encodings_dict=encodings_dict
         )
         y_pred_int = self.encoder.convert_int_iupac(
             y_pred_dec, encodings_dict=encodings_dict
         )
-        y_true_10 = y_true_int[self.sim_mask_]
-        y_pred_10 = y_pred_int[self.sim_mask_]
+        y_true_iupac = y_true_int[self.sim_mask_]
+        y_pred_iupac = y_pred_int[self.sim_mask_]
 
-        m = (y_true_10 >= 0) & (y_pred_10 >= 0)
-        y_true_10, y_pred_10 = y_true_10[m], y_pred_10[m]
-        if y_true_10.size == 0:
-            self.logger.warning(
-                "No valid IUPAC test cells; skipping 10-class evaluation."
-            )
+        m = (y_true_iupac >= 0) & (y_pred_iupac >= 0)
+        y_true_iupac, y_pred_iupac = y_true_iupac[m], y_pred_iupac[m]
+        if y_true_iupac.size == 0:
+            self.logger.warning("No valid IUPAC test cells; skipping IUPAC evaluation.")
             return
 
-        self._evaluate_iupac10_and_plot(y_true_10, y_pred_10)
+        self._evaluate_iupac10_and_plot(y_true_iupac, y_pred_iupac)
 
     def _evaluate_012_and_plot(self, y_true: np.ndarray, y_pred: np.ndarray) -> None:
         """0/1/2 zygosity report & confusion matrix.
@@ -469,10 +500,10 @@ class ImputeRefAllele:
         labels: list[int] = [0, 1, 2]
         report_names: list[str] = ["REF", "HET", "ALT"]
 
-        # Haploid parity: fold ALT (2) into ALT/Present (1)
+        # Haploid parity: fold any non-REF ALT state into ALT/Present (1)
         if self.is_haploid_:
-            y_true = np.where(y_true == 2, 1, y_true)
-            y_pred = np.where(y_pred == 2, 1, y_pred)
+            y_true = np.where(y_true > 0, 1, y_true)
+            y_pred = np.where(y_pred > 0, 1, y_pred)
             labels = [0, 1]
             report_names = ["REF", "ALT"]
 
@@ -534,27 +565,38 @@ class ImputeRefAllele:
     def _evaluate_iupac10_and_plot(
         self, y_true: np.ndarray, y_pred: np.ndarray
     ) -> None:
-        """10-class IUPAC report & confusion matrix.
+        """IUPAC report & confusion matrix (ploidy-aware).
 
-        This method generates a classification report and confusion matrix for genotypes encoded as 10-class IUPAC codes (0-9). It computes various performance metrics, logs the classification report, and creates visualizations of the results.
+        Diploid: evaluates 10 IUPAC classes (A,C,G,T,W,R,M,K,Y,S).
+        Haploid: evaluates 4 base classes (A,C,G,T).
 
         Args:
-            y_true (np.ndarray): True genotypes (0-9) for masked
-            y_pred (np.ndarray): Predicted genotypes (0-9) for masked
+            y_true (np.ndarray): True encoded IUPAC labels for masked cells.
+            y_pred (np.ndarray): Predicted encoded IUPAC labels for masked cells.
         """
         # --- FIX: Cast to int immediately ---
         # Guards against float inputs causing IndexError in np.eye indexing below
         y_true = y_true.astype(int)
         y_pred = y_pred.astype(int)
 
-        labels_idx = list(range(10))
-        report_names = ["A", "C", "G", "T", "W", "R", "M", "K", "Y", "S"]
+        if self.is_haploid_:
+            labels_idx = [0, 1, 2, 3]
+            report_names = ["A", "C", "G", "T"]
+        else:
+            labels_idx = list(range(10))
+            report_names = ["A", "C", "G", "T", "W", "R", "M", "K", "Y", "S"]
 
-        m = (y_true >= 0) & (y_true < 10) & (y_pred >= 0) & (y_pred < 10)
+        max_label = int(max(labels_idx))
+        m = (
+            (y_true >= 0)
+            & (y_true <= max_label)
+            & (y_pred >= 0)
+            & (y_pred <= max_label)
+        )
         y_true, y_pred = y_true[m], y_pred[m]
 
         if y_true.size == 0:
-            self.logger.warning("No valid IUPAC labels in 0..9; skipping.")
+            self.logger.warning("No valid IUPAC labels in expected range; skipping.")
             return
 
         report: dict | str = classification_report(
@@ -609,7 +651,7 @@ class ImputeRefAllele:
             pm = PrettyMetrics(
                 report_full,
                 precision=2,
-                title=f"{self.model_name} IUPAC 10-Class Report",
+                title=f"{self.model_name} IUPAC {len(labels_idx)}-Class Report",
             )
             pm.render()
 
@@ -705,28 +747,20 @@ class ImputeRefAllele:
     ) -> np.ndarray:
         """Decode 012-encodings to IUPAC chars with metadata repair.
 
-        This method converts genotype calls encoded as integers (0, 1, 2, etc.) into their corresponding IUPAC nucleotide codes. It supports two modes of decoding:
-        1. Nucleotide mode (`is_nuc=True`): Decodes integer codes (0-9) directly to IUPAC nucleotide codes.
-        2. Metadata mode (`is_nuc=False`): Uses reference and alternate allele metadata to determine the appropriate IUPAC codes. If metadata is missing or inconsistent, the method attempts to repair the decoding by scanning the source SNP data for valid IUPAC codes.
+        Supports:
+        - is_nuc=True: direct 0..9 -> IUPAC mapping
+        - is_nuc=False: ref/alt-based decoding with metadata repair
 
-        Args:
-            X (np.ndarray | pd.DataFrame | list[list[int]]): Input genotype calls as integers. Can be a NumPy array, Pandas DataFrame, or nested list.
-            is_nuc (bool): If True, decode 0-9 nucleotide codes; else use ref/alt metadata. Defaults to False.
+        Additional behavior:
+        - Multiallelic ALT is allowed. The ALT used for decoding is chosen as the
+            most common alternate base (A/C/G/T) observed in the source SNP column.
+        - If REF/ALT are missing or ambiguous, they are inferred from observed
+            base counts in the source SNP column (if available).
 
         Returns:
             np.ndarray: IUPAC strings as a 2D array of shape (n_samples, n_snps).
-
-        Notes:
-            - The method normalizes input values to handle various formats, including strings, lists, and arrays.
-            - It uses a predefined mapping of IUPAC codes to nucleotide bases and vice versa.
-            - Missing or invalid codes are represented as 'N' if they can't be resolved.
-            - The method includes repair logic to infer missing metadata from the source SNP data when necessary.
-
-        Raises:
-            ValueError: If input is not a DataFrame.
         """
         df = validate_input_type(X, return_type="df")
-
         if not isinstance(df, pd.DataFrame):
             msg = f"Expected a pandas.DataFrame in 'decode_012', but got: {type(df)}."
             self.logger.error(msg)
@@ -759,28 +793,18 @@ class ImputeRefAllele:
             """Normalize an input into a single IUPAC code token or None."""
             if value is None:
                 return None
-
-            # Bytes -> str (make type narrowing explicit)
             if isinstance(value, (bytes, np.bytes_)):
                 value = bytes(value).decode("utf-8", errors="ignore")
 
-            # Handle list/tuple/array/Series: take first valid
             if isinstance(value, (list, tuple, pd.Series, np.ndarray)):
-                # Convert Series to numpy array for consistent behavior
                 if isinstance(value, pd.Series):
                     arr = value.to_numpy()
                 else:
                     arr = value
-
-                # Scalar numpy array fast path
                 if isinstance(arr, np.ndarray) and arr.ndim == 0:
                     return _normalize_iupac(arr.item())
-
-                # Empty sequence/array
                 if len(arr) == 0:
                     return None
-
-                # First valid element wins
                 for item in arr:
                     code = _normalize_iupac(item)
                     if code is not None:
@@ -799,8 +823,119 @@ class ImputeRefAllele:
 
             return s if s in iupac_to_bases else None
 
+        def _extract_candidates(value: object) -> list[str]:
+            """Extract all candidate IUPAC tokens from multiallelic/list-like metadata."""
+            if value is None:
+                return []
+
+            if isinstance(value, (bytes, np.bytes_)):
+                value = bytes(value).decode("utf-8", errors="ignore")
+
+            # list-like: flatten
+            if isinstance(value, (list, tuple, pd.Series, np.ndarray)):
+                if isinstance(value, pd.Series):
+                    seq = value.to_numpy()
+                else:
+                    seq = value
+                out: list[str] = []
+                for item in seq:
+                    out.extend(_extract_candidates(item))
+                return out
+
+            s = str(value).upper().strip()
+            if not s or s in missing_codes:
+                return []
+
+            toks = [t.strip() for t in s.split(",")] if "," in s else [s]
+            out: list[str] = []
+            for tok in toks:
+                if not tok or tok in missing_codes:
+                    continue
+                if tok in iupac_to_bases:
+                    out.append(tok)
+            return out
+
+        def _base_counts_from_column(
+            col: np.ndarray, *, max_scan: int = 5000
+        ) -> dict[str, int]:
+            """Count A/C/G/T from a source SNP column of IUPAC codes.
+
+            Counting rule:
+            - Homozygote (single-base) contributes +2 to that base
+            - Heterozygote/ambiguity contributes +1 to each base in the set
+            """
+            counts = {"A": 0, "C": 0, "G": 0, "T": 0}
+            seen = 0
+            for val in col:
+                code = _normalize_iupac(val)
+                if code is None or code == "N":
+                    continue
+                bases = iupac_to_bases.get(code, set())
+                if not bases:
+                    continue
+                if len(bases) == 1:
+                    b = next(iter(bases))
+                    if b in counts:
+                        counts[b] += 2
+                else:
+                    for b in bases:
+                        if b in counts:
+                            counts[b] += 1
+                seen += 1
+                if seen >= max_scan:
+                    break
+            return counts
+
+        def _choose_single_base(
+            token: str | None, counts: dict[str, int]
+        ) -> str | None:
+            """If token is ambiguous, pick the most frequent constituent base; else return token."""
+            if token is None:
+                return None
+            bases = iupac_to_bases.get(token, set())
+            if not bases:
+                return None
+            if len(bases) == 1:
+                b = next(iter(bases))
+                return b if b in {"A", "C", "G", "T"} else token
+            # Ambiguous: choose most common base in observed counts
+            best = None
+            best_ct = -1
+            for b in bases:
+                ct = counts.get(b, 0)
+                if ct > best_ct:
+                    best_ct = ct
+                    best = b
+            return best if best in {"A", "C", "G", "T"} else None
+
+        def _choose_alt_from_candidates(
+            ref_base: str | None,
+            alt_candidates: list[str],
+            counts: dict[str, int],
+        ) -> str | None:
+            """Pick ALT as the most common base among candidates, excluding REF."""
+            # Reduce candidates to base set
+            base_cands: set[str] = set()
+            for tok in alt_candidates:
+                bases = iupac_to_bases.get(tok, set())
+                for b in bases:
+                    if b in {"A", "C", "G", "T"}:
+                        base_cands.add(b)
+
+            if ref_base in base_cands:
+                base_cands.remove(ref_base)
+
+            if not base_cands:
+                return None
+
+            # Most common by counts; deterministic tie-breaker by base order
+            order = {"A": 0, "C": 1, "G": 2, "T": 3}
+            best = max(base_cands, key=lambda b: (counts.get(b, 0), -order[b]))
+            return best
+
+        # numeric codes
         codes_df = df.apply(pd.to_numeric, errors="coerce")
-        codes = codes_df.fillna(-1).astype(np.float32).to_numpy()
+        codes = codes_df.fillna(-1).astype(np.int8).to_numpy()
         n_rows, n_cols = codes.shape
 
         if is_nuc:
@@ -809,7 +944,7 @@ class ImputeRefAllele:
             )
             out = np.full((n_rows, n_cols), "N", dtype="<U1")
             mask = (codes >= 0) & (codes <= 9)
-            out[mask] = iupac_list[codes[mask].astype(int)]
+            out[mask] = iupac_list[codes[mask]]
             return out
 
         # Metadata fetch
@@ -821,70 +956,87 @@ class ImputeRefAllele:
         if len(alt_alleles) != n_cols:
             alt_alleles = getattr(self, "_alt", [None] * n_cols)
 
-        # Ensure list length matches
         if len(ref_alleles) != n_cols:
             ref_alleles = [None] * n_cols
         if len(alt_alleles) != n_cols:
             alt_alleles = [None] * n_cols
 
         out = np.full((n_rows, n_cols), "N", dtype="<U1")
+
+        # Lazy-load source SNP data once
         source_snp_data = None
+        if getattr(self.genotype_data, "snp_data", None) is not None:
+            try:
+                source_snp_data = np.asarray(self.genotype_data.snp_data)
+            except Exception:
+                source_snp_data = None
 
         for j in range(n_cols):
-            ref = _normalize_iupac(ref_alleles[j])
-            alt = _normalize_iupac(alt_alleles[j])
+            ref_tok = _normalize_iupac(ref_alleles[j])
+            alt_toks = _extract_candidates(alt_alleles[j])  # multiallelic-safe
 
-            # --- REPAIR LOGIC ---
-            # If metadata is missing, scan the source column.
-            if ref is None or alt is None:
-                if source_snp_data is None and self.genotype_data.snp_data is not None:
-                    try:
-                        source_snp_data = np.asarray(self.genotype_data.snp_data)
-                    except Exception:
-                        pass  # if lazy loading fails
+            # Column base counts (if we have source data)
+            counts = {"A": 0, "C": 0, "G": 0, "T": 0}
+            if (
+                source_snp_data is not None
+                and source_snp_data.ndim == 2
+                and source_snp_data.shape[1] > j
+            ):
+                try:
+                    counts = _base_counts_from_column(source_snp_data[:, j])
+                except Exception:
+                    counts = {"A": 0, "C": 0, "G": 0, "T": 0}
 
-                if source_snp_data is not None:
-                    try:
-                        col_data = source_snp_data[:, j]
-                        uniques = set()
-                        # Optimization: check up to 200 non-empty values
-                        count = 0
-                        for val in col_data:
-                            norm = _normalize_iupac(val)
-                            if norm:
-                                uniques.add(norm)
-                                count += 1
-                            if len(uniques) >= 2 or count > 200:
-                                break
+            # Canonicalize REF to a single base if possible
+            ref_base = _choose_single_base(ref_tok, counts)
 
-                        sorted_u = sorted(list(uniques))
-                        if len(sorted_u) >= 1 and ref is None:
-                            ref = sorted_u[0]
-                        if len(sorted_u) >= 2 and alt is None:
-                            alt = sorted_u[1]
-                    except Exception:
-                        pass
+            # Choose ALT:
+            #  - if multiallelic candidates exist, pick most common base among them
+            #  - else if single ALT token exists, canonicalize it
+            alt_base = None
+            if alt_toks:
+                alt_base = _choose_alt_from_candidates(ref_base, alt_toks, counts)
+                if alt_base is None and len(alt_toks) == 1:
+                    alt_base = _choose_single_base(alt_toks[0], counts)
+            else:
+                # no ALT candidates in metadata
+                alt_base = None
+
+            # --- REPAIR LOGIC (frequency-aware) ---
+            # If still missing, infer from observed counts in source column:
+            if (ref_base is None or alt_base is None) and any(
+                v > 0 for v in counts.values()
+            ):
+                # Sort bases by count desc, then A/C/G/T deterministic
+                order = {"A": 0, "C": 1, "G": 2, "T": 3}
+                ranked = sorted(counts.keys(), key=lambda b: (-counts[b], order[b]))
+                if ref_base is None:
+                    ref_base = ranked[0]
+                if alt_base is None:
+                    alt_base = next(
+                        (b for b in ranked if b != ref_base and counts[b] > 0), None
+                    )
 
             # --- DEFAULTS FOR MISSING ---
-            # If still missing, we cannot decode.
-            if ref is None and alt is None:
-                ref = "N"
-                alt = "N"
-            elif ref is None:
-                ref = alt
-            elif alt is None:
-                alt = ref  # Monomorphic site: ALT becomes REF
+            if ref_base is None and alt_base is None:
+                ref_base = "N"
+                alt_base = "N"
+            elif ref_base is None:
+                ref_base = alt_base if alt_base is not None else "N"
+            elif alt_base is None:
+                # Monomorphic or truly no alt info -> treat as ref
+                alt_base = ref_base
+
+            ref = ref_base
+            alt = alt_base
 
             # --- COMPUTE HET CODE ---
             if ref == alt:
                 het_code = ref
             else:
-                ref_set = iupac_to_bases.get(ref, set()) if ref is not None else set()
-                alt_set = iupac_to_bases.get(alt, set()) if alt is not None else set()
-                union_set = frozenset(ref_set | alt_set)
+                union_set = frozenset({ref, alt})
                 het_code = bases_to_iupac.get(union_set, "N")
 
-            # --- ASSIGNMENT WITH SAFETY FALLBACKS ---
             col_codes = codes[:, j]
 
             # Case 0: REF
@@ -895,10 +1047,7 @@ class ImputeRefAllele:
             if het_code != "N":
                 out[col_codes == 1, j] = het_code
             else:
-                # If HET code is invalid (e.g. ref='A', alt='N'),
-                # fallback to REF
-                # Fix for an issue where a HET prediction at a monomorphic site
-                # produced 'N'
+                # fallback to REF if het is not representable
                 if ref != "N":
                     out[col_codes == 1, j] = ref
 
@@ -906,9 +1055,6 @@ class ImputeRefAllele:
             if alt != "N":
                 out[col_codes == 2, j] = alt
             else:
-                # If ALT is invalid (e.g. ref='A', alt='N'), fallback to REF
-                # Fix for an issue where an ALT prediction on a monomorphic site
-                # produced 'N'
                 if ref != "N":
                     out[col_codes == 2, j] = ref
 
@@ -924,6 +1070,13 @@ class ImputeRefAllele:
     ) -> dict[str, dict[str, float] | float]:
         """Compute additional metrics and augment the report dictionary.
 
+        Notes:
+            - Safely computes Average Precision (AP) even when some classes are absent
+            in y_true (common in haploid eval slices after 2->1 folding).
+            - AP is computed per-class as a one-vs-rest binary AP **only if that class
+            has at least one positive example** in y_true; otherwise AP is set to NaN.
+            - Macro/weighted AP are computed over classes with support > 0.
+
         Args:
             y_true (np.ndarray): True genotypes.
             y_pred (np.ndarray): Predicted genotypes.
@@ -934,87 +1087,105 @@ class ImputeRefAllele:
         Returns:
             dict[str, dict[str, float] | float]: Augmented report dictionary with additional metrics.
         """
-        y_true = y_true.astype(int)
-        y_pred = y_pred.astype(int)
+        y_true = np.asarray(y_true).astype(int, copy=False)
+        y_pred = np.asarray(y_pred).astype(int, copy=False)
 
         K = len(report_names)
+        # Keep only valid label indices (protects np.eye indexing)
         m = (y_true >= 0) & (y_true < K) & (y_pred >= 0) & (y_pred < K)
-        y_true = y_true[m].astype(int)
-        y_pred = y_pred[m].astype(int)
+        y_true = y_true[m]
+        y_pred = y_pred[m]
 
         if y_true.size == 0:
-            self.logger.warning(
-                "No valid labels for AP/Jaccard/MCC computation; skipping."
+            self.logger.warning("No valid labels for AP/Jaccard computation; skipping.")
+            return report
+
+        # Hard prediction "scores" (deterministic imputer has no probabilities).
+        # Shape: (N, K)
+        y_score_ohe = np.eye(K, dtype=float)[y_pred]
+
+        # --- Per-class AP (safe) ---
+        # Compute one-vs-rest AP only when the class exists in y_true.
+        ap_pc = np.full(K, np.nan, dtype=float)
+        support = np.zeros(K, dtype=int)
+        for k in range(K):
+            yk = (y_true == k).astype(int)
+            support[k] = int(yk.sum())
+            if support[k] == 0:
+                continue  # no positives -> AP undefined; leave NaN
+            # Use scores for class k (0/1 here)
+            ap_pc[k] = float(average_precision_score(yk, y_score_ohe[:, k]))
+
+        # Macro/weighted AP over supported classes only
+        supported = support > 0
+        if supported.any():
+            ap_macro = float(np.nanmean(ap_pc[supported]))
+            ap_weighted = float(
+                np.nansum(ap_pc[supported] * support[supported])
+                / support[supported].sum()
             )
-            return {
-                k: v
-                for k, v in report.items()
-                if k in report_names or k.endswith("avg") or k == "accuracy"
-            }
+        else:
+            ap_macro = float("nan")
+            ap_weighted = float("nan")
 
-        y_score = np.eye(K, dtype=float)[y_pred]
-
-        # Per-class metrics
-        ap_pc = average_precision_score(y_true, y_score, average=None)
+        # --- Jaccard (safe with zero_division=0) ---
         jaccard_pc = jaccard_score(
             y_true, y_pred, average=None, labels=labels, zero_division=0
         )
-
-        # Macro/weighted metrics
-        ap_macro = average_precision_score(y_true, y_score, average="macro")
-        ap_weighted = average_precision_score(y_true, y_score, average="weighted")
-        jaccard_macro = jaccard_score(y_true, y_pred, average="macro", zero_division=0)
-        jaccard_weighted = jaccard_score(
-            y_true, y_pred, average="weighted", zero_division=0
+        jaccard_macro = float(
+            jaccard_score(y_true, y_pred, average="macro", zero_division=0)
+        )
+        jaccard_weighted = float(
+            jaccard_score(y_true, y_pred, average="weighted", zero_division=0)
         )
 
-        # Matthews correlation coefficient (MCC)
-        mcc = matthews_corrcoef(y_true, y_pred)
-
-        if not isinstance(ap_pc, np.ndarray):
-            msg = "average_precision_score or f1_score did not return np.ndarray as expected."
-            self.logger.error(msg)
-            raise TypeError(msg)
+        # --- MCC ---
+        mcc = float(matthews_corrcoef(y_true, y_pred))
 
         if not isinstance(jaccard_pc, np.ndarray):
             msg = "jaccard_score did not return np.ndarray as expected."
             self.logger.error(msg)
             raise TypeError(msg)
 
-        # Add per-class metrics
-        report_full = {}
+        # Build augmented report
+        report_full: dict[str, dict[str, float] | float] = {}
+
         dd_subset = {
             k: v for k, v in report.items() if k in report_names and isinstance(v, dict)
         }
         for i, class_name in enumerate(report_names):
-            class_report: dict[str, float] = {}
-            if class_name in dd_subset:
-                class_report = dd_subset[class_name]
-
-            if isinstance(class_report, float) or not class_report:
+            class_report = dd_subset.get(class_name, {})
+            if not class_report:
                 continue
-
             report_full[class_name] = dict(class_report)
-            report_full[class_name]["average-precision"] = float(ap_pc[i])
+            # AP may be NaN if class absent in y_true (that’s correct)
+            report_full[class_name]["average-precision"] = (
+                float(ap_pc[i]) if np.isfinite(ap_pc[i]) else float("nan")
+            )
             report_full[class_name]["jaccard"] = float(jaccard_pc[i])
 
         macro_avg = report.get("macro avg")
         if isinstance(macro_avg, dict):
             report_full["macro avg"] = dict(macro_avg)
-            report_full["macro avg"]["average-precision"] = float(ap_macro)
-            report_full["macro avg"]["jaccard"] = float(jaccard_macro)
+            report_full["macro avg"]["average-precision"] = ap_macro
+            report_full["macro avg"]["jaccard"] = jaccard_macro
 
         weighted_avg = report.get("weighted avg")
         if isinstance(weighted_avg, dict):
             report_full["weighted avg"] = dict(weighted_avg)
-            report_full["weighted avg"]["average-precision"] = float(ap_weighted)
-            report_full["weighted avg"]["jaccard"] = float(jaccard_weighted)
+            report_full["weighted avg"]["average-precision"] = ap_weighted
+            report_full["weighted avg"]["jaccard"] = jaccard_weighted
 
-        # Add scalar summary metrics
-        report_full["mcc"] = float(mcc)
+        report_full["mcc"] = mcc
         accuracy_val = report.get("accuracy")
-
         if isinstance(accuracy_val, (int, float)):
             report_full["accuracy"] = float(accuracy_val)
+
+        # Optional: log once if AP had undefined classes (helps debugging haploid slices)
+        if np.any((support == 0)):
+            missing_classes = [report_names[i] for i in range(K) if support[i] == 0]
+            self.logger.debug(
+                f"AP undefined for classes absent in y_true (support=0): {missing_classes}"
+            )
 
         return report_full
