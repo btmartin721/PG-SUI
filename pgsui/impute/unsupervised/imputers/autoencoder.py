@@ -459,6 +459,13 @@ class ImputeAutoencoder(BaseNNImputer):
         self.ground_truth_ = gt_full.astype(np.int8, copy=False)
         self.num_features_ = int(self.ground_truth_.shape[1])
 
+        if self.is_haploid_:
+            gt_h = np.where(self.ground_truth_ > 0, 1, self.ground_truth_).astype(
+                np.int8, copy=False
+            )
+            gt_h[self.ground_truth_ < 0] = -1
+            self.ground_truth_ = gt_h
+
         self.model_params = {
             "n_features": self.num_features_,
             "num_classes": self.num_classes_,
@@ -637,8 +644,8 @@ class ImputeAutoencoder(BaseNNImputer):
 
         # Data loaders expect numpy arrays; force CPU materialization safely
         try:
-            Xtr_np = self.X_train_.numpy(force=True)
-            Xva_np = self.X_val_.numpy(force=True)
+            Xtr_np = self.X_train_.detach().cpu().numpy()
+            Xva_np = self.X_val_.detach().cpu().numpy()
 
             if Xtr_np.ndim == 3:
                 Xtr_np = Xtr_np.reshape(
@@ -684,6 +691,26 @@ class ImputeAutoencoder(BaseNNImputer):
                 max_ratio=self.max_ratio,
                 power=self.power,
             )
+            # --- Sanitize Haploid/Invalid Weights ---
+            if self.class_weights_ is not None:
+                # 1. Truncate dimension if needed
+                # (Haploid returns 3 weights for 2 classes)
+                if self.is_haploid_ and self.class_weights_.numel() > self.num_classes_:
+                    self.logger.warning(
+                        f"Haploid mode: Truncating class weights from {self.class_weights_.shape} to {self.num_classes_}."
+                    )
+                    self.class_weights_ = self.class_weights_[: self.num_classes_]
+
+                # 2. Check for NaN/Inf (caused by 0 counts in inverse freq)
+                if not torch.isfinite(self.class_weights_).all():
+                    self.logger.warning(
+                        f"Class weights contain NaN/Inf ({self.class_weights_}). "
+                        "This usually happens with rare variants in small splits. Resetting to uniform weights."
+                    )
+                    self.class_weights_ = torch.ones(
+                        self.num_classes_, device=self.device
+                    )
+
             keys = OBJECTIVE_SPEC_AE.keys
             self.tuned_params_ = {k: getattr(self, k) for k in keys}
             self.tuned_params_["model_params"] = self.model_params
@@ -839,6 +866,9 @@ class ImputeAutoencoder(BaseNNImputer):
             msg = f"{self.model_name} decode_012 failed during transform(): {e}"
             self.logger.error(msg)
             raise RuntimeError(msg) from e
+
+        if getattr(self, "is_haploid_", False):
+            imputed_gt = self._sanitize_haploid_decoded_output(imputed_gt)
 
         if (imputed_gt == "N").any():
             msg = f"Something went wrong: {self.model_name} imputation still contains {int((imputed_gt == 'N').sum())} missing values ('N')."
@@ -1207,6 +1237,10 @@ class ImputeAutoencoder(BaseNNImputer):
                 X_batch = X_batch.to(self.device, non_blocking=True).float()
                 y_batch = y_batch.to(self.device, non_blocking=True).long()
                 m_batch = m_batch.to(self.device, non_blocking=True).bool()
+                flat_mask = m_batch.view(-1)
+                y_flat = y_batch.view(-1)
+                valid_targets = (y_flat >= 0) & (y_flat < nC_model)
+                flat_mask = flat_mask & valid_targets
 
                 logits_flat = model(X_batch)
 
@@ -1216,14 +1250,14 @@ class ImputeAutoencoder(BaseNNImputer):
                     self.logger.error(msg)
                     raise ValueError(msg)
 
-                logits_masked = logits_flat.view(-1, nC_model)[m_batch.view(-1)]
-                targets_masked = y_batch.view(-1)[m_batch.view(-1)]
+                logits_masked = logits_flat.view(-1, nC_model)[flat_mask]
+                targets_masked = y_flat[flat_mask]
 
                 if targets_masked.numel() == 0:
                     continue
 
-                if torch.any(targets_masked < 0):
-                    msg = f"[{self.model_name}] Masked targets contain negative labels; mask/targets are inconsistent."
+                if torch.any((targets_masked < 0) | (targets_masked >= nC_model)):
+                    msg = f"[{self.model_name}] Masked targets contain out-of-range labels; expected in [0, {nC_model - 1}]."
                     self.logger.error(msg)
                     raise ValueError(msg)
 
@@ -1330,6 +1364,10 @@ class ImputeAutoencoder(BaseNNImputer):
                     X_batch = X_batch.to(self.device, non_blocking=True).float()
                     y_batch = y_batch.to(self.device, non_blocking=True).long()
                     m_batch = m_batch.to(self.device, non_blocking=True).bool()
+                    flat_mask = m_batch.view(-1)
+                    y_flat = y_batch.view(-1)
+                    valid_targets = (y_flat >= 0) & (y_flat < nC_model)
+                    flat_mask = flat_mask & valid_targets
 
                     logits_flat = model(X_batch)
 
@@ -1342,17 +1380,14 @@ class ImputeAutoencoder(BaseNNImputer):
                             self.logger.error(msg)
                             raise ValueError(msg) from e
 
-                    logits_masked = logits_flat.view(-1, nC_model)
-                    flat_mask = m_batch.view(-1)
-                    logits_masked = logits_masked[flat_mask]
-
-                    targets_masked = y_batch.view(-1)[flat_mask]
+                    logits_masked = logits_flat.view(-1, nC_model)[flat_mask]
+                    targets_masked = y_flat[flat_mask]
 
                     if targets_masked.numel() == 0:
                         continue
 
-                    if torch.any(targets_masked < 0):
-                        msg = f"[{self.model_name}] Masked targets contain negative labels; mask/targets are inconsistent."
+                    if torch.any((targets_masked < 0) | (targets_masked >= nC_model)):
+                        msg = f"[{self.model_name}] Masked targets contain out-of-range labels; expected in [0, {nC_model - 1}]."
                         self.logger.error(msg)
                         raise ValueError(msg)
 
@@ -1440,6 +1475,13 @@ class ImputeAutoencoder(BaseNNImputer):
             self.logger.error(msg)
             raise ValueError(msg) from e
 
+        if X_tensor.numel() == 0:
+            empty_labels = np.empty((0, nF), dtype=np.int64)
+            empty_proba = (
+                np.empty((0, nF, nC), dtype=np.float32) if return_proba else None
+            )
+            return empty_labels, empty_proba
+
         X_tensor = X_tensor.float()
         if X_tensor.device != self.device:
             X_tensor = X_tensor.to(self.device)
@@ -1462,6 +1504,15 @@ class ImputeAutoencoder(BaseNNImputer):
 
         with torch.no_grad():
             raw = model(X_tensor)
+            if not torch.is_tensor(raw):
+                msg = f"[{self.model_name}] Autoencoder forward must return logits tensor; got {type(raw).__name__}."
+                self.logger.error(msg)
+                raise RuntimeError(msg)
+            expected = X_tensor.shape[0] * nF * nC
+            if raw.numel() != expected:
+                msg = f"[{self.model_name}] Autoencoder logits size mismatch: got {raw.numel()}, expected {expected}."
+                self.logger.error(msg)
+                raise RuntimeError(msg)
             logits = raw.view(-1, nF, nC)
             probas = torch.softmax(logits, dim=-1)
             labels = torch.argmax(probas, dim=-1)
@@ -1564,6 +1615,12 @@ class ImputeAutoencoder(BaseNNImputer):
             self.logger.error(msg)
             raise ValueError(msg)
 
+        if not np.isfinite(y_proba_flat).all():
+            self.logger.warning(
+                f"[{self.model_name}] Non-finite probabilities detected; replacing with 0 and renormalizing."
+            )
+            y_proba_flat = np.nan_to_num(y_proba_flat, nan=0.0, posinf=0.0, neginf=0.0)
+
         K = int(y_proba_flat.shape[1])
         if self.is_haploid_:
             if K not in (2, 3):
@@ -1575,6 +1632,11 @@ class ImputeAutoencoder(BaseNNImputer):
                 msg = f"Diploid evaluation expects 3 classes; got {K}."
                 self.logger.error(msg)
                 raise ValueError(msg)
+
+        if not self.is_haploid_ and np.any((y_true_flat < 0) | (y_true_flat > 2)):
+            msg = "Diploid y_true_flat contains values outside {0,1,2} after masking."
+            self.logger.error(msg)
+            raise ValueError(msg)
 
         if self.is_haploid_:
             y_true_flat = (y_true_flat > 0).astype(np.int8, copy=False)
@@ -1657,7 +1719,8 @@ class ImputeAutoencoder(BaseNNImputer):
             y_true_dec = self.decode_012(y_true_matrix)
             y_pred_dec = self.decode_012(y_pred_matrix)
 
-            encodings_dict = {
+            # Diploid mapping dict (kept for ploidy=2 path)
+            encodings_dict_diploid = {
                 "A": 0,
                 "C": 1,
                 "G": 2,
@@ -1670,21 +1733,59 @@ class ImputeAutoencoder(BaseNNImputer):
                 "S": 9,
                 "N": -1,
             }
-            y_true_int = self.pgenc.convert_int_iupac(
-                y_true_dec, encodings_dict=encodings_dict
+
+            # Haploid mapping dict
+            encodings_dict_haploid = {"A": 0, "C": 1, "G": 2, "T": 3, "N": -1}
+
+            y_true_int = self._convert_int_iupac_ploidy(
+                y_true_dec,
+                ploidy=self.ploidy,
+                encodings_dict=(
+                    encodings_dict_haploid
+                    if self.is_haploid_
+                    else encodings_dict_diploid
+                ),
+                ref=getattr(self.genotype_data, "ref", None),
+                alt=getattr(self.genotype_data, "alt", None),
+                ambiguity_mode="ref_alt",  # or "first_base" if you don’t trust ref/alt
             )
-            y_pred_int = self.pgenc.convert_int_iupac(
-                y_pred_dec, encodings_dict=encodings_dict
+            y_pred_int = self._convert_int_iupac_ploidy(
+                y_pred_dec,
+                ploidy=self.ploidy,
+                encodings_dict=(
+                    encodings_dict_haploid
+                    if self.is_haploid_
+                    else encodings_dict_diploid
+                ),
+                ref=getattr(self.genotype_data, "ref", None),
+                alt=getattr(self.genotype_data, "alt", None),
+                ambiguity_mode="ref_alt",
             )
 
-            valid_iupac_mask = y_true_int[m_arr] >= 0
-            if valid_iupac_mask.any():
+            y_true_eval = y_true_int[eval_mask]
+            y_pred_eval = y_pred_int[eval_mask]
+            n_iupac_classes = 4 if self.num_classes_ == 2 else 10
+            valid_iupac_mask = (
+                (y_true_eval >= 0)
+                & (y_true_eval < n_iupac_classes)
+                & (y_pred_eval >= 0)
+                & (y_pred_eval < n_iupac_classes)
+            )
+            if bool(valid_iupac_mask.any()) and self.num_classes_ > 2:
                 self._make_class_reports(
-                    y_true=y_true_int[m_arr][valid_iupac_mask],
-                    y_pred=y_pred_int[m_arr][valid_iupac_mask],
+                    y_true=y_true_eval[valid_iupac_mask],
+                    y_pred=y_pred_eval[valid_iupac_mask],
                     metrics=metrics,
                     y_pred_proba=None,
                     labels=["A", "C", "G", "T", "W", "R", "M", "K", "Y", "S"],
+                )
+            elif bool(valid_iupac_mask.any()) and self.num_classes_ == 2:
+                self._make_class_reports(
+                    y_true=y_true_eval[valid_iupac_mask],
+                    y_pred=y_pred_eval[valid_iupac_mask],
+                    metrics=metrics,
+                    y_pred_proba=None,
+                    labels=["A", "C", "G", "T"],
                 )
             else:
                 self.logger.warning(
@@ -1718,7 +1819,7 @@ class ImputeAutoencoder(BaseNNImputer):
             lr: float = params["learning_rate"]
             l1_penalty: float = params["l1_penalty"]
 
-            class_weights = self._class_weights_from_zygosity(
+            class_weights_ = self._class_weights_from_zygosity(
                 self.y_train_,
                 train_mask=self.eval_mask_train_,
                 inverse=params["inverse"],
@@ -1727,13 +1828,31 @@ class ImputeAutoencoder(BaseNNImputer):
                 power=params["power"],
             )
 
+            # --- Sanitize Haploid/Invalid Weights ---
+            if class_weights_ is not None:
+                # 1. Truncate dimension if needed
+                # (Haploid returns 3 weights for 2 classes)
+                if self.is_haploid_ and class_weights_.numel() > self.num_classes_:
+                    self.logger.warning(
+                        f"Haploid mode: Truncating class weights from {class_weights_.shape} to {self.num_classes_}."
+                    )
+                    class_weights_ = class_weights_[: self.num_classes_]
+
+                # 2. Check for NaN/Inf (caused by 0 counts in inverse freq)
+                if not torch.isfinite(class_weights_).all():
+                    self.logger.warning(
+                        f"Class weights contain NaN/Inf ({class_weights_}). "
+                        "This usually happens with rare variants in small splits. Resetting to uniform weights."
+                    )
+                    class_weights_ = torch.ones(self.num_classes_, device=self.device)
+
             res = self._train_and_validate_model(
                 model=model,
                 lr=lr,
                 l1_penalty=l1_penalty,
                 params=params,
                 trial=trial,
-                class_weights=class_weights,
+                class_weights=class_weights_,
                 gamma_schedule=params["gamma_schedule"],
             )
             model = res[1]
@@ -1905,6 +2024,24 @@ class ImputeAutoencoder(BaseNNImputer):
             max_ratio=self.max_ratio,
             power=self.power,
         )
+
+        # --- Sanitize Haploid/Invalid Weights ---
+        if self.class_weights_ is not None:
+            # 1. Truncate dimension if needed
+            # (Haploid returns 3 weights for 2 classes)
+            if self.is_haploid_ and self.class_weights_.numel() > self.num_classes_:
+                self.logger.warning(
+                    f"Haploid mode: Truncating class weights from {self.class_weights_.shape} to {self.num_classes_}."
+                )
+                self.class_weights_ = self.class_weights_[: self.num_classes_]
+
+            # 2. Check for NaN/Inf (caused by 0 counts in inverse freq)
+            if not torch.isfinite(self.class_weights_).all():
+                self.logger.warning(
+                    f"Class weights contain NaN/Inf ({self.class_weights_}). "
+                    "This usually happens with rare variants in small splits. Resetting to uniform weights."
+                )
+                self.class_weights_ = torch.ones(self.num_classes_, device=self.device)
 
         nF = int(self.num_features_)
         nC = int(self.num_classes_)
