@@ -4,6 +4,23 @@ Changelog
 
 An overview of changes to **PG-SUI** by release. This file mirrors the GitHub Markdown changelog and reflects the refactor-era docs: dataclass-first configs, presets, unified scikit-learn framework-based ``fit()/transform()`` methods, CLI precedence, and updated deterministic/supervised docs.
 
+v1.7.8 - 2026-02-15
+-------------------
+
+Bug Fixes - v1.7.8
+^^^^^^^^^^^^^^^^^^
+
+- Harmonized haploid handling across ``ImputeUBP``, ``ImputeNLPCA``, ``ImputeAutoencoder``, and ``ImputeVAE`` for ``transform()``, ``_predict()``, training/validation steps, and class-report generation.
+- Corrected ``class_weights_`` lifecycle so pre-tuning and post-tuning paths consistently use sanitized weights for haploid (2-class) and diploid (3-class) runs.
+- Hardened focal cross-entropy validation in ``FocalCELoss`` for logits/targets/reduction handling so haploid and diploid targets are masked and scored safely.
+- Fixed ``decode_012`` edge cases affecting deterministic and unsupervised imputers so multi-allelic and ambiguous IUPAC inputs are decoded without injecting false missing calls.
+
+Improvements - v1.7.8
+^^^^^^^^^^^^^^^^^^^^^
+
+- Added consistent target-range filtering and finite-value guards in ``_evaluate_model()``, ``_train_epoch()``, ``_train_step()``, ``_val_step_with_projection()``, and ``_val_step()`` across unsupervised models.
+- Refined deterministic imputer DataFrame update paths and logging to avoid pandas copy/indexing pitfalls and keep report outputs aligned.
+
 v1.7.7 - 2026-02-03
 -------------------
 
