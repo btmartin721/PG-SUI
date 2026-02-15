@@ -532,6 +532,26 @@ class ImputeUBP(BaseNNImputer):
                 power=self.power,
             )
 
+            # --- Sanitize Haploid/Invalid Weights ---
+            if self.class_weights_ is not None:
+                # 1. Truncate dimension if needed
+                # (Haploid returns 3 weights for 2 classes)
+                if self.is_haploid_ and self.class_weights_.numel() > self.num_classes_:
+                    self.logger.warning(
+                        f"Haploid mode: Truncating class weights from {self.class_weights_.shape} to {self.num_classes_}."
+                    )
+                    self.class_weights_ = self.class_weights_[: self.num_classes_]
+
+                # 2. Check for NaN/Inf (caused by 0 counts in inverse freq)
+                if not torch.isfinite(self.class_weights_).all():
+                    self.logger.warning(
+                        f"Class weights contain NaN/Inf ({self.class_weights_}). "
+                        "This usually happens with rare variants in small splits. Resetting to uniform weights."
+                    )
+                    self.class_weights_ = torch.ones(
+                        self.num_classes_, device=self.device
+                    )
+
             keys = OBJECTIVE_SPEC_UBP.keys
             self.tuned_params_ = {k: getattr(self, k) for k in keys}
             self.tuned_params_["model_params"] = self.model_params
@@ -652,6 +672,16 @@ class ImputeUBP(BaseNNImputer):
             self.logger.error(msg)
             raise NotFittedError(msg)
 
+        if getattr(self, "model_", None) is None:
+            msg = f"{self.model_name}.model_ is missing; fit() did not complete successfully."
+            self.logger.error(msg)
+            raise NotFittedError(msg)
+
+        if getattr(self, "ground_truth_", None) is None:
+            msg = f"{self.model_name}.ground_truth_ is missing; cannot transform."
+            self.logger.error(msg)
+            raise RuntimeError(msg)
+
         self.logger.info(f"Imputing entire dataset with {self.model_name}...")
 
         self.logger.debug(
@@ -672,20 +702,35 @@ class ImputeUBP(BaseNNImputer):
             f"[{self.model_name}] Projection complete. Generating predictions..."
         )
 
+        if self.ground_truth_.ndim != 2:
+            msg = f"{self.model_name}.ground_truth_ must be 2D; got shape {self.ground_truth_.shape}."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
         full_indices = np.arange(self.total_samples_)
         pred_labels, _ = self._predict(self.model_, indices=full_indices)
+        if pred_labels.shape != self.ground_truth_.shape:
+            msg = (
+                f"{self.model_name} prediction shape mismatch: "
+                f"pred_labels={pred_labels.shape}, ground_truth_={self.ground_truth_.shape}."
+            )
+            self.logger.error(msg)
+            raise RuntimeError(msg)
 
         imputed = self.ground_truth_.copy()
         missing_mask = imputed < 0
         imputed[missing_mask] = pred_labels[missing_mask]
 
-        # 3. Handle Haploid mapping (2->1) before decoding if needed
+        # 3. Haploid decode uses diploid decoder semantics: map ALT=1 -> 2
         decode_input = imputed
         if getattr(self, "is_haploid_", False):
             decode_input = imputed.copy()
             decode_input[decode_input == 1] = 2
 
         decoded = self.decode_012(decode_input)
+
+        if getattr(self, "is_haploid_", False):
+            decoded = self._sanitize_haploid_decoded_output(decoded)
 
         if (decoded == "N").any():
             msg = f"Something went wrong: {self.model_name} imputation still contains {(decoded == 'N').sum()} missing values ('N')."
@@ -824,6 +869,9 @@ class ImputeUBP(BaseNNImputer):
                 m = m.to(self.device, non_blocking=True).bool()
 
                 flat_mask = m.view(-1)
+                y_flat = y.view(-1)
+                valid_targets = (y_flat >= 0) & (y_flat < self.num_classes_)
+                flat_mask = flat_mask & valid_targets
                 if flat_mask.sum().item() == 0:
                     continue
 
@@ -844,29 +892,37 @@ class ImputeUBP(BaseNNImputer):
                     logits = model(idx)  # (B, L, K)
 
                 logits_2d = logits.view(-1, self.num_classes_)[flat_mask]
-                targets_1d = y.view(-1)[flat_mask]
+                targets_1d = y_flat[flat_mask]
+
+                # --- Clamp Logits for Numerical Stability ---
+                # Prevents huge values from causing log(0) or exp(inf) in FocalLoss
+                logits_2d = torch.clamp(logits_2d, min=-30.0, max=30.0)
 
                 loss = criterion(logits_2d, targets_1d)
 
-                # L1 regularization
+                # --- L1 Regularization ---
                 if l1 > 0.0:
                     reg = torch.zeros((), device=self.device)
                     if phase == 1:
+                        # Phase 1: Regulate embedding + temp layer
                         reg = reg + model.embedding.weight.abs().sum()  # type: ignore[attr-defined]
                         reg = reg + temp_layer.weight.abs().sum()  # type: ignore[union-attr]
                     else:
+                        # Phase 2 & 3: Regulate network weights
                         for p in model.hidden_layers.parameters():  # type: ignore[attr-defined]
                             reg = reg + p.abs().sum()
                         for p in model.dense_output.parameters():  # type: ignore[attr-defined]
                             reg = reg + p.abs().sum()
+
+                        # NEW: In Phase 3, we MUST regulate embeddings too,
+                        # otherwise V explodes while W shrinks (Scale Ambiguity)
+                        if phase == 3:
+                            reg = reg + model.embedding.weight.abs().sum()  # type: ignore[attr-defined]
+
                     loss = loss + float(l1) * reg
 
                 # ---- Critical diagnostic ----
                 if not loss.requires_grad:
-                    # This indicates we're still not building a graph:
-                    # either grad mode is off
-                    # (should be fixed by enable_grad)
-                    # or everything is detached/frozen.
                     grad_enabled = torch.is_grad_enabled()
                     opt_reqs = [
                         p.requires_grad
@@ -1261,6 +1317,9 @@ class ImputeUBP(BaseNNImputer):
                     m = m.to(self.device, non_blocking=True).bool()
 
                     flat_mask = m.view(-1)
+                    y_flat = y.view(-1)
+                    valid_targets = (y_flat >= 0) & (y_flat < self.num_classes_)
+                    flat_mask = flat_mask & valid_targets
                     if flat_mask.sum().item() == 0:
                         continue
 
@@ -1275,9 +1334,12 @@ class ImputeUBP(BaseNNImputer):
                         else:
                             out_pre = model(override_embeddings=v_batch)
 
+                        # NOTE: consider moving stability into the loss implementation instead.
+                        out_pre = torch.clamp(out_pre, min=-30.0, max=30.0)
+
                         loss_pre = criterion(
                             out_pre.view(-1, self.num_classes_)[flat_mask],
-                            y.view(-1)[flat_mask],
+                            y_flat[flat_mask],
                         )
                         if not torch.isfinite(loss_pre):
                             raise RuntimeError(
@@ -1300,7 +1362,7 @@ class ImputeUBP(BaseNNImputer):
 
                         loss = criterion(
                             out.view(-1, self.num_classes_)[flat_mask],
-                            y.view(-1)[flat_mask],
+                            y_flat[flat_mask],
                         )
                         if not torch.isfinite(loss):
                             raise RuntimeError(
@@ -1319,7 +1381,7 @@ class ImputeUBP(BaseNNImputer):
 
                         val_l = criterion(
                             out_final.view(-1, self.num_classes_)[flat_mask],
-                            y.view(-1)[flat_mask],
+                            y_flat[flat_mask],
                         )
                         if not torch.isfinite(val_l):
                             raise RuntimeError(
@@ -1738,7 +1800,7 @@ class ImputeUBP(BaseNNImputer):
                     labels=target_names,
                 )
 
-                # --- IUPAC decode and 10-base integer report (keep existing behavior) ---
+                # --- IUPAC decode and 10-base integer report ---
                 y_true_matrix = np.array(y, copy=True)
                 y_pred_matrix = np.array(pred_labels, copy=True)
 
@@ -1749,7 +1811,8 @@ class ImputeUBP(BaseNNImputer):
                 y_true_dec = self.decode_012(y_true_matrix)
                 y_pred_dec = self.decode_012(y_pred_matrix)
 
-                encodings_dict = {
+                # Diploid mapping dict (kept for ploidy=2 path)
+                encodings_dict_diploid = {
                     "A": 0,
                     "C": 1,
                     "G": 2,
@@ -1762,21 +1825,59 @@ class ImputeUBP(BaseNNImputer):
                     "S": 9,
                     "N": -1,
                 }
-                y_true_int = self.pgenc.convert_int_iupac(
-                    y_true_dec, encodings_dict=encodings_dict
+
+                # Haploid mapping dict
+                encodings_dict_haploid = {"A": 0, "C": 1, "G": 2, "T": 3, "N": -1}
+
+                y_true_int = self._convert_int_iupac_ploidy(
+                    y_true_dec,
+                    ploidy=self.ploidy,
+                    encodings_dict=(
+                        encodings_dict_haploid
+                        if self.is_haploid_
+                        else encodings_dict_diploid
+                    ),
+                    ref=getattr(self.genotype_data, "ref", None),
+                    alt=getattr(self.genotype_data, "alt", None),
+                    ambiguity_mode="ref_alt",  # or "first_base" if you don’t trust ref/alt
                 )
-                y_pred_int = self.pgenc.convert_int_iupac(
-                    y_pred_dec, encodings_dict=encodings_dict
+                y_pred_int = self._convert_int_iupac_ploidy(
+                    y_pred_dec,
+                    ploidy=self.ploidy,
+                    encodings_dict=(
+                        encodings_dict_haploid
+                        if self.is_haploid_
+                        else encodings_dict_diploid
+                    ),
+                    ref=getattr(self.genotype_data, "ref", None),
+                    alt=getattr(self.genotype_data, "alt", None),
+                    ambiguity_mode="ref_alt",
                 )
 
-                valid_iupac_mask = y_true_int[eval_mask] >= 0
-                if bool(valid_iupac_mask.any()):
+                y_true_eval = y_true_int[eval_mask]
+                y_pred_eval = y_pred_int[eval_mask]
+                n_iupac_classes = 4 if self.num_classes_ == 2 else 10
+                valid_iupac_mask = (
+                    (y_true_eval >= 0)
+                    & (y_true_eval < n_iupac_classes)
+                    & (y_pred_eval >= 0)
+                    & (y_pred_eval < n_iupac_classes)
+                )
+                if bool(valid_iupac_mask.any()) and self.num_classes_ > 2:
                     self._make_class_reports(
-                        y_true=y_true_int[eval_mask][valid_iupac_mask],
-                        y_pred=y_pred_int[eval_mask][valid_iupac_mask],
+                        y_true=y_true_eval[valid_iupac_mask],
+                        y_pred=y_pred_eval[valid_iupac_mask],
                         metrics=metrics,
                         y_pred_proba=None,
                         labels=["A", "C", "G", "T", "W", "R", "M", "K", "Y", "S"],
+                    )
+                elif bool(valid_iupac_mask.any()) and self.num_classes_ == 2:
+                    self._make_class_reports(
+                        y_true=y_true_eval[valid_iupac_mask],
+                        y_pred=y_pred_eval[valid_iupac_mask],
+                        metrics=metrics,
+                        y_pred_proba=None,
+                        labels=["A", "C", "G", "T"],
                     )
                 else:
                     self.logger.warning(
@@ -1826,6 +1927,33 @@ class ImputeUBP(BaseNNImputer):
         if idx.dim() != 1:
             idx = idx.view(-1)
 
+        if idx.numel() == 0:
+            empty_labels = np.empty((0, int(self.num_features_)), dtype=np.int64)
+            empty_proba = (
+                np.empty(
+                    (0, int(self.num_features_), int(self.num_classes_)),
+                    dtype=np.float32,
+                )
+                if return_proba
+                else None
+            )
+            return empty_labels, empty_proba
+
+        n_samples = int(getattr(self, "total_samples_", 0))
+        if n_samples <= 0:
+            msg = f"[{self.model_name}] total_samples_ must be > 0; got {n_samples}."
+            self.logger.error(msg)
+            raise RuntimeError(msg)
+
+        bad = (idx < 0) | (idx >= n_samples)
+        if bool(bad.any()):
+            msg = (
+                f"[{self.model_name}] indices out of range for embedding table size "
+                f"{n_samples}: min={int(idx.min().item())}, max={int(idx.max().item())}."
+            )
+            self.logger.error(msg)
+            raise ValueError(msg)
+
         idx = idx.to(self.device, non_blocking=True)
 
         model.eval()
@@ -1843,8 +1971,8 @@ class ImputeUBP(BaseNNImputer):
             labels = torch.argmax(probas, dim=-1)
 
         if return_proba:
-            return labels.numpy(force=True), probas.numpy(force=True)
-        return labels.numpy(force=True), None
+            return labels.detach().cpu().numpy(), probas.detach().cpu().numpy()
+        return labels.detach().cpu().numpy(), None
 
     def _objective(self, trial: optuna.Trial) -> float | tuple[float, ...]:
         """Objective function for hyperparameter tuning.
@@ -1874,14 +2002,33 @@ class ImputeUBP(BaseNNImputer):
         l1_penalty: float = params["l1_penalty"]
 
         train_loss_mask = self.X_train_corrupted_ >= 0
-        class_weights = self._class_weights_from_zygosity(
+
+        class_weights_ = self._class_weights_from_zygosity(
             self.y_train_,
-            train_mask=train_loss_mask,
-            inverse=params["inverse"],
-            normalize=params["normalize"],
+            train_mask=train_loss_mask,  # NOTE: # not sim_mask
+            inverse=bool(params["inverse"]),
+            normalize=bool(params["normalize"]),
             max_ratio=self.max_ratio,
-            power=params["power"],
+            power=float(params["power"]),
         )
+
+        # --- Sanitize Haploid/Invalid Weights ---
+        if class_weights_ is not None:
+            # 1. Truncate dimension if needed
+            # (Haploid returns 3 weights for 2 classes)
+            if self.is_haploid_ and class_weights_.numel() > self.num_classes_:
+                self.logger.warning(
+                    f"Haploid mode: Truncating class weights from {class_weights_.shape} to {self.num_classes_}."
+                )
+                class_weights_ = class_weights_[: self.num_classes_]
+
+            # 2. Check for NaN/Inf (caused by 0 counts in inverse freq)
+            if not torch.isfinite(class_weights_).all():
+                self.logger.warning(
+                    f"Class weights contain NaN/Inf ({class_weights_}). "
+                    "This usually happens with rare variants in small splits. Resetting to uniform weights."
+                )
+                class_weights_ = torch.ones(self.num_classes_, device=self.device)
 
         res = self._execute_ubp_training(
             model=model,
@@ -1889,7 +2036,7 @@ class ImputeUBP(BaseNNImputer):
             l1_penalty=l1_penalty,
             params=params,
             trial=trial,
-            class_weights=class_weights,
+            class_weights=class_weights_,
             gamma_schedule=params["gamma_schedule"],
         )
 
@@ -1904,7 +2051,7 @@ class ImputeUBP(BaseNNImputer):
             project_embedding=True,
             objective_mode=True,
             trial=trial,
-            class_weights=class_weights,
+            class_weights=class_weights_,
             persist_projection=False,
         )
 
@@ -2017,6 +2164,24 @@ class ImputeUBP(BaseNNImputer):
             max_ratio=self.max_ratio,
             power=self.power,
         )
+
+        # --- Sanitize Haploid/Invalid Weights ---
+        if self.class_weights_ is not None:
+            # 1. Truncate dimension if needed
+            # (Haploid returns 3 weights for 2 classes)
+            if self.is_haploid_ and self.class_weights_.numel() > self.num_classes_:
+                self.logger.warning(
+                    f"Haploid mode: Truncating class weights from {self.class_weights_.shape} to {self.num_classes_}."
+                )
+                self.class_weights_ = self.class_weights_[: self.num_classes_]
+
+            # 2. Check for NaN/Inf (caused by 0 counts in inverse freq)
+            if not torch.isfinite(self.class_weights_).all():
+                self.logger.warning(
+                    f"Class weights contain NaN/Inf ({self.class_weights_}). "
+                    "This usually happens with rare variants in small splits. Resetting to uniform weights."
+                )
+                self.class_weights_ = torch.ones(self.num_classes_, device=self.device)
 
         nF = int(self.num_features_)
         nC = int(self.num_classes_)
