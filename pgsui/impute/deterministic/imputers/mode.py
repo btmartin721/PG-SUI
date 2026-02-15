@@ -283,7 +283,7 @@ class ImputeMostFrequent:
         self.ground_truth012_ = self.X012_.copy()
 
         # Work in DataFrame with NaN as missing for mode computation
-        df_all = pd.DataFrame(self.ground_truth012_).astype("float32", copy=True)
+        df_all = pd.DataFrame(self.ground_truth012_).astype("float32").copy()
         df_all[df_all < 0] = np.nan
 
         # Modes from TRAIN rows only (per-locus)
@@ -682,9 +682,7 @@ class ImputeMostFrequent:
         m = (y_true_iupac >= 0) & (y_pred_iupac >= 0)
         y_true_iupac, y_pred_iupac = y_true_iupac[m], y_pred_iupac[m]
         if y_true_iupac.size == 0:
-            self.logger.warning(
-                "No valid IUPAC test cells; skipping IUPAC evaluation."
-            )
+            self.logger.warning("No valid IUPAC test cells; skipping IUPAC evaluation.")
             return
 
         self._evaluate_iupac10_and_plot(y_true_iupac, y_pred_iupac)
@@ -792,7 +790,12 @@ class ImputeMostFrequent:
             report_names = ["A", "C", "G", "T", "W", "R", "M", "K", "Y", "S"]
 
         max_label = int(max(labels_idx))
-        m = (y_true >= 0) & (y_true <= max_label) & (y_pred >= 0) & (y_pred <= max_label)
+        m = (
+            (y_true >= 0)
+            & (y_true <= max_label)
+            & (y_pred >= 0)
+            & (y_pred <= max_label)
+        )
         y_true, y_pred = y_true[m], y_pred[m]
 
         if y_true.size == 0:
