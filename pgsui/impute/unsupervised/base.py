@@ -6,7 +6,7 @@ import math
 import pprint
 from datetime import timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Optional, Type
+from typing import TYPE_CHECKING, Any, Literal, Mapping, Optional, Tuple, Type
 from uuid import uuid4
 
 import matplotlib.pyplot as plt
@@ -633,30 +633,72 @@ class BaseNNImputer:
             report (dict): Classification report dictionary to augment.
 
         Returns:
-            dict[str, dict[str, float] | float]: Augmented report dictionary with additional metrics.
+            dict[str, dict[str, float] | float]: Augmented report dictionary.
         """
-        # Create an identity matrix and use the targets array as indices
-        y_score = np.eye(len(report_names))[y_pred]
+        n_classes = len(report_names)
+
+        y_true_int = np.array(y_true, dtype=int).reshape(-1)
+        y_pred_int = np.array(y_pred, dtype=int).reshape(-1)
+        valid = (
+            (y_true_int >= 0)
+            & (y_true_int < n_classes)
+            & (y_pred_int >= 0)
+            & (y_pred_int < n_classes)
+        )
+        if not bool(valid.any()):
+            msg = (
+                f"[{self.model_name}] No valid labels available for additional metrics "
+                f"(n_classes={n_classes})."
+            )
+            self.logger.error(msg)
+            raise ValueError(msg)
+        dropped = int(valid.size - int(valid.sum()))
+        if dropped > 0:
+            self.logger.warning(
+                f"[{self.model_name}] Dropping {dropped} out-of-range labels before additional metrics."
+            )
+
+        y_true_int = y_true_int[valid]
+        y_pred_int = y_pred_int[valid]
+
+        # --- Enforce Multilabel Format for AP Score ---
+        # Explicitly One-Hot Encode (OHE) y_true to shape (N, n_classes).
+        # This forces return of array of shape (n_classes,)
+        # even if n_classes == 2.
+
+        # 1. OHE Truth
+        y_true_ohe = np.eye(n_classes)[y_true_int]
+
+        # 2. OHE Predictions (Scores)
+        # Using hard predictions as scores (coarse, but matches logic)
+        y_score_ohe = np.eye(n_classes)[y_pred_int]
 
         # Per-class metrics
-        ap_pc = average_precision_score(y_true, y_score, average=None)
-        jaccard_pc = jaccard_score(
-            y_true, y_pred, average=None, labels=labels, zero_division=0
+        # average=None on OHE inputs returns an array (C,)
+        ap_pc = average_precision_score(y_true_ohe, y_score_ohe, average=None)
+        ap_macro = average_precision_score(y_true_ohe, y_score_ohe, average="macro")
+        ap_weighted = average_precision_score(
+            y_true_ohe, y_score_ohe, average="weighted"
         )
 
-        # Macro/weighted metrics
-        ap_macro = average_precision_score(y_true, y_score, average="macro")
-        ap_weighted = average_precision_score(y_true, y_score, average="weighted")
-        jaccard_macro = jaccard_score(y_true, y_pred, average="macro", zero_division=0)
+        # Jaccard similarity coefficient
+        # (Jaccard handles 1D inputs for average=None, returning an array)
+        jaccard_pc = jaccard_score(
+            y_true_int, y_pred_int, average=None, labels=labels, zero_division=0
+        )
+        jaccard_macro = jaccard_score(
+            y_true_int, y_pred_int, average="macro", zero_division=0
+        )
         jaccard_weighted = jaccard_score(
-            y_true, y_pred, average="weighted", zero_division=0
+            y_true_int, y_pred_int, average="weighted", zero_division=0
         )
 
         # Matthews correlation coefficient (MCC)
-        mcc = matthews_corrcoef(y_true, y_pred)
+        mcc = matthews_corrcoef(y_true_int, y_pred_int)
 
+        # These checks should now pass for both binary and multiclass
         if not isinstance(ap_pc, np.ndarray):
-            msg = "average_precision_score or f1_score did not return np.ndarray as expected."
+            msg = f"average_precision_score return type {type(ap_pc)} is not np.ndarray (ap_pc={ap_pc})."
             self.logger.error(msg)
             raise TypeError(msg)
 
@@ -725,14 +767,55 @@ class BaseNNImputer:
         report_name = "zygosity" if len(labels) <= 3 else "iupac"
         middle = "IUPAC" if report_name == "iupac" else "Zygosity"
 
-        msg = f"{middle} Report (on {y_pred.size} total genotypes)"
+        y_true_arr = np.asarray(y_true).reshape(-1)
+        y_pred_arr = np.asarray(y_pred).reshape(-1)
+        n_classes = int(len(labels))
+        valid = (
+            (y_true_arr >= 0)
+            & (y_true_arr < n_classes)
+            & (y_pred_arr >= 0)
+            & (y_pred_arr < n_classes)
+        )
+        if not bool(valid.any()):
+            self.logger.warning(
+                f"[{self.model_name}] Skipping {middle} report: no valid labels in [0, {n_classes - 1}]."
+            )
+            return
+
+        dropped = int(valid.size - int(valid.sum()))
+        if dropped > 0:
+            self.logger.warning(
+                f"[{self.model_name}] Dropping {dropped} out-of-range entries before {middle} report."
+            )
+
+        y_true_arr = y_true_arr[valid].astype(np.int64, copy=False)
+        y_pred_arr = y_pred_arr[valid].astype(np.int64, copy=False)
+
+        y_pred_proba_arr = None
+        if y_pred_proba is not None:
+            y_pred_proba_arr = np.asarray(y_pred_proba)
+            if y_pred_proba_arr.ndim != 2:
+                self.logger.warning(
+                    f"[{self.model_name}] Ignoring probability matrix with invalid ndim={y_pred_proba_arr.ndim}."
+                )
+                y_pred_proba_arr = None
+            elif y_pred_proba_arr.shape[0] != valid.size:
+                self.logger.warning(
+                    f"[{self.model_name}] Ignoring probability matrix with row mismatch: "
+                    f"n_proba={y_pred_proba_arr.shape[0]}, n_labels={valid.size}."
+                )
+                y_pred_proba_arr = None
+            else:
+                y_pred_proba_arr = y_pred_proba_arr[valid]
+
+        msg = f"{middle} Report (on {y_pred_arr.size} total genotypes)"
         self.logger.info(msg)
 
-        if y_pred_proba is not None:
+        if y_pred_proba_arr is not None:
             if self.show_plots:
                 self.plotter_.plot_metrics(
-                    y_true,
-                    y_pred_proba,
+                    y_true_arr,
+                    y_pred_proba_arr,
                     metrics,
                     label_names=labels,
                     prefix=report_name,
@@ -740,12 +823,12 @@ class BaseNNImputer:
 
             if self.show_plots:
                 self.plotter_.plot_confusion_matrix(
-                    y_true, y_pred, label_names=labels, prefix=report_name
+                    y_true_arr, y_pred_arr, label_names=labels, prefix=report_name
                 )
 
         report: str | dict = classification_report(
-            y_true,
-            y_pred,
+            y_true_arr,
+            y_pred_arr,
             labels=list(range(len(labels))),
             target_names=labels,
             zero_division=0,
@@ -794,8 +877,8 @@ class BaseNNImputer:
                 self.logger.info(msg)
 
         report_full = self._additional_metrics(
-            y_true,
-            y_pred,
+            y_true_arr,
+            y_pred_arr,
             labels=list(range(len(labels))),
             report_names=labels,
             report=report,
@@ -811,6 +894,375 @@ class BaseNNImputer:
 
         with open(self.metrics_dir / f"{report_name}_report.json", "w") as f:
             json.dump(report_full, f, indent=4)
+
+    def _convert_int_iupac_ploidy(
+        self,
+        X: np.ndarray,
+        *,
+        ploidy: int,
+        encodings_dict: Optional[Mapping[str, int]] = None,
+        ref: Optional[np.ndarray] = None,
+        alt: Optional[np.ndarray] = None,
+        ambiguity_mode: str = "ref_alt",
+    ) -> np.ndarray:
+        """Convert IUPAC genotype calls to integer encodings with ploidy-aware behavior.
+
+        For diploid data (ploidy=2), preserves IUPAC ambiguity codes (W/R/M/K/Y/S) as distinct classes. For haploid data (ploidy=1), forbids heterozygous ambiguity codes and collapses them to A/C/G/T (or N) deterministically.
+
+        Args:
+            X (np.ndarray): IUPAC array of shape (N, L) or (L,) containing characters like
+                A/C/G/T/W/R/M/K/Y/S/N (case-insensitive).
+            ploidy (int): 1 for haploid, 2 for diploid.
+            encodings_dict (Mapping[str, int] | None): Mapping from IUPAC char -> int.
+                If None, a sensible default is used:
+                - Diploid default: A,C,G,T,W,R,M,K,Y,S,N -> 0..9,-1
+                - Haploid default: A,C,G,T,N -> 0..3,-1
+            ref (np.ndarray | None): Optional per-locus REF alleles (shape (L,)). Used only when
+                ploidy=1 and ambiguity_mode="ref_alt".
+            alt (np.ndarray | None): Optional per-locus ALT alleles (shape (L,)). Used only when
+                ploidy=1 and ambiguity_mode="ref_alt".
+            ambiguity_mode (str): How to collapse ambiguity codes when ploidy=1:
+                - "ref_alt": choose REF if the ambiguity contains REF else ALT if contains ALT else first-base
+                - "first_base": deterministic map W->A, R->A, M->A, K->G, Y->C, S->C
+                - "N": convert all ambiguity codes to N (-1)
+
+        Returns:
+            np.ndarray: Integer array with same shape as X.
+
+        Raises:
+            ValueError: If ploidy is not 1 or 2, or ambiguity_mode is invalid, or ref/alt shapes mismatch.
+        """
+        if int(ploidy) not in (1, 2):
+            raise ValueError(f"ploidy must be 1 or 2; got {ploidy}.")
+
+        Xc = np.asarray(X)
+        if Xc.dtype.kind not in {"U", "S", "O"}:
+            # If someone passes numeric, just return as-is after int cast
+            return Xc.astype(np.int16, copy=False)
+
+        # Normalize to uppercase single-character strings
+        Xu = Xc.astype("U1", copy=False)
+        Xu = np.char.upper(Xu)
+
+        if ploidy == 2:
+            # Preserve current behavior
+            # (diploid, ambiguity codes are real classes)
+            if encodings_dict is None:
+                encodings_dict = {
+                    "A": 0,
+                    "C": 1,
+                    "G": 2,
+                    "T": 3,
+                    "W": 4,
+                    "R": 5,
+                    "M": 6,
+                    "K": 7,
+                    "Y": 8,
+                    "S": 9,
+                    "N": -1,
+                }
+            return self._map_chars_to_int(Xu, encodings_dict)
+
+        # ---- Haploid path: collapse ambiguities to A/C/G/T/N only ----
+        if encodings_dict is None:
+            encodings_dict = {"A": 0, "C": 1, "G": 2, "T": 3, "N": -1}
+
+        if ambiguity_mode not in {"ref_alt", "first_base", "N"}:
+            msg = f"Invalid ambiguity_mode: {ambiguity_mode!r}. Must be one of 'ref_alt', 'first_base', or 'N'."
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        # Quick exit: if no ambiguity chars are present, just map A/C/G/T/N
+        ambig_chars = np.array(["W", "R", "M", "K", "Y", "S"], dtype="U1")
+        ambig_mask = np.isin(Xu, ambig_chars)
+        if ambig_mask.any():
+            Xu = Xu.copy()
+            Xu[ambig_mask] = self._collapse_ambiguity_haploid(
+                Xu[ambig_mask],
+                full_matrix=Xu,
+                ambig_mask=ambig_mask,
+                ref=ref,
+                alt=alt,
+                mode=ambiguity_mode,
+            )
+
+        # Any remaining unknowns should be treated as N
+        valid = np.isin(Xu, np.array(["A", "C", "G", "T", "N"], dtype="U1"))
+        if not bool(valid.all()):
+            Xu = Xu.copy()
+            Xu[~valid] = "N"
+
+        return self._map_chars_to_int(Xu, encodings_dict)
+
+    def _sanitize_haploid_decoded_output(self, decoded: np.ndarray) -> np.ndarray:
+        """Normalize haploid decoded calls to strict A/C/G/T/N.
+
+        This is a safety pass for haploid outputs after ``decode_012``. Any ambiguity codes (W/R/M/K/Y/S) are collapsed using ``_convert_int_iupac_ploidy(..., ploidy=1, ambiguity_mode='ref_alt')`` and mapped back to single-base nucleotides.
+
+        Args:
+            decoded (np.ndarray): Decoded IUPAC calls, shape (N, L).
+
+        Returns:
+            np.ndarray: Sanitized calls with only A/C/G/T/N.
+        """
+        arr = np.asarray(decoded)
+        if arr.ndim != 2:
+            msg = (
+                f"[{self.model_name}] Expected decoded haploid array to be 2D; got "
+                f"shape={arr.shape}."
+            )
+            self.logger.error(msg)
+            raise ValueError(msg)
+
+        arr_u1 = arr.astype("<U1", copy=False)
+
+        ref = getattr(self.genotype_data, "ref", None)
+        alt = getattr(self.genotype_data, "alt", None)
+
+        try:
+            ints = self._convert_int_iupac_ploidy(
+                arr_u1,
+                ploidy=1,
+                encodings_dict={"A": 0, "C": 1, "G": 2, "T": 3, "N": -1},
+                ref=ref,
+                alt=alt,
+                ambiguity_mode="ref_alt",
+            )
+        except Exception as e:
+            self.logger.warning(
+                f"[{self.model_name}] Haploid decoded sanitization with ref/alt failed: {e}. "
+                "Falling back to ambiguity collapse without ref/alt metadata."
+            )
+            ints = self._convert_int_iupac_ploidy(
+                arr_u1,
+                ploidy=1,
+                encodings_dict={"A": 0, "C": 1, "G": 2, "T": 3, "N": -1},
+                ref=None,
+                alt=None,
+                ambiguity_mode="ref_alt",
+            )
+
+        out = np.full(arr_u1.shape, "N", dtype="<U1")
+        out[ints == 0] = "A"
+        out[ints == 1] = "C"
+        out[ints == 2] = "G"
+        out[ints == 3] = "T"
+        return out
+
+    def _map_chars_to_int(
+        self, Xu: np.ndarray, mapping: Mapping[str, int]
+    ) -> np.ndarray:
+        """Vectorized char->int mapping with safe fallback to N/-1."""
+        # Build dense lookup table for ASCII A..Z plus fallback
+        # This is fast and avoids Python loops.
+        lut = np.full(256, -1, dtype=np.int16)
+        for k, v in mapping.items():
+            if not k:
+                continue
+            lut[ord(str(k).upper()[0])] = int(v)
+
+        # Convert array of 'U1' to bytes of first char
+        # Works for Xu dtype 'U1' or 'S1' after astype.
+        xb = Xu.astype("S1", copy=False).view(np.uint8)
+        out = lut[xb].astype(np.int16, copy=False)
+        return out
+
+    def _collapse_ambiguity_haploid(
+        self,
+        ambig_values: np.ndarray,
+        *,
+        full_matrix: np.ndarray,
+        ambig_mask: np.ndarray,
+        ref: Optional[np.ndarray],
+        alt: Optional[np.ndarray],
+        mode: str,
+    ) -> np.ndarray:
+        """Collapse ambiguity codes to haploid bases (A/C/G/T/N).
+
+        Supports multiallelic ALT encodings (e.g., 'A,G' strings or list/tuple per locus) by deterministically selecting a single representative ALT base for haploid collapse.
+        """
+        if mode == "N":
+            return np.full(ambig_values.shape, "N", dtype="U1")
+
+        if mode == "first_base":
+            first = {
+                "W": "A",  # A/T
+                "R": "A",  # A/G
+                "M": "A",  # A/C
+                "K": "G",  # G/T
+                "Y": "C",  # C/T
+                "S": "C",  # C/G
+            }
+            out = ambig_values.copy()
+            for k, v in first.items():
+                out[ambig_values == k] = v
+            return out.astype("U1", copy=False)
+
+        # mode == "ref_alt"
+        if ref is None or alt is None:
+            return self._collapse_ambiguity_haploid(
+                ambig_values,
+                full_matrix=full_matrix,
+                ambig_mask=ambig_mask,
+                ref=None,
+                alt=None,
+                mode="first_base",
+            )
+
+        # Canonicalize ref/alt to 1D single-base strings
+        def _norm_base1(x) -> str:
+            """Return single A/C/G/T base else 'N'."""
+            b = str(x).upper()[:1]
+            return b if b in {"A", "C", "G", "T"} else "N"
+
+        def _first_allele_base(x) -> str:
+            """Extract a single representative ALT base from multi-allelic encodings.
+
+            Accepts:
+            - "A,G" -> "A"
+            - ["A","G"] -> "A"
+            - ("A","G") -> "A"
+            - np.ndarray([...]) -> first element
+            - anything else -> first character of string representation
+            Then normalizes to A/C/G/T or N.
+            """
+            if x is None:
+                return "N"
+
+            # list/tuple/ndarray of alleles
+            if isinstance(x, (list, tuple, np.ndarray)):
+                if len(x) == 0:
+                    return "N"
+                return _norm_base1(x[0])
+
+            # strings like "A,G" or "A"
+            s = str(x).upper()
+            if "," in s:
+                s = s.split(",", 1)[0]
+            return _norm_base1(s)
+
+        # Build clean 1D arrays (Python pass is required for ragged ALT)
+        ref_list = list(ref) if not isinstance(ref, list) else ref
+        alt_list = list(alt) if not isinstance(alt, list) else alt
+
+        if len(ref_list) != len(alt_list):
+            raise ValueError(
+                f"ref/alt must have same length; got len(ref)={len(ref_list)}, len(alt)={len(alt_list)}."
+            )
+
+        ref_norm = np.array([_norm_base1(x) for x in ref_list], dtype="U1")
+        alt_norm = np.array([_first_allele_base(x) for x in alt_list], dtype="U1")
+
+        # Identify (row,col) for ambiguity cells
+        rr, cc = np.where(ambig_mask)
+        if rr.size == 0:
+            return ambig_values.astype("U1", copy=False)
+
+        amb = full_matrix[rr, cc].astype("U1", copy=False)
+
+        contains = {
+            "W": ("A", "T"),
+            "R": ("A", "G"),
+            "M": ("A", "C"),
+            "K": ("G", "T"),
+            "Y": ("C", "T"),
+            "S": ("C", "G"),
+        }
+
+        out = amb.copy()
+        for code, (b1, b2) in contains.items():
+            m = amb == code
+            if not bool(m.any()):
+                continue
+
+            rloc = ref_norm[cc[m]]
+            aloc = alt_norm[cc[m]]
+
+            choose_ref = (rloc == b1) | (rloc == b2)
+            choose_alt = (~choose_ref) & ((aloc == b1) | (aloc == b2))
+
+            out[m] = np.where(
+                choose_ref,
+                rloc,
+                np.where(choose_alt, aloc, b1),  # fallback: deterministic first base
+            )
+
+        valid = np.isin(out, np.array(["A", "C", "G", "T"], dtype="U1"))
+        if not bool(valid.all()):
+            out[~valid] = "N"
+
+        return out.astype("U1", copy=False)
+
+    def _canonicalize_ref_alt_single_base(
+        self,
+        ref: Any,
+        alt: Any,
+        *,
+        L: int,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Return (ref_s, alt_s) as (L,) arrays of single bases 'A/C/G/T/N'.
+
+        Args:
+            ref (Any): REF metadata (array-like length L).
+            alt (Any): ALT metadata (array-like length L; may be ragged per locus).
+            L (int): Number of loci/features.
+
+        Returns:
+            (ref_s, alt_s): Two arrays of dtype '<U1' and shape (L,).
+
+        Notes:
+            Handles multiallelic ALT encodings:
+                - ALT per locus as list/tuple/np.ndarray (ragged): takes the first valid base allele
+                - ALT per locus as string "A,G": takes first token before comma that is a valid base
+                - Scalars: takes first character
+
+        Raises:
+            ValueError: If lengths are incompatible with L.
+        """
+
+        def _norm_base1(x: Any) -> str:
+            b = str(x).upper()[:1]
+            return b if b in {"A", "C", "G", "T"} else "N"
+
+        def _alt_first_valid_base(x: Any) -> str:
+            """Pick a single representative ALT base from multiallelic encodings."""
+            if x is None:
+                return "N"
+
+            # Ragged list/tuple/ndarray of alleles: pick first valid A/C/G/T if possible.
+            if isinstance(x, (list, tuple, np.ndarray)):
+                if len(x) == 0:
+                    return "N"
+                for a in x:
+                    b = _norm_base1(a)
+                    if b != "N":
+                        return b
+                return "N"
+
+            # Strings like "A,G" or "A"
+            s = str(x).upper()
+            if "," in s:
+                # Prefer first valid allele in the comma-delimited list
+                for tok in s.split(","):
+                    b = _norm_base1(tok)
+                    if b != "N":
+                        return b
+                return "N"
+
+            return _norm_base1(s)
+
+        ref_list = list(ref) if not isinstance(ref, list) else ref
+        alt_list = list(alt) if not isinstance(alt, list) else alt
+
+        if len(ref_list) != L or len(alt_list) != L:
+            raise ValueError(
+                f"[{self.model_name}] ref/alt length mismatch: expected L={L}, "
+                f"got len(ref)={len(ref_list)}, len(alt)={len(alt_list)}."
+            )
+
+        ref_s = np.array([_norm_base1(x) for x in ref_list], dtype="<U1")
+        alt_s = np.array([_alt_first_valid_base(x) for x in alt_list], dtype="<U1")
+        return ref_s, alt_s
 
     def _compute_hidden_layer_sizes(
         self,
@@ -1253,7 +1705,7 @@ class BaseNNImputer:
         Notes:
             - Valid classes must be integers in [0, K-1]
             - Missing is any value < 0; these positions become [-1, -1, ..., -1]
-            - If K==2 and values are in {0,2} (no 1s), map 2->1.
+            - If K==2 (Haploid), any value >= 1 is mapped to 1 (0=Ref, 1=Alt).
         """
         Xt = (
             torch.from_numpy(X).to(self.device)
@@ -1274,16 +1726,16 @@ class BaseNNImputer:
         # Missing is anything < 0 (covers -1, -9, etc.)
         valid = Xt >= 0
 
-        # If binary mode but data is {0,2}
-        # (haploid-like or "ref vs non-ref"), map 2->1
+        # --- Haploidization ---
+        # If binary mode (K=2), we force all non-ref variants (1, 2, etc.) to 1.
+        # This handles inputs like {0, 2} (HomAlt encoded) OR {0, 1, 2} (Diploid encoded).
         if K == 2:
-            has_het = torch.any(valid & (Xt == 1))
-            has_alt2 = torch.any(valid & (Xt == 2))
-            if has_alt2 and not has_het:
+            mask_gt1 = valid & (Xt > 1)
+            if torch.any(mask_gt1):
                 Xt = Xt.clone()
-                Xt[valid & (Xt == 2)] = 1
+                Xt[mask_gt1] = 1
 
-        # Now enforce the one-hot precondition
+        # Enforce the one-hot precondition
         if torch.any(valid & (Xt >= K)):
             bad_vals = torch.unique(Xt[valid & (Xt >= K)]).detach().cpu().tolist()
             all_vals = torch.unique(Xt[valid]).detach().cpu().tolist()
@@ -1311,28 +1763,20 @@ class BaseNNImputer:
     ) -> np.ndarray:
         """Decode 012-encodings to IUPAC chars with metadata repair.
 
-        This method converts genotype calls encoded as integers (0, 1, 2, etc.) into their corresponding IUPAC nucleotide codes. It supports two modes of decoding:
-        1. Nucleotide mode (`is_nuc=True`): Decodes integer codes (0-9) directly to IUPAC nucleotide codes.
-        2. Metadata mode (`is_nuc=False`): Uses reference and alternate allele metadata to determine the appropriate IUPAC codes. If metadata is missing or inconsistent, the method attempts to repair the decoding by scanning the source SNP data for valid IUPAC codes.
+        Supports:
+        - is_nuc=True: direct 0..9 -> IUPAC mapping
+        - is_nuc=False: ref/alt-based decoding with metadata repair
 
-        Args:
-            X (np.ndarray | pd.DataFrame | list[list[int]]): Input genotype calls as integers. Can be a NumPy array, Pandas DataFrame, or nested list.
-            is_nuc (bool): If True, decode 0-9 nucleotide codes; else use ref/alt metadata. Defaults to False.
+        Additional behavior:
+        - Multiallelic ALT is allowed. The ALT used for decoding is chosen as the
+            most common alternate base (A/C/G/T) observed in the source SNP column.
+        - If REF/ALT are missing or ambiguous, they are inferred from observed
+            base counts in the source SNP column (if available).
 
         Returns:
             np.ndarray: IUPAC strings as a 2D array of shape (n_samples, n_snps).
-
-        Notes:
-            - The method normalizes input values to handle various formats, including strings, lists, and arrays.
-            - It uses a predefined mapping of IUPAC codes to nucleotide bases and vice versa.
-            - Missing or invalid codes are represented as 'N' if they can't be resolved.
-            - The method includes repair logic to infer missing metadata from the source SNP data when necessary.
-
-        Raises:
-            ValueError: If input is not a DataFrame.
         """
         df = validate_input_type(X, return_type="df")
-
         if not isinstance(df, pd.DataFrame):
             msg = f"Expected a pandas.DataFrame in 'decode_012', but got: {type(df)}."
             self.logger.error(msg)
@@ -1365,28 +1809,18 @@ class BaseNNImputer:
             """Normalize an input into a single IUPAC code token or None."""
             if value is None:
                 return None
-
-            # Bytes -> str (make type narrowing explicit)
             if isinstance(value, (bytes, np.bytes_)):
                 value = bytes(value).decode("utf-8", errors="ignore")
 
-            # Handle list/tuple/array/Series: take first valid
             if isinstance(value, (list, tuple, pd.Series, np.ndarray)):
-                # Convert Series to numpy array for consistent behavior
                 if isinstance(value, pd.Series):
                     arr = value.to_numpy()
                 else:
                     arr = value
-
-                # Scalar numpy array fast path
                 if isinstance(arr, np.ndarray) and arr.ndim == 0:
                     return _normalize_iupac(arr.item())
-
-                # Empty sequence/array
                 if len(arr) == 0:
                     return None
-
-                # First valid element wins
                 for item in arr:
                     code = _normalize_iupac(item)
                     if code is not None:
@@ -1405,6 +1839,117 @@ class BaseNNImputer:
 
             return s if s in iupac_to_bases else None
 
+        def _extract_candidates(value: object) -> list[str]:
+            """Extract all candidate IUPAC tokens from multiallelic/list-like metadata."""
+            if value is None:
+                return []
+
+            if isinstance(value, (bytes, np.bytes_)):
+                value = bytes(value).decode("utf-8", errors="ignore")
+
+            # list-like: flatten
+            if isinstance(value, (list, tuple, pd.Series, np.ndarray)):
+                if isinstance(value, pd.Series):
+                    seq = value.to_numpy()
+                else:
+                    seq = value
+                out: list[str] = []
+                for item in seq:
+                    out.extend(_extract_candidates(item))
+                return out
+
+            s = str(value).upper().strip()
+            if not s or s in missing_codes:
+                return []
+
+            toks = [t.strip() for t in s.split(",")] if "," in s else [s]
+            out: list[str] = []
+            for tok in toks:
+                if not tok or tok in missing_codes:
+                    continue
+                if tok in iupac_to_bases:
+                    out.append(tok)
+            return out
+
+        def _base_counts_from_column(
+            col: np.ndarray, *, max_scan: int = 5000
+        ) -> dict[str, int]:
+            """Count A/C/G/T from a source SNP column of IUPAC codes.
+
+            Counting rule:
+            - Homozygote (single-base) contributes +2 to that base
+            - Heterozygote/ambiguity contributes +1 to each base in the set
+            """
+            counts = {"A": 0, "C": 0, "G": 0, "T": 0}
+            seen = 0
+            for val in col:
+                code = _normalize_iupac(val)
+                if code is None or code == "N":
+                    continue
+                bases = iupac_to_bases.get(code, set())
+                if not bases:
+                    continue
+                if len(bases) == 1:
+                    b = next(iter(bases))
+                    if b in counts:
+                        counts[b] += 2
+                else:
+                    for b in bases:
+                        if b in counts:
+                            counts[b] += 1
+                seen += 1
+                if seen >= max_scan:
+                    break
+            return counts
+
+        def _choose_single_base(
+            token: str | None, counts: dict[str, int]
+        ) -> str | None:
+            """If token is ambiguous, pick the most frequent constituent base; else return token."""
+            if token is None:
+                return None
+            bases = iupac_to_bases.get(token, set())
+            if not bases:
+                return None
+            if len(bases) == 1:
+                b = next(iter(bases))
+                return b if b in {"A", "C", "G", "T"} else token
+            # Ambiguous: choose most common base in observed counts
+            best = None
+            best_ct = -1
+            for b in bases:
+                ct = counts.get(b, 0)
+                if ct > best_ct:
+                    best_ct = ct
+                    best = b
+            return best if best in {"A", "C", "G", "T"} else None
+
+        def _choose_alt_from_candidates(
+            ref_base: str | None,
+            alt_candidates: list[str],
+            counts: dict[str, int],
+        ) -> str | None:
+            """Pick ALT as the most common base among candidates, excluding REF."""
+            # Reduce candidates to base set
+            base_cands: set[str] = set()
+            for tok in alt_candidates:
+                bases = iupac_to_bases.get(tok, set())
+                for b in bases:
+                    if b in {"A", "C", "G", "T"}:
+                        base_cands.add(b)
+
+            if ref_base in base_cands:
+                base_cands.remove(ref_base)
+
+            if not base_cands:
+                return None
+
+            # Most common by counts; deterministic tie-breaker by base order
+            order = {"A": 0, "C": 1, "G": 2, "T": 3}
+            best = max(base_cands, key=lambda b: (counts.get(b, 0), -order[b]))
+            return best
+
+        # numeric codes
         codes_df = df.apply(pd.to_numeric, errors="coerce")
         codes = codes_df.fillna(-1).astype(np.int8).to_numpy()
         n_rows, n_cols = codes.shape
@@ -1427,70 +1972,87 @@ class BaseNNImputer:
         if len(alt_alleles) != n_cols:
             alt_alleles = getattr(self, "_alt", [None] * n_cols)
 
-        # Ensure list length matches
         if len(ref_alleles) != n_cols:
             ref_alleles = [None] * n_cols
         if len(alt_alleles) != n_cols:
             alt_alleles = [None] * n_cols
 
         out = np.full((n_rows, n_cols), "N", dtype="<U1")
+
+        # Lazy-load source SNP data once
         source_snp_data = None
+        if getattr(self.genotype_data, "snp_data", None) is not None:
+            try:
+                source_snp_data = np.asarray(self.genotype_data.snp_data)
+            except Exception:
+                source_snp_data = None
 
         for j in range(n_cols):
-            ref = _normalize_iupac(ref_alleles[j])
-            alt = _normalize_iupac(alt_alleles[j])
+            ref_tok = _normalize_iupac(ref_alleles[j])
+            alt_toks = _extract_candidates(alt_alleles[j])  # multiallelic-safe
 
-            # --- REPAIR LOGIC ---
-            # If metadata is missing, scan the source column.
-            if ref is None or alt is None:
-                if source_snp_data is None and self.genotype_data.snp_data is not None:
-                    try:
-                        source_snp_data = np.asarray(self.genotype_data.snp_data)
-                    except Exception:
-                        pass  # if lazy loading fails
+            # Column base counts (if we have source data)
+            counts = {"A": 0, "C": 0, "G": 0, "T": 0}
+            if (
+                source_snp_data is not None
+                and source_snp_data.ndim == 2
+                and source_snp_data.shape[1] > j
+            ):
+                try:
+                    counts = _base_counts_from_column(source_snp_data[:, j])
+                except Exception:
+                    counts = {"A": 0, "C": 0, "G": 0, "T": 0}
 
-                if source_snp_data is not None:
-                    try:
-                        col_data = source_snp_data[:, j]
-                        uniques = set()
-                        # Optimization: check up to 200 non-empty values
-                        count = 0
-                        for val in col_data:
-                            norm = _normalize_iupac(val)
-                            if norm:
-                                uniques.add(norm)
-                                count += 1
-                            if len(uniques) >= 2 or count > 200:
-                                break
+            # Canonicalize REF to a single base if possible
+            ref_base = _choose_single_base(ref_tok, counts)
 
-                        sorted_u = sorted(list(uniques))
-                        if len(sorted_u) >= 1 and ref is None:
-                            ref = sorted_u[0]
-                        if len(sorted_u) >= 2 and alt is None:
-                            alt = sorted_u[1]
-                    except Exception:
-                        pass
+            # Choose ALT:
+            #  - if multiallelic candidates exist, pick most common base among them
+            #  - else if single ALT token exists, canonicalize it
+            alt_base = None
+            if alt_toks:
+                alt_base = _choose_alt_from_candidates(ref_base, alt_toks, counts)
+                if alt_base is None and len(alt_toks) == 1:
+                    alt_base = _choose_single_base(alt_toks[0], counts)
+            else:
+                # no ALT candidates in metadata
+                alt_base = None
+
+            # --- REPAIR LOGIC (frequency-aware) ---
+            # If still missing, infer from observed counts in source column:
+            if (ref_base is None or alt_base is None) and any(
+                v > 0 for v in counts.values()
+            ):
+                # Sort bases by count desc, then A/C/G/T deterministic
+                order = {"A": 0, "C": 1, "G": 2, "T": 3}
+                ranked = sorted(counts.keys(), key=lambda b: (-counts[b], order[b]))
+                if ref_base is None:
+                    ref_base = ranked[0]
+                if alt_base is None:
+                    alt_base = next(
+                        (b for b in ranked if b != ref_base and counts[b] > 0), None
+                    )
 
             # --- DEFAULTS FOR MISSING ---
-            # If still missing, we cannot decode.
-            if ref is None and alt is None:
-                ref = "N"
-                alt = "N"
-            elif ref is None:
-                ref = alt
-            elif alt is None:
-                alt = ref  # Monomorphic site: ALT becomes REF
+            if ref_base is None and alt_base is None:
+                ref_base = "N"
+                alt_base = "N"
+            elif ref_base is None:
+                ref_base = alt_base if alt_base is not None else "N"
+            elif alt_base is None:
+                # Monomorphic or truly no alt info -> treat as ref
+                alt_base = ref_base
+
+            ref = ref_base
+            alt = alt_base
 
             # --- COMPUTE HET CODE ---
             if ref == alt:
                 het_code = ref
             else:
-                ref_set = iupac_to_bases.get(ref, set()) if ref is not None else set()
-                alt_set = iupac_to_bases.get(alt, set()) if alt is not None else set()
-                union_set = frozenset(ref_set | alt_set)
+                union_set = frozenset({ref, alt})
                 het_code = bases_to_iupac.get(union_set, "N")
 
-            # --- ASSIGNMENT WITH SAFETY FALLBACKS ---
             col_codes = codes[:, j]
 
             # Case 0: REF
@@ -1501,10 +2063,7 @@ class BaseNNImputer:
             if het_code != "N":
                 out[col_codes == 1, j] = het_code
             else:
-                # If HET code is invalid (e.g. ref='A', alt='N'),
-                # fallback to REF
-                # Fix for an issue where a HET prediction at a monomorphic site
-                # produced 'N'
+                # fallback to REF if het is not representable
                 if ref != "N":
                     out[col_codes == 1, j] = ref
 
@@ -1512,9 +2071,6 @@ class BaseNNImputer:
             if alt != "N":
                 out[col_codes == 2, j] = alt
             else:
-                # If ALT is invalid (e.g. ref='A', alt='N'), fallback to REF
-                # Fix for an issue where an ALT prediction on a monomorphic site
-                # produced 'N'
                 if ref != "N":
                     out[col_codes == 2, j] = ref
 
@@ -2007,10 +2563,15 @@ class BaseNNImputer:
         """
         if self.class_weights_ is not None:
             genotypes = self.class_weights_.numpy(force=True)
-            ref, het, alt = genotypes.astype(float).tolist()
-            self.logger.info(
-                f"class_weights=[REF={ref:.2f}, HET={het:.2f}, ALT={alt:.2f}]"
-            )
+            res = genotypes.astype(float).tolist()
+            if len(res) == 3:
+                ref, het, alt = res
+                self.logger.info(
+                    f"class_weights=[REF={ref:.2f}, HET={het:.2f}, ALT={alt:.2f}]"
+                )
+            else:
+                ref, alt = res
+                self.logger.info(f"class_weights=[REF={ref:.2f}, ALT={alt:.2f}]")
 
     def _richprint_best_params(
         self, d: dict[str, Any], title: str, *, precision=3
