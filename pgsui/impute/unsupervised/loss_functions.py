@@ -34,6 +34,10 @@ class FocalCELoss(nn.Module):
         super().__init__()
         self._gamma = float(gamma)
         self.ignore_index = int(ignore_index)
+        if reduction not in {"mean", "sum", "none"}:
+            raise ValueError(
+                f"Invalid reduction={reduction!r}; expected one of 'mean', 'sum', or 'none'."
+            )
         self.reduction = reduction
 
         if alpha is not None:
@@ -69,11 +73,21 @@ class FocalCELoss(nn.Module):
         # (N, C, d1, ...) -> (N, d1, ..., C)
         if logits.dim() > 2:
             logits = logits.permute(0, *range(2, logits.dim()), 1)
+        elif logits.dim() < 2:
+            raise ValueError(
+                f"logits must be at least 2D with class dimension; got shape {tuple(logits.shape)}."
+            )
 
         logits_flat = logits.reshape(-1, logits.size(-1))
-        targets_flat = targets.reshape(-1).int()
+        targets_flat = targets.reshape(-1).long()
+        n_classes = int(logits_flat.size(-1))
 
-        valid_mask = targets_flat != self.ignore_index
+        # Treat any out-of-range targets as ignored (robust to ploidy-mismatch artifacts).
+        valid_mask = (
+            (targets_flat != self.ignore_index)
+            & (targets_flat >= 0)
+            & (targets_flat < n_classes)
+        )
 
         # Early exit if everything is ignored
         if not bool(valid_mask.any()):
@@ -85,13 +99,17 @@ class FocalCELoss(nn.Module):
 
         # Numerically stable log-softmax
         log_probs = F.log_softmax(logits_v, dim=-1)
-        log_pt = log_probs.gather(1, targets_v.unsqueeze(1)).squeeze(1)
+        log_pt = log_probs.gather(1, targets_v.long().unsqueeze(1)).squeeze(1)
         pt = log_pt.exp()
 
         focal_term = (1.0 - pt).pow(self.gamma)
         loss_vec = -focal_term * log_pt
 
         if self.alpha is not None:
+            if self.alpha.numel() < n_classes:
+                raise ValueError(
+                    f"alpha has {self.alpha.numel()} entries, but logits have {n_classes} classes."
+                )
             loss_vec = loss_vec * self.alpha[targets_v]
 
         # Apply reduction
