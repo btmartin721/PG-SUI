@@ -27,19 +27,18 @@ requirements:
     - setuptools-scm
   run:
     - python {{ python }}
-    - matplotlib
-    - numpy {{ numpy }}
-    - pandas >=2.2.2
-    - scikit-learn >=1.4
-    - scipy
-    - seaborn
-    - pytorch
+    - matplotlib >=3.8,<4.0
+    - numpy >=2.2,<3.0
+    - pandas >=2.2,<3.0
+    - scikit-learn >=1.4,<2.0
+    - scipy >=1.13,<2.0
+    - seaborn >=0.13.2,<0.14
+    - pytorch >=2.12,<3.0
     - tqdm
     - toytree
-    - optuna
+    - optuna >=4.6,<5.0
     - rich
-    - rich[jupyter]
-    - snpio
+    - snpio >=1.6.16
     # GUI / server components
     - fastapi >=0.110
     - uvicorn-standard >=0.23

@@ -37,19 +37,19 @@ classifiers = [
     "Natural Language :: English"
 ]
 dependencies = [
-    "matplotlib",
-    "numpy >=2.1",
-    "pandas >=2.2.2",
-    "scikit-learn >=1.4",
-    "scipy",
-    "seaborn",
-    "torch",
-    "tqdm",
-    "toytree",
-    "optuna",
+    "matplotlib >=3.8,<4.0",
+    "numpy >=2.2,<3.0",
+    "pandas >=2.2,<3.0",
+    "scikit-learn >=1.4,<2.0",
+    "scipy >=1.13,<2.0",
+    "seaborn >=0.13.2,<0.14",
+    "snpio >=1.6.16",
+    "optuna >=4.6,<5.0",
     "rich",
     "rich[jupyter]",
-    "snpio",
+    "torch >=2.12,<3.0",
+    "toytree",
+    "tqdm",
 ]
 
 [tool.setuptools.packages.find]
