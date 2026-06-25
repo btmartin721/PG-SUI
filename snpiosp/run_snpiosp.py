@@ -6,19 +6,13 @@ import argparse
 import json
 import os
 import shutil
+import tempfile
+import atexit
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
-import itertools
 
 import numpy as np
 import pandas as pd
-from sklearn.cluster import DBSCAN
-from sklearn.decomposition import PCA
-from sklearn.impute import SimpleImputer
-from sklearn.metrics import silhouette_score
-from sklearn.neighbors import NearestNeighbors
-from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import StandardScaler
 
 # Configure logger (can be controlled by user application)
 logger = logging.getLogger(__name__)
@@ -78,8 +72,14 @@ class DnaSPSingleLocusAnalyzer:
             logger.error(msg)
             raise ValueError(msg)
 
-        # SNPio readers generally accept filename and popmapfile as base kwargs
-        kwargs = {"filename": self.filename, "popmapfile": self.popmap_file}
+        # SNPio readers generally accept filename and popmapfile as base kwargs.
+        # PHYLIP currently hard-requires a popmap in snpio even when we want a
+        # single-pool analysis, so synthesize one when none was provided.
+        effective_popmap = self.popmap_file
+        if effective_popmap is None and ft in {"phylip", "phy"}:
+            effective_popmap = self._create_single_pool_popmap()
+
+        kwargs = {"filename": self.filename, "popmapfile": effective_popmap}
 
         try:
             # Suppress specific warnings just for the reader if necessary
@@ -117,6 +117,55 @@ class DnaSPSingleLocusAnalyzer:
         logger.info(
             f"Loaded: {len(self.samples)} samples, {self.genotype_matrix.shape[1]} loci."
         )
+
+    def _create_single_pool_popmap(self) -> Path:
+        """Create a temporary popmap assigning all PHYLIP samples to one group."""
+        samples = self._read_phylip_sample_names()
+        if not samples:
+            msg = f"Unable to infer PHYLIP sample names from {self.filename}"
+            logger.error(msg)
+            raise RuntimeError(msg)
+
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".popmap", prefix="snpiosp_", delete=False
+        ) as handle:
+            for sample in samples:
+                handle.write(f"{sample}\tPop1\n")
+
+        temp_path = Path(handle.name)
+        atexit.register(lambda p=temp_path: p.exists() and p.unlink())
+        logger.info(
+            "No popmap provided for PHYLIP input. Using a temporary single-pool popmap."
+        )
+        return temp_path
+
+    def _read_phylip_sample_names(self) -> list[str]:
+        """Read sample IDs from the first PHYLIP block."""
+        with self.filename.open("r", encoding="utf-8") as handle:
+            header = handle.readline().strip().split()
+            if len(header) < 1:
+                return []
+
+            try:
+                n_samples = int(header[0])
+            except ValueError:
+                return []
+
+            samples = []
+            for line in handle:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+
+                parts = stripped.split()
+                if not parts:
+                    continue
+
+                samples.append(parts[0])
+                if len(samples) == n_samples:
+                    break
+
+        return samples
 
     def _get_locus_names(self) -> np.ndarray:
         """Generate locus names based on SNPio data or default naming."""
@@ -240,11 +289,11 @@ class DnaSPSingleLocusAnalyzer:
             b1 = (n_sub + 1) / (3 * (n_sub - 1))
             b2 = (2 * (n_sub**2 + n_sub + 3)) / (9 * n_sub * (n_sub - 1))
 
-            c1 = b1 - (1.0 / a1_sub)
-            c2 = b2 - ((n_sub + 2) / (a1_sub * n_sub)) + (a2_sub / (a1_sub**2))
+            c1_taj = b1 - (1.0 / a1_sub)
+            c2_taj = b2 - ((n_sub + 2) / (a1_sub * n_sub)) + (a2_sub / (a1_sub**2))
 
-            e1 = c1 / a1_sub
-            e2 = c2 / (a1_sub**2 + a2_sub)
+            e1 = c1_taj / a1_sub
+            e2 = c2_taj / (a1_sub**2 + a2_sub)
 
             S_vec = S[calc_d]
             var_D = (e1 * S_vec) + (e2 * S_vec * (S_vec - 1))

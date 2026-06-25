@@ -82,6 +82,13 @@ class FocalCELoss(nn.Module):
         targets_flat = targets.reshape(-1).long()
         n_classes = int(logits_flat.size(-1))
 
+        if logits_flat.size(0) != targets_flat.numel():
+            raise ValueError(
+                "logits and targets are not shape-compatible after flattening. "
+                f"Got logits shape {tuple(logits.shape)} and targets shape {tuple(targets.shape)}. "
+                "Expected logits shaped like (N, C, d1, ...) with the class dimension at index 1."
+            )
+
         # Treat any out-of-range targets as ignored (robust to ploidy-mismatch artifacts).
         valid_mask = (
             (targets_flat != self.ignore_index)
@@ -91,7 +98,9 @@ class FocalCELoss(nn.Module):
 
         # Early exit if everything is ignored
         if not bool(valid_mask.any()):
-            # preserve grad path behavior if caller expects it
+            # Preserve grad-path behavior while still respecting reduction semantics.
+            if self.reduction == "none":
+                return torch.zeros_like(targets, dtype=logits.dtype)
             return logits.sum() * 0.0
 
         logits_v = logits_flat[valid_mask]
@@ -211,6 +220,13 @@ def compute_vae_loss(
         raise ValueError(msg)
 
     tgt_1d = targets.reshape(-1) if targets.dim() > 1 else targets
+
+    if logits_2d.size(0) != tgt_1d.numel():
+        raise ValueError(
+            "recon_logits and targets flatten to different lengths. "
+            f"Got recon_logits shape {tuple(recon_logits.shape)} and targets shape {tuple(targets.shape)}. "
+            "Expected recon_logits shaped like (N, L, C) with the class dimension last."
+        )
 
     # Reconstruction loss (criterion may ignore_index internally)
     try:

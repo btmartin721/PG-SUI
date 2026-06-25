@@ -12,7 +12,6 @@ import optuna
 import torch
 from sklearn.exceptions import NotFittedError
 from snpio.analysis.genotype_encoder import GenotypeEncoder
-from snpio.utils.logging import LoggerManager
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from pgsui.data_processing.config import apply_dot_overrides, load_yaml_to_dataclass
@@ -21,7 +20,6 @@ from pgsui.impute.unsupervised.base import BaseNNImputer
 from pgsui.impute.unsupervised.callbacks import EarlyStopping
 from pgsui.impute.unsupervised.loss_functions import FocalCELoss
 from pgsui.impute.unsupervised.models.autoencoder_model import AutoencoderModel
-from pgsui.utils.logging_utils import configure_logger
 from pgsui.utils.misc import OBJECTIVE_SPEC_AE
 from pgsui.utils.pretty_metrics import PrettyMetrics
 
@@ -196,19 +194,6 @@ class ImputeAutoencoder(BaseNNImputer):
         if overrides:
             cfg = apply_dot_overrides(cfg, overrides)
         self.cfg = cfg
-
-        logman = LoggerManager(
-            __name__,
-            prefix=self.cfg.io.prefix,
-            debug=self.cfg.io.debug,
-            verbose=self.cfg.io.verbose,
-        )
-        self.logger = configure_logger(
-            logman.get_logger(),
-            verbose=self.cfg.io.verbose,
-            debug=self.cfg.io.debug,
-        )
-        self.logger.propagate = False
 
         super().__init__(
             model_name=self.model_name,

@@ -6,7 +6,6 @@
     "git.ignoreLimitWarning": true,
     "python-envs.defaultEnvManager": "ms-python.python:conda",
     "python-envs.defaultPackageManager": "ms-python.python:conda",
-    "python-envs.pythonProjects": [ ],
     "yaml.schemas": {
         "https://raw.githubusercontent.com/weaveworks/eksctl/main/pkg/apis/eksctl.io/v1alpha5/assets/schema.json": "*.eksctl.yaml",
         "https://raw.githubusercontent.com/conda-forge/conda-smithy/main/conda_smithy/data/conda-forge.json": "conda/recipe/meta.yaml"
@@ -82,5 +81,9 @@
     "editor.codeActionsOnSave": {
         "source.fixAll.eslint": "always"
     },
-    "python.REPL.enableREPLSmartSend": false
+    "python.REPL.enableREPLSmartSend": false,
+    "chat.agentFilesLocations": {
+        ".codex/agents": true
+    },
+    "chat.useNestedAgentsMdFiles": true
 }

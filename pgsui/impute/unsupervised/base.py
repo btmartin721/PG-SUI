@@ -4,7 +4,6 @@ import json
 import logging
 import math
 import pprint
-from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Mapping, Optional, Tuple, Type
 from uuid import uuid4
@@ -24,16 +23,23 @@ from sklearn.metrics import (
     matthews_corrcoef,
 )
 from sklearn.model_selection import train_test_split
-from snpio import SNPioMultiQC
-from snpio.utils.logging import LoggerManager
 from snpio.utils.misc import validate_input_type
+
+try:
+    from snpio import SNPioMultiQC
+except ImportError:
+    SNPioMultiQC = None
 
 from pgsui.data_processing.transformers import SimMissingTransformer
 from pgsui.impute.unsupervised.nn_scorers import Scorer
 from pgsui.utils.classification_viz import ClassificationReportVisualizer
 from pgsui.utils.logging_utils import (
-    configure_logger,
     configure_optuna_best_trial_logger,
+    get_pgsui_logger,
+    log_key_values,
+    log_runtime,
+    log_section,
+    summarize_optuna_study,
 )
 from pgsui.utils.plotting import Plotting
 from pgsui.utils.pretty_metrics import PrettyMetrics
@@ -95,6 +101,15 @@ class BaseNNImputer:
         self.verbose = verbose
         self.debug = debug
 
+        self.logger = get_pgsui_logger(
+            "pgsui.impute.unsupervised.imputers",
+            prefix=prefix,
+            model_name=model_name,
+            verbose=self.verbose,
+            debug=self.debug,
+            reset_handlers=True,
+        )
+
         # Quiet Matplotlib/fontTools INFO logging when saving PDF/SVG
         for name in (
             "fontTools",
@@ -114,14 +129,6 @@ class BaseNNImputer:
         outdirs = ["models", "plots", "metrics", "optimize", "parameters"]
         self._create_model_directories(prefix, outdirs)
 
-        # Initialize loggers
-        kwargs = {"prefix": prefix, "verbose": verbose, "debug": debug}
-        logman = LoggerManager(__name__, **kwargs)
-        self.logger = configure_logger(
-            logman.get_logger(), verbose=self.verbose, debug=self.debug
-        )
-        self.logger.propagate = False
-
         self.logger.info(f"Using PyTorch device: {self.device.type}.")
 
         # To be initialized by child classes or fit method
@@ -140,7 +147,7 @@ class BaseNNImputer:
         self.plot_fontsize: int = 10
         self.plot_dpi: int = 300
         self.title_fontsize: int = 12
-        self.use_multiqc: bool = True
+        self.use_multiqc: bool = SNPioMultiQC is not None
         self.despine: bool = True
         self.show_plots: bool = False
         self.scoring_averaging: Literal["macro", "weighted"] = "macro"
@@ -237,16 +244,15 @@ class BaseNNImputer:
         )
         sampler = optuna.samplers.TPESampler(seed=self.seed, n_startup_trials=n_startup)
 
-        # 1. Define the base pruner (Hyperband for efficiency)
         base_pruner = optuna.pruners.HyperbandPruner(
-            min_resource=max(10, int(self.epochs * 0.2)),  # 10 or 20% of epochs
-            max_resource=self.epochs,  # Max number of epochs
-            reduction_factor=3,  # 1/3 of trials survive each round
+            min_resource=max(10, int(self.epochs * 0.2)),
+            max_resource=self.epochs,
+            reduction_factor=3,
         )
         pruner = optuna.pruners.PatientPruner(
             base_pruner,
-            patience=3,  # Non-improving steps before pruning
-            min_delta=0,  # Minimum improvement to reset patience
+            patience=3,
+            min_delta=0,
         )
         study_kwargs = {
             "study_name": study_name,
@@ -274,18 +280,61 @@ class BaseNNImputer:
 
         bar = not self.verbose and not self.debug and self.n_jobs == 1
 
-        # Custom logger
-        optlog = configure_optuna_best_trial_logger(min_delta=0.0)
-        optlog.start(study, self.n_trials)
-        study.optimize(
-            lambda trial: self._objective(trial),
-            n_trials=self.n_trials,
-            n_jobs=self.n_jobs,
-            gc_after_trial=True,
-            show_progress_bar=bar,
-            callbacks=[optlog.callback],
+        metric_label = (
+            ", ".join(self.tune_metric)
+            if isinstance(self.tune_metric, (list, tuple))
+            else self.tune_metric
         )
-        optlog.finish(study)
+
+        log_section(self.logger, f"{self.model_name} Tuning")
+        log_key_values(
+            self.logger,
+            [
+                ("metric(s)", metric_label),
+                ("planned trials", self.n_trials),
+                ("tuned parameters", n_params),
+                ("n_jobs", self.n_jobs),
+                ("device", self.device.type),
+                ("max epochs", self.epochs),
+                ("batch size", self.batch_size),
+                ("sampler", type(sampler).__name__),
+                ("pruner", type(pruner).__name__),
+                ("storage", storage or "in-memory"),
+                ("progress bar", bar),
+            ],
+            title="Tuning configuration",
+        )
+
+        optlog = configure_optuna_best_trial_logger(
+            logger_name=f"{self.logger.name}.optuna",
+            min_delta=0.0,
+            forward_logger=self.logger,
+            echo=False,
+        )
+        optlog.start(study, self.n_trials)
+        tune_wall_s: float
+        try:
+            with log_runtime(
+                self.logger,
+                f"{self.model_name} Optuna execution",
+                log_start=False,
+                log_finish=False,
+            ) as timer:
+                study.optimize(
+                    lambda trial: self._objective(trial),
+                    n_trials=self.n_trials,
+                    n_jobs=self.n_jobs,
+                    gc_after_trial=True,
+                    show_progress_bar=bar,
+                    callbacks=[optlog.callback],
+                )
+            tune_wall_s = timer.elapsed_s
+        finally:
+            optlog.finish(study)
+
+        study_stats = summarize_optuna_study(
+            study, planned_trials=self.n_trials, wall_time_s=tune_wall_s
+        )
 
         try:
             best_metric = study.best_value
@@ -321,63 +370,26 @@ class BaseNNImputer:
                 study, self.model_name, self.optimize_dir / "plots", target_name=tn
             )
 
-        if study.trials:
-            start_time = study.trials[0].datetime_start
-            end_time = study.trials[-1].datetime_complete
-            mean_trial_duration = None
-            if start_time is not None and end_time is not None:
-                duration = end_time - start_time
-                if len(study.trials) > 0:
-                    mean_trial_duration = sum(
-                        (
-                            t.duration
-                            for t in study.trials
-                            if study.trials is not None and t.duration is not None
-                        ),
-                        timedelta(0),
-                    ) / len(study.trials)
-                    stddev_trial_duration_seconds = (
-                        sum(
-                            (
-                                (t.duration - mean_trial_duration).total_seconds() ** 2
-                                for t in study.trials
-                                if study.trials is not None and t.duration is not None
-                            ),
-                        )
-                        / len(study.trials)
-                    ) ** 0.5
-                    stddev_trial_duration = timedelta(
-                        seconds=stddev_trial_duration_seconds
-                    )
-        else:
-            duration = None
-            mean_trial_duration = None
-            stddev_trial_duration = None
+        best_trial_label = (
+            getattr(study.best_trial, "number", "n/a")
+            if len(study.directions) == 1
+            else "Pareto front"
+        )
 
-        self.logger.info("")
-        self.logger.info("************ TUNING SUMMARY ************")
-        self.logger.info("")
-        if duration is not None:
-            self.logger.info(
-                f"Tuning completed in: {duration} (HH:MM:SS) for {len(study.trials)} trials."
-            )
-        if mean_trial_duration is not None:
-            self.logger.info("")
-            self.logger.info(f"Average trial duration: {mean_trial_duration}")
-        if stddev_trial_duration is not None:
-            self.logger.info("")
-            self.logger.info(
-                f"Trial duration standard deviation: {stddev_trial_duration}"
-            )
-        self.logger.info("")
-        self.logger.info(best_metric_str)
-        self.logger.info("")
+        log_section(self.logger, "Tuning Summary")
+        log_key_values(self.logger, study_stats.as_log_rows(), title="Execution")
+        log_key_values(
+            self.logger,
+            [
+                ("best metric", best_metric_str),
+                ("best trial", best_trial_label),
+                ("parameters returned", len(best_params)),
+            ],
+            title="Best result",
+        )
         self.logger.info("Best tuned parameters:")
-        self.logger.info("")
         self.logger.info(pprint.pformat(self.best_params_, indent=4, width=72))
-        self.logger.info("")
-
-        self.logger.info("Tuning completed!")
+        self.logger.info("Tuning completed.")
 
         return best_params_tmp
 
@@ -863,14 +875,15 @@ class BaseNNImputer:
                     fout_html = fout.with_suffix(".html")
                     fig.write_html(file=fout_html)
 
-                    SNPioMultiQC.queue_html(
-                        fout_html,
-                        panel_id=f"pgsui_{self.model_name.lower()}_{report_name}_radar",
-                        section=f"PG-SUI: {self.model_name} Model Imputation",
-                        title=f"{self.model_name} {middle} Radar Plot",
-                        index_label=name,
-                        description=f"{self.model_name} {middle} {len(labels)}-base Radar Plot. This radar plot visualizes model performance for three metrics per-class: precision, recall, and F1-score. Each axis represents one of these metrics, allowing for a quick visual assessment of the model's strengths and weaknesses. Higher values towards the outer edge indicate better performance.",
-                    )
+                    if self.use_multiqc and SNPioMultiQC is not None:
+                        SNPioMultiQC.queue_html(
+                            fout_html,
+                            panel_id=f"pgsui_{self.model_name.lower()}_{report_name}_radar",
+                            section=f"PG-SUI: {self.model_name} Model Imputation",
+                            title=f"{self.model_name} {middle} Radar Plot",
+                            index_label=name,
+                            description=f"{self.model_name} {middle} {len(labels)}-base Radar Plot. This radar plot visualizes model performance for three metrics per-class: precision, recall, and F1-score. Each axis represents one of these metrics, allowing for a quick visual assessment of the model's strengths and weaknesses. Higher values towards the outer edge indicate better performance.",
+                        )
 
             if not self.is_haploid_:
                 msg = f"Ploidy: {self.ploidy}. Evaluating per genotype (REF, HET, ALT)."

@@ -328,25 +328,47 @@ class DnaSPSingleLocusAnalyzer:
         if matrix.shape[0] == 0:
             return pd.DataFrame()
 
+        n_total_samples = matrix.shape[0]
+
         # --- Vectorized Calculations ---
         is_nan = np.isnan(matrix)
         n_samples_per_locus = np.sum(~is_nan, axis=0)
 
+        # Keep parity with the historical Total_LocusStats contract used downstream.
+        missing_rate = 1.0 - (n_samples_per_locus / n_total_samples)
+
         # Guard against division by zero for empty columns
         with np.errstate(divide="ignore", invalid="ignore"):
             n_chroms = 2.0 * n_samples_per_locus
+
+            c0 = np.sum(matrix == 0.0, axis=0)
+            c1 = np.sum(matrix == 1.0, axis=0)
+            c2 = np.sum(matrix == 2.0, axis=0)
+
             alt_counts = np.nansum(matrix, axis=0)
             p = alt_counts / n_chroms
             q = 1.0 - p
 
+            maf = np.minimum(p, q)
+            Ho = c1 / n_samples_per_locus
+
+            correction_he = n_chroms / (n_chroms - 1.0)
+            correction_he[n_chroms <= 1] = 0.0
+            He = 2.0 * p * q
+            He_unbiased = He * correction_he
+
+            F_stat = np.full_like(Ho, np.nan)
+            valid_he = He_unbiased > 1e-9
+            F_stat[valid_he] = 1.0 - (Ho[valid_he] / He_unbiased[valid_he])
+
+            minor_counts = np.minimum(alt_counts, n_chroms - alt_counts)
+            singletons = (minor_counts == 1).astype(int)
+
             # Pi
-            correction = n_chroms / (n_chroms - 1.0)
-            correction[n_chroms <= 1] = 0.0
-            Pi = (2.0 * p * q) * correction
+            Pi = He_unbiased
 
         is_segregating = (p > 1e-9) & (p < (1.0 - 1e-9))
         S = is_segregating.astype(int)
-        Eta = S.copy()
 
         # --- Optimization: Vectorized Harmonic Numbers ---
         max_n = int(np.max(n_chroms)) if len(n_chroms) > 0 else 0
@@ -380,12 +402,12 @@ class DnaSPSingleLocusAnalyzer:
             b2 = (2 * (n_sub**2 + n_sub + 3)) / (9 * n_sub * (n_sub - 1))
 
             # 2. Calculate c1 and c2 (Tajima 1989, Eqs 33, 34)
-            c1 = b1 - (1.0 / a1_sub)
-            c2 = b2 - ((n_sub + 2) / (a1_sub * n_sub)) + (a2_sub / (a1_sub**2))
+            c1_taj = b1 - (1.0 / a1_sub)
+            c2_taj = b2 - ((n_sub + 2) / (a1_sub * n_sub)) + (a2_sub / (a1_sub**2))
 
             # 3. Calculate e1 and e2 (Tajima 1989, Eqs 31, 32)
-            e1 = c1 / a1_sub
-            e2 = c2 / (a1_sub**2 + a2_sub)
+            e1 = c1_taj / a1_sub
+            e2 = c2_taj / (a1_sub**2 + a2_sub)
 
             # 4. Calculate Variance (Tajima 1989, Eq 30)
             # NOTE: DnaSP Logic: Var(d) = e1*S + e2*S*(S-1)
@@ -399,10 +421,6 @@ class DnaSPSingleLocusAnalyzer:
             TajimaD[calc_d] = d_vals
 
         # Haplotype Diversity (Hd)
-        c0 = np.sum(matrix == 0.0, axis=0)
-        c1 = np.sum(matrix == 1.0, axis=0)
-        c2 = np.sum(matrix == 2.0, axis=0)
-
         Hap = (c0 > 0).astype(int) + (c1 > 0).astype(int) + (c2 > 0).astype(int)
         HetzPositions = c1
 
@@ -422,7 +440,13 @@ class DnaSPSingleLocusAnalyzer:
             {
                 "Locus": self.locus_names,
                 "Sample_Size": n_samples_per_locus,
+                "Missingness": missing_rate,
                 "SegSites": S,
+                "Singletons": singletons,
+                "MAF": maf,
+                "Ho": Ho,
+                "He": He_unbiased,
+                "F_inbreeding": F_stat,
                 "HetzPositions": HetzPositions,
                 "Hap": Hap,
                 "Hd": Hd,
@@ -454,20 +478,39 @@ class DnaSPSingleLocusAnalyzer:
             return {}
 
         # Ensure numeric
-        numeric_cols = ["Sample_Size", "SegSites", "Pi", "ThetaWatt", "TajimaD", "Hd"]
+        numeric_cols = [
+            "Sample_Size",
+            "SegSites",
+            "Pi",
+            "ThetaWatt",
+            "TajimaD",
+            "Hd",
+            "Ho",
+            "He",
+            "F_inbreeding",
+            "MAF",
+            "Missingness",
+        ]
         for col in numeric_cols:
             if col in df_locus.columns:
                 df_locus[col] = pd.to_numeric(df_locus[col], errors="coerce")
 
         summary = {
             "Population": pop_id,
+            "N_Loci": len(df_locus),
             "Mean_Sample_Size": float(df_locus["Sample_Size"].mean()),
             "Var_Sample_Size": float(df_locus["Sample_Size"].var()),
             "Total_Segregating_Sites": int(df_locus["SegSites"].sum()),
+            "Total_Singletons": int(df_locus["Singletons"].sum()),
             "Mean_Pi": float(df_locus["Pi"].mean()),
             "Mean_ThetaWatt": float(df_locus["ThetaWatt"].mean()),
             "Mean_TajimaD": float(df_locus["TajimaD"].mean()),
             "Mean_Hd": float(df_locus["Hd"].mean()),
+            "Mean_Ho": float(df_locus["Ho"].mean()),
+            "Mean_He": float(df_locus["He"].mean()),
+            "Mean_F": float(df_locus["F_inbreeding"].mean()),
+            "Mean_MAF": float(df_locus["MAF"].mean()),
+            "Mean_Missingness": float(df_locus["Missingness"].mean()),
             "Var_Pi": float(df_locus["Pi"].var()),
             "Var_ThetaWatt": float(df_locus["ThetaWatt"].var()),
             "Var_Hd": float(df_locus["Hd"].var()),
@@ -476,6 +519,7 @@ class DnaSPSingleLocusAnalyzer:
             "StdDev_ThetaWatt": float(df_locus["ThetaWatt"].std()),
             "StdDev_Hd": float(df_locus["Hd"].std()),
             "StdDev_TajimaD": float(df_locus["TajimaD"].std()),
+            "StdDev_F": float(df_locus["F_inbreeding"].std()),
         }
 
         # Kelly's ZnS

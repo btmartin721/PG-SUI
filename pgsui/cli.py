@@ -79,6 +79,7 @@ from pgsui.data_processing.config import (
     save_dataclass_yaml,
 )
 from pgsui.data_processing.containers import NLPCAConfig, UBPConfig
+from pgsui.utils.logging_utils import PGSUI_DATE_FORMAT, PGSUI_LOG_FORMAT
 
 # Canonical model order used everywhere (default and subset ordering)
 MODEL_ORDER: Tuple[str, ...] = (
@@ -293,7 +294,8 @@ def _configure_logging(verbose: bool, log_file: Optional[str] = None) -> logging
         handlers.append(logging.FileHandler(log_file, mode="w", encoding="utf-8"))
     logging.basicConfig(
         level=level,
-        format="%(asctime)s - %(levelname)s - %(message)s",
+        format=PGSUI_LOG_FORMAT,
+        datefmt=PGSUI_DATE_FORMAT,
         handlers=handlers,
     )
     return logging.getLogger()

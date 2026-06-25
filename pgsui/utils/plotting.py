@@ -25,9 +25,12 @@ from sklearn.metrics import (
     precision_recall_curve,
     roc_curve,
 )
-from sklearn.preprocessing import label_binarize
-from snpio import SNPioMultiQC
 from snpio.utils.logging import LoggerManager
+
+try:
+    from snpio import SNPioMultiQC
+except ImportError:
+    SNPioMultiQC = None
 
 from pgsui.utils import misc
 from pgsui.utils.logging_utils import configure_logger
@@ -125,6 +128,12 @@ class Plotting:
         self.multiqc_section: str = (
             multiqc_section if multiqc_section is not None else f"PG-SUI ({model_name})"
         )
+
+        if self.use_multiqc and SNPioMultiQC is None:
+            self.logger.warning(
+                "MultiQC output was requested, but snpio.SNPioMultiQC is unavailable; skipping MultiQC exports."
+            )
+            self.use_multiqc = False
 
         if self.plot_format.startswith("."):
             self.plot_format = self.plot_format.lstrip(".")
@@ -1016,7 +1025,7 @@ class Plotting:
     # --------------------------------------------------------------------- #
     def _multiqc_enabled(self) -> bool:
         """Return True if MultiQC integration is active."""
-        return bool(self.use_multiqc)
+        return bool(self.use_multiqc and SNPioMultiQC is not None)
 
     def _queue_multiqc_tuning(
         self,
