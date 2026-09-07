@@ -4,6 +4,16 @@ Changelog
 
 An overview of changes to **PG-SUI** by release. This file mirrors the GitHub Markdown changelog and reflects the refactor-era docs: dataclass-first configs, presets, unified scikit-learn framework-based ``fit()/transform()`` methods, CLI precedence, and updated deterministic/supervised docs.
 
+v1.8.3 - 2026-09-06
+-------------------
+
+Documentation Infrastructure - v1.8.3
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+- Migrated Read the Docs builds from the retired Ubuntu 20.04 image to Ubuntu 24.04.
+- Updated the Read the Docs Python runtime from 3.11 to 3.12 to match the current development target.
+- Published a patch release so both the ``latest`` and tag-backed ``stable`` documentation channels use a supported build environment.
+
 v1.8.2 - 2026-09-06
 -------------------
 

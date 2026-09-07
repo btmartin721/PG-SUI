@@ -1,49 +1,17 @@
-# PG-SUI v1.8.2
+# PG-SUI v1.8.3
 
-PG-SUI v1.8.2 is a maintenance and robustness release for genotype
-imputation, reporting, and distribution workflows.
+PG-SUI v1.8.3 is a documentation-infrastructure patch release. Package APIs,
+scientific behavior, and the intentional v1.8.2 dependency updates are
+unchanged.
 
-## Scientific and runtime correctness
+## Documentation infrastructure
 
-- Corrected NLPCA embedding snapshots and L1 regularization so optimization
-  operates on module parameters consistently.
-- Removed mutable neural-model defaults and normalized focal-loss gamma
-  handling across supported devices.
-- Added explicit population-label validation before population-specific mode
-  imputation.
-- Hardened haploid REF/ALT normalization, simulated-missingness sampling, and
-  validation-array checks.
-- Preserved error context while narrowing recoverable exception handling in
-  deterministic and neural imputers.
+- Migrated Read the Docs builds from the retired Ubuntu 20.04 image to Ubuntu
+  24.04.
+- Updated the Read the Docs Python runtime from 3.11 to 3.12 to match the
+  current development target.
+- Published a patch tag so both the `latest` and tag-backed `stable`
+  documentation channels build on a supported environment.
 
-## Reporting and analysis
-
-- Made optional MultiQC reporting safe when the integration is unavailable.
-- Improved model-scoped logging and diagnostic output for tuning, cleanup, and
-  configuration failures.
-- Added reproducible analysis scripts for metric-feature interactions,
-  validation runtime scaling, and PG-SUI/GTImputation comparisons.
-- Added regression tests for metric-feature bootstrap analyses, validation
-  runtime scaling, GTImputation VCF scoring, and CPU/GPU runtime comparisons.
-
-## Dependencies and distribution
-
-- Updated SNPio to `>=1.7.3` and retained the intentional scientific Python,
-  PyTorch, Optuna, FastAPI, and Uvicorn dependency bounds.
-- Enforced strict Conda channel priority without the `defaults` channel to
-  prevent low-level library clobbering.
-- Synchronized pip, Conda, and environment dependency declarations.
-- Corrected setuptools package-discovery exclusions so Electron vendor modules
-  are not bundled into the Python wheel.
-- Pinned release Docker builds to the exact PG-SUI version published to PyPI.
-- Made missing Docker Hub credentials fail the release workflow explicitly.
-- Attached built source and wheel distributions to the GitHub release.
-
-## Documentation and maintenance
-
-- Updated pip, Conda, and Docker installation guidance.
-- Corrected Sphinx version metadata and GitHub source links.
-- Adopted Ruff for formatting, import sorting, and linting.
-- Added Ruff checks to the tag and pull-request test workflow.
-- Modernized type annotations and removed broad exception handling throughout
-  the touched code paths.
+The scientific, engineering, dependency, and distribution changes remain
+documented in the v1.8.2 changelog immediately below this patch release.
