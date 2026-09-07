@@ -21,6 +21,8 @@ imputation, reporting, and distribution workflows.
 - Made optional MultiQC reporting safe when the integration is unavailable.
 - Improved model-scoped logging and diagnostic output for tuning, cleanup, and
   configuration failures.
+- Added reproducible analysis scripts for metric-feature interactions,
+  validation runtime scaling, and PG-SUI/GTImputation comparisons.
 - Added regression tests for metric-feature bootstrap analyses, validation
   runtime scaling, GTImputation VCF scoring, and CPU/GPU runtime comparisons.
 

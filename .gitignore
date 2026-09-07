@@ -235,6 +235,9 @@ tmp_probe_output/
 gtImputation/
 gtimputation-results/
 scripts/*
+!scripts/pgsui_metric_feature_interactions.py
+!scripts/plot_pgsui_validation_runtime_scaling.py
+!scripts/visualize_pgsui_gtimputation_results.py
 test.phy.vcf
 iqtree_runs/
 imputed.nremover.vcf.gz

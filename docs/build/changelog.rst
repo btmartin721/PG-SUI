@@ -22,6 +22,7 @@ Engineering - v1.8.2
 - Adopted Ruff for formatting, import sorting, and linting; added Ruff checks to CI; and modernized annotations to built-in Python generics and union syntax.
 - Replaced broad recoverable exception handlers with focused exception groups and preserved useful logging context.
 - Standardized module-scoped logging across configuration, CLI, deterministic, unsupervised, plotting, and scoring code.
+- Added reproducible analysis scripts for metric-feature interactions, validation runtime scaling, and PG-SUI/GTImputation comparisons.
 - Added regression tests for metric-feature bootstrap analyses, validation runtime scaling, GTImputation VCF scoring, and CPU/GPU runtime comparisons.
 
 Dependencies and Distribution - v1.8.2

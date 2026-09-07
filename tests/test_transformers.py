@@ -221,7 +221,19 @@ def test_treeparser_file_inputs(tmp_path: Path) -> None:
         / "phylip_files"
         / "test_n2.phy"
     )
-    gd = PhylipReader(filename=str(phy_path), prefix="treeparser-test", verbose=False)
+    popmap_path = (
+        Path(__file__).resolve().parents[1]
+        / "pgsui"
+        / "example_data"
+        / "popmaps"
+        / "test.popmap"
+    )
+    gd = PhylipReader(
+        filename=str(phy_path),
+        popmapfile=str(popmap_path),
+        prefix="treeparser-test",
+        verbose=False,
+    )
 
     tree_path = tmp_path / "test.tre"
     qmatrix_path = tmp_path / "test.iqtree"
