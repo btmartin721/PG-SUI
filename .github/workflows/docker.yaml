@@ -5,6 +5,11 @@ on:
     tags:
       - "v*.*.*"
   workflow_dispatch:
+    inputs:
+      version:
+        description: Existing PyPI version to publish to Docker Hub
+        required: true
+        type: string
 
 env:
   IMAGE_NAME: btmartin721/pg-sui
@@ -16,7 +21,19 @@ jobs:
     permissions:
       actions: read
     steps:
+      - name: Validate manual release version
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Version must use the X.Y.Z format."
+            exit 1
+          fi
+
       - name: Wait for unit-tests success
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_SHA: ${{ github.sha }}
@@ -146,40 +163,44 @@ jobs:
           fi
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
 
       - name: Set up Docker Buildx
         id: buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
         with:
           install: true
           driver-opts: network=host
 
       - name: Derive version
         id: version
+        env:
+          DISPATCH_VERSION: ${{ inputs.version }}
         run: |
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          elif [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            echo "version=${DISPATCH_VERSION}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Docker metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.IMAGE_NAME }}
           tags: |
-            type=semver,pattern={{version}},value=${{ steps.version.outputs.version }},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=semver,pattern={{version}},value=${{ steps.version.outputs.version }},enable=${{ steps.version.outputs.version != '' }}
+            type=raw,value=latest,enable=${{ steps.version.outputs.version != '' }}
             type=raw,value=pr-${{ github.event.pull_request.number }},enable=${{ github.event_name == 'pull_request' }}
             type=ref,event=branch
             type=sha,format=short
 
       - name: Log in to Docker Hub
         if: github.event_name != 'pull_request' && steps.dockerhub-creds.outputs.username != '' && env.DOCKERHUB_PASSWORD != ''
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           username: ${{ steps.dockerhub-creds.outputs.username }}
           password: ${{ env.DOCKERHUB_PASSWORD }}
@@ -191,15 +212,15 @@ jobs:
           exit 1
 
       - name: Build and push
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: Dockerfile
           build-args: |
             PGSUI_VERSION=${{ steps.version.outputs.version }}
-          # Build single-arch when loading for PRs; multi-arch only for tag pushes.
+          # Build single-arch when loading for PRs; release builds are multi-arch.
           platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
-          push: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && env.DOCKERHUB_PASSWORD != '' && steps.dockerhub-creds.outputs.username != '' }}
+          push: ${{ (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') && env.DOCKERHUB_PASSWORD != '' && steps.dockerhub-creds.outputs.username != '' }}
           load: ${{ github.event_name == 'pull_request' }}
           builder: ${{ steps.buildx.outputs.name }}
           tags: ${{ steps.meta.outputs.tags }}
@@ -215,5 +236,5 @@ jobs:
           docker run --rm "$image" pg-sui --help
 
       - name: Confirm Docker image built
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         run: 'echo "Docker image pushed with tags: ${{ steps.meta.outputs.tags }}"'

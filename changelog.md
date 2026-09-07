@@ -4,6 +4,13 @@ An overview of changes to **PG-SUI** by release. This mirrors the Sphinx/RST cha
 
 ---
 
+## Unreleased
+
+### Distribution
+
+- Disabled optional Conda channel-notice retrieval during Docker builds to prevent ARM64 QEMU jobs from hanging before dependency resolution.
+- Added validated exact-version Docker republishing and updated the Docker workflow actions to their current supported major versions.
+
 ## v1.8.3 - 2026-09-07
 
 ### Documentation Infrastructure - v1.8.3

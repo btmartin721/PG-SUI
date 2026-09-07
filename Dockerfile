@@ -27,8 +27,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     procps \
     && rm -rf /var/lib/apt/lists/*
 
-# Create a new Conda environment and install dependencies
-RUN conda create -y -n $CONDA_ENV -c conda-forge -c btmartin721 \
+# Create a new Conda environment and install dependencies. Channel notices are
+# nonessential in reproducible builds and can stall under QEMU emulation.
+RUN conda config --system --set number_channel_notices 0 && \
+    conda create -y -n $CONDA_ENV -c conda-forge -c btmartin721 \
     python=3.12 \
     numpy=2.2.6 \
     pandas=2.2.3 \
@@ -37,7 +39,7 @@ RUN conda create -y -n $CONDA_ENV -c conda-forge -c btmartin721 \
     conda init bash && \
     echo "conda activate $CONDA_ENV" > ~/.bashrc
 
-ENV PATH /opt/conda/envs/$CONDA_ENV/bin:$PATH
+ENV PATH=/opt/conda/envs/$CONDA_ENV/bin:$PATH
 
 RUN if [ -n "$PGSUI_VERSION" ]; then \
         PGSUI_PACKAGE="pg-sui==$PGSUI_VERSION"; \
