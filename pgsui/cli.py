@@ -1,6 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
 """PG-SUI Imputation CLI
 
 Argument-precedence model:
@@ -32,18 +29,13 @@ import logging
 import os
 import sys
 import time
+from collections.abc import Callable, Iterable
 from functools import wraps
 from pathlib import Path
 from typing import (
     Any,
-    Callable,
-    Dict,
-    Iterable,
-    List,
     Literal,
-    Optional,
     ParamSpec,
-    Tuple,
     TypeVar,
     cast,
 )
@@ -78,11 +70,12 @@ from pgsui.data_processing.config import (
     load_yaml_to_dataclass,
     save_dataclass_yaml,
 )
-from pgsui.data_processing.containers import NLPCAConfig, UBPConfig
 from pgsui.utils.logging_utils import PGSUI_DATE_FORMAT, PGSUI_LOG_FORMAT
 
+logger = logging.getLogger(__name__)
+
 # Canonical model order used everywhere (default and subset ordering)
-MODEL_ORDER: Tuple[str, ...] = (
+MODEL_ORDER: tuple[str, ...] = (
     "ImputeUBP",
     "ImputeNLPCA",
     "ImputeVAE",
@@ -92,7 +85,7 @@ MODEL_ORDER: Tuple[str, ...] = (
 )
 
 # Strategies supported by SimMissingTransformer + SimConfig.
-SIM_STRATEGY_CHOICES: Tuple[str, ...] = (
+SIM_STRATEGY_CHOICES: tuple[str, ...] = (
     "random",
     "random_weighted",
     "random_weighted_inv",
@@ -102,6 +95,9 @@ SIM_STRATEGY_CHOICES: Tuple[str, ...] = (
 
 P = ParamSpec("P")
 R = TypeVar("R")
+
+# Module-level logger
+logger = logging.getLogger(__name__)
 
 
 # ----------------------------- CLI Utilities ----------------------------- #
@@ -138,8 +134,8 @@ def _force_tuning_off(cfg: Any, model_name: str) -> Any:
         if hasattr(cfg, "tune") and hasattr(cfg.tune, "enabled"):
             cfg.tune.enabled = False
             return cfg
-    except Exception:
-        pass
+    except (AttributeError, TypeError) as exc:
+        logger.debug(f"Failed to set tune.enabled directly: {exc}")
 
     # Fallback to dot override
     try:
@@ -150,6 +146,9 @@ def _force_tuning_off(cfg: Any, model_name: str) -> Any:
             raise RuntimeError(
                 f"Failed to force tuning off for {model_name}: {e}"
             ) from e
+        logger.debug(
+            f"Failed to disable tuning via dot overrides for {model_name}: {e}"
+        )
         return cfg
 
 
@@ -183,10 +182,10 @@ def _load_best_params(best_params_path: Path) -> dict:
     """Load best parameters JSON."""
     with best_params_path.open("r", encoding="utf-8") as f:
         data = json.load(f)
+
     if not isinstance(data, dict):
-        raise ValueError(
-            f"best_parameters.json must be a JSON object, got {type(data)}"
-        )
+        raise TypeError(f"best_parameters.json must be a JSON object, got {type(data)}")
+
     return data
 
 
@@ -254,9 +253,11 @@ def _apply_best_params_to_cfg(cfg: Any, best_params: dict, model_name: str) -> A
             try:
                 cfg = apply_dot_overrides(cfg, {raw_k: v})
                 continue
-            except Exception:
+            except (AttributeError, KeyError, TypeError, ValueError) as exc:
                 # If exact dot-path failed, fall through to prefix search
-                pass
+                logger.debug(
+                    f"Could not apply best parameter '{raw_k}' as an exact dot path: {exc}",
+                )
 
         # CASE 2: Prefix Search
         # Try applying empty prefix, then model., train., etc.
@@ -267,18 +268,21 @@ def _apply_best_params_to_cfg(cfg: Any, best_params: dict, model_name: str) -> A
                 cfg = apply_dot_overrides(cfg, {k: v})
                 applied = True
                 break
-            except Exception:
+            except (AttributeError, KeyError, TypeError, ValueError) as exc:
+                logger.debug(
+                    f"Could not apply parameter '{k}' with prefix '{pref}': {exc}"
+                )
                 continue
 
         if not applied:
-            logging.warning(
+            logger.warning(
                 f"Best param '{raw_k}' not recognized for {model_name}; leaving config unchanged for that key."
             )
 
     return cfg
 
 
-def _configure_logging(verbose: bool, log_file: Optional[str] = None) -> logging.Logger:
+def _configure_logging(verbose: bool, log_file: str | None = None) -> logging.Logger:
     """Configure root logger.
 
     Args:
@@ -289,7 +293,7 @@ def _configure_logging(verbose: bool, log_file: Optional[str] = None) -> logging
         logging.Logger: Configured root logger.
     """
     level = logging.INFO if verbose else logging.ERROR
-    handlers: List[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
     if log_file:
         handlers.append(logging.FileHandler(log_file, mode="w", encoding="utf-8"))
     logging.basicConfig(
@@ -301,7 +305,7 @@ def _configure_logging(verbose: bool, log_file: Optional[str] = None) -> logging
     return logging.getLogger()
 
 
-def _parse_seed(seed_arg: str) -> Optional[int]:
+def _parse_seed(seed_arg: str) -> int | None:
     """Parse --seed argument into an int or None."""
     s = seed_arg.strip().lower()
     if s == "random":
@@ -316,7 +320,7 @@ def _parse_seed(seed_arg: str) -> Optional[int]:
         ) from e
 
 
-def _parse_models(models: Iterable[str]) -> Tuple[str, ...]:
+def _parse_models(models: Iterable[str]) -> tuple[str, ...]:
     """Validate and canonicalize model names in a deterministic order.
 
     - If no models are provided, returns all in MODEL_ORDER.
@@ -351,7 +355,7 @@ def _parse_overrides(pairs: list[str]) -> dict:
         v = v.strip()
         try:
             out[k] = ast.literal_eval(v)
-        except Exception:
+        except (ValueError, SyntaxError):
             out[k] = v  # raw string fallback
     return out
 
@@ -360,10 +364,10 @@ def _parse_allele_encoding(arg: str) -> dict:
     """Parse STRUCTURE allele encoding dict from JSON or Python literal."""
     try:
         payload = json.loads(arg)
-    except Exception:
+    except (json.JSONDecodeError, ValueError, SyntaxError):
         try:
             payload = ast.literal_eval(arg)
-        except Exception as e:
+        except (ValueError, SyntaxError) as e:
             raise argparse.ArgumentTypeError(
                 f"Invalid --structure-allele-encoding; must be a dict. Error: {e}"
             ) from e
@@ -381,9 +385,11 @@ def _parse_allele_encoding(arg: str) -> dict:
             if k_strip.lstrip("-").isdigit():
                 try:
                     key = int(k_strip)
-                except Exception:
+                except (ValueError, SyntaxError, TypeError):
                     key = k
+
         out[key] = str(v)
+
     return out
 
 
@@ -483,14 +489,10 @@ def _args_to_cli_overrides(args: argparse.Namespace) -> dict:
     if hasattr(args, "plot_format"):
         overrides["plot.fmt"] = args.plot_format
     if getattr(args, "disable_plotting", False):
-        logging.info(
-            "Disabling plotting for all models as per --disable-plotting flag."
-        )
+        logger.info("Disabling plotting for all models as per --disable-plotting flag.")
         overrides["plot.show"] = False
     if getattr(args, "disable_multiqc", False):
-        logging.info(
-            "Disabling MultiQC-compatible plots as per --disable-multiqc flag."
-        )
+        logger.info("Disabling MultiQC-compatible plots as per --disable-multiqc flag.")
         overrides["plot.multiqc"] = False
 
     # Simulation overrides
@@ -506,11 +508,11 @@ def _args_to_cli_overrides(args: argparse.Namespace) -> dict:
     if getattr(args, "load_best_params", False):
         # Never allow CLI flags to re-enable tuning when loading params
         if hasattr(args, "tune") and bool(getattr(args, "tune", False)):
-            logging.warning(
+            logger.warning(
                 "--tune was supplied, but --load-best-params is active; ignoring --tune."
             )
         if hasattr(args, "tune_n_trials"):
-            logging.warning(
+            logger.warning(
                 "--tune-n-trials was supplied, but --load-best-params is active; ignoring it."
             )
     else:
@@ -523,7 +525,7 @@ def _args_to_cli_overrides(args: argparse.Namespace) -> dict:
 
 
 def _format_seconds(seconds: float) -> str:
-    total = int(round(seconds))
+    total = round(seconds)
     minutes, secs = divmod(total, 60)
     hours, minutes = divmod(minutes, 60)
     if hours:
@@ -542,16 +544,13 @@ def log_model_time(fn: Callable[P, R]) -> Callable[P, R]:
             result = fn(*args, **kwargs)
         except Exception:
             elapsed = time.perf_counter() - start
-            logging.error(
-                f"{model_name} failed after {elapsed:0.2f}s "
-                f"({_format_seconds(elapsed)}).",
-                exc_info=True,
+            logger.exception(
+                f"{model_name} failed after {elapsed:0.2f}s ({_format_seconds(elapsed)}).",
             )
             raise
         elapsed = time.perf_counter() - start
-        logging.info(
-            f"{model_name} finished in {elapsed:0.2f}s "
-            f"({_format_seconds(elapsed)})."
+        logger.info(
+            f"{model_name} finished in {elapsed:0.2f}s ({_format_seconds(elapsed)})."
         )
         return result
 
@@ -577,7 +576,7 @@ def build_genotype_data(
     siterates: str | None,
     force_popmap: bool,
     debug: bool,
-    include_pops: List[str] | None,
+    include_pops: list[str] | None,
     plot_format: Literal["pdf", "png", "jpg", "jpeg", "svg"],
     structure_has_popids: bool = False,
     structure_has_marker_names: bool = False,
@@ -604,7 +603,7 @@ def build_genotype_data(
     """
     fmt_norm = _normalize_input_format(fmt)
     plot_format = _normalize_plot_format(cast(str, plot_format))
-    logging.info(f"Loading {fmt_norm.upper()} and popmap data...")
+    logger.info(f"Loading {fmt_norm.upper()} and popmap data...")
 
     kwargs = {
         "filename": input_path,
@@ -637,36 +636,36 @@ def build_genotype_data(
 
     tp = None
     if treefile is not None:
-        logging.info("Parsing phylogenetic tree...")
+        logger.info("Parsing phylogenetic tree...")
 
         tp = TreeParser(
             gd, treefile=treefile, qmatrix=qmatrix, siterates=siterates, verbose=True
         )
 
-    logging.info("Loaded genotype data.")
+    logger.info("Loaded genotype data.")
     return gd, tp
 
 
 @log_model_time
-def run_model_safely(model_name: str, builder, *, warn_only: bool = True) -> None:
+def run_model_safely(model_name: str, builder, *, warn_only: bool = True) -> Any:
     """Run model builder + fit/transform with error isolation."""
-    logging.info(f"▶ Running {model_name} ...")
+    logger.info(f"▶ Running {model_name} ...")
     try:
         model = builder()
         model.fit()
         X_imputed = model.transform()
-        logging.info(f"✓ {model_name} completed.")
+        logger.info(f"✓ {model_name} completed.")
         return X_imputed
     except Exception as e:
         if warn_only:
-            logging.warning(f"⚠ {model_name} failed: {e}", exc_info=True)
+            logger.warning(f"⚠ {model_name} failed: {e}", exc_info=True)
         else:
             raise
 
 
 # -------------------------- Model Registry ------------------------------- #
 # Add config-driven models here by listing the class and its config dataclass.
-MODEL_REGISTRY: Dict[str, Dict[str, Any]] = {
+MODEL_REGISTRY: dict[str, dict[str, Any]] = {
     "ImputeUBP": {"cls": ImputeUBP, "config_cls": UBPConfig},
     "ImputeNLPCA": {"cls": ImputeNLPCA, "config_cls": NLPCAConfig},
     "ImputeAutoencoder": {"cls": ImputeAutoencoder, "config_cls": AutoencoderConfig},
@@ -700,9 +699,9 @@ def _build_effective_config_for_model(
     if hasattr(args, "preset"):
         preset_name = args.preset
         cfg = cfg_cls.from_preset(preset_name)
-        logging.info(f"Initialized {model_name} from '{preset_name}' preset.")
+        logger.info(f"Initialized {model_name} from '{preset_name}' preset.")
     else:
-        logging.info(f"Initialized {model_name} from dataclass defaults (no preset).")
+        logger.info(f"Initialized {model_name} from dataclass defaults (no preset).")
 
     # 2) YAML overlays preset/defaults (boss). Ignore any 'preset' in YAML.
     yaml_path = getattr(args, "config", None)
@@ -714,7 +713,7 @@ def _build_effective_config_for_model(
             base=cfg,
             yaml_preset_behavior="ignore",  # 'preset' key in YAML ignored with warning
         )
-        logging.info(
+        logger.info(
             f"Loaded YAML config for {model_name} from {yaml_path} (ignored 'preset' in YAML if present)."
         )
 
@@ -735,7 +734,7 @@ def _build_effective_config_for_model(
                 src_prefix = getattr(getattr(cfg, "io", object()), "prefix", None)
 
         if getattr(args, "tune", False):
-            logging.warning(
+            logger.warning(
                 "--tune was supplied, but --load-best-params is active; forcing tuning OFF."
             )
 
@@ -756,11 +755,11 @@ def _build_effective_config_for_model(
                 "ImputeVAE",
                 "ImputeAutoencoder",
             }:
-                logging.error(msg)
+                logger.error(msg)
                 raise FileNotFoundError(msg)
-            logging.warning(msg)
+            logger.warning(msg)
         else:
-            logging.info(f"Loading best parameters for {model_name} from: {best_path}")
+            logger.info(f"Loading best parameters for {model_name} from: {best_path}")
             best_params = _load_best_params(best_path)
             cfg = _apply_best_params_to_cfg(cfg, best_params, model_name)
             cfg = _force_tuning_off(cfg, model_name)
@@ -787,7 +786,7 @@ def _build_effective_config_for_model(
                 "ImputeAutoencoder",
                 "ImputeVAE",
             }:
-                logging.error(
+                logger.error(
                     f"Error applying --set overrides to {model_name} config: {e}"
                 )
                 raise
@@ -799,8 +798,8 @@ def _build_effective_config_for_model(
         # --set, YAML, preset, and CLI flags.
         if getattr(args, "load_best_params", False):
             # If user explicitly tried to set tune.* via --set, warn and override.
-            if any(str(k).startswith("tune.") for k in (user_overrides or {}).keys()):
-                logging.warning(
+            if any(str(k).startswith("tune.") for k in (user_overrides or {})):
+                logger.warning(
                     f"{model_name}: '--set tune.*=...' was provided, but --load-best-params forces tuning OFF. "
                     "Ignoring any tune.* overrides."
                 )
@@ -810,7 +809,7 @@ def _build_effective_config_for_model(
 
 
 def _maybe_print_or_dump_configs(
-    cfgs_by_model: Dict[str, Any], args: argparse.Namespace
+    cfgs_by_model: dict[str, Any], args: argparse.Namespace
 ) -> bool:
     """Handle --print-config / --dump-config for ALL config-driven models selected.
 
@@ -839,13 +838,13 @@ def _maybe_print_or_dump_configs(
             else:
                 path = f"{dump_base}.{m}.yaml"
             save_dataclass_yaml(cfg, path)
-            logging.info(f"Saved {m} config to {path}")
+            logger.info(f"Saved {m} config to {path}")
         did_io = True
 
     return did_io
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     """PG-SUI CLI main entry point.
 
     The CLI supports running multiple imputation models on a single input file, with configuration handled via presets, YAML files, and CLI flags.
@@ -921,7 +920,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument(
         "--config",
         default=argparse.SUPPRESS,
-        help="YAML config for config-driven models (Autoencoder, VAE). Overrides preset and defaults.",
+        help=(
+            "YAML config for config-driven models "
+            "(Autoencoder, VAE, NLPCA, UBP). Overrides preset and defaults."
+        ),
     )
     parser.add_argument(
         "--preset",
@@ -1155,7 +1157,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if input_path is None and hasattr(args, "vcf"):
         input_path = args.vcf
         if not hasattr(args, "format"):
-            setattr(args, "format", "vcf")
+            args.format = "vcf"
 
     if input_path is None:
         logger.error("You must provide --input (or legacy --vcf).")
@@ -1212,22 +1214,23 @@ def main(argv: Optional[List[str]] = None) -> int:
     prefix: str = getattr(args, "prefix", str(Path(input_path).stem))
     # Ensure downstream config building sees the resolved prefix even if
     # --prefix was not provided.
-    setattr(args, "prefix", prefix)
+    args.prefix = prefix
 
     treefile, qmatrix, siterates = _resolve_tree_paths(args)
-    setattr(args, "treefile", treefile)
-    setattr(args, "qmatrix", qmatrix)
-    setattr(args, "siterates", siterates)
+    args.treefile = treefile
+    args.qmatrix = qmatrix
+    args.siterates = siterates
 
-    if any(x is not None for x in (treefile, qmatrix, siterates)):
-        if not all(x is not None for x in (treefile, qmatrix, siterates)):
-            logger.error(
-                "--treefile, --qmatrix, and --siterates must all be provided together or they should all be omitted."
-            )
-            parser.error(
-                "--treefile, --qmatrix, and --siterates must all be provided together or they should all be omitted."
-            )
-            return 2
+    if any(x is not None for x in (treefile, qmatrix, siterates)) and not all(
+        x is not None for x in (treefile, qmatrix, siterates)
+    ):
+        logger.error(
+            "--treefile, --qmatrix, and --siterates must all be provided together or they should all be omitted."
+        )
+        parser.error(
+            "--treefile, --qmatrix, and --siterates must all be provided together or they should all be omitted."
+        )
+        return 2
 
     # Load genotype data
     gd, tp = build_genotype_data(
@@ -1264,7 +1267,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
 
     # ---------------- Build config(s) per selected model ------------------- #
-    cfgs_by_model: Dict[str, Any] = {
+    cfgs_by_model: dict[str, Any] = {
         m: _build_effective_config_for_model(m, args) for m in selected_models
     }
 
@@ -1476,8 +1479,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             overwrite=overwrite,
         )
         logger.info("MultiQC report successfully built.")
-    except Exception as exc2:
-        logger.error(f"Failed to build MultiQC report: {exc2}", exc_info=True)
+    except Exception:
+        logger.exception("Failed to build MultiQC report.")
 
     logger.info("PG-SUI imputation run complete!")
     return 0

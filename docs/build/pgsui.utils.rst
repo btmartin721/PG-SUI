@@ -10,6 +10,7 @@ pgsui.utils.misc module
 .. automodule:: pgsui.utils.misc
    :members:
    :undoc-members:
+   :no-index:
 
 pgsui.utils.plotting module
 ---------------------------
@@ -22,12 +23,5 @@ pgsui.utils.scorers module
 --------------------------
 
 .. automodule:: pgsui.utils.scorers
-   :members:
-   :undoc-members:
-
-Module contents
----------------
-
-.. automodule:: pgsui.utils
    :members:
    :undoc-members:

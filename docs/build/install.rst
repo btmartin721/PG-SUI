@@ -33,11 +33,27 @@ If you prefer using Anaconda/Miniconda, install PG-SUI from the btmartin721 chan
 
 .. code-block:: bash
 
-    conda create -n pg-sui-env -c btmartin721 pg-sui
-    conda activate pg-sui-env
+    conda create -n pgsui-env --strict-channel-priority --override-channels \
+        -c btmartin721 -c conda-forge -c bioconda \
+        python=3.12 pg-sui
+    conda activate pgsui-env
 
     # sanity check
     pg-sui --help
+
+Docker installation
+-------------------
+
+Pull the release image from Docker Hub and run the CLI without installing
+PG-SUI into the host Python environment:
+
+.. code-block:: bash
+
+    docker pull btmartin721/pg-sui:latest
+    docker run -it --rm btmartin721/pg-sui:latest pg-sui --help
+
+For reproducible workflows, replace ``latest`` with a release tag such as
+``1.8.2``.
 
 MacOS GUI add-on (Electron)
 ---------------------------

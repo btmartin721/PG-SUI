@@ -1,20 +1,21 @@
 import logging
 import warnings
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Dict, List, Literal, Mapping, Optional, Sequence, cast
+from typing import Literal, cast
 
 import matplotlib as mpl
 
 # Use Agg backend for headless plotting
 mpl.use("Agg")
 
-import matplotlib.colors as colors
 import matplotlib.pyplot as plt
 import numpy as np
 import optuna
 import pandas as pd
 import seaborn as sns
 import torch
+from matplotlib import colors
 from optuna.exceptions import ExperimentalWarning
 from scipy.spatial.distance import jensenshannon
 from sklearn.metrics import (
@@ -87,7 +88,7 @@ class Plotting:
         verbose: int = 0,
         debug: bool = False,
         multiqc: bool = False,
-        multiqc_section: Optional[str] = None,
+        multiqc_section: str | None = None,
     ) -> None:
         """Initialize the Plotting object.
 
@@ -295,20 +296,25 @@ class Plotting:
             plt.rcParams.update(self.param_dict)
 
         # ---- MultiQC: Optuna tuning line graph + best-params table --------
+        if SNPioMultiQC is None:
+            return
+
         if self._multiqc_enabled():
             try:
                 self._queue_multiqc_tuning(
                     study=study, model_name=model_name, target_name=target_name
                 )
-            except Exception as exc:  # pragma: no cover - defensive
+            except (AttributeError, OSError, TypeError, ValueError) as exc:
+                # MultiQC queueing is best-effort; only log expected
+                # data/format issues.
                 self.logger.warning(f"Failed to queue MultiQC tuning plots: {exc}")
 
     def plot_metrics(
         self,
         y_true: np.ndarray,
         y_pred_proba: np.ndarray,
-        metrics: Dict[str, float],
-        label_names: Optional[Sequence[str]] = None,
+        metrics: dict[str, float],
+        label_names: Sequence[str] | None = None,
         prefix: str = "",
     ) -> None:
         """Plot multi-class ROC-AUC and Precision-Recall curves.
@@ -487,7 +493,7 @@ class Plotting:
                     label_names=label_names,
                     panel_prefix=prefix,
                 )
-            except Exception as exc:  # pragma: no cover - defensive
+            except (AttributeError, KeyError, TypeError, ValueError) as exc:
                 self.logger.warning(f"Failed to queue MultiQC metrics plots: {exc}")
 
             try:
@@ -503,7 +509,7 @@ class Plotting:
                     label_names=label_names,
                     panel_prefix=prefix,
                 )
-            except Exception as exc:  # pragma: no cover - defensive
+            except (AttributeError, KeyError, TypeError, ValueError) as exc:
                 self.logger.warning(f"Failed to queue MultiQC ROC/PR curves: {exc}")
 
     def _series_from_history(self, vals: list[float]) -> pd.Series:
@@ -716,14 +722,14 @@ class Plotting:
         if self._multiqc_enabled():
             try:
                 self._queue_multiqc_history(history=history)
-            except Exception as exc:  # pragma: no cover
+            except RuntimeError as exc:  # pragma: no cover
                 self.logger.warning(f"Failed to queue MultiQC history plot: {exc}")
 
     def plot_confusion_matrix(
         self,
-        y_true_1d: np.ndarray | pd.DataFrame | List[str | int] | torch.Tensor,
-        y_pred_1d: np.ndarray | pd.DataFrame | List[str | int] | torch.Tensor,
-        label_names: Sequence[str] | Dict[str, int] | None = None,
+        y_true_1d: np.ndarray | pd.DataFrame | list[str | int] | torch.Tensor,
+        y_pred_1d: np.ndarray | pd.DataFrame | list[str | int] | torch.Tensor,
+        label_names: Sequence[str] | dict[str, int] | None = None,
         prefix: str = "",
     ) -> None:
         """Plot a confusion matrix with optional class labels.
@@ -770,9 +776,8 @@ class Plotting:
 
         fig, ax = plt.subplots(1, 1, figsize=(15, 15))
 
-        true_values, true_counts = np.unique(y_true_1d, return_counts=True)
-        pred_values, pred_counts = np.unique(y_pred_1d, return_counts=True)
-        vmin = int(min(true_counts.min(), pred_counts.min()))
+        _, true_counts = np.unique(y_true_1d, return_counts=True)
+        _, pred_counts = np.unique(y_pred_1d, return_counts=True)
         vmax = int(max(true_counts.max(), pred_counts.max()))
 
         if n_classes <= 3:
@@ -836,7 +841,7 @@ class Plotting:
                     display_labels=display_labels,
                     panel_id=panel_id,
                 )
-            except Exception as exc:  # pragma: no cover
+            except (AttributeError, OSError, TypeError, ValueError) as exc:
                 self.logger.warning(f"Failed to queue MultiQC confusion matrix: {exc}")
 
     def plot_gt_distribution(
@@ -1015,7 +1020,13 @@ class Plotting:
                     is_imputed=is_imputed,
                     is_comparison=X_compare is not None,
                 )
-            except Exception as exc:
+            except (
+                AttributeError,
+                KeyError,
+                TypeError,
+                ValueError,
+                RuntimeError,
+            ) as exc:
                 self.logger.warning(
                     f"Failed to queue MultiQC genotype distribution: {exc}"
                 )
@@ -1047,7 +1058,7 @@ class Plotting:
         # trial number vs objective value line graph
         try:
             df_trials = study.trials_dataframe(attrs=("number", "value"))
-        except Exception as exc:  # pragma: no cover
+        except (RuntimeError, ValueError) as exc:  # pragma: no cover
             self.logger.warning(
                 f"Could not extract trials_dataframe for MultiQC: {exc}"
             )
@@ -1056,7 +1067,7 @@ class Plotting:
         if df_trials.empty or "value" not in df_trials:
             return
 
-        history_data: Dict[str, Dict[int, float]] = {
+        history_data: dict[str, dict[int, float]] = {
             model_name: {
                 int(row["number"]): float(row["value"])
                 for _, row in df_trials.iterrows()
@@ -1067,8 +1078,11 @@ class Plotting:
         if not history_data[model_name]:
             return
 
+        if SNPioMultiQC is None:
+            return
+
         SNPioMultiQC.queue_linegraph(
-            data=cast(Dict[str, Dict[int, int]], history_data),
+            data=cast(dict[str, dict[int, int]], history_data),
             panel_id=f"{self.model_name}_optuna_history",
             section=self.multiqc_section,
             title=f"{self.model_name} Optuna Optimization History",
@@ -1081,14 +1095,14 @@ class Plotting:
         try:
             best_value = study.best_value
             best_params = study.best_params
-        except Exception:
+        except ValueError:
             return
 
         if best_params:
             # Build a single dict so static type checkers don't infer a
             # mismatched dtype for the Series and complain about assigning
             # a float value after creation.
-            best_param_data: Dict[str, float | int | str] = {
+            best_param_data: dict[str, float | int | str] = {
                 **{str(k): cast(float | int | str, v) for k, v in best_params.items()},
                 "objective": float(best_value),
             }
@@ -1125,15 +1139,15 @@ class Plotting:
 
         def _curve_to_mapping(
             x_vals: Sequence[float], y_vals: Sequence[float]
-        ) -> Dict[float, float]:
+        ) -> dict[float, float]:
             """Return {x: y} mapping expected by MultiQC linegraphs."""
-            return {float(x): float(y) for x, y in zip(x_vals, y_vals)}
+            return {float(x): float(y) for x, y in zip(x_vals, y_vals, strict=True)}
 
-        data: Dict[str, Dict[float, float]] = {}
+        data: dict[str, dict[float, float]] = {}
 
         # Only report the first three classes
         # (MultiQC plot readability) plus micro/macro averages
-        class_keys = sorted(k for k in fpr.keys() if isinstance(k, int))
+        class_keys = sorted(k for k in fpr if isinstance(k, int))
         for idx in class_keys[:3]:
             label = label_names[idx] if idx < len(label_names) else f"Class {idx}"
             data[label] = _curve_to_mapping(fpr[idx], tpr[idx])
@@ -1147,7 +1161,10 @@ class Plotting:
             return
 
         # ROC curves
-        curve_data = cast(Dict[str, Dict[int, int]], data)
+        curve_data = cast(dict[str, dict[int, int]], data)
+
+        if SNPioMultiQC is None:
+            return
 
         SNPioMultiQC.queue_linegraph(
             data=curve_data,
@@ -1176,14 +1193,14 @@ class Plotting:
 
         def _curve_to_mapping(
             x_vals: Sequence[float], y_vals: Sequence[float]
-        ) -> Dict[float, float]:
+        ) -> dict[float, float]:
             """Return {recall: precision} mapping expected by MultiQC linegraphs."""
-            return {float(x): float(y) for x, y in zip(x_vals, y_vals)}
+            return {float(x): float(y) for x, y in zip(x_vals, y_vals, strict=True)}
 
-        data: Dict[str, Dict[float, float]] = {}
+        data: dict[str, dict[float, float]] = {}
 
         # Only report the first three classes (MultiQC plot readability) plus micro/macro averages
-        class_keys = sorted(k for k in recall.keys() if isinstance(k, int))
+        class_keys = sorted(k for k in recall if isinstance(k, int))
         for idx in class_keys[:3]:
             if idx not in precision or idx not in recall:
                 continue
@@ -1198,7 +1215,10 @@ class Plotting:
         if not data:
             return
 
-        curve_data = cast(Dict[str, Dict[int, int]], data)
+        curve_data = cast(dict[str, dict[int, int]], data)
+
+        if SNPioMultiQC is None:
+            return
 
         SNPioMultiQC.queue_linegraph(
             data=curve_data,
@@ -1216,9 +1236,9 @@ class Plotting:
     def _queue_multiqc_metrics(
         self,
         *,
-        metrics: Dict[str, float],
-        roc_auc: Dict[object, float],
-        average_precision: Dict[object, float],
+        metrics: dict[str, float],
+        roc_auc: dict[object, float],
+        average_precision: dict[object, float],
         label_names: Sequence[str],
         panel_prefix: str,
     ) -> None:
@@ -1234,6 +1254,9 @@ class Plotting:
         if not self._multiqc_enabled():
             return
 
+        if SNPioMultiQC is None:
+            return
+
         # Summary metrics table (accuracy, F1, etc.)
         if metrics:
             series = pd.Series(metrics, name="Value")
@@ -1247,10 +1270,10 @@ class Plotting:
             )
 
         # Per-class ROC-AUC and AP heatmap
-        rows: List[Dict[str, float | str]] = []
+        rows: list[dict[str, float | str]] = []
 
         # integer keys are classes; others are 'micro', 'macro'
-        class_keys = [k for k in roc_auc.keys() if isinstance(k, int)]
+        class_keys = [k for k in roc_auc if isinstance(k, int)]
         class_keys_sorted = sorted(class_keys)
 
         for i in class_keys_sorted:
@@ -1294,7 +1317,7 @@ class Plotting:
     def _queue_multiqc_history(
         self,
         *,
-        history: Mapping[str, List[float] | Dict[str, List[float]] | None] | None,
+        history: Mapping[str, list[float] | dict[str, list[float]] | None] | None,
     ) -> None:
         """Queue training history (loss vs epoch) for MultiQC.
 
@@ -1304,7 +1327,7 @@ class Plotting:
         if not self._multiqc_enabled() or history is None:
             return
 
-        data: Dict[str, Dict[int, int]] = {}
+        data: dict[str, dict[int, int]] = {}
 
         if self.model_name != "ImputeUBP":
             if not isinstance(history, dict) or "Train" not in history:
@@ -1346,7 +1369,7 @@ class Plotting:
                     for epoch, val in enumerate(val_history.to_numpy(), start=1)
                 }
 
-        if not data:
+        if not data or SNPioMultiQC is None:
             return
 
         SNPioMultiQC.queue_linegraph(
@@ -1364,7 +1387,7 @@ class Plotting:
         y_true: np.ndarray,
         y_pred: np.ndarray,
         labels: np.ndarray,
-        display_labels: List[str] | np.ndarray,
+        display_labels: list[str] | np.ndarray,
         panel_id: str,
     ) -> None:
         """Queue confusion-matrix heatmap for MultiQC.
@@ -1381,6 +1404,9 @@ class Plotting:
 
         cm = confusion_matrix(y_true, y_pred, labels=labels)
         df_cm = pd.DataFrame(cm, index=display_labels, columns=display_labels)
+
+        if SNPioMultiQC is None:
+            return
 
         SNPioMultiQC.queue_heatmap(
             df=df_cm,
@@ -1425,6 +1451,9 @@ class Plotting:
                 columns=["Original", "Imputed"],
             ).fillna(0)
 
+            if SNPioMultiQC is None:
+                return
+
             SNPioMultiQC.queue_barplot(
                 df=df_final,
                 panel_id=f"{self.model_name}_gt_distribution_comparison",
@@ -1442,6 +1471,9 @@ class Plotting:
 
             dataset = "Imputed" if is_imputed else "Original"
             title = f"{self.model_name} {dataset} Genotype Distribution"
+
+            if SNPioMultiQC is None:
+                return
 
             SNPioMultiQC.queue_barplot(
                 df=series,

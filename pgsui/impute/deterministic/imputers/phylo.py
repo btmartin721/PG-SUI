@@ -263,7 +263,7 @@ class ImputePhylo:
 
         num_to_mask = int(len(known_positions) * self.eval_missing_rate)
         if num_to_mask == 0:
-            self.logger.warning(f"eval_missing_rate is too low to mask any values.")
+            self.logger.warning("eval_missing_rate is too low to mask any values.")
             return genotypes_to_impute
 
         # Sample the (sample, site_idx) tuples to be masked
@@ -349,8 +349,6 @@ class ImputePhylo:
 
             n_classes = 4
             y_true_ohe = np.eye(n_classes, dtype=float)[y_true_int]
-            idx_to_nuc = {v: k for k, v in nuc_to_idx.items()}
-
             self.logger.info("--- Per-Allele Imputation Performance (4-class) ---")
             self.evaluation_results_ = self.scorer.evaluate(
                 y_true=y_true_int,

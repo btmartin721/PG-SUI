@@ -46,17 +46,12 @@ def test_load_yaml_to_dataclass_merges_with_env_and_overlays(tmp_path: Path) -> 
     yaml_text = dataclass_to_yaml(base)
     path = tmp_path / "config.yaml"
     path.write_text(
-        yaml_text
-        + "\n"
-        + "\n".join(
-            [
-                "io:",
-                "  prefix: ${PGSUI_PREFIX:default}",
-                "  verbose: false",
-                "split:",
-                "  test_size: 0.45",
-            ]
-        ),
+        f"{yaml_text}\n"
+        "io:\n"
+        "  prefix: ${PGSUI_PREFIX:default}\n"
+        "  verbose: false\n"
+        "split:\n"
+        "  test_size: 0.45",
         encoding="utf-8",
     )
 

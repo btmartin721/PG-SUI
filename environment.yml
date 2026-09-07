@@ -1,7 +1,23 @@
 name: pgsui
-channels: [btmartin721, conda-forge]
+channels:
+  - btmartin721
+  - conda-forge
+  - bioconda
+  - nodefaults
 dependencies:
-  - python>=3.11
+  - python>=3.11,<3.13
   - pg-sui
-  - pytorch
-  - cpuonly
+  - snpio>=1.7.3
+  - numpy>=2.2,<3.0
+  - pandas>=2.2,<3.0
+  - scikit-learn>=1.4,<2.0
+  - scipy>=1.13,<2.0
+  - matplotlib>=3.8,<4.0
+  - seaborn>=0.13.2,<0.14
+  - pytorch>=2.12,<3.0
+  - optuna>=4.6,<5.0
+  - fastapi>=0.110
+  - uvicorn-standard>=0.23
+  - toytree
+  - tqdm
+  - rich

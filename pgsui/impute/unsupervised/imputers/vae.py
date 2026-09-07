@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 import traceback
 from collections import defaultdict
-from typing import TYPE_CHECKING, Any, Literal, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -118,7 +118,7 @@ class ImputeVAE(BaseNNImputer):
         exc: Exception,
         *,
         context: str,
-        trial: Optional[optuna.Trial],
+        trial: optuna.Trial | None,
     ) -> None:
         """Either prune an Optuna trial or raise a RuntimeError with context.
 
@@ -141,11 +141,11 @@ class ImputeVAE(BaseNNImputer):
 
     def __init__(
         self,
-        genotype_data: "GenotypeData",
+        genotype_data: GenotypeData,
         *,
-        tree_parser: Optional["TreeParser"] = None,
-        config: Optional[Union["VAEConfig", dict, str]] = None,
-        overrides: Optional[dict] = None,
+        tree_parser: TreeParser | None = None,
+        config: VAEConfig | dict | str | None = None,
+        overrides: dict | None = None,
         sim_strategy: Literal[
             "random",
             "random_weighted",
@@ -153,8 +153,8 @@ class ImputeVAE(BaseNNImputer):
             "nonrandom",
             "nonrandom_weighted",
         ] = "random",
-        sim_prop: Optional[float] = None,
-        sim_kwargs: Optional[dict] = None,
+        sim_prop: float | None = None,
+        sim_kwargs: dict | None = None,
     ) -> None:
         """Initialize the ImputeVAE imputer.
 
@@ -289,7 +289,7 @@ class ImputeVAE(BaseNNImputer):
 
         # Training parameters
         self.power: float = self.cfg.train.weights_power
-        self.max_ratio: Optional[float] = self.cfg.train.weights_max_ratio
+        self.max_ratio: float | None = self.cfg.train.weights_max_ratio
         self.normalize: bool = self.cfg.train.weights_normalize
         self.inverse: bool = self.cfg.train.weights_inverse
         self.batch_size = self.cfg.train.batch_size
@@ -365,7 +365,7 @@ class ImputeVAE(BaseNNImputer):
 
         self.num_tuned_params_ = OBJECTIVE_SPEC_VAE.count()
 
-    def fit(self) -> "ImputeVAE":
+    def fit(self) -> ImputeVAE:
         """Fit the VAE imputer model to the genotype data.
 
         Adds robustness checks for:
@@ -768,7 +768,7 @@ class ImputeVAE(BaseNNImputer):
             # avoid crashes if plotter/history are malformed
             try:
                 self.plotter_.plot_history(self.history_)
-            except Exception as e:
+            except (AttributeError, TypeError, ValueError) as e:
                 self.logger.warning(f"[{self.model_name}] plot_history failed: {e}")
 
         self._save_display_model_params(is_tuned=self.model_tuned_)
@@ -779,7 +779,7 @@ class ImputeVAE(BaseNNImputer):
         """Impute missing genotypes and return IUPAC strings.
 
         Adds robustness checks for:
-            - presence of fitted model + ground_truth_
+            - presence of fitted model and ``ground_truth_``
             - prediction shape alignment
             - remaining missing values after filling
             - decode failures
@@ -848,7 +848,7 @@ class ImputeVAE(BaseNNImputer):
             imputed_gt = self._sanitize_haploid_decoded_output(imputed_gt)
 
         if not isinstance(imputed_gt, np.ndarray):
-            raise RuntimeError(
+            raise TypeError(
                 f"decode_012 must return a numpy array; got {type(imputed_gt).__name__}."
             )
 
@@ -867,7 +867,7 @@ class ImputeVAE(BaseNNImputer):
                 plt.rcParams.update(self.plotter_.param_dict)
                 orig_dec = self.decode_012(original_input)
                 self.plotter_.plot_gt_distribution(imputed_gt, orig_dec, True)
-            except Exception as e:
+            except (AttributeError, TypeError, ValueError, RuntimeError) as e:
                 self.logger.warning(
                     f"[{self.model_name}] Plotting failed in transform(): {e}"
                 )
@@ -881,9 +881,9 @@ class ImputeVAE(BaseNNImputer):
         *,
         lr: float,
         l1_penalty: float,
-        trial: Optional[optuna.Trial] = None,
-        params: Optional[dict[str, Any]] = None,
-        class_weights: Optional[torch.Tensor] = None,
+        trial: optuna.Trial | None = None,
+        params: dict[str, Any] | None = None,
+        class_weights: torch.Tensor | None = None,
         kl_beta_schedule: bool = False,
         gamma_schedule: bool = False,
     ) -> tuple[float, torch.nn.Module, dict[str, list[float]]]:
@@ -933,7 +933,7 @@ class ImputeVAE(BaseNNImputer):
         max_epochs = int(self.epochs)
         try:
             optimizer = torch.optim.AdamW(model.parameters(), lr=float(lr))
-        except Exception as e:
+        except (TypeError, ValueError, RuntimeError) as e:
             self._maybe_prune_or_raise_runtime(
                 e, context="Failed to construct optimizer", trial=trial
             )
@@ -955,7 +955,7 @@ class ImputeVAE(BaseNNImputer):
             scheduler = _make_warmup_cosine_scheduler(
                 optimizer, max_epochs=max_epochs, warmup_epochs=warmup_epochs
             )
-        except Exception as e:
+        except (TypeError, ValueError, RuntimeError) as e:
             self._maybe_prune_or_raise_runtime(
                 e, context="Failed to construct scheduler", trial=trial
             )
@@ -983,9 +983,9 @@ class ImputeVAE(BaseNNImputer):
         ),
         model: torch.nn.Module,
         l1_penalty: float,
-        trial: Optional[optuna.Trial] = None,
-        params: Optional[dict[str, Any]] = None,
-        class_weights: Optional[torch.Tensor] = None,
+        trial: optuna.Trial | None = None,
+        params: dict[str, Any] | None = None,
+        class_weights: torch.Tensor | None = None,
         kl_beta_schedule: bool = False,
         gamma_schedule: bool = False,
     ) -> tuple[float, torch.nn.Module, dict[str, list[float]]]:
@@ -1125,7 +1125,7 @@ class ImputeVAE(BaseNNImputer):
                         self.logger.debug(
                             f"Learning Rate: {float(scheduler.get_last_lr()[0]):.6f}"
                         )
-                    except Exception:
+                    except (AttributeError, IndexError, TypeError, ValueError):
                         self.logger.debug("Learning Rate: <unavailable>")
                     self.logger.debug(f"KL Beta: {float(kl_beta_current):.6f}")
                     if gamma_schedule:
@@ -1138,7 +1138,15 @@ class ImputeVAE(BaseNNImputer):
                 # Scheduler step (keep behavior; just guard)
                 try:
                     scheduler.step()
-                except Exception as e:
+                except (
+                    AttributeError,
+                    FloatingPointError,
+                    IndexError,
+                    KeyError,
+                    RuntimeError,
+                    TypeError,
+                    ValueError,
+                ) as e:
                     self._maybe_prune_or_raise_runtime(
                         e, context="scheduler.step() failed", trial=trial
                     )
@@ -1161,10 +1169,19 @@ class ImputeVAE(BaseNNImputer):
 
             except optuna.exceptions.TrialPruned:
                 raise
-            except Exception as e:
-                # During tuning, prune on unexpected runtime failures; during fit, raise.
+            except (
+                AttributeError,
+                FloatingPointError,
+                IndexError,
+                KeyError,
+                RuntimeError,
+                TypeError,
+                ValueError,
+            ) as e:
+                # During tuning, prune on unexpected runtime failures;
+                # during fit, raise.
                 self._maybe_prune_or_raise_runtime(
-                    e, context=f"training loop failed at epoch {epoch+1}", trial=trial
+                    e, context=f"training loop failed at epoch {epoch + 1}", trial=trial
                 )
 
         best_loss = float(getattr(early_stopping, "best_score", np.inf))
@@ -1181,7 +1198,7 @@ class ImputeVAE(BaseNNImputer):
         if early_stopping.best_state_dict is not None:
             try:
                 model.load_state_dict(early_stopping.best_state_dict)
-            except Exception as e:
+            except (KeyError, RuntimeError, TypeError, ValueError) as e:
                 self._maybe_prune_or_raise_runtime(
                     e, context="Failed to load best_state_dict", trial=trial
                 )
@@ -1194,7 +1211,7 @@ class ImputeVAE(BaseNNImputer):
         optimizer: torch.optim.Optimizer,
         model: torch.nn.Module,
         ce_criterion: torch.nn.Module,
-        trial: Optional[optuna.Trial] = None,
+        trial: optuna.Trial | None = None,
         *,
         l1_penalty: float,
         kl_beta: torch.Tensor | float,
@@ -1328,7 +1345,7 @@ class ImputeVAE(BaseNNImputer):
                 self._maybe_prune_or_raise_runtime(
                     e, context="train_step RuntimeError", trial=trial
                 )
-            except Exception as e:
+            except (TypeError, ValueError, IndexError, KeyError, AttributeError) as e:
                 self._maybe_prune_or_raise_runtime(
                     e, context="train_step failed", trial=trial
                 )
@@ -1347,7 +1364,7 @@ class ImputeVAE(BaseNNImputer):
         loader: torch.utils.data.DataLoader,
         model: torch.nn.Module,
         ce_criterion: torch.nn.Module,
-        trial: Optional[optuna.Trial] = None,
+        trial: optuna.Trial | None = None,
         *,
         l1_penalty: float,
         kl_beta: torch.Tensor | float = 1.0,
@@ -1473,7 +1490,7 @@ class ImputeVAE(BaseNNImputer):
                     self._maybe_prune_or_raise_runtime(
                         e, context="val_step RuntimeError", trial=trial
                     )
-                except Exception as e:
+                except (ValueError, TypeError, IndexError, KeyError) as e:
                     self._maybe_prune_or_raise_runtime(
                         e, context="val_step failed", trial=trial
                     )
@@ -1698,13 +1715,10 @@ class ImputeVAE(BaseNNImputer):
                 self.logger.error(msg)
                 raise RuntimeError(msg)
 
-        if not self.is_haploid_:
-            if np.any((y_true_flat < 0) | (y_true_flat > 2)):
-                msg = (
-                    "Diploid y_true_flat contains values outside {0,1,2} after masking."
-                )
-                self.logger.error(msg)
-                raise ValueError(msg)
+        if not self.is_haploid_ and np.any((y_true_flat < 0) | (y_true_flat > 2)):
+            msg = "Diploid y_true_flat contains values outside {0,1,2} after masking."
+            self.logger.error(msg)
+            raise ValueError(msg)
 
         # --- Harmonize for haploid vs diploid ---
         if self.is_haploid_:
@@ -1864,7 +1878,14 @@ class ImputeVAE(BaseNNImputer):
                         "Skipped IUPAC confusion matrix: No valid ground truths."
                     )
 
-            except Exception as e:
+            except (
+                AttributeError,
+                IndexError,
+                KeyError,
+                RuntimeError,
+                TypeError,
+                ValueError,
+            ) as e:
                 self.logger.warning(f"[{self.model_name}] IUPAC reporting failed: {e}")
 
         return metrics
@@ -1879,7 +1900,7 @@ class ImputeVAE(BaseNNImputer):
         Returns:
             float | tuple[float, ...]: Value(s) of the tuning metric(s) to be optimized.
         """
-        model: Optional[torch.nn.Module] = None
+        model: torch.nn.Module | None = None
         try:
             if (
                 getattr(self, "X_train_", None) is None
@@ -1968,9 +1989,15 @@ class ImputeVAE(BaseNNImputer):
             try:
                 if model is not None:
                     self._clear_resources(model)
-            except Exception:
-                # Don't let cleanup failures mask real tuning signals
-                pass
+            except (AttributeError, RuntimeError, TypeError) as cleanup_error:
+                # Don't let cleanup failures mask real tuning signals,
+                # but retain enough context to diagnose resource-cleanup issues.
+                self.logger.debug(
+                    "[%s] Failed to clear tuning model resources: %s",
+                    self.model_name,
+                    cleanup_error,
+                    exc_info=True,
+                )
 
     def _sample_hyperparameters(self, trial: optuna.Trial) -> dict:
         """Sample model hyperparameters; hidden sizes use BaseNNImputer helper.

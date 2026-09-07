@@ -8,8 +8,10 @@ script_env:
   - PKG_VERSION
   - SETUPTOOLS_SCM_PRETEND_VERSION
 
-# Keep channel ordering consistent during solve
+# Keep channel ordering consistent during solve.
+# Do not include defaults here: mixing defaults with conda-forge can trigger
+# file clobbers for shared low-level libraries on Linux build hosts.
 channel_sources:
-  - btmartin721,conda-forge,bioconda,pytorch,defaults
+  - btmartin721,conda-forge,bioconda
 channel_targets:
   - btmartin721 main

@@ -1,6 +1,7 @@
 # Standard library imports
 import logging
-from typing import TYPE_CHECKING, Dict, Literal, Optional, Sequence, Tuple
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Literal
 
 # Third-party imports
 import numpy as np
@@ -45,11 +46,11 @@ class ImputeAlleleFreq:
         default: int = 0,
         missing: int = -9,
         verbose: bool = True,
-        seed: Optional[int] = None,
+        seed: int | None = None,
         sim_prop_missing: float = 0.30,
         debug: bool = False,
         test_size: float = 0.2,
-        test_indices: Optional[Sequence[int]] = None,
+        test_indices: Sequence[int] | None = None,
         stratify_by_populations: bool = False,
         logger: logging.Logger | None = None,
     ) -> None:
@@ -69,7 +70,7 @@ class ImputeAlleleFreq:
             test_indices: Explicit test row indices. Overrides `test_size` if given.
             stratify_by_populations: If True and populations are available, create a stratified test split per population.
         """
-        self.genotype_data: "GenotypeData" = genotype_data
+        self.genotype_data: GenotypeData = genotype_data
         self.prefix: str = prefix
         self.by_populations: bool = by_populations
         self.default: int = int(default)
@@ -108,22 +109,22 @@ class ImputeAlleleFreq:
                 )
 
         self.is_fit_: bool = False
-        self.global_dist_: Dict[int | str, Tuple[np.ndarray, np.ndarray]] = {}
-        self.group_dist_: Dict[
-            str | int, Dict[int | str, Tuple[np.ndarray, np.ndarray]]
+        self.global_dist_: dict[int | str, tuple[np.ndarray, np.ndarray]] = {}
+        self.group_dist_: dict[
+            str | int, dict[int | str, tuple[np.ndarray, np.ndarray]]
         ] = {}
-        self.sim_mask_: Optional[np.ndarray] = None
-        self.train_idx_: Optional[np.ndarray] = None
-        self.test_idx_: Optional[np.ndarray] = None
-        self.X_train_: Optional[pd.DataFrame] = None
-        self.ground_truths_: Optional[np.ndarray] = None
-        self.metrics_: Dict[str, float] = {}
-        self.X_imputed_: Optional[np.ndarray] = None
+        self.sim_mask_: np.ndarray | None = None
+        self.train_idx_: np.ndarray | None = None
+        self.test_idx_: np.ndarray | None = None
+        self.X_train_: pd.DataFrame | None = None
+        self.ground_truths_: np.ndarray | None = None
+        self.metrics_: dict[str, float] = {}
+        self.X_imputed_: np.ndarray | None = None
 
         # VCF ref/alt cache + IUPAC LUT
-        self.ref_codes_: Optional[np.ndarray] = None  # (nF,) in {0..3}
-        self.alt_mask_: Optional[np.ndarray] = None  # (nF,4) bool
-        self._iupac_presence_lut_: Optional[np.ndarray] = None  # (10,4) bool
+        self.ref_codes_: np.ndarray | None = None  # (nF,) in {0..3}
+        self.alt_mask_: np.ndarray | None = None  # (nF,4) bool
+        self._iupac_presence_lut_: np.ndarray | None = None  # (10,4) bool
 
         plot_fmt: Literal["pdf", "png", "jpg", "jpeg"] = getattr(
             genotype_data, "plot_format", "png"
@@ -255,7 +256,7 @@ class ImputeAlleleFreq:
     # -----------------------
     # Fit / Transform
     # -----------------------
-    def _make_train_test_split(self) -> Tuple[np.ndarray, np.ndarray]:
+    def _make_train_test_split(self) -> tuple[np.ndarray, np.ndarray]:
         """Create row-wise train/test split according to init settings.
 
         Returns:
@@ -280,7 +281,7 @@ class ImputeAlleleFreq:
             test_buckets = []
             for pop in np.unique(self.pops):
                 pop_rows = np.where(self.pops == pop)[0]
-                k = int(round(self.test_size * pop_rows.size))
+                k = round(self.test_size * pop_rows.size)
                 if k > 0:
                     chosen = self.rng.choice(pop_rows, size=k, replace=False)
                     test_buckets.append(chosen)
@@ -290,7 +291,7 @@ class ImputeAlleleFreq:
                 else np.array([], dtype=int)
             )
         else:
-            k = int(round(self.test_size * n))
+            k = round(self.test_size * n)
             test_idx = (
                 self.rng.choice(n, size=k, replace=False)
                 if k > 0
@@ -348,7 +349,7 @@ class ImputeAlleleFreq:
             coords_test = coords[test_row_mask[coords[:, 0]]]
             total_obs_test = coords_test.shape[0]
             if total_obs_test > 0:
-                n_to_mask = int(round(self.sim_prop_missing * total_obs_test))
+                n_to_mask = round(self.sim_prop_missing * total_obs_test)
                 if n_to_mask > 0:
                     choice_idx = self.rng.choice(
                         total_obs_test, size=n_to_mask, replace=False
@@ -646,7 +647,7 @@ class ImputeAlleleFreq:
             return np.full(probs.size, 1.0 / max(1, probs.size))
         return probs / s
 
-    def _series_distribution(self, s: pd.Series) -> Tuple[np.ndarray, np.ndarray]:
+    def _series_distribution(self, s: pd.Series) -> tuple[np.ndarray, np.ndarray]:
         """Compute empirical (states, probs) for one locus from observed integer codes.
 
         Args:

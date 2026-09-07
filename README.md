@@ -58,17 +58,19 @@ pip install pg-sui
 To install PG-SUI with Anaconda, do the following:
 
 ``` shell
-conda create -n pgsui-env python=3.12
+conda create -n pgsui-env --strict-channel-priority --override-channels \
+    -c btmartin721 -c conda-forge -c bioconda \
+    python=3.12 pg-sui
 conda activate pgsui-env
-conda install -c btmartin721 pg-sui
 ```
 
 ### Docker Container
 
-We also maintains a Docker image that comes with PG-SUI preinstalled. This can be useful for automated worklows such as Nextflow or Snakemake.
+We also maintain a Docker image that comes with PG-SUI preinstalled. This can be useful for automated workflows such as Nextflow or Snakemake.
 
 ``` shell
-docker pull pg-sui:latest
+docker pull btmartin721/pg-sui:latest
+docker run -it --rm btmartin721/pg-sui:latest pg-sui --help
 ```
 
 ### Optional MacOS GUI

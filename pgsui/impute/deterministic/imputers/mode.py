@@ -2,7 +2,7 @@
 import copy
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
 # Third-party imports
 import matplotlib.pyplot as plt
@@ -38,7 +38,7 @@ if TYPE_CHECKING:
 
 
 def ensure_mostfrequent_config(
-    config: Union[MostFrequentConfig, dict, str, None],
+    config: MostFrequentConfig | dict | str | None,
 ) -> MostFrequentConfig:
     """Return a concrete MostFrequentConfig (dataclass, dict, YAML path, or None).
 
@@ -89,8 +89,8 @@ class ImputeMostFrequent:
         genotype_data: "GenotypeData",
         *,
         tree_parser: Optional["TreeParser"] = None,
-        config: Optional[Union[MostFrequentConfig, dict, str]] = None,
-        overrides: Optional[dict] = None,
+        config: MostFrequentConfig | dict | str | None = None,
+        overrides: dict | None = None,
         simulate_missing: bool = True,
         sim_strategy: Literal[
             "random",
@@ -100,7 +100,7 @@ class ImputeMostFrequent:
             "nonrandom_weighted",
         ] = "random",
         sim_prop: float = 0.2,
-        sim_kwargs: Optional[dict] = None,
+        sim_kwargs: dict | None = None,
     ) -> None:
         """Initialize the Most-Frequent (mode) imputer from a unified config.
 
@@ -192,8 +192,8 @@ class ImputeMostFrequent:
         self.sim_kwargs = sim_cfg_kwargs
 
         # Simulated-missing masks (global + test-only)
-        self.sim_mask_global_: Optional[np.ndarray] = None  # shape (N, L), bool
-        self.sim_mask_test_only_: Optional[np.ndarray] = None
+        self.sim_mask_global_: np.ndarray | None = None  # shape (N, L), bool
+        self.sim_mask_test_only_: np.ndarray | None = None
 
         # Split & algo knobs
         self.test_size = float(cfg.split.test_size)
@@ -222,14 +222,14 @@ class ImputeMostFrequent:
 
         # State
         self.is_fit_: bool = False
-        self.global_modes_: Dict[str, int] = {}
+        self.global_modes_: dict[str, int] = {}
         self.group_modes_: dict = {}
-        self.sim_mask_: Optional[np.ndarray] = None
-        self.train_idx_: Optional[np.ndarray] = None
-        self.test_idx_: Optional[np.ndarray] = None
-        self.X_train_df_: Optional[pd.DataFrame] = None
-        self.ground_truth012_: Optional[np.ndarray] = None
-        self.X_imputed012_: Optional[np.ndarray] = None
+        self.sim_mask_: np.ndarray | None = None
+        self.train_idx_: np.ndarray | None = None
+        self.test_idx_: np.ndarray | None = None
+        self.X_train_df_: pd.DataFrame | None = None
+        self.ground_truth012_: np.ndarray | None = None
+        self.X_imputed012_: np.ndarray | None = None
 
         # Ploidy heuristic for 0/1/2 scoring parity
         self.ploidy = self.cfg.io.ploidy
@@ -405,9 +405,9 @@ class ImputeMostFrequent:
             self.logger.error(msg)
             raise NotFittedError(msg)
 
-        assert (
-            self.X_train_df_ is not None
-        ), f"[{self.model_name}] X_train_df_ is not set after fit()."
+        assert self.X_train_df_ is not None, (
+            f"[{self.model_name}] X_train_df_ is not set after fit()."
+        )
 
         # 1) Impute the evaluation-masked copy (to compute metrics)
         imputed_eval_df = self._impute_df(self.X_train_df_)
@@ -521,13 +521,19 @@ class ImputeMostFrequent:
 
         df = df_in.copy()
 
+        if self.pops is None:
+            msg = "Population labels (self.pops) are not set; cannot perform population-specific imputation."
+            self.logger.error(msg)
+            raise RuntimeError(msg)
+
         # Map population labels to df rows robustly by original sample index
         pops = pd.Series(self.pops, index=np.arange(len(self.pops))).reindex(df.index)
+
         if pops.isna().any():
             # If any rows cannot be mapped,
             # we still proceed with global fallback.
             self.logger.warning(
-                "Some df rows could not be mapped to populations; using global fallback for those rows."
+                "Some dataframe rows could not be mapped to populations; using global fallback for those rows."
             )
 
         # Global modes: enforce exact column alignment + float32 dtype
@@ -861,7 +867,7 @@ class ImputeMostFrequent:
         # Save JSON
         self._save_report(report_full, suffix="iupac")
 
-    def _make_train_test_split(self) -> Tuple[np.ndarray, np.ndarray]:
+    def _make_train_test_split(self) -> tuple[np.ndarray, np.ndarray]:
         """Create train/test split indices.
 
         This method creates training and testing indices based on the specified test size or provided test indices. If population-based splitting is enabled, it ensures that the test set includes samples from each population according to the specified test size.
@@ -885,14 +891,14 @@ class ImputeMostFrequent:
             buckets = []
             for pop in np.unique(self.pops):
                 rows = np.where(self.pops == pop)[0]
-                k = max(1, int(round(self.test_size * rows.size)))
+                k = max(1, round(self.test_size * rows.size))
                 if k > 0:
                     buckets.append(self.rng.choice(rows, size=k, replace=False))
             test_idx = (
                 np.sort(np.concatenate(buckets)) if buckets else np.array([], dtype=int)
             )
         else:
-            k = max(1, int(round(self.test_size * n)))
+            k = max(1, round(self.test_size * n))
             test_idx = (
                 self.rng.choice(n, size=k, replace=False)
                 if k > 0
@@ -902,7 +908,7 @@ class ImputeMostFrequent:
         train_idx = np.setdiff1d(all_idx, test_idx, assume_unique=False)
         return train_idx, test_idx
 
-    def _save_report(self, report_dict: Dict[str, Any], suffix: str) -> None:
+    def _save_report(self, report_dict: dict[str, Any], suffix: str) -> None:
         """Save classification report dictionary as a JSON file.
 
         This method saves the provided classification report dictionary to a JSON file in the metrics directory, appending the specified suffix to the filename.
@@ -923,7 +929,7 @@ class ImputeMostFrequent:
             json.dump(report_dict, f, indent=4)
         self.logger.info(f"{self.model_name} {suffix} report saved to {out_fp}.")
 
-    def _create_model_directories(self, prefix: str, outdirs: List[str]) -> None:
+    def _create_model_directories(self, prefix: str, outdirs: list[str]) -> None:
         """Creates the directory structure for storing model outputs.
 
         This method sets up a standardized folder hierarchy for saving models, plots, metrics, and optimization results, organized under a main directory named after the provided prefix.
@@ -943,10 +949,16 @@ class ImputeMostFrequent:
             setattr(self, f"{d}_dir", subdir)
             try:
                 getattr(self, f"{d}_dir").mkdir(parents=True, exist_ok=True)
-            except Exception as e:
+            except (
+                FileNotFoundError,
+                PermissionError,
+                ValueError,
+                TypeError,
+                KeyError,
+            ) as e:
                 msg = f"Failed to create directory {getattr(self, f'{d}_dir')}: {e}"
                 self.logger.error(msg)
-                raise Exception(msg)
+                raise
 
     def decode_012(
         self, X: np.ndarray | pd.DataFrame | list[list[int]], is_nuc: bool = False
@@ -954,14 +966,16 @@ class ImputeMostFrequent:
         """Decode 012-encodings to IUPAC chars with metadata repair.
 
         Supports:
-        - is_nuc=True: direct 0..9 -> IUPAC mapping
-        - is_nuc=False: ref/alt-based decoding with metadata repair
+
+        - ``is_nuc=True``: direct 0..9 to IUPAC mapping.
+        - ``is_nuc=False``: REF/ALT-based decoding with metadata repair.
 
         Additional behavior:
+
         - Multiallelic ALT is allowed. The ALT used for decoding is chosen as the
-            most common alternate base (A/C/G/T) observed in the source SNP column.
+          most common alternate base (A/C/G/T) observed in the source SNP column.
         - If REF/ALT are missing or ambiguous, they are inferred from observed
-            base counts in the source SNP column (if available).
+          base counts in the source SNP column (if available).
 
         Returns:
             np.ndarray: IUPAC strings as a 2D array of shape (n_samples, n_snps).
@@ -970,7 +984,7 @@ class ImputeMostFrequent:
         if not isinstance(df, pd.DataFrame):
             msg = f"Expected a pandas.DataFrame in 'decode_012', but got: {type(df)}."
             self.logger.error(msg)
-            raise ValueError(msg)
+            raise TypeError(msg)
 
         # IUPAC Definitions
         iupac_to_bases: dict[str, set[str]] = {
@@ -1003,10 +1017,7 @@ class ImputeMostFrequent:
                 value = bytes(value).decode("utf-8", errors="ignore")
 
             if isinstance(value, (list, tuple, pd.Series, np.ndarray)):
-                if isinstance(value, pd.Series):
-                    arr = value.to_numpy()
-                else:
-                    arr = value
+                arr = value.to_numpy() if isinstance(value, pd.Series) else value
                 if isinstance(arr, np.ndarray) and arr.ndim == 0:
                     return _normalize_iupac(arr.item())
                 if len(arr) == 0:
@@ -1039,10 +1050,7 @@ class ImputeMostFrequent:
 
             # list-like: flatten
             if isinstance(value, (list, tuple, pd.Series, np.ndarray)):
-                if isinstance(value, pd.Series):
-                    seq = value.to_numpy()
-                else:
-                    seq = value
+                seq = value.to_numpy() if isinstance(value, pd.Series) else value
                 out: list[str] = []
                 for item in seq:
                     out.extend(_extract_candidates(item))
@@ -1067,29 +1075,38 @@ class ImputeMostFrequent:
             """Count A/C/G/T from a source SNP column of IUPAC codes.
 
             Counting rule:
-            - Homozygote (single-base) contributes +2 to that base
-            - Heterozygote/ambiguity contributes +1 to each base in the set
+                - Homozygote (single-base) contributes +2 to that base
+                - Heterozygote/ambiguity contributes +1 to each base in the set
             """
             counts = {"A": 0, "C": 0, "G": 0, "T": 0}
             seen = 0
+
             for val in col:
                 code = _normalize_iupac(val)
+
                 if code is None or code == "N":
                     continue
+
                 bases = iupac_to_bases.get(code, set())
+
                 if not bases:
                     continue
+
                 if len(bases) == 1:
                     b = next(iter(bases))
                     if b in counts:
                         counts[b] += 2
+
                 else:
                     for b in bases:
                         if b in counts:
                             counts[b] += 1
+
                 seen += 1
+
                 if seen >= max_scan:
                     break
+
             return counts
 
         def _choose_single_base(
@@ -1128,8 +1145,7 @@ class ImputeMostFrequent:
                     if b in {"A", "C", "G", "T"}:
                         base_cands.add(b)
 
-            if ref_base in base_cands:
-                base_cands.remove(ref_base)
+            base_cands.discard(ref_base)
 
             if not base_cands:
                 return None
@@ -1174,7 +1190,7 @@ class ImputeMostFrequent:
         if getattr(self.genotype_data, "snp_data", None) is not None:
             try:
                 source_snp_data = np.asarray(self.genotype_data.snp_data)
-            except Exception:
+            except (TypeError, ValueError, KeyError):
                 source_snp_data = None
 
         for j in range(n_cols):
@@ -1183,6 +1199,7 @@ class ImputeMostFrequent:
 
             # Column base counts (if we have source data)
             counts = {"A": 0, "C": 0, "G": 0, "T": 0}
+
             if (
                 source_snp_data is not None
                 and source_snp_data.ndim == 2
@@ -1190,7 +1207,7 @@ class ImputeMostFrequent:
             ):
                 try:
                     counts = _base_counts_from_column(source_snp_data[:, j])
-                except Exception:
+                except (TypeError, ValueError, KeyError):
                     counts = {"A": 0, "C": 0, "G": 0, "T": 0}
 
             # Canonicalize REF to a single base if possible
@@ -1240,7 +1257,7 @@ class ImputeMostFrequent:
             if ref == alt:
                 het_code = ref
             else:
-                union_set = frozenset({ref, alt})
+                union_set = frozenset({str(ref), str(alt)})
                 het_code = bases_to_iupac.get(union_set, "N")
 
             col_codes = codes[:, j]
@@ -1361,26 +1378,33 @@ class ImputeMostFrequent:
         }
         for i, class_name in enumerate(report_names):
             class_report = dd_subset.get(class_name, {})
+
             if not class_report:
                 continue
-            report_full[class_name] = dict(class_report)
+
+            class_report_full: dict[str, float] = dict(class_report)
+            report_full[class_name] = class_report_full
+
             # AP may be NaN if class absent in y_true (that’s correct)
-            report_full[class_name]["average-precision"] = (
+            class_report_full["average-precision"] = (
                 float(ap_pc[i]) if np.isfinite(ap_pc[i]) else float("nan")
             )
-            report_full[class_name]["jaccard"] = float(jaccard_pc[i])
+            class_report_full["jaccard"] = float(jaccard_pc[i])
 
         macro_avg = report.get("macro avg")
+
         if isinstance(macro_avg, dict):
-            report_full["macro avg"] = dict(macro_avg)
-            report_full["macro avg"]["average-precision"] = ap_macro
-            report_full["macro avg"]["jaccard"] = jaccard_macro
+            macro_report: dict[str, float] = dict(macro_avg)
+            report_full["macro avg"] = macro_report
+            macro_report["average-precision"] = ap_macro
+            macro_report["jaccard"] = jaccard_macro
 
         weighted_avg = report.get("weighted avg")
         if isinstance(weighted_avg, dict):
-            report_full["weighted avg"] = dict(weighted_avg)
-            report_full["weighted avg"]["average-precision"] = ap_weighted
-            report_full["weighted avg"]["jaccard"] = jaccard_weighted
+            weighted_report: dict[str, float] = dict(weighted_avg)
+            report_full["weighted avg"] = weighted_report
+            weighted_report["average-precision"] = ap_weighted
+            weighted_report["jaccard"] = jaccard_weighted
 
         report_full["mcc"] = mcc
         accuracy_val = report.get("accuracy")
@@ -1388,7 +1412,7 @@ class ImputeMostFrequent:
             report_full["accuracy"] = float(accuracy_val)
 
         # Optional: log once if AP had undefined classes (helps debugging haploid slices)
-        if np.any((support == 0)):
+        if np.any(support == 0):
             missing_classes = [report_names[i] for i in range(K) if support[i] == 0]
             self.logger.debug(
                 f"AP undefined for classes absent in y_true (support=0): {missing_classes}"

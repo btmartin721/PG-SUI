@@ -1,4 +1,4 @@
-from typing import Dict, Literal
+from typing import Literal
 
 import numpy as np
 from sklearn.metrics import (
@@ -145,10 +145,10 @@ class Scorer:
                 multi_class="ovr",
                 average=self.average,
             )
-        except ValueError as e:
+        except ValueError as exc:
             msg = "Error computing ROC-AUC. This may be due to only one class being present in y_true."
             self.logger.error(msg)
-            raise ValueError(msg)
+            raise ValueError(msg) from exc
 
         return float(roc_auc)
 
@@ -170,7 +170,7 @@ class Scorer:
             "mcc",
             "jaccard",
         ] = "pr_macro",
-    ) -> Dict[str, float] | None:
+    ) -> dict[str, float] | None:
         """Evaluate the model using various metrics.
 
         This method evaluates the performance of a model using various metrics, such as accuracy, F1 score, precision, recall, average precision, and ROC AUC. The method can be used to evaluate the performance of a model on a dataset with ground truth labels. The method can also be used to evaluate the performance of a model in objective mode for hyperparameter tuning.
@@ -207,7 +207,7 @@ class Scorer:
             self.logger.error(msg)
             raise ValueError(msg)
 
-        if not y_true_ohe.ndim == 2:
+        if y_true_ohe.ndim != 2:
             msg = "y_true_ohe must have 2 dimensions."
             self.logger.error(msg)
             raise ValueError(msg)

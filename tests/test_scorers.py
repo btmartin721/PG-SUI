@@ -29,6 +29,7 @@ def test_scorer_evaluate_and_objective_mode() -> None:
     )
 
     metrics = scorer.evaluate(y_true, y_pred, y_true_ohe, y_pred_proba)
+    assert metrics is not None
 
     expected_keys = {
         "accuracy",

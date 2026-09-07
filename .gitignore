@@ -238,3 +238,5 @@ scripts/*
 test.phy.vcf
 iqtree_runs/
 imputed.nremover.vcf.gz
+results-gti/
+results-pgsui/

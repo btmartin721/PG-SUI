@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import copy
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from typing import List, Literal, Optional, Tuple, Union
-import numpy as np
+from typing import Literal
 
+import numpy as np
+import torch
 from snpio.utils.logging import LoggerManager
+from torch import nn
+
 from pgsui.utils.logging_utils import configure_logger
 
 
@@ -28,7 +28,7 @@ class Encoder(nn.Module):
         n_features: int,
         num_classes: int,
         latent_dim: int,
-        hidden_layer_sizes: List[int],
+        hidden_layer_sizes: list[int],
         dropout_rate: float,
         activation: torch.nn.Module,
     ):
@@ -52,7 +52,7 @@ class Encoder(nn.Module):
 
     def forward(
         self, x: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         x = self.flatten(x)
         x = self.hidden_layers(x)
         z_mean = self.dense_z_mean(x)
@@ -69,7 +69,7 @@ class Decoder(nn.Module):
         n_features: int,
         num_classes: int,
         latent_dim: int,
-        hidden_layer_sizes: List[int],
+        hidden_layer_sizes: list[int],
         dropout_rate: float,
         activation: torch.nn.Module,
     ) -> None:
@@ -103,7 +103,7 @@ class VAEModel(nn.Module):
         prefix: str,
         *,
         num_classes: int = 4,
-        hidden_layer_sizes: List[int] | np.ndarray = [128, 64],
+        hidden_layer_sizes: list[int] | np.ndarray | None = None,
         latent_dim: int = 2,
         dropout_rate: float = 0.2,
         activation: Literal["relu", "elu", "selu", "leaky_relu"] = "relu",
@@ -111,9 +111,24 @@ class VAEModel(nn.Module):
         device: Literal["cpu", "gpu", "mps"] = "cpu",
         verbose: bool = False,
         debug: bool = False,
-    ):
-        """Variational Autoencoder (VAE) model for unsupervised imputation."""
+    ) -> None:
+        """Variational Autoencoder (VAE) model for unsupervised imputation.
+
+        Args:
+            n_features (int): Number of features/SNPs (d).
+            prefix (str): Prefix for the logger.
+            num_classes (int): Genotype states (4 for tetraploid, 3 for triploid, etc.).
+            hidden_layer_sizes (list[int] | np.ndarray | None): Sizes of hidden layers for the MLP. If None, default sizes [128, 64] are used.
+            latent_dim (int): Size of the intrinsic/latent vector (t).
+            dropout_rate (float): Dropout probability within the MLP.
+            activation (Literal["relu", "elu", "selu", "leaky_relu"]): Activation function for the MLP.
+            kl_beta (float): Weight for the KL divergence term in the loss.
+            device (Literal["cpu", "gpu", "mps"]): Torch device or device string.
+            verbose (bool): Verbose logging.
+            debug (bool): Debug logging.
+        """
         super().__init__()
+
         self.n_features = int(n_features)
         self.num_classes = int(num_classes)
         self.latent_dim = int(latent_dim)
@@ -128,6 +143,10 @@ class VAEModel(nn.Module):
         )
 
         act = self._resolve_activation(activation)
+
+        if hidden_layer_sizes is None:
+            hidden_layer_sizes = [128, 64]
+
         hls = (
             hidden_layer_sizes.tolist()
             if isinstance(hidden_layer_sizes, np.ndarray)
@@ -148,12 +167,12 @@ class VAEModel(nn.Module):
 
     def forward(
         self, x: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         z_mean, z_log_var, z = self.encoder(x)
         reconstruction = self.decoder(z)
         return reconstruction, z_mean, z_log_var
 
-    def _resolve_activation(self, activation: Union[str, nn.Module]) -> nn.Module:
+    def _resolve_activation(self, activation: str | nn.Module) -> nn.Module:
         if isinstance(activation, nn.Module):
             return activation
         a = activation.lower()

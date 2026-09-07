@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import List
 
 import numpy as np
 import pandas as pd
@@ -39,9 +38,9 @@ try:  # pragma: no cover - defensive guard
                 return None
 
         snpio.SNPioMultiQC = _DummyMQC  # type: ignore[attr-defined]
-except Exception:
+except ImportError:
     # Let importorskip handle truly missing snpio installations.
-    snpio = None  # type: ignore
+    snpio = None
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -98,7 +97,6 @@ def example_genotype_data(
     example_popmap_path: Path,
 ):
     """Load the bundled example dataset via SNPio's VCFReader."""
-    snpio = pytest.importorskip("snpio")
     from snpio import GenotypeEncoder, VCFReader
 
     workdir = tmp_path_factory.mktemp("pgsui_runs")
@@ -134,7 +132,9 @@ def example_genotype_data(
         ref_list = _coerce_alleles(alleles[0])
     if ref_list is None:
         ref_list = (
-            alleles[0].tolist() if isinstance(alleles[0], np.ndarray) else list(alleles[0])
+            alleles[0].tolist()
+            if isinstance(alleles[0], np.ndarray)
+            else list(alleles[0])
         )
 
     alt_list = _coerce_alleles(getattr(gd, "alt", None))
@@ -170,14 +170,18 @@ def example_genotype_data(
     keep_idx = []
     cleaned_ref = []
     cleaned_alt = []
-    for i, (ref_val, alt_val) in enumerate(zip(ref_list, alt_list)):
+    for i, (ref_val, alt_val) in enumerate(zip(ref_list, alt_list, strict=True)):
         ref_tok = _normalize_token(ref_val)
         if ref_tok not in valid_bases:
             continue
 
         alt_clean = _clean_alt(alt_val)
         if isinstance(alt_clean, list):
-            alt_out = alt_clean if len(alt_clean) > 1 else (alt_clean[0] if alt_clean else ".")
+            alt_out = (
+                alt_clean
+                if len(alt_clean) > 1
+                else (alt_clean[0] if alt_clean else ".")
+            )
         else:
             alt_out = alt_clean if alt_clean is not None else "."
 
@@ -202,7 +206,11 @@ def example_genotype_data(
 
     def _patched_init(self, genotype_data):
         orig_init(self, genotype_data)
-        if not hasattr(self, "_ref") or self._ref is None or len(getattr(self, "_ref", [])) == 0:  # type: ignore[attr-defined]
+        if (
+            not hasattr(self, "_ref")
+            or self._ref is None
+            or len(getattr(self, "_ref", [])) == 0
+        ):  # type: ignore[attr-defined]
             ref_candidate = getattr(genotype_data, "ref", None)
             alt_candidate = getattr(genotype_data, "alt", None)
             n_loci = None
@@ -236,7 +244,7 @@ def example_genotype_data(
         self.filetype = "vcf"
 
     def _patched_decode(
-        self, X: np.ndarray | pd.DataFrame | List[List[int]], is_nuc: bool = False
+        self, X: np.ndarray | pd.DataFrame | list[list[int]], is_nuc: bool = False
     ) -> np.ndarray:
         """Decode 012 or 0-9 integer encodings to single-character IUPAC nucleotides.
 
@@ -266,7 +274,7 @@ def example_genotype_data(
         if not isinstance(df, pd.DataFrame):
             msg = "Internal error: expected DataFrame after validation."
             self.logger.error(msg)
-            raise ValueError(msg)
+            raise TypeError(msg)
 
         # IUPAC ambiguity mapping (unordered pairs → code) for 012→IUPAC.
         pair_to_iupac = {
@@ -287,7 +295,7 @@ def example_genotype_data(
             mapping[-1] = "N"
 
             # accept strings too
-            mapping.update({str(k): v for k, v in mapping.items()})
+            mapping = {**mapping, **{str(k): v for k, v in list(mapping.items())}}
             return df.replace(mapping).to_numpy(dtype="<U1")
 
         # ---- Standard 012 decoding using REF/ALT per column ----
@@ -325,7 +333,7 @@ def example_genotype_data(
                 alleles = self.genotype_data.get_ref_alt_alleles(
                     self.genotype_data.snp_data
                 )
-            except Exception:
+            except (AttributeError, ValueError, TypeError):
                 alleles = None
 
             if alleles:

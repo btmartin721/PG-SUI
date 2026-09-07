@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal, Optional, Tuple
+from typing import Literal
 
 import numpy as np
 from sklearn.metrics import (
@@ -114,7 +114,7 @@ class Scorer:
         try:
             finite_yt = np.isfinite(yt).all(axis=1)
             finite_yp = np.isfinite(yp).all(axis=1)
-        except Exception:
+        except (ValueError, TypeError):
             mask = np.zeros((yt.shape[0],), dtype=bool)
             return yt[:0, :], yp[:0, :], mask
 
@@ -173,15 +173,8 @@ class Scorer:
         yt = np.asarray(y_true)
         yp = np.asarray(y_pred)
 
-        if yt.ndim == 2:
-            yt = yt.reshape(-1)
-        else:
-            yt = yt.reshape(-1)
-
-        if yp.ndim == 2:
-            yp = yp.reshape(-1)
-        else:
-            yp = yp.reshape(-1)
+        yt = yt.reshape(-1)
+        yp = yp.reshape(-1)
 
         if yt.shape[0] != yp.shape[0]:
             msg = f"{metric_name}: y_true/y_pred length mismatch {yt.shape[0]} vs {yp.shape[0]}."
@@ -217,7 +210,7 @@ class Scorer:
         try:
             yt = yt.astype(np.int64, copy=False)
             yp = yp.astype(np.int64, copy=False)
-        except Exception:
+        except (ValueError, TypeError):
             self.logger.warning(
                 f"{metric_name}: non-numeric labels after filtering; returning empty arrays."
             )
@@ -277,7 +270,7 @@ class Scorer:
         require_at_least_two_present_classes: bool = False,
         filter_to_present_classes: bool = False,
         allow_average_none: bool = True,
-    ) -> Optional[Tuple[np.ndarray, np.ndarray, int, np.ndarray]]:
+    ) -> tuple[np.ndarray, np.ndarray, int, np.ndarray] | None:
         """Validate prepared (N, K) indicator + score matrices for metrics.
 
         Args:
@@ -317,7 +310,7 @@ class Scorer:
             if not np.isfinite(yt).all() or not np.isfinite(yp).all():
                 _warn("NaN/Inf detected in yt or yp; returning 0.0.")
                 return None
-        except Exception:
+        except (TypeError, ValueError):
             _warn("non-numeric yt/yp detected; returning 0.0.")
             return None
 
@@ -386,7 +379,7 @@ class Scorer:
 
         try:
             yt, yp = self._prepare_ohe_proba(y_true_ohe, y_pred_proba)
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             return _warn_and_return(
                 "ROC AUC failed in _prepare_ohe_proba(); returning 0.0.", e
             )
@@ -404,7 +397,7 @@ class Scorer:
             return 0.0
 
         # NOTE: if filtered, K/present reflect filtered version
-        yt, yp, K, present = v
+        yt, yp, K, _ = v
 
         if K == 2:
             y_true_bin = yt[:, 1]
@@ -420,16 +413,12 @@ class Scorer:
                 return float(roc_auc_score(y_true_bin, y_score))
             except ValueError as e:
                 return _warn_and_return("ROC AUC failed binary case; returning 0.0.", e)
-            except Exception as e:
-                return _warn_and_return(
-                    "ROC AUC crashed unexpectedly (binary); returning 0.0.", e
-                )
 
         try:
             return float(roc_auc_score(yt, yp, average=self.average, multi_class="ovr"))
         except ValueError as e:
             return _warn_and_return("ROC AUC failed multiclass case; returning 0.0.", e)
-        except Exception as e:
+        except RuntimeError as e:
             return _warn_and_return(
                 "ROC AUC crashed unexpectedly (multiclass); returning 0.0.", e
             )
@@ -456,7 +445,7 @@ class Scorer:
 
         try:
             yt, yp = self._prepare_ohe_proba(y_true_ohe, y_pred_proba)
-        except Exception as e:
+        except (TypeError, ValueError) as e:
             return _warn_and_return(
                 "Average Precision failed in _prepare_ohe_proba(); returning 0.0.", e
             )
@@ -485,24 +474,16 @@ class Scorer:
 
             try:
                 return float(average_precision_score(y_true_bin, y_score))
-            except ValueError as e:
+            except (ValueError, TypeError, ZeroDivisionError) as e:
                 return _warn_and_return(
                     "Average Precision failed binary case; returning 0.0.", e
-                )
-            except Exception as e:
-                return _warn_and_return(
-                    "Average Precision crashed unexpectedly (binary); returning 0.0.", e
                 )
 
         try:
             return float(average_precision_score(yt, yp, average=self.average))
-        except ValueError as e:
+        except (ValueError, TypeError, ZeroDivisionError) as e:
             return _warn_and_return(
                 "Average Precision failed multiclass case; returning 0.0.", e
-            )
-        except Exception as e:
-            return _warn_and_return(
-                "Average Precision crashed unexpectedly (multiclass); returning 0.0.", e
             )
 
     def pr_macro(self, y_true_ohe: np.ndarray, y_pred_proba: np.ndarray) -> float:
@@ -517,7 +498,7 @@ class Scorer:
 
         try:
             yt, yp = self._prepare_ohe_proba(y_true_ohe, y_pred_proba)
-        except Exception as e:
+        except (TypeError, ValueError) as e:
             return _warn_and_return(
                 "PR macro failed in _prepare_ohe_proba(); returning 0.0.", e
             )
@@ -542,14 +523,14 @@ class Scorer:
                 )
             try:
                 return float(average_precision_score(y_true_bin, y_score))
-            except Exception as e:
+            except (ValueError, TypeError, ZeroDivisionError) as e:
                 return _warn_and_return(
                     "PR macro failed binary case; returning 0.0.", e
                 )
 
         try:
             return float(average_precision_score(yt, yp, average="macro"))
-        except Exception as e:
+        except (ValueError, TypeError, ZeroDivisionError) as e:
             return _warn_and_return(
                 "PR macro failed multiclass case; returning 0.0.", e
             )
@@ -591,7 +572,7 @@ class Scorer:
             yt_ohe, yp_proba, mask = self._prepare_ohe_proba_with_mask(
                 y_true_ohe, y_pred_proba
             )
-        except Exception as e:
+        except (ValueError, TypeError, IndexError) as e:
             # If OHE/proba are broken, discrete metrics can still be computed
             self.logger.warning(
                 f"evaluate(): OHE/proba prep failed ({e}); scoring discrete metrics only."

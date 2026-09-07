@@ -103,9 +103,10 @@ An Anaconda package is also available on `Anaconda Cloud <https://anaconda.org/b
 
 .. code-block:: bash
 
-    conda create -n pgsui-env python=3.12
+    conda create -n pgsui-env --strict-channel-priority --override-channels \
+        -c btmartin721 -c conda-forge -c bioconda \
+        python=3.12 pg-sui
     conda activate pgsui-env
-    conda install -c btmartin721 pg-sui
 
 Docker installation
 ^^^^^^^^^^^^^^^^^^^

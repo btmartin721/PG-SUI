@@ -5,20 +5,18 @@ import math
 import sys
 import threading
 import time
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from statistics import mean, pstdev
-from typing import Any, Callable, Iterator, Optional, Sequence, TextIO
+from typing import Any, TextIO
 
 import optuna
 from optuna.trial import TrialState
 from snpio.utils.logging import LoggerManager
 
-
-PGSUI_LOG_FORMAT = (
-    "%(asctime)s | %(levelname)-8s | %(name)s:%(funcName)s | %(message)s"
-)
+PGSUI_LOG_FORMAT = "%(asctime)s | %(levelname)-8s | %(name)s:%(funcName)s | %(message)s"
 PGSUI_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
@@ -40,12 +38,14 @@ def reset_logger_handlers(logger_or_name: logging.Logger | str) -> None:
         if isinstance(logger_or_name, str)
         else logger_or_name
     )
+    module_logger = logging.getLogger(__name__)
+
     for handler in list(logger.handlers):
         logger.removeHandler(handler)
         try:
             handler.close()
-        except Exception:
-            pass
+        except OSError as exc:
+            module_logger.debug(f"Failed to close handler: {exc}")
 
 
 def get_pgsui_logger(
@@ -85,7 +85,7 @@ def get_pgsui_logger(
     return logger
 
 
-def format_duration(seconds: float | int | None) -> str:
+def format_duration(seconds: float | None) -> str:
     """Format elapsed seconds as a compact human-readable duration."""
     if seconds is None:
         return "n/a"
@@ -307,7 +307,7 @@ class BestTrialOnlyHandler(logging.Handler):
 
     def __init__(
         self,
-        stream: Optional[TextIO] = None,
+        stream: TextIO | None = None,
         *,
         starting_template: str = (
             "[Optuna] Starting study={study_name} | direction(s)={directions} | "
@@ -323,7 +323,7 @@ class BestTrialOnlyHandler(logging.Handler):
             "value(s)={best_value} | completed={completed_trials}/{total_trials} | "
             "elapsed_s={elapsed_s:.3f} | params={params}"
         ),
-        forward_logger: Optional[logging.Logger] = None,
+        forward_logger: logging.Logger | None = None,
         echo: bool = True,
         terminator: str = "\n",
     ) -> None:
@@ -390,7 +390,7 @@ class BestTrialOnlyHandler(logging.Handler):
                 return
 
             self.write_line(msg)
-        except Exception:
+        except (KeyError, AttributeError, ValueError):
             # Prevent logging failures from crashing the optimization study
             self.handleError(record)
 
@@ -414,7 +414,7 @@ class OptunaBestTrialLogger:
 
 def configure_optuna_best_trial_logger(
     *,
-    stream: Optional[TextIO] = None,
+    stream: TextIO | None = None,
     logger_name: str = "optuna.best",
     disable_default_optuna_handler: bool = True,
     min_delta: float = 0.0,
@@ -433,7 +433,7 @@ def configure_optuna_best_trial_logger(
         "completed={completed_trials}/{total_trials} | "
         "elapsed_s={elapsed_s:.3f} | best_params={params} | -> best_value(s)={best_value}"
     ),
-    forward_logger: Optional[logging.Logger] = None,
+    forward_logger: logging.Logger | None = None,
     echo: bool = True,
 ) -> OptunaBestTrialLogger:
     """Configures a custom logger for Optuna that highlights best trials."""
@@ -465,11 +465,11 @@ def configure_optuna_best_trial_logger(
 
     @dataclass
     class _State:
-        best_value_scalar: Optional[float] = (
+        best_value_scalar: float | None = (
             None  # Only used for single-objective optimization
         )
-        t0: Optional[float] = None
-        planned_trials: Optional[int] = None
+        t0: float | None = None
+        planned_trials: int | None = None
 
     state = _State()
 
@@ -479,16 +479,14 @@ def configure_optuna_best_trial_logger(
             return "[" + ", ".join(f"{v:.6g}" for v in value) + "]"
         return f"{value:.6g}"
 
-    def _is_scalar_improvement(
-        direction: str, new: float, old: Optional[float]
-    ) -> bool:
+    def _is_scalar_improvement(direction: str, new: float, old: float | None) -> bool:
         if old is None:
             return True
         if direction == "minimize":
             return new <= (old - min_delta)
         return new >= (old + min_delta)
 
-    def _get_handler() -> Optional[BestTrialOnlyHandler]:
+    def _get_handler() -> BestTrialOnlyHandler | None:
         return next(
             (h for h in logger.handlers if isinstance(h, BestTrialOnlyHandler)), None
         )

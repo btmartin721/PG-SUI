@@ -1,9 +1,9 @@
-from typing import List, Literal
+from typing import Literal
 
 import numpy as np
 import torch
-import torch.nn as nn
 from snpio.utils.logging import LoggerManager
+from torch import nn
 
 from pgsui.utils.logging_utils import configure_logger
 
@@ -19,7 +19,7 @@ class Encoder(nn.Module):
         n_features: int,
         num_classes: int,
         latent_dim: int,
-        hidden_layer_sizes: List[int],
+        hidden_layer_sizes: list[int],
         dropout_rate: float,
         activation: torch.nn.Module,
     ):
@@ -35,7 +35,7 @@ class Encoder(nn.Module):
             dropout_rate (float): The dropout rate for regularization in the hidden layers.
             activation (torch.nn.Module): An instantiated activation function module (e.g., `nn.ReLU()`) for the hidden layers.
         """
-        super(Encoder, self).__init__()
+        super().__init__()
         self.flatten = nn.Flatten()
 
         layers = []
@@ -76,7 +76,7 @@ class Decoder(nn.Module):
         n_features: int,
         num_classes: int,
         latent_dim: int,
-        hidden_layer_sizes: List[int],
+        hidden_layer_sizes: list[int],
         dropout_rate: float,
         activation: torch.nn.Module,
     ) -> None:
@@ -90,7 +90,7 @@ class Decoder(nn.Module):
             dropout_rate (float): The dropout rate for regularization in the hidden layers.
             activation (torch.nn.Module): An instantiated activation function module (e.g., `nn.ReLU()`) for the hidden layers.
         """
-        super(Decoder, self).__init__()
+        super().__init__()
 
         layers = []
         input_dim = latent_dim
@@ -146,11 +146,11 @@ class AutoencoderModel(nn.Module):
         prefix: str,
         *,
         num_classes: int = 4,
-        hidden_layer_sizes: List[int] | np.ndarray = [128, 64],
+        hidden_layer_sizes: list[int] | np.ndarray | None = None,
         latent_dim: int = 2,
         dropout_rate: float = 0.2,
         activation: Literal["relu", "elu", "selu", "leaky_relu"] = "relu",
-        gamma: torch.Tensor = torch.tensor(2.0),
+        gamma: torch.Tensor | float | None = None,
         device: Literal["cpu", "gpu", "mps"] = "cpu",
         verbose: bool = False,
         debug: bool = False,
@@ -165,15 +165,15 @@ class AutoencoderModel(nn.Module):
             latent_dim (int): The dimensionality of the latent space (bottleneck). Defaults to 2.
             dropout_rate (float): The dropout rate for regularization in hidden layers. Defaults to 0.2.
             activation (Literal["relu", "elu", "selu", "leaky_relu"]): The name of the activation function for hidden layers. Defaults to "relu".
-            gamma (float): The focusing parameter for the focal loss function. Defaults to 2.0.
+            gamma (torch.Tensor | float | None): The focusing parameter for the focal loss function. Defaults to None.
             device (Literal["cpu", "gpu", "mps"]): The device to run the model on.
             verbose (bool): If True, enables detailed logging.
             debug (bool): If True, enables debug mode.
         """
-        super(AutoencoderModel, self).__init__()
-        self.num_classes = num_classes
-        self.gamma = gamma
-        self.device = device
+        super().__init__()
+
+        if hidden_layer_sizes is None:
+            hidden_layer_sizes = [128, 64]
 
         logman = LoggerManager(
             name=__name__, prefix=prefix, verbose=verbose, debug=debug
@@ -181,6 +181,23 @@ class AutoencoderModel(nn.Module):
         self.logger = configure_logger(
             logman.get_logger(), verbose=verbose, debug=debug
         )
+
+        if isinstance(gamma, float):
+            gamma = torch.tensor(gamma)
+        elif gamma is None:
+            gamma = torch.tensor(2.0)
+        elif isinstance(gamma, torch.Tensor):
+            gamma = torch.tensor(gamma)
+        else:
+            msg = f"Invalid type for gamma: {type(gamma).__name__}. Expected float, torch.Tensor, or None."
+            self.logger.error(msg)
+            raise TypeError(msg)
+
+        gamma = gamma.to(device)
+
+        self.num_classes = num_classes
+        self.gamma = gamma
+        self.device = device
 
         activation_module = self._resolve_activation(activation)
 

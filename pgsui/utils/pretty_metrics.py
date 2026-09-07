@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import math
-from typing import Any, Iterable, List, Mapping, Optional, Sequence, Tuple
+from collections.abc import Iterable, Mapping, Sequence
+from typing import Any
 
 import numpy as np
 
@@ -14,7 +15,7 @@ try:
 
     _HAS_RICH = True
     _CONSOLE = Console()
-except Exception:
+except (ImportError, RuntimeError):
     _HAS_RICH = False
     _CONSOLE = None
 
@@ -36,7 +37,7 @@ class PrettyMetrics:
         metrics: Mapping[str, Any],
         *,
         precision: int = 4,
-        title: Optional[str] = "Metrics",
+        title: str | None = "Metrics",
     ) -> None:
         """Initialize the printer.
 
@@ -133,7 +134,7 @@ class PrettyMetrics:
         except Exception as e:  # pragma: no cover
             raise ImportError("pandas is required for to_dataframe()") from e
 
-        out: List[Tuple[str, Any]] = []
+        out: list[tuple[str, Any]] = []
         for k, v in self._flatten(self.metrics):
             if self._is_numeric(v):
                 out.append((k, float(v)))  # type: ignore[arg-type]
@@ -154,9 +155,9 @@ class PrettyMetrics:
 
     # ----------------------- Internal helpers -----------------------------
 
-    def _rows(self) -> List[Tuple[str, str, Optional[float]]]:
+    def _rows(self) -> list[tuple[str, str, float | None]]:
         """Build rows as (metric_name, formatted_value, last_numeric_for_coloring)."""
-        rows: List[Tuple[str, str, Optional[float]]] = []
+        rows: list[tuple[str, str, float | None]] = []
         for name, val in self._flatten(self.metrics):
             if self._is_numeric(val):
                 val_num = float(val)
@@ -171,7 +172,7 @@ class PrettyMetrics:
         return rows
 
     @staticmethod
-    def _flatten(d: Mapping[str, Any], prefix: str = "") -> Iterable[Tuple[str, Any]]:
+    def _flatten(d: Mapping[str, Any], prefix: str = "") -> Iterable[tuple[str, Any]]:
         for k, v in d.items():
             name = f"{prefix} → {k}" if prefix else str(k)
             if isinstance(v, Mapping):
@@ -198,7 +199,7 @@ class PrettyMetrics:
         return f"{mean:.{self.precision}f} ± {std:.{self.precision}f}  (last {last:.{self.precision}f})"
 
     @staticmethod
-    def _to_float_seq(val: Any) -> List[float]:
+    def _to_float_seq(val: Any) -> list[float]:
         if np is not None and hasattr(val, "tolist"):
             return list(map(float, val.tolist()))
         return list(map(float, val))
@@ -232,7 +233,7 @@ class PrettyMetrics:
         )
 
     @staticmethod
-    def _better_is_higher(metric_name: str) -> Optional[bool]:
+    def _better_is_higher(metric_name: str) -> bool | None:
         name = metric_name.lower()
         higher = (
             "acc",
@@ -264,8 +265,8 @@ class PrettyMetrics:
         return None
 
     def _color_val_rich(
-        self, metric: str, value_text: str, value_num: Optional[float]
-    ) -> "Text | str":
+        self, metric: str, value_text: str, value_num: float | None
+    ) -> Text | str:
         if not _HAS_RICH:
             return value_text
         t = Text(value_text)

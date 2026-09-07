@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import os
-import signal
 import shutil
+import signal
 from pathlib import Path
 
 from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 ROOT = Path(__file__).resolve().parent / "ui"

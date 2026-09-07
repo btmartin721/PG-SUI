@@ -184,16 +184,19 @@ jobs:
           username: ${{ steps.dockerhub-creds.outputs.username }}
           password: ${{ env.DOCKERHUB_PASSWORD }}
 
-      - name: Warn about missing Docker Hub credentials
+      - name: Verify Docker Hub credentials
         if: github.event_name != 'pull_request' && (steps.dockerhub-creds.outputs.username == '' || env.DOCKERHUB_PASSWORD == '')
         run: |
-          echo "Docker Hub credentials not provided; skipping login. Push will fail without credentials."
+          echo "Docker Hub credentials are required for release publication."
+          exit 1
 
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
           context: .
           file: Dockerfile
+          build-args: |
+            PGSUI_VERSION=${{ steps.version.outputs.version }}
           # Build single-arch when loading for PRs; multi-arch only for tag pushes.
           platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
           push: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && env.DOCKERHUB_PASSWORD != '' && steps.dockerhub-creds.outputs.username != '' }}

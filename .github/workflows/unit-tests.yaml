@@ -46,3 +46,8 @@ jobs:
         env:
           MPLCONFIGDIR: ${{ runner.temp }}/mpl
         run: pytest -q
+
+      - name: Run Ruff checks
+        run: |
+          python -m ruff check pgsui tests scripts
+          python -m ruff format --check pgsui tests scripts

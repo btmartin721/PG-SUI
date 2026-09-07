@@ -1,10 +1,9 @@
-# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import copy
 import traceback
 from collections import defaultdict
-from typing import TYPE_CHECKING, Any, Literal, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -129,7 +128,7 @@ class ImputeAutoencoder(BaseNNImputer):
         exc: Exception,
         *,
         context: str,
-        trial: Optional[optuna.Trial],
+        trial: optuna.Trial | None,
     ) -> None:
         """Either prune an Optuna trial or raise a RuntimeError with context.
 
@@ -152,11 +151,11 @@ class ImputeAutoencoder(BaseNNImputer):
 
     def __init__(
         self,
-        genotype_data: "GenotypeData",
+        genotype_data: GenotypeData,
         *,
-        tree_parser: Optional["TreeParser"] = None,
-        config: Optional[Union["AutoencoderConfig", dict, str]] = None,
-        overrides: Optional[dict] = None,
+        tree_parser: TreeParser | None = None,
+        config: AutoencoderConfig | dict | str | None = None,
+        overrides: dict | None = None,
         sim_strategy: (
             Literal[
                 "random",
@@ -167,8 +166,8 @@ class ImputeAutoencoder(BaseNNImputer):
             ]
             | None
         ) = None,
-        sim_prop: Optional[float] = None,
-        sim_kwargs: Optional[dict] = None,
+        sim_prop: float | None = None,
+        sim_kwargs: dict | None = None,
     ) -> None:
         """Initialize the Autoencoder imputer with a unified config interface.
 
@@ -217,7 +216,7 @@ class ImputeAutoencoder(BaseNNImputer):
 
         try:
             self.rng = np.random.default_rng(self.seed)
-        except Exception as e:
+        except (TypeError, ValueError, RuntimeError) as e:
             msg = f"{self.model_name} failed to initialize RNG with seed={self.seed!r}: {e}"
             self.logger.error(msg)
             raise ValueError(msg) from e
@@ -378,7 +377,7 @@ class ImputeAutoencoder(BaseNNImputer):
 
         self.num_tuned_params_ = OBJECTIVE_SPEC_AE.count()
 
-    def fit(self) -> "ImputeAutoencoder":
+    def fit(self) -> ImputeAutoencoder:
         """Fit the Autoencoder imputer model to the genotype data.
 
         This method performs the following steps:
@@ -546,21 +545,21 @@ class ImputeAutoencoder(BaseNNImputer):
             ("eval_mask_val_", self.eval_mask_val_),
             ("eval_mask_test_", self.eval_mask_test_),
         ]:
-            if (
-                m.shape
-                != self.ground_truth_[
-                    (
-                        self.train_idx_
-                        if "train" in nm
-                        else self.val_idx_ if "val" in nm else self.test_idx_
-                    )
-                ].shape
-            ):
-                # Best-effort: avoid overcomplicating; just require 2D with correct second axis.
-                if m.ndim != 2 or m.shape[1] != self.num_features_:
-                    msg = f"{self.model_name} {nm} has unexpected shape {m.shape}."
-                    self.logger.error(msg)
-                    raise ValueError(msg)
+            if m.shape != self.ground_truth_[
+                (
+                    self.train_idx_
+                    if "train" in nm
+                    else self.val_idx_
+                    if "val" in nm
+                    else self.test_idx_
+                )
+            ].shape and (m.ndim != 2 or m.shape[1] != self.num_features_):
+                # Best-effort: avoid overcomplicating;
+                # just require 2D with correct second axis.
+                msg = f"{self.model_name} {nm} has unexpected shape {m.shape}."
+                self.logger.error(msg)
+                raise ValueError(msg)
+
             if not bool(np.any(m)):
                 msg = f"{self.model_name} {nm} has zero True entries; nothing to evaluate."
                 self.logger.error(msg)
@@ -641,7 +640,7 @@ class ImputeAutoencoder(BaseNNImputer):
                     Xva_np.shape[0], Xva_np.shape[1] * Xva_np.shape[2]
                 )
 
-        except Exception as e:
+        except (TypeError, ValueError, RuntimeError) as e:
             msg = f"[{self.model_name}] Failed to convert tensors to numpy and reshape for dataloaders: {e}"
             self.logger.error(msg)
             raise RuntimeError(msg) from e
@@ -871,7 +870,7 @@ class ImputeAutoencoder(BaseNNImputer):
             try:
                 orig_dec = self.decode_012(original_input)
                 self.plotter_.plot_gt_distribution(imputed_gt, orig_dec, True)
-            except Exception as e:
+            except (RuntimeError, ValueError, TypeError, KeyError) as e:
                 # Plotting should never break transform()
                 self.logger.warning(
                     f"{self.model_name} plotting failed in transform(): {e}"
@@ -886,9 +885,9 @@ class ImputeAutoencoder(BaseNNImputer):
         *,
         lr: float,
         l1_penalty: float,
-        trial: Optional[optuna.Trial] = None,
-        params: Optional[dict[str, Any]] = None,
-        class_weights: Optional[torch.Tensor] = None,
+        trial: optuna.Trial | None = None,
+        params: dict[str, Any] | None = None,
+        class_weights: torch.Tensor | None = None,
         gamma_schedule: bool = False,
     ) -> tuple[float, torch.nn.Module, dict[str, list[float]]]:
         """Train and validate the model.
@@ -932,7 +931,7 @@ class ImputeAutoencoder(BaseNNImputer):
 
         try:
             optimizer = torch.optim.AdamW(model.parameters(), lr=float(lr))
-        except Exception as e:
+        except (TypeError, ValueError, RuntimeError) as e:
             self._maybe_prune_or_raise_runtime(
                 e, context="Failed to construct optimizer", trial=trial
             )
@@ -951,7 +950,7 @@ class ImputeAutoencoder(BaseNNImputer):
             scheduler = _make_warmup_cosine_scheduler(
                 optimizer, max_epochs=max_epochs, warmup_epochs=warmup_epochs
             )
-        except Exception as e:
+        except (TypeError, ValueError, RuntimeError) as e:
             self._maybe_prune_or_raise_runtime(
                 e, context="Failed to construct scheduler", trial=trial
             )
@@ -978,9 +977,9 @@ class ImputeAutoencoder(BaseNNImputer):
         ),
         model: torch.nn.Module,
         l1_penalty: float,
-        trial: Optional[optuna.Trial] = None,
-        params: Optional[dict[str, Any]] = None,
-        class_weights: Optional[torch.Tensor] = None,
+        trial: optuna.Trial | None = None,
+        params: dict[str, Any] | None = None,
+        class_weights: torch.Tensor | None = None,
         gamma_schedule: bool = False,
     ) -> tuple[float, torch.nn.Module, dict[str, list[float]]]:
         """Train AE (masked focal CE) with EarlyStopping + Optuna pruning.
@@ -1086,7 +1085,7 @@ class ImputeAutoencoder(BaseNNImputer):
                     try:
                         lr_now = float(scheduler.get_last_lr()[0])
                         self.logger.debug(f"Learning Rate: {lr_now:.6f}")
-                    except Exception:
+                    except (AttributeError, IndexError, TypeError):
                         self.logger.debug("Learning Rate: <unavailable>")
                     if gamma_schedule:
                         self.logger.debug(
@@ -1098,7 +1097,7 @@ class ImputeAutoencoder(BaseNNImputer):
                 # Scheduler step (keep behavior; just guard)
                 try:
                     scheduler.step()
-                except Exception as e:
+                except (RuntimeError, ValueError, TypeError, AttributeError) as e:
                     self._maybe_prune_or_raise_runtime(
                         e, context="scheduler.step() failed", trial=trial
                     )
@@ -1122,11 +1121,18 @@ class ImputeAutoencoder(BaseNNImputer):
 
             except optuna.exceptions.TrialPruned:
                 raise
-            except Exception as e:
+            except (
+                RuntimeError,
+                ValueError,
+                TypeError,
+                KeyError,
+                AttributeError,
+                IndexError,
+            ) as e:
                 # During tuning,
                 # prune on unexpected runtime failures; during fit, raise.
                 self._maybe_prune_or_raise_runtime(
-                    e, context=f"training loop failed at epoch {epoch+1}", trial=trial
+                    e, context=f"training loop failed at epoch {epoch + 1}", trial=trial
                 )
 
         best_loss = float(getattr(early_stopping, "best_score", np.inf))
@@ -1143,7 +1149,7 @@ class ImputeAutoencoder(BaseNNImputer):
         if early_stopping.best_state_dict is not None:
             try:
                 model.load_state_dict(early_stopping.best_state_dict)
-            except Exception as e:
+            except (RuntimeError, TypeError, KeyError, AttributeError) as e:
                 self._maybe_prune_or_raise_runtime(
                     e, context="Failed to load best_state_dict", trial=trial
                 )
@@ -1156,7 +1162,7 @@ class ImputeAutoencoder(BaseNNImputer):
         optimizer: torch.optim.Optimizer,
         model: torch.nn.Module,
         ce_criterion: torch.nn.Module,
-        trial: Optional[optuna.Trial] = None,
+        trial: optuna.Trial | None = None,
         *,
         l1_penalty: float,
     ) -> float:
@@ -1275,7 +1281,7 @@ class ImputeAutoencoder(BaseNNImputer):
                 self._maybe_prune_or_raise_runtime(
                     e, context="train_step RuntimeError", trial=trial
                 )
-            except Exception as e:
+            except (TypeError, ValueError, IndexError, AttributeError) as e:
                 self._maybe_prune_or_raise_runtime(
                     e, context="train_step failed", trial=trial
                 )
@@ -1292,7 +1298,7 @@ class ImputeAutoencoder(BaseNNImputer):
         loader: torch.utils.data.DataLoader,
         model: torch.nn.Module,
         ce_criterion: torch.nn.Module,
-        trial: Optional[optuna.Trial] = None,
+        trial: optuna.Trial | None = None,
         *,
         l1_penalty: float,
     ) -> float:
@@ -1403,7 +1409,7 @@ class ImputeAutoencoder(BaseNNImputer):
                     self._maybe_prune_or_raise_runtime(
                         e, context="val_step RuntimeError", trial=trial
                     )
-                except Exception as e:
+                except (ValueError, TypeError, IndexError, AttributeError) as e:
                     self._maybe_prune_or_raise_runtime(
                         e, context="val_step failed", trial=trial
                     )
@@ -1585,7 +1591,7 @@ class ImputeAutoencoder(BaseNNImputer):
 
         if y_true_flat.size == 0:
             self.logger.debug(
-                f"No valid ground truth genotypes found for evaluation in _evaluate_model(). Returning zeroed metrics."
+                "No valid ground truth genotypes found for evaluation in _evaluate_model(). Returning zeroed metrics."
             )
             if isinstance(self.tune_metric, str):
                 return {self.tune_metric: 0.0}
@@ -1794,7 +1800,7 @@ class ImputeAutoencoder(BaseNNImputer):
             RuntimeError: If model training returns None.
             optuna.exceptions.TrialPruned: If training fails unexpectedly or is unpromising.
         """
-        model: Optional[torch.nn.Module] = None
+        model: torch.nn.Module | None = None
         try:
             params = self._sample_hyperparameters(trial)
 
@@ -1859,7 +1865,7 @@ class ImputeAutoencoder(BaseNNImputer):
                 return tuple([metrics[k] for k in self.tune_metric])
             return metrics[self.primary_metric]
 
-        except Exception as e:
+        except (RuntimeError, ValueError, KeyError) as e:
             err_type = type(e).__name__
             self.logger.warning(
                 f"Trial {trial.number} failed due to exception {err_type}: {e}"
@@ -1872,7 +1878,7 @@ class ImputeAutoencoder(BaseNNImputer):
             if model is not None:
                 try:
                     self._clear_resources(model)
-                except Exception as e:
+                except RuntimeError as e:
                     self.logger.warning(
                         f"{self.model_name} _clear_resources failed in objective cleanup: {e}"
                     )

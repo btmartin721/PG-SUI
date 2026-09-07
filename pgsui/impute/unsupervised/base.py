@@ -4,8 +4,9 @@ import json
 import logging
 import math
 import pprint
+from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Mapping, Optional, Tuple, Type
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
 
 import matplotlib.pyplot as plt
@@ -59,6 +60,10 @@ class _MaskedNumpyDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx: int):
         return self.X[idx], self.y[idx], self.mask[idx]
+
+
+class OutputDirectoryCreationError(Exception):
+    """Raised when an imputer output directory cannot be created."""
 
 
 class BaseNNImputer:
@@ -139,7 +144,7 @@ class BaseNNImputer:
         self.tune_metric: str = "f1"
         self.primary_metric: str
         self.learning_rate: float = 1e-3
-        self.plotter_: "Plotting"
+        self.plotter_: Plotting
         self.num_features_: int = 0
         self.num_tuned_params_: int = 0
         self.num_classes_: int = 3
@@ -155,10 +160,10 @@ class BaseNNImputer:
         self.is_haploid_: bool = False
         self.ploidy: int = 2
         self.beta: float = 0.9999
-        self.max_ratio: Optional[float] = None
+        self.max_ratio: float | None = None
         self.sim_strategy: str = "random"
         self.sim_prop: float = 0.2
-        self.seed: Optional[int] = None
+        self.seed: int | None = None
         self.rng: np.random.Generator = np.random.default_rng(self.seed)
         self.ground_truth_: np.ndarray
         self.validation_split: float = 0.2
@@ -171,9 +176,9 @@ class BaseNNImputer:
         self.metrics_dir: Path
         self.parameters_dir: Path
         self.epochs: int
-        self.study_db: Optional[Path] = None
-        self.X_model_input_: Optional[np.ndarray] = None
-        self.class_weights_: Optional[torch.Tensor] = None
+        self.study_db: Path | None = None
+        self.X_model_input_: np.ndarray | None = None
+        self.class_weights_: torch.Tensor | None = None
 
         self.sim_mask_train_: np.ndarray
         self.sim_mask_val_: np.ndarray
@@ -339,21 +344,21 @@ class BaseNNImputer:
         try:
             best_metric = study.best_value
             best_params = study.best_params
-        except Exception:
+        except (AttributeError, IndexError):
             try:
                 best_metric = study.best_trials[0].values
                 best_params = study.best_trials[0].params
-            except Exception:
+            except (AttributeError, IndexError) as exc:
                 msg = f"[{self.model_name}] Tuning failed: No successful trials completed. Try enabling debug mode for more details."
                 self.logger.error(msg)
-                raise RuntimeError(msg)
+                raise RuntimeError(msg) from exc
 
         if isinstance(best_metric, (list, tuple)) and isinstance(
             self.tune_metric, (list, tuple)
         ):
             best_metric_str = ", ".join(
                 f"Best {m} metric: {v:.4f}"
-                for m, v in zip(self.tune_metric, best_metric)
+                for m, v in zip(self.tune_metric, best_metric, strict=True)
             )
         else:
             best_metric_str = f"Best {self.tune_metric} metric: {best_metric:.4f}"
@@ -410,7 +415,7 @@ class BaseNNImputer:
 
     def build_model(
         self,
-        Model: Type[torch.nn.Module],
+        Model: type[torch.nn.Module],
         model_params: dict[str, Any],
     ) -> torch.nn.Module:
         """Builds and initializes a neural network model instance.
@@ -449,7 +454,7 @@ class BaseNNImputer:
             "device": self.device,
         }
 
-        if self.model_name in {f"ImputeUBP", "ImputeNLPCA"}:
+        if self.model_name in {"ImputeUBP", "ImputeNLPCA"}:
             all_params["num_embeddings"] = getattr(self, "total_samples_", 0)
             if self.total_samples_ == 0:
                 msg = "Attribute 'total_samples_' is not set. Call fit() before build_model()."
@@ -600,10 +605,10 @@ class BaseNNImputer:
             setattr(self, f"{d}_dir", subdir)
             try:
                 getattr(self, f"{d}_dir").mkdir(parents=True, exist_ok=True)
-            except Exception as e:
+            except (OSError, PermissionError) as e:
                 msg = f"Failed to create directory {getattr(self, f'{d}_dir')}: {e}"
                 self.logger.error(msg)
-                raise Exception(msg)
+                raise OutputDirectoryCreationError(msg) from e
 
     def _clear_resources(self, model: torch.nn.Module) -> None:
         """Releases GPU and CPU memory after an Optuna trial.
@@ -613,10 +618,7 @@ class BaseNNImputer:
         Args:
             model (torch.nn.Module): The model from the completed trial.
         """
-        try:
-            del model
-        except NameError:
-            pass
+        del model
 
         gc.collect()
         if torch.cuda.is_available():
@@ -624,8 +626,8 @@ class BaseNNImputer:
         elif hasattr(torch, "mps") and torch.backends.mps.is_available():
             try:
                 torch.mps.empty_cache()
-            except Exception:
-                pass
+            except RuntimeError as exc:
+                self.logger.debug(f"Unable to clear MPS cache: {exc}")
 
     def _additional_metrics(
         self,
@@ -763,7 +765,7 @@ class BaseNNImputer:
         y_pred: np.ndarray,
         metrics: dict[str, float],
         y_pred_proba: np.ndarray | None = None,
-        labels: list[str] = ["REF", "HET", "ALT"],
+        labels: list[str] | None = None,
     ) -> None:
         """Generate and save detailed classification reports and visualizations.
 
@@ -774,14 +776,17 @@ class BaseNNImputer:
             y_pred (np.ndarray): Predicted labels (1D array).
             metrics (dict[str, float]): Computed metrics.
             y_pred_proba (np.ndarray | None): Predicted probabilities (2D array). Defaults to None.
-            labels (list[str]): Class label names (default: ["REF", "HET", "ALT"] for 3-class).
+            labels (list[str] | None): Class label names (default: ["REF", "HET", "ALT"] for 3-class).
         """
+        if labels is None:
+            labels = ["REF", "HET", "ALT"]
+
         report_name = "zygosity" if len(labels) <= 3 else "iupac"
         middle = "IUPAC" if report_name == "iupac" else "Zygosity"
 
         y_true_arr = np.asarray(y_true).reshape(-1)
         y_pred_arr = np.asarray(y_pred).reshape(-1)
-        n_classes = int(len(labels))
+        n_classes = len(labels)
         valid = (
             (y_true_arr >= 0)
             & (y_true_arr < n_classes)
@@ -849,8 +854,8 @@ class BaseNNImputer:
 
         if not isinstance(report, dict):
             msg = "Expected classification_report to return a dict."
-            self.logger.error(msg, exc_info=True)
-            raise ValueError(msg)
+            self.logger.error(msg)
+            raise TypeError(msg)
 
         if self.show_plots:
             viz = ClassificationReportVisualizer(reset_kwargs=self.plotter_.param_dict)
@@ -913,9 +918,9 @@ class BaseNNImputer:
         X: np.ndarray,
         *,
         ploidy: int,
-        encodings_dict: Optional[Mapping[str, int]] = None,
-        ref: Optional[np.ndarray] = None,
-        alt: Optional[np.ndarray] = None,
+        encodings_dict: Mapping[str, int] | None = None,
+        ref: np.ndarray | None = None,
+        alt: np.ndarray | None = None,
         ambiguity_mode: str = "ref_alt",
     ) -> np.ndarray:
         """Convert IUPAC genotype calls to integer encodings with ploidy-aware behavior.
@@ -1041,11 +1046,10 @@ class BaseNNImputer:
                 alt=alt,
                 ambiguity_mode="ref_alt",
             )
-        except Exception as e:
-            self.logger.warning(
-                f"[{self.model_name}] Haploid decoded sanitization with ref/alt failed: {e}. "
-                "Falling back to ambiguity collapse without ref/alt metadata."
-            )
+        except (TypeError, ValueError) as e:
+            msg = f"[{self.model_name}] Haploid decoded sanitization with ref/alt failed: {e}. Falling back to ambiguity collapse without ref/alt metadata."
+            self.logger.warning(msg)
+
             ints = self._convert_int_iupac_ploidy(
                 arr_u1,
                 ploidy=1,
@@ -1086,8 +1090,8 @@ class BaseNNImputer:
         *,
         full_matrix: np.ndarray,
         ambig_mask: np.ndarray,
-        ref: Optional[np.ndarray],
-        alt: Optional[np.ndarray],
+        ref: np.ndarray | None,
+        alt: np.ndarray | None,
         mode: str,
     ) -> np.ndarray:
         """Collapse ambiguity codes to haploid bases (A/C/G/T/N).
@@ -1212,7 +1216,7 @@ class BaseNNImputer:
         alt: Any,
         *,
         L: int,
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray]:
         """Return (ref_s, alt_s) as (L,) arrays of single bases 'A/C/G/T/N'.
 
         Args:
@@ -1403,10 +1407,7 @@ class BaseNNImputer:
         if max_size is None:
             max_size = max(int(n_inputs), int(base), int(effective_min))
 
-        if cap_by_inputs:
-            max_size = min(int(max_size), int(n_inputs))
-        else:
-            max_size = int(max_size)
+        max_size = min(int(max_size), int(n_inputs)) if cap_by_inputs else int(max_size)
 
         if max_size < effective_min:
             msg = (
@@ -1588,7 +1589,7 @@ class BaseNNImputer:
     def _class_weights_from_zygosity(
         self,
         X: np.ndarray,
-        train_mask: Optional[np.ndarray] = None,
+        train_mask: np.ndarray | None = None,
         *,
         inverse: bool = False,
         normalize: bool = False,
@@ -1752,7 +1753,7 @@ class BaseNNImputer:
         if torch.any(valid & (Xt >= K)):
             bad_vals = torch.unique(Xt[valid & (Xt >= K)]).detach().cpu().tolist()
             all_vals = torch.unique(Xt[valid]).detach().cpu().tolist()
-            msg = f"_one_hot_encode_012 received class values outside [0, {K-1}]. num_classes={K}, offending_values={bad_vals}, observed_values={all_vals}. Upstream encoding mismatch (e.g., passing 0/1/2 with num_classes=2)."
+            msg = f"_one_hot_encode_012 received class values outside [0, {K - 1}]. num_classes={K}, offending_values={bad_vals}, observed_values={all_vals}. Upstream encoding mismatch (e.g., passing 0/1/2 with num_classes=2)."
             self.logger.error(msg)
             raise ValueError(msg)
 
@@ -1793,7 +1794,7 @@ class BaseNNImputer:
         if not isinstance(df, pd.DataFrame):
             msg = f"Expected a pandas.DataFrame in 'decode_012', but got: {type(df)}."
             self.logger.error(msg)
-            raise ValueError(msg)
+            raise TypeError(msg)
 
         # IUPAC Definitions
         iupac_to_bases: dict[str, set[str]] = {
@@ -1826,10 +1827,7 @@ class BaseNNImputer:
                 value = bytes(value).decode("utf-8", errors="ignore")
 
             if isinstance(value, (list, tuple, pd.Series, np.ndarray)):
-                if isinstance(value, pd.Series):
-                    arr = value.to_numpy()
-                else:
-                    arr = value
+                arr = value.to_numpy() if isinstance(value, pd.Series) else value
                 if isinstance(arr, np.ndarray) and arr.ndim == 0:
                     return _normalize_iupac(arr.item())
                 if len(arr) == 0:
@@ -1862,10 +1860,7 @@ class BaseNNImputer:
 
             # list-like: flatten
             if isinstance(value, (list, tuple, pd.Series, np.ndarray)):
-                if isinstance(value, pd.Series):
-                    seq = value.to_numpy()
-                else:
-                    seq = value
+                seq = value.to_numpy() if isinstance(value, pd.Series) else value
                 out: list[str] = []
                 for item in seq:
                     out.extend(_extract_candidates(item))
@@ -1951,8 +1946,7 @@ class BaseNNImputer:
                     if b in {"A", "C", "G", "T"}:
                         base_cands.add(b)
 
-            if ref_base in base_cands:
-                base_cands.remove(ref_base)
+            base_cands.discard(ref_base)
 
             if not base_cands:
                 return None
@@ -1997,7 +1991,7 @@ class BaseNNImputer:
         if getattr(self.genotype_data, "snp_data", None) is not None:
             try:
                 source_snp_data = np.asarray(self.genotype_data.snp_data)
-            except Exception:
+            except (TypeError, ValueError):
                 source_snp_data = None
 
         for j in range(n_cols):
@@ -2013,7 +2007,7 @@ class BaseNNImputer:
             ):
                 try:
                     counts = _base_counts_from_column(source_snp_data[:, j])
-                except Exception:
+                except (TypeError, ValueError, IndexError):
                     counts = {"A": 0, "C": 0, "G": 0, "T": 0}
 
             # Canonicalize REF to a single base if possible
@@ -2063,7 +2057,7 @@ class BaseNNImputer:
             if ref == alt:
                 het_code = ref
             else:
-                union_set = frozenset({ref, alt})
+                union_set = frozenset({str(ref), str(alt)})
                 het_code = bases_to_iupac.get(union_set, "N")
 
             col_codes = codes[:, j]
@@ -2312,7 +2306,7 @@ class BaseNNImputer:
             msg = f"Shape mismatch among X, y, and mask: X{X.shape}, y{y.shape}, mask{mask.shape}."
             self.logger.error(msg)
             raise ValueError(msg)
-        if not X.ndim == 2 or not y.ndim == 2 or not mask.ndim == 2:
+        if X.ndim != 2 or y.ndim != 2 or mask.ndim != 2:
             msg = f"_get_data_loaders requires X, y, and mask to be 2D, but got shapes X{X.shape}, y{y.shape}, mask{mask.shape}."
             self.logger.error(msg)
             raise ValueError(msg)
@@ -2357,7 +2351,7 @@ class BaseNNImputer:
 
     def _anneal_config(
         self,
-        params: Optional[dict],
+        params: dict | None,
         key: str,
         default: float,
         max_epochs: int,
@@ -2392,8 +2386,9 @@ class BaseNNImputer:
         else:
             final = default
 
-        warm, ramp = min(int(0.1 * max_epochs), warm_alt), min(
-            int(0.2 * max_epochs), ramp_alt
+        warm, ramp = (
+            min(int(0.1 * max_epochs), warm_alt),
+            min(int(0.2 * max_epochs), ramp_alt),
         )
         return final, warm, ramp
 
@@ -2464,7 +2459,7 @@ class BaseNNImputer:
         self,
         n_trials: int,
         *,
-        n_params: Optional[int] = None,
+        n_params: int | None = None,
         frac: float = 0.10,
         min_startup: int = 5,
         max_startup: int = 50,
@@ -2691,7 +2686,7 @@ class BaseNNImputer:
         sm = (self.sim_mask_train_, self.sim_mask_val_, self.sim_mask_test_)
         om = (self.orig_mask_train_, self.orig_mask_val_, self.orig_mask_test_)
         contexts = ("train", "val", "test")
-        for sim_mask, orig_mask, context in zip(sm, om, contexts):
+        for sim_mask, orig_mask, context in zip(sm, om, contexts, strict=True):
             self._validate_mask_splits(sim_mask, orig_mask, context=context)
 
     def _extract_masks_indices(
@@ -2706,7 +2701,7 @@ class BaseNNImputer:
         Returns:
             tuple[np.ndarray, np.ndarray, np.ndarray]: Train, val, test masks.
         """
-        if not len(indices) == 3:
+        if len(indices) != 3:
             msg = "Indices tuple must contain exactly three elements: (train_idx, val_idx, test_idx)."
             self.logger.error(msg)
             raise ValueError(msg)

@@ -1,16 +1,15 @@
-# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import copy
-from typing import TYPE_CHECKING, Any, Literal, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import numpy as np
 import optuna
 import torch
-import torch.nn as nn
 from sklearn.decomposition import PCA
 from sklearn.exceptions import NotFittedError
 from snpio.analysis.genotype_encoder import GenotypeEncoder
+from torch import nn
 
 from pgsui.data_processing.config import apply_dot_overrides, load_yaml_to_dataclass
 from pgsui.data_processing.containers import UBPConfig
@@ -67,23 +66,23 @@ class ImputeUBP(BaseNNImputer):
 
         **Mathematical Formulation**
 
-        The objective is to minimize the reconstruction error between the observed genotypes :math:`X` and the model output :math:`\hat{X}`.
+        The objective is to minimize the reconstruction error between the observed genotypes :math:`X` and the model output :math:`\\hat{X}`.
 
         .. math::
 
-            \hat{X} = f(V; W)
+            \\hat{X} = f(V; W)
 
         The optimization minimizes the cost function :math:`J`:
 
         .. math::
 
-            J(V, W) = \mathcal{L}_{Focal}(X_{obs}, \hat{X}_{obs}) + \lambda \|W\|_1
+            J(V, W) = \\mathcal{L}_{Focal}(X_{obs}, \\hat{X}_{obs}) + \\lambda \\|W\\|_1
 
         Where:
-            - :math:`V \in \mathbb{R}^{N \times K}` are the latent embeddings.
+            - :math:`V \\in \\mathbb{R}^{N \times K}` are the latent embeddings.
             - :math:`W` are the network weights.
-            - :math:`\mathcal{L}_{Focal}` is the Focal Cross-Entropy loss (handling class imbalance).
-            - :math:`\lambda` is the L1 regularization coefficient.
+            - :math:`\\mathcal{L}_{Focal}` is the Focal Cross-Entropy loss (handling class imbalance).
+            - :math:`\\lambda` is the L1 regularization coefficient.
 
         **Training Procedure**
         This implementation modifies the original Gashler et al. algorithm for genomics:
@@ -188,14 +187,14 @@ class ImputeUBP(BaseNNImputer):
 
     def __init__(
         self,
-        genotype_data: "GenotypeData",
+        genotype_data: GenotypeData,
         *,
-        tree_parser: Optional["TreeParser"] = None,
-        config: Optional[Union[UBPConfig, dict, str]] = None,
-        overrides: Optional[dict] = None,
-        sim_strategy: Optional[str] = None,
-        sim_prop: Optional[float] = None,
-        sim_kwargs: Optional[dict] = None,
+        tree_parser: TreeParser | None = None,
+        config: UBPConfig | dict | str | None = None,
+        overrides: dict | None = None,
+        sim_strategy: str | None = None,
+        sim_prop: float | None = None,
+        sim_kwargs: dict | None = None,
     ) -> None:
         """Initialize the ImputeUBP model.
 
@@ -319,7 +318,7 @@ class ImputeUBP(BaseNNImputer):
         out[miss] = -1
         return out
 
-    def fit(self) -> "ImputeUBP":
+    def fit(self) -> ImputeUBP:
         """Fit the UBP model using the 3-phase algorithm.
 
         This method coordinates the entire training pipeline:
@@ -590,7 +589,7 @@ class ImputeUBP(BaseNNImputer):
         # NOTE: No general init here; Model init handles V (PCA)
 
         # Run 3-Phase Training
-        loss, trained_model, history = self._execute_ubp_training(
+        _, trained_model, history = self._execute_ubp_training(
             model=model,
             lr=float(self.best_params_["learning_rate"]),
             l1_penalty=float(self.best_params_["l1_penalty"]),
@@ -741,10 +740,10 @@ class ImputeUBP(BaseNNImputer):
         lr: float,
         l1_penalty: float,
         params: dict[str, Any],
-        trial: Optional[optuna.Trial],
-        class_weights: Optional[torch.Tensor],
+        trial: optuna.Trial | None,
+        class_weights: torch.Tensor | None,
         gamma_schedule: bool,
-    ) -> Tuple[float, nn.Module, dict[str, list[float]]]:
+    ) -> tuple[float, nn.Module, dict[str, list[float]]]:
         """Execute the 3-phase UBP training procedure.
 
         This method orchestrates the training of the UBP model through its three distinct phases:
@@ -767,7 +766,7 @@ class ImputeUBP(BaseNNImputer):
             RuntimeError: If training fails to converge or produces non-finite loss.
         """
 
-        gamma_target, gamma_warm, gamma_ramp = self._anneal_config(
+        gamma_target, _, __ = self._anneal_config(
             params, "gamma", default=self.gamma, max_epochs=self.epochs
         )
 
@@ -818,12 +817,12 @@ class ImputeUBP(BaseNNImputer):
     def _train_epoch(
         self,
         model: nn.Module,
-        temp_layer: Optional[nn.Module],
+        temp_layer: nn.Module | None,
         optimizer: torch.optim.Optimizer,
         criterion: nn.Module,
         l1: float,
         phase: int,
-        trial: Optional[optuna.Trial] = None,
+        trial: optuna.Trial | None = None,
     ) -> float:
         """Train one epoch for a given UBP phase.
 
@@ -1033,13 +1032,13 @@ class ImputeUBP(BaseNNImputer):
     def _run_phase_loop(
         self,
         model: nn.Module,
-        temp_layer: Optional[nn.Module],
+        temp_layer: nn.Module | None,
         phase: int,
         lr: float,
         l1: float,
         criterion: nn.Module,
-        trial: Optional[optuna.Trial] = None,
-        params: Optional[dict[str, Any]] = None,
+        trial: optuna.Trial | None = None,
+        params: dict[str, Any] | None = None,
         gamma_schedule: bool = False,
     ) -> tuple[float, dict[str, list[float]]]:
         """Run a UBP phase with ReduceLROnPlateau LR scheduling and optional gamma scheduling.
@@ -1186,7 +1185,7 @@ class ImputeUBP(BaseNNImputer):
                 # prune trial (if applicable) or raise.
                 if trial is not None:
                     raise optuna.exceptions.TrialPruned(
-                        f"[{self.model_name}] Trial {trial.number} failed during validation: {str(e)}"
+                        f"[{self.model_name}] Trial {trial.number} failed during validation: {e!s}"
                     ) from e
                 raise
 
@@ -1251,7 +1250,7 @@ class ImputeUBP(BaseNNImputer):
     def _val_step_with_projection(
         self,
         model: nn.Module,
-        temp_layer: Optional[nn.Module],
+        temp_layer: nn.Module | None,
         criterion: nn.Module,
         steps: int = 20,
         lr: float = 0.05,
@@ -1283,7 +1282,7 @@ class ImputeUBP(BaseNNImputer):
 
         saved: list[tuple[torch.nn.Parameter, bool]] = []
 
-        def _save_and_disable(module: Optional[nn.Module]) -> None:
+        def _save_and_disable(module: nn.Module | None) -> None:
             if module is None:
                 return
             for p in module.parameters():
@@ -1402,7 +1401,7 @@ class ImputeUBP(BaseNNImputer):
         lr: float = 0.05,
         class_weights: torch.Tensor | None = None,
         iterations: int = 100,
-        trial: Optional[optuna.Trial] = None,
+        trial: optuna.Trial | None = None,
     ) -> None:
         """Refine embeddings V for given indices using observed entries only.
 
@@ -1579,7 +1578,7 @@ class ImputeUBP(BaseNNImputer):
                 f"Eval alignment mismatch: y_true={y_true.shape}, y_pred={y_pred.shape}, y_proba={y_proba.shape}."
             )
 
-        K = int(len(labels_for_scoring))
+        K = len(labels_for_scoring)
         if y_proba.shape[1] != K:
             raise ValueError(f"Expected y_proba.shape[1]=={K}, got {y_proba.shape[1]}.")
 
@@ -1629,8 +1628,8 @@ class ImputeUBP(BaseNNImputer):
         gamma: float,
         project_embedding: bool = False,
         objective_mode: bool = False,
-        trial: Optional[optuna.Trial] = None,
-        class_weights: Optional[torch.Tensor] = None,
+        trial: optuna.Trial | None = None,
+        class_weights: torch.Tensor | None = None,
         *,
         persist_projection: bool = False,
     ):
@@ -1684,7 +1683,12 @@ class ImputeUBP(BaseNNImputer):
                     torch.from_numpy(idx_np).to(self.device, non_blocking=True).long()
                 )
                 with torch.no_grad():
-                    saved_rows = model.embedding.weight.index_select(0, idx_t).detach().clone()  # type: ignore[attr-defined]
+                    saved_rows = (
+                        cast(nn.Embedding, model.embedding)
+                        .weight.index_select(0, idx_t)
+                        .detach()
+                        .clone()
+                    )
 
             self._refine_all_embeddings(
                 model,
@@ -1736,7 +1740,7 @@ class ImputeUBP(BaseNNImputer):
                     )
                 )
             except Exception as e:
-                msg = f"[{self.model_name}] Evaluation arrays invalid: {str(e)}"
+                msg = f"[{self.model_name}] Evaluation arrays invalid: {e!s}"
                 if trial is not None:
                     raise optuna.exceptions.TrialPruned(msg) from e
                 self.logger.error(msg)
@@ -1886,7 +1890,7 @@ class ImputeUBP(BaseNNImputer):
         model: nn.Module,
         indices: np.ndarray | torch.Tensor | list[int],
         return_proba: bool = False,
-    ) -> Tuple[np.ndarray, np.ndarray | None]:
+    ) -> tuple[np.ndarray, np.ndarray | None]:
         """Predict labels/probabilities for given sample indices.
 
         Args:
@@ -2015,7 +2019,7 @@ class ImputeUBP(BaseNNImputer):
                 )
                 class_weights_ = torch.ones(self.num_classes_, device=self.device)
 
-        res = self._execute_ubp_training(
+        _ = self._execute_ubp_training(
             model=model,
             lr=lr,
             l1_penalty=l1_penalty,
@@ -2110,7 +2114,6 @@ class ImputeUBP(BaseNNImputer):
             "hidden_layer_sizes": hidden_layer_sizes,
             "dropout_rate": float(params["dropout_rate"]),
             "activation": str(params["activation"]),
-            "prefix": self.prefix,
             "device": self.device,
             "verbose": self.verbose,
             "debug": self.debug,
@@ -2327,10 +2330,7 @@ class ImputeUBP(BaseNNImputer):
         if max_size is None:
             max_size = max(int(n_inputs), int(base), int(effective_min))
 
-        if cap_by_inputs:
-            max_size = min(int(max_size), int(n_inputs))
-        else:
-            max_size = int(max_size)
+        max_size = min(int(max_size), int(n_inputs)) if cap_by_inputs else int(max_size)
 
         if max_size < effective_min:
             msg = (
@@ -2543,7 +2543,7 @@ class ImputeUBP(BaseNNImputer):
 
         try:
             latent_dim_req = int(latent_dim)
-        except Exception as e:
+        except (ValueError, RuntimeError, FloatingPointError) as e:
             msg = f"[{self.model_name}] latent_dim must be an int-like value; got {latent_dim!r}."
             self.logger.error(msg)
             raise ValueError(msg) from e
@@ -2661,7 +2661,7 @@ class ImputeUBP(BaseNNImputer):
                     f"[{self.model_name}] PCA init EVR head={head}, total={float(evr.sum()):.4f}."
                 )
 
-        except Exception as e:
+        except (ValueError, np.linalg.LinAlgError) as e:
             self.logger.warning(
                 f"[{self.model_name}] PCA init failed (n_train={n_train}, n_features={L}, eff_dim={eff_dim}): {e}. "
                 "Falling back to random embedding init."
@@ -2679,7 +2679,9 @@ class ImputeUBP(BaseNNImputer):
             rng = np.random.default_rng(self.seed)
             V = np.zeros((N, latent_dim_req), dtype=np.float32)
             V[:, :eff_dim] = V_eff
-            # Small-noise padding helps avoid exact-zero dimensions (often harmless either way)
+
+            # Small-noise padding helps avoid exact-zero dimensions
+            # (often harmless either way)
             pad = latent_dim_req - eff_dim
             if pad > 0:
                 V[:, eff_dim:] = rng.normal(loc=0.0, scale=1e-3, size=(N, pad)).astype(

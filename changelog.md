@@ -4,6 +4,61 @@ An overview of changes to **PG-SUI** by release. This mirrors the Sphinx/RST cha
 
 ---
 
+## v1.8.2 - 2026-09-06
+
+### Bug Fixes - v1.8.2
+
+- Corrected NLPCA embedding snapshots and L1 regularization so refinement and training operate on module parameters consistently.
+- Removed mutable hidden-layer and focal-gamma defaults from neural models, normalized gamma tensors on the selected device, and added clearer type validation.
+- Added explicit population-label validation before population-specific mode imputation.
+- Hardened haploid REF/ALT normalization, simulated-missingness sampling, validation-array checks, and tuning cleanup diagnostics.
+- Made optional MultiQC plots and tables no-ops when the SNPio MultiQC integration is unavailable.
+
+### Engineering - v1.8.2
+
+- Adopted Ruff for formatting, import sorting, and linting; added Ruff checks to CI; and modernized annotations to built-in Python generics and union syntax.
+- Replaced broad recoverable exception handlers with focused exception groups and preserved useful logging context.
+- Standardized module-scoped logging across configuration, CLI, deterministic, unsupervised, plotting, and scoring code.
+- Added regression tests for metric-feature bootstrap analyses, validation runtime scaling, GTImputation VCF scoring, and CPU/GPU runtime comparisons.
+
+### Dependencies and Distribution - v1.8.2
+
+- Updated SNPio to `>=1.7.3` and retained the intentional NumPy, pandas, scikit-learn, SciPy, Matplotlib, seaborn, PyTorch, Optuna, FastAPI, and Uvicorn bounds.
+- Synchronized pip, Conda, and environment dependency declarations.
+- Corrected setuptools package-discovery exclusions so Electron vendor modules are not bundled into the Python wheel.
+- Enforced strict Conda channel priority without the `defaults` channel to avoid shared-library clobbering.
+- Pinned Docker release builds to the exact package version published to PyPI.
+- Made missing Docker Hub credentials fail the release workflow explicitly instead of reporting a successful no-op.
+- Updated the release workflow to publish organized notes and attach wheel and source distributions to GitHub releases.
+
+### Documentation - v1.8.2
+
+- Updated pip, Conda, and Docker installation guidance, synchronized the Sphinx release version, and corrected GitHub source links.
+
+## v1.8.1 - 2026-06-25
+
+### Dependencies and Distribution - v1.8.1
+
+- Added compatible upper and lower bounds for NumPy, pandas, scikit-learn, SciPy, Matplotlib, seaborn, PyTorch, and Optuna.
+- Set the minimum SNPio version to `1.6.16` and synchronized the PyPI and Conda dependency declarations.
+- Configured Conda builds for Python 3.11 and 3.12.
+
+## v1.8.0 - 2026-06-25
+
+### Features - v1.8.0
+
+- Added structured PG-SUI logging utilities, model-scoped loggers, timed-phase reporting, and concise Optuna best-trial summaries.
+- Expanded SNPioSP dataset comparisons with missingness, minor-allele frequency, inbreeding coefficients, and revised Tajima's D summaries.
+
+### Improvements - v1.8.0
+
+- Consolidated neural-imputer logging and runtime instrumentation in `BaseNNImputer`.
+- Improved loss, plotting, and CLI diagnostics and refreshed the bundled sorted example VCF and index.
+
+### Tests - v1.8.0
+
+- Added coverage for logger lifecycle, timed phases, Optuna trial summaries, and model-scoped log output.
+
 ## v1.7.8 - 2026-02-15
 
 ### Bug Fixes - v1.7.8

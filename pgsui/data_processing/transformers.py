@@ -1,8 +1,7 @@
 # Standard library imports
-import copy
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, Optional, Tuple
+from typing import TYPE_CHECKING, Literal, Optional
 
 # Third-party imports
 import numpy as np
@@ -225,7 +224,7 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
         verbose=0,
         tol=None,
         max_tries=None,
-        seed: Optional[int] = None,
+        seed: int | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         """Initialize the SimMissingTransformer.
@@ -278,7 +277,7 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
 
         if not np.isnan(self.missing_val):
             X = X.copy()
-            X[X == self.missing_val] = np.nan
+            X[self.missing_val == X] = np.nan
 
         self.original_missing_mask_ = np.isnan(X)
 
@@ -352,7 +351,7 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
                 )
                 return self
 
-            target = int(round(self.prop_missing * total_eligible))
+            target = round(self.prop_missing * total_eligible)
             tol = int(
                 max(
                     1,
@@ -464,7 +463,7 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
         # Get values where original value was not missing and simulated.
         # data is missing.
         self.sim_missing_mask_ = np.logical_and(
-            self.all_missing_mask_, self.original_missing_mask_ == False
+            self.all_missing_mask_, ~self.original_missing_mask_
         )
 
         if self.mask_missing:
@@ -510,7 +509,7 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
         transform_fn: Literal["sqrt", "exp"] = "sqrt",
         power: float = 0.5,
         inv: bool = False,
-        rng: Optional[np.random.Generator] = None,
+        rng: np.random.Generator | None = None,
         target_rate: float | None = None,
         *,
         mask_missing: bool = True,
@@ -573,7 +572,7 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
             )
 
             probs = np.zeros(n_samples, dtype=float)
-            for c, pw in zip(classes, w):
+            for c, pw in zip(classes, w, strict=True):
                 probs[eligible & (col == c)] = pw
 
             if target_rate is not None:
@@ -603,7 +602,7 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
         tips_only: bool = False,
         skip_root: bool = True,
         weighted: bool = False,
-        rng: Optional[np.random.Generator] = None,
+        rng: np.random.Generator | None = None,
     ) -> list[str]:
         """Sample a node and return descendant tip labels.
 
@@ -681,7 +680,7 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
             return rng.choice(keys)
 
         tree = self.tree_parser.tree
-        last_error: Optional[Exception] = None
+        last_error: Exception | None = None
         max_attempts = max(1, len(keys) * 3)
 
         for _ in range(max_attempts):
@@ -693,7 +692,7 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
                     node = tree[int(chosen_key)]
                 else:
                     node = chosen_key
-            except Exception as e:
+            except (IndexError, KeyError, TypeError, ValueError) as e:
                 last_error = e
                 continue
 
@@ -706,7 +705,7 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
 
             try:
                 tips = [leaf.name for leaf in node.get_leaves()]  # type: ignore
-            except Exception as e:
+            except (AttributeError, TypeError, ValueError) as e:
                 last_error = e
                 continue
 
@@ -781,7 +780,7 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
 
     def read_mask(
         self, filename_prefix: str
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Read mask from file.
 
         Args:

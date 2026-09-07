@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import logging
 from pathlib import Path
+from unittest.mock import Mock
 
 import optuna
 
@@ -47,7 +48,7 @@ def test_base_nn_imputer_uses_model_scoped_logger(tmp_path: Path) -> None:
     prefix = tmp_path / "base_run"
     imputer = BaseNNImputer(
         model_name="ImputeAutoencoder",
-        genotype_data=object(),
+        genotype_data=Mock(),
         prefix=str(prefix),
         verbose=True,
     )

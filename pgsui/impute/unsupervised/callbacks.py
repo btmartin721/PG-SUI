@@ -89,7 +89,7 @@ class EarlyStopping:
         # Treat non-finite scores as non-improvements
         try:
             score_f = float(score)
-        except Exception:
+        except (ValueError, TypeError):
             score_f = float("inf") if self.mode == "min" else float("-inf")
 
         if not np.isfinite(score_f):

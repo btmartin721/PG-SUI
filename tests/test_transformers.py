@@ -2,15 +2,18 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import numpy as np
 import pytest
+from numpy.random import Generator
 
 # Skip these tests if snpio isn't installed at all; when present, patch only
 # the missing SNPioMultiQC attribute for older releases.
 snpio = pytest.importorskip("snpio")  # type: ignore
 
 if not hasattr(snpio, "SNPioMultiQC"):
+
     class _DummyMQC:
         @staticmethod
         def queue_html(*args, **kwargs):
@@ -34,8 +37,9 @@ if not hasattr(snpio, "SNPioMultiQC"):
 
     snpio.SNPioMultiQC = _DummyMQC  # type: ignore[attr-defined]
 
-from pgsui.data_processing.transformers import SimMissingTransformer
-from snpio import PhylipReader, TreeParser
+from snpio import PhylipReader, TreeParser  # noqa: E402
+
+from pgsui.data_processing.transformers import SimMissingTransformer  # noqa: E402
 
 
 class _StubRNG:
@@ -56,6 +60,7 @@ class _FakeNode:
     def __init__(self, name: str | None = None, dist: float = 1.0, children=None):
         self.name = name
         self.dist = dist
+        self.idx: int = 0
         self.children = children or []
         self.up = None
         for c in self.children:
@@ -91,7 +96,7 @@ class _FakeTree:
             child.up = node
             self._assign_indices(child)
 
-    def traverse(self, order="preorder"):  # noqa: ARG002
+    def traverse(self, order="preorder"):
         return list(self.nodes)
 
     def __getitem__(self, idx: int) -> _FakeNode:
@@ -119,17 +124,14 @@ def _write_newick_tree(path: Path, samples: list[str]) -> None:
 
 def _write_iqtree_qmatrix(path: Path) -> None:
     path.write_text(
-        "\n".join(
-            [
-                "Rate matrix Q",
-                "A C G T",
-                "A -0.1 0.02 0.03 0.05",
-                "C 0.01 -0.09 0.04 0.04",
-                "G 0.02 0.02 -0.08 0.04",
-                "T 0.03 0.02 0.01 -0.06",
-                "",
-            ]
-        ),
+        """Rate matrix Q
+A C G T
+A -0.1 0.02 0.03 0.05
+C 0.01 -0.09 0.04 0.04
+G 0.02 0.02 -0.08 0.04
+T 0.03 0.02 0.01 -0.06
+
+""",
         encoding="utf-8",
     )
 
@@ -149,10 +151,13 @@ def test_sample_clade_resamples_until_overlap() -> None:
     tp = _FakeTreeParser(_FakeTree(root))
 
     gd = SimpleNamespace(samples=["good_tip"])
-    transformer = SimMissingTransformer(genotype_data=gd, tree_parser=tp, strategy="nonrandom")
+
+    transformer = SimMissingTransformer(
+        genotype_data=gd, tree_parser=cast(TreeParser, tp), strategy="nonrandom"
+    )
 
     rng = _StubRNG(seq=[bad.idx, good.idx])  # first hit bad, then good
-    tips = transformer._sample_tree(rng=rng)
+    tips = transformer._sample_tree(rng=cast(Generator, rng))
 
     assert tips == ["good_tip"]
 
@@ -163,7 +168,9 @@ def test_sample_clade_raises_when_no_matching_tips() -> None:
     tp = _FakeTreeParser(_FakeTree(root))
 
     gd = SimpleNamespace(samples=["other"])
-    transformer = SimMissingTransformer(genotype_data=gd, tree_parser=tp, strategy="nonrandom")
+    transformer = SimMissingTransformer(
+        genotype_data=gd, tree_parser=cast(TreeParser, tp), strategy="nonrandom"
+    )
 
     with pytest.raises(ValueError):
         transformer._sample_tree()
@@ -192,7 +199,7 @@ def test_sim_missing_strategies_run(strategy: str) -> None:
 
     transformer = SimMissingTransformer(
         genotype_data=gd,
-        tree_parser=tp,
+        tree_parser=cast(TreeParser | None, tp),
         prop_missing=0.25,
         strategy=strategy,
         seed=123,

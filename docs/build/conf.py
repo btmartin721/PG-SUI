@@ -24,10 +24,10 @@ copyright = "2021, Bradley T. Martin and Tyler K. Chafin"
 author = "Bradley T. Martin and Tyler K. Chafin"
 
 # The short X.Y version
-version = "1.6.12"
+version = "1.8.2"
 
 # The full version, including alpha/beta/rc tags
-release = "v1.6.12"
+release = "v1.8.2"
 
 # -- General configuration ---------------------------------------------------
 
@@ -42,7 +42,6 @@ extensions = [
     "sphinx.ext.todo",
     "sphinx.ext.githubpages",
     "sphinx.ext.intersphinx",
-    "sphinx.ext.viewcode",
     "sphinx_rtd_theme",
 ]
 
@@ -95,10 +94,10 @@ html_theme_options = {"collapse_navigation": True, "titles_only": True}
 html_context = {
     "display_github": True,  # Enable GitHub integration
     "github_user": "btmartin721",  # GitHub username
-    "github_repo": "SNPio",  # GitHub repo
+    "github_repo": "PG-SUI",  # GitHub repo
     "github_version": "master",  # Branch to use
-    "conf_py_path": "/docs/source/",  # Path to docs in the repo
-    "current_version": "v1.6.12",  # Project version
+    "conf_py_path": "/docs/build/",  # Path to docs in the repo
+    "current_version": "v1.8.2",  # Project version
     "display_version": True,  # Display version number in the theme
     "latest_version": "master",  # Define the latest stable version
     "display_edit_on_github": True,  # Add 'Edit on GitHub' link

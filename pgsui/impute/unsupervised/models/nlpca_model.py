@@ -1,12 +1,11 @@
-# -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from typing import List, Literal, Optional
+from typing import Literal
 
 import numpy as np
 import torch
-import torch.nn as nn
 from snpio.utils.logging import LoggerManager
+from torch import nn
 
 from pgsui.utils.logging_utils import configure_logger
 
@@ -29,7 +28,7 @@ class NLPCAModel(nn.Module):
         *,
         embedding_init: torch.Tensor,
         num_classes: int = 3,
-        hidden_layer_sizes: List[int] | np.ndarray = [64, 128],
+        hidden_layer_sizes: list[int] | np.ndarray | None = None,
         latent_dim: int = 2,
         dropout_rate: float = 0.2,
         activation: Literal["relu", "elu", "selu", "leaky_relu"] = "relu",
@@ -45,7 +44,7 @@ class NLPCAModel(nn.Module):
             prefix (str): Logging prefix.
             embedding_init (torch.Tensor): Tensor of shape (num_embeddings, latent_dim) used to initialize V (PCA warm-start).
             num_classes (int): Number of genotype classes (3 diploid, 2 haploid).
-            hidden_layer_sizes (List[int] | np.ndarray): Hidden layer widths for the decoder MLP.
+            hidden_layer_sizes (List[int] | np.ndarray | None): Hidden layer widths for the decoder MLP. If None, defaults to [64, 128].
             latent_dim (int): Latent embedding dimension.
             dropout_rate (float): Dropout probability within the decoder.
             activation (Literal["relu", "elu", "selu", "leaky_relu"]): Activation function.
@@ -67,6 +66,9 @@ class NLPCAModel(nn.Module):
         )
 
         activation_module = self._resolve_activation(str(activation))
+
+        if hidden_layer_sizes is None:
+            hidden_layer_sizes = [64, 128]
 
         hls = (
             hidden_layer_sizes.tolist()
@@ -107,8 +109,8 @@ class NLPCAModel(nn.Module):
 
     def forward(
         self,
-        indices: Optional[torch.Tensor] = None,
-        override_embeddings: Optional[torch.Tensor] = None,
+        indices: torch.Tensor | None = None,
+        override_embeddings: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Forward pass mapping latent embeddings -> genotype logits.
 

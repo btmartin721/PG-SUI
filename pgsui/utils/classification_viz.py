@@ -1,10 +1,9 @@
-# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import re
 import warnings
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -34,7 +33,7 @@ class ClassificationReportVisualizer:
         avg_order: Canonical ordering for average rows (when present).
     """
 
-    retro_palette: List[str] = field(
+    retro_palette: list[str] = field(
         default_factory=lambda: [
             "#ff00ff",
             "#9400ff",
@@ -48,15 +47,15 @@ class ClassificationReportVisualizer:
     )
     background_hex: str = "#0a0a15"
     grid_hex: str = "#2a2a3a"
-    reset_kwargs: Dict[str, bool | str] | None = None
+    reset_kwargs: dict[str, bool | str] | None = None
 
     # Canonical label order used everywhere.
     # Edit/extend this if you want additional IUPAC or special tokens
     # ordered explicitly.
-    genotype_order: List[str] = field(
+    genotype_order: list[str] = field(
         default_factory=lambda: ["A", "C", "G", "T", "K", "M", "R", "S", "W", "Y", "N"]
     )
-    avg_order: List[str] = field(
+    avg_order: list[str] = field(
         default_factory=lambda: [
             "micro avg",
             "macro avg",
@@ -88,7 +87,7 @@ class ClassificationReportVisualizer:
                 key.append((1, p.lower()))
         return key
 
-    def _ordered_class_labels(self, labels: Union[pd.Index, List[str]]) -> List[str]:
+    def _ordered_class_labels(self, labels: pd.Index | list[str]) -> list[str]:
         """Order non-avg class labels with genotype_order first, then natural-sorted remainder."""
         labels_list = [str(x) for x in list(labels)]
         if not labels_list:
@@ -96,7 +95,7 @@ class ClassificationReportVisualizer:
 
         # Map normalized -> first-seen original label to preserve original
         #  formatting.
-        norm_to_orig: Dict[str, str] = {}
+        norm_to_orig: dict[str, str] = {}
         for lab in labels_list:
             n = self._normalize_label(lab)
             norm_to_orig.setdefault(n, lab)
@@ -108,7 +107,7 @@ class ClassificationReportVisualizer:
 
         # Append everything not in genotype_order
         # (natural sort; stable + de-dup)
-        seen = set(self._normalize_label(x) for x in ordered)
+        seen = {self._normalize_label(x) for x in ordered}
         remainder = [
             lab
             for lab in labels_list
@@ -118,7 +117,7 @@ class ClassificationReportVisualizer:
         remainder_sorted = sorted(remainder, key=self._natural_sort_key)
         return ordered + remainder_sorted
 
-    def _ordered_avg_labels(self, labels: Union[pd.Index, List[str]]) -> List[str]:
+    def _ordered_avg_labels(self, labels: pd.Index | list[str]) -> list[str]:
         """Order avg labels with avg_order first, then alpha remainder.
 
         Args:
@@ -131,7 +130,7 @@ class ClassificationReportVisualizer:
         if not labels_list:
             return []
 
-        norm_to_orig: Dict[str, str] = {}
+        norm_to_orig: dict[str, str] = {}
         for lab in labels_list:
             n = self._normalize_avg(lab)
             norm_to_orig.setdefault(n, lab)
@@ -142,7 +141,8 @@ class ClassificationReportVisualizer:
             if pref in norm_to_orig:
                 preferred.append(norm_to_orig[pref])
 
-        seen = set(self._normalize_avg(x) for x in preferred)
+        seen = {self._normalize_avg(x) for x in preferred}
+
         remainder = [
             lab
             for lab in labels_list
@@ -152,7 +152,7 @@ class ClassificationReportVisualizer:
         remainder_sorted = sorted(remainder, key=lambda x: x.lower())
         return preferred + remainder_sorted
 
-    def _ordered_report_index(self, idx: Union[pd.Index, List[str]]) -> List[str]:
+    def _ordered_report_index(self, idx: pd.Index | list[str]) -> list[str]:
         """Order full report index: classes first (genotype_order), avg rows last (avg_order).
 
         Args:
@@ -163,8 +163,8 @@ class ClassificationReportVisualizer:
         """
         labels = [str(x) for x in list(idx)]
         is_avg = [("avg" in lab.lower()) for lab in labels]
-        class_labels = [lab for lab, a in zip(labels, is_avg) if not a]
-        avg_labels = [lab for lab, a in zip(labels, is_avg) if a]
+        class_labels = [lab for lab, a in zip(labels, is_avg, strict=True) if not a]
+        avg_labels = [lab for lab, a in zip(labels, is_avg, strict=True) if a]
         return self._ordered_class_labels(class_labels) + self._ordered_avg_labels(
             avg_labels
         )
@@ -184,7 +184,7 @@ class ClassificationReportVisualizer:
         return df.reindex(ordered)
 
     # ---------- Core data prep ----------
-    def to_dataframe(self, report: Dict[str, Dict[str, float]]) -> pd.DataFrame:
+    def to_dataframe(self, report: dict[str, dict[str, float]]) -> pd.DataFrame:
         """Convert sklearn classification_report output_dict to a tidy DataFrame.
 
         Args:
@@ -204,7 +204,7 @@ class ClassificationReportVisualizer:
                 acc_val = df.loc["accuracy", "precision"]
                 if pd.api.types.is_number(acc_val):
                     df.attrs["accuracy"] = float(str(acc_val))
-            except Exception:
+            except (KeyError, TypeError, ValueError):
                 squeezed_val = df.loc["accuracy"].squeeze()
                 if pd.api.types.is_number(squeezed_val):
                     df.attrs["accuracy"] = float(str(squeezed_val))
@@ -221,9 +221,9 @@ class ClassificationReportVisualizer:
 
     def compute_ci(
         self,
-        boot_reports: List[Dict[str, Dict[str, float]]],
+        boot_reports: list[dict[str, dict[str, float]]],
         ci: float = 0.95,
-        metrics: Tuple[str, ...] = ("precision", "recall", "f1-score"),
+        metrics: tuple[str, ...] = ("precision", "recall", "f1-score"),
     ) -> pd.DataFrame:
         """Compute per-class bootstrap CIs from multiple report dicts.
 
@@ -318,7 +318,7 @@ class ClassificationReportVisualizer:
         df: pd.DataFrame,
         title: str = "Classification Report — Per-Class Metrics",
         classes_only: bool = True,
-        figsize: Tuple[int, int] = (12, 6),
+        figsize: tuple[int, int] = (12, 6),
         annot_decimals: int = 3,
         vmax: float = 1.0,
         vmin: float = 0.0,
@@ -406,9 +406,9 @@ class ClassificationReportVisualizer:
         df: pd.DataFrame,
         title: str = "Per-Class Metrics (Grouped Bars)",
         classes_only: bool = True,
-        figsize: Tuple[int, int] = (14, 7),
+        figsize: tuple[int, int] = (14, 7),
         bar_alpha: float = 0.9,
-        ci_df: Optional[pd.DataFrame] = None,
+        ci_df: pd.DataFrame | None = None,
     ):
         """Plot grouped bars for P/R/F1 with support markers and optional CI.
 
@@ -500,7 +500,7 @@ class ClassificationReportVisualizer:
                 edgecolor="#ffffff",
                 linewidth=0.4,
                 yerr=yerr,
-                error_kw=dict(ecolor="#ffffff", elinewidth=0.9, capsize=3),
+                error_kw={"ecolor": "#ffffff", "elinewidth": 0.9, "capsize": 3},
             )
 
         ax.set_xticks(x)
@@ -527,7 +527,7 @@ class ClassificationReportVisualizer:
         include_micro: bool = True,
         include_macro: bool = True,
         include_weighted: bool = True,
-        ci_df: Optional[pd.DataFrame] = None,
+        ci_df: pd.DataFrame | None = None,
     ) -> go.Figure:
         """Interactive radar chart of averages + top-k classes; optional CI bands.
 
@@ -588,7 +588,7 @@ class ClassificationReportVisualizer:
         def _add_ci_band(name: str, color: str):
             if ci_df is None:
                 return
-            if not all([(m, "lower") in ci_df.columns for m in metrics]):
+            if not all((m, "lower") in ci_df.columns for m in metrics):
                 return
             if name not in ci_df.index:
                 return
@@ -608,7 +608,7 @@ class ClassificationReportVisualizer:
                     r=ups,
                     theta=theta,
                     mode="lines",
-                    line=dict(width=0),
+                    line={"width": 0},
                     hoverinfo="skip",
                     showlegend=False,
                 )
@@ -618,7 +618,7 @@ class ClassificationReportVisualizer:
                     r=lows[::-1],
                     theta=theta[::-1],
                     mode="lines",
-                    line=dict(width=0),
+                    line={"width": 0},
                     fill="toself",
                     hoverinfo="skip",
                     name=f"{name} CI",
@@ -639,8 +639,8 @@ class ClassificationReportVisualizer:
                     theta=theta,
                     name=name.title(),
                     mode="lines+markers",
-                    line=dict(width=3, color=color),
-                    marker=dict(size=7, color=color),
+                    line={"width": 3, "color": color},
+                    marker={"size": 7, "color": color},
                     opacity=0.95,
                 )
             )
@@ -657,8 +657,8 @@ class ClassificationReportVisualizer:
                     theta=theta,
                     name=str(cls),
                     mode="lines+markers",
-                    line=dict(width=2, color=color),
-                    marker=dict(size=6, color=color),
+                    line={"width": 2, "color": color},
+                    marker={"size": 6, "color": color},
                     opacity=0.85,
                 )
             )
@@ -668,35 +668,39 @@ class ClassificationReportVisualizer:
             template="plotly_dark",
             paper_bgcolor=self.background_hex,
             plot_bgcolor=self.background_hex,
-            polar=dict(
-                bgcolor="#111122",
-                radialaxis=dict(range=[0, 1.05], showline=True, gridcolor="#33334d"),
-                angularaxis=dict(gridcolor="#33334d"),
-            ),
-            legend=dict(
-                bgcolor="#121222",
-                bordercolor="#2a2a3a",
-                borderwidth=1,
-                orientation="h",
-                yanchor="bottom",
-                y=-0.15,
-                x=0.5,
-                xanchor="center",
-            ),
+            polar={
+                "bgcolor": "#111122",
+                "radialaxis": {
+                    "range": [0, 1.05],
+                    "showline": True,
+                    "gridcolor": "#33334d",
+                },
+                "angularaxis": {"gridcolor": "#33334d"},
+            },
+            legend={
+                "bgcolor": "#121222",
+                "bordercolor": "#2a2a3a",
+                "borderwidth": 1,
+                "orientation": "h",
+                "yanchor": "bottom",
+                "y": -0.15,
+                "x": 0.5,
+                "xanchor": "center",
+            },
         )
 
         return fig
 
     def plot_all(
         self,
-        report: Dict[str, Dict[str, float]],
+        report: dict[str, dict[str, float]],
         title_prefix: str = "Classification Report",
         heatmap_classes_only: bool = True,
         radar_top_k: int = 10,
-        boot_reports: Optional[List[Dict[str, Dict[str, float]]]] = None,
+        boot_reports: list[dict[str, dict[str, float]]] | None = None,
         ci: float = 0.95,
         show: bool = True,
-    ) -> Dict[str, Union["Figure", go.Figure]]:
+    ) -> dict[str, Figure | go.Figure]:
         """Generate all visuals, with optional CI from bootstrap reports.
 
         Args:

@@ -27,7 +27,9 @@ def main() -> int:
 
     env = os.environ.copy()
     env.setdefault("PGSUI_PYTHON", sys.executable)
-    env.setdefault("PGSUI_CLI_DEFAULT", str(Path(__file__).resolve().parents[1] / "cli.py"))
+    env.setdefault(
+        "PGSUI_CLI_DEFAULT", str(Path(__file__).resolve().parents[1] / "cli.py")
+    )
 
     try:
         if local_electron.exists():

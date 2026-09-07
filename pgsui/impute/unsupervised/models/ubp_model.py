@@ -1,12 +1,11 @@
-# -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from typing import List, Literal, Optional
+from typing import Literal
 
 import numpy as np
 import torch
-import torch.nn as nn
 from snpio.utils.logging import LoggerManager
+from torch import nn
 
 from pgsui.utils.logging_utils import configure_logger
 
@@ -25,24 +24,30 @@ class UBPModel(nn.Module):
         *,
         embedding_init: torch.Tensor,
         num_classes: int = 3,
-        hidden_layer_sizes: List[int] | np.ndarray = [64, 128],
+        hidden_layer_sizes: list[int] | np.ndarray | None = None,
         latent_dim: int = 2,
         dropout_rate: float = 0.2,
         activation: Literal["relu", "elu", "selu", "leaky_relu"] = "relu",
         device: Literal["cpu", "gpu", "mps"] = "cpu",
         verbose: bool = False,
         debug: bool = False,
-    ):
+    ) -> None:
         """Initialize UBP Model.
 
         Args:
-            num_embeddings: Total number of samples (rows) in the dataset (n).
-            n_features: Number of features/SNPs (d).
-            num_classes: Genotype states (3 for diploid, 2 for haploid).
-            hidden_layer_sizes: Sizes of hidden layers for the MLP (W).
-            latent_dim: Size of the intrinsic/latent vector (t).
+            num_embeddings (int): Total number of samples (rows) in the dataset (n).
+            n_features (int): Number of features/SNPs (d).
+            num_classes (int): Genotype states (3 for diploid, 2 for haploid).
+            hidden_layer_sizes (list[int] | np.ndarray | None): Sizes of hidden layers for the MLP (W).
+            latent_dim (int): Size of the intrinsic/latent vector (t).
+            dropout_rate (float): Dropout probability within the MLP.
+            activation (Literal["relu", "elu", "selu", "leaky_relu"]): Activation function for the MLP.
+            device (Literal["cpu", "gpu", "mps"]): Torch device or device string.
+            verbose (bool): Verbose logging.
+            debug (bool): Debug logging.
         """
-        super(UBPModel, self).__init__()
+        super().__init__()
+
         self.num_classes = num_classes
         self.n_features = n_features
         self.device = device
@@ -57,8 +62,13 @@ class UBPModel(nn.Module):
 
         activation_module = self._resolve_activation(activation)
 
-        if isinstance(hidden_layer_sizes, np.ndarray):
+        if hidden_layer_sizes is None:
+            hls = [64, 128]
+
+        elif isinstance(hidden_layer_sizes, np.ndarray):
             hls = hidden_layer_sizes.tolist()
+        elif not isinstance(hidden_layer_sizes, list):
+            hls = list(hidden_layer_sizes)
         else:
             hls = hidden_layer_sizes
 
@@ -96,8 +106,8 @@ class UBPModel(nn.Module):
 
     def forward(
         self,
-        indices: Optional[torch.Tensor] = None,
-        override_embeddings: Optional[torch.Tensor] = None,
+        indices: torch.Tensor | None = None,
+        override_embeddings: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Forward pass mapping latent V -> output logits.
 

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, FrozenSet, Literal, Mapping
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -16,7 +17,7 @@ class OptunaParamSpec:
         keys: Canonical keys used in the Optuna objective `params` dict.
     """
 
-    keys: FrozenSet[str]
+    keys: frozenset[str]
 
     def __post_init__(self) -> None:
         if not isinstance(self.keys, frozenset):

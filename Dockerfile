@@ -1,6 +1,8 @@
 # Base image with Conda
 FROM continuumio/miniconda3
 
+ARG PGSUI_VERSION=""
+
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -37,8 +39,13 @@ RUN conda create -y -n $CONDA_ENV -c conda-forge -c btmartin721 \
 
 ENV PATH /opt/conda/envs/$CONDA_ENV/bin:$PATH
 
-RUN conda run -n $CONDA_ENV pip install --no-cache-dir \
-    pg-sui \
+RUN if [ -n "$PGSUI_VERSION" ]; then \
+        PGSUI_PACKAGE="pg-sui==$PGSUI_VERSION"; \
+    else \
+        PGSUI_PACKAGE="pg-sui"; \
+    fi && \
+    conda run -n $CONDA_ENV pip install --no-cache-dir \
+    "$PGSUI_PACKAGE" \
     pytest \
     jupyterlab && \
     conda clean -afy

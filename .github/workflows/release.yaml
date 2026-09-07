@@ -107,9 +107,11 @@ jobs:
           twine upload --non-interactive --skip-existing dist/*
 
       - name: Create GitHub release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: Release ${{ github.ref_name }}
-          body: |
-            Automated release for PG-SUI ${{ github.ref_name }}.
+          body_path: release-notes.md
+          generate_release_notes: true
+          files: dist/*
+          fail_on_unmatched_files: true

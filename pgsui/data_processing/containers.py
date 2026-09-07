@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
-from typing import Any, Dict, Literal, Optional, Sequence
+from typing import Any, Literal
 
 from pgsui.data_processing.config import apply_dot_overrides, load_yaml_to_dataclass
 
@@ -74,7 +75,7 @@ class _RFParams:
     min_samples_leaf: int = 1
     max_features: Literal["sqrt", "log2"] | float | None = "sqrt"
     criterion: Literal["gini", "entropy", "log_loss"] = "gini"
-    class_weight: Literal["balanced", "balanced_subsample", None] = "balanced"
+    class_weight: Literal["balanced", "balanced_subsample"] | None = "balanced"
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -104,7 +105,7 @@ class _HGBParams:
     n_iter_no_change: int = 10
     tol: float = 1e-7
     max_features: float | None = 1.0
-    class_weight: Literal["balanced", "balanced_subsample", None] = "balanced"
+    class_weight: Literal["balanced", "balanced_subsample"] | None = "balanced"
     random_state: int | None = None
     verbose: bool = False
 
@@ -160,7 +161,7 @@ class TrainConfig:
     max_epochs: int = 2000
     validation_split: float = 0.2
     device: Literal["gpu", "cpu", "mps"] = "cpu"
-    weights_max_ratio: Optional[float] = None
+    weights_max_ratio: float | None = None
     weights_power: float = 1.0
     weights_normalize: bool = True
     weights_inverse: bool = False
@@ -312,7 +313,7 @@ class AutoencoderConfig:
     @classmethod
     def from_preset(
         cls, preset: Literal["fast", "balanced", "thorough"] = "balanced"
-    ) -> "AutoencoderConfig":
+    ) -> AutoencoderConfig:
         """Build a AutoencoderConfig from a named preset.
 
         Args:
@@ -400,7 +401,7 @@ class AutoencoderConfig:
 
         return cfg
 
-    def apply_overrides(self, overrides: Dict[str, Any] | None) -> "AutoencoderConfig":
+    def apply_overrides(self, overrides: dict[str, Any] | None) -> AutoencoderConfig:
         """Apply flat dot-key overrides.
 
         Args:
@@ -423,7 +424,7 @@ class AutoencoderConfig:
                 raise KeyError(f"Unknown config key: {k}")
         return self
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
@@ -461,7 +462,7 @@ class VAEConfig:
     @classmethod
     def from_preset(
         cls, preset: Literal["fast", "balanced", "thorough"] = "balanced"
-    ) -> "VAEConfig":
+    ) -> VAEConfig:
         """Build a VAEConfig from a named preset.
 
         Args:
@@ -551,7 +552,7 @@ class VAEConfig:
 
         return cfg
 
-    def apply_overrides(self, overrides: Dict[str, Any] | None) -> "VAEConfig":
+    def apply_overrides(self, overrides: dict[str, Any] | None) -> VAEConfig:
         """Apply flat dot-key overrides."""
         if not overrides:
             return self
@@ -567,7 +568,7 @@ class VAEConfig:
                 raise KeyError(f"Unknown config key: {k}")
         return self
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
@@ -604,7 +605,7 @@ class NLPCAConfig:
     @classmethod
     def from_preset(
         cls, preset: Literal["fast", "balanced", "thorough"] = "balanced"
-    ) -> "NLPCAConfig":
+    ) -> NLPCAConfig:
         """Build a NLPCAConfig from a named preset.
 
         Args:
@@ -696,7 +697,7 @@ class NLPCAConfig:
 
         return cfg
 
-    def apply_overrides(self, overrides: Dict[str, Any] | None) -> "NLPCAConfig":
+    def apply_overrides(self, overrides: dict[str, Any] | None) -> NLPCAConfig:
         """Apply flat dot-key overrides.
 
         Args:
@@ -719,7 +720,7 @@ class NLPCAConfig:
                 raise KeyError(f"Unknown config key: {k}")
         return self
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
@@ -756,7 +757,7 @@ class UBPConfig:
     @classmethod
     def from_preset(
         cls, preset: Literal["fast", "balanced", "thorough"] = "balanced"
-    ) -> "UBPConfig":
+    ) -> UBPConfig:
         """Build a UBPConfig from a named preset.
 
         Args:
@@ -848,7 +849,7 @@ class UBPConfig:
 
         return cfg
 
-    def apply_overrides(self, overrides: Dict[str, Any] | None) -> "UBPConfig":
+    def apply_overrides(self, overrides: dict[str, Any] | None) -> UBPConfig:
         """Apply flat dot-key overrides.
 
         Args:
@@ -871,7 +872,7 @@ class UBPConfig:
                 raise KeyError(f"Unknown config key: {k}")
         return self
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
@@ -900,7 +901,7 @@ class DeterministicSplitConfig:
     """
 
     test_size: float = 0.2
-    test_indices: Optional[Sequence[int]] = None
+    test_indices: Sequence[int] | None = None
 
 
 @dataclass
@@ -933,7 +934,7 @@ class MostFrequentConfig:
     def from_preset(
         cls,
         preset: Literal["fast", "balanced", "thorough"] = "balanced",
-    ) -> "MostFrequentConfig":
+    ) -> MostFrequentConfig:
         """Construct a preset configuration.
 
         Args:
@@ -955,7 +956,7 @@ class MostFrequentConfig:
 
         return cfg
 
-    def apply_overrides(self, overrides: Dict[str, Any] | None) -> "MostFrequentConfig":
+    def apply_overrides(self, overrides: dict[str, Any] | None) -> MostFrequentConfig:
         """Apply dot-key overrides."""
         if not overrides:
             return self
@@ -971,7 +972,7 @@ class MostFrequentConfig:
                 pass
         return self
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
@@ -1015,7 +1016,7 @@ class RefAlleleConfig:
     @classmethod
     def from_preset(
         cls, preset: Literal["fast", "balanced", "thorough"] = "balanced"
-    ) -> "RefAlleleConfig":
+    ) -> RefAlleleConfig:
         """Presets mainly keep parity with logging/IO and split test_size.
 
         Args:
@@ -1036,7 +1037,7 @@ class RefAlleleConfig:
         cfg.sim.sim_prop = 0.2
         return cfg
 
-    def apply_overrides(self, overrides: Dict[str, Any] | None) -> "RefAlleleConfig":
+    def apply_overrides(self, overrides: dict[str, Any] | None) -> RefAlleleConfig:
         """Apply dot-key overrides."""
         if not overrides:
             return self
@@ -1052,13 +1053,13 @@ class RefAlleleConfig:
                 pass
         return self
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
 def _flatten_dict(
-    d: Dict[str, Any], prefix: str = "", out: Optional[Dict[str, Any]] = None
-) -> Dict[str, Any]:
+    d: dict[str, Any], prefix: str = "", out: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """Flatten a nested dictionary into dot-key format."""
     out = out or {}
     for k, v in d.items():
@@ -1083,7 +1084,7 @@ class IOConfigSupervised:
     """
 
     prefix: str = "pgsui"
-    seed: Optional[int] = None
+    seed: int | None = None
     n_jobs: int = 1
     verbose: bool = False
     debug: bool = False
@@ -1132,7 +1133,7 @@ class ImputerConfigSupervised:
         max_iter (int): Maximum number of imputation iterations to perform.
     """
 
-    n_nearest_features: Optional[int] = 10
+    n_nearest_features: int | None = 10
     max_iter: int = 10
 
 
@@ -1179,12 +1180,12 @@ class RFModelConfig:
     """
 
     n_estimators: int = 100
-    max_depth: Optional[int] = None
+    max_depth: int | None = None
     min_samples_split: int = 2
     min_samples_leaf: int = 1
     max_features: Literal["sqrt", "log2"] | float | None = "sqrt"
     criterion: Literal["gini", "entropy", "log_loss"] = "gini"
-    class_weight: Literal["balanced", "balanced_subsample", None] = "balanced"
+    class_weight: Literal["balanced", "balanced_subsample"] | None = "balanced"
 
 
 @dataclass
@@ -1203,16 +1204,17 @@ class HGBModelConfig:
 
     n_estimators: int = 100  # maps to max_iter
     learning_rate: float = 0.1
-    max_depth: Optional[int] = None
+    max_depth: int | None = None
     min_samples_leaf: int = 1
     max_features: float | None = 1.0
     n_iter_no_change: int = 10
     tol: float = 1e-7
 
     def __post_init__(self) -> None:
-        if isinstance(self.max_features, float):
-            if not (0.0 < self.max_features <= 1.0):
-                raise ValueError("max_features as float must be in (0.0, 1.0]")
+        if isinstance(self.max_features, float) and not (
+            0.0 < self.max_features <= 1.0
+        ):
+            raise ValueError("max_features as float must be in (0.0, 1.0]")
 
         if self.n_estimators <= 0:
             raise ValueError("n_estimators must be a positive integer")
@@ -1241,7 +1243,7 @@ class RFConfig:
     tune: TuningConfigSupervised = field(default_factory=TuningConfigSupervised)
 
     @classmethod
-    def from_preset(cls, preset: str = "balanced") -> "RFConfig":
+    def from_preset(cls, preset: str = "balanced") -> RFConfig:
         """Build a config from a named preset.
 
         Args:
@@ -1277,20 +1279,20 @@ class RFConfig:
         return cfg
 
     @classmethod
-    def from_yaml(cls, path: str) -> "RFConfig":
+    def from_yaml(cls, path: str) -> RFConfig:
         """Load from YAML; honors optional top-level 'preset'."""
         return load_yaml_to_dataclass(path, cls)
 
-    def apply_overrides(self, overrides: Dict[str, Any] | None) -> "RFConfig":
+    def apply_overrides(self, overrides: dict[str, Any] | None) -> RFConfig:
         """Apply flat dot-key overrides."""
         if overrides:
             apply_dot_overrides(self, overrides)
         return self
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
-    def to_imputer_kwargs(self) -> Dict[str, Any]:
+    def to_imputer_kwargs(self) -> dict[str, Any]:
         return {
             "prefix": self.io.prefix,
             "seed": self.io.seed,
@@ -1340,7 +1342,7 @@ class HGBConfig:
     tune: TuningConfigSupervised = field(default_factory=TuningConfigSupervised)
 
     @classmethod
-    def from_preset(cls, preset: str = "balanced") -> "HGBConfig":
+    def from_preset(cls, preset: str = "balanced") -> HGBConfig:
         """Build a config from a named preset.
 
         Args:
@@ -1380,18 +1382,18 @@ class HGBConfig:
         return cfg
 
     @classmethod
-    def from_yaml(cls, path: str) -> "HGBConfig":
+    def from_yaml(cls, path: str) -> HGBConfig:
         return load_yaml_to_dataclass(path, cls)
 
-    def apply_overrides(self, overrides: Dict[str, Any] | None) -> "HGBConfig":
+    def apply_overrides(self, overrides: dict[str, Any] | None) -> HGBConfig:
         if overrides:
             apply_dot_overrides(self, overrides)
         return self
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
-    def to_imputer_kwargs(self) -> Dict[str, Any]:
+    def to_imputer_kwargs(self) -> dict[str, Any]:
         return {
             "prefix": self.io.prefix,
             "seed": self.io.seed,

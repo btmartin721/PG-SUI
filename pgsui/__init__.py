@@ -24,21 +24,21 @@ from pgsui.impute.unsupervised.imputers.vae import ImputeVAE
 from ._version import version as __version__
 
 __all__ = [
-    "ImputeAutoencoder",  # Unsupervised imputer classes
-    "ImputeVAE",
-    "ImputeNLPCA",
-    "ImputeUBP",
-    "ImputeRandomForest",  # Supervised imputer classes
-    "ImputeHistGradientBoosting",
-    "ImputeRefAllele",  # Deterministic imputer classes
-    "ImputeMostFrequent",
     "AutoencoderConfig",  # Unsupervised imputer configs
-    "VAEConfig",
-    "NLPCAConfig",
-    "UBPConfig",
-    "MostFrequentConfig",  # Deterministic imputer configs
-    "RefAlleleConfig",
-    "RFConfig",  # Supervised imputer configs
     "HGBConfig",
+    "ImputeAutoencoder",  # Unsupervised imputer classes
+    "ImputeHistGradientBoosting",
+    "ImputeMostFrequent",
+    "ImputeNLPCA",
+    "ImputeRandomForest",  # Supervised imputer classes
+    "ImputeRefAllele",  # Deterministic imputer classes
+    "ImputeUBP",
+    "ImputeVAE",
+    "MostFrequentConfig",  # Deterministic imputer configs
+    "NLPCAConfig",
+    "RFConfig",  # Supervised imputer configs
+    "RefAlleleConfig",
+    "UBPConfig",
+    "VAEConfig",
     "__version__",
 ]

@@ -103,7 +103,7 @@ class ImputeNMF:
     def fit_predict(self, X):
         # imputation
         if self.verbose:
-            print(f"Doing MF imputation...")
+            print("Doing MF imputation...")
         R = X
         R = R.astype(int)
         R[R == self.missing] = -9
@@ -155,7 +155,7 @@ class ImputeNMF:
         tR = self.transform(R, nR)
 
         # get accuracy of re-constructing non-missing genotypes
-        accuracy = self.accuracy(X, tR)
+        self.accuracy(X, tR)
 
         # insert imputed values for missing genotypes
         fR = X
@@ -171,7 +171,6 @@ class ImputeNMF:
         n_col = len(original[0])
         tR = predicted
         for j in range(n_col):
-            observed = predicted[:, j]
             expected = original[:, j]
             options = np.unique(expected[expected != 0])
             for i in range(n_row):

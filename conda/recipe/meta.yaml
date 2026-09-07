@@ -38,7 +38,7 @@ requirements:
     - toytree
     - optuna >=4.6,<5.0
     - rich
-    - snpio >=1.6.16
+    - snpio >=1.7.3
     # GUI / server components
     - fastapi >=0.110
     - uvicorn-standard >=0.23

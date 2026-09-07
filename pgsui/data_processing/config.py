@@ -6,11 +6,12 @@ import logging
 import os
 import typing as t
 from dataclasses import MISSING, asdict, fields, is_dataclass
-from typing import Any, Dict, Literal, Type
+from typing import Any, Literal
 
 import yaml
 
 T = t.TypeVar("T")
+logger = logging.getLogger(__name__)
 
 
 """
@@ -117,7 +118,7 @@ def save_dataclass_yaml(dc: t.Any, path: str) -> None:
         f.write(dataclass_to_yaml(dc))
 
 
-def _merge_into_dataclass(inst: Any, payload: Dict[str, Any], path: str = "") -> Any:
+def _merge_into_dataclass(inst: Any, payload: dict[str, Any], path: str = "") -> Any:
     """Recursively merge a nested dict into a dataclass instance in place.
 
     This function updates the fields of the dataclass instance with values from the nested mapping. It raises errors for unknown keys and ensures that nested dataclasses are merged recursively.
@@ -154,10 +155,10 @@ def _merge_into_dataclass(inst: Any, payload: Dict[str, Any], path: str = "") ->
 
 def load_yaml_to_dataclass(
     path: str,
-    dc_type: Type[T],
+    dc_type: type[T],
     *,
     base: T | None = None,
-    overlays: Dict[str, Any] | None = None,
+    overlays: dict[str, Any] | None = None,
     yaml_preset_behavior: Literal["ignore", "error"] = "ignore",
 ) -> T:
     """Load a YAML file and merge into a dataclass instance with strict precedence.
@@ -188,7 +189,7 @@ def load_yaml_to_dataclass(
         ValueError: If `yaml_preset_behavior="error"` and YAML contains `preset`.
         KeyError: If any override path is invalid.
     """
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
     raw = _walk_env(raw)
 
@@ -201,7 +202,7 @@ def load_yaml_to_dataclass(
                 "The preset must be selected via the command line only."
             )
         # ignore (default): drop it and continue
-        logging.warning(
+        logger.warning(
             "Ignoring 'preset' in YAML (%r). Preset selection is CLI-only.",
             preset_in_yaml,
         )
@@ -243,7 +244,7 @@ def _is_dataclass_type(tp: t.Any) -> bool:
     """
     try:
         return isinstance(tp, type) and dataclasses.is_dataclass(tp)
-    except Exception:
+    except TypeError:
         return False
 
 
@@ -287,8 +288,8 @@ def _expected_field_type(dc_type: type, name: str) -> t.Any:
                 try:
                     resolved = t.get_type_hints(dc_type).get(name, hint)
                     hint = resolved
-                except Exception:
-                    pass
+                except NameError:
+                    logger.debug(f"Could not resolve type hint for {name}")
             return hint
     raise KeyError(f"Unknown config key: '{name}' on {dc_type.__name__}")
 
@@ -400,19 +401,18 @@ def _coerce_value(value: t.Any, tp: t.Any, where: str, *, current: t.Any = MISSI
     origin = t.get_origin(tp)
     args = t.get_args(tp)
 
-    if tp in {t.Any, object, None}:
-        if current is not MISSING and current is not None:
-            infer_type = type(current)
-            if isinstance(current, bool):
-                tp = bool
-            elif isinstance(current, int) and not isinstance(current, bool):
-                tp = int
-            elif isinstance(current, float):
-                tp = float
-            elif isinstance(current, str):
-                tp = str
-            else:
-                tp = infer_type
+    if tp in {t.Any, object, None} and current is not MISSING and current is not None:
+        infer_type = type(current)
+        if isinstance(current, bool):
+            tp = bool
+        elif isinstance(current, int) and not isinstance(current, bool):
+            tp = int
+        elif isinstance(current, float):
+            tp = float
+        elif isinstance(current, str):
+            tp = str
+        else:
+            tp = infer_type
 
     # Literal[...] → restrict values
     if origin is t.Literal:
@@ -444,12 +444,12 @@ def _coerce_value(value: t.Any, tp: t.Any, where: str, *, current: t.Any = MISSI
                 return current if current is not MISSING else value
             try:
                 return tp(stripped)
-            except Exception:
+            except (TypeError, ValueError):
                 return value
 
         try:
             return tp(value)
-        except Exception:
+        except (TypeError, ValueError):
             return value
 
     # Dataclasses or other complex types → trust caller
@@ -525,7 +525,7 @@ def apply_dot_overrides(
             # Materialize or up-cast if needed
             child = getattr(node, seg, MISSING)
             if child is MISSING:
-                raise KeyError(f"Unknown config key: '{'.'.join(parts[:idx+1])}'")
+                raise KeyError(f"Unknown config key: '{'.'.join(parts[: idx + 1])}'")
 
             if isinstance(child, dict) and _is_dataclass_type(exp_core):
                 # Up-cast dict → dataclass of the expected type
