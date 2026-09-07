@@ -4,7 +4,7 @@ An overview of changes to **PG-SUI** by release. This mirrors the Sphinx/RST cha
 
 ---
 
-## v1.8.3 - 2026-09-06
+## v1.8.3 - 2026-09-07
 
 ### Documentation Infrastructure - v1.8.3
 
