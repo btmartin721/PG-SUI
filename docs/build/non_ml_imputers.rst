@@ -8,7 +8,8 @@ The deterministic imputers provide fast, interpretable baselines that mirror the
 **fit/transform** contract used across PG-SUI:
 
 - You **instantiate** with a `GenotypeData` and a **dataclass config** (or YAML path).
-- Call :py:meth:`fit()` with **no arguments** to set up evaluation (TRAIN/TEST split with simulated masking).
+- Call :py:meth:`fit()` with **no arguments** to set up evaluation using the
+  same seeded TRAIN/VALIDATION/TEST split and simulated mask as the neural models.
 - Call :py:meth:`transform()` with **no arguments** to impute and write plots/metrics.
 
 Both imputers operate on SNPio's 0/1/2 working encoding (with ``-1`` or ``-9`` as missing),
@@ -25,9 +26,14 @@ What's included
 Shared behavior & outputs
 -------------------------
 
-- **Evaluation protocol:** single TRAIN/TEST split by samples; on TEST rows, either a
-  simulated-missingness mask (``sim.simulate_missing=True``) or all originally observed
-  cells (when disabled) are used for scoring.
+- **Evaluation protocol:** the fraction in ``train.validation_split`` is held
+  out and divided equally between VALIDATION and TEST rows. All model families
+  use the same two seeded scikit-learn splits. On TEST rows, either a
+  simulated-missingness mask (``sim.simulate_missing=True``) or all originally
+  observed cells (when disabled) are used for scoring.
+- **Mask provenance:** ``evaluation_mask_test.npz`` records the exact test-row
+  indices and evaluated cells alongside each model's metrics, allowing strict
+  post-hoc coordinate comparisons.
 - **Metrics & figures:** macro F1/PR/accuracy at zygosity level (REF/HET/ALT, with
   haploid folding), and IUPAC-10 classification plus confusion matrices; genotype
   distribution plots pre/post imputation.
@@ -85,8 +91,8 @@ Minimal examples:
 
    io:
      prefix: "mf_yaml"
-   split:
-     test_size: 0.2
+   train:
+     validation_split: 0.2
    algo:
      by_populations: true
      missing: -1
@@ -102,8 +108,8 @@ Minimal examples:
 
    io:
      prefix: "ref_yaml"
-   split:
-     test_size: 0.25
+   train:
+     validation_split: 0.2
    algo:
      missing: -1
    plot:
@@ -136,7 +142,13 @@ These deterministic models follow the same CLI precedence model as the rest of P
      --preset fast \
      --set io.prefix=ref_cli
 
-Even deterministic runs honour ``--sim-strategy``/``--sim-prop`` and ``--disable-simulate-missing``; you can also set ``sim.simulate_missing=False`` via YAML or ``--set`` for cross-family comparisons.
+Even deterministic runs honour ``--sim-strategy``/``--sim-prop`` and
+``--disable-simulate-missing``; you can also set
+``sim.simulate_missing=False`` via YAML or ``--set`` for cross-family
+comparisons. ``split.test_indices`` remains an explicit test-row override.
+The older ``split.test_size`` field is retained for configuration-file
+compatibility but no longer controls canonical evaluation; use
+``train.validation_split``.
 
 Configuration dataclasses
 -------------------------

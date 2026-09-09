@@ -24,10 +24,10 @@ copyright = "2021, Bradley T. Martin and Tyler K. Chafin"
 author = "Bradley T. Martin and Tyler K. Chafin"
 
 # The short X.Y version
-version = "1.8.3"
+version = "1.8.4"
 
 # The full version, including alpha/beta/rc tags
-release = "v1.8.3"
+release = "v1.8.4"
 
 # -- General configuration ---------------------------------------------------
 
@@ -97,7 +97,7 @@ html_context = {
     "github_repo": "PG-SUI",  # GitHub repo
     "github_version": "master",  # Branch to use
     "conf_py_path": "/docs/build/",  # Path to docs in the repo
-    "current_version": "v1.8.3",  # Project version
+    "current_version": "v1.8.4",  # Project version
     "display_version": True,  # Display version number in the theme
     "latest_version": "master",  # Define the latest stable version
     "display_edit_on_github": True,  # Add 'Edit on GitHub' link

@@ -23,7 +23,6 @@ from sklearn.metrics import (
     jaccard_score,
     matthews_corrcoef,
 )
-from sklearn.model_selection import train_test_split
 from snpio.utils.misc import validate_input_type
 
 try:
@@ -31,6 +30,7 @@ try:
 except ImportError:
     SNPioMultiQC = None
 
+from pgsui.data_processing.splitting import train_validation_test_indices
 from pgsui.data_processing.transformers import SimMissingTransformer
 from pgsui.impute.unsupervised.nn_scorers import Scorer
 from pgsui.utils.classification_viz import ClassificationReportVisualizer
@@ -41,6 +41,10 @@ from pgsui.utils.logging_utils import (
     log_runtime,
     log_section,
     summarize_optuna_study,
+)
+from pgsui.utils.optuna_utils import (
+    representative_best_trial,
+    trial_objective_values,
 )
 from pgsui.utils.plotting import Plotting
 from pgsui.utils.pretty_metrics import PrettyMetrics
@@ -342,16 +346,16 @@ class BaseNNImputer:
         )
 
         try:
-            best_metric = study.best_value
-            best_params = study.best_params
-        except (AttributeError, IndexError):
-            try:
-                best_metric = study.best_trials[0].values
-                best_params = study.best_trials[0].params
-            except (AttributeError, IndexError) as exc:
-                msg = f"[{self.model_name}] Tuning failed: No successful trials completed. Try enabling debug mode for more details."
-                self.logger.error(msg)
-                raise RuntimeError(msg) from exc
+            best_trial = representative_best_trial(study)
+            best_values = trial_objective_values(best_trial)
+            best_params = best_trial.params
+        except RuntimeError as exc:
+            msg = f"[{self.model_name}] Tuning failed: No successful trials completed. Try enabling debug mode for more details."
+            self.logger.error(msg)
+            raise RuntimeError(msg) from exc
+
+        best_metric: float | tuple[float, ...]
+        best_metric = best_values if len(best_values) > 1 else best_values[0]
 
         if isinstance(best_metric, (list, tuple)) and isinstance(
             self.tune_metric, (list, tuple)
@@ -376,9 +380,9 @@ class BaseNNImputer:
             )
 
         best_trial_label = (
-            getattr(study.best_trial, "number", "n/a")
+            best_trial.number
             if len(study.directions) == 1
-            else "Pareto front"
+            else f"{best_trial.number} (representative Pareto trial)"
         )
 
         log_section(self.logger, "Tuning Summary")
@@ -2237,37 +2241,13 @@ class BaseNNImputer:
             ValueError: If there are not enough samples for splitting.
             ValueError: If validation_split is not in (0.0, 1.0).
         """
-        n_samples = X.shape[0]
-
-        if n_samples < 3:
-            msg = f"Not enough samples ({n_samples}) for train/val/test split."
-            self.logger.error(msg)
-            raise ValueError(msg)
-
-        if not (0.0 < float(self.validation_split) < 1.0):
-            msg = f"validation_split must be in (0.0, 1.0), but got {self.validation_split}."
-            self.logger.error(msg)
-            raise ValueError(msg)
-
-        # Train/Val split
-        indices = np.arange(n_samples)
-        train_idx, val_test_idx = train_test_split(
-            indices,
-            test_size=self.validation_split,
-            random_state=self.seed,
-        )
-
-        if not val_test_idx.size >= 4:
-            msg = f"Not enough samples ({val_test_idx.size}) for validation/test split."
-            self.logger.error(msg)
-            raise ValueError(msg)
-
-        # Split val and test equally
-        val_idx, test_idx = train_test_split(
-            val_test_idx, test_size=0.5, random_state=self.seed
-        )
-
-        return train_idx, val_idx, test_idx
+        try:
+            return train_validation_test_indices(
+                X.shape[0], self.validation_split, self.seed
+            )
+        except ValueError as exc:
+            self.logger.error(str(exc))
+            raise
 
     def _get_data_loaders(
         self,

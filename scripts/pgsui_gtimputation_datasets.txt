@@ -1,0 +1,11 @@
+# PG-SUI manuscript datasets included in the GTImputation comparison.
+2SP-QSQI
+hr-HY20
+hr-QI96
+hr-QS07
+mr-HY
+mr-Mice1940
+mr-Mice98
+mr-QI
+mr-QS
+mr-QS98

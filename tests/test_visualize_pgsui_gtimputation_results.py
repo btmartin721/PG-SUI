@@ -184,6 +184,119 @@ def test_validate_nonmissing_truth_rejects_missing_truth() -> None:
         viz.validate_nonmissing_truth(np.array([0, -1, 2]), "test context")
 
 
+def test_canonical_mask_rejects_unmasked_evaluation_coordinate(
+    tmp_path: Path,
+) -> None:
+    masked_vcf_path = tmp_path / "masked.vcf"
+    write_vcf(
+        masked_vcf_path,
+        [("chr1", "1", "A", "C", "./.", "0/1")],
+    )
+    mask = pd.DataFrame(
+        {
+            "sample_id": ["S1", "S2"],
+            "locus_index": [0, 0],
+            "chrom": ["chr1", "chr1"],
+            "pos": ["1", "1"],
+            "ref": ["A", "A"],
+            "alt": ["C", "C"],
+        }
+    )
+    sim_row = pd.Series(
+        {
+            "dataset_id": "ds1",
+            "strategy": "random",
+            "masked_vcf": str(masked_vcf_path),
+            "evaluation_mask_tsv": str(tmp_path / "evaluation.tsv"),
+        }
+    )
+
+    with pytest.raises(ValueError, match="1 unmasked evaluation coordinates"):
+        viz.mask_actual_missing_sites(
+            mask,
+            sim_row,
+            sim_manifest_path=tmp_path / "manifest.csv",
+            masked_cache={},
+        )
+
+
+def test_scoring_vectors_use_pgsui_class_mapping(tmp_path: Path) -> None:
+    truth_path = tmp_path / "truth.vcf"
+    prediction_path = tmp_path / "prediction.vcf"
+    write_vcf(
+        truth_path,
+        [
+            ("chr1", "1", "A", "C", "0/0", "0/1"),
+            ("chr1", "2", "A", "C", "1/1", "0/0"),
+        ],
+    )
+    write_vcf(
+        prediction_path,
+        [
+            ("chr1", "1", "A", "C", "1/1", "0/1"),
+            ("chr1", "2", "A", "C", "0/0", "1/1"),
+        ],
+    )
+    mask = pd.DataFrame(
+        {
+            "sample_id": ["S1", "S2", "S1", "S2"],
+            "locus_index": [0, 0, 1, 1],
+            "chrom": ["chr1"] * 4,
+            "pos": ["1", "1", "2", "2"],
+            "ref": ["A"] * 4,
+            "alt": ["C"] * 4,
+            "pgsui_truth_012": [2, 1, 0, 2],
+            "pgsui_class_for_vcf_ref": [2] * 4,
+            "pgsui_class_for_vcf_het": [1] * 4,
+            "pgsui_class_for_vcf_alt": [0] * 4,
+        }
+    )
+
+    y_true, y_pred, encoding = viz.scoring_vectors_from_mask(
+        mask,
+        viz.load_vcf_matrix(truth_path),
+        viz.load_vcf_matrix(prediction_path),
+    )
+
+    assert encoding == "pgsui_012"
+    assert y_true.tolist() == [2, 1, 0, 2]
+    assert y_pred.tolist() == [0, 1, 2, 0]
+
+
+def test_canonical_support_audit_requires_class_match() -> None:
+    pgsui = pd.DataFrame(
+        {
+            "dataset_id": ["ds1"],
+            "strategy": ["random"],
+            "model": ["ImputeUBP"],
+            "model_label": ["UBP"],
+            "support": [10],
+            "ref_support": [5],
+            "het_support": [3],
+            "alt_support": [2],
+        }
+    )
+    gti = pd.DataFrame(
+        {
+            "dataset_id": ["ds1"],
+            "strategy": ["random"],
+            "model_label": ["SOM (GTImputation)"],
+            "class_encoding": ["pgsui_012"],
+            "support": [10],
+            "ref_support": [5],
+            "het_support": [3],
+            "alt_support": [2],
+        }
+    )
+
+    audit = viz.build_evaluation_support_audit(pgsui, gti)
+    assert bool(audit["support_match"].all())
+
+    gti.loc[0, "alt_support"] = 3
+    with pytest.raises(ValueError, match="class supports differ"):
+        viz.build_evaluation_support_audit(pgsui, gti)
+
+
 def _toy_combined() -> pd.DataFrame:
     """Two datasets x one strategy, covering all four model families."""
     rows = [

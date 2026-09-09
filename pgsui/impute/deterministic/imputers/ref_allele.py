@@ -25,8 +25,10 @@ from snpio.utils.misc import validate_input_type
 
 from pgsui.data_processing.config import apply_dot_overrides, load_yaml_to_dataclass
 from pgsui.data_processing.containers import RefAlleleConfig
+from pgsui.data_processing.splitting import train_validation_test_indices
 from pgsui.data_processing.transformers import SimMissingTransformer
 from pgsui.utils.classification_viz import ClassificationReportVisualizer
+from pgsui.utils.evaluation_artifacts import save_test_evaluation_mask
 from pgsui.utils.logging_utils import configure_logger
 from pgsui.utils.plotting import Plotting
 from pgsui.utils.pretty_metrics import PrettyMetrics
@@ -183,6 +185,13 @@ class ImputeRefAllele:
 
         # Split & algo knobs
         self.test_size = float(cfg.split.test_size)
+        self.validation_split = float(cfg.train.validation_split)
+        self.seed = cfg.io.seed
+        if self.test_size != 0.2:
+            self.logger.warning(
+                "split.test_size is deprecated and ignored; use "
+                "train.validation_split for the shared three-way split."
+            )
         self.test_indices = (
             None
             if cfg.split.test_indices is None
@@ -194,6 +203,7 @@ class ImputeRefAllele:
         self.is_fit_: bool = False
         self.sim_mask_: np.ndarray | None = None
         self.train_idx_: np.ndarray | None = None
+        self.val_idx_: np.ndarray | None = None
         self.test_idx_: np.ndarray | None = None
         self.X_train_df_: pd.DataFrame | None = None
         self.ground_truth012_: np.ndarray | None = None
@@ -241,7 +251,9 @@ class ImputeRefAllele:
             ImputeRefAllele: The fitted imputer instance.
         """
         # Train/test split indices
-        self.train_idx_, self.test_idx_ = self._make_train_test_split()
+        self.train_idx_, self.val_idx_, self.test_idx_ = (
+            self._make_train_validation_test_split()
+        )
         self.ground_truth012_ = self.X012_.copy()
 
         # Use NaN for missing inside a DataFrame to leverage fillna
@@ -262,6 +274,8 @@ class ImputeRefAllele:
             X_for_sim[X_for_sim < 0] = -9.0
 
             # Simulate missing on the full matrix; we only use the mask.
+            sim_kwargs = dict(self.sim_kwargs or {})
+            sim_kwargs.setdefault("seed", self.seed)
             tr = SimMissingTransformer(
                 genotype_data=self.genotype_data,
                 tree_parser=self.tree_parser,
@@ -270,7 +284,7 @@ class ImputeRefAllele:
                 missing_val=-9,
                 mask_missing=True,
                 verbose=self.verbose,
-                **(self.sim_kwargs or {}),
+                **sim_kwargs,
             )
             tr.fit(X_for_sim)
 
@@ -305,6 +319,16 @@ class ImputeRefAllele:
 
         # Store state
         self.sim_mask_ = sim_mask
+        save_test_evaluation_mask(
+            self.metrics_dir,
+            test_indices=self.test_idx_,
+            evaluation_mask=sim_mask,
+            n_samples=self.ground_truth012_.shape[0],
+            n_loci=self.ground_truth012_.shape[1],
+            seed=self.seed,
+            strategy=self.sim_strategy,
+            validation_split=self.validation_split,
+        )
         self.X_train_df_ = df_sim
         self.is_fit_ = True
 
@@ -669,6 +693,26 @@ class ImputeRefAllele:
         Raises:
             IndexError: If provided test_indices are out of bounds.
         """
+        train_idx, val_idx, test_idx = self._make_train_validation_test_split()
+        return np.concatenate((train_idx, val_idx)), test_idx
+
+    def _make_train_validation_test_split(
+        self,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Create canonical train/validation/test indices for evaluation.
+
+        Explicit ``split.test_indices`` values retain their historical
+        behavior: every other row is available for fitting and the validation
+        set is empty. Otherwise, the exact seeded split protocol used by the
+        neural imputers is applied.
+
+        Returns:
+            Train, validation, and test row-index arrays.
+
+        Raises:
+            IndexError: If provided test indices are out of bounds.
+            ValueError: If a canonical three-way split cannot be constructed.
+        """
         n = self.X012_.shape[0]
         all_idx = np.arange(n, dtype=int)
 
@@ -681,18 +725,13 @@ class ImputeRefAllele:
                 raise IndexError(msg)
 
             train_idx = np.setdiff1d(all_idx, test_idx, assume_unique=False)
-            return train_idx, test_idx
+            return train_idx, np.array([], dtype=int), test_idx
 
-        k = round(self.test_size * n)
-
-        test_idx = (
-            self.rng.choice(n, size=k, replace=False)
-            if k > 0
-            else np.array([], dtype=int)
+        return train_validation_test_indices(
+            n,
+            validation_split=self.validation_split,
+            seed=self.seed,
         )
-
-        train_idx = np.setdiff1d(all_idx, test_idx, assume_unique=False)
-        return train_idx, test_idx
 
     def _save_report(self, report_dict: dict[str, Any], suffix: str) -> None:
         """Save classification report dictionary as a JSON file.

@@ -896,7 +896,10 @@ class DeterministicSplitConfig:
     """Evaluation split configuration shared by deterministic imputers.
 
     Attributes:
-        test_size (float): Proportion of data to use as the test set. Default is 0.2.
+        test_size (float): Deprecated legacy train/test fraction retained for
+            configuration compatibility. Canonical evaluation uses
+            ``train.validation_split`` and divides the reserved fraction
+            equally between validation and test rows.
         test_indices (Optional[Sequence[int]]): Specific indices to use as the test set. Default is None.
     """
 
@@ -908,9 +911,9 @@ class DeterministicSplitConfig:
 class MostFrequentConfig:
     """Top-level configuration for ImputeMostFrequent.
 
-    Deterministic imputers primarily use ``io``, ``plot``, ``split``, ``algo``,
-    and ``sim``. The ``train`` and ``tune`` sections are retained for schema
-    parity with NN models but are not currently used by ImputeMostFrequent.
+    Deterministic imputers use ``train.validation_split`` so their test rows
+    exactly match neural-model evaluation. The ``tune`` section is retained
+    for schema parity but is not used by ImputeMostFrequent.
 
     Attributes:
         io (IOConfig): I/O configuration.
@@ -991,9 +994,9 @@ class RefAlleleAlgoConfig:
 class RefAlleleConfig:
     """Top-level configuration for ImputeRefAllele.
 
-    Deterministic imputers primarily use ``io``, ``plot``, ``split``, ``algo``,
-    and ``sim``. The ``train`` and ``tune`` sections are retained for schema
-    parity with NN models but are not currently used by ImputeRefAllele.
+    Deterministic imputers use ``train.validation_split`` so their test rows
+    exactly match neural-model evaluation. The ``tune`` section is retained
+    for schema parity but is not used by ImputeRefAllele.
 
     Attributes:
         io (IOConfig): I/O configuration.

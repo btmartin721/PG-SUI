@@ -35,6 +35,10 @@ except ImportError:
 
 from pgsui.utils import misc
 from pgsui.utils.logging_utils import configure_logger
+from pgsui.utils.optuna_utils import (
+    representative_best_trial,
+    trial_objective_values,
+)
 
 # Quiet Matplotlib/fontTools INFO logging when saving PDF/SVG
 for name in (
@@ -1064,18 +1068,28 @@ class Plotting:
             )
             return
 
-        if df_trials.empty or "value" not in df_trials:
+        value_columns = [
+            column
+            for column in df_trials.columns
+            if column == "value" or column.startswith("values_")
+        ]
+        if df_trials.empty or not value_columns:
             return
 
-        history_data: dict[str, dict[int, float]] = {
-            model_name: {
-                int(row["number"]): float(row["value"])
+        history_data: dict[str, dict[int, float]] = {}
+        for objective_index, value_column in enumerate(value_columns):
+            series_name = (
+                model_name
+                if len(value_columns) == 1
+                else f"{model_name} objective {objective_index + 1}"
+            )
+            history_data[series_name] = {
+                int(row["number"]): float(row[value_column])
                 for _, row in df_trials.iterrows()
-                if row["value"] is not None
+                if pd.notna(row[value_column])
             }
-        }
 
-        if not history_data[model_name]:
+        if not any(history_data.values()):
             return
 
         if SNPioMultiQC is None:
@@ -1093,9 +1107,13 @@ class Plotting:
 
         # best-params table
         try:
-            best_value = study.best_value
-            best_params = study.best_params
-        except ValueError:
+            best_trial = representative_best_trial(study)
+            best_values = trial_objective_values(best_trial)
+            best_params = best_trial.params
+        except RuntimeError:
+            self.logger.warning(
+                "Could not extract best trial for MultiQC best-params table."
+            )
             return
 
         if best_params:
@@ -1104,8 +1122,14 @@ class Plotting:
             # a float value after creation.
             best_param_data: dict[str, float | int | str] = {
                 **{str(k): cast(float | int | str, v) for k, v in best_params.items()},
-                "objective": float(best_value),
             }
+            for objective_index, objective_value in enumerate(best_values):
+                objective_name = (
+                    "objective"
+                    if len(best_values) == 1
+                    else f"objective_{objective_index + 1}"
+                )
+                best_param_data[objective_name] = objective_value
 
             series = pd.Series(best_param_data, name="Best Value")
 

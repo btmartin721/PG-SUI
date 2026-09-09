@@ -1,17 +1,30 @@
-# PG-SUI v1.8.3
+# PG-SUI v1.8.4
 
-PG-SUI v1.8.3 is a documentation-infrastructure patch release. Package APIs,
-scientific behavior, and the intentional v1.8.2 dependency updates are
-unchanged.
+PG-SUI v1.8.4 is a scientific-correctness and reproducibility patch release.
 
-## Documentation infrastructure
+## Scientific correctness
 
-- Migrated Read the Docs builds from the retired Ubuntu 20.04 image to Ubuntu
-  24.04.
-- Updated the Read the Docs Python runtime from 3.11 to 3.12 to match the
-  current development target.
-- Published a patch tag so both the `latest` and tag-backed `stable`
-  documentation channels build on a supported environment.
+- All four neural models and the `ImputeMostFrequent` and `ImputeRefAllele`
+  baselines now use the same seeded train/validation/test sample split.
+- Deterministic simulated-missingness generation now receives the configured
+  seed explicitly, ensuring that every model evaluates the same masked cells.
+- Every model writes an `evaluation_mask_test.npz` artifact containing exact
+  test rows and evaluated coordinates for strict post-hoc validation.
 
-The scientific, engineering, dependency, and distribution changes remain
-documented in the v1.8.2 changelog immediately below this patch release.
+## Multi-objective tuning
+
+- Corrected Optuna result extraction for studies where scalar `best_value` and
+  `best_trial` accessors are unavailable.
+- Multi-objective studies select a reproducible representative Pareto trial by
+  the first configured objective and report every objective value.
+
+## Reproducibility
+
+- Added a manifest-driven 50-task GPU/SLURM workflow, strict coordinate and
+  support auditing, alternate-genotype summaries, reviewer-bundle generation,
+  and AWS PCS transfer instructions for the PG-SUI/GTImputation benchmark.
+
+## Distribution
+
+- Includes the post-v1.8.3 ARM64 Docker correction that disables hanging Conda
+  channel-notice retrieval under QEMU and supports exact-version republishing.

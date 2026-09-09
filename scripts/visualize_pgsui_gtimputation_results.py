@@ -16,6 +16,7 @@ import math
 import os
 import re
 import sys
+import tempfile
 import warnings
 from dataclasses import dataclass
 from datetime import datetime
@@ -24,8 +25,12 @@ from typing import Mapping, Sequence, cast
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
-os.environ.setdefault("MPLCONFIGDIR", str(SCRIPT_DIR / ".mplconfig"))
-(SCRIPT_DIR / ".mplconfig").mkdir(parents=True, exist_ok=True)
+MPLCONFIG_DIR = Path(
+    os.environ.setdefault(
+        "MPLCONFIGDIR", str(Path(tempfile.gettempdir()) / "pgsui-mpl-cache")
+    )
+).expanduser()
+MPLCONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
 import matplotlib as mpl
 
@@ -220,6 +225,14 @@ PGSUI_BACKEND_LABELS = {
 
 MISSING_GT = {"", ".", "./.", ".|.", "-", "?", "NA", "NAN", "NONE"}
 
+MASK_COORD_COLUMNS = ("sample_id", "locus_index", "chrom", "pos", "ref", "alt")
+
+PGSUI_CLASS_MAPPING_COLUMNS = {
+    0: "pgsui_class_for_vcf_ref",
+    1: "pgsui_class_for_vcf_het",
+    2: "pgsui_class_for_vcf_alt",
+}
+
 GTI_METRIC_COLUMNS = (
     "dataset_id",
     "strategy",
@@ -245,6 +258,7 @@ GTI_METRIC_COLUMNS = (
     "input_path",
     "mask_tsv",
     "truth_vcf",
+    "class_encoding",
     "masked_input_vcf",
     "mask_rows",
     "scored_masked_sites",
@@ -292,6 +306,7 @@ GTI_CLASS_REPORT_COLUMNS = (
     "input_path",
     "mask_tsv",
     "truth_vcf",
+    "class_encoding",
     "masked_input_vcf",
     "mask_rows",
     "scored_masked_sites",
@@ -332,6 +347,7 @@ PGSUI_METRIC_COLUMNS = (
     "input_path",
     "mask_tsv",
     "truth_vcf",
+    "class_encoding",
     "masked_input_vcf",
     "mask_rows",
     "scored_masked_sites",
@@ -380,6 +396,7 @@ PGSUI_CLASS_REPORT_COLUMNS = (
     "input_path",
     "mask_tsv",
     "truth_vcf",
+    "class_encoding",
     "masked_input_vcf",
     "mask_rows",
     "scored_masked_sites",
@@ -422,30 +439,28 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--pgsui-dir",
         type=Path,
-        default=Path("/Users/btm002/PG-SUI/results-pgsui"),
+        default=PROJECT_ROOT / "canonical_benchmark" / "results-pgsui",
         help="Root containing PG-SUI *_output directories.",
     )
     parser.add_argument(
         "--gti-dir",
         type=Path,
-        default=Path("/Users/btm002/PG-SUI/results-gti"),
+        default=PROJECT_ROOT / "canonical_benchmark" / "results-gti",
         help="Root containing GTImputation result bundle.",
     )
     parser.add_argument(
         "--sim-manifest",
         type=Path,
         default=PROJECT_ROOT
-        / "gtimputation-results"
-        / "zygosity_missingness_simulations"
-        / "manifest.csv",
+        / "canonical_benchmark"
+        / "manifests"
+        / "simulation_manifest.csv",
         help="Manifest produced by simulate_gtimputation_missingness.py.",
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=PROJECT_ROOT
-        / "gtimputation-results"
-        / "pgsui_gtimputation_current_comparison",
+        default=PROJECT_ROOT / "canonical_benchmark" / "comparison_results",
     )
     parser.add_argument(
         "--report-type",
@@ -1129,7 +1144,6 @@ def load_gti_manifest(
         "method",
         "dataset_name",
         "simulation_strategy",
-        "imputation_log_status",
         "copied_vcf",
         "candidate_vcf_filename",
     }
@@ -1144,10 +1158,12 @@ def load_gti_manifest(
     manifest["dataset_id"] = manifest["dataset_name"].astype(str)
     manifest["strategy"] = manifest["simulation_strategy"].map(canonical_strategy)
     manifest = manifest.loc[
-        manifest["method"].isin(methods)
-        & manifest["strategy"].isin(strategies)
-        & manifest["imputation_log_status"].astype(str).str.upper().eq("OK")
+        manifest["method"].isin(methods) & manifest["strategy"].isin(strategies)
     ].copy()
+    if "imputation_log_status" in manifest.columns:
+        manifest = manifest.loc[
+            manifest["imputation_log_status"].astype(str).str.upper().eq("OK")
+        ].copy()
     if "gtdb_log_status" in manifest.columns:
         som_has_ok_gtdb = (
             manifest["gtdb_log_status"].fillna("OK").astype(str).str.upper().eq("OK")
@@ -1253,18 +1269,28 @@ def load_vcf_matrix(path: Path) -> VCFMatrix:
     )
 
 
-def resolve_manifest_path(raw_path, fallback: Path | None = None) -> Path:
+def resolve_manifest_path(
+    raw_path,
+    fallback: Path | None = None,
+    *,
+    base_dir: Path | None = None,
+) -> Path:
+    """Resolve an absolute or manifest-relative artifact path."""
     path_text = "" if pd.isna(raw_path) else str(raw_path)
     path = Path(path_text).expanduser()
     if path.exists():
         return path.resolve()
+    if base_dir is not None and path_text:
+        relative_path = (base_dir / path).resolve()
+        if relative_path.exists():
+            return relative_path
     if fallback is not None and fallback.exists():
         return fallback.resolve()
     return path
 
 
 def resolve_gti_vcf(row: pd.Series, gti_dir: Path) -> Path:
-    copied = resolve_manifest_path(row.get("copied_vcf", ""))
+    copied = resolve_manifest_path(row.get("copied_vcf", ""), base_dir=gti_dir)
     if copied.exists():
         return copied
     candidate = str(row.get("candidate_vcf_filename", ""))
@@ -1277,7 +1303,9 @@ def resolve_gti_vcf(row: pd.Series, gti_dir: Path) -> Path:
 
 
 def resolve_truth_vcf(sim_row: pd.Series, sim_manifest_path: Path) -> Path:
-    input_vcf = resolve_manifest_path(sim_row.get("input_vcf", ""))
+    input_vcf = resolve_manifest_path(
+        sim_row.get("input_vcf", ""), base_dir=sim_manifest_path.parent
+    )
     if input_vcf.exists():
         return input_vcf
 
@@ -1298,7 +1326,10 @@ def resolve_truth_vcf(sim_row: pd.Series, sim_manifest_path: Path) -> Path:
 
 
 def resolve_mask_tsv(sim_row: pd.Series, sim_manifest_path: Path) -> Path:
-    mask = resolve_manifest_path(sim_row.get("mask_tsv", ""))
+    raw_mask = sim_row.get("evaluation_mask_tsv", "")
+    if pd.isna(raw_mask) or not str(raw_mask).strip():
+        raw_mask = sim_row.get("mask_tsv", sim_row.get("full_mask_tsv", ""))
+    mask = resolve_manifest_path(raw_mask, base_dir=sim_manifest_path.parent)
     if mask.exists():
         return mask
     dataset_id = str(sim_row["dataset_id"])
@@ -1316,7 +1347,8 @@ def resolve_mask_tsv(sim_row: pd.Series, sim_manifest_path: Path) -> Path:
 
 
 def resolve_masked_input_vcf(sim_row: pd.Series, sim_manifest_path: Path) -> Path:
-    output_vcf = resolve_manifest_path(sim_row.get("output_vcf", ""))
+    raw_vcf = sim_row.get("masked_vcf", sim_row.get("output_vcf", ""))
+    output_vcf = resolve_manifest_path(raw_vcf, base_dir=sim_manifest_path.parent)
     if output_vcf.exists():
         return output_vcf
     dataset_id = str(sim_row["dataset_id"])
@@ -1338,12 +1370,25 @@ def load_sim_manifest(path: Path, strategies: Sequence[str]) -> pd.DataFrame:
     if not path.exists():
         raise FileNotFoundError(f"Simulation manifest not found: {path}")
     manifest = pd.read_csv(path)
-    required = {"dataset_id", "strategy", "input_vcf", "output_vcf", "mask_tsv"}
+    required = {"dataset_id", "strategy", "input_vcf"}
     missing = required - set(manifest.columns)
     if missing:
         raise ValueError(
             f"Simulation manifest missing required columns: {sorted(missing)}"
         )
+    has_mask = bool(
+        {"evaluation_mask_tsv", "mask_tsv", "full_mask_tsv"}.intersection(
+            manifest.columns
+        )
+    )
+    has_masked_vcf = bool({"masked_vcf", "output_vcf"}.intersection(manifest.columns))
+    if not has_mask:
+        raise ValueError(
+            "Simulation manifest must contain evaluation_mask_tsv, mask_tsv, "
+            "or full_mask_tsv"
+        )
+    if not has_masked_vcf:
+        raise ValueError("Simulation manifest must contain masked_vcf or output_vcf")
     manifest = manifest.copy()
     manifest["strategy"] = manifest["strategy"].map(canonical_strategy)
     return manifest.loc[manifest["strategy"].isin(strategies)].copy()
@@ -1425,13 +1470,33 @@ def mask_actual_missing_sites(
     sim_manifest_path: Path,
     masked_cache: dict[Path, VCFMatrix],
 ) -> tuple[pd.DataFrame, dict[str, object]]:
+    """Validate canonical masks or filter legacy masks to actual missing sites.
+
+    Canonical manifests provide ``evaluation_mask_tsv`` and are strict: every
+    listed coordinate must be missing in the GTImputation input VCF.  Legacy
+    manifests retain the historical filtering behavior for backward
+    compatibility.
+    """
     masked_input_path = resolve_masked_input_vcf(sim_row, sim_manifest_path)
     if masked_input_path not in masked_cache:
         masked_cache[masked_input_path] = load_vcf_matrix(masked_input_path)
     masked_vcf = masked_cache[masked_input_path]
     mask_loci, mask_samples = vcf_indices_from_mask(mask, masked_vcf)
     actual_missing = masked_vcf.zygosity[mask_loci, mask_samples] < 0
-    filtered_mask = mask.loc[actual_missing].reset_index(drop=True)
+    raw_evaluation_path = sim_row.get("evaluation_mask_tsv", "")
+    strict = not pd.isna(raw_evaluation_path) and bool(str(raw_evaluation_path).strip())
+    dropped = int(np.count_nonzero(~actual_missing))
+    if strict and dropped:
+        raise ValueError(
+            f"Canonical masked VCF has {dropped} unmasked evaluation coordinates "
+            f"for {sim_row['dataset_id']}/{sim_row['strategy']}: "
+            f"{masked_input_path}"
+        )
+    filtered_mask = (
+        mask.reset_index(drop=True)
+        if strict
+        else mask.loc[actual_missing].reset_index(drop=True)
+    )
     if filtered_mask.empty:
         raise ValueError(
             f"No actually missing genotypes found in masked input VCF for "
@@ -1441,9 +1506,73 @@ def mask_actual_missing_sites(
         "masked_input_vcf": str(masked_input_path),
         "mask_rows": int(len(mask)),
         "scored_masked_sites": int(len(filtered_mask)),
-        "dropped_unmasked_mask_rows": int(len(mask) - len(filtered_mask)),
+        "dropped_unmasked_mask_rows": dropped,
     }
     return filtered_mask, stats
+
+
+def load_mask_table(path: Path) -> pd.DataFrame:
+    """Load a coordinate mask while retaining optional PG-SUI class metadata."""
+    mask = pd.read_csv(path, sep="\t", dtype=str)
+    missing = set(MASK_COORD_COLUMNS).difference(mask.columns)
+    if missing:
+        raise ValueError(f"Mask TSV {path} is missing columns: {sorted(missing)}")
+    mask = mask.copy()
+    mask["sample_id"] = mask["sample_id"].astype(str)
+    mask["locus_index"] = pd.to_numeric(mask["locus_index"], errors="raise").astype(int)
+    for column in ("chrom", "pos", "ref", "alt"):
+        mask[column] = mask[column].astype(str)
+    return mask
+
+
+def scoring_vectors_from_mask(
+    mask: pd.DataFrame,
+    truth_vcf: VCFMatrix,
+    predicted_vcf: VCFMatrix,
+) -> tuple[np.ndarray, np.ndarray, str]:
+    """Extract matched truth/prediction vectors using one explicit class encoding."""
+    truth_loci, truth_samples = vcf_indices_from_mask(mask, truth_vcf)
+    pred_loci, pred_samples = vcf_indices_from_mask(mask, predicted_vcf)
+    raw_truth = truth_vcf.zygosity[truth_loci, truth_samples]
+    raw_prediction = predicted_vcf.zygosity[pred_loci, pred_samples]
+
+    encoding_columns = (
+        "pgsui_truth_012",
+        *PGSUI_CLASS_MAPPING_COLUMNS.values(),
+    )
+    has_encoding = set(encoding_columns).issubset(mask.columns) and bool(
+        mask[list(encoding_columns)].notna().to_numpy().all()
+    )
+    if not has_encoding:
+        return raw_truth, raw_prediction, "vcf_ref_het_alt"
+
+    pgsui_truth = pd.to_numeric(mask["pgsui_truth_012"], errors="raise").to_numpy(
+        dtype=np.int8
+    )
+    mappings = np.column_stack(
+        [
+            pd.to_numeric(mask[column], errors="raise").to_numpy(dtype=np.int8)
+            for column in PGSUI_CLASS_MAPPING_COLUMNS.values()
+        ]
+    )
+    if not np.isin(mappings, CLASS_IDS).all():
+        raise ValueError("PG-SUI class mappings must contain only 0, 1, and 2")
+    validate_nonmissing_truth(raw_truth, "PG-SUI class-mapping validation")
+
+    mapped_truth = mappings[np.arange(len(mask)), raw_truth]
+    if not np.array_equal(mapped_truth, pgsui_truth):
+        mismatch = int(np.count_nonzero(mapped_truth != pgsui_truth))
+        raise ValueError(
+            f"Mask PG-SUI truth encoding differs from the truth VCF at "
+            f"{mismatch} coordinates"
+        )
+
+    mapped_prediction = np.full(raw_prediction.shape, -1, dtype=np.int8)
+    observed = raw_prediction >= 0
+    mapped_prediction[observed] = mappings[
+        np.flatnonzero(observed), raw_prediction[observed]
+    ]
+    return pgsui_truth, mapped_prediction, "pgsui_012"
 
 
 def score_vectors(
@@ -1523,6 +1652,9 @@ def score_vectors(
 
 def gti_runtime_seconds(row: pd.Series) -> tuple[float, str]:
     method = str(row.get("method", "")).lower()
+    supplied_seconds = as_float(row.get("runtime_seconds"))
+    if np.isfinite(supplied_seconds):
+        return supplied_seconds, "runtime_seconds"
     imputation_seconds = as_float(row.get("imputation_phase_real_seconds"))
     gtdb_seconds = as_float(row.get("gtdb_build_real_seconds"))
 
@@ -1568,22 +1700,16 @@ def score_gti_run(
     truth_vcf = truth_cache[truth_path]
     pred_vcf = load_vcf_matrix(pred_path)
 
-    mask = pd.read_csv(
-        mask_path,
-        sep="\t",
-        usecols=["sample_id", "locus_index", "chrom", "pos", "ref", "alt"],
-        dtype={"sample_id": str, "chrom": str, "pos": str, "ref": str, "alt": str},
-    )
+    mask = load_mask_table(mask_path)
     mask, mask_stats = mask_actual_missing_sites(
         mask,
         sim_row,
         sim_manifest_path=sim_manifest_path,
         masked_cache=masked_cache,
     )
-    truth_loci, truth_samples = vcf_indices_from_mask(mask, truth_vcf)
-    pred_loci, pred_samples = vcf_indices_from_mask(mask, pred_vcf)
-    y_true = truth_vcf.zygosity[truth_loci, truth_samples]
-    y_pred = pred_vcf.zygosity[pred_loci, pred_samples]
+    y_true, y_pred, class_encoding = scoring_vectors_from_mask(
+        mask, truth_vcf, pred_vcf
+    )
     validate_nonmissing_truth(
         y_true, f"GTImputation {row['dataset_id']}/{row['strategy']}/{row['run_id']}"
     )
@@ -1610,6 +1736,7 @@ def score_gti_run(
         "input_path": str(pred_path),
         "mask_tsv": str(mask_path),
         "truth_vcf": str(truth_path),
+        "class_encoding": class_encoding,
         **mask_stats,
     }
     class_rows = [{**base, **class_row} for class_row in class_rows]
@@ -1645,22 +1772,16 @@ def score_pgsui_run(
     truth_vcf = truth_cache[truth_path]
     pred_vcf = load_vcf_matrix(pred_path)
 
-    mask = pd.read_csv(
-        mask_path,
-        sep="\t",
-        usecols=["sample_id", "locus_index", "chrom", "pos", "ref", "alt"],
-        dtype={"sample_id": str, "chrom": str, "pos": str, "ref": str, "alt": str},
-    )
+    mask = load_mask_table(mask_path)
     mask, mask_stats = mask_actual_missing_sites(
         mask,
         sim_row,
         sim_manifest_path=sim_manifest_path,
         masked_cache=masked_cache,
     )
-    truth_loci, truth_samples = vcf_indices_from_mask(mask, truth_vcf)
-    pred_loci, pred_samples = vcf_indices_from_mask(mask, pred_vcf)
-    y_true = truth_vcf.zygosity[truth_loci, truth_samples]
-    y_pred = pred_vcf.zygosity[pred_loci, pred_samples]
+    y_true, y_pred, class_encoding = scoring_vectors_from_mask(
+        mask, truth_vcf, pred_vcf
+    )
     validate_nonmissing_truth(
         y_true, f"PG-SUI {row['dataset_id']}/{row['strategy']}/{row['model']}"
     )
@@ -1698,6 +1819,7 @@ def score_pgsui_run(
         "input_path": str(pred_path),
         "mask_tsv": str(mask_path),
         "truth_vcf": str(truth_path),
+        "class_encoding": class_encoding,
         **mask_stats,
     }
     class_rows = [{**base, **class_row} for class_row in class_rows]
@@ -2163,6 +2285,7 @@ def build_pgsui_class_report_from_reports(pgsui_metrics: pd.DataFrame) -> pd.Dat
             "input_path": row.get("input_path", ""),
             "mask_tsv": "",
             "truth_vcf": "",
+            "class_encoding": "pgsui_012_report",
             "masked_input_vcf": "",
             "mask_rows": np.nan,
             "scored_masked_sites": np.nan,
@@ -2172,6 +2295,85 @@ def build_pgsui_class_report_from_reports(pgsui_metrics: pd.DataFrame) -> pd.Dat
             {**base, **class_row} for class_row in load_pgsui_class_report(report_path)
         )
     return pd.DataFrame(class_rows, columns=PGSUI_CLASS_REPORT_COLUMNS)
+
+
+def build_evaluation_support_audit(
+    pgsui_metrics: pd.DataFrame, gti_metrics: pd.DataFrame
+) -> pd.DataFrame:
+    """Require canonical GTImputation truth support to match PG-SUI reports."""
+    columns = [
+        "dataset_id",
+        "strategy",
+        "pgsui_model",
+        "gti_method",
+        "pgsui_support",
+        "gti_support",
+        "pgsui_ref_support",
+        "gti_ref_support",
+        "pgsui_het_support",
+        "gti_het_support",
+        "pgsui_alt_support",
+        "gti_alt_support",
+        "support_match",
+    ]
+    if pgsui_metrics.empty or gti_metrics.empty:
+        return pd.DataFrame(columns=columns)
+
+    canonical_gti = gti_metrics.loc[
+        gti_metrics.get(
+            "class_encoding", pd.Series(index=gti_metrics.index, dtype=object)
+        ).eq("pgsui_012")
+    ].copy()
+    if canonical_gti.empty:
+        return pd.DataFrame(columns=columns)
+
+    deep_pgsui = pgsui_metrics.loc[
+        pgsui_metrics["model"].isin(PGSUI_DEEP_MODELS)
+    ].copy()
+    rows: list[dict[str, object]] = []
+    support_columns = ("support", "ref_support", "het_support", "alt_support")
+    for _, pgsui_row in deep_pgsui.iterrows():
+        matches = canonical_gti.loc[
+            canonical_gti["dataset_id"].eq(pgsui_row["dataset_id"])
+            & canonical_gti["strategy"].eq(pgsui_row["strategy"])
+        ]
+        for _, gti_row in matches.iterrows():
+            support_match = all(
+                np.isclose(
+                    as_float(pgsui_row.get(column)),
+                    as_float(gti_row.get(column)),
+                    equal_nan=False,
+                )
+                for column in support_columns
+            )
+            rows.append(
+                {
+                    "dataset_id": pgsui_row["dataset_id"],
+                    "strategy": pgsui_row["strategy"],
+                    "pgsui_model": pgsui_row["model_label"],
+                    "gti_method": gti_row["model_label"],
+                    "pgsui_support": pgsui_row["support"],
+                    "gti_support": gti_row["support"],
+                    "pgsui_ref_support": pgsui_row["ref_support"],
+                    "gti_ref_support": gti_row["ref_support"],
+                    "pgsui_het_support": pgsui_row["het_support"],
+                    "gti_het_support": gti_row["het_support"],
+                    "pgsui_alt_support": pgsui_row["alt_support"],
+                    "gti_alt_support": gti_row["alt_support"],
+                    "support_match": support_match,
+                }
+            )
+
+    audit = pd.DataFrame(rows, columns=columns)
+    mismatches = audit.loc[~audit["support_match"]] if not audit.empty else audit
+    if not mismatches.empty:
+        examples = mismatches[["dataset_id", "strategy"]].drop_duplicates().head(5)
+        raise ValueError(
+            "Canonical PG-SUI and GTImputation class supports differ for "
+            f"{len(mismatches)} model comparisons; examples: "
+            f"{examples.to_dict('records')}"
+        )
+    return audit
 
 
 def build_combined_class_report(
@@ -8042,7 +8244,8 @@ def write_readme(
         f"- Simulation manifest: `{sim_manifest}`",
         f"- Grid mode: `{'partial complete pairs' if allow_partial_grid else 'complete all-strategy datasets'}`",
         "- PG-SUI F1 scoring: PG-SUI classification reports generated from held-out simulated missing genotypes",
-        "- GTImputation F1 scoring: imputed VCFs versus original VCFs at actual missing genotypes in the masked simulation VCF",
+        "- GTImputation F1 scoring: imputed VCFs versus original VCFs at the exact exported PG-SUI test coordinates",
+        "- Canonical class scoring: VCF predictions are mapped to the same PG-SUI 0/1/2 encoding, and REF/HET/ALT support must match the neural PG-SUI reports",
         f"- PG-SUI F1 backend filter: `{f1_backends}` only; CPU/GPU duplicate PG-SUI runs are not duplicated in F1 tables",
         "- PG-SUI VCF note: saved `imputed/*.vcf.gz` files appear truth-restored at masked sites and are not used for F1 scoring",
         "- GTImputation SOM timing: `gtdb_build_real_seconds + imputation_phase_real_seconds`",
@@ -8062,7 +8265,7 @@ def write_readme(
         f"- Retained datasets: {complete_dataset_count}",
         f"- Combined metric rows: {len(combined)}",
         f"- GTImputation scoring errors: {len(gti_errors)}",
-        f"- Mask TSV rows dropped because they were not missing in the masked VCF: {int(scored_site_counts['dropped_unmasked_mask_rows'].sum()) if not scored_site_counts.empty else 0}",
+        f"- Legacy mask TSV rows dropped because they were not missing in the masked VCF: {int(scored_site_counts['dropped_unmasked_mask_rows'].sum()) if not scored_site_counts.empty else 0}",
         "",
         "## Best Macro F1 by Software",
         "",
@@ -8182,6 +8385,7 @@ def main() -> None:
         "runtime_summary_by_software.csv",
         "parallel_adjusted_runtime_summary_by_software.csv",
         "class_f1_summary_by_software.csv",
+        "canonical_evaluation_support_audit.csv",
     ):
         stale_path = tables_dir / stale_table
 
@@ -8283,6 +8487,8 @@ def main() -> None:
 
     pgsui_metrics = select_pgsui_metrics_for_runs(pgsui_report_metrics, retained_keys)
 
+    support_audit = build_evaluation_support_audit(pgsui_metrics, gti_metrics)
+
     pgsui_class_report = build_pgsui_class_report_from_reports(pgsui_metrics)
     combined = build_combined_metrics(pgsui_metrics, gti_metrics, retained_keys)
     combined = attach_simulation_size_metadata(combined, sim_manifest)
@@ -8383,6 +8589,7 @@ def main() -> None:
     )
 
     write_table(pgsui_metrics, tables_dir / "pgsui_metrics_from_reports.csv")
+    write_table(support_audit, tables_dir / "canonical_evaluation_support_audit.csv")
     write_table(
         pgsui_class_report, tables_dir / "pgsui_class_report_from_reports_long.csv"
     )

@@ -23,8 +23,10 @@ from snpio.utils.misc import validate_input_type
 
 from pgsui.data_processing.config import apply_dot_overrides, load_yaml_to_dataclass
 from pgsui.data_processing.containers import MostFrequentConfig
+from pgsui.data_processing.splitting import train_validation_test_indices
 from pgsui.data_processing.transformers import SimMissingTransformer
 from pgsui.utils.classification_viz import ClassificationReportVisualizer
+from pgsui.utils.evaluation_artifacts import save_test_evaluation_mask
 from pgsui.utils.logging_utils import configure_logger
 
 # Local imports
@@ -197,6 +199,13 @@ class ImputeMostFrequent:
 
         # Split & algo knobs
         self.test_size = float(cfg.split.test_size)
+        self.validation_split = float(cfg.train.validation_split)
+        self.seed = cfg.io.seed
+        if self.test_size != 0.2:
+            self.logger.warning(
+                "split.test_size is deprecated and ignored; use "
+                "train.validation_split for the shared three-way split."
+            )
         self.test_indices = (
             None
             if cfg.split.test_indices is None
@@ -226,6 +235,7 @@ class ImputeMostFrequent:
         self.group_modes_: dict = {}
         self.sim_mask_: np.ndarray | None = None
         self.train_idx_: np.ndarray | None = None
+        self.val_idx_: np.ndarray | None = None
         self.test_idx_: np.ndarray | None = None
         self.X_train_df_: pd.DataFrame | None = None
         self.ground_truth012_: np.ndarray | None = None
@@ -279,7 +289,9 @@ class ImputeMostFrequent:
         Returns:
             ImputeMostFrequent: The fitted imputer instance.
         """
-        self.train_idx_, self.test_idx_ = self._make_train_test_split()
+        self.train_idx_, self.val_idx_, self.test_idx_ = (
+            self._make_train_validation_test_split()
+        )
         self.ground_truth012_ = self.X012_.copy()
 
         # Work in DataFrame with NaN as missing for mode computation
@@ -327,6 +339,8 @@ class ImputeMostFrequent:
             X_for_sim[X_for_sim < 0] = -9.0
 
             # Use the same transformer as VAE
+            sim_kwargs = dict(self.sim_kwargs)
+            sim_kwargs.setdefault("seed", self.seed)
             tr = SimMissingTransformer(
                 genotype_data=self.genotype_data,
                 tree_parser=self.tree_parser,
@@ -335,7 +349,7 @@ class ImputeMostFrequent:
                 missing_val=-9,
                 mask_missing=True,
                 verbose=self.verbose,
-                **self.sim_kwargs,
+                **sim_kwargs,
             )
             tr.fit(X_for_sim)
 
@@ -371,6 +385,16 @@ class ImputeMostFrequent:
         df_sim = df_sim.mask(sim_mask, other=np.nan)
 
         self.sim_mask_ = self.sim_mask_test_only_
+        save_test_evaluation_mask(
+            self.metrics_dir,
+            test_indices=self.test_idx_,
+            evaluation_mask=self.sim_mask_test_only_,
+            n_samples=self.ground_truth012_.shape[0],
+            n_loci=self.ground_truth012_.shape[1],
+            seed=self.seed,
+            strategy=self.sim_strategy,
+            validation_split=self.validation_split,
+        )
         self.X_train_df_ = df_sim
         self.is_fit_ = True
 
@@ -878,6 +902,26 @@ class ImputeMostFrequent:
         Raises:
             IndexError: If provided test_indices are out of bounds.
         """
+        train_idx, val_idx, test_idx = self._make_train_validation_test_split()
+        return np.concatenate((train_idx, val_idx)), test_idx
+
+    def _make_train_validation_test_split(
+        self,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Create canonical train/validation/test indices for evaluation.
+
+        Explicit ``split.test_indices`` values retain their historical
+        behavior: every other row is available for fitting and the validation
+        set is empty. Otherwise, the exact seeded split protocol used by the
+        neural imputers is applied.
+
+        Returns:
+            Train, validation, and test row-index arrays.
+
+        Raises:
+            IndexError: If provided test indices are out of bounds.
+            ValueError: If a canonical three-way split cannot be constructed.
+        """
         n = self.X012_.shape[0]
         all_idx = np.arange(n, dtype=int)
         if self.test_indices is not None:
@@ -885,28 +929,13 @@ class ImputeMostFrequent:
             if np.any((test_idx < 0) | (test_idx >= n)):
                 raise IndexError("Some test_indices are out of bounds.")
             train_idx = np.setdiff1d(all_idx, test_idx, assume_unique=False)
-            return train_idx, test_idx
+            return train_idx, np.array([], dtype=int), test_idx
 
-        if self.by_populations and self.pops is not None:
-            buckets = []
-            for pop in np.unique(self.pops):
-                rows = np.where(self.pops == pop)[0]
-                k = max(1, round(self.test_size * rows.size))
-                if k > 0:
-                    buckets.append(self.rng.choice(rows, size=k, replace=False))
-            test_idx = (
-                np.sort(np.concatenate(buckets)) if buckets else np.array([], dtype=int)
-            )
-        else:
-            k = max(1, round(self.test_size * n))
-            test_idx = (
-                self.rng.choice(n, size=k, replace=False)
-                if k > 0
-                else np.array([], dtype=int)
-            )
-
-        train_idx = np.setdiff1d(all_idx, test_idx, assume_unique=False)
-        return train_idx, test_idx
+        return train_validation_test_indices(
+            n,
+            validation_split=self.validation_split,
+            seed=self.seed,
+        )
 
     def _save_report(self, report_dict: dict[str, Any], suffix: str) -> None:
         """Save classification report dictionary as a JSON file.

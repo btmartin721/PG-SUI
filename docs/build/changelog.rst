@@ -7,9 +7,28 @@ An overview of changes to **PG-SUI** by release. This file mirrors the GitHub Ma
 Unreleased
 ----------
 
-Distribution
-^^^^^^^^^^^^
+No unreleased changes.
 
+v1.8.4 - 2026-09-09
+-------------------
+
+Scientific correctness
+^^^^^^^^^^^^^^^^^^^^^^
+
+- Unified the seeded train/validation/test split across all four neural models and the ``ImputeMostFrequent`` and ``ImputeRefAllele`` baselines.
+- Propagated the configured seed into deterministic simulated-missingness generation so all six models evaluate the same masked genotypes.
+- Added compact per-model test-mask artifacts for exact coordinate-level post-hoc validation.
+
+Bug fixes
+^^^^^^^^^
+
+- Corrected multi-objective Optuna result handling when scalar ``best_value`` and ``best_trial`` accessors raise ``RuntimeError``.
+- Made tuning summaries and MultiQC tables handle multiple objective values without scalar conversion failures.
+
+Reproducibility and distribution
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+- Added a manifest-driven 50-task GPU/SLURM workflow, strict post-hoc support and coordinate auditing, alternate-genotype summaries, reviewer bundle generation, and transfer instructions for the PG-SUI/GTImputation benchmark.
 - Disabled optional Conda channel-notice retrieval during Docker builds to prevent ARM64 QEMU jobs from hanging before dependency resolution.
 - Added validated exact-version Docker republishing and updated the Docker workflow actions to their current supported major versions.
 

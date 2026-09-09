@@ -17,8 +17,11 @@ Workflow
 3. Each trial samples a model-specific set of hyperparameters, trains the
    model, and evaluates a validation metric (or metrics) defined by
    ``tune.metrics``.
-4. The best trial parameters are persisted and then used for the final
-   full-data fit.
+4. The selected trial parameters are persisted and then used for the final
+   full-data fit. A single-objective study uses Optuna's best trial. For a
+   multi-objective study, PG-SUI reproducibly selects the Pareto-optimal trial
+   with the best value for the first configured metric, using the lowest trial
+   number to break ties.
 
 For unsupervised models, tuning uses the simulated-missing evaluation mask so
 trials are scored against known truth.
@@ -40,6 +43,10 @@ Key fields in :class:`pgsui.data_processing.containers.TuneConfig`:
 
 Parallelism is controlled by ``io.n_jobs``. Use ``--n-jobs`` on the CLI or set
 ``io.n_jobs`` in YAML to increase Optuna worker count.
+
+When one process owns one GPU, ``--n-jobs 1`` is normally the safest setting;
+parallelize independent dataset/model runs through the scheduler rather than
+placing concurrent training trials on the same accelerator.
 
 Artifacts and outputs
 ---------------------

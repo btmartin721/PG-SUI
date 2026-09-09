@@ -19,6 +19,7 @@ from pgsui.impute.unsupervised.base import BaseNNImputer
 from pgsui.impute.unsupervised.callbacks import EarlyStopping
 from pgsui.impute.unsupervised.loss_functions import FocalCELoss, compute_vae_loss
 from pgsui.impute.unsupervised.models.vae_model import VAEModel
+from pgsui.utils.evaluation_artifacts import save_test_evaluation_mask
 from pgsui.utils.misc import OBJECTIVE_SPEC_VAE
 from pgsui.utils.pretty_metrics import PrettyMetrics
 
@@ -520,6 +521,16 @@ class ImputeVAE(BaseNNImputer):
         self.eval_mask_train_ = self.sim_mask_train_ & ~self.orig_mask_train_
         self.eval_mask_val_ = self.sim_mask_val_ & ~self.orig_mask_val_
         self.eval_mask_test_ = self.sim_mask_test_ & ~self.orig_mask_test_
+        save_test_evaluation_mask(
+            self.metrics_dir,
+            test_indices=self.test_idx_,
+            evaluation_mask=self.eval_mask_test_,
+            n_samples=self.ground_truth_.shape[0],
+            n_loci=self.ground_truth_.shape[1],
+            seed=self.seed,
+            strategy=self.sim_strategy,
+            validation_split=self.validation_split,
+        )
 
         self.validate_and_log_masks()
 
