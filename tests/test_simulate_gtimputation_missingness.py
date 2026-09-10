@@ -102,12 +102,15 @@ def test_runtime_dataset_exposes_tree_parser_metadata(tmp_path: Path) -> None:
     input_vcf = tmp_path / "input.vcf"
     samples = write_tiny_vcf(input_vcf)
     layout = SIMULATOR.read_vcf_layout(input_vcf)
+    dependencies = SIMULATOR.load_runtime_dependencies()
 
-    genotype_data, truth = SIMULATOR.build_runtime_dataset(
-        layout, input_vcf=input_vcf, verbose=False
+    genotype_data, truth, snpio_layout, canonical_vcf = SIMULATOR.build_runtime_dataset(
+        input_vcf=input_vcf,
+        snpio_prefix=tmp_path / "snpio" / "source",
+        dependencies=dependencies,
+        verbose=False,
     )
 
-    assert genotype_data.filename == str(input_vcf)
     assert genotype_data.samples == list(samples)
     assert np.array_equal(
         genotype_data.sample_indices, np.ones(len(samples), dtype=bool)
@@ -116,6 +119,29 @@ def test_runtime_dataset_exposes_tree_parser_metadata(tmp_path: Path) -> None:
         genotype_data.loci_indices, np.ones(len(layout.variants), dtype=bool)
     )
     assert np.array_equal(truth, layout.truth_zygosity)
+    assert snpio_layout.samples == samples
+    assert canonical_vcf.is_file()
+
+
+def test_runtime_dataset_uses_snpio_multiallelic_alt_dosage(
+    tmp_path: Path,
+) -> None:
+    input_vcf = tmp_path / "multiallelic.vcf"
+    input_vcf.write_text(
+        "##fileformat=VCFv4.2\n"
+        "##FORMAT=<ID=GT,Number=1,Type=String,Description=Genotype>\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\tS2\tS3\n"
+        "1\t10\tv10\tA\tC,G\t.\tPASS\t.\tGT\t0/0\t0/2\t1/2\n",
+        encoding="utf-8",
+    )
+    _, truth, _, _ = SIMULATOR.build_runtime_dataset(
+        input_vcf=input_vcf,
+        snpio_prefix=tmp_path / "snpio" / "source",
+        dependencies=SIMULATOR.load_runtime_dependencies(),
+        verbose=False,
+    )
+
+    assert truth[:, 0].tolist() == [0, 1, 2]
 
 
 def test_tree_container_loads_without_snpio_reader_state(tmp_path: Path) -> None:

@@ -19,12 +19,22 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
 
-from pgsui.utils.canonical_benchmark import (
-    GENOTYPE_CLASSES,
-    audit_task_reports,
-    metric_rows,
-    read_task_manifest,
-)
+try:
+    from _canonical_benchmark_support import (
+        GENOTYPE_CLASSES,
+        audit_task_reports,
+        metric_rows,
+        read_task_manifest,
+    )
+except ModuleNotFoundError as exc:
+    if exc.name != "_canonical_benchmark_support":
+        raise
+    from pgsui.utils.canonical_benchmark import (
+        GENOTYPE_CLASSES,
+        audit_task_reports,
+        metric_rows,
+        read_task_manifest,
+    )
 
 
 def parse_args() -> argparse.Namespace:

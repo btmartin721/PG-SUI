@@ -29,6 +29,7 @@ SIMULATION_STRATEGIES: tuple[str, ...] = (
     "nonrandom",
     "nonrandom_weighted",
 )
+SUPPORTED_BENCHMARK_DEVICES: frozenset[str] = frozenset({"cpu", "cuda"})
 
 
 @dataclass(frozen=True)
@@ -46,7 +47,7 @@ class CanonicalBenchmarkTask:
     seed: int = 42
     sim_prop: float = 0.3
     validation_split: float = 0.3
-    device: str = "cuda"
+    device: str = "cpu"
     n_jobs: int = 1
     tune_n_trials: int = 100
     tune_metrics: tuple[str, ...] = ("f1", "mcc", "average_precision")
@@ -56,7 +57,7 @@ class CanonicalBenchmarkTask:
     treefile: str = ""
     qmatrix: str = ""
     siterates: str = ""
-    expected_pgsui_version: str = "1.8.4"
+    expected_pgsui_version: str = "1.8.5"
 
     @classmethod
     def from_mapping(cls, row: Mapping[str, str]) -> CanonicalBenchmarkTask:
@@ -78,7 +79,7 @@ class CanonicalBenchmarkTask:
             seed=int(row.get("seed", 42)),
             sim_prop=float(row.get("sim_prop", 0.3)),
             validation_split=float(row.get("validation_split", 0.3)),
-            device=row.get("device", "cuda").strip() or "cuda",
+            device=row.get("device", "cpu").strip() or "cpu",
             n_jobs=int(row.get("n_jobs", 1)),
             tune_n_trials=int(row.get("tune_n_trials", 100)),
             tune_metrics=words("tune_metrics", ("f1", "mcc", "average_precision")),
@@ -88,7 +89,7 @@ class CanonicalBenchmarkTask:
             treefile=row.get("treefile", "").strip(),
             qmatrix=row.get("qmatrix", "").strip(),
             siterates=row.get("siterates", "").strip(),
-            expected_pgsui_version=row.get("expected_pgsui_version", "1.8.4").strip(),
+            expected_pgsui_version=row.get("expected_pgsui_version", "1.8.5").strip(),
         )
         task.validate_values()
         return task
@@ -97,9 +98,10 @@ class CanonicalBenchmarkTask:
         """Validate scientific and execution invariants for the task."""
         if self.strategy not in SIMULATION_STRATEGIES:
             raise ValueError(f"Unknown simulation strategy: {self.strategy}")
-        if self.device != "cuda":
+        if self.device not in SUPPORTED_BENCHMARK_DEVICES:
             raise ValueError(
-                f"Canonical GPU task requires device=cuda, got {self.device}"
+                "Canonical benchmark task requires device='cpu' or device='cuda', "
+                f"got {self.device!r}"
             )
         if self.n_jobs < 1:
             raise ValueError("n_jobs must be at least 1")
@@ -154,25 +156,41 @@ class CanonicalBenchmarkTask:
     def report_path(self, bundle_root: Path, model: str) -> Path:
         """Return the expected zygosity classification-report path."""
         family = "Unsupervised" if model in DEEP_MODELS else "Deterministic"
+        report_name = (
+            "zygosity_report.json"
+            if model in DEEP_MODELS
+            else "classification_report_zygosity.json"
+        )
         return (
             self.output_directory(bundle_root)
             / family
             / "metrics"
             / model
-            / "classification_report_zygosity.json"
+            / report_name
         )
 
     def evaluation_artifact_path(self, bundle_root: Path, model: str) -> Path:
         """Return the model's exact test-evaluation-mask artifact path."""
         return self.report_path(bundle_root, model).parent / "evaluation_mask_test.npz"
 
-    def command(self, bundle_root: Path, executable: str = "pg-sui") -> list[str]:
+    def command(
+        self,
+        bundle_root: Path,
+        executable: str = "pg-sui",
+        *,
+        input_path: Path | None = None,
+    ) -> list[str]:
         """Build the canonical PG-SUI command for this task."""
         output_prefix = self.output_prefix_path(bundle_root)
+        resolved_input = (
+            input_path.resolve()
+            if input_path is not None
+            else self.resolve(bundle_root, self.input_vcf)
+        )
         command = [
             executable,
             "--input",
-            str(self.resolve(bundle_root, self.input_vcf)),
+            str(resolved_input),
             "--format",
             "vcf",
             "--preset",
@@ -217,9 +235,21 @@ class CanonicalBenchmarkTask:
             )
         return command
 
-    def command_text(self, bundle_root: Path, executable: str = "pg-sui") -> str:
+    def command_text(
+        self,
+        bundle_root: Path,
+        executable: str = "pg-sui",
+        *,
+        input_path: Path | None = None,
+    ) -> str:
         """Return a shell-escaped rendering of :meth:`command`."""
-        return shlex.join(self.command(bundle_root, executable=executable))
+        return shlex.join(
+            self.command(
+                bundle_root,
+                executable=executable,
+                input_path=input_path,
+            )
+        )
 
 
 def read_task_manifest(path: Path) -> list[CanonicalBenchmarkTask]:

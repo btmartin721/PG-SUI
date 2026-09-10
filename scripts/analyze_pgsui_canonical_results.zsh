@@ -1,9 +1,10 @@
-#!/usr/bin/env zsh
+#!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR=${0:A:h}
-BUNDLE_ROOT=${PGSUI_BENCHMARK_ROOT:-${SCRIPT_DIR:h}}
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+BUNDLE_ROOT=${PGSUI_BENCHMARK_ROOT:-$(dirname -- "${SCRIPT_DIR}")}
+PYTHON_BIN=${PYTHON_BIN:-python}
 
-python "${SCRIPT_DIR}/analyze_pgsui_canonical_results.py" \
+"${PYTHON_BIN}" "${SCRIPT_DIR}/analyze_pgsui_canonical_results.py" \
   --bundle-root "${BUNDLE_ROOT}" \
   "$@"

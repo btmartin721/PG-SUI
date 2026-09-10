@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import platform
+import shutil
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -14,7 +15,15 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
-from pgsui.utils.canonical_benchmark import audit_task_reports, read_task_manifest
+try:
+    from _canonical_benchmark_support import audit_task_reports, read_task_manifest
+except ModuleNotFoundError as exc:
+    if exc.name != "_canonical_benchmark_support":
+        raise
+    from pgsui.utils.canonical_benchmark import (
+        audit_task_reports,
+        read_task_manifest,
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -27,6 +36,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--task-index", type=int, required=True)
     parser.add_argument("--pgsui-executable", default="pg-sui")
+    parser.add_argument(
+        "--work-dir",
+        type=Path,
+        help=(
+            "Task-private working directory for staged VCF and SNPio files. "
+            "Defaults to work/task_<id> below the bundle root."
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--force", action="store_true")
     return parser.parse_args()
@@ -46,6 +63,18 @@ def installed_pgsui_version() -> str:
 def write_json(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def stage_vcf(source: Path, work_dir: Path) -> Path:
+    """Copy a VCF and available index into a task-private working directory."""
+    work_dir.mkdir(parents=True, exist_ok=True)
+    staged = work_dir / source.name
+    shutil.copy2(source, staged)
+    for suffix in (".tbi", ".csi"):
+        source_index = Path(f"{source}{suffix}")
+        if source_index.is_file():
+            shutil.copy2(source_index, Path(f"{staged}{suffix}"))
+    return staged
 
 
 def main() -> int:
@@ -82,8 +111,24 @@ def main() -> int:
         print(f"Task {task.task_id} already passed: {success_path}")
         return 0
 
-    command = task.command(bundle_root, executable=args.pgsui_executable)
-    print(task.command_text(bundle_root, executable=args.pgsui_executable))
+    work_dir = (
+        args.work_dir.resolve()
+        if args.work_dir is not None
+        else bundle_root / "work" / f"task_{task.task_id:02d}"
+    )
+    staged_input = work_dir / Path(task.input_vcf).name
+    command = task.command(
+        bundle_root,
+        executable=args.pgsui_executable,
+        input_path=staged_input,
+    )
+    print(
+        task.command_text(
+            bundle_root,
+            executable=args.pgsui_executable,
+            input_path=staged_input,
+        )
+    )
     if args.dry_run:
         return 0
 
@@ -94,10 +139,20 @@ def main() -> int:
             f"{task.expected_pgsui_version}, but {installed_version} is installed."
         )
 
+    staged_input = stage_vcf(
+        task.resolve(bundle_root, task.input_vcf),
+        work_dir,
+    )
+
     metadata: dict[str, Any] = {
         "task_id": task.task_id,
         "dataset_id": task.dataset_id,
         "strategy": task.strategy,
+        "device": task.device,
+        "output_prefix": str(task.output_prefix_path(bundle_root)),
+        "source_input_vcf": str(task.resolve(bundle_root, task.input_vcf)),
+        "staged_input_vcf": str(staged_input),
+        "work_dir": str(work_dir),
         "command": command,
         "started_at_utc": utc_now(),
         "hostname": platform.node(),
@@ -107,7 +162,7 @@ def main() -> int:
         "slurm_array_job_id": os.environ.get("SLURM_ARRAY_JOB_ID"),
         "slurm_array_task_id": os.environ.get("SLURM_ARRAY_TASK_ID"),
     }
-    completed = subprocess.run(command, check=False)
+    completed = subprocess.run(command, cwd=work_dir, check=False)
     metadata["finished_at_utc"] = utc_now()
     metadata["returncode"] = completed.returncode
     if completed.returncode != 0:

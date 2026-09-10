@@ -578,6 +578,7 @@ def build_genotype_data(
     debug: bool,
     include_pops: list[str] | None,
     plot_format: Literal["pdf", "png", "jpg", "jpeg", "svg"],
+    prefix: str | None = None,
     structure_has_popids: bool = False,
     structure_has_marker_names: bool = False,
     structure_allele_start_col: int | None = None,
@@ -596,6 +597,8 @@ def build_genotype_data(
         debug (bool): Whether to enable debug-level logging in SNPio readers.
         include_pops (List[str] | None): Optional list of population IDs to include.
         plot_format (Literal): Figure format for SNPio plots.
+        prefix (str | None): PG-SUI output prefix used to isolate SNPio
+            artifacts. Defaults to the input file stem.
         structure_has_popids (bool): STRUCTURE only; whether pop IDs are present.
         structure_has_marker_names (bool): STRUCTURE only; whether the first line has marker names.
         structure_allele_start_col (int | None): STRUCTURE only; zero-based allele start column.
@@ -611,7 +614,7 @@ def build_genotype_data(
         "force_popmap": force_popmap,
         "verbose": debug,
         "include_pops": include_pops if include_pops else None,
-        "prefix": f"snpio_{Path(input_path).stem}",
+        "prefix": f"{prefix or Path(input_path).stem}_snpio",
         "plot_format": plot_format,
     }
 
@@ -1255,6 +1258,7 @@ def main(argv: list[str] | None = None) -> int:
         force_popmap=force_popmap,
         include_pops=include_pops,
         debug=getattr(args, "debug", False),
+        prefix=prefix,
         plot_format=getattr(args, "plot_format", "pdf"),
         structure_has_popids=structure_has_popids,
         structure_has_marker_names=structure_has_marker_names,

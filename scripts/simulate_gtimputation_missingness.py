@@ -21,9 +21,9 @@ import hashlib
 import importlib.metadata
 import importlib.util
 import json
-import logging
 import os
 import platform
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -85,6 +85,8 @@ class SplitIndices:
 class RuntimeDependencies:
     """Lazily imported PG-SUI simulation and tree-reading callables."""
 
+    vcf_reader_class: type
+    genotype_encoder_class: type
     sim_missing_transformer_class: type
     tree_reader: Callable[[str], Any]
 
@@ -97,27 +99,6 @@ class BenchmarkTreeParser:
     treefile: str
     qmatrix: str | None
     siterates: str | None
-
-
-@dataclass
-class BenchmarkGenotypeData:
-    """Minimal genotype metadata required by the simulation components."""
-
-    samples: list[str]
-    loci_indices: np.ndarray
-    sample_indices: np.ndarray
-    logger: logging.Logger
-    filename: str
-    popmapfile: str | None = None
-    force_popmap: bool = False
-    exclude_pops: list[str] | None = None
-    include_pops: list[str] | None = None
-    plot_format: str = "pdf"
-    prefix: str = "pgsui_gtimputation_benchmark"
-    verbose: bool = False
-    debug: bool = False
-    plot_fontsize: int = 18
-    plot_dpi: int = 300
 
 
 @dataclass(frozen=True)
@@ -366,52 +347,9 @@ def read_vcf_layout(path: Path) -> VCFLayout:
     )
 
 
-def derive_pgsui_class_mapping(
-    raw_zygosity: np.ndarray, pgsui_truth: np.ndarray
-) -> np.ndarray:
-    """Map VCF REF/HET/ALT classes to the PG-SUI 0/1/2 encoding per locus.
-
-    SNPio encoding can orient homozygous classes differently from the VCF REF
-    and ALT allele indices.  The mapping is derived once from the complete
-    truth data and then applied unchanged to GTImputation predictions.
-    """
-    if raw_zygosity.shape != pgsui_truth.shape:
-        raise ValueError(
-            f"Encoding matrices differ in shape: {raw_zygosity.shape} vs "
-            f"{pgsui_truth.shape}"
-        )
-    n_loci = raw_zygosity.shape[1]
-    mapping = np.full((n_loci, 3), -1, dtype=np.int8)
-    for locus_index in range(n_loci):
-        for raw_class in range(3):
-            selected = (raw_zygosity[:, locus_index] == raw_class) & (
-                pgsui_truth[:, locus_index] >= 0
-            )
-            values = np.unique(pgsui_truth[selected, locus_index])
-            if values.size > 1:
-                raise ValueError(
-                    f"VCF class {raw_class} maps to multiple PG-SUI classes at "
-                    f"locus {locus_index}: {values.tolist()}"
-                )
-            if values.size == 1:
-                mapping[locus_index, raw_class] = int(values[0])
-
-        if mapping[locus_index, 1] < 0:
-            mapping[locus_index, 1] = 1
-        if mapping[locus_index, 0] < 0 and mapping[locus_index, 2] in {0, 2}:
-            mapping[locus_index, 0] = 2 - mapping[locus_index, 2]
-        if mapping[locus_index, 2] < 0 and mapping[locus_index, 0] in {0, 2}:
-            mapping[locus_index, 2] = 2 - mapping[locus_index, 0]
-        for raw_class in range(3):
-            if mapping[locus_index, raw_class] < 0:
-                mapping[locus_index, raw_class] = raw_class
-
-        if sorted(mapping[locus_index].tolist()) != [0, 1, 2]:
-            raise ValueError(
-                f"Non-bijective VCF-to-PG-SUI class mapping at locus "
-                f"{locus_index}: {mapping[locus_index].tolist()}"
-            )
-    return mapping
+def canonical_class_mapping(n_loci: int) -> np.ndarray:
+    """Return SNPio's canonical REF/HET/ALT 012 mapping per locus."""
+    return np.tile(np.asarray([0, 1, 2], dtype=np.int8), (n_loci, 1))
 
 
 def reconstruct_split(
@@ -449,38 +387,84 @@ def sha256_mask(mask: np.ndarray) -> str:
 
 
 def load_runtime_dependencies() -> RuntimeDependencies:
-    """Load PG-SUI and ToyTree only when mask regeneration is requested."""
+    """Load SNPio, PG-SUI, and ToyTree only when the workflow executes."""
     import toytree
+    from snpio import GenotypeEncoder, VCFReader
 
     from pgsui.data_processing.transformers import SimMissingTransformer
 
     return RuntimeDependencies(
+        vcf_reader_class=VCFReader,
+        genotype_encoder_class=GenotypeEncoder,
         sim_missing_transformer_class=SimMissingTransformer,
         tree_reader=toytree.tree,
     )
 
 
 def build_runtime_dataset(
-    layout: VCFLayout, *, input_vcf: Path, verbose: bool
-) -> tuple[BenchmarkGenotypeData, np.ndarray]:
-    """Build simulation metadata from the VCF without rewriting or recoding it.
-
-    Reading GT fields directly avoids reader-side filtering and preserves the
-    exact sample/locus order used by the exported coordinate masks.  Diploid
-    VCF genotypes are encoded as REF=0, HET=1, ALT=2, missing=-1.
-    """
-    logger = logging.getLogger("pgsui.gtimputation_benchmark")
-    if verbose and not logging.getLogger().handlers:
-        logging.basicConfig(level=logging.INFO)
-    genotype_data = BenchmarkGenotypeData(
-        samples=list(layout.samples),
-        loci_indices=np.ones(len(layout.variants), dtype=bool),
-        sample_indices=np.ones(len(layout.samples), dtype=bool),
-        logger=logger,
-        filename=str(input_vcf),
+    *,
+    input_vcf: Path,
+    snpio_prefix: Path,
+    dependencies: RuntimeDependencies,
+    verbose: bool,
+) -> tuple[Any, np.ndarray, VCFLayout, Path]:
+    """Load and encode a VCF with SNPio's canonical REF/HET/ALT logic."""
+    snpio_prefix.parent.mkdir(parents=True, exist_ok=True)
+    staged_vcf = snpio_prefix.parent / input_vcf.name
+    shutil.copy2(input_vcf, staged_vcf)
+    source_index = Path(f"{input_vcf}.tbi")
+    if source_index.is_file():
+        shutil.copy2(source_index, Path(f"{staged_vcf}.tbi"))
+    genotype_data = dependencies.vcf_reader_class(
+        filename=str(staged_vcf),
+        prefix=str(snpio_prefix),
+        disable_progress_bar=not verbose,
         verbose=verbose,
     )
-    return genotype_data, np.array(layout.truth_zygosity, copy=True)
+    canonical_vcf = Path(genotype_data.filename).resolve()
+    layout = read_vcf_layout(canonical_vcf)
+    samples = tuple(str(sample) for sample in genotype_data.samples)
+    if samples != layout.samples:
+        raise ValueError(f"SNPio sample order is internally inconsistent: {input_vcf}")
+
+    encoder = dependencies.genotype_encoder_class(genotype_data)
+    truth = np.asarray(encoder.genotypes_012, dtype=np.int8)
+    expected_shape = (len(layout.samples), len(layout.variants))
+    if truth.shape != expected_shape:
+        raise ValueError(
+            f"SNPio encoded {input_vcf} as {truth.shape}; expected "
+            f"{expected_shape}. The benchmark does not permit sample or locus "
+            "filtering."
+        )
+
+    decoded = np.asarray(encoder.decode_012(truth, is_nuc=False))
+    roundtrip = np.asarray(encoder.convert_012(decoded.tolist()), dtype=np.int8)
+    if not np.array_equal(roundtrip, truth):
+        differences = int(np.count_nonzero(roundtrip != truth))
+        raise ValueError(
+            f"SNPio 012 encode/decode round trip differs at {differences} cells "
+            f"for {input_vcf}"
+        )
+    return genotype_data, truth, layout, canonical_vcf
+
+
+def persist_canonical_vcf(
+    source: Path,
+    destination: Path,
+    *,
+    force: bool,
+) -> Path:
+    """Persist SNPio's sorted/indexed VCF as the benchmark truth source."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists() and not force:
+        raise FileExistsError(
+            f"Canonical VCF exists: {destination}. Use --force to replace it."
+        )
+    shutil.copy2(source, destination)
+    source_index = Path(f"{source}.tbi")
+    if source_index.is_file():
+        shutil.copy2(source_index, Path(f"{destination}.tbi"))
+    return destination
 
 
 def build_tree_parser(
@@ -762,10 +746,12 @@ def mask_rows(
     sample_indices, locus_indices = np.where(mask)
     for sample_index, locus_index in zip(sample_indices, locus_indices, strict=True):
         variant = layout.variants[int(locus_index)]
-        raw_truth = int(layout.truth_zygosity[sample_index, locus_index])
-        pgsui_value: object = ""
-        if pgsui_truth is not None:
-            pgsui_value = int(pgsui_truth[sample_index, locus_index])
+        truth = int(
+            pgsui_truth[sample_index, locus_index]
+            if pgsui_truth is not None
+            else layout.truth_zygosity[sample_index, locus_index]
+        )
+        pgsui_value: object = truth if pgsui_truth is not None else ""
         class_mapping: list[object] = ["", "", ""]
         if pgsui_class_mapping is not None:
             class_mapping = [
@@ -782,8 +768,8 @@ def mask_rows(
             variant.ref,
             variant.alt,
             split_lookup[int(sample_index)],
-            raw_truth,
-            CLASS_LABELS.get(raw_truth, "UNKNOWN"),
+            truth,
+            CLASS_LABELS.get(truth, "UNKNOWN"),
             pgsui_value,
             *class_mapping,
         ]
@@ -1437,15 +1423,23 @@ def main() -> None:
     input_vcfs = discover_vcfs(input_dir, dataset_ids)
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    dependencies: RuntimeDependencies | None = None
-    if args.mask_mode in {"regenerate", "verify"} or pgsui_results_dir is not None:
-        dependencies = load_runtime_dependencies()
+    dependencies = load_runtime_dependencies()
 
     results: list[SimulationResult] = []
     support_rows: list[dict[str, object]] = []
     for input_vcf in input_vcfs:
         dataset_id = vcf_stem(input_vcf)
-        layout = read_vcf_layout(input_vcf)
+        genotype_data, pgsui_truth, layout, snpio_vcf = build_runtime_dataset(
+            input_vcf=input_vcf.resolve(),
+            snpio_prefix=output_dir / ".snpio_cache" / dataset_id / "source",
+            dependencies=dependencies,
+            verbose=args.verbose,
+        )
+        canonical_input_vcf = persist_canonical_vcf(
+            snpio_vcf,
+            output_dir / "canonical_vcfs" / dataset_id / f"{dataset_id}.vcf.gz",
+            force=args.force,
+        )
         split = reconstruct_split(len(layout.samples), args.validation_split, args.seed)
         split_tsv, _ = write_split_files(
             output_dir=output_dir,
@@ -1456,20 +1450,11 @@ def main() -> None:
             validation_split=args.validation_split,
             force=args.force,
         )
-        genotype_data: Any | None = None
-        pgsui_truth: np.ndarray | None = None
-        pgsui_class_mapping: np.ndarray | None = None
-        if dependencies is not None:
-            genotype_data, pgsui_truth = build_runtime_dataset(
-                layout, input_vcf=input_vcf.resolve(), verbose=args.verbose
-            )
-            pgsui_class_mapping = derive_pgsui_class_mapping(
-                layout.truth_zygosity, pgsui_truth
-            )
+        pgsui_class_mapping = canonical_class_mapping(len(layout.variants))
 
         for strategy in args.strategies:
             result = prepare_strategy(
-                input_vcf=input_vcf.resolve(),
+                input_vcf=canonical_input_vcf,
                 output_dir=output_dir,
                 reference_mask_dir=reference_mask_dir,
                 pgsui_results_dir=pgsui_results_dir,

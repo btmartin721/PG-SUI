@@ -9,6 +9,23 @@ Unreleased
 
 No unreleased changes.
 
+v1.8.5 - 2026-09-09
+-------------------
+
+Scientific correctness
+^^^^^^^^^^^^^^^^^^^^^^
+
+- Delegated 0/1/2 decoding in neural and deterministic imputers to SNPio's canonical ``GenotypeEncoder`` implementation.
+- Switched canonical mask generation and GTImputation VCF scoring to SNPio's REF/HET/ALT encoding, including multiallelic ALT-dosage handling.
+- Corrected neural report discovery to use ``zygosity_report.json`` while retaining the deterministic report filename.
+
+Reproducibility and HPC execution
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+- Isolated each task's VCF, SNPio HDF5 cache, and generated VCF sidecars in a private working directory.
+- Scheduled all five strategies for each dataset sequentially across four persistent CPU workers, preventing concurrent reads of the same dataset.
+- Updated the canonical reviewer workflow, tests, and documentation for the corrected masks and PG-SUI 1.8.5.
+
 v1.8.4 - 2026-09-09
 -------------------
 

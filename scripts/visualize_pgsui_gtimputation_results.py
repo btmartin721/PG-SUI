@@ -15,6 +15,7 @@ import json
 import math
 import os
 import re
+import shutil
 import sys
 import tempfile
 import warnings
@@ -50,6 +51,7 @@ from sklearn.metrics import (
     matthews_corrcoef,
     precision_recall_fscore_support,
 )
+from snpio import GenotypeEncoder, VCFReader
 
 GENOTYPE_CLASS_COLUMN_MAP = {
     "0": "ref_f1",
@@ -210,7 +212,7 @@ CATEGORY_SHORT_LABELS = {
     "PG-SUI: Deep learning": "PG-SUI DL",
 }
 
-BACKEND_PRIORITY = ("cuda", "mps", "cpu", "none")
+BACKEND_PRIORITY = ("cpu", "cuda", "mps", "none")
 
 RUNTIME_PGSUI_BACKENDS = ("cpu", "cuda")
 
@@ -222,8 +224,6 @@ PGSUI_BACKEND_LABELS = {
     "deterministic": "Deterministic",
     "not_applicable": "Not Applicable",
 }
-
-MISSING_GT = {"", ".", "./.", ".|.", "-", "?", "NA", "NAN", "NONE"}
 
 MASK_COORD_COLUMNS = ("sample_id", "locus_index", "chrom", "pos", "ref", "alt")
 
@@ -492,10 +492,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--pgsui-backend",
         choices=("auto", "cuda", "mps", "cpu", "none"),
-        default="cuda",
+        default="cpu",
         help=(
-            "PG-SUI backend used for F1-score comparisons. Default cuda prevents "
-            "CPU/GPU duplicate F1 rows."
+            "PG-SUI backend used for F1-score comparisons. Default cpu prevents "
+            "duplicate PG-SUI rows from other backends."
         ),
     )
     parser.add_argument(
@@ -1219,26 +1219,12 @@ def open_text(path: Path):
     return path.open()
 
 
-def gt_to_zygosity(value: str) -> int:
-    genotype = str(value).split(":", 1)[0].strip()
-    if genotype.upper() in MISSING_GT:
-        return -1
-    alleles = re.split(r"[\/|]", genotype)
-    if not alleles or any(allele == "." for allele in alleles):
-        return -1
-    if len(set(alleles)) > 1:
-        return 1
-    return 0 if alleles[0] == "0" else 2
-
-
-def load_vcf_matrix(path: Path) -> VCFMatrix:
-    path = path.expanduser().resolve()
-    if not path.exists():
-        raise FileNotFoundError(f"VCF not found: {path}")
-
+def read_vcf_coordinates(
+    path: Path,
+) -> tuple[list[str], list[tuple[str, str, str, str]]]:
+    """Read sample identifiers and variant keys without interpreting genotypes."""
     samples: list[str] = []
     variant_keys: list[tuple[str, str, str, str]] = []
-    rows: list[list[int]] = []
     with open_text(path) as handle:
         for line in handle:
             if line.startswith("##") or not line.strip():
@@ -1254,11 +1240,41 @@ def load_vcf_matrix(path: Path) -> VCFMatrix:
             if len(fields) < 10:
                 continue
             variant_keys.append((fields[0], fields[1], fields[3], fields[4]))
-            rows.append([gt_to_zygosity(value) for value in fields[9:]])
 
-    if not samples or not rows:
+    if not samples or not variant_keys:
         raise ValueError(f"No genotype records loaded from VCF: {path}")
-    matrix = np.asarray(rows, dtype=np.int8)
+    return samples, variant_keys
+
+
+def load_vcf_matrix(path: Path) -> VCFMatrix:
+    """Load VCF genotypes with SNPio's canonical REF/HET/ALT encoder."""
+    path = path.expanduser().resolve()
+    if not path.exists():
+        raise FileNotFoundError(f"VCF not found: {path}")
+
+    with tempfile.TemporaryDirectory(prefix="pgsui-vcf-score-") as temp_name:
+        temp_dir = Path(temp_name)
+        staged_vcf = temp_dir / path.name
+        shutil.copy2(path, staged_vcf)
+        source_index = Path(f"{path}.tbi")
+        if source_index.is_file():
+            shutil.copy2(source_index, Path(f"{staged_vcf}.tbi"))
+        reader = VCFReader(
+            filename=str(staged_vcf),
+            prefix=str(temp_dir / "snpio_reader"),
+            disable_progress_bar=True,
+            verbose=False,
+        )
+        encoder = GenotypeEncoder(reader)
+        encoded = np.asarray(encoder.genotypes_012, dtype=np.int8)
+        samples, variant_keys = read_vcf_coordinates(Path(reader.filename))
+
+    expected_shape = (len(samples), len(variant_keys))
+    if encoded.shape != expected_shape:
+        raise ValueError(
+            f"SNPio encoded {path} as {encoded.shape}; expected {expected_shape}"
+        )
+    matrix = encoded.T
     return VCFMatrix(
         path=path,
         samples=samples,

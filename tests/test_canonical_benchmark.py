@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -29,7 +30,7 @@ def make_task(strategy: str = "random") -> CanonicalBenchmarkTask:
         evaluation_mask_tsv="masks/example.evaluation_mask.tsv",
         mask_npz="masks/example.mask.npz",
         split_tsv="splits/example.split.tsv",
-        output_prefix="results/pgsui/example/random/example_random_cuda",
+        output_prefix="results/pgsui/example/random/example_random_cpu",
         treefile=treefile,
         qmatrix=qmatrix,
         siterates=qmatrix,
@@ -115,12 +116,16 @@ def write_mask_artifacts(
     )
 
 
-def test_task_command_contains_canonical_settings(tmp_path: Path) -> None:
-    task = make_task("nonrandom_weighted")
+@pytest.mark.parametrize("strategy", ("nonrandom", "nonrandom_weighted"))
+def test_task_command_contains_canonical_settings(
+    tmp_path: Path, strategy: str
+) -> None:
+    task = make_task(strategy)
 
     command = task.command(tmp_path)
 
     assert command[0] == "pg-sui"
+    assert command[command.index("--device") + 1] == "cpu"
     assert "--verbose" in command
     assert "--disable-plotting" in command
     assert command[command.index("--tune-n-trials") + 1] == "100"
@@ -133,7 +138,40 @@ def test_task_command_contains_canonical_settings(tmp_path: Path) -> None:
         "mcc",
         "average_precision",
     )
-    assert "--treefile" in command
+    expected_treefile = tmp_path / "inputs/tree/example.treefile"
+    expected_iqtree = tmp_path / "inputs/tree/example.iqtree"
+    assert command[command.index("--treefile") + 1] == str(expected_treefile)
+    assert command[command.index("--qmatrix") + 1] == str(expected_iqtree)
+    assert command[command.index("--siterates") + 1] == str(expected_iqtree)
+
+
+def test_task_mapping_defaults_to_cpu() -> None:
+    task = CanonicalBenchmarkTask.from_mapping(
+        {
+            "task_id": "0",
+            "dataset_id": "example",
+            "strategy": "random",
+            "input_vcf": "inputs/example.vcf",
+            "evaluation_mask_tsv": "masks/example.evaluation.tsv",
+            "mask_npz": "masks/example.npz",
+            "split_tsv": "splits/example.tsv",
+            "output_prefix": "results/pgsui/example_cpu",
+        }
+    )
+
+    assert task.device == "cpu"
+
+
+@pytest.mark.parametrize("device", ("cpu", "cuda"))
+def test_task_validation_accepts_supported_device(device: str) -> None:
+    task = make_task()
+    replace(task, device=device).validate_values()
+
+
+def test_task_validation_rejects_unknown_device() -> None:
+    task = make_task()
+    with pytest.raises(ValueError, match="device='cpu' or device='cuda'"):
+        replace(task, device="mps").validate_values()
 
 
 def test_random_task_omits_tree_arguments(tmp_path: Path) -> None:
@@ -141,6 +179,25 @@ def test_random_task_omits_tree_arguments(tmp_path: Path) -> None:
     assert "--treefile" not in command
     assert "--qmatrix" not in command
     assert "--siterates" not in command
+
+
+def test_task_uses_family_specific_report_names(tmp_path: Path) -> None:
+    task = make_task()
+
+    assert task.report_path(tmp_path, "ImputeVAE").name == "zygosity_report.json"
+    assert (
+        task.report_path(tmp_path, "ImputeRefAllele").name
+        == "classification_report_zygosity.json"
+    )
+
+
+def test_task_command_accepts_private_staged_input(tmp_path: Path) -> None:
+    task = make_task()
+    staged = tmp_path / "scratch" / "example.vcf"
+
+    command = task.command(tmp_path, input_path=staged)
+
+    assert command[command.index("--input") + 1] == str(staged.resolve())
 
 
 def test_expected_support_counts_ref_het_alt(tmp_path: Path) -> None:

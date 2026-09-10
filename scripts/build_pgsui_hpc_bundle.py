@@ -14,9 +14,15 @@ from typing import Any
 
 import pandas as pd
 
-from pgsui.utils.canonical_benchmark import MODEL_ORDER, SIMULATION_STRATEGIES
+from pgsui.utils.canonical_benchmark import (
+    MODEL_ORDER,
+    SIMULATION_STRATEGIES,
+    CanonicalBenchmarkTask,
+    read_task_manifest,
+)
 
-EXPECTED_VERSION = "1.8.4"
+EXPECTED_VERSION = "1.8.5"
+PORTABLE_SUPPORT_NAME = "_canonical_benchmark_support.py"
 SCRIPT_NAMES: tuple[str, ...] = (
     "build_pgsui_hpc_bundle.py",
     "build_pgsui_hpc_bundle.zsh",
@@ -81,6 +87,7 @@ def task_rows(simulation_manifest: pd.DataFrame) -> list[dict[str, Any]]:
         dataset = str(row["dataset_id"])
         strategy = str(row["strategy"])
         needs_tree = strategy.startswith("nonrandom")
+        input_name = Path(str(row["input_vcf"])).name
         rows.append(
             {
                 "task_id": task_id,
@@ -89,7 +96,7 @@ def task_rows(simulation_manifest: pd.DataFrame) -> list[dict[str, Any]]:
                 "seed": int(row["seed"]),
                 "sim_prop": float(row["sim_prop"]),
                 "validation_split": float(row["validation_split"]),
-                "input_vcf": f"inputs/vcfs/{dataset}.vcf",
+                "input_vcf": f"inputs/vcfs/{input_name}",
                 "treefile": f"inputs/iqtree/{dataset}.treefile" if needs_tree else "",
                 "qmatrix": f"inputs/iqtree/{dataset}.iqtree" if needs_tree else "",
                 "siterates": f"inputs/iqtree/{dataset}.iqtree" if needs_tree else "",
@@ -99,8 +106,8 @@ def task_rows(simulation_manifest: pd.DataFrame) -> list[dict[str, Any]]:
                     f"{Path(row['evaluation_mask_tsv']).name}"
                 ),
                 "split_tsv": f"splits/{dataset}/{Path(row['split_tsv']).name}",
-                "output_prefix": f"results/pgsui/{dataset}_{strategy}_cuda",
-                "device": "cuda",
+                "output_prefix": f"results/pgsui/{dataset}_{strategy}_cpu",
+                "device": "cpu",
                 "preset": "balanced",
                 "models": " ".join(MODEL_ORDER),
                 "n_jobs": 1,
@@ -119,6 +126,47 @@ def write_tsv(rows: list[dict[str, Any]], path: Path) -> None:
         writer = csv.DictWriter(handle, fieldnames=list(rows[0]), delimiter="\t")
         writer.writeheader()
         writer.writerows(rows)
+
+
+def validate_portable_tasks(
+    manifest_path: Path, bundle_root: Path
+) -> list[CanonicalBenchmarkTask]:
+    """Validate the portable task grid and every required input path."""
+    tasks = read_task_manifest(manifest_path)
+    if len(tasks) != 50:
+        raise ValueError(f"Expected 50 PG-SUI tasks, found {len(tasks)}")
+
+    for task in tasks:
+        if task.device != "cpu":
+            raise ValueError(
+                f"Task {task.task_id} must use device=cpu, found {task.device!r}"
+            )
+        if not task.output_prefix.endswith("_cpu"):
+            raise ValueError(
+                f"Task {task.task_id} output prefix must end in '_cpu': "
+                f"{task.output_prefix}"
+            )
+
+        required_paths = task.required_input_paths(bundle_root)
+        missing = [path for path in required_paths if not path.is_file()]
+        if missing:
+            formatted = "\n".join(f"  - {path}" for path in missing)
+            raise FileNotFoundError(
+                f"Required inputs are missing for task {task.task_id}:\n{formatted}"
+            )
+
+        if task.strategy.startswith("nonrandom"):
+            expected_treefile = f"inputs/iqtree/{task.dataset_id}.treefile"
+            expected_iqtree = f"inputs/iqtree/{task.dataset_id}.iqtree"
+            observed = (task.treefile, task.qmatrix, task.siterates)
+            expected = (expected_treefile, expected_iqtree, expected_iqtree)
+            if observed != expected:
+                raise ValueError(
+                    f"Incorrect phylogenetic inputs for task {task.task_id}: "
+                    f"expected {expected}, found {observed}"
+                )
+
+    return tasks
 
 
 def sha256(path: Path) -> str:
@@ -148,16 +196,22 @@ def write_checksums(bundle_root: Path) -> int:
 
 
 def reviewer_readme() -> str:
-    return """# PG-SUI canonical GPU benchmark bundle
+    return """# PG-SUI canonical CPU benchmark bundle
 
-This portable directory contains the 10 original VCF datasets, five canonical
+This portable directory contains 10 SNPio-canonical VCF datasets, five
 missingness masks per dataset, inputs for phylogeny-aware simulations, a
-50-task GPU manifest, SLURM orchestration, strict post-hoc validation, and empty
+50-task CPU manifest, SLURM orchestration, strict post-hoc validation, and empty
 result destinations.
+
+All workflow shell entrypoints use Bash. Their existing `.zsh` suffixes are
+retained only for backward-compatible filenames. The two orchestration
+filenames containing `gpu` are also retained for compatibility; their contents
+and submitted jobs are CPU-only.
 
 ## Software
 
-Create or activate a Python 3.12 environment containing PG-SUI 1.8.4. The task
+Create or activate a Python 3.12 `pgsui-gti-2` environment containing PG-SUI
+1.8.5. The bundle includes a portable canonical benchmark helper, and the task
 runner refuses to execute a different PG-SUI version. PG-SUI installs its
 compatible SNPio dependency.
 
@@ -177,28 +231,49 @@ submission wrapper exports the selected bundle root, so the workflow remains
 portable if a different remote directory is preferred. No hostname is embedded
 because AWS PCS login endpoints differ between deployments.
 
-## Submit the 50 GPU tasks
+## Submit four persistent CPU workers
 
-From this directory on the AWS PCS login node:
+The task manifest uses `device=cpu`, `_cpu` output prefixes, and `n_jobs=1`.
+The SLURM template requests the `shu-hpc-biocpu` partition, four CPUs per
+worker, no explicit memory limit, and 72 hours per worker. The default Conda
+environment is `pgsui-gti-2`. Override these site-specific defaults with
+`PGSUI_CPU_PARTITION` or `PGSUI_CONDA_ENV` when needed. From this directory on
+the AWS PCS login node:
 
 ```bash
 export PGSUI_BENCHMARK_ROOT="$PWD"
-export MAX_CONCURRENT=4  # adjust to the available GPU quota
-zsh scripts/submit_pgsui_canonical_gpu_array.zsh
+bash scripts/submit_pgsui_canonical_gpu_array.zsh
 ```
 
-Each array element runs one dataset/strategy combination on one GPU. It uses
-100 Optuna trials with `f1`, `mcc`, and `average_precision`, seed 42, the
-balanced preset, and verbose logging. A success marker is written only after
-all six model reports match the canonical REF/HET/ALT test-mask support.
+The submission creates only four array elements. Each persistent worker runs
+all five strategies for one dataset sequentially before taking another dataset.
+Therefore no dataset is read by multiple SNPio processes at once, no more than
+four PG-SUI tasks run concurrently, and only four jobs appear in the scheduler.
+Every task also stages its VCF in private node-local storage. Workers continue
+after individual failures; resubmission skips successful tasks and retries
+incomplete or failed tasks.
+
+Each task uses 100 Optuna trials with `f1`, `mcc`, and `average_precision`, seed
+42, the balanced preset, and verbose logging. A success marker is written only
+after all six model reports match the canonical REF/HET/ALT test-mask support.
+
+For every `nonrandom` and `nonrandom_weighted` task, the runner passes the
+dataset-specific files under `inputs/iqtree/` as follows:
+
+- `--treefile inputs/iqtree/<dataset>.treefile`
+- `--qmatrix inputs/iqtree/<dataset>.iqtree`
+- `--siterates inputs/iqtree/<dataset>.iqtree`
+
+The task runner stops before launching PG-SUI if any required file is missing.
+The three options are omitted for the other simulation strategies.
 
 ## Regenerate and verify all five simulation strategies
 
 The bundle includes the original VCFs, IQ-TREE inputs, and canonical mask
-archives. From the bundle root, activate PG-SUI 1.8.4 and run:
+archives. From the bundle root, activate PG-SUI 1.8.5 and run:
 
 ```bash
-zsh scripts/simulate_gtimputation_missingness.zsh --verbose
+bash scripts/simulate_gtimputation_missingness.zsh --verbose
 ```
 
 The bundle-aware defaults rerun all 10 datasets by all five strategies and
@@ -211,7 +286,7 @@ against the superseded pre-correction masks for provenance.
 ## Validate and summarize PG-SUI results
 
 ```bash
-zsh scripts/analyze_pgsui_canonical_results.zsh
+bash scripts/analyze_pgsui_canonical_results.zsh
 ```
 
 Tables are written to `analysis/tables`, publication PNGs to `analysis/plots`,
@@ -271,7 +346,6 @@ def main() -> int:
         raise ValueError("Simulation manifest does not contain 50 unique pairs")
 
     datasets = sorted(simulation_manifest["dataset_id"].unique())
-    vcf_root = package_root / "inputs" / "test-vcf-files"
     iqtree_root = (
         package_root
         / "outputs"
@@ -280,10 +354,24 @@ def main() -> int:
         / "iqtree"
     )
     for dataset in datasets:
-        copy_file(
-            vcf_root / f"{dataset}.vcf",
-            output_dir / "inputs" / "vcfs" / f"{dataset}.vcf",
-        )
+        dataset_rows = simulation_manifest.loc[
+            simulation_manifest["dataset_id"].astype(str).eq(dataset)
+        ]
+        source_vcfs = {
+            portable_mask_path(str(value), canonical_root)
+            for value in dataset_rows["input_vcf"]
+        }
+        if len(source_vcfs) != 1:
+            raise ValueError(
+                f"Expected one canonical input VCF for {dataset}, found "
+                f"{sorted(str(path) for path in source_vcfs)}"
+            )
+        source_vcf = source_vcfs.pop()
+        bundled_vcf = output_dir / "inputs" / "vcfs" / source_vcf.name
+        copy_file(source_vcf, bundled_vcf)
+        source_index = Path(f"{source_vcf}.tbi")
+        if source_index.is_file():
+            copy_file(source_index, Path(f"{bundled_vcf}.tbi"))
         copy_file(
             iqtree_root / f"{dataset}.treefile",
             output_dir / "inputs" / "iqtree" / f"{dataset}.treefile",
@@ -312,15 +400,17 @@ def main() -> int:
             / masked_source.name,
         )
 
-    tasks = task_rows(simulation_manifest)
-    write_tsv(tasks, output_dir / "manifests" / "pgsui_gpu_tasks.tsv")
+    task_row_data = task_rows(simulation_manifest)
+    task_manifest_path = output_dir / "manifests" / "pgsui_gpu_tasks.tsv"
+    write_tsv(task_row_data, task_manifest_path)
+    tasks = validate_portable_tasks(task_manifest_path, output_dir)
 
     gti_rows: list[dict[str, Any]] = []
     gti_result_rows: list[dict[str, Any]] = []
-    for task in tasks:
+    for task_data in task_row_data:
         for method in ("naive", "som"):
-            dataset = task["dataset_id"]
-            strategy = task["strategy"]
+            dataset = task_data["dataset_id"]
+            strategy = task_data["strategy"]
             masked_name = next(
                 (output_dir / "inputs" / "masked_vcfs" / dataset / strategy).glob(
                     "*.vcf"
@@ -339,7 +429,7 @@ def main() -> int:
                         f"results/gtimputation/vcfs/{method}/"
                         f"{dataset}__sim30__{strategy}__seed42__{method}.vcf"
                     ),
-                    "evaluation_mask_tsv": task["evaluation_mask_tsv"],
+                    "evaluation_mask_tsv": task_data["evaluation_mask_tsv"],
                 }
             )
             output_name = f"{dataset}__sim30__{strategy}__seed42__{method}.vcf"
@@ -349,7 +439,7 @@ def main() -> int:
                     "method": method,
                     "dataset_name": dataset,
                     "simulation_strategy": strategy,
-                    "seed": task["seed"],
+                    "seed": task_data["seed"],
                     "source_masked_vcf": (
                         f"../../inputs/masked_vcfs/{dataset}/{strategy}/{masked_name}"
                     ),
@@ -402,6 +492,10 @@ def main() -> int:
 
     for script_name in SCRIPT_NAMES:
         copy_file(scripts_dir / script_name, output_dir / "scripts" / script_name)
+    copy_file(
+        scripts_dir.parent / "pgsui" / "utils" / "canonical_benchmark.py",
+        output_dir / "scripts" / PORTABLE_SUPPORT_NAME,
+    )
 
     for relative in (
         "results/pgsui",
@@ -429,6 +523,12 @@ def main() -> int:
         "n_datasets": len(datasets),
         "n_strategies": len(SIMULATION_STRATEGIES),
         "n_pgsui_tasks": len(tasks),
+        "pgsui_device": tasks[0].device,
+        "portable_canonical_support": f"scripts/{PORTABLE_SUPPORT_NAME}",
+        "slurm_worker_count": 4,
+        "n_tree_enabled_pgsui_tasks": sum(
+            task.strategy.startswith("nonrandom") for task in tasks
+        ),
         "n_gtimputation_manual_tasks": len(gti_rows),
     }
     (output_dir / "provenance" / "bundle_manifest.json").write_text(
