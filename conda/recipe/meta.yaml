@@ -1,6 +1,6 @@
 # meta.yaml - pg-sui conda recipe
 # Normalize version from CI/exported variables (PKG_VERSION/SETUPTOOLS_SCM_PRETEND_VERSION/GIT_DESCRIBE_TAG), fallback to default.
-{% set raw_version = environ.get("SETUPTOOLS_SCM_PRETEND_VERSION") or environ.get("PKG_VERSION") or environ.get("GIT_DESCRIBE_TAG") or "1.6.8" %}
+{% set raw_version = environ.get("SETUPTOOLS_SCM_PRETEND_VERSION") or environ.get("PKG_VERSION") or environ.get("GIT_DESCRIBE_TAG") or "1.8.6" %}
 {% set version = raw_version.lstrip("v").replace("-", ".").replace("+", ".") %}
 
 package:
@@ -38,7 +38,7 @@ requirements:
     - toytree
     - optuna >=4.6,<5.0
     - rich
-    - snpio >=1.7.3
+    - snpio >=1.7.4
     # GUI / server components
     - fastapi >=0.110
     - uvicorn-standard >=0.23

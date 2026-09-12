@@ -285,7 +285,7 @@ def test_bundle_runner_prefers_portable_cpu_support(tmp_path: Path) -> None:
         ),
         "tune_n_trials": 100,
         "tune_metrics": "f1 mcc average_precision",
-        "expected_pgsui_version": "1.8.5",
+        "expected_pgsui_version": "1.8.6",
     }
     with (manifest_dir / "pgsui_gpu_tasks.tsv").open(
         "w", newline="", encoding="utf-8"

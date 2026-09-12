@@ -69,6 +69,7 @@ def test_write_masked_vcf_changes_only_selected_gt_fields(tmp_path: Path) -> Non
     input_vcf = tmp_path / "input.vcf"
     samples = write_tiny_vcf(input_vcf)
     layout = SIMULATOR.read_vcf_layout(input_vcf)
+    assert layout.observed_ploidies == (2,)
     mask = np.zeros(layout.original_missing.shape, dtype=bool)
     mask[0, 0] = True
     mask[4, 1] = True
@@ -98,17 +99,38 @@ def test_write_masked_vcf_changes_only_selected_gt_fields(tmp_path: Path) -> Non
     assert "0/1:11" in text
 
 
+def test_auto_ploidy_preserves_haploid_gt_and_ignores_missing_tokens(
+    tmp_path: Path,
+) -> None:
+    vcf = tmp_path / "haploid.vcf"
+    vcf.write_text(
+        "##fileformat=VCFv4.2\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\ts1\ts2\n"
+        "1\t1\t.\tA\tG\t.\tPASS\t.\tGT\t0\t1\n"
+        "1\t2\t.\tC\tT\t.\tPASS\t.\tGT\t.\t./.\n",
+        encoding="utf-8",
+    )
+    layout = SIMULATOR.read_vcf_layout(vcf)
+
+    assert layout.observed_ploidies == (1,)
+    assert SIMULATOR.resolve_input_ploidy("auto", layout, vcf) == 1
+    with np.testing.assert_raises_regex(ValueError, "differs from VCF GT ploidy"):
+        SIMULATOR.resolve_input_ploidy("2", layout, vcf)
+
+
 def test_runtime_dataset_exposes_tree_parser_metadata(tmp_path: Path) -> None:
     input_vcf = tmp_path / "input.vcf"
     samples = write_tiny_vcf(input_vcf)
     layout = SIMULATOR.read_vcf_layout(input_vcf)
     dependencies = SIMULATOR.load_runtime_dependencies()
 
-    genotype_data, truth, snpio_layout, canonical_vcf = SIMULATOR.build_runtime_dataset(
-        input_vcf=input_vcf,
-        snpio_prefix=tmp_path / "snpio" / "source",
-        dependencies=dependencies,
-        verbose=False,
+    genotype_data, truth, snpio_layout, canonical_vcf, order_changed = (
+        SIMULATOR.build_runtime_dataset(
+            input_vcf=input_vcf,
+            snpio_prefix=tmp_path / "snpio" / "source",
+            dependencies=dependencies,
+            verbose=False,
+        )
     )
 
     assert genotype_data.samples == list(samples)
@@ -121,6 +143,67 @@ def test_runtime_dataset_exposes_tree_parser_metadata(tmp_path: Path) -> None:
     assert np.array_equal(truth, layout.truth_zygosity)
     assert snpio_layout.samples == samples
     assert canonical_vcf.is_file()
+    assert order_changed is False
+
+
+def test_runtime_dataset_accepts_only_verified_snpio_locus_sorting(
+    tmp_path: Path,
+) -> None:
+    input_vcf = tmp_path / "unsorted.vcf"
+    samples = write_tiny_vcf(input_vcf)
+    lines = input_vcf.read_text(encoding="utf-8").splitlines()
+    header = [line for line in lines if line.startswith("#")]
+    records = [line for line in lines if not line.startswith("#")]
+    input_vcf.write_text(
+        "\n".join([*header, records[2], records[0], records[1]]) + "\n",
+        encoding="utf-8",
+    )
+
+    genotype_data, truth, layout, _, order_changed = SIMULATOR.build_runtime_dataset(
+        input_vcf=input_vcf,
+        snpio_prefix=tmp_path / "snpio" / "source",
+        dependencies=SIMULATOR.load_runtime_dependencies(),
+        verbose=False,
+    )
+
+    assert genotype_data.samples == list(samples)
+    assert order_changed is True
+    assert [(record.chrom, record.pos) for record in layout.variants] == [
+        ("1", "10"),
+        ("1", "20"),
+        ("2", "30"),
+    ]
+    np.testing.assert_array_equal(truth, layout.truth_zygosity)
+
+
+def test_runtime_dataset_tracks_duplicate_loci_by_call_signature(
+    tmp_path: Path,
+) -> None:
+    input_vcf = tmp_path / "duplicate_unsorted.vcf"
+    input_vcf.write_text(
+        "##fileformat=VCFv4.2\n"
+        "##FORMAT=<ID=GT,Number=1,Type=String,Description=Genotype>\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\ts1\ts2\n"
+        "2\t30\t.\tC\tT\t.\tPASS\t.\tGT\t0/0\t0/1\n"
+        "1\t10\t.\tA\tG\t.\tPASS\t.\tGT\t0/0\t1/1\n"
+        "1\t10\t.\tA\tG\t.\tPASS\t.\tGT\t0/1\t0/0\n",
+        encoding="utf-8",
+    )
+
+    _, truth, layout, _, order_changed = SIMULATOR.build_runtime_dataset(
+        input_vcf=input_vcf,
+        snpio_prefix=tmp_path / "snpio" / "source",
+        dependencies=SIMULATOR.load_runtime_dependencies(),
+        verbose=False,
+    )
+
+    assert order_changed is True
+    assert [(record.chrom, record.pos) for record in layout.variants] == [
+        ("1", "10"),
+        ("1", "10"),
+        ("2", "30"),
+    ]
+    np.testing.assert_array_equal(truth, layout.truth_zygosity)
 
 
 def test_runtime_dataset_uses_snpio_multiallelic_alt_dosage(
@@ -134,7 +217,7 @@ def test_runtime_dataset_uses_snpio_multiallelic_alt_dosage(
         "1\t10\tv10\tA\tC,G\t.\tPASS\t.\tGT\t0/0\t0/2\t1/2\n",
         encoding="utf-8",
     )
-    _, truth, _, _ = SIMULATOR.build_runtime_dataset(
+    _, truth, _, _, _ = SIMULATOR.build_runtime_dataset(
         input_vcf=input_vcf,
         snpio_prefix=tmp_path / "snpio" / "source",
         dependencies=SIMULATOR.load_runtime_dependencies(),
@@ -144,24 +227,64 @@ def test_runtime_dataset_uses_snpio_multiallelic_alt_dosage(
     assert truth[:, 0].tolist() == [0, 1, 2]
 
 
+def test_regenerated_mask_uses_snpio_missing_sentinel(tmp_path: Path) -> None:
+    input_vcf = tmp_path / "input.vcf"
+    write_tiny_vcf(input_vcf)
+    dependencies = SIMULATOR.load_runtime_dependencies()
+    genotype_data, truth, _, _, _ = SIMULATOR.build_runtime_dataset(
+        input_vcf=input_vcf,
+        snpio_prefix=tmp_path / "snpio" / "source",
+        dependencies=dependencies,
+        verbose=False,
+    )
+    truth = truth.copy()
+    truth[0, 0] = -9
+    simulated, original, completion_count, completion_mode = SIMULATOR.regenerate_mask(
+        genotype_data=genotype_data,
+        ground_truth=truth,
+        strategy="random",
+        sim_prop=0.30,
+        sim_max_tries=None,
+        seed=42,
+        tree_parser=None,
+        dependencies=dependencies,
+        verbose=False,
+    )
+
+    assert original[0, 0]
+    assert not simulated[0, 0]
+    assert completion_count == 0
+    assert completion_mode == "none"
+    np.testing.assert_array_equal(original, truth == -9)
+
+
 def test_tree_container_loads_without_snpio_reader_state(tmp_path: Path) -> None:
     treefile = tmp_path / "dataset.treefile"
     treefile.write_text("(sample_0:0.1,sample_1:0.2);\n", encoding="utf-8")
+    iqtree = tmp_path / "dataset.iqtree"
+    iqtree.write_text("Rate matrix Q\n", encoding="utf-8")
+    siterates = tmp_path / "dataset.rate"
+    siterates.write_text("Site Rate Cat C_rate\n", encoding="utf-8")
     dependencies = SIMULATOR.load_runtime_dependencies()
 
-    tree_parser, resolved_treefile = SIMULATOR.build_tree_parser(
-        dataset_id="dataset",
-        tree_dir=tmp_path,
-        tree_suffix=".treefile",
-        iqtree_suffix=".iqtree",
-        dependencies=dependencies,
+    tree_parser, resolved_treefile, resolved_iqtree, resolved_siterates = (
+        SIMULATOR.build_tree_parser(
+            dataset_id="dataset",
+            tree_dir=tmp_path,
+            tree_suffix=".treefile",
+            iqtree_suffix=".iqtree",
+            siterates_suffix=".rate",
+            dependencies=dependencies,
+        )
     )
 
     assert resolved_treefile == treefile
+    assert resolved_iqtree == iqtree
+    assert resolved_siterates == siterates
     assert tree_parser.treefile == str(treefile)
     assert set(tree_parser.tree.get_tip_labels()) == {"sample_0", "sample_1"}
-    assert tree_parser.qmatrix is None
-    assert tree_parser.siterates is None
+    assert tree_parser.qmatrix == str(iqtree)
+    assert tree_parser.siterates == str(siterates)
 
 
 def test_module_origin_reports_missing_dependency() -> None:
@@ -213,6 +336,8 @@ def test_reuse_mode_exports_exact_pgsui_test_coordinates(tmp_path: Path) -> None
         np.asarray([0, 1, 2], dtype=np.int8), (len(layout.variants), 1)
     )
     result = SIMULATOR.prepare_strategy(
+        source_input_vcf=input_vcf,
+        snpio_locus_order_changed=False,
         input_vcf=input_vcf,
         output_dir=output_dir,
         reference_mask_dir=reference_root,
@@ -229,8 +354,10 @@ def test_reuse_mode_exports_exact_pgsui_test_coordinates(tmp_path: Path) -> None
         tree_dir=tmp_path / "trees",
         tree_suffix=".treefile",
         iqtree_suffix=".iqtree",
+        siterates_suffix=".rate",
         mask_mode="reuse",
         sim_prop=0.30,
+        sim_max_tries=None,
         validation_split=0.40,
         seed=7,
         ploidy=2,
@@ -268,7 +395,9 @@ def test_reviewer_run_sheets_record_inputs_and_rerun_settings(
         strategy="nonrandom",
         seed=42,
         sim_prop=0.30,
+        sim_max_tries=100_000,
         validation_split=0.30,
+        ploidy=2,
         mask_mode="regenerate",
         reference_mask_checked=True,
         reference_mask_match=True,
@@ -280,12 +409,18 @@ def test_reviewer_run_sheets_record_inputs_and_rerun_settings(
         n_original_missing=0,
         n_simulated_missing=9,
         simulated_missing_rate=0.30,
+        eligible_simulated_missing_rate=0.30,
         n_train_samples=7,
         n_validation_samples=1,
         n_test_samples=2,
         n_test_evaluation=2,
         n_written_missing=9,
         n_dropped_mask_positions=0,
+        nonrandom_completion_count=0,
+        nonrandom_completion_mode="none",
+        source_input_vcf="../../inputs/source/dataset.vcf",
+        source_input_sha256="source-hash",
+        snpio_locus_order_changed=False,
         input_vcf="../../inputs/test-vcf-files/dataset.vcf",
         reference_mask="../../legacy/dataset.mask.npz",
         masked_vcf="../masked_vcfs/dataset/nonrandom/input.vcf",
@@ -294,6 +429,8 @@ def test_reviewer_run_sheets_record_inputs_and_rerun_settings(
         evaluation_mask_tsv="../masks/dataset/nonrandom/evaluation.tsv",
         split_tsv="../splits/dataset/split.tsv",
         treefile="../../legacy/iqtree/dataset.treefile",
+        qmatrix="../../legacy/iqtree/dataset.iqtree",
+        siterates="../../legacy/iqtree/dataset.rate",
         input_sha256="input-hash",
         masked_vcf_sha256="masked-hash",
         mask_sha256="mask-hash",
@@ -308,10 +445,11 @@ def test_reviewer_run_sheets_record_inputs_and_rerun_settings(
     assert len(pgsui_rows) == 2
     assert {row["backend"] for row in pgsui_rows} == {"cpu", "cuda"}
     assert pgsui_rows[0]["qmatrix"] == "../../legacy/iqtree/dataset.iqtree"
-    assert pgsui_rows[0]["siterates"] == "../../legacy/iqtree/dataset.iqtree"
+    assert pgsui_rows[0]["siterates"] == "../../legacy/iqtree/dataset.rate"
     assert pgsui_rows[0]["tune_enabled"] == "True"
     assert pgsui_rows[0]["tune_metrics"] == "f1 mcc average_precision"
     assert pgsui_rows[0]["tune_n_trials"] == "100"
+    assert pgsui_rows[0]["sim_max_tries"] == "100000"
     assert pgsui_rows[0]["train_max_epochs"] == "2000"
 
     with (tmp_path / "manifests" / "gtimputation_run_sheet.csv").open(

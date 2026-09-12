@@ -1,560 +1,781 @@
+"""SNPio-backed population-genetic covariates for PG-SUI validation data."""
+
 from __future__ import annotations
 
+import gzip
 import logging
-import warnings
+import re
+import shutil
+import tempfile
+from dataclasses import dataclass
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import Any, Dict, Optional, Union
+from types import TracebackType
+from typing import Any
 
 import numpy as np
 import pandas as pd
-from sklearn.cluster import DBSCAN
-from sklearn.decomposition import PCA
-from sklearn.impute import SimpleImputer
-from sklearn.metrics import silhouette_score
-from sklearn.neighbors import NearestNeighbors
-from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import StandardScaler
-
-# Configure logger (can be controlled by user application)
-logger = logging.getLogger(__name__)
 
 try:
-    from snpio import StructureReader  # Added StructureReader
-    from snpio import GenePopReader, GenotypeEncoder, PhylipReader, VCFReader
-except ImportError:
-    raise ImportError("SNPio is required. Run 'pip install snpio'.")
+    from snpio import (
+        GenePopReader,
+        GenotypeEncoder,
+        PhylipReader,
+        PopGenStatistics,
+        StructureReader,
+        VCFReader,
+    )
+except ImportError as exc:
+    raise ImportError(
+        "SNPio is required. Install PG-SUI with its dependencies."
+    ) from exc
+
+logger = logging.getLogger(__name__)
+SUPPORTED_FORMATS = frozenset({"vcf", "phylip", "phy", "genepop", "structure", "str"})
+SNPIO_LD_MAX_PAIRS = 100_000
+SNPIO_LD_SEED = 42
+
+
+@dataclass(frozen=True)
+class TajimasDResult:
+    """Classical multi-site Tajima's D result for complete-call loci."""
+
+    value: float
+    complete_loci: int
+    segregating_sites: int
+    reason: str
+
+
+@dataclass(frozen=True)
+class SNPioLDResult:
+    """SNPio Ragsdale-Gravel LD estimates and computation status."""
+
+    r2d: float
+    rdz: float
+    effective_population_size: float
+    loci: int
+    pairs: int
+    reason: str
+
+
+def snpio_version() -> str:
+    """Return the installed SNPio distribution version."""
+    try:
+        return version("snpio")
+    except PackageNotFoundError:
+        return "unknown"
+
+
+def clean_012_matrix(matrix: np.ndarray) -> np.ndarray:
+    """Validate SNPio's diploid 0/1/2 encoding and convert missing calls to NaN.
+
+    Args:
+        matrix: SNPio ``GenotypeEncoder.genotypes_012`` matrix with shape
+            ``(n_samples, n_loci)``.
+
+    Returns:
+        Owned float matrix containing only 0, 1, 2, and NaN.
+
+    Raises:
+        ValueError: If the matrix is not two-dimensional, is empty, or contains
+            a nonmissing value outside SNPio's 0/1/2 encoding.
+    """
+    values = np.asarray(matrix)
+    if values.ndim != 2:
+        raise ValueError(f"Expected a 2D genotype matrix, found shape {values.shape}")
+    if 0 in values.shape:
+        raise ValueError(
+            f"Genotype matrix must be nonempty, found shape {values.shape}"
+        )
+    cleaned = np.array(values, dtype=float, copy=True)
+    cleaned[cleaned == -9] = np.nan
+    valid = np.isnan(cleaned) | np.isin(cleaned, (0.0, 1.0, 2.0))
+    if not np.all(valid):
+        unexpected = np.unique(cleaned[~valid]).tolist()
+        raise ValueError(f"Unexpected SNPio 012 values: {unexpected}")
+    return cleaned
+
+
+def infer_vcf_ploidy(path: Path) -> int:
+    """Infer one consistent positive ploidy from called VCF GTs."""
+    opener = gzip.open if path.name.lower().endswith(".gz") else open
+    observed: set[int] = set()
+    with opener(path, "rt", encoding="utf-8") as handle:
+        for line in handle:
+            if not line or line.startswith("#"):
+                continue
+            fields = line.rstrip("\r\n").split("\t")
+            if len(fields) < 10:
+                continue
+            format_keys = fields[8].split(":")
+            if "GT" not in format_keys:
+                continue
+            genotype_index = format_keys.index("GT")
+            for sample in fields[9:]:
+                values = sample.split(":")
+                if genotype_index >= len(values):
+                    continue
+                alleles = re.split(r"[/|]", values[genotype_index])
+                if not alleles or any(allele in {"", "."} for allele in alleles):
+                    continue
+                observed.add(len(alleles))
+    ploidies = tuple(sorted(observed))
+    if len(ploidies) != 1 or ploidies[0] < 1:
+        raise ValueError(
+            f"VCF must contain one consistent positive GT ploidy: {path} has {ploidies}"
+        )
+    return ploidies[0]
+
+
+def read_biallelic_vcf_alt_dosage(path: Path, *, ploidy: int) -> np.ndarray:
+    """Read exact non-reference allele-copy counts from a biallelic VCF."""
+    if ploidy < 1:
+        raise ValueError("ploidy must be positive")
+    opener = gzip.open if path.name.lower().endswith(".gz") else open
+    n_samples: int | None = None
+    loci: list[list[float]] = []
+    with opener(path, "rt", encoding="utf-8") as handle:
+        for line in handle:
+            if line.startswith("#CHROM"):
+                n_samples = len(line.rstrip("\r\n").split("\t")) - 9
+                continue
+            if not line or line.startswith("#"):
+                continue
+            fields = line.rstrip("\r\n").split("\t")
+            if n_samples is None or len(fields) != 9 + n_samples:
+                raise ValueError(f"Malformed VCF sample columns: {path}")
+            if len(fields[4].split(",")) != 1:
+                raise ValueError(
+                    "Exact polyploid dosage currently requires biallelic VCF loci: "
+                    f"{path} has {fields[0]}:{fields[1]}"
+                )
+            format_keys = fields[8].split(":")
+            if "GT" not in format_keys:
+                raise ValueError(f"VCF record lacks GT: {path}")
+            genotype_index = format_keys.index("GT")
+            locus: list[float] = []
+            for sample in fields[9:]:
+                values = sample.split(":")
+                genotype = values[genotype_index]
+                alleles = re.split(r"[/|]", genotype)
+                if any(allele in {"", "."} for allele in alleles):
+                    locus.append(np.nan)
+                    continue
+                if len(alleles) != ploidy:
+                    raise ValueError(
+                        f"VCF GT ploidy differs from {ploidy}: {genotype!r} in {path}"
+                    )
+                try:
+                    indices = [int(allele) for allele in alleles]
+                except ValueError as exc:
+                    raise ValueError(f"Invalid GT in {path}: {genotype!r}") from exc
+                if not set(indices).issubset({0, 1}):
+                    raise ValueError(f"Invalid biallelic GT in {path}: {genotype!r}")
+                locus.append(float(sum(index > 0 for index in indices)))
+            loci.append(locus)
+    if n_samples is None or not loci:
+        raise ValueError(f"VCF contains no genotype matrix: {path}")
+    return np.asarray(loci, dtype=float).T
+
+
+def polyploid_locus_statistics(
+    allele_copies: np.ndarray,
+    *,
+    ploidy: int,
+) -> pd.DataFrame:
+    """Calculate Ho, He, and unbiased pi from exact polyploid allele copies."""
+    values = np.asarray(allele_copies, dtype=float)
+    if values.ndim != 2 or 0 in values.shape:
+        raise ValueError(f"Expected a nonempty dosage matrix, found {values.shape}")
+    valid = np.isnan(values) | ((values >= 0) & (values <= ploidy))
+    if not np.all(valid):
+        raise ValueError("Polyploid dosage is outside the allowed allele-copy range")
+    observed = np.sum(~np.isnan(values), axis=0)
+    chromosomes = ploidy * observed
+    alt_counts = np.nansum(values, axis=0, dtype=float)
+    allele_frequency = _safe_divide(alt_counts, chromosomes)
+    heterozygotes = np.sum(
+        (~np.isnan(values)) & (values > 0) & (values < ploidy), axis=0
+    )
+    ho = _safe_divide(heterozygotes, observed)
+    he = 2.0 * allele_frequency * (1.0 - allele_frequency)
+    he[observed == 0] = np.nan
+    correction = _safe_divide(chromosomes, chromosomes - 1)
+    pi = he * correction
+    pi[chromosomes <= 1] = np.nan
+    return pd.DataFrame({"Ho": ho, "He": he, "Pi": pi})
+
+
+def _allele_copy_matrix(matrix: np.ndarray, ploidy: int) -> np.ndarray:
+    """Return allele-copy counts consistent with haploid or diploid ploidy."""
+    if ploidy not in {1, 2}:
+        raise ValueError("ploidy must be 1 or 2")
+    values = clean_012_matrix(matrix)
+    if ploidy == 2:
+        return values
+    return np.where(np.isnan(values), np.nan, (values > 0).astype(float))
+
+
+def _safe_divide(numerator: np.ndarray, denominator: np.ndarray) -> np.ndarray:
+    output = np.full(np.broadcast_shapes(numerator.shape, denominator.shape), np.nan)
+    np.divide(numerator, denominator, out=output, where=denominator != 0)
+    return output
+
+
+def _harmonic_number(order: int, power: int = 1) -> float:
+    if order < 1:
+        return 0.0
+    values = np.arange(1, order + 1, dtype=float)
+    return float(np.sum(1.0 / values**power))
+
+
+def tajimas_d_complete_sites(
+    matrix: np.ndarray,
+    *,
+    ploidy: int = 2,
+    allele_copies: np.ndarray | None = None,
+) -> TajimasDResult:
+    """Calculate classical multi-site Tajima's D on complete-call SNP loci.
+
+    The standard statistic assumes a common chromosome sample size across
+    sites. To avoid silently applying an invalid variable-sample-size formula,
+    loci containing missing calls are excluded and their count is reported.
+
+    Args:
+        matrix: Clean diploid dosage matrix with shape ``(samples, loci)``.
+
+    Returns:
+        Statistic, number of complete loci, number of segregating complete
+        sites, and an explicit status reason.
+    """
+    values = (
+        _allele_copy_matrix(matrix, ploidy)
+        if allele_copies is None
+        else np.asarray(allele_copies, dtype=float)
+    )
+    if values.shape != np.asarray(matrix).shape:
+        raise ValueError("Allele-copy matrix shape differs from genotype categories")
+    n_samples = values.shape[0]
+    complete = ~np.isnan(values).any(axis=0)
+    complete_values = values[:, complete]
+    complete_loci = int(complete.sum())
+    if n_samples < 2:
+        return TajimasDResult(np.nan, complete_loci, 0, "fewer_than_two_samples")
+    if complete_loci == 0:
+        return TajimasDResult(np.nan, 0, 0, "no_complete_call_loci")
+
+    n_chromosomes = ploidy * n_samples
+    alt_counts = complete_values.sum(axis=0, dtype=float)
+    segregating = (alt_counts > 0) & (alt_counts < n_chromosomes)
+    segregating_sites = int(segregating.sum())
+    if segregating_sites == 0:
+        return TajimasDResult(
+            np.nan, complete_loci, 0, "no_segregating_complete_call_loci"
+        )
+
+    allele_frequency = alt_counts[segregating] / n_chromosomes
+    pi_total = float(
+        np.sum(
+            2.0
+            * allele_frequency
+            * (1.0 - allele_frequency)
+            * n_chromosomes
+            / (n_chromosomes - 1)
+        )
+    )
+    a1 = _harmonic_number(n_chromosomes - 1)
+    a2 = _harmonic_number(n_chromosomes - 1, power=2)
+    b1 = (n_chromosomes + 1) / (3.0 * (n_chromosomes - 1))
+    b2 = (2.0 * (n_chromosomes**2 + n_chromosomes + 3)) / (
+        9.0 * n_chromosomes * (n_chromosomes - 1)
+    )
+    c1 = b1 - 1.0 / a1
+    c2 = b2 - (n_chromosomes + 2) / (a1 * n_chromosomes) + a2 / a1**2
+    e1 = c1 / a1
+    e2 = c2 / (a1**2 + a2)
+    variance = e1 * segregating_sites + e2 * segregating_sites * (segregating_sites - 1)
+    if not np.isfinite(variance) or variance <= 0:
+        return TajimasDResult(
+            np.nan, complete_loci, segregating_sites, "nonpositive_variance"
+        )
+    theta_watterson = segregating_sites / a1
+    value = (pi_total - theta_watterson) / np.sqrt(variance)
+    return TajimasDResult(
+        float(value), complete_loci, segregating_sites, "complete_call_loci"
+    )
+
+
+def snpio_ld_overall(
+    popgen: PopGenStatistics,
+    matrix: np.ndarray,
+    *,
+    n_jobs: int = 1,
+    ploidy: int = 2,
+) -> SNPioLDResult:
+    """Calculate SNPio's unbiased overall LD estimate without bootstrapping.
+
+    The validation SNPs are explicitly treated as unlinked. SNPio evaluates at
+    most 100,000 deterministically sampled pairs and reports the aggregate
+    Ragsdale-Gravel ``r2D`` ratio rather than averaging biased pairwise ratios.
+    """
+    values = clean_012_matrix(matrix)
+    if ploidy == 1:
+        return SNPioLDResult(
+            np.nan,
+            np.nan,
+            np.nan,
+            values.shape[1],
+            0,
+            "not_estimable_for_haploid_data",
+        )
+    if ploidy != 2:
+        return SNPioLDResult(
+            np.nan,
+            np.nan,
+            np.nan,
+            values.shape[1],
+            0,
+            "not_estimable_for_polyploid_data",
+        )
+    if values.shape[0] < 4:
+        return SNPioLDResult(
+            np.nan, np.nan, np.nan, values.shape[1], 0, "fewer_than_four_samples"
+        )
+    try:
+        result = popgen.calculate_linkage_disequilibrium(
+            assume_unlinked=True,
+            n_bootstraps=0,
+            n_jobs=n_jobs,
+            max_pairs=SNPIO_LD_MAX_PAIRS,
+            pairwise_sample_size=0,
+            seed=SNPIO_LD_SEED,
+            save_pairwise=False,
+            save_plots=False,
+        )
+    except ValueError as exc:
+        return SNPioLDResult(
+            np.nan,
+            np.nan,
+            np.nan,
+            values.shape[1],
+            0,
+            f"not_estimable: {exc}",
+        )
+    summary = result.summary
+    if not isinstance(summary, pd.DataFrame) or len(summary) != 1:
+        raise ValueError("SNPio overall LD returned an unexpected summary table")
+    row = summary.iloc[0]
+    if str(row["Population"]) != "Overall":
+        raise ValueError("SNPio overall LD did not label the pooled population")
+    return SNPioLDResult(
+        r2d=float(row["r2D"]),
+        rdz=float(row["rDz"]),
+        effective_population_size=float(row["Ne"]),
+        loci=int(row["Loci"]),
+        pairs=int(row["Pairs"]),
+        reason="snpio_ragsdale_gravel_unbiased",
+    )
+
+
+def per_locus_statistics(
+    matrix: np.ndarray,
+    snpio_statistics: pd.DataFrame,
+    *,
+    locus_names: np.ndarray | None = None,
+    filename: str = "",
+    ploidy: int = 2,
+    allele_copies: np.ndarray | None = None,
+) -> pd.DataFrame:
+    """Combine SNPio Ho/He/Pi with explicit dosage-derived statistics."""
+    values = clean_012_matrix(matrix)
+    allele_copies = (
+        _allele_copy_matrix(values, ploidy)
+        if allele_copies is None
+        else np.asarray(allele_copies, dtype=float)
+    )
+    if allele_copies.shape != values.shape:
+        raise ValueError("Allele-copy matrix shape differs from genotype categories")
+    n_samples, n_loci = values.shape
+    required = {"Ho", "He", "Pi"}
+    if not required.issubset(snpio_statistics.columns):
+        missing = sorted(required.difference(snpio_statistics.columns))
+        raise ValueError(f"SNPio summary statistics are missing columns: {missing}")
+    if len(snpio_statistics) != n_loci:
+        raise ValueError(
+            "SNPio summary-statistic length differs from the genotype matrix: "
+            f"{len(snpio_statistics)} != {n_loci}"
+        )
+    if locus_names is None:
+        locus_names = np.array([f"Locus_{index + 1}" for index in range(n_loci)])
+    if len(locus_names) != n_loci:
+        raise ValueError("Locus-name count differs from the genotype matrix")
+
+    observed = np.sum(~np.isnan(values), axis=0)
+    chromosomes = ploidy * observed
+    alt_counts = np.nansum(allele_copies, axis=0, dtype=float)
+    allele_frequency = _safe_divide(alt_counts, chromosomes)
+    minor_frequency = np.minimum(allele_frequency, 1.0 - allele_frequency)
+    segregating = (observed > 0) & (alt_counts > 0) & (alt_counts < chromosomes)
+    minor_counts = np.minimum(alt_counts, chromosomes - alt_counts)
+    singletons = segregating & np.isclose(minor_counts, 1.0)
+    genotype_counts = np.column_stack(
+        [np.sum(values == genotype, axis=0) for genotype in (0.0, 1.0, 2.0)]
+    )
+    genotype_category_count = np.sum(genotype_counts > 0, axis=1)
+    frequencies = _safe_divide(genotype_counts, observed[:, np.newaxis])
+    raw_diversity = 1.0 - np.nansum(frequencies**2, axis=1)
+    diversity_correction = _safe_divide(observed, observed - 1)
+    genotype_diversity = raw_diversity * diversity_correction
+    genotype_diversity[observed <= 1] = np.nan
+
+    theta_watterson = np.full(n_loci, np.nan)
+    theta_watterson[observed > 0] = 0.0
+    for sample_size in np.unique(observed[segregating]):
+        n_chromosomes = ploidy * int(sample_size)
+        a1 = _harmonic_number(n_chromosomes - 1)
+        if a1 > 0:
+            theta_watterson[segregating & (observed == sample_size)] = 1.0 / a1
+
+    snpio_values = snpio_statistics.reset_index(drop=True)
+    ho = pd.to_numeric(snpio_values["Ho"], errors="coerce").to_numpy(float)
+    he = pd.to_numeric(snpio_values["He"], errors="coerce").to_numpy(float)
+    pi = pd.to_numeric(snpio_values["Pi"], errors="coerce").to_numpy(float)
+    fixation = np.full(n_loci, np.nan)
+    valid_he = np.isfinite(he) & (he > 0) & (ploidy == 2)
+    fixation[valid_he] = 1.0 - ho[valid_he] / he[valid_he]
+
+    return pd.DataFrame(
+        {
+            "Locus": np.asarray(locus_names),
+            "Sample_Size": observed,
+            "Missingness": 1.0 - observed / n_samples,
+            "SegSites": segregating.astype(int),
+            "Singletons": singletons.astype(int),
+            "MAF": minor_frequency,
+            "Ho": ho,
+            "He": he,
+            "F_inbreeding": fixation,
+            "Heterozygote_Count": genotype_counts[:, 1],
+            "Genotype_Category_Count": genotype_category_count,
+            "Genotype_Diversity": genotype_diversity,
+            "Pi": pi,
+            "ThetaWatt_Per_Site": theta_watterson,
+            "TajimaD_Per_Site": np.full(n_loci, np.nan),
+            "Filename": filename,
+            "TotalPos": 1,
+            "SNPio_Version": snpio_version(),
+        }
+    )
+
+
+def _finite_statistic(series: pd.Series, operation: str) -> float:
+    values = pd.to_numeric(series, errors="coerce").to_numpy(float)
+    values = values[np.isfinite(values)]
+    if values.size == 0:
+        return np.nan
+    if operation == "mean":
+        return float(values.mean())
+    if operation == "variance":
+        return float(values.var(ddof=1)) if values.size > 1 else np.nan
+    if operation == "stddev":
+        return float(values.std(ddof=1)) if values.size > 1 else np.nan
+    raise ValueError(f"Unknown summary operation: {operation}")
 
 
 class DnaSPSingleLocusAnalyzer:
-    """Replicates DnaSP v6 output treating EACH COLUMN (SNP) as a separate Locus Now supports VCF, Phylip, GenePop, and Structure formats."""
+    """Calculate transparent per-SNP covariates using SNPio's 0/1/2 data model."""
 
     def __init__(
         self,
-        filename: Union[str, Path],
-        popmap_file: Optional[Union[str, Path]] = None,
+        filename: str | Path,
+        popmap_file: str | Path | None = None,
         file_format: str = "vcf",
-    ):
-        """Initialize the analyzer.
-
-        Args:
-            filename: Path to genotype file (VCF, Phylip, GenePop, Structure).
-            popmap_file: Optional path to population map file.
-            file_format: Format of the genotype file ('vcf', 'phylip', 'genepop', 'structure').
-        """
-        self.filename = Path(filename)
-        self.popmap_file = Path(popmap_file) if popmap_file else None
+        *,
+        n_jobs: int = 1,
+        ploidy: int | None = None,
+    ) -> None:
+        self.filename = Path(filename).expanduser().resolve()
+        self.popmap_file = (
+            None if popmap_file is None else Path(popmap_file).expanduser().resolve()
+        )
         self.file_format = file_format.lower()
+        self.n_jobs = n_jobs
+        self.requested_ploidy = ploidy
+        if self.file_format not in SUPPORTED_FORMATS:
+            raise ValueError(
+                f"Unsupported format {file_format!r}; choose {sorted(SUPPORTED_FORMATS)}"
+            )
+        if self.n_jobs < 1:
+            raise ValueError("n_jobs must be at least 1")
+        if self.requested_ploidy is not None and self.requested_ploidy < 1:
+            raise ValueError("ploidy must be positive or None for VCF inference")
+        if not self.filename.is_file():
+            raise FileNotFoundError(self.filename)
+        if self.popmap_file is not None and not self.popmap_file.is_file():
+            raise FileNotFoundError(self.popmap_file)
+        self._temporary_directory = tempfile.TemporaryDirectory(prefix="snpiosp_")
+        self._load_data()
 
-        # Safe initialization without global side effects
-        self._load_data(self.file_format)
+    def _stage_input(self) -> Path:
+        root = Path(self._temporary_directory.name)
+        staged = root / self.filename.name
+        shutil.copy2(self.filename, staged)
+        for suffix in (".tbi", ".csi"):
+            index = Path(f"{self.filename}{suffix}")
+            if index.is_file():
+                shutil.copy2(index, Path(f"{staged}{suffix}"))
+        return staged
 
-    def _load_data(self, ft: str) -> None:
-        """Load genotype data using SNPio readers.
+    @staticmethod
+    def _read_phylip_sample_names(path: Path) -> list[str]:
+        with path.open(encoding="utf-8") as handle:
+            header = handle.readline().split()
+            if not header:
+                return []
+            n_samples = int(header[0])
+            samples = [
+                line.split()[0] for line in handle if line.strip() and line.split()
+            ]
+        return samples[:n_samples]
 
-        Args:
-            ft: File format string.
-        """
-        logger.info(f"Loading data from {self.filename} using SNPio...")
+    def _single_pool_popmap(self, staged: Path) -> Path:
+        samples = self._read_phylip_sample_names(staged)
+        if not samples:
+            raise ValueError(f"Could not read PHYLIP samples from {self.filename}")
+        path = Path(self._temporary_directory.name) / "single_pool.popmap"
+        path.write_text(
+            "".join(f"{sample}\tPop1\n" for sample in samples), encoding="utf-8"
+        )
+        return path
 
-        reader_mapper = {
+    def _load_data(self) -> None:
+        staged = self._stage_input()
+        inferred_ploidy = (
+            infer_vcf_ploidy(staged)
+            if self.file_format == "vcf"
+            else self.requested_ploidy or 2
+        )
+        if (
+            self.requested_ploidy is not None
+            and self.requested_ploidy != inferred_ploidy
+        ):
+            raise ValueError(
+                f"Configured ploidy {self.requested_ploidy} differs from VCF GT "
+                f"ploidy {inferred_ploidy}: {self.filename}"
+            )
+        self.ploidy = inferred_ploidy
+        reader_class = {
             "vcf": VCFReader,
             "phylip": PhylipReader,
             "phy": PhylipReader,
             "genepop": GenePopReader,
             "structure": StructureReader,
             "str": StructureReader,
+        }[self.file_format]
+        effective_popmap = self.popmap_file
+        if effective_popmap is None and self.file_format in {"phylip", "phy"}:
+            effective_popmap = self._single_pool_popmap(staged)
+        prefix = Path(self._temporary_directory.name) / "snpio"
+        kwargs: dict[str, Any] = {
+            "filename": str(staged),
+            "popmapfile": None if effective_popmap is None else str(effective_popmap),
+            "prefix": str(prefix),
+            "show_plots": False,
         }
-
-        if ft not in reader_mapper:
-            keys = list(reader_mapper.keys())
-            msg = f"Format '{ft}' not supported. Use: {keys}"
-            logger.error(msg)
-            raise ValueError(msg)
-
-        # SNPio readers generally accept filename and popmapfile as base kwargs
-        kwargs = {"filename": self.filename, "popmapfile": self.popmap_file}
-
-        try:
-            # Suppress specific warnings just for the reader if necessary
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                self.gd = reader_mapper[ft](**kwargs)
-        except Exception as e:
-            msg = f"Failed to load data: {e}"
-            logger.error(msg)
-            raise RuntimeError(msg)
-
-        logger.info("Encoding genotypes...")
-        encoder = GenotypeEncoder(self.gd)
-        self.genotype_matrix = self._clean_012_matrix(encoder.genotypes_012)
-
-        self.samples = np.asarray(self.gd.samples)
-        self.locus_names = self._get_locus_names()
-
-        # Population Inference
+        if self.file_format == "vcf":
+            kwargs["disable_progress_bar"] = True
+        self.gd = reader_class(**kwargs)
+        self.genotype_matrix = clean_012_matrix(GenotypeEncoder(self.gd).genotypes_012)
+        self.allele_copy_matrix = (
+            read_biallelic_vcf_alt_dosage(staged, ploidy=self.ploidy)
+            if self.file_format == "vcf" and self.ploidy > 2
+            else _allele_copy_matrix(self.genotype_matrix, self.ploidy)
+        )
+        if self.allele_copy_matrix.shape != self.genotype_matrix.shape:
+            raise ValueError("VCF dosage and SNPio genotype matrices differ in shape")
+        if not np.array_equal(
+            np.isnan(self.allele_copy_matrix),
+            np.isnan(self.genotype_matrix),
+        ):
+            raise ValueError("VCF dosage and SNPio genotype missingness differ")
+        self.samples = np.asarray(self.gd.samples, dtype=str)
+        loci = getattr(self.gd, "locus_names", None)
+        self.locus_names = (
+            np.asarray(loci, dtype=str)
+            if loci is not None and len(loci) == self.genotype_matrix.shape[1]
+            else np.array(
+                [f"Locus_{index + 1}" for index in range(self.genotype_matrix.shape[1])]
+            )
+        )
         if self.popmap_file is None:
-            logger.info("No popmap. Inferring populations via PCA+DBSCAN...")
-            self.populations = self._infer_populations_dbscan()
+            self.populations = pd.Series("Pop1", index=self.samples, dtype=str)
+            self._analyze_populations = False
         else:
-            self.populations = pd.Series(self.gd.populations, index=self.samples)
-
-        logger.info(
-            f"Loaded: {len(self.samples)} samples, {self.genotype_matrix.shape[1]} loci."
-        )
-        logger.debug(f"Populations: {sorted(self.populations.unique())}")
-
-    def _get_locus_names(self) -> np.ndarray:
-        """Generate locus names based on SNPio data or default naming.
-
-        Returns:
-            Numpy array of locus names.
-        """
-        n_snps = self.genotype_matrix.shape[1]
-
-        # specific check for numpy array or list presence
-        gd_loci = getattr(self.gd, "locus_names", None)
-
-        if gd_loci is not None and len(gd_loci) == n_snps:
-            return np.asarray(gd_loci)
-
-        return np.array([f"Locus_{i+1}" for i in range(n_snps)])
-
-    @staticmethod
-    def _clean_012_matrix(X: np.ndarray) -> np.ndarray:
-        """Convert to float, set invalid to NaN.
-
-        Args:
-            X: Input genotype matrix (numpy array).
-
-        Returns:
-            Cleaned genotype matrix with invalid entries as NaN.
-        """
-        Xc = X.astype(float, copy=True)
-
-        # Optimized: Set anything not 0, 1, 2 to NaN in one go
-        mask_invalid = (Xc != 0.0) & (Xc != 1.0) & (Xc != 2.0)
-        Xc[mask_invalid] = np.nan
-        return Xc
-
-    # ---------------------------------------------------------------------
-    # Robust DBSCAN Logic
-    # ---------------------------------------------------------------------
-    @staticmethod
-    def _score_dbscan_solution(
-        X: np.ndarray,
-        labels: np.ndarray,
-        noise_cap: float = 0.7,
-        w_clusters: float = 1.0,
-        w_noise: float = 1.5,
-        w_sil: float = 0.5,
-    ) -> float:
-        """Score DBSCAN clustering solution.
-
-        Args:
-            X: Input data matrix.
-            labels: Cluster labels from DBSCAN.
-            noise_cap: Maximum noise fraction before heavy penalty.
-            w_clusters: Weight for number of clusters.
-            w_noise: Weight for noise penalty.
-            w_sil: Weight for silhouette score bonus.
-        """
-        # Optimized: np.unique returns counts directly
-        unique_labels, counts = np.unique(labels, return_counts=True)
-
-        # Calculate noise fraction
-        if -1 in unique_labels:
-            noise_count = counts[unique_labels == -1][0]
-            noise_frac = float(noise_count / len(labels))
-            n_clusters = len(unique_labels) - 1
+            self.populations = pd.Series(
+                np.asarray(self.gd.populations, dtype=str), index=self.samples
+            )
+            self._analyze_populations = True
+        popgen = PopGenStatistics(self.gd, verbose=False, debug=False)
+        if self.ploidy > 2:
+            per_population = {
+                population: polyploid_locus_statistics(
+                    self.allele_copy_matrix[self.populations.eq(population).to_numpy()],
+                    ploidy=self.ploidy,
+                )
+                for population in self.populations_to_analyze
+            }
+            self.snpio_summary = {
+                "overall": polyploid_locus_statistics(
+                    self.allele_copy_matrix, ploidy=self.ploidy
+                ),
+                "per_population": per_population,
+            }
+            self.snpio_allele_summary = {}
+            self.ho_he_pi_source = "Exact raw VCF allele-copy counts"
         else:
-            noise_frac = 0.0
-            n_clusters = len(unique_labels)
-
-        if n_clusters == 0:
-            return -np.inf
-
-        sil_bonus = 0.0
-        if n_clusters >= 2:
-            mask = labels != -1
-            # Safety check for minimum samples for silhouette
-            if np.sum(mask) > n_clusters:
-                try:
-                    sil_bonus = float(silhouette_score(X[mask], labels[mask]))
-                except ValueError:
-                    pass  # Keep bonus at 0.0
-
-        noise_pen = (
-            noise_frac
-            if noise_frac <= noise_cap
-            else noise_cap + 3.0 * (noise_frac - noise_cap)
-        )
-        return (w_clusters * n_clusters) - (w_noise * noise_pen) + (w_sil * sil_bonus)
-
-    def _estimate_dbscan_eps(
-        self, X: np.ndarray, min_samples: int = 5, quantile_fallback: float = 0.9
-    ) -> float:
-        """Estimate initial DBSCAN eps using k-NN distances.
-
-        Args:
-            X: Input data matrix.
-            min_samples: Minimum samples for DBSCAN.
-            quantile_fallback: Fallback quantile for eps if knee detection fails.
-
-        Returns:
-            Estimated eps value.
-        """
-        n = X.shape[0]
-        k = max(2, min(min_samples, n - 1))
-
-        nn = NearestNeighbors(n_neighbors=k, n_jobs=-1).fit(X)
-        distances, _ = nn.kneighbors(X)
-        kth_dist = np.sort(distances[:, -1])
-
-        if np.allclose(kth_dist, kth_dist[0]):
-            return float(np.quantile(kth_dist, quantile_fallback) + 1e-6)
-
-        # Knee detection (Vectorized)
-        y = (kth_dist - kth_dist.min()) / (kth_dist.max() - kth_dist.min() + 1e-9)
-        x = np.linspace(0.0, 1.0, len(y))
-        # Find point with max distance from diagonal
-        knee_idx = np.argmax(y - x)
-        eps = float(kth_dist[knee_idx])
-
-        return (
-            eps
-            if (np.isfinite(eps) and eps > 0)
-            else float(np.quantile(kth_dist, quantile_fallback))
+            self.snpio_summary, self.snpio_allele_summary = popgen.summary_statistics(
+                method="observed",
+                n_jobs=self.n_jobs,
+                save_plots=False,
+                include_nei=False,
+            )
+            self.ho_he_pi_source = "SNPio PopGenStatistics.summary_statistics"
+        self.snpio_ld = (
+            SNPioLDResult(
+                np.nan,
+                np.nan,
+                np.nan,
+                self.genotype_matrix.shape[1],
+                0,
+                "not_run_for_population_mapped_input",
+            )
+            if self._analyze_populations
+            else snpio_ld_overall(
+                popgen,
+                self.genotype_matrix,
+                n_jobs=self.n_jobs,
+                ploidy=self.ploidy,
+            )
         )
 
-    def _tune_dbscan_params(
-        self,
-        X,
-        eps0,
-        min_samples_grid,
-        eps_factors=(0.03, 2.5),
-        n_eps=25,
-        noise_cap=0.7,
-    ) -> tuple[float, int]:
-        """Tune DBSCAN eps and min_samples using grid search.
+    @property
+    def populations_to_analyze(self) -> list[str]:
+        """Return explicit populations only; inferred populations are never used."""
+        if not self._analyze_populations:
+            return []
+        return sorted(self.populations.unique().tolist())
 
-        Args:
-            X: Input data matrix.
-            eps0: Initial eps estimate.
-            min_samples_grid: Grid of min_samples to try.
-            eps_factors: Multiplicative factors for eps grid.
-            n_eps: Number of eps values to try.
-            noise_cap: Maximum noise fraction before heavy penalty.
-
-        Returns:
-            Tuple of best (eps, min_samples).
-        """
-
-        low = max(eps0 * eps_factors[0], 1e-6)
-        high = max(eps0 * eps_factors[1], 1e-6 * 1.01)
-
-        # Logspace ensures we sample smaller epsilons more densely
-        eps_grid = np.geomspace(low, high, n_eps)
-
-        best_score = -np.inf
-        best_eps = eps0
-        best_ms = min_samples_grid[0]
-
-        for ms in min_samples_grid:
-            for eps in eps_grid:
-                labels = DBSCAN(eps=eps, min_samples=int(ms), n_jobs=-1).fit_predict(X)
-                score = self._score_dbscan_solution(X, labels, noise_cap=noise_cap)
-                if score > best_score:
-                    best_score, best_eps, best_ms = score, eps, int(ms)
-
-        return float(best_eps), int(best_ms)
-
-    def _infer_populations_dbscan(self, n_pcs: int = 30) -> pd.Series:
-        """Infer populations using PCA + DBSCAN.
-
-        Args:
-            n_pcs: Number of principal components to use.
-
-        Returns:
-            Pandas Series of inferred population labels indexed by sample names.
-        """
-        # Impute missing data with most frequent genotype
-        imputer = SimpleImputer(strategy="most_frequent")
-        X_imp = imputer.fit_transform(self.genotype_matrix)
-
-        n_components = min(n_pcs, X_imp.shape[0] - 1, X_imp.shape[1])
-        if n_components < 2:
-            return pd.Series(["Inferred_Pop_1"] * len(self.samples), index=self.samples)
-
-        # Use Pipeline for cleanliness
-        pca_pipe = make_pipeline(PCA(n_components=n_components), StandardScaler())
-        X_pca = pca_pipe.fit_transform(X_imp)
-
-        min_samples_guess = int(np.clip(np.sqrt(X_pca.shape[0]) / 3, 2, 10))
-        eps0 = self._estimate_dbscan_eps(X_pca, min_samples=min_samples_guess)
-        eps, min_samples = self._tune_dbscan_params(X_pca, eps0, (2, 3, 4, 5, 6, 8, 10))
-
-        logger.info(f"Tuned DBSCAN: eps={eps:.3f}, min_samples={min_samples}")
-
-        labels = DBSCAN(eps=eps, min_samples=min_samples, n_jobs=-1).fit_predict(X_pca)
-
-        pop_labels = [
-            "Inferred_Noise" if l == -1 else f"Inferred_Pop_{l + 1}" for l in labels
-        ]
-        return pd.Series(pop_labels, index=self.samples)
-
-    # ---------------------------------------------------------------------
-    # Analysis Logic
-    # ---------------------------------------------------------------------
     def _get_pop_matrix(self, pop_id: str) -> np.ndarray:
-        """Get genotype matrix for a specific population.
-
-        Args:
-            pop_id: Population identifier.
-
-        Returns:
-            Numpy array of genotype matrix for the population.
-        """
         if pop_id == "Total":
             return self.genotype_matrix
-
-        # boolean indexing is safer and faster than string comparison on index usually
-        mask = (self.populations == pop_id).to_numpy()
+        mask = self.populations.eq(pop_id).to_numpy()
         if not np.any(mask):
-            return np.empty((0, self.genotype_matrix.shape[1]))
-        return self.genotype_matrix[mask, :]
+            raise KeyError(f"Unknown population: {pop_id}")
+        return self.genotype_matrix[mask]
+
+    def _get_pop_allele_copies(self, pop_id: str) -> np.ndarray:
+        """Return exact allele-copy counts for one population or the total."""
+        if pop_id == "Total":
+            return self.allele_copy_matrix
+        mask = self.populations.eq(pop_id).to_numpy()
+        if not np.any(mask):
+            raise KeyError(f"Unknown population: {pop_id}")
+        return self.allele_copy_matrix[mask]
+
+    def _get_snpio_statistics(self, pop_id: str) -> pd.DataFrame:
+        if pop_id == "Total":
+            frame = self.snpio_summary["overall"]
+        else:
+            frame = self.snpio_summary["per_population"].get(pop_id)
+            if frame is None:
+                raise KeyError(f"SNPio did not return statistics for {pop_id}")
+        if not isinstance(frame, pd.DataFrame):
+            raise TypeError(
+                f"Unexpected SNPio summary type for {pop_id}: {type(frame)}"
+            )
+        return frame
 
     def analyze_population_per_locus(self, pop_id: str) -> pd.DataFrame:
-        matrix = self._get_pop_matrix(pop_id)
-        if matrix.shape[0] == 0:
-            return pd.DataFrame()
-
-        n_total_samples = matrix.shape[0]
-
-        # --- Vectorized Calculations ---
-        is_nan = np.isnan(matrix)
-        n_samples_per_locus = np.sum(~is_nan, axis=0)
-
-        # Keep parity with the historical Total_LocusStats contract used downstream.
-        missing_rate = 1.0 - (n_samples_per_locus / n_total_samples)
-
-        # Guard against division by zero for empty columns
-        with np.errstate(divide="ignore", invalid="ignore"):
-            n_chroms = 2.0 * n_samples_per_locus
-
-            c0 = np.sum(matrix == 0.0, axis=0)
-            c1 = np.sum(matrix == 1.0, axis=0)
-            c2 = np.sum(matrix == 2.0, axis=0)
-
-            alt_counts = np.nansum(matrix, axis=0)
-            p = alt_counts / n_chroms
-            q = 1.0 - p
-
-            maf = np.minimum(p, q)
-            Ho = c1 / n_samples_per_locus
-
-            correction_he = n_chroms / (n_chroms - 1.0)
-            correction_he[n_chroms <= 1] = 0.0
-            He = 2.0 * p * q
-            He_unbiased = He * correction_he
-
-            F_stat = np.full_like(Ho, np.nan)
-            valid_he = He_unbiased > 1e-9
-            F_stat[valid_he] = 1.0 - (Ho[valid_he] / He_unbiased[valid_he])
-
-            minor_counts = np.minimum(alt_counts, n_chroms - alt_counts)
-            singletons = (minor_counts == 1).astype(int)
-
-            # Pi
-            Pi = He_unbiased
-
-        is_segregating = (p > 1e-9) & (p < (1.0 - 1e-9))
-        S = is_segregating.astype(int)
-
-        # --- Optimization: Vectorized Harmonic Numbers ---
-        max_n = int(np.max(n_chroms)) if len(n_chroms) > 0 else 0
-
-        # Precompute harmonic series up to max_n
-        reciprocals = 1.0 / np.arange(1, max_n + 1)
-        a1_lookup = np.concatenate(([0], np.cumsum(reciprocals)))
-
-        n_chroms_int = n_chroms.astype(int)
-        a1_vals = a1_lookup[np.clip(n_chroms_int - 1, 0, max_n)]
-
-        ThetaWatt = np.zeros_like(Pi)
-        valid_theta = (S == 1) & (a1_vals > 0)
-        ThetaWatt[valid_theta] = 1.0 / a1_vals[valid_theta]
-
-        # Tajima's D
-        TajimaD = np.full(len(S), np.nan)
-        calc_d = (S == 1) & (n_chroms_int >= 2)
-
-        if np.any(calc_d):
-            n_sub = n_chroms[calc_d].astype(int)
-            a1_sub = a1_vals[calc_d]
-
-            # a2: sum(1/i^2)
-            reciprocals_sq = 1.0 / (np.arange(1, max_n + 1) ** 2)
-            a2_lookup = np.concatenate(([0], np.cumsum(reciprocals_sq)))
-            a2_sub = a2_lookup[np.clip(n_sub - 1, 0, max_n)]
-
-            # 1. Calculate b1 and b2 (Tajima 1989, Eqs 35, 36)
-            b1 = (n_sub + 1) / (3 * (n_sub - 1))
-            b2 = (2 * (n_sub**2 + n_sub + 3)) / (9 * n_sub * (n_sub - 1))
-
-            # 2. Calculate c1 and c2 (Tajima 1989, Eqs 33, 34)
-            c1_taj = b1 - (1.0 / a1_sub)
-            c2_taj = b2 - ((n_sub + 2) / (a1_sub * n_sub)) + (a2_sub / (a1_sub**2))
-
-            # 3. Calculate e1 and e2 (Tajima 1989, Eqs 31, 32)
-            e1 = c1_taj / a1_sub
-            e2 = c2_taj / (a1_sub**2 + a2_sub)
-
-            # 4. Calculate Variance (Tajima 1989, Eq 30)
-            # NOTE: DnaSP Logic: Var(d) = e1*S + e2*S*(S-1)
-            S_vec = S[calc_d]
-            var_D = (e1 * S_vec) + (e2 * S_vec * (S_vec - 1))
-
-            diff = Pi[calc_d] - ThetaWatt[calc_d]
-            with np.errstate(invalid="ignore", divide="ignore"):
-                d_vals = diff / np.sqrt(var_D)
-
-            TajimaD[calc_d] = d_vals
-
-        # Haplotype Diversity (Hd)
-        Hap = (c0 > 0).astype(int) + (c1 > 0).astype(int) + (c2 > 0).astype(int)
-        HetzPositions = c1
-
-        with np.errstate(invalid="ignore", divide="ignore"):
-            sum_sq_g = (
-                (c0 / n_samples_per_locus) ** 2
-                + (c1 / n_samples_per_locus) ** 2
-                + (c2 / n_samples_per_locus) ** 2
-            )
-
-            Hd_corr = n_samples_per_locus / (n_samples_per_locus - 1.0)
-            Hd_corr[n_samples_per_locus <= 1] = 0.0
-            Hd = (1.0 - sum_sq_g) * Hd_corr
-
-        # Create DataFrame
-        df = pd.DataFrame(
-            {
-                "Locus": self.locus_names,
-                "Sample_Size": n_samples_per_locus,
-                "Missingness": missing_rate,
-                "SegSites": S,
-                "Singletons": singletons,
-                "MAF": maf,
-                "Ho": Ho,
-                "He": He_unbiased,
-                "F_inbreeding": F_stat,
-                "HetzPositions": HetzPositions,
-                "Hap": Hap,
-                "Hd": Hd,
-                "Pi": Pi,
-                "ThetaWatt": ThetaWatt,
-                "TajimaD": TajimaD,
-                "Filename": self.filename.name,
-            }
+        """Return per-locus covariates for the total data or one explicit population."""
+        return per_locus_statistics(
+            self._get_pop_matrix(pop_id),
+            self._get_snpio_statistics(pop_id),
+            locus_names=self.locus_names,
+            filename=self.filename.name,
+            ploidy=self.ploidy,
+            allele_copies=self._get_pop_allele_copies(pop_id),
         )
 
-        df["TotalPos"] = 1
-        df["NetSegSites"] = 0
-        return df
-
     def compute_overall_summary(
-        self, pop_id: str, df_locus: pd.DataFrame
-    ) -> Dict[str, Any]:
-        """Compute overall summary statistics for a population.
-
-        Args:
-            pop_id: Population identifier.
-            df_locus: DataFrame of per-locus statistics.
-
-        Returns:
-            Dictionary of overall summary statistics.
-        """
-
+        self,
+        pop_id: str,
+        df_locus: pd.DataFrame,
+    ) -> dict[str, Any]:
+        """Summarize one population with explicit statistic definitions."""
         if df_locus.empty:
-            return {}
-
-        # Ensure numeric
-        numeric_cols = [
-            "Sample_Size",
-            "SegSites",
-            "Pi",
-            "ThetaWatt",
-            "TajimaD",
-            "Hd",
-            "Ho",
-            "He",
-            "F_inbreeding",
-            "MAF",
-            "Missingness",
-        ]
-        for col in numeric_cols:
-            if col in df_locus.columns:
-                df_locus[col] = pd.to_numeric(df_locus[col], errors="coerce")
-
-        summary = {
+            raise ValueError(f"Cannot summarize empty per-locus data for {pop_id}")
+        matrix = self._get_pop_matrix(pop_id)
+        tajima = tajimas_d_complete_sites(
+            matrix,
+            ploidy=self.ploidy,
+            allele_copies=self._get_pop_allele_copies(pop_id),
+        )
+        snpio_ld = self.snpio_ld
+        summary: dict[str, Any] = {
             "Population": pop_id,
             "N_Loci": len(df_locus),
-            "Mean_Sample_Size": float(df_locus["Sample_Size"].mean()),
-            "Var_Sample_Size": float(df_locus["Sample_Size"].var()),
+            "N_Samples": matrix.shape[0],
+            "Ploidy": self.ploidy,
+            "Mean_Sample_Size": _finite_statistic(df_locus["Sample_Size"], "mean"),
+            "Var_Sample_Size": _finite_statistic(df_locus["Sample_Size"], "variance"),
             "Total_Segregating_Sites": int(df_locus["SegSites"].sum()),
             "Total_Singletons": int(df_locus["Singletons"].sum()),
-            "Mean_Pi": float(df_locus["Pi"].mean()),
-            "Mean_ThetaWatt": float(df_locus["ThetaWatt"].mean()),
-            "Mean_TajimaD": float(df_locus["TajimaD"].mean()),
-            "Mean_Hd": float(df_locus["Hd"].mean()),
-            "Mean_Ho": float(df_locus["Ho"].mean()),
-            "Mean_He": float(df_locus["He"].mean()),
-            "Mean_F": float(df_locus["F_inbreeding"].mean()),
-            "Mean_MAF": float(df_locus["MAF"].mean()),
-            "Mean_Missingness": float(df_locus["Missingness"].mean()),
-            "Var_Pi": float(df_locus["Pi"].var()),
-            "Var_ThetaWatt": float(df_locus["ThetaWatt"].var()),
-            "Var_Hd": float(df_locus["Hd"].var()),
-            "Var_TajimaD": float(df_locus["TajimaD"].var()),
-            "StdDev_Pi": float(df_locus["Pi"].std()),
-            "StdDev_ThetaWatt": float(df_locus["ThetaWatt"].std()),
-            "StdDev_Hd": float(df_locus["Hd"].std()),
-            "StdDev_TajimaD": float(df_locus["TajimaD"].std()),
-            "StdDev_F": float(df_locus["F_inbreeding"].std()),
+            "Mean_Pi": _finite_statistic(df_locus["Pi"], "mean"),
+            "Mean_ThetaWatt_Per_Site": _finite_statistic(
+                df_locus["ThetaWatt_Per_Site"], "mean"
+            ),
+            "TajimaD_CompleteSites": tajima.value,
+            "TajimaD_CompleteSite_Count": tajima.complete_loci,
+            "TajimaD_Segregating_Site_Count": tajima.segregating_sites,
+            "TajimaD_Status": tajima.reason,
+            "Mean_Genotype_Diversity": _finite_statistic(
+                df_locus["Genotype_Diversity"], "mean"
+            ),
+            "Mean_Ho": _finite_statistic(df_locus["Ho"], "mean"),
+            "Mean_He": _finite_statistic(df_locus["He"], "mean"),
+            "Mean_F": _finite_statistic(df_locus["F_inbreeding"], "mean"),
+            "Mean_MAF": _finite_statistic(df_locus["MAF"], "mean"),
+            "Mean_Missingness": _finite_statistic(df_locus["Missingness"], "mean"),
+            "Var_Pi": _finite_statistic(df_locus["Pi"], "variance"),
+            "StdDev_Pi": _finite_statistic(df_locus["Pi"], "stddev"),
+            "StdDev_F": _finite_statistic(df_locus["F_inbreeding"], "stddev"),
+            "SNPio_LD_r2D": snpio_ld.r2d,
+            "SNPio_LD_rDz": snpio_ld.rdz,
+            "SNPio_LD_Ne": snpio_ld.effective_population_size,
+            "SNPio_LD_Loci": snpio_ld.loci,
+            "SNPio_LD_Pairs": snpio_ld.pairs,
+            "SNPio_LD_Status": snpio_ld.reason,
+            "SNPio_LD_Max_Pairs": SNPIO_LD_MAX_PAIRS,
+            "SNPio_LD_Seed": SNPIO_LD_SEED,
+            "SNPio_LD_Assume_Unlinked": not self._analyze_populations,
+            "SNPio_Version": snpio_version(),
+            "Ho_He_Pi_Source": self.ho_he_pi_source,
+            "LD_Source": "SNPio PopGenStatistics.calculate_linkage_disequilibrium",
+            "Genotype_Encoding_Source": "SNPio GenotypeEncoder.genotypes_012",
         }
-
-        # Kelly's ZnS
-        MAX_LOCI_FOR_CORR = 10000
-
-        seg_mask = (df_locus["SegSites"] == 1).to_numpy()
-        n_seg = np.sum(seg_mask)
-        ZnS = np.nan
-
-        if n_seg > 1:
-            if n_seg > MAX_LOCI_FOR_CORR:
-                logger.warning(
-                    f"Skipping ZnS: Too many segregating sites ({n_seg}) for memory safety."
-                )
-            else:
-                try:
-                    matrix = self._get_pop_matrix(pop_id)
-                    mat_seg = matrix[:, seg_mask]
-
-                    col_means = np.nanmean(mat_seg, axis=0)
-                    inds = np.where(np.isnan(mat_seg))
-                    mat_seg[inds] = np.take(col_means, inds[1])
-
-                    with np.errstate(invalid="ignore"):
-                        corr_mat = np.corrcoef(mat_seg, rowvar=False)
-                        r2_mat = corr_mat**2
-
-                    indices = np.triu_indices_from(r2_mat, k=1)
-                    r2_values = r2_mat[indices]
-
-                    valid_r2 = r2_values[~np.isnan(r2_values)]
-                    if len(valid_r2) > 0:
-                        ZnS = float(np.mean(valid_r2))
-                except Exception as e:
-                    logger.error(f"ZnS Calculation failed: {e}")
-
-        summary["ZnS_Kelly"] = ZnS
         return summary
+
+    def close(self) -> None:
+        """Remove task-private staged inputs and SNPio outputs."""
+        self._temporary_directory.cleanup()
+
+    def __enter__(self) -> DnaSPSingleLocusAnalyzer:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self.close()

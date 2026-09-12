@@ -4,10 +4,24 @@ Changelog
 
 An overview of changes to **PG-SUI** by release. This file mirrors the GitHub Markdown changelog and reflects the refactor-era docs: dataclass-first configs, presets, unified scikit-learn framework-based ``fit()/transform()`` methods, CLI precedence, and updated deterministic/supervised docs.
 
-Unreleased
-----------
+v1.8.6 - 2026-09-12
+-------------------
 
-No unreleased changes.
+Scientific correctness
+^^^^^^^^^^^^^^^^^^^^^^
+
+- Added a manifest-driven N=58 diploid validation workflow that requires one exact, seeded evaluation mask per dataset-by-simulation task and audits every model report against that coordinate-level support before post-hoc analysis.
+- Reworked SNPioSP covariates to use SNPio's canonical genotype encoder, observed heterozygosity, expected heterozygosity, nucleotide diversity, and unbiased unphased LD estimator; corrected multi-site Tajima's D.
+- Added strict VCF-to-PHYLIP checks for dimensions, sample identity/order, consistent source and analysis GT ploidy, and SNPio-decoded genotype equivalence before source VCFs can enter the validation catalog; the haploid and tetraploid datasets are explicitly excluded from the N=58 benchmark.
+- Made all five simulation strategies meet one exact global eligible-call target while retaining at least one observed genotype per locus; capped phylogenetic simulation records any seeded tip-clade completion while preserving the marginal uniform-node or branch-length-weighted distribution.
+
+Reproducibility and HPC execution
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+- Added eight CPU-only N=58 SLURM workers that run 290 dataset-strategy combinations sequentially by whole dataset with matrix-cell load balancing, plus eight sequential SNPioSP workers, using the ``shu-hpc-biocpu`` partition and one thread per job.
+- Fixed the IQ-TREE input contract so topology, Q-matrix, and site rates are sourced from the matching ``.treefile``, ``.iqtree``, and ``.rate`` files.
+- Added strict N=58 audits, post-hoc statistics and plots, provenance manifests, current PG-SUI/SNPio version gates, and a checksum-complete reviewer package.
+- Bundled and checksummed the exact PG-SUI Python source used by the N=58 run, including its Git revision and dirty-tree state, and made every task verify and load that source snapshot.
 
 v1.8.5 - 2026-09-09
 -------------------

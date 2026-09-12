@@ -213,6 +213,100 @@ def test_sim_missing_strategies_run(strategy: str) -> None:
     assert not transformer.sim_missing_mask_.all(axis=0).any()
 
 
+@pytest.mark.parametrize("strategy", ["nonrandom", "nonrandom_weighted"])
+def test_nonrandom_completion_reaches_target_after_small_try_cap(
+    strategy: str,
+) -> None:
+    samples = [f"s{i}" for i in range(6)]
+    gd = SimpleNamespace(samples=samples)
+    tree_parser = _make_fake_tree_parser(samples)
+    X = np.tile(np.asarray([0, 1, 2, 0, 1, 2], dtype=np.float32)[:, None], (1, 12))
+    transformer = SimMissingTransformer(
+        genotype_data=gd,
+        tree_parser=cast(TreeParser, tree_parser),
+        prop_missing=0.25,
+        strategy=strategy,
+        seed=123,
+        max_tries=1,
+    )
+
+    transformer.fit(X)
+
+    assert int(transformer.sim_missing_mask_.sum()) == 18
+    assert transformer.nonrandom_completion_count_ > 0
+    assert transformer.nonrandom_completion_mode_ != "none"
+    assert not transformer.sim_missing_mask_.all(axis=0).any()
+
+
+def test_phylogenetic_completion_weights_follow_sampling_strategy() -> None:
+    samples = [f"s{i}" for i in range(4)]
+    genotype_data = SimpleNamespace(samples=samples)
+    tree_parser = _make_fake_tree_parser(samples)
+    transformer = SimMissingTransformer(
+        genotype_data=genotype_data,
+        tree_parser=cast(TreeParser, tree_parser),
+        strategy="nonrandom_weighted",
+        seed=123,
+    )
+
+    np.testing.assert_array_equal(
+        transformer._phylogenetic_tip_completion_weights(weighted=False),
+        np.ones(4),
+    )
+    np.testing.assert_allclose(
+        transformer._phylogenetic_tip_completion_weights(weighted=True),
+        np.asarray([1.0, 1.1, 1.2, 1.3]),
+    )
+
+
+@pytest.mark.parametrize("strategy", ["nonrandom", "nonrandom_weighted"])
+def test_nonrandom_masks_exact_rounded_global_target(strategy: str) -> None:
+    samples = [f"s{i}" for i in range(7)]
+    genotype_data = SimpleNamespace(samples=samples)
+    tree_parser = _make_fake_tree_parser(samples)
+    X = np.tile(
+        np.asarray([0, 1, 2, 0, 1, 2, 0], dtype=np.float32)[:, None],
+        (1, 11),
+    )
+    transformer = SimMissingTransformer(
+        genotype_data=genotype_data,
+        tree_parser=cast(TreeParser, tree_parser),
+        prop_missing=0.30,
+        strategy=strategy,
+        seed=123,
+        max_tries=1,
+    )
+
+    transformer.fit(X)
+
+    assert int(transformer.sim_missing_mask_.sum()) == round(0.30 * X.size)
+    assert not transformer.sim_missing_mask_.all(axis=0).any()
+
+
+@pytest.mark.parametrize(
+    "strategy", ["random", "random_weighted", "random_weighted_inv"]
+)
+def test_random_masks_exact_global_target_including_monomorphic_loci(
+    strategy: str,
+) -> None:
+    samples = [f"s{i}" for i in range(6)]
+    gd = SimpleNamespace(samples=samples)
+    X = np.tile(np.asarray([0, 1, 2, 0, 1, 2], dtype=np.float32)[:, None], (1, 12))
+    X[:, -2:] = 0
+    transformer = SimMissingTransformer(
+        genotype_data=gd,
+        prop_missing=0.25,
+        strategy=strategy,
+        seed=123,
+    )
+
+    transformer.fit(X)
+
+    assert int(transformer.sim_missing_mask_.sum()) == 18
+    assert transformer.sim_missing_mask_[:, -2:].any()
+    assert not transformer.sim_missing_mask_.all(axis=0).any()
+
+
 def test_treeparser_file_inputs(tmp_path: Path) -> None:
     phy_path = (
         Path(__file__).resolve().parents[1]
@@ -231,7 +325,7 @@ def test_treeparser_file_inputs(tmp_path: Path) -> None:
     gd = PhylipReader(
         filename=str(phy_path),
         popmapfile=str(popmap_path),
-        prefix="treeparser-test",
+        prefix=str(tmp_path / "treeparser-test"),
         verbose=False,
     )
 

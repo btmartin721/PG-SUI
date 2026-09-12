@@ -10,19 +10,33 @@ import platform
 import shutil
 import subprocess
 import sys
+import time
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 try:
-    from _canonical_benchmark_support import audit_task_reports, read_task_manifest
+    from _canonical_benchmark_support import (
+        audit_task_reports,
+        read_task_manifest,
+        sha256_python_tree,
+        task_fingerprint,
+        verify_task_input_hashes,
+    )
 except ModuleNotFoundError as exc:
     if exc.name != "_canonical_benchmark_support":
         raise
     from pgsui.utils.canonical_benchmark import (
         audit_task_reports,
         read_task_manifest,
+        sha256_python_tree,
+        task_fingerprint,
+        verify_task_input_hashes,
     )
 
 
@@ -53,9 +67,10 @@ def utc_now() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def installed_pgsui_version() -> str:
+def installed_package_version(distribution: str) -> str:
+    """Return an installed distribution version or an explicit marker."""
     try:
-        return version("pg-sui")
+        return version(distribution)
     except PackageNotFoundError:
         return "not-installed"
 
@@ -104,17 +119,27 @@ def main() -> int:
     output_directory = task.output_directory(bundle_root)
     output_directory.parent.mkdir(parents=True, exist_ok=True)
     status_dir = bundle_root / "status"
-    success_path = status_dir / f"task_{task.task_id:02d}.success.json"
-    failure_path = status_dir / f"task_{task.task_id:02d}.failure.json"
+    success_path = status_dir / f"task_{task.task_id:03d}.success.json"
+    failure_path = status_dir / f"task_{task.task_id:03d}.failure.json"
+    fingerprint = task_fingerprint(task)
 
     if success_path.is_file() and not args.force:
-        print(f"Task {task.task_id} already passed: {success_path}")
-        return 0
+        previous = json.loads(success_path.read_text(encoding="utf-8"))
+        audit_rows = audit_task_reports(task, bundle_root)
+        audit_passed = all(row["status"] == "ok" for row in audit_rows)
+        if previous.get("task_fingerprint") == fingerprint and audit_passed:
+            print(f"Task {task.task_id} already passed: {success_path}")
+            return 0
+        raise RuntimeError(
+            "Existing success status does not match this task configuration or "
+            f"its outputs no longer pass audit: {success_path}. Use --force only "
+            "after preserving the prior run."
+        )
 
     work_dir = (
         args.work_dir.resolve()
         if args.work_dir is not None
-        else bundle_root / "work" / f"task_{task.task_id:02d}"
+        else bundle_root / "work" / f"task_{task.task_id:03d}"
     )
     staged_input = work_dir / Path(task.input_vcf).name
     command = task.command(
@@ -132,12 +157,30 @@ def main() -> int:
     if args.dry_run:
         return 0
 
-    installed_version = installed_pgsui_version()
+    installed_version = installed_package_version("pg-sui")
+    installed_snpio = installed_package_version("snpio")
     if installed_version != task.expected_pgsui_version:
         raise RuntimeError(
             "Canonical task requires PG-SUI "
             f"{task.expected_pgsui_version}, but {installed_version} is installed."
         )
+    if installed_snpio != task.expected_snpio_version:
+        raise RuntimeError(
+            "Canonical task requires SNPio "
+            f"{task.expected_snpio_version}, but {installed_snpio} is installed."
+        )
+
+    bundled_source_parent = bundle_root / "inputs" / "software"
+    bundled_pgsui_source = bundled_source_parent / "pgsui"
+    bundled_source_sha256 = sha256_python_tree(bundled_pgsui_source)
+    if bundled_source_sha256 != task.expected_pgsui_source_sha256:
+        raise RuntimeError(
+            "Bundled PG-SUI source differs from the task manifest: "
+            f"expected {task.expected_pgsui_source_sha256}, observed "
+            f"{bundled_source_sha256}."
+        )
+
+    input_hash_audit = verify_task_input_hashes(task, bundle_root)
 
     staged_input = stage_vcf(
         task.resolve(bundle_root, task.input_vcf),
@@ -157,12 +200,40 @@ def main() -> int:
         "started_at_utc": utc_now(),
         "hostname": platform.node(),
         "pgsui_version": installed_version,
+        "snpio_version": installed_snpio,
+        "expected_pgsui_git_revision": task.expected_pgsui_git_revision,
+        "pgsui_source_path": str(bundled_pgsui_source),
+        "pgsui_source_sha256": bundled_source_sha256,
+        "benchmark_profile": task.benchmark_profile,
+        "task_fingerprint": fingerprint,
+        "input_hash_audit": input_hash_audit,
         "python_version": platform.python_version(),
         "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
         "slurm_array_job_id": os.environ.get("SLURM_ARRAY_JOB_ID"),
         "slurm_array_task_id": os.environ.get("SLURM_ARRAY_TASK_ID"),
     }
-    completed = subprocess.run(command, cwd=work_dir, check=False)
+    task_environment = os.environ.copy()
+    existing_pythonpath = task_environment.get("PYTHONPATH")
+    task_environment["PYTHONPATH"] = os.pathsep.join(
+        value for value in (str(bundled_source_parent), existing_pythonpath) if value
+    )
+    for name in (
+        "OMP_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+        "VECLIB_MAXIMUM_THREADS",
+        "NUMBA_NUM_THREADS",
+    ):
+        task_environment[name] = str(task.n_jobs)
+    started = time.monotonic()
+    completed = subprocess.run(
+        command,
+        cwd=work_dir,
+        check=False,
+        env=task_environment,
+    )
+    metadata["elapsed_seconds"] = time.monotonic() - started
     metadata["finished_at_utc"] = utc_now()
     metadata["returncode"] = completed.returncode
     if completed.returncode != 0:

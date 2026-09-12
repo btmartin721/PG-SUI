@@ -70,6 +70,7 @@ class VCFLayout:
     variants: tuple[VariantRecord, ...]
     original_missing: np.ndarray
     truth_zygosity: np.ndarray
+    observed_ploidies: tuple[int, ...]
 
 
 @dataclass(frozen=True)
@@ -109,7 +110,9 @@ class SimulationResult:
     strategy: str
     seed: int
     sim_prop: float
+    sim_max_tries: int | None
     validation_split: float
+    ploidy: int
     mask_mode: str
     reference_mask_checked: bool
     reference_mask_match: bool | None
@@ -121,12 +124,18 @@ class SimulationResult:
     n_original_missing: int
     n_simulated_missing: int
     simulated_missing_rate: float
+    eligible_simulated_missing_rate: float
     n_train_samples: int
     n_validation_samples: int
     n_test_samples: int
     n_test_evaluation: int
     n_written_missing: int
     n_dropped_mask_positions: int
+    nonrandom_completion_count: int | None
+    nonrandom_completion_mode: str
+    source_input_vcf: str
+    source_input_sha256: str
+    snpio_locus_order_changed: bool
     input_vcf: str
     reference_mask: str
     masked_vcf: str
@@ -135,6 +144,8 @@ class SimulationResult:
     evaluation_mask_tsv: str
     split_tsv: str
     treefile: str
+    qmatrix: str
+    siterates: str
     input_sha256: str
     masked_vcf_sha256: str
     mask_sha256: str
@@ -164,7 +175,10 @@ def parse_args() -> argparse.Namespace:
         "--tree-dir",
         type=Path,
         required=True,
-        help="Directory containing <dataset>.treefile and optional .iqtree files.",
+        help=(
+            "Directory containing matched <dataset>.treefile, <dataset>.iqtree, "
+            "and <dataset>.rate files."
+        ),
     )
     parser.add_argument(
         "--reference-mask-dir",
@@ -207,15 +221,45 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--sim-prop", type=float, default=0.30)
+    parser.add_argument(
+        "--sim-max-tries",
+        type=int,
+        default=None,
+        help=(
+            "Optional nonrandom-search limit passed to PG-SUI's missingness "
+            "transformer; use the same value for the subsequent PG-SUI run."
+        ),
+    )
     parser.add_argument("--validation-split", type=float, default=0.30)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--ploidy", type=int, choices=(1, 2), default=2)
+    parser.add_argument(
+        "--ploidy",
+        choices=("auto", "1", "2"),
+        default="2",
+        help=(
+            "Input ploidy. Use 'auto' to require and preserve one consistent "
+            "haploid or diploid GT ploidy per VCF. Default: 2."
+        ),
+    )
     parser.add_argument("--tree-suffix", default=".treefile")
     parser.add_argument("--iqtree-suffix", default=".iqtree")
+    parser.add_argument(
+        "--siterates-suffix",
+        default=".rate",
+        help="Suffix for the IQ-TREE site-rate table.",
+    )
     parser.add_argument(
         "--force",
         action="store_true",
         help="Replace files in the canonical output directory.",
+    )
+    parser.add_argument(
+        "--skip-comparison-run-sheets",
+        action="store_true",
+        help=(
+            "Do not emit the legacy PG-SUI/GTImputation CPU/GPU run sheets. "
+            "Use this for manuscript-specific CPU workflows."
+        ),
     )
     parser.add_argument("--verbose", action="store_true")
     return parser.parse_args()
@@ -248,6 +292,15 @@ def genotype_is_missing(gt: str) -> bool:
         return True
     alleles = normalized.replace("|", "/").split("/")
     return any(allele in {"", "."} for allele in alleles)
+
+
+def called_gt_ploidy(gt: str) -> int | None:
+    """Return a fully called GT token's ploidy, otherwise ``None``."""
+    normalized = gt.strip().replace("|", "/")
+    alleles = normalized.split("/")
+    if not alleles or any(allele in {"", "."} for allele in alleles):
+        return None
+    return len(alleles)
 
 
 def gt_to_zygosity(gt: str) -> int:
@@ -295,6 +348,7 @@ def read_vcf_layout(path: Path) -> VCFLayout:
     variants: list[VariantRecord] = []
     missing_columns: list[np.ndarray] = []
     zygosity_columns: list[np.ndarray] = []
+    observed_ploidies: set[int] = set()
 
     with open_text(path) as handle:
         for line in handle:
@@ -332,6 +386,9 @@ def read_vcf_layout(path: Path) -> VCFLayout:
                 _, _, gt = extract_gt(fields[8], sample_field)
                 missing_column[sample_index] = genotype_is_missing(gt)
                 zygosity_column[sample_index] = gt_to_zygosity(gt)
+                ploidy = called_gt_ploidy(gt)
+                if ploidy is not None:
+                    observed_ploidies.add(ploidy)
             missing_columns.append(missing_column)
             zygosity_columns.append(zygosity_column)
 
@@ -344,7 +401,27 @@ def read_vcf_layout(path: Path) -> VCFLayout:
         variants=tuple(variants),
         original_missing=np.stack(missing_columns, axis=1),
         truth_zygosity=np.stack(zygosity_columns, axis=1),
+        observed_ploidies=tuple(sorted(observed_ploidies)),
     )
+
+
+def resolve_input_ploidy(requested: str, layout: VCFLayout, path: Path) -> int:
+    """Validate or infer one supported GT ploidy for a VCF."""
+    if layout.observed_ploidies not in {(1,), (2,)}:
+        raise ValueError(
+            f"VCF must contain one consistent haploid or diploid GT ploidy: "
+            f"{path} has {layout.observed_ploidies}"
+        )
+    observed = layout.observed_ploidies[0]
+    if requested == "auto":
+        return observed
+    configured = int(requested)
+    if configured != observed:
+        raise ValueError(
+            f"Configured ploidy {configured} differs from VCF GT ploidy "
+            f"{observed}: {path}"
+        )
+    return configured
 
 
 def canonical_class_mapping(n_loci: int) -> np.ndarray:
@@ -407,10 +484,19 @@ def build_runtime_dataset(
     snpio_prefix: Path,
     dependencies: RuntimeDependencies,
     verbose: bool,
-) -> tuple[Any, np.ndarray, VCFLayout, Path]:
+) -> tuple[Any, np.ndarray, VCFLayout, Path, bool]:
     """Load and encode a VCF with SNPio's canonical REF/HET/ALT logic."""
+    source_layout = read_vcf_layout(input_vcf)
     snpio_prefix.parent.mkdir(parents=True, exist_ok=True)
     staged_vcf = snpio_prefix.parent / input_vcf.name
+    if not staged_vcf.name.endswith(".gz"):
+        derived_vcf = Path(f"{staged_vcf}.gz")
+        for generated in (
+            derived_vcf,
+            Path(f"{derived_vcf}.tbi"),
+            Path(f"{derived_vcf}.csi"),
+        ):
+            generated.unlink(missing_ok=True)
     shutil.copy2(input_vcf, staged_vcf)
     source_index = Path(f"{input_vcf}.tbi")
     if source_index.is_file():
@@ -426,6 +512,47 @@ def build_runtime_dataset(
     samples = tuple(str(sample) for sample in genotype_data.samples)
     if samples != layout.samples:
         raise ValueError(f"SNPio sample order is internally inconsistent: {input_vcf}")
+    if layout.samples != source_layout.samples:
+        raise ValueError(f"SNPio changed sample order for {input_vcf}")
+
+    def call_aware_keys(vcf_layout: VCFLayout) -> list[tuple[object, ...]]:
+        """Return occurrence-qualified keys, including sample-wise call state."""
+        counts: dict[tuple[object, ...], int] = {}
+        keys: list[tuple[object, ...]] = []
+        for index, record in enumerate(vcf_layout.variants):
+            base_key: tuple[object, ...] = (
+                record.chrom,
+                record.pos,
+                record.variant_id,
+                record.ref,
+                record.alt,
+                vcf_layout.original_missing[:, index].tobytes(),
+                vcf_layout.truth_zygosity[:, index].tobytes(),
+            )
+            occurrence = counts.get(base_key, 0)
+            counts[base_key] = occurrence + 1
+            keys.append((*base_key, occurrence))
+        return keys
+
+    source_keys = call_aware_keys(source_layout)
+    canonical_keys = call_aware_keys(layout)
+    source_lookup = {key: index for index, key in enumerate(source_keys)}
+    if set(canonical_keys) != set(source_keys):
+        raise ValueError(
+            f"SNPio changed locus, allele metadata, or genotype calls for {input_vcf}"
+        )
+    source_indices = np.asarray(
+        [source_lookup[key] for key in canonical_keys], dtype=np.int64
+    )
+    locus_order_changed = not np.array_equal(
+        source_indices, np.arange(len(source_indices), dtype=np.int64)
+    )
+    source_missing_in_snpio_order = source_layout.original_missing[:, source_indices]
+    source_truth_in_snpio_order = source_layout.truth_zygosity[:, source_indices]
+    if not np.array_equal(layout.original_missing, source_missing_in_snpio_order):
+        raise ValueError(f"SNPio changed original missingness for {input_vcf}")
+    if not np.array_equal(layout.truth_zygosity, source_truth_in_snpio_order):
+        raise ValueError(f"SNPio changed genotype calls for {input_vcf}")
 
     encoder = dependencies.genotype_encoder_class(genotype_data)
     truth = np.asarray(encoder.genotypes_012, dtype=np.int8)
@@ -445,7 +572,18 @@ def build_runtime_dataset(
             f"SNPio 012 encode/decode round trip differs at {differences} cells "
             f"for {input_vcf}"
         )
-    return genotype_data, truth, layout, canonical_vcf
+    biallelic = np.asarray(
+        ["," not in record.alt for record in layout.variants], dtype=bool
+    )
+    expected_truth = np.where(
+        layout.original_missing, -9, layout.truth_zygosity
+    ).astype(np.int8)
+    if not np.array_equal(truth[:, biallelic], expected_truth[:, biallelic]):
+        raise ValueError(
+            "SNPio 0/1/2 encoding differs from VCF REF/HET/ALT truth for "
+            f"biallelic loci in {input_vcf}"
+        )
+    return genotype_data, truth, layout, canonical_vcf, locus_order_changed
 
 
 def persist_canonical_vcf(
@@ -461,9 +599,15 @@ def persist_canonical_vcf(
             f"Canonical VCF exists: {destination}. Use --force to replace it."
         )
     shutil.copy2(source, destination)
-    source_index = Path(f"{source}.tbi")
-    if source_index.is_file():
-        shutil.copy2(source_index, Path(f"{destination}.tbi"))
+    for suffix in (".tbi", ".csi"):
+        destination_index = Path(f"{destination}{suffix}")
+        destination_index.unlink(missing_ok=True)
+        source_index = Path(f"{source}{suffix}")
+        if (
+            source_index.is_file()
+            and source_index.stat().st_mtime >= source.stat().st_mtime
+        ):
+            shutil.copy2(source_index, destination_index)
     return destination
 
 
@@ -473,21 +617,54 @@ def build_tree_parser(
     tree_dir: Path,
     tree_suffix: str,
     iqtree_suffix: str,
+    siterates_suffix: str,
     dependencies: RuntimeDependencies,
-) -> tuple[BenchmarkTreeParser, Path]:
+) -> tuple[BenchmarkTreeParser, Path, Path, Path]:
     """Build the tree container needed by nonrandom missingness strategies."""
     treefile = tree_dir / f"{dataset_id}{tree_suffix}"
     if not treefile.is_file():
         raise FileNotFoundError(f"Missing tree for {dataset_id}: {treefile}")
     iqtree_file = tree_dir / f"{dataset_id}{iqtree_suffix}"
-    auxiliary = str(iqtree_file) if iqtree_file.is_file() else None
+    if not iqtree_file.is_file():
+        raise FileNotFoundError(
+            f"Missing IQ-TREE Q-matrix report for {dataset_id}: {iqtree_file}"
+        )
+    siterates_file = tree_dir / f"{dataset_id}{siterates_suffix}"
+    if not siterates_file.is_file():
+        raise FileNotFoundError(
+            f"Missing IQ-TREE site rates for {dataset_id}: {siterates_file}"
+        )
     parser = BenchmarkTreeParser(
         tree=dependencies.tree_reader(str(treefile)),
         treefile=str(treefile),
-        qmatrix=auxiliary,
-        siterates=auxiliary,
+        qmatrix=str(iqtree_file),
+        siterates=str(siterates_file),
     )
-    return parser, treefile
+    return parser, treefile, iqtree_file, siterates_file
+
+
+def validate_siterates(path: Path, *, n_loci: int) -> None:
+    """Require one sequential IQ-TREE site-rate row per canonical locus."""
+    observed_sites: list[int] = []
+    with path.open(encoding="utf-8") as handle:
+        for line in handle:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or stripped.startswith("Site"):
+                continue
+            fields = stripped.split()
+            try:
+                observed_sites.append(int(fields[0]))
+            except (IndexError, ValueError) as exc:
+                raise ValueError(
+                    f"Invalid IQ-TREE site-rate row in {path}: {line!r}"
+                ) from exc
+    expected_sites = list(range(1, n_loci + 1))
+    if observed_sites != expected_sites:
+        raise ValueError(
+            "IQ-TREE site-rate coordinates differ from the canonical VCF: "
+            f"{path} has {len(observed_sites)} sites; expected {n_loci} "
+            "sequential sites"
+        )
 
 
 def regenerate_mask(
@@ -496,27 +673,31 @@ def regenerate_mask(
     ground_truth: np.ndarray,
     strategy: str,
     sim_prop: float,
+    sim_max_tries: int | None,
     seed: int,
     tree_parser: Any | None,
     dependencies: RuntimeDependencies,
     verbose: bool,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, int, str]:
     """Regenerate one PG-SUI simulated mask."""
     transformer = dependencies.sim_missing_transformer_class(
         genotype_data,
         tree_parser=tree_parser,
         prop_missing=sim_prop,
         strategy=strategy,
-        missing_val=-1,
+        missing_val=-9,
         mask_missing=True,
         verbose=int(verbose),
         seed=seed,
+        max_tries=sim_max_tries,
     )
     transformer.fit(ground_truth.copy())
     transformer.transform(ground_truth.copy())
     return (
         np.asarray(transformer.sim_missing_mask_, dtype=bool),
         np.asarray(transformer.original_missing_mask_, dtype=bool),
+        int(getattr(transformer, "nonrandom_completion_count_", 0)),
+        str(getattr(transformer, "nonrandom_completion_mode_", "none")),
     )
 
 
@@ -826,6 +1007,8 @@ def write_mask_tsv(
 
 def prepare_strategy(
     *,
+    source_input_vcf: Path,
+    snpio_locus_order_changed: bool,
     input_vcf: Path,
     output_dir: Path,
     reference_mask_dir: Path | None,
@@ -842,8 +1025,10 @@ def prepare_strategy(
     tree_dir: Path,
     tree_suffix: str,
     iqtree_suffix: str,
+    siterates_suffix: str,
     mask_mode: str,
     sim_prop: float,
+    sim_max_tries: int | None,
     validation_split: float,
     seed: int,
     ploidy: int,
@@ -880,24 +1065,36 @@ def prepare_strategy(
 
     tree_parser = None
     treefile: Path | None = None
+    qmatrix: Path | None = None
+    siterates: Path | None = None
     regenerated_mask: np.ndarray | None = None
     regenerated_orig: np.ndarray | None = None
+    regenerated_completion_count: int | None = None
+    regenerated_completion_mode = "none"
     if mask_mode in {"regenerate", "verify"}:
         if dependencies is None or genotype_data is None or pgsui_truth is None:
             raise RuntimeError("PG-SUI runtime data were not initialized")
         if strategy in NONRANDOM_STRATEGIES:
-            tree_parser, treefile = build_tree_parser(
+            tree_parser, treefile, qmatrix, siterates = build_tree_parser(
                 dataset_id=dataset_id,
                 tree_dir=tree_dir,
                 tree_suffix=tree_suffix,
                 iqtree_suffix=iqtree_suffix,
+                siterates_suffix=siterates_suffix,
                 dependencies=dependencies,
             )
-        regenerated_mask, regenerated_orig = regenerate_mask(
+            validate_siterates(siterates, n_loci=len(layout.variants))
+        (
+            regenerated_mask,
+            regenerated_orig,
+            regenerated_completion_count,
+            regenerated_completion_mode,
+        ) = regenerate_mask(
             genotype_data=genotype_data,
             ground_truth=pgsui_truth,
             strategy=strategy,
             sim_prop=sim_prop,
+            sim_max_tries=sim_max_tries,
             seed=seed,
             tree_parser=tree_parser,
             dependencies=dependencies,
@@ -964,6 +1161,11 @@ def prepare_strategy(
         dataset_id=dataset_id,
         strategy=strategy,
     )
+    eligible_count = int(np.count_nonzero(~orig_mask))
+    if eligible_count == 0:
+        raise ValueError(
+            f"No observed genotypes can be masked for {dataset_id}/{strategy}"
+        )
     evaluation_mask = np.zeros_like(sim_mask, dtype=bool)
     evaluation_mask[split.test] = sim_mask[split.test] & ~orig_mask[split.test]
     if not bool(evaluation_mask.any()):
@@ -1003,8 +1205,14 @@ def prepare_strategy(
         dataset_id=np.asarray(dataset_id),
         strategy=np.asarray(strategy),
         sim_prop=np.asarray(sim_prop),
+        sim_max_tries=np.asarray(0 if sim_max_tries is None else sim_max_tries),
         validation_split=np.asarray(validation_split),
         seed=np.asarray(seed),
+        ploidy=np.asarray(ploidy),
+        nonrandom_completion_count=np.asarray(
+            0 if regenerated_completion_count is None else regenerated_completion_count
+        ),
+        nonrandom_completion_mode=np.asarray(regenerated_completion_mode),
         source_mask=(
             np.asarray(str(reference_path)) if reference_path else np.asarray("")
         ),
@@ -1050,7 +1258,9 @@ def prepare_strategy(
         strategy=strategy,
         seed=seed,
         sim_prop=sim_prop,
+        sim_max_tries=sim_max_tries,
         validation_split=validation_split,
+        ploidy=ploidy,
         mask_mode=mask_mode,
         reference_mask_checked=reference_path is not None,
         reference_mask_match=reference_match,
@@ -1062,12 +1272,18 @@ def prepare_strategy(
         n_original_missing=int(orig_mask.sum()),
         n_simulated_missing=int(sim_mask.sum()),
         simulated_missing_rate=float(sim_mask.sum() / sim_mask.size),
+        eligible_simulated_missing_rate=float(sim_mask.sum() / eligible_count),
         n_train_samples=len(split.train),
         n_validation_samples=len(split.validation),
         n_test_samples=len(split.test),
         n_test_evaluation=int(evaluation_mask.sum()),
         n_written_missing=n_written_missing,
         n_dropped_mask_positions=n_dropped,
+        nonrandom_completion_count=regenerated_completion_count,
+        nonrandom_completion_mode=regenerated_completion_mode,
+        source_input_vcf=portable_path(source_input_vcf),
+        source_input_sha256=sha256_file(source_input_vcf),
+        snpio_locus_order_changed=snpio_locus_order_changed,
         input_vcf=portable_path(input_vcf),
         reference_mask=(
             "" if reference_path is None else portable_path(reference_path)
@@ -1078,6 +1294,8 @@ def prepare_strategy(
         evaluation_mask_tsv=portable_path(evaluation_mask_tsv),
         split_tsv=portable_path(split_tsv),
         treefile="" if treefile is None else portable_path(treefile),
+        qmatrix="" if qmatrix is None else portable_path(qmatrix),
+        siterates="" if siterates is None else portable_path(siterates),
         input_sha256=sha256_file(input_vcf),
         masked_vcf_sha256=sha256_file(masked_vcf),
         mask_sha256=sha256_mask(sim_mask),
@@ -1230,9 +1448,6 @@ def write_reviewer_run_sheets(
             f"{result.strategy}__seed{result.seed}"
         )
         source_masked_vcf = str(Path(result.masked_vcf).relative_to(".."))
-        iqtree_file = (
-            str(Path(result.treefile).with_suffix(".iqtree")) if result.treefile else ""
-        )
         for method in ("naive", "som"):
             filename = f"{prefix}__{method}.vcf"
             copied_vcf = Path("vcfs") / method / filename
@@ -1258,11 +1473,12 @@ def write_reviewer_run_sheets(
                     "backend": backend,
                     "seed": result.seed,
                     "sim_prop": result.sim_prop,
+                    "sim_max_tries": result.sim_max_tries,
                     "validation_split": result.validation_split,
                     "input_vcf": result.input_vcf,
                     "treefile": result.treefile,
-                    "qmatrix": iqtree_file,
-                    "siterates": iqtree_file,
+                    "qmatrix": result.qmatrix,
+                    "siterates": result.siterates,
                     "output_prefix": (
                         f"../results-pgsui/{result.dataset_id}_{result.strategy}_"
                         f"{backend}"
@@ -1399,6 +1615,8 @@ def main() -> None:
         raise ValueError(
             f"--validation-split must be in (0, 1); found {args.validation_split}"
         )
+    if args.sim_max_tries is not None and args.sim_max_tries < 1:
+        raise ValueError("--sim-max-tries must be positive when provided")
 
     input_dir = args.input_dir.expanduser().resolve()
     output_dir = args.output_dir.expanduser().resolve()
@@ -1429,12 +1647,19 @@ def main() -> None:
     support_rows: list[dict[str, object]] = []
     for input_vcf in input_vcfs:
         dataset_id = vcf_stem(input_vcf)
-        genotype_data, pgsui_truth, layout, snpio_vcf = build_runtime_dataset(
+        (
+            genotype_data,
+            pgsui_truth,
+            layout,
+            snpio_vcf,
+            snpio_locus_order_changed,
+        ) = build_runtime_dataset(
             input_vcf=input_vcf.resolve(),
             snpio_prefix=output_dir / ".snpio_cache" / dataset_id / "source",
             dependencies=dependencies,
             verbose=args.verbose,
         )
+        ploidy = resolve_input_ploidy(args.ploidy, layout, input_vcf)
         canonical_input_vcf = persist_canonical_vcf(
             snpio_vcf,
             output_dir / "canonical_vcfs" / dataset_id / f"{dataset_id}.vcf.gz",
@@ -1454,6 +1679,8 @@ def main() -> None:
 
         for strategy in args.strategies:
             result = prepare_strategy(
+                source_input_vcf=input_vcf.resolve(),
+                snpio_locus_order_changed=snpio_locus_order_changed,
                 input_vcf=canonical_input_vcf,
                 output_dir=output_dir,
                 reference_mask_dir=reference_mask_dir,
@@ -1470,11 +1697,13 @@ def main() -> None:
                 tree_dir=tree_dir,
                 tree_suffix=args.tree_suffix,
                 iqtree_suffix=args.iqtree_suffix,
+                siterates_suffix=args.siterates_suffix,
                 mask_mode=args.mask_mode,
                 sim_prop=args.sim_prop,
+                sim_max_tries=args.sim_max_tries,
                 validation_split=args.validation_split,
                 seed=args.seed,
-                ploidy=args.ploidy,
+                ploidy=ploidy,
                 force=args.force,
                 verbose=args.verbose,
                 support_rows=support_rows,
@@ -1488,7 +1717,8 @@ def main() -> None:
     manifest_rows = [asdict(result) for result in results]
     write_csv(output_dir / "manifests" / "simulation_manifest.csv", manifest_rows)
     write_csv(output_dir / "manifests" / "pgsui_support_validation.csv", support_rows)
-    write_reviewer_run_sheets(output_dir, results)
+    if not args.skip_comparison_run_sheets:
+        write_reviewer_run_sheets(output_dir, results)
     write_package_readme(output_dir)
     write_provenance(output_dir, args)
     write_checksums(output_dir)

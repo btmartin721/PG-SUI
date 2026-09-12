@@ -14,6 +14,7 @@ from pgsui.utils.canonical_benchmark import (
     audit_task_reports,
     expected_support,
     read_task_manifest,
+    sha256_python_tree,
 )
 
 
@@ -22,6 +23,7 @@ def make_task(strategy: str = "random") -> CanonicalBenchmarkTask:
         "inputs/tree/example.treefile" if strategy.startswith("nonrandom") else ""
     )
     qmatrix = "inputs/tree/example.iqtree" if strategy.startswith("nonrandom") else ""
+    siterates = "inputs/tree/example.rate" if strategy.startswith("nonrandom") else ""
     return CanonicalBenchmarkTask(
         task_id=0,
         dataset_id="example",
@@ -33,11 +35,11 @@ def make_task(strategy: str = "random") -> CanonicalBenchmarkTask:
         output_prefix="results/pgsui/example/random/example_random_cpu",
         treefile=treefile,
         qmatrix=qmatrix,
-        siterates=qmatrix,
+        siterates=siterates,
     )
 
 
-def write_evaluation_mask(path: Path) -> None:
+def write_evaluation_mask(path: Path, *, ploidy: int = 2) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(
@@ -46,18 +48,32 @@ def write_evaluation_mask(path: Path) -> None:
             delimiter="\t",
         )
         writer.writeheader()
-        writer.writerows(
-            (
-                {"sample_index": 0, "locus_index": 0, "truth_class": "REF"},
-                {"sample_index": 0, "locus_index": 1, "truth_class": "HET"},
-                {"sample_index": 1, "locus_index": 0, "truth_class": "ALT"},
-                {"sample_index": 1, "locus_index": 1, "truth_class": "ALT"},
+        classes = (
+            ("REF", "REF", "ALT", "ALT")
+            if ploidy == 1
+            else (
+                "REF",
+                "HET",
+                "ALT",
+                "ALT",
             )
+        )
+        writer.writerows(
+            {
+                "sample_index": index // 2,
+                "locus_index": index % 2,
+                "truth_class": genotype_class,
+            }
+            for index, genotype_class in enumerate(classes)
         )
 
 
-def write_report(path: Path, alt_support: int = 2) -> None:
-    support = {"REF": 1, "HET": 1, "ALT": alt_support}
+def write_report(path: Path, alt_support: int = 2, *, ploidy: int = 2) -> None:
+    support = (
+        {"REF": 2, "ALT": alt_support}
+        if ploidy == 1
+        else {"REF": 1, "HET": 1, "ALT": alt_support}
+    )
     report = {
         label: {
             "precision": 0.5,
@@ -74,6 +90,8 @@ def write_report(path: Path, alt_support: int = 2) -> None:
         "recall": 0.5,
         "f1-score": 0.5,
         "support": sum(support.values()),
+        "average-precision": 0.5,
+        "jaccard": 0.5,
     }
     report["weighted avg"] = dict(report["macro avg"])
     report["mcc"] = 0.25
@@ -126,6 +144,7 @@ def test_task_command_contains_canonical_settings(
 
     assert command[0] == "pg-sui"
     assert command[command.index("--device") + 1] == "cpu"
+    assert command[command.index("--ploidy") + 1] == "2"
     assert "--verbose" in command
     assert "--disable-plotting" in command
     assert command[command.index("--tune-n-trials") + 1] == "100"
@@ -140,9 +159,10 @@ def test_task_command_contains_canonical_settings(
     )
     expected_treefile = tmp_path / "inputs/tree/example.treefile"
     expected_iqtree = tmp_path / "inputs/tree/example.iqtree"
+    expected_siterates = tmp_path / "inputs/tree/example.rate"
     assert command[command.index("--treefile") + 1] == str(expected_treefile)
     assert command[command.index("--qmatrix") + 1] == str(expected_iqtree)
-    assert command[command.index("--siterates") + 1] == str(expected_iqtree)
+    assert command[command.index("--siterates") + 1] == str(expected_siterates)
 
 
 def test_task_mapping_defaults_to_cpu() -> None:
@@ -160,6 +180,21 @@ def test_task_mapping_defaults_to_cpu() -> None:
     )
 
     assert task.device == "cpu"
+    assert task.ploidy == 2
+
+
+def test_haploid_report_audit_uses_ref_alt_support(tmp_path: Path) -> None:
+    task = replace(make_task(), ploidy=1)
+    write_evaluation_mask(tmp_path / task.evaluation_mask_tsv, ploidy=1)
+    write_mask_artifacts(task, tmp_path)
+    for model in MODEL_ORDER:
+        write_report(task.report_path(tmp_path, model), ploidy=1)
+        write_mask_artifacts(task, tmp_path, model)
+
+    rows = audit_task_reports(task, tmp_path)
+
+    assert all(row["status"] == "ok" for row in rows)
+    assert all(row["expected_het_support"] == 0 for row in rows)
 
 
 @pytest.mark.parametrize("device", ("cpu", "cuda"))
@@ -179,6 +214,15 @@ def test_random_task_omits_tree_arguments(tmp_path: Path) -> None:
     assert "--treefile" not in command
     assert "--qmatrix" not in command
     assert "--siterates" not in command
+
+
+def test_task_command_propagates_simulation_search_limit(tmp_path: Path) -> None:
+    command = replace(make_task("nonrandom"), sim_max_tries=100_000).command(tmp_path)
+
+    settings = [
+        command[index + 1] for index, value in enumerate(command) if value == "--set"
+    ]
+    assert "sim.sim_kwargs={'max_tries': 100000}" in settings
 
 
 def test_task_uses_family_specific_report_names(tmp_path: Path) -> None:
@@ -245,6 +289,24 @@ def test_report_audit_rejects_coordinate_mismatch_with_same_support(
     assert status["ImputeAutoencoder"] == "ok"
 
 
+def test_report_audit_rejects_nonfinite_scoring_metrics(tmp_path: Path) -> None:
+    task = make_task()
+    write_evaluation_mask(tmp_path / task.evaluation_mask_tsv)
+    write_mask_artifacts(task, tmp_path)
+    for model in MODEL_ORDER:
+        report_path = task.report_path(tmp_path, model)
+        write_report(report_path)
+        write_mask_artifacts(task, tmp_path, model)
+    report_path = task.report_path(tmp_path, "ImputeVAE")
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["REF"]["f1-score"] = float("nan")
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    rows = audit_task_reports(task, tmp_path)
+    status = {row["model"]: row["status"] for row in rows}
+    assert status["ImputeVAE"] == "invalid_report"
+
+
 def test_read_task_manifest_rejects_noncontiguous_ids(tmp_path: Path) -> None:
     path = tmp_path / "tasks.tsv"
     row = {
@@ -267,8 +329,60 @@ def test_read_task_manifest_rejects_noncontiguous_ids(tmp_path: Path) -> None:
         read_task_manifest(path)
 
 
+def test_python_source_digest_includes_paths_and_contents(tmp_path: Path) -> None:
+    package = tmp_path / "package"
+    (package / "nested").mkdir(parents=True)
+    (package / "__init__.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (package / "nested" / "module.py").write_text("VALUE = 2\n", encoding="utf-8")
+    first = sha256_python_tree(package)
+
+    (package / "nested" / "module.py").write_text("VALUE = 3\n", encoding="utf-8")
+
+    assert sha256_python_tree(package) != first
+
+
+def test_python_source_digest_excludes_bundled_gui_dependencies(tmp_path: Path) -> None:
+    package = tmp_path / "package"
+    package.mkdir()
+    (package / "__init__.py").write_text("VALUE = 1\n", encoding="utf-8")
+    first = sha256_python_tree(package)
+    gui_dependency = package / "electron" / "app" / "node_modules" / "tool.py"
+    gui_dependency.parent.mkdir(parents=True)
+    gui_dependency.write_text("VALUE = 2\n", encoding="utf-8")
+
+    assert sha256_python_tree(package) == first
+
+
 def test_task_requires_all_six_models() -> None:
     task = make_task()
     invalid = {**task.__dict__, "models": MODEL_ORDER[:-1]}
     with pytest.raises(ValueError, match="model order"):
         CanonicalBenchmarkTask(**invalid).validate_values()
+
+
+def test_n58_profile_requires_input_hashes() -> None:
+    task = replace(
+        make_task(),
+        benchmark_profile="n58-manuscript-fast-50",
+        tune_n_trials=50,
+        preset="fast",
+        sim_max_tries=100_000,
+        expected_pgsui_git_revision="a" * 40,
+        expected_pgsui_source_sha256="b" * 64,
+    )
+    with pytest.raises(ValueError, match="require all applicable input hashes"):
+        task.validate_values()
+
+
+def test_n58_profile_rejects_protocol_drift() -> None:
+    task = replace(
+        make_task(),
+        benchmark_profile="n58-manuscript-fast-50",
+        tune_n_trials=50,
+        preset="fast",
+        sim_max_tries=100_000,
+        expected_pgsui_git_revision="a" * 40,
+        expected_pgsui_source_sha256="b" * 64,
+    )
+    with pytest.raises(ValueError, match="fixed execution profile"):
+        replace(task, device="cuda").validate_values()

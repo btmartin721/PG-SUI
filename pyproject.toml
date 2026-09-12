@@ -43,7 +43,7 @@ dependencies = [
     "scikit-learn >=1.4,<2.0",
     "scipy >=1.13,<2.0",
     "seaborn >=0.13.2,<0.14",
-    "snpio >=1.7.3",
+    "snpio >=1.7.4",
     "optuna >=4.6,<5.0",
     "rich",
     "rich[jupyter]",

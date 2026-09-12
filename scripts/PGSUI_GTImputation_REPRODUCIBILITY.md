@@ -74,7 +74,7 @@ return `rsync` commands are included in the bundle README.
 The canonical masks and class labels use SNPio's REF/HET/ALT 0/1/2 encoder.
 Therefore, legacy PG-SUI reports must not be combined with the canonical
 GTImputation rerun. The task manifest uses `device=cpu`, `_cpu` output
-prefixes, and `n_jobs=1`. Install PG-SUI 1.8.5 in the `pgsui-gti-2`
+prefixes, and `n_jobs=1`. Install PG-SUI 1.8.6 in the `pgsui-gti-2`
 environment.
 
 The SLURM template requests `shu-hpc-biocpu`, four CPUs per worker, no explicit
@@ -106,7 +106,7 @@ dataset-specific phylogenetic inputs from `inputs/iqtree/`:
 
 - `--treefile inputs/iqtree/<dataset>.treefile`
 - `--qmatrix inputs/iqtree/<dataset>.iqtree`
-- `--siterates inputs/iqtree/<dataset>.iqtree`
+- `--siterates inputs/iqtree/<dataset>.rate`
 
 The runner verifies all required files before launching PG-SUI. Tree-related
 options are omitted for `random`, `random_weighted`, and `random_weighted_inv`.

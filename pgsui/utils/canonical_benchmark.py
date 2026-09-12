@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
+import re
 import shlex
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -46,7 +48,9 @@ class CanonicalBenchmarkTask:
     output_prefix: str
     seed: int = 42
     sim_prop: float = 0.3
+    sim_max_tries: int = 0
     validation_split: float = 0.3
+    ploidy: int = 2
     device: str = "cpu"
     n_jobs: int = 1
     tune_n_trials: int = 100
@@ -57,7 +61,18 @@ class CanonicalBenchmarkTask:
     treefile: str = ""
     qmatrix: str = ""
     siterates: str = ""
-    expected_pgsui_version: str = "1.8.5"
+    expected_pgsui_version: str = "1.8.6"
+    expected_snpio_version: str = "1.7.4"
+    expected_pgsui_git_revision: str = ""
+    expected_pgsui_source_sha256: str = ""
+    benchmark_profile: str = "canonical-balanced-100"
+    input_sha256: str = ""
+    evaluation_mask_sha256: str = ""
+    mask_sha256: str = ""
+    split_sha256: str = ""
+    treefile_sha256: str = ""
+    qmatrix_sha256: str = ""
+    siterates_sha256: str = ""
 
     @classmethod
     def from_mapping(cls, row: Mapping[str, str]) -> CanonicalBenchmarkTask:
@@ -78,7 +93,9 @@ class CanonicalBenchmarkTask:
             output_prefix=row["output_prefix"].strip(),
             seed=int(row.get("seed", 42)),
             sim_prop=float(row.get("sim_prop", 0.3)),
+            sim_max_tries=int(row.get("sim_max_tries", 0) or 0),
             validation_split=float(row.get("validation_split", 0.3)),
+            ploidy=int(row.get("ploidy", 2)),
             device=row.get("device", "cpu").strip() or "cpu",
             n_jobs=int(row.get("n_jobs", 1)),
             tune_n_trials=int(row.get("tune_n_trials", 100)),
@@ -89,7 +106,24 @@ class CanonicalBenchmarkTask:
             treefile=row.get("treefile", "").strip(),
             qmatrix=row.get("qmatrix", "").strip(),
             siterates=row.get("siterates", "").strip(),
-            expected_pgsui_version=row.get("expected_pgsui_version", "1.8.5").strip(),
+            expected_pgsui_version=row.get("expected_pgsui_version", "1.8.6").strip(),
+            expected_snpio_version=row.get("expected_snpio_version", "1.7.4").strip(),
+            expected_pgsui_git_revision=row.get(
+                "expected_pgsui_git_revision", ""
+            ).strip(),
+            expected_pgsui_source_sha256=row.get(
+                "expected_pgsui_source_sha256", ""
+            ).strip(),
+            benchmark_profile=row.get(
+                "benchmark_profile", "canonical-balanced-100"
+            ).strip(),
+            input_sha256=row.get("input_sha256", "").strip(),
+            evaluation_mask_sha256=row.get("evaluation_mask_sha256", "").strip(),
+            mask_sha256=row.get("mask_sha256", "").strip(),
+            split_sha256=row.get("split_sha256", "").strip(),
+            treefile_sha256=row.get("treefile_sha256", "").strip(),
+            qmatrix_sha256=row.get("qmatrix_sha256", "").strip(),
+            siterates_sha256=row.get("siterates_sha256", "").strip(),
         )
         task.validate_values()
         return task
@@ -105,14 +139,16 @@ class CanonicalBenchmarkTask:
             )
         if self.n_jobs < 1:
             raise ValueError("n_jobs must be at least 1")
-        if self.tune_n_trials != 100:
-            raise ValueError(
-                "Canonical reviewer runs require exactly 100 tuning trials"
-            )
+        if self.tune_n_trials < 1:
+            raise ValueError("tune_n_trials must be at least 1")
         if not 0.0 < self.validation_split < 1.0:
             raise ValueError("validation_split must be in (0, 1)")
+        if self.ploidy not in {1, 2}:
+            raise ValueError("ploidy must be 1 or 2")
         if not 0.0 < self.sim_prop < 1.0:
             raise ValueError("sim_prop must be in (0, 1)")
+        if self.sim_max_tries < 0:
+            raise ValueError("sim_max_tries must be nonnegative")
         if tuple(self.models) != MODEL_ORDER:
             raise ValueError(
                 "Canonical task model order must include the four neural models "
@@ -120,6 +156,80 @@ class CanonicalBenchmarkTask:
             )
         if len(self.tune_metrics) < 2:
             raise ValueError("Canonical runs require multi-objective tuning metrics")
+        if not self.benchmark_profile:
+            raise ValueError("benchmark_profile must not be empty")
+        if self.expected_pgsui_git_revision and not re.fullmatch(
+            r"[0-9a-fA-F]{40}", self.expected_pgsui_git_revision
+        ):
+            raise ValueError(
+                "expected_pgsui_git_revision must be a 40-character Git SHA"
+            )
+        if self.expected_pgsui_source_sha256 and not re.fullmatch(
+            r"[0-9a-fA-F]{64}", self.expected_pgsui_source_sha256
+        ):
+            raise ValueError(
+                "expected_pgsui_source_sha256 must be a SHA-256 hexadecimal digest"
+            )
+        for name in (
+            "input_sha256",
+            "evaluation_mask_sha256",
+            "mask_sha256",
+            "split_sha256",
+            "treefile_sha256",
+            "qmatrix_sha256",
+            "siterates_sha256",
+        ):
+            value = getattr(self, name)
+            if value and not re.fullmatch(r"[0-9a-fA-F]{64}", value):
+                raise ValueError(f"{name} must be a SHA-256 hexadecimal digest")
+        if self.benchmark_profile == "n58-manuscript-fast-50":
+            protocol = {
+                "device": (self.device, "cpu"),
+                "n_jobs": (self.n_jobs, 1),
+                "tune_n_trials": (self.tune_n_trials, 50),
+                "preset": (self.preset, "fast"),
+                "sim_max_tries": (self.sim_max_tries, 100_000),
+                "expected_pgsui_version": (self.expected_pgsui_version, "1.8.6"),
+                "expected_snpio_version": (self.expected_snpio_version, "1.7.4"),
+            }
+            protocol_mismatches = {
+                name: values
+                for name, values in protocol.items()
+                if values[0] != values[1]
+            }
+            if protocol_mismatches:
+                raise ValueError(
+                    "N=58 manuscript task violates the fixed execution profile: "
+                    f"{protocol_mismatches}"
+                )
+            if not self.expected_pgsui_git_revision:
+                raise ValueError("N=58 manuscript tasks require a PG-SUI Git revision")
+            if not self.expected_pgsui_source_sha256:
+                raise ValueError(
+                    "N=58 manuscript tasks require an exact PG-SUI source digest"
+                )
+            required_hashes = {
+                "input_sha256": self.input_sha256,
+                "evaluation_mask_sha256": self.evaluation_mask_sha256,
+                "mask_sha256": self.mask_sha256,
+                "split_sha256": self.split_sha256,
+            }
+            if self.strategy.startswith("nonrandom"):
+                required_hashes.update(
+                    {
+                        "treefile_sha256": self.treefile_sha256,
+                        "qmatrix_sha256": self.qmatrix_sha256,
+                        "siterates_sha256": self.siterates_sha256,
+                    }
+                )
+            missing_hashes = [
+                name for name, value in required_hashes.items() if not value
+            ]
+            if missing_hashes:
+                raise ValueError(
+                    "N=58 manuscript tasks require all applicable input hashes; "
+                    f"missing {missing_hashes}"
+                )
         if self.strategy.startswith("nonrandom") and not all(
             (self.treefile, self.qmatrix, self.siterates)
         ):
@@ -203,6 +313,8 @@ class CanonicalBenchmarkTask:
             str(self.n_jobs),
             "--device",
             self.device,
+            "--ploidy",
+            str(self.ploidy),
             "--tune",
             "--tune-n-trials",
             str(self.tune_n_trials),
@@ -232,6 +344,10 @@ class CanonicalBenchmarkTask:
                     "--siterates",
                     str(self.resolve(bundle_root, self.siterates)),
                 ]
+            )
+        if self.sim_max_tries:
+            command.extend(
+                ["--set", f"sim.sim_kwargs={{'max_tries': {self.sim_max_tries}}}"]
             )
         return command
 
@@ -271,6 +387,98 @@ def read_task_manifest(path: Path) -> list[CanonicalBenchmarkTask]:
     return tasks
 
 
+def sha256_file(path: Path) -> str:
+    """Calculate a file SHA-256 digest using bounded memory."""
+    hasher = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+def python_source_files(root: Path) -> tuple[Path, ...]:
+    """Return runtime Python sources while excluding bundled GUI dependencies."""
+    return tuple(
+        sorted(
+            path
+            for path in root.rglob("*.py")
+            if path.is_file()
+            and "__pycache__" not in path.relative_to(root).parts
+            and path.relative_to(root).parts[:2] != ("electron", "app")
+        )
+    )
+
+
+def sha256_python_tree(root: Path) -> str:
+    """Hash Python source paths and contents below a package directory.
+
+    Args:
+        root (Path): Root directory containing the Python package source.
+
+    Returns:
+        str: Stable SHA-256 digest of every ``.py`` relative path and file.
+
+    Raises:
+        FileNotFoundError: If ``root`` is not a directory.
+        ValueError: If no Python source files are present.
+    """
+    if not root.is_dir():
+        raise FileNotFoundError(f"Python source directory is missing: {root}")
+    paths = python_source_files(root)
+    if not paths:
+        raise ValueError(f"Python source directory contains no .py files: {root}")
+    hasher = hashlib.sha256()
+    for path in paths:
+        relative = path.relative_to(root).as_posix().encode("utf-8")
+        hasher.update(len(relative).to_bytes(8, byteorder="big"))
+        hasher.update(relative)
+        with path.open("rb") as handle:
+            while chunk := handle.read(1024 * 1024):
+                hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+def task_fingerprint(task: CanonicalBenchmarkTask) -> str:
+    """Return a stable digest of every task configuration field."""
+    payload = json.dumps(asdict(task), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def verify_task_input_hashes(
+    task: CanonicalBenchmarkTask,
+    bundle_root: Path,
+) -> dict[str, dict[str, str | bool]]:
+    """Verify task inputs carrying expected SHA-256 values in the manifest."""
+    pairs = {
+        "input_vcf": (task.input_vcf, task.input_sha256),
+        "evaluation_mask_tsv": (
+            task.evaluation_mask_tsv,
+            task.evaluation_mask_sha256,
+        ),
+        "mask_npz": (task.mask_npz, task.mask_sha256),
+        "split_tsv": (task.split_tsv, task.split_sha256),
+        "treefile": (task.treefile, task.treefile_sha256),
+        "qmatrix": (task.qmatrix, task.qmatrix_sha256),
+        "siterates": (task.siterates, task.siterates_sha256),
+    }
+    results: dict[str, dict[str, str | bool]] = {}
+    for name, (raw_path, expected) in pairs.items():
+        if not raw_path or not expected:
+            continue
+        path = task.resolve(bundle_root, raw_path)
+        observed = sha256_file(path)
+        results[name] = {
+            "path": str(path),
+            "expected_sha256": expected,
+            "observed_sha256": observed,
+            "match": observed == expected,
+        }
+    failures = [name for name, result in results.items() if not result["match"]]
+    if failures:
+        raise ValueError(f"Task input SHA-256 mismatch: {', '.join(failures)}")
+    return results
+
+
 def expected_support(evaluation_mask_tsv: Path) -> dict[str, int]:
     """Count canonical test-mask truth classes without loading genotype data."""
     counts = {label: 0 for label in GENOTYPE_CLASSES}
@@ -291,23 +499,69 @@ def expected_support(evaluation_mask_tsv: Path) -> dict[str, int]:
     return counts
 
 
-def read_classification_report(path: Path) -> dict[str, Any]:
-    """Read and minimally validate a PG-SUI zygosity report."""
+def report_classes(ploidy: int) -> tuple[str, ...]:
+    """Return the zygosity report classes for a supported ploidy."""
+    if ploidy == 1:
+        return ("REF", "ALT")
+    if ploidy == 2:
+        return GENOTYPE_CLASSES
+    raise ValueError("ploidy must be 1 or 2")
+
+
+def read_classification_report(path: Path, *, ploidy: int = 2) -> dict[str, Any]:
+    """Read and validate all manuscript metrics in a PG-SUI zygosity report."""
     with path.open(encoding="utf-8") as handle:
         report = json.load(handle)
+    classes = report_classes(ploidy)
     missing = [
-        label for label in (*GENOTYPE_CLASSES, "macro avg") if label not in report
+        label
+        for label in (*classes, "macro avg", "weighted avg")
+        if label not in report
     ]
     if missing:
         raise ValueError(f"Report {path} is missing sections: {missing}")
+    metric_names = (
+        "precision",
+        "recall",
+        "f1-score",
+        "support",
+        "average-precision",
+        "jaccard",
+    )
+    for label in (*classes, "macro avg", "weighted avg"):
+        section = report[label]
+        if not isinstance(section, Mapping):
+            raise TypeError(f"Report section {label!r} is not a mapping")
+        missing_metrics = [name for name in metric_names if name not in section]
+        if missing_metrics:
+            raise ValueError(
+                f"Report section {label!r} is missing metrics: {missing_metrics}"
+            )
+        values = np.asarray([float(section[name]) for name in metric_names])
+        if not np.all(np.isfinite(values)):
+            raise ValueError(f"Report section {label!r} has non-finite metrics")
+        support = float(section["support"])
+        if support < 0 or not support.is_integer():
+            raise ValueError(f"Report section {label!r} has invalid support")
+    for name in ("mcc", "accuracy"):
+        if name not in report or not np.isfinite(float(report[name])):
+            raise ValueError(f"Report has invalid or missing {name}")
+    expected_total = sum(int(report[label]["support"]) for label in classes)
+    for label in ("macro avg", "weighted avg"):
+        if int(report[label]["support"]) != expected_total:
+            raise ValueError(f"Report section {label!r} support is inconsistent")
     return report
 
 
-def report_support(report: Mapping[str, Any]) -> dict[str, int]:
+def report_support(report: Mapping[str, Any], *, ploidy: int = 2) -> dict[str, int]:
     """Extract integer class and total support from a classification report."""
-    support = {
-        label: int(round(float(report[label]["support"]))) for label in GENOTYPE_CLASSES
-    }
+    support = {label: 0 for label in GENOTYPE_CLASSES}
+    support.update(
+        {
+            label: int(round(float(report[label]["support"])))
+            for label in report_classes(ploidy)
+        }
+    )
     support["TOTAL"] = int(round(float(report["macro avg"]["support"])))
     return support
 
@@ -397,8 +651,8 @@ def audit_task_reports(
             )
             continue
         try:
-            report = read_classification_report(path)
-            observed = report_support(report)
+            report = read_classification_report(path, ploidy=task.ploidy)
+            observed = report_support(report, ploidy=task.ploidy)
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
             rows.append(
                 {
@@ -456,7 +710,7 @@ def metric_rows(
         path = task.report_path(bundle_root, model)
         if not path.is_file():
             continue
-        report = read_classification_report(path)
+        report = read_classification_report(path, ploidy=task.ploidy)
         base = {
             "task_id": task.task_id,
             "dataset_id": task.dataset_id,
@@ -466,9 +720,10 @@ def metric_rows(
             if model in DEEP_MODELS
             else "deterministic",
             "backend": task.device if model in DEEP_MODELS else "deterministic",
+            "ploidy": task.ploidy,
             "report_path": str(path),
         }
-        for label in (*GENOTYPE_CLASSES, "macro avg", "weighted avg"):
+        for label in (*report_classes(task.ploidy), "macro avg", "weighted avg"):
             values = report[label]
             rows.append(
                 {

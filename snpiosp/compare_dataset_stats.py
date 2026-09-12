@@ -9,9 +9,11 @@ Includes diagnostic debugging for dataset completion gating.
 from __future__ import annotations
 
 import argparse
+import json
 import re
 from collections import defaultdict
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import List, Optional, Sequence
 
@@ -72,7 +74,6 @@ mpl_params = {
     "axes.spines.bottom": True,
     "axes.spines.top": False,
     "axes.spines.right": False,
-    "axes.facecolor": "white",
     "savefig.facecolor": "white",
     "savefig.dpi": 300,
     "savefig.bbox": "tight",
@@ -85,17 +86,18 @@ plt.rcParams.update(mpl_params)
 
 METRIC_MAP = {
     "F_inbreeding": r"$\it{F}_{\it{is}}$",
-    "ThetaWatt": r"$\it{\theta}_{\it{w}}$",
+    "ThetaWatt_Per_Site": r"$\it{\theta}_{\it{w}}$ per site",
     "Pi": r"$\it{\pi}$",
-    "TajimaD": r"Tajima's $\it{D}$",
+    "TajimaD_CompleteSites": r"Tajima's $\it{D}$ (complete sites)",
     "Missingness": "Missingness",
     "Ho": r"$\it{H}_{\it{o}}$",
     "He": r"$\it{H}_{\it{e}}$",
-    "HetzPositions": r"Heterozygous Sites",
+    "Heterozygote_Count": r"Heterozygote Count",
     "SegSites": r"$\it{S}$",
     "Singletons": r"Singletons",
-    "Hap": r"$\it{N}_{\it{hap}}$",
-    "Hd": r"$\it{H}_{\it{d}}$",
+    "Genotype_Category_Count": r"Genotype Category Count",
+    "Genotype_Diversity": r"Genotype Diversity",
+    "SNPio_LD_r2D": r"Unbiased LD $r^2_D$",
     "Sample_Size": r"Sample Size",
     "MAF": r"MAF",
 }
@@ -240,7 +242,7 @@ def plot_effectsize_summary(anova_res: pd.DataFrame, outpath: Path) -> None:
     fig, ax = plt.subplots(figsize=(10, 6))
 
     # Use native Matplotlib bar for exact color mapping and lower overhead
-    bars = ax.bar(metrics, eta_vals, color=colors, edgecolor="k", linewidth=0.7)
+    ax.bar(metrics, eta_vals, color=colors, edgecolor="k", linewidth=0.7)
 
     ax.set_ylabel(r"$\eta^2$ (Effect Size)")
     ax.set_xlabel("Summary Statistic")
@@ -337,7 +339,7 @@ def plot_metric_histograms(
     ax0 = axes[0]
     ax0.hist(dataset_means, bins=30, color="#2c7bb6", edgecolor="k", alpha=0.8)
     ax0.set_title(
-        f"Dataset Mean Distribution: {metric}\n" f"(n datasets = {n_dataset_means})"
+        f"Dataset Mean Distribution: {metric}\n(n datasets = {n_dataset_means})"
     )
     ax0.set_xlabel(f"Mean {metric}")
     ax0.set_ylabel("Count of Datasets")
@@ -526,6 +528,36 @@ def read_locus_stats(dset: DatasetFiles) -> pd.DataFrame:
     return df
 
 
+def read_dataset_summaries(datasets: Sequence[DatasetFiles]) -> pd.DataFrame:
+    """Read scalar total-dataset summaries without treating them as loci."""
+    rows: list[dict[str, object]] = []
+    for dataset in datasets:
+        if dataset.summary_json is None:
+            continue
+        with dataset.summary_json.open(encoding="utf-8") as handle:
+            payload = json.load(handle)
+        if not isinstance(payload, dict):
+            raise ValueError(f"Expected a JSON object: {dataset.summary_json}")
+        dataset_key = extract_dataset_key(dataset.dataset_id)
+        if dataset_key is None:
+            raise ValueError(
+                f"Could not derive dataset key from {dataset.dataset_id!r}"
+            )
+        scalars = {
+            key: value
+            for key, value in payload.items()
+            if isinstance(value, (str, int, float, bool)) or value is None
+        }
+        rows.append({"dataset": dataset_key, **scalars})
+    if not rows:
+        return pd.DataFrame(columns=["dataset"])
+    frame = pd.DataFrame(rows)
+    if frame["dataset"].duplicated().any():
+        duplicates = sorted(frame.loc[frame["dataset"].duplicated(), "dataset"])
+        raise ValueError(f"Duplicate total summary datasets: {duplicates}")
+    return frame
+
+
 def deduplicate_datasets_by_key(df: pd.DataFrame) -> pd.DataFrame:
     if "dataset_key" not in df.columns:
         return df
@@ -626,9 +658,6 @@ def welch_anova_by_metric(
 
         y = sub[metric].to_numpy(dtype=float).copy()
         datasets = sub["dataset"].to_numpy()
-
-        # Apply jitter to prevent zero-variance errors in transformation/ANOVA
-        y += np.random.normal(0, 1e-9, size=y.shape)
 
         if transform:
             y = yeo_johnson_transform(y)
@@ -747,11 +776,18 @@ def load_completed_dataset_labels(
     print(f"\n[Completion Gate] Loading metrics from: {metrics_long_csv}")
 
     try:
-        df = pd.read_csv(metrics_long_csv)
+        delimiter = "\t" if metrics_long_csv.suffix.lower() == ".tsv" else ","
+        df = pd.read_csv(metrics_long_csv, sep=delimiter)
     except Exception as e:
         print(f"[Completion Gate] Error reading CSV: {e}")
         return set()
 
+    rename = {}
+    if "dataset_id" in df.columns and "dataset" not in df.columns:
+        rename["dataset_id"] = "dataset"
+    if "strategy" in df.columns and "sim_strategy" not in df.columns:
+        rename["strategy"] = "sim_strategy"
+    df = df.rename(columns=rename)
     required_cols = {"dataset", "sim_strategy", "model"}
     missing = required_cols - set(df.columns)
     if missing:
@@ -794,6 +830,8 @@ def load_completed_dataset_labels(
         .astype(str)
         .str.lower()
         .str.strip()
+        .str.replace("_", " ", regex=False)
+        .str.replace(r"\s+", " ", regex=True)
         .map(strategy_map)
         .fillna("Unknown")
     )
@@ -855,7 +893,8 @@ def main() -> None:
     """Executes the pipeline to aggregate, test, and plot summary statistics."""
     args = parse_args()
     root: Path = args.root.resolve()
-    root.mkdir(parents=True, exist_ok=True)
+    if not root.is_dir():
+        raise FileNotFoundError(f"Summary-statistics root does not exist: {root}")
 
     out_dir = (
         args.output_dir.resolve()
@@ -922,8 +961,22 @@ def main() -> None:
 
     retained_n = combined["dataset_key"].astype(str).nunique()
     print(f"[Sanity Check] Retained unique dataset_key count: {retained_n}")
+    if args.expected_datasets is not None and retained_n != args.expected_datasets:
+        raise ValueError(
+            "Population-genetic analysis retained "
+            f"{retained_n} datasets; expected {args.expected_datasets}"
+        )
 
     desc = per_dataset_descriptives(combined, metrics)
+    summary_frame = read_dataset_summaries(datasets)
+    if not summary_frame.empty:
+        desc["dataset"] = desc["dataset"].astype(str)
+        desc = desc.merge(
+            summary_frame,
+            on="dataset",
+            how="left",
+            validate="one_to_one",
+        )
     desc.to_csv(
         out_dir / f"{args.out_prefix}_all_datasets_summary_stats.csv", index=False
     )
@@ -945,7 +998,7 @@ def main() -> None:
         anova_res = anova_res.drop(columns=["welch_F"])
 
     print("Running Post-Hoc Outlier Analysis...")
-    outliers_df = analyze_deviations(desc, metrics, out_dir, args.out_prefix)
+    analyze_deviations(desc, metrics, out_dir, args.out_prefix)
 
     if args.plots and not anova_res.empty:
         plot_dir = out_dir / f"{args.out_prefix}_plots"
@@ -970,6 +1023,35 @@ def main() -> None:
             )
 
         print(f"Plots written to: {plot_dir}")
+
+    manifest_name = f"{args.out_prefix}_manifest.json"
+    output_files = sorted(
+        str(path.relative_to(out_dir))
+        for path in out_dir.rglob("*")
+        if path.is_file() and path.name != manifest_name
+    )
+    manifest = {
+        "created_at_utc": datetime.now(UTC).isoformat(),
+        "snpio_versions": sorted(
+            combined["SNPio_Version"].dropna().astype(str).unique().tolist()
+        )
+        if "SNPio_Version" in combined.columns
+        else [],
+        "source_root": str(root),
+        "completed_metrics_long": (
+            ""
+            if args.completed_metrics_long is None
+            else str(args.completed_metrics_long.resolve())
+        ),
+        "strict_strategies": args.strict_strategies,
+        "expected_datasets": args.expected_datasets,
+        "dataset_count": retained_n,
+        "metrics": list(metrics),
+        "output_files": output_files,
+    }
+    (out_dir / manifest_name).write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -1025,7 +1107,18 @@ def parse_args() -> argparse.Namespace:
             "Defaults to False (include datasets even if some strategies are missing)."
         ),
     )
-    return p.parse_args()
+    p.add_argument(
+        "--expected-datasets",
+        type=int,
+        default=None,
+        help=(
+            "Optional exact retained-dataset count required after completion gating."
+        ),
+    )
+    args = p.parse_args()
+    if args.expected_datasets is not None and args.expected_datasets < 1:
+        p.error("--expected-datasets must be positive")
+    return args
 
 
 if __name__ == "__main__":

@@ -21,7 +21,7 @@ from pgsui.utils.canonical_benchmark import (
     read_task_manifest,
 )
 
-EXPECTED_VERSION = "1.8.5"
+EXPECTED_VERSION = "1.8.6"
 PORTABLE_SUPPORT_NAME = "_canonical_benchmark_support.py"
 SCRIPT_NAMES: tuple[str, ...] = (
     "build_pgsui_hpc_bundle.py",
@@ -99,7 +99,7 @@ def task_rows(simulation_manifest: pd.DataFrame) -> list[dict[str, Any]]:
                 "input_vcf": f"inputs/vcfs/{input_name}",
                 "treefile": f"inputs/iqtree/{dataset}.treefile" if needs_tree else "",
                 "qmatrix": f"inputs/iqtree/{dataset}.iqtree" if needs_tree else "",
-                "siterates": f"inputs/iqtree/{dataset}.iqtree" if needs_tree else "",
+                "siterates": f"inputs/iqtree/{dataset}.rate" if needs_tree else "",
                 "mask_npz": f"masks/{dataset}/{strategy}/{Path(row['mask_npz']).name}",
                 "evaluation_mask_tsv": (
                     f"masks/{dataset}/{strategy}/"
@@ -158,8 +158,9 @@ def validate_portable_tasks(
         if task.strategy.startswith("nonrandom"):
             expected_treefile = f"inputs/iqtree/{task.dataset_id}.treefile"
             expected_iqtree = f"inputs/iqtree/{task.dataset_id}.iqtree"
+            expected_siterates = f"inputs/iqtree/{task.dataset_id}.rate"
             observed = (task.treefile, task.qmatrix, task.siterates)
-            expected = (expected_treefile, expected_iqtree, expected_iqtree)
+            expected = (expected_treefile, expected_iqtree, expected_siterates)
             if observed != expected:
                 raise ValueError(
                     f"Incorrect phylogenetic inputs for task {task.task_id}: "
@@ -211,7 +212,7 @@ and submitted jobs are CPU-only.
 ## Software
 
 Create or activate a Python 3.12 `pgsui-gti-2` environment containing PG-SUI
-1.8.5. The bundle includes a portable canonical benchmark helper, and the task
+1.8.6. The bundle includes a portable canonical benchmark helper, and the task
 runner refuses to execute a different PG-SUI version. PG-SUI installs its
 compatible SNPio dependency.
 
@@ -262,7 +263,7 @@ dataset-specific files under `inputs/iqtree/` as follows:
 
 - `--treefile inputs/iqtree/<dataset>.treefile`
 - `--qmatrix inputs/iqtree/<dataset>.iqtree`
-- `--siterates inputs/iqtree/<dataset>.iqtree`
+- `--siterates inputs/iqtree/<dataset>.rate`
 
 The task runner stops before launching PG-SUI if any required file is missing.
 The three options are omitted for the other simulation strategies.
@@ -270,7 +271,7 @@ The three options are omitted for the other simulation strategies.
 ## Regenerate and verify all five simulation strategies
 
 The bundle includes the original VCFs, IQ-TREE inputs, and canonical mask
-archives. From the bundle root, activate PG-SUI 1.8.5 and run:
+archives. From the bundle root, activate PG-SUI 1.8.6 and run:
 
 ```bash
 bash scripts/simulate_gtimputation_missingness.zsh --verbose
@@ -380,6 +381,10 @@ def main() -> int:
             iqtree_root / f"{dataset}.iqtree",
             output_dir / "inputs" / "iqtree" / f"{dataset}.iqtree",
         )
+        copy_file(
+            iqtree_root / f"{dataset}.rate",
+            output_dir / "inputs" / "iqtree" / f"{dataset}.rate",
+        )
 
     for row in simulation_manifest.to_dict("records"):
         dataset = str(row["dataset_id"])
@@ -483,6 +488,16 @@ def main() -> int:
         )
         portable_simulation.at[index, "treefile"] = (
             f"../inputs/iqtree/{dataset}.treefile"
+            if strategy.startswith("nonrandom")
+            else ""
+        )
+        portable_simulation.at[index, "qmatrix"] = (
+            f"../inputs/iqtree/{dataset}.iqtree"
+            if strategy.startswith("nonrandom")
+            else ""
+        )
+        portable_simulation.at[index, "siterates"] = (
+            f"../inputs/iqtree/{dataset}.rate"
             if strategy.startswith("nonrandom")
             else ""
         )

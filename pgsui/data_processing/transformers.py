@@ -203,7 +203,8 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
         missing_val (int, optional): Value that represents missing data. Defaults to -9.
         mask_missing (bool, optional): True if you want to skip original missing values when simulating new missing data, False otherwise. Defaults to True.
         verbose (bool, optional): Verbosity level. Defaults to 0.
-        tol (float): Tolerance to reach proportion specified in self.prop_missing. Defaults to 1/num_snps*num_inds
+        tol (float): Deprecated compatibility option. Missingness strategies now
+            enforce the exact attainable rounded target. Defaults to None.
         max_tries (int): Maximum number of tries to reach targeted missing data proportion within specified tol. If None, num_inds will be used. Defaults to None.
 
     Attributes:
@@ -237,7 +238,7 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
             missing_val (int, optional): Value that represents missing data. Defaults to -9.
             mask_missing (bool, optional): True if you want to skip original missing values when simulating new missing data, False otherwise. Defaults to True.
             verbose (bool, optional): Verbosity level. Defaults to 0.
-            tol (float): Tolerance to reach proportion specified in self.prop_missing. Defaults to 1/num_snps*num_inds
+            tol (float): Deprecated compatibility option. Missingness strategies now enforce the exact attainable rounded target. Defaults to None.
             max_tries (int): Maximum number of tries to reach targeted missing data proportion within specified tol. If None, num_inds will be used. Defaults to None.
             seed (int | None): RNG seed.
             logger (logging.Logger | None): Logger for messages.
@@ -252,9 +253,13 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
         self.tol = tol
         self.max_tries = max_tries
         self.seed = seed
+
         self.rng = (
             np.random.default_rng(seed) if seed is not None else np.random.default_rng()
         )
+
+        self.nonrandom_completion_count_ = 0
+        self.nonrandom_completion_mode_ = "none"
         self.logger = logger or logging.getLogger(__name__)
 
     def fit(self, X: np.ndarray, y=None) -> "SimMissingTransformer":
@@ -270,6 +275,8 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
             ValueError: Invalid ``strategy`` parameter provided.
         """
         X = np.asarray(validate_input_type(X, return_type="array")).astype(np.float32)
+        self.nonrandom_completion_count_ = 0
+        self.nonrandom_completion_mode_ = "none"
 
         self.logger.debug(
             f"Adding {self.prop_missing} missing data per column using strategy: {self.strategy}"
@@ -285,9 +292,19 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
             present = ~self.original_missing_mask_
             self.mask_ = np.zeros_like(X, dtype=bool)
 
-            # sample only over present sites
-            draws = self.rng.random(X.shape)
-            self.mask_[present] = draws[present] < self.prop_missing
+            target_counts = self._allocate_column_mask_counts(
+                present, self.prop_missing, rng=self.rng
+            )
+            for column, n_select in enumerate(target_counts):
+                if n_select <= 0:
+                    continue
+                candidates = np.flatnonzero(present[:, column])
+                selected = self.rng.choice(
+                    candidates,
+                    size=int(n_select),
+                    replace=False,
+                )
+                self.mask_[selected, column] = True
 
             if self.mask_missing:
                 # keep original-missing as not simulated
@@ -340,24 +357,26 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
             )
 
             total_eligible = int(present.sum())
+
             if total_eligible == 0:
                 self.mask_ = mask
                 self._validate_mask(use_non_original_only=self.mask_missing)
+
                 self.all_missing_mask_ = np.logical_or(
                     self.mask_, self.original_missing_mask_
                 )
+
                 self.sim_missing_mask_ = np.logical_and(
                     self.all_missing_mask_, ~self.original_missing_mask_
                 )
+
                 return self
 
-            target = round(self.prop_missing * total_eligible)
-            tol = int(
-                max(
-                    1,
-                    (self.tol if self.tol is not None else 1.0 / mask.size)
-                    * total_eligible,
-                )
+            per_locus_capacity = np.maximum(np.count_nonzero(present, axis=0) - 1, 0)
+
+            target = min(
+                round(self.prop_missing * total_eligible),
+                int(per_locus_capacity.sum()),
             )
 
             # map tip labels -> row indices
@@ -368,9 +387,10 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
                 if self.max_tries is not None
                 else max(10_000, mask.shape[0] * 10)
             )
+
             placed = int(mask.sum())
-            best_delta = abs(placed - target)
             tries = 0
+            event_width = max(1, 4 * int(np.ceil(target / max_outer)))
 
             # simple per-locus quota to distribute hits
             col_quota = np.full(
@@ -379,10 +399,9 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
                 dtype=int,
             )
 
-            while tries < max_outer and abs(placed - target) > tol:
+            while tries < max_outer and placed < target:
                 tries += 1
 
-                # >>> Call _sample_tree here <<<
                 try:
                     tips = self._sample_tree(
                         internal_only=False,
@@ -396,59 +415,91 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
                     continue
 
                 # Convert to row indices; skip labels not in matrix
-                rows = [name_to_idx[t] for t in tips if t in name_to_idx]
-                if not rows:
+                rows = np.asarray(
+                    [name_to_idx[t] for t in tips if t in name_to_idx], dtype=int
+                )
+                if rows.size == 0:
                     continue
 
-                # choose a column to edit
+                # Mask one sampled clade across a small random batch of loci.
+                # Scaling the batch width by target/max_tries lets large
+                # alignments reach the requested rate without changing the
+                # phylogenetic unit being sampled.
                 cols_left = np.flatnonzero(col_quota > 0)
+
                 if cols_left.size == 0:
                     cols_left = np.arange(mask.shape[1])
-                j = int(self.rng.choice(cols_left))
 
-                # only edit eligible cells in this column
-                eligible_rows = np.fromiter(
-                    (r for r in rows if present[r, j]), dtype=int
+                n_columns = min(event_width, cols_left.size)
+
+                columns = np.atleast_1d(
+                    self.rng.choice(cols_left, size=n_columns, replace=False)
                 )
-                if eligible_rows.size == 0:
-                    continue
 
-                if placed < target:
-                    prev_col = mask[:, j].copy()
-                    mask[eligible_rows, j] = True
+                for j_value in columns:
+                    j = int(j_value)
 
-                    # avoid fully missing column among observed
-                    col_after = mask[present[:, j], j]
-                    if col_after.all():
-                        idx_present = np.flatnonzero(present[:, j])
-                        k = int(self.rng.choice(idx_present))
-                        mask[k, j] = False
+                    candidate_rows = rows[present[rows, j] & ~mask[rows, j]]
 
-                    new_placed = int(mask.sum())
-                    delta = abs(new_placed - target)
-                    if delta <= best_delta:
-                        best_delta = delta
-                        placed = new_placed
-                        col_quota[j] = max(0, col_quota[j] - 1)
-                    else:
-                        mask[:, j] = prev_col
-                else:
-                    # remove within the same clade and column
-                    prev_col = mask[:, j].copy()
-                    col_idxs = eligible_rows[mask[eligible_rows, j]]
-                    if col_idxs.size == 0:
+                    if candidate_rows.size == 0:
                         continue
-                    need = min(col_idxs.size, max(1, placed - target))
-                    to_clear = self.rng.choice(col_idxs, size=need, replace=False)
-                    mask[to_clear, j] = False
 
-                    new_placed = int(mask.sum())
-                    delta = abs(new_placed - target)
-                    if delta <= best_delta:
-                        best_delta = delta
-                        placed = new_placed
-                    else:
-                        mask[:, j] = prev_col
+                    unmasked_observed = int(
+                        np.count_nonzero(present[:, j] & ~mask[:, j])
+                    )
+
+                    capacity = unmasked_observed - 1
+                    remaining = target - placed
+
+                    take = min(candidate_rows.size, capacity, remaining)
+
+                    if take <= 0:
+                        continue
+
+                    if take < candidate_rows.size:
+                        candidate_rows = np.atleast_1d(
+                            self.rng.choice(candidate_rows, size=take, replace=False)
+                        )
+
+                    mask[candidate_rows, j] = True
+                    placed += int(candidate_rows.size)
+                    col_quota[j] = max(0, col_quota[j] - 1)
+
+                    if placed >= target:
+                        break
+
+            if placed < target:
+                row_weights = self._phylogenetic_tip_completion_weights(
+                    weighted=weighted
+                )
+                self.nonrandom_completion_count_ = self._complete_mask_to_target(
+                    mask,
+                    present,
+                    target,
+                    row_weights=row_weights,
+                )
+                self.nonrandom_completion_mode_ = (
+                    "branch_length_weighted_tip_clades"
+                    if weighted
+                    else "uniform_node_marginal_tip_clades"
+                )
+
+                placed = int(mask.sum())
+
+                self.logger.warning(
+                    "Nonrandom simulation required %s seeded phylogenetic "
+                    "tip-clade completion masks after %s clade-sampling attempts "
+                    "(mode=%s).",
+                    self.nonrandom_completion_count_,
+                    tries,
+                    self.nonrandom_completion_mode_,
+                )
+
+            if placed != target:
+                raise RuntimeError(
+                    "Nonrandom missingness could not reach the requested rate: "
+                    f"placed={placed}, target={target}"
+                )
 
             self.mask_ = mask
             self._validate_mask(use_non_original_only=self.mask_missing)
@@ -470,7 +521,9 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
             overlap = self.sim_missing_mask_ & self.original_missing_mask_
             if bool(overlap.any()):
                 n = int(overlap.sum())
+
                 msg = f"SimMissingTransformer produced {n} simulated-missing positions that overlap original missing values while mask_missing=True. This violates the no-overlap contract."
+
                 self.logger.error(msg)
                 raise ValueError(msg)
 
@@ -532,6 +585,7 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
         rng = rng if rng is not None else self.rng
 
         tf = transform_fn.lower()
+
         if tf not in {"sqrt", "exp"}:
             msg = f"transform_fn must be 'sqrt' or 'exp', got: {transform_fn}"
             self.logger.error(msg)
@@ -546,6 +600,13 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
         n_samples, n_snps = X.shape
         out_mask = np.zeros((n_samples, n_snps), dtype=bool)
 
+        target_counts: np.ndarray | None = None
+
+        if target_rate is not None:
+            target_counts = self._allocate_column_mask_counts(
+                ~np.isnan(X), target_rate, rng=rng
+            )
+
         for j in range(n_snps):
             col = X[:, j]
             present = ~np.isnan(col)
@@ -557,37 +618,47 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
             vals = col[eligible]
             classes, counts = np.unique(vals, return_counts=True)
 
-            if classes.size == 1:  # never wipe entire column
-                continue
-
             p = counts.astype(float) / counts.sum()
-            base = 1.0 / np.clip(p, eps, None) if inv else p
-            w = _tf(base)
-            w = np.clip(w, 0.0, None) ** power
-            s = w.sum()
-            w = (
-                np.full_like(w, 1.0 / w.size, dtype=float)
-                if (s <= 0 or ~np.isfinite(s))
-                else (w / s)
-            )
+            if classes.size == 1:
+                w = np.ones(1, dtype=float)
+            else:
+                base = 1.0 / np.clip(p, eps, None) if inv else p
+                w = _tf(base)
+                w = np.clip(w, 0.0, None) ** power
+                weight_sum = w.sum()
+                w = (
+                    np.full_like(w, 1.0 / w.size, dtype=float)
+                    if (weight_sum <= 0 or ~np.isfinite(weight_sum))
+                    else (w / weight_sum)
+                )
 
             probs = np.zeros(n_samples, dtype=float)
             for c, pw in zip(classes, w, strict=True):
                 probs[eligible & (col == c)] = pw
 
-            if target_rate is not None:
-                mean_p = probs[present].mean()
-                if mean_p > 0:
-                    probs *= float(target_rate) / mean_p
-            probs = np.clip(probs, 0.0, 1.0)
-
-            draws = rng.random(n_samples)
-            out_mask[:, j] = draws < probs
+            if target_counts is None:
+                probs = np.clip(probs, 0.0, 1.0)
+                draws = rng.random(n_samples)
+                out_mask[:, j] = draws < probs
+            else:
+                candidates = np.flatnonzero(present)
+                n_select = int(target_counts[j])
+                if n_select:
+                    candidate_weights = probs[candidates]
+                    candidate_weights /= candidate_weights.sum()
+                    selected = rng.choice(
+                        candidates,
+                        size=n_select,
+                        replace=False,
+                        p=candidate_weights,
+                    )
+                    out_mask[selected, j] = True
 
             if mask_missing:
                 out_mask[~present, j] = False  # never alter already-missing
 
-            # guard against accidentally wiping this column (using only non-original-missing)
+            # guard against accidentally wiping this column
+            # (using only non-original-missing)
             col_after = out_mask[present, j]
             if col_after.sum() == col_after.size:
                 # clear a random observed index
@@ -595,6 +666,207 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
                 out_mask[np.flatnonzero(present)[k], j] = False
 
         return out_mask
+
+    @staticmethod
+    def _allocate_column_mask_counts(
+        present: np.ndarray,
+        target_rate: float,
+        *,
+        rng: np.random.Generator,
+    ) -> np.ndarray:
+        """Allocate an exact global mask target without emptying a locus.
+
+        Counts start at each locus's floored proportional allocation. Any remainder is distributed by fractional priority with seeded random tie-breaking. A locus always retains at least one observed genotype.
+
+        Args:
+            present (np.ndarray): Boolean eligible-call matrix with shape ``(n_samples, n_loci)``.
+            target_rate (float): Requested fraction of all eligible calls.
+            rng (np.random.Generator): Seeded random-number generator.
+
+        Returns:
+            np.ndarray: Number of calls to mask in each locus.
+
+        Raises:
+            ValueError: If ``target_rate`` is outside ``[0, 1]``.
+            RuntimeError: If the requested allocation cannot be completed.
+        """
+        if not 0.0 <= target_rate <= 1.0:
+            raise ValueError(f"target_rate must be in [0, 1], got: {target_rate}")
+
+        observed_counts = np.count_nonzero(present, axis=0)
+        capacities = np.maximum(observed_counts - 1, 0)
+        desired = float(target_rate) * observed_counts
+        target_counts = np.minimum(np.floor(desired).astype(int), capacities)
+
+        total_target = min(
+            round(float(target_rate) * int(observed_counts.sum())),
+            int(capacities.sum()),
+        )
+
+        remaining = total_target - int(target_counts.sum())
+        fractional = desired - np.floor(desired)
+        tie_breakers = rng.random(present.shape[1])
+        priority = np.lexsort((tie_breakers, -fractional))
+
+        while remaining > 0:
+            candidates = priority[target_counts[priority] < capacities[priority]]
+            if candidates.size == 0:
+                raise RuntimeError(
+                    "Missingness target exceeds the per-locus masking capacity"
+                )
+            take = min(remaining, candidates.size)
+            target_counts[candidates[:take]] += 1
+            remaining -= take
+
+        return target_counts
+
+    def _complete_mask_to_target(
+        self,
+        mask: np.ndarray,
+        present: np.ndarray,
+        target: int,
+        *,
+        row_weights: np.ndarray | None = None,
+    ) -> int:
+        """Complete a capped nonrandom mask without fully masking any locus.
+
+        This is a deterministic, seed-controlled safeguard for unusually sparse
+        trees or finite ``max_tries`` values. Completion is spread across loci
+        one observed tip-clade at a time. Optional row weights preserve the
+        marginal tip probabilities induced by the phylogenetic node-sampling
+        strategy.
+
+        Args:
+            mask (np.ndarray): Partially constructed simulated mask.
+            present (np.ndarray): Boolean matrix of eligible observed calls.
+            target (int): Requested total number of simulated-missing calls.
+            row_weights (np.ndarray | None): Nonnegative sampling weights for
+                matrix rows. Uniform weights are used when omitted.
+
+        Returns:
+            int: Number of cells added by the completion safeguard.
+
+        Raises:
+            RuntimeError: If the requested target would fully mask a locus.
+        """
+        remaining = target - int(mask.sum())
+
+        if remaining <= 0:
+            return 0
+
+        if row_weights is None:
+            weights = np.ones(mask.shape[0], dtype=float)
+        else:
+            weights = np.asarray(row_weights, dtype=float)
+            if weights.shape != (mask.shape[0],):
+                raise ValueError(
+                    "row_weights must have one value per genotype-matrix row"
+                )
+            if not np.all(np.isfinite(weights)) or np.any(weights < 0):
+                raise ValueError("row_weights must be finite and nonnegative")
+            if not np.any(weights > 0):
+                weights = np.ones(mask.shape[0], dtype=float)
+
+        columns = self.rng.permutation(mask.shape[1])
+        added = 0
+
+        while remaining > 0:
+            progress = 0
+
+            active_columns = [
+                int(column)
+                for column in columns
+                if np.count_nonzero(present[:, column] & ~mask[:, column]) > 1
+            ]
+
+            if not active_columns:
+                raise RuntimeError(
+                    "Requested nonrandom missingness would fully mask at least "
+                    "one observed locus"
+                )
+
+            per_column = max(1, int(np.ceil(remaining / len(active_columns))))
+
+            for column in active_columns:
+                candidates = np.flatnonzero(present[:, column] & ~mask[:, column])
+
+                take = min(per_column, candidates.size - 1, remaining)
+
+                if take <= 0:
+                    continue
+
+                candidate_weights = weights[candidates]
+                probability = (
+                    candidate_weights / candidate_weights.sum()
+                    if candidate_weights.sum() > 0
+                    else None
+                )
+                selected = np.atleast_1d(
+                    self.rng.choice(
+                        candidates,
+                        size=take,
+                        replace=False,
+                        p=probability,
+                    )
+                )
+
+                mask[selected, column] = True
+                remaining -= int(selected.size)
+                added += int(selected.size)
+                progress += int(selected.size)
+
+                if remaining == 0:
+                    break
+
+            if progress == 0:
+                raise RuntimeError("Nonrandom mask completion made no progress")
+
+            columns = self.rng.permutation(columns)
+
+        return added
+
+    def _phylogenetic_tip_completion_weights(self, *, weighted: bool) -> np.ndarray:
+        """Return marginal sample weights induced by eligible tree nodes.
+
+        Each non-root node contributes its branch length in the weighted
+        strategy and unit mass in the unweighted strategy to every descendant
+        sample. Selecting individual tip-clades with these row weights therefore
+        preserves the marginal phylogenetic sampling emphasis when the capped
+        clade loop needs exact-target completion.
+
+        Args:
+            weighted (bool): Whether node contributions use branch lengths.
+
+        Returns:
+            np.ndarray: Nonnegative weight for every genotype-matrix row.
+        """
+        if self.tree_parser is None or not hasattr(self.tree_parser, "tree"):
+            raise TypeError("A loaded tree is required for phylogenetic completion")
+
+        sample_to_index = {
+            str(sample): index
+            for index, sample in enumerate(self.genotype_data.samples)
+        }
+        weights = np.zeros(len(sample_to_index), dtype=float)
+        for node in self.tree_parser.tree.treenode.traverse("preorder"):
+            is_root = (
+                bool(node.is_root())
+                if hasattr(node, "is_root")
+                else getattr(node, "up", None) is None
+            )
+            if is_root or not hasattr(node, "get_leaves"):
+                continue
+            contribution = float(getattr(node, "dist", 0.0) or 0.0) if weighted else 1.0
+            if not np.isfinite(contribution) or contribution <= 0:
+                continue
+            for leaf in node.get_leaves():
+                index = sample_to_index.get(str(getattr(leaf, "name", "")))
+                if index is not None:
+                    weights[index] += contribution
+
+        if not np.any(weights > 0):
+            weights.fill(1.0)
+        return weights
 
     def _sample_tree(
         self,
@@ -718,9 +990,12 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
             "No sampled clades contain tips present in genotype_data.samples. "
             "Check that tree tip names match the genotype_data samples."
         )
+
         self.logger.error(msg)
+
         if last_error:
             raise ValueError(msg) from last_error
+
         raise ValueError(msg)
 
     def _validate_mask(self, use_non_original_only: bool = False) -> None:
@@ -749,7 +1024,6 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
         if X.ndim == 3:
             # One-hot encoded: zero-out all channels at masked positions
             mask_val = np.zeros((X.shape[-1],), dtype=X.dtype)
-
         elif X.ndim == 2:
             # 012-encoded.
             mask_val = (
@@ -757,7 +1031,6 @@ class SimMissingTransformer(BaseEstimator, TransformerMixin):
                 if np.isnan(self.missing_val)
                 else self.missing_val
             )
-
         else:
             raise ValueError(f"Invalid shape of input X: {X.shape}")
 
