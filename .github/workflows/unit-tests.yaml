@@ -45,7 +45,7 @@ jobs:
       - name: Run tests
         env:
           MPLCONFIGDIR: ${{ runner.temp }}/mpl
-        run: pytest -q
+        run: python -m pytest -q
 
       - name: Run Ruff checks
         run: |

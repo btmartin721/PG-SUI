@@ -24,6 +24,16 @@ BASH_ENTRYPOINTS = (
 )
 
 
+def test_ci_runs_pytest_with_checkout_on_python_path() -> None:
+    """Keep repository-level script modules importable during CI collection."""
+    workflow = (PROJECT_ROOT / ".github/workflows/unit-tests.yaml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "run: python -m pytest -q" in workflow
+    assert "run: pytest -q" not in workflow
+
+
 @pytest.mark.parametrize("script_path", BASH_ENTRYPOINTS, ids=lambda path: path.name)
 def test_reviewer_workflow_entrypoint_is_valid_bash(script_path: Path) -> None:
     """Require each reviewer workflow entrypoint to parse under Bash."""
