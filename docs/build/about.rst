@@ -6,7 +6,7 @@ About PG-SUI
 PG-SUI Philosophy
 -----------------
 
-PG-SUI is a Python 3 toolkit for imputing missing genotypes in population genomic SNP matrices using **deterministic**, **unsupervised**, and **supervised** approaches. PG-SUI integrates with `SNPio <https://snpio.readthedocs.io/en/latest/>__` for I/O (file input/output) and encoding, emphasizes robust handling of class imbalance, and follows a logical design with easy-to-use configurations and presets, optional **YAML** configs, and a consistent **instantiate → fit() → transform()** workflow. Unsupervised deep models build on representation learning and generative modeling ideas (Hinton & Salakhutdinov, 2006; Kingma & Welling, 2013).
+PG-SUI is a Python 3 toolkit for imputing missing genotypes in population genomic SNP matrices using **deterministic**, **unsupervised**, and **supervised** approaches. PG-SUI integrates with `SNPio <https://snpio.readthedocs.io/en/latest/>`__ for I/O (file input/output) and encoding, emphasizes robust handling of class imbalance, and follows a logical design with easy-to-use configurations and presets, optional **YAML** configs, and a consistent **instantiate → fit() → transform()** workflow. Unsupervised deep models build on representation learning and generative modeling ideas (Hinton & Salakhutdinov, 2006; Kingma & Welling, 2013).
 
 Key Design (at a glance)
 ------------------------
