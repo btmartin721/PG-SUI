@@ -18,6 +18,14 @@ frozen, and then both embeddings and decoder weights are jointly optimized.
 Missingness is simulated once on the full matrix and reused across train/val/test
 splits; evaluation metrics are computed on simulated-missing positions only.
 
+This schematic animation shows PCA initialization, decoder refinement, joint
+optimization, projection, validation, and imputation. Its predictions are
+illustrative rather than measured results.
+
+.. image:: ../../img/impute_ubp_workflow.gif
+   :alt: Animated UBP workflow showing genotype input, PCA initialization, decoder refinement, joint training, projection, and imputed calls.
+   :align: center
+
 Model formulation
 -----------------
 

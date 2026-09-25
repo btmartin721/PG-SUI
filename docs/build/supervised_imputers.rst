@@ -6,6 +6,17 @@ Overview
 
 PG-SUI's supervised imputers frame genotype imputation as **multiclass prediction** (0 = REF, 1 = HET, 2 = ALT for diploids; haploids collapse to two classes). They use typed ``*Config`` dataclasses with presets (``fast``, ``balanced``, ``thorough``), optional YAML, and a consistent **instantiate → fit() → transform()** workflow. Under the hood each model wraps :class:`sklearn.impute.IterativeImputer` with a tree-based estimator, evaluates on simulated missingness, and reports both 0/1/2 and IUPAC metrics.
 
+These schematic animations show the two tree-based workflows. Their genotype
+predictions are illustrative rather than measured results.
+
+.. image:: ../../img/impute_random_forest_workflow.gif
+   :alt: Animated random-forest iterative-imputation workflow from genotype input through tree voting to filled calls.
+   :align: center
+
+.. image:: ../../img/impute_hist_gradient_boosting_workflow.gif
+   :alt: Animated histogram-gradient-boosting iterative-imputation workflow from binned genotype features through boosted trees to filled calls.
+   :align: center
+
 .. code-block:: python
 
    from snpio import VCFReader

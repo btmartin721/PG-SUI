@@ -23,6 +23,18 @@ What's included
   population-aware modes when a popmap is available.
 - **ImputeRefAllele** — replaces all missing values with REF genotype (0).
 
+These schematic animations show each baseline from genotype input through
+validation masking to filled calls. Unlike neural imputers, these methods do
+not use neural networks. The displayed example calls are illustrative.
+
+.. image:: ../../img/impute_most_frequent_workflow.gif
+   :alt: Animated most-frequent-genotype baseline showing observed per-locus counts, modes, and filled genotype calls.
+   :align: center
+
+.. image:: ../../img/impute_ref_allele_workflow.gif
+   :alt: Animated reference-allele baseline showing missing genotype calls filled with REF genotype zero.
+   :align: center
+
 Shared behavior & outputs
 -------------------------
 

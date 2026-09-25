@@ -50,6 +50,16 @@ Simulation strategies
 - ``nonrandom_weighted``: like ``nonrandom`` but clades are sampled in
   proportion to branch length.
 
+The animation compares all five strategies on the same illustrative genotype
+matrix. Amber cells were observed before masking and retain known truth;
+teal cells were already missing and are never scored. The pictured selections
+are schematic rather than actual draws from the transformer. The CLI and YAML
+name for inverse-frequency weighting is ``random_weighted_inv``.
+
+.. image:: ../../img/simulated_missingness_strategies.gif
+   :alt: Animated comparison of random, frequency-weighted, inverse-frequency-weighted, clade-based, and branch-length-weighted simulated missingness.
+   :align: center
+
 ``nonrandom`` and ``nonrandom_weighted`` require a tree parser; provide
 ``--treefile``, ``--qmatrix``, and ``--siterates`` on the CLI.
 

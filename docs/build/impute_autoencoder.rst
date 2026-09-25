@@ -11,6 +11,14 @@ genotype imputation. The model maps genotype vectors into a low-dimensional
 latent space and reconstructs per-locus genotype logits. It uses masked focal
 cross-entropy to ignore missing entries and handle class imbalance.
 
+This schematic animation follows genotype calls through validation masking,
+the encoder, latent code, decoder, and imputed output. Its predictions are
+illustrative rather than measured results.
+
+.. image:: ../../img/impute_autoencoder_workflow.gif
+   :alt: Animated autoencoder workflow showing masked genotypes, encoder and decoder networks, and imputed calls.
+   :align: center
+
 Model formulation
 -----------------
 

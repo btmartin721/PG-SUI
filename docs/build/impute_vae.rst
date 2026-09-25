@@ -12,6 +12,19 @@ samples latent vectors via the reparameterization trick, and the decoder
 reconstructs genotype logits. Training combines masked focal reconstruction
 loss with a KL divergence penalty.
 
+The first animation follows the VAE from observed genotypes through a simulated
+validation mask, prediction, and filling original gaps. The second highlights
+its encoder, latent distribution, sampling, and decoder. Both are schematic;
+their calls and any displayed score are illustrative.
+
+.. image:: ../../img/vae_imputation.gif
+   :alt: Animated VAE overview showing held-out validation genotypes and originally missing genotypes.
+   :align: center
+
+.. image:: ../../img/impute_vae_workflow.gif
+   :alt: Animated VAE workflow from genotype matrix through encoder, latent distribution, sampling, decoder, and imputed calls.
+   :align: center
+
 Model formulation
 -----------------
 

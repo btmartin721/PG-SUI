@@ -10,22 +10,34 @@ PG-SUI is a Python 3 API that uses machine learning to impute missing values fro
 
 Below is some general information and a basic tutorial. For more detailed information, see our [API Documentation](https://pg-sui.readthedocs.io/en/latest/).
 
+## How PG-SUI works
+
+PG-SUI fills missing SNP genotypes using unsupervised neural networks, supervised machine-learning models, or deterministic methods. Its neural models learn to reconstruct genotype calls using observed values as training targets. To evaluate an imputer, PG-SUI temporarily masks some observed genotypes, predicts them, and compares the predictions with their known values. After fitting, it fills the genotypes that were missing in the original input. Those calls have no known truth, so they are excluded from accuracy scores.
+
+The animation illustrates the variational autoencoder (VAE) workflow. Its genotype calls and validation score are illustrative only.
+
+![VAE imputation workflow showing observed genotypes hidden for validation and original missing calls filled](./img/vae_imputation.gif)
+
 ### Unsupervised Imputation Methods
 
-Unsupervised imputers include three custom neural network models:
+Unsupervised imputers include four neural models:
 
 + Variational Autoencoder (VAE) [1](#1)
-  + VAE models train themselves to reconstruct their input (i.e., the genotypes) [1](#1). To use VAE for imputation, the missing values are masked and the VAE model gets trained to reconstruct only on known values. Once the model is trained, it is then used to predict the missing values.
+  + Encodes genotypes as a latent distribution, then decodes them to reconstruct observed calls. Training excludes originally missing calls from the reconstruction loss; the trained model predicts those calls.
 + Autoencoder [2](#2)
-  + A standard autoencoder that trains the input to predict itself [2](#2). As with VAE, missing values are masked and the model gets trained only on known values. Predictions are then made on the missing values.
+  + Learns a lower-dimensional representation of the genotypes and reconstructs observed calls. Its predictions fill originally missing positions.
++ Nonlinear PCA (NLPCA)
+  + Learns per-sample latent representations and a decoder network to reconstruct genotypes.
++ Unsupervised backpropagation (UBP)
+  + Initializes sample representations with PCA, then refines the decoder and representations in stages.
 
-See the below diagram for an overview of implemented features for each model.
+The diagram below compares the autoencoder and VAE architectures.
 
 ![Side-by-side comparison of two neural network architectures for genomic imputation. Left diagram with blue boxes shows ImputeAutoencoder workflow: input genotypes with missing data encoded as 0=REF, 1=HET, 2=ALT, -9 or -1=Missing flows through gamma Schedule, Encoder Network, Latent Space, Decoder Network, Reconstruction Loss, to produce Imputed Genotype Output. Right diagram with orange boxes shows ImputeVAE architecture: genotype input flows through Encoder Network to Mean and Log Variance outputs, then Sampling with Reparameterization, KL-beta Schedule, KL Divergence Loss, Decoder Network, Reconstruction Loss, producing Imputed Genotype Output. Both models output refilled missing values. The comparison illustrates how the autoencoder differs from VAE through additional scheduled parameters and loss components in the variational model.](./img/autoencoder_vae_model_diagrams.png)
 
 ### Supervised Imputation Methods
 
-Supervised methods utilze the scikit-learn's ``IterativeImputer``, which is based on the MICE (Multivariate Imputation by Chained Equations) algorithm [3](#3), and iterates over each SNP site (i.e., feature) while uses the N nearest neighbor features to inform the imputation. The number of nearest features can be adjusted by users. IterativeImputer currently works with the following scikit-learn classifiers:
+Supervised methods use scikit-learn's `IterativeImputer`, which is based on multivariate imputation by chained equations (MICE) [3](#3). It predicts missing genotypes at each SNP site using other sites as features. Users can configure how many other SNP features are considered for each prediction. PG-SUI supports these classifiers:
 
 + ImputeRandomForest
 + ImputeHistGradientBoosting
@@ -38,6 +50,7 @@ We also include several deterministic options for imputing missing data, includi
 
 + Per-population mode per SNP site
 + Overall mode per SNP site
++ Reference allele (REF genotype)
 
 ## Installing PG-SUI
 

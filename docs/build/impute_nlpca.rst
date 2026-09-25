@@ -17,6 +17,14 @@ evaluation and inference. It is equivalent to the joint-optimization phase of
 UBP, with an additional input-refinement step that updates originally missing
 entries while keeping simulated-missing cells masked to avoid leakage.
 
+This schematic animation shows PCA initialization of sample embeddings,
+decoder training, projection, validation, and final imputation. Its predictions
+are illustrative rather than measured results.
+
+.. image:: ../../img/impute_nlpca_workflow.gif
+   :alt: Animated NLPCA workflow showing genotype input, PCA-initialized sample embeddings, neural decoder, and imputed calls.
+   :align: center
+
 Model formulation
 -----------------
 
