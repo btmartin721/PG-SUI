@@ -17,10 +17,6 @@ Unsupervised Models
 - **ImputeUBP**: Unsupervised Backpropagation with phased training and latent projection (Gashler et al., 2014).
 - These models learn structure from observed entries and then infer true missing genotypes by training on simulated missingness.
 
-.. image:: ../../img/autoencoder_vae_model_diagrams.png
-    :alt: Side-by-side comparison of two neural network architectures for genomic imputation. Left diagram with blue boxes shows ImputeAutoencoder workflow: input genotypes with missing data encoded as 0=REF, 1=HET, 2=ALT, -9 or -1=Missing flows through gamma Schedule, Encoder Network, Latent Space, Decoder Network, Reconstruction Loss, to produce Imputed Genotype Output. Right diagram with orange boxes shows ImputeVAE architecture: genotype input flows through Encoder Network to Mean and Log Variance outputs, then Sampling with Reparameterization, KL-beta Schedule, KL Divergence Loss, Decoder Network, Reconstruction Loss, producing Imputed Genotype Output. Both models output refilled missing values. The comparison illustrates how the autoencoder differs from VAE through additional scheduled parameters and loss components in the variational model.
-    :align: center
-
 Supervised Models
 ^^^^^^^^^^^^^^^^^
 

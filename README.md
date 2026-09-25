@@ -14,13 +14,13 @@ Below is some general information and a basic tutorial. For more detailed inform
 
 PG-SUI fills missing SNP genotypes using unsupervised neural networks, supervised machine-learning models, or deterministic methods. Its neural models learn to reconstruct genotype calls using observed values as training targets. To evaluate an imputer, PG-SUI temporarily masks some observed genotypes, predicts them, and compares the predictions with their known values. After fitting, it fills the genotypes that were missing in the original input. Those calls have no known truth, so they are excluded from accuracy scores.
 
-The animation illustrates the variational autoencoder (VAE) workflow. Its genotype calls and validation score are illustrative only.
+The following schematic animation illustrates the variational autoencoder (VAE) genotype imputation workflow. Its predictions are illustrative, not measured results.
 
-![VAE imputation workflow showing observed genotypes hidden for validation and original missing calls filled](./img/vae_imputation.gif)
+![VAE workflow showing genotype input and validation masking, a neural encoder and decoder, and imputed output](./img/impute_vae_workflow.gif)
 
 ### Unsupervised Imputation Methods
 
-Unsupervised imputers include four neural models:
+Unsupervised imputers include four neural network models:
 
 + Variational Autoencoder (VAE) [1](#1)
   + Encodes genotypes as a latent distribution, then decodes them to reconstruct observed calls. Training excludes originally missing calls from the reconstruction loss; the trained model predicts those calls.
@@ -31,9 +31,15 @@ Unsupervised imputers include four neural models:
 + Unsupervised backpropagation (UBP)
   + Initializes sample representations with PCA, then refines the decoder and representations in stages.
 
-The diagram below compares the autoencoder and VAE architectures.
+The animations below show the four neural imputation workflows.
 
-![Side-by-side comparison of two neural network architectures for genomic imputation. Left diagram with blue boxes shows ImputeAutoencoder workflow: input genotypes with missing data encoded as 0=REF, 1=HET, 2=ALT, -9 or -1=Missing flows through gamma Schedule, Encoder Network, Latent Space, Decoder Network, Reconstruction Loss, to produce Imputed Genotype Output. Right diagram with orange boxes shows ImputeVAE architecture: genotype input flows through Encoder Network to Mean and Log Variance outputs, then Sampling with Reparameterization, KL-beta Schedule, KL Divergence Loss, Decoder Network, Reconstruction Loss, producing Imputed Genotype Output. Both models output refilled missing values. The comparison illustrates how the autoencoder differs from VAE through additional scheduled parameters and loss components in the variational model.](./img/autoencoder_vae_model_diagrams.png)
+![Autoencoder workflow showing genotype input, encoder and decoder networks, and imputed output](./img/impute_autoencoder_workflow.gif)
+
+![VAE workflow showing genotype input, a latent distribution, neural decoder, and imputed output](./img/impute_vae_workflow.gif)
+
+![NLPCA workflow showing genotype input, sample embeddings, a neural decoder, and imputed output](./img/impute_nlpca_workflow.gif)
+
+![UBP workflow showing genotype input, staged decoder training, projection, and imputed output](./img/impute_ubp_workflow.gif)
 
 ### Supervised Imputation Methods
 
@@ -44,6 +50,12 @@ Supervised methods use scikit-learn's `IterativeImputer`, which is based on mult
 
 See the [scikit-learn documentation](https://scikit-learn.org) for more information on IterativeImputer and each of the classifiers.
 
+The animations below illustrate the supervised imputation models.
+
+![Random forest imputation workflow showing genotype input, tree votes, and filled calls](./img/impute_random_forest_workflow.gif)
+
+![Histogram gradient boosting workflow showing genotype input, binned features, boosted trees, and filled calls](./img/impute_hist_gradient_boosting_workflow.gif)
+
 ### Non-Machine Learning (Deterministic) Methods
 
 We also include several deterministic options for imputing missing data, including:
@@ -51,6 +63,12 @@ We also include several deterministic options for imputing missing data, includi
 + Per-population mode per SNP site
 + Overall mode per SNP site
 + Reference allele (REF genotype)
+
+The animations below illustrate each deterministic model.
+
+![Reference-allele imputation workflow showing missing calls filled with the REF genotype](./img/impute_ref_allele_workflow.gif)
+
+![Most-frequent imputation workflow showing per-locus genotype counts and filled calls](./img/impute_most_frequent_workflow.gif)
 
 ## Installing PG-SUI
 

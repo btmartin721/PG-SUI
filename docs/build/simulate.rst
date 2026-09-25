@@ -30,9 +30,9 @@ Simulation process
 3. Use :class:`pgsui.data_processing.transformers.SimMissingTransformer` to select a subset of observed cells to mask based on ``sim_strategy`` and ``sim_prop``.
 4. Produce a masked matrix for model training/inference plus three boolean masks:
 
-   - ``original_missing_mask_``: missing in the input data.
-   - ``sim_missing_mask_``: simulated missing on observed cells.
-   - ``all_missing_mask_``: union of original and simulated missing.
+    - ``original_missing_mask_``: missing in the input data.
+    - ``sim_missing_mask_``: simulated missing on observed cells.
+    - ``all_missing_mask_``: union of original and simulated missing.
 
 The simulated mask is always applied to observed cells only, so model
 performance is measured against known truth.
@@ -73,27 +73,21 @@ Simulation Strategy Summary Table
    * - Strategy
      - Selection logic
      - Biologically mimics
-     - Expected difficulty
    * - Random
      - Uniform coin flip per cell
      - Random sequencing errors; read-depth fluctuations
-     - Easy
    * - Random weighted
      - Probability proportional to genotype frequency (masks common)
      - Reference bias; over-representation of common alleles
-     - Moderate
    * - Random weighted inv
      - Probability inversely proportional to genotype frequency (masks rare)
      - Allelic dropout; minor-allele loss; ascertainment bias
-     - Hard
    * - Nonrandom
      - Phylogenetically clustered masking
      - Clade-specific dropout; sample batch effects
-     - Hard
    * - Nonrandom weighted
      - Clustered masking weighted by branch length
      - Divergence-linked dropout; lineage-specific failures
-     - Very hard
 
 Evaluation workflow
 -------------------
@@ -118,20 +112,20 @@ YAML configuration (applies per model config):
 
 .. code-block:: yaml
 
-   sim:
-     simulate_missing: true
-     sim_strategy: random_weighted_inv
-     sim_prop: 0.30
-     sim_kwargs: {}
+    sim:
+      simulate_missing: true
+      sim_strategy: random_weighted_inv
+      sim_prop: 0.30
+      sim_kwargs: {}
 
 CLI overrides (apply to all selected models):
 
 .. code-block:: bash
 
-   pg-sui \
-     --input data.vcf.gz \
-     --sim-strategy random_weighted_inv \
-     --sim-prop 0.30
+    pg-sui \
+      --input data.vcf.gz \
+      --sim-strategy random_weighted_inv \
+      --sim-prop 0.30
 
 Use ``--disable-simulate-missing`` to turn off simulated masking for
 supervised/deterministic runs. Unsupervised models require simulated
