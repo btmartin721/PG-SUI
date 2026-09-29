@@ -598,7 +598,7 @@ def model_diagram(draw: ImageDraw.ImageDraw, story: ModelStory, phase: int) -> N
             label(
                 draw,
                 (660, 515),
-                "Refine originally missing inputs during training",
+                "Keep missing genotypes masked during training",
                 size=18,
                 fill=MUTED,
                 anchor="mm",

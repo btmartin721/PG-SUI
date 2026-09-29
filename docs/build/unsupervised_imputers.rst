@@ -83,7 +83,7 @@ Non-linear PCA (ImputeNLPCA)
 - Encodes genotypes to 0/1/2 (missing → -1) and detects haploid panels, collapsing ALT/HET where appropriate.
 - Initializes per-sample latent embeddings with PCA and optimizes them directly (no encoder network).
 - Trains with focal cross-entropy (``train.gamma``) while jointly optimizing decoder weights and latent vectors, using class-weight controls from ``train.weights_*``.
-- Input refinement updates originally missing entries in the working matrix after selected epochs while keeping simulated-missing positions masked.
+- Originally missing and simulated-missing genotypes remain excluded from the training loss; predictions are not fed back as targets.
 - Projection-based evaluation refines latents with the decoder frozen, controlled by ``nlpca.projection_lr`` / ``nlpca.projection_epochs``.
 - Optional Optuna tuning uses the ``tune`` envelope (trial count, metric selection, and optional patience settings) before the final training run.
 

@@ -4,6 +4,17 @@ Changelog
 
 An overview of changes to **PG-SUI** by release. This file mirrors the GitHub Markdown changelog and reflects the refactor-era docs: dataclass-first configs, presets, unified scikit-learn framework-based ``fit()/transform()`` methods, CLI precedence, and updated deterministic/supervised docs.
 
+v1.8.7 - 2026-09-29
+-------------------
+
+Scientific correctness
+^^^^^^^^^^^^^^^^^^^^^^
+
+- Initialized UBP and NLPCA sample embeddings from the corrupted genotype matrix, with PCA fitted on training samples only, so simulated-missing genotypes remain hidden from the warm start.
+- Trained NLPCA on observed genotypes only. Originally missing and simulated-missing cells remain excluded from its loss throughout training; the former are no longer filled with predicted targets between epochs.
+- Added regression tests for PCA initialization, NLPCA training masks, and end-to-end imputation.
+- Updated method documentation and the NLPCA animation to match the training behavior and corrected the displayed sign of focal cross-entropy.
+
 v1.8.6 - 2026-09-12
 -------------------
 

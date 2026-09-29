@@ -14,8 +14,8 @@ directly by backpropagation.
 
 PG-SUI uses NLPCA as a decoder-only model with latent refinement during
 evaluation and inference. It is equivalent to the joint-optimization phase of
-UBP, with an additional input-refinement step that updates originally missing
-entries while keeping simulated-missing cells masked to avoid leakage.
+UBP, without the decoder-only phase. Originally missing and simulated-missing
+genotypes stay masked throughout training.
 
 This schematic animation shows PCA initialization of sample embeddings,
 decoder training, projection, validation, and final imputation. Its predictions
@@ -38,14 +38,14 @@ class logits for every locus:
    \hat{X}_i = f_W(v_i)
 
 Training minimizes a masked focal cross-entropy loss over observed entries
-with optional class weights and L1 regularization on decoder weights:
+with optional class weights and L1 regularization on the trainable parameters:
 
 .. math::
 
    \mathcal{L} =
    \frac{1}{|M|} \sum_{(i, j) \in M}
-   w_{y_{ij}} (1 - p_{ij})^{\gamma} \log(p_{ij})
-   + \lambda \lVert W \rVert_1
+   -w_{y_{ij}} (1 - p_{ij})^{\gamma} \log(p_{ij})
+   + \lambda (\lVert V \rVert_1 + \lVert W \rVert_1)
 
 where :math:`M` indexes non-missing entries, :math:`p_{ij}` is the probability
 assigned to the true genotype class, and :math:`\gamma` is the focal-loss
@@ -56,15 +56,11 @@ Algorithm summary
 
 1. Encode genotypes as 0/1/2, simulate missingness once on the full matrix, and
    build masks for original and simulated missingness (reused across splits).
-2. Initialize latent embeddings with PCA on observed training data.
-3. Initialize the working matrix by filling originally missing entries with
-   per-locus mode values; simulated-missing positions stay masked.
-4. Jointly optimize latent embeddings :math:`V` and decoder weights :math:`W`
-   using focal cross-entropy on observed entries.
-5. Input refinement (EM-like): after selected epochs, replace **only**
-   originally missing entries in the working matrix with current reconstructions
-   while keeping simulated-missing positions masked.
-6. During validation/inference, refine embeddings by projection (optimize
+2. Fit PCA on observed training genotypes and initialize all sample embeddings
+   from the corrupted matrix, using training-locus means for missing cells.
+3. Jointly optimize latent embeddings :math:`V` and decoder weights :math:`W`
+   using focal cross-entropy on observed entries only.
+4. During validation/inference, refine embeddings by projection (optimize
    :math:`V` with :math:`W` frozen) to improve reconstruction quality.
 
 Configuration highlights

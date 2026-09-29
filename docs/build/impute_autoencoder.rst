@@ -39,7 +39,7 @@ with optional class weights and L1 regularization:
 
    \mathcal{L} =
    \frac{1}{|M|} \sum_{(i, j) \in M}
-   w_{y_{ij}} (1 - p_{ij})^{\gamma} \log(p_{ij})
+   -w_{y_{ij}} (1 - p_{ij})^{\gamma} \log(p_{ij})
    + \lambda \lVert \theta \rVert_1
 
 where :math:`M` indexes non-missing entries, :math:`p_{ij}` is the probability

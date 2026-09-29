@@ -68,18 +68,17 @@ def ensure_nlpca_config(config: NLPCAConfig | dict | str | None) -> NLPCAConfig:
 class ImputeNLPCA(BaseNNImputer):
     """Non-linear PCA (NLPCA) Imputer for Genotype Data.
 
-    This is “UBP Phase 3 only” + explicit input refinement.
+    This is “UBP Phase 3 only”: per-sample latent embeddings (V) and decoder
+    weights (W) are optimized jointly from a PCA warm start, with the loss
+    computed only on observed genotypes.
 
     Key differences vs ImputeUBP:
         - No Phase 2 (decoder-only refinement).
         - Joint optimization only (V and W updated together).
-            - EM-like updates of *originally missing* inputs during training: after each epoch, replace originally-missing values in the working matrix with the model's current reconstructions. Simulated-missing values are NEVER filled during training (prevents leakage).
 
     Attributes:
         model_ (nn.Module): Trained decoder model with learnable embeddings.
         is_fit_ (bool): Whether fit() has been called successfully.
-        X_train_work_ (np.ndarray): Working training matrix used as targets during NLPCA.
-        _X_train_work_init_ (np.ndarray): Initial copy for per-trial reset during tuning.
     """
 
     def __init__(
@@ -180,9 +179,6 @@ class ImputeNLPCA(BaseNNImputer):
         self.projection_lr = float(self.cfg.nlpca.projection_lr)
         self.projection_epochs = int(self.cfg.nlpca.projection_epochs)
 
-        # NLPCA input-refinement controls
-        self.input_refine_every = int(getattr(self.cfg.nlpca, "input_refine_every", 1))
-        self.input_refine_steps = int(getattr(self.cfg.nlpca, "input_refine_steps", 1))
         # Tuning
         self.tune = bool(self.cfg.tune.enabled)
         self.tune_metric: str | list[str] | tuple[str, ...]
@@ -203,12 +199,6 @@ class ImputeNLPCA(BaseNNImputer):
         self.class_weights_: torch.Tensor | None = None
 
         self.num_tuned_params_ = OBJECTIVE_SPEC_NLPCA.count()
-
-        # Working matrices (set during fit)
-        self.X_train_work_: np.ndarray | None = None
-        self.X_val_work_: np.ndarray | None = None
-        self.X_test_work_: np.ndarray | None = None
-        self._X_train_work_init_: np.ndarray | None = None
 
     def _safe_batch_size(self, n: int, batch_size: int) -> int:
         """Return a safe batch size for a dataset size n."""
@@ -298,79 +288,8 @@ class ImputeNLPCA(BaseNNImputer):
         out[miss] = -1
         return out
 
-    def _initialize_orig_missing_with_mode(
-        self, X_corrupted: np.ndarray, orig_mask: np.ndarray
-    ) -> np.ndarray:
-        Xc = np.asarray(X_corrupted, dtype=np.int16)
-        om = np.asarray(orig_mask, dtype=bool)
-
-        if Xc.ndim != 2 or om.shape != Xc.shape:
-            msg = f"[{self.model_name}] initialize_orig_missing: shape mismatch X={Xc.shape}, orig_mask={om.shape}."
-            self.logger.error(msg)
-            raise ValueError(msg)
-
-        if Xc.size == 0:
-            return Xc.astype(np.int8, copy=False)
-
-        out = Xc.copy()
-        if not om.any():
-            return out.astype(np.int8, copy=False)
-
-        obs = out >= 0
-        if obs.any():
-            L = out.shape[1]
-            modes = np.zeros(L, dtype=np.int16)
-            for j in range(L):
-                v = out[:, j]
-                v = v[v >= 0]
-                if v.size == 0:
-                    modes[j] = 0
-                else:
-                    bc = np.bincount(
-                        v.astype(np.int64), minlength=int(self.num_classes_)
-                    )
-                    modes[j] = int(np.argmax(bc))
-            r, c = np.where(om)
-            if r.size:
-                out[r, c] = modes[c]
-        else:
-            out[om] = 0
-
-        return out.astype(np.int8, copy=False)
-
-    def _update_orig_missing_from_model(
-        self,
-        model: nn.Module,
-        X_work: np.ndarray,
-        orig_mask: np.ndarray,
-        indices: np.ndarray,
-    ) -> None:
-        """Update originally-missing entries in X_work from current model predictions.
-
-        Args:
-            model: Trained/partially trained model.
-            X_work: Working matrix to update in-place (N_split, L).
-            orig_mask: Original-missing mask for the same split (N_split, L).
-            indices: Global sample indices for rows of X_work.
-        """
-        # Predict only the rows in this split,
-        # then write back into split-local X_work.
-        pred_labels, _ = self._predict(model, indices=indices, return_proba=False)
-        pred_labels = np.asarray(pred_labels, dtype=np.int8)
-
-        # Map global indices -> split row order:
-        # X_work rows already correspond to `indices` order.
-        om = np.asarray(orig_mask, dtype=bool)
-        if om.shape != X_work.shape:
-            msg = f"orig_mask shape mismatch: {om.shape} != {X_work.shape}"
-            self.logger.error(msg)
-            raise ValueError(msg)
-
-        # Update only orig-missing positions
-        X_work[om] = pred_labels[om]
-
     def fit(self) -> ImputeNLPCA:
-        """Fit NLPCA model (joint refinement + input refinement)."""
+        """Fit NLPCA model (joint optimization of embeddings and decoder)."""
         self.logger.info(f"Fitting {self.model_name} model...")
 
         if self.genotype_data.snp_data is None:
@@ -422,6 +341,12 @@ class ImputeNLPCA(BaseNNImputer):
 
         if self.is_haploid_:
             X_for_model_full = self._haploidize_012(X_for_model_full)
+
+        # Full corrupted matrix (simulated + original missing = -1). PCA
+        # embedding initialization must use this, not ground_truth_, so that
+        # held-out samples' starting embeddings never see simulated-missing
+        # genotypes that are later scored.
+        self.X_corrupted_full_ = X_for_model_full
 
         self._validate_sim_and_orig_masks(
             sim_mask=self.sim_mask_, orig_mask=self.orig_mask_, context="full"
@@ -498,23 +423,10 @@ class ImputeNLPCA(BaseNNImputer):
         self.X_val_corrupted_ = X_val_corrupted
         self.X_test_corrupted_ = X_test_corrupted
 
-        # NLPCA working matrices
-        # Fill only originally-missing entries with per-locus mode.
-        # Never fill simulated-missing entries.
-        self.X_train_work_ = self._initialize_orig_missing_with_mode(
-            X_train_corrupted, self.orig_mask_train_
-        )
-        self.X_val_work_ = self._initialize_orig_missing_with_mode(
-            X_val_corrupted, self.orig_mask_val_
-        )
-        self.X_test_work_ = self._initialize_orig_missing_with_mode(
-            X_test_corrupted, self.orig_mask_test_
-        )
-        self._X_train_work_init_ = self.X_train_work_.copy()
-
-        # For NLPCA training, targets are the working matrix itself.
-        # Missing (-1) are ignored by loss via ignore_index and by mask.
-        self.X_train_ = self.X_train_work_
+        # Training targets are the corrupted matrix. Simulated- and
+        # originally-missing cells are -1 and are excluded from the loss by
+        # both the observed-cell mask and the valid-target check.
+        self.X_train_ = self.X_train_corrupted_
         self.y_train_ = self.X_train_clean_
 
         # Validation targets remain the CLEAN matrix for
@@ -535,7 +447,7 @@ class ImputeNLPCA(BaseNNImputer):
 
         self.train_loader_ = self._get_nlpca_loaders(
             self.train_idx_,
-            self.X_train_work_,
+            self.X_train_corrupted_,
             mask=train_mask,
             batch_size=self.batch_size,
             shuffle=True,
@@ -599,7 +511,9 @@ class ImputeNLPCA(BaseNNImputer):
 
         # PCA init for embeddings V
         self.v_init_ = self._get_pca_embedding_init(
-            self.ground_truth_, self.train_idx_, int(self.best_params_["latent_dim"])
+            self.X_corrupted_full_,
+            self.train_idx_,
+            int(self.best_params_["latent_dim"]),
         )
 
         # Final model params
@@ -632,7 +546,7 @@ class ImputeNLPCA(BaseNNImputer):
 
         model = self.build_model(self.Model, self.best_params_["model_params"])
 
-        # Train (joint only + input refinement)
+        # Train (joint optimization of V and W)
         _, trained_model, history = self._execute_nlpca_training(
             model=model,
             lr=float(self.best_params_["learning_rate"]),
@@ -689,25 +603,6 @@ class ImputeNLPCA(BaseNNImputer):
 
         self.logger.info(f"{self.model_name} fitting complete!")
         return self
-
-    def _rebuild_train_loader_from_work(self) -> None:
-        """Rebuild train_loader_ from the current X_train_work_.
-
-        Needed because TensorDataset captures a snapshot of y at creation time.
-        """
-        if self.X_train_work_ is None:
-            msg = f"[{self.model_name}] X_train_work_ is None; cannot rebuild train loader."
-            self.logger.error(msg)
-            raise RuntimeError(msg)
-
-        train_mask = self.X_train_corrupted_ >= 0
-        self.train_loader_ = self._get_nlpca_loaders(
-            self.train_idx_,
-            self.X_train_work_,
-            mask=train_mask,
-            batch_size=self.batch_size,
-            shuffle=True,
-        )
 
     def transform(self) -> np.ndarray:
         """Impute missing values via final projection and decoding.
@@ -1414,12 +1309,10 @@ class ImputeNLPCA(BaseNNImputer):
         class_weights: torch.Tensor | None,
         gamma_schedule: bool,
     ) -> tuple[float, nn.Module, dict[str, list[float]]]:
-        """Execute NLPCA training: UBP Phase 3 only + input refinement.
+        """Execute NLPCA training: UBP Phase 3 only.
 
-        Consistency target: match ImputeUBP Phase 3 training behavior, except:
-        - No Phase 2.
-        - After certain epochs, update *originally missing* entries in X_train_work_
-            using current model reconstructions (EM-like). Simulated-missing is never filled.
+        Consistency target: match ImputeUBP Phase 3 training behavior (joint
+        optimization of embeddings V and decoder weights W), without Phase 2.
         """
         # Configure focal loss exactly like UBP
         cw = class_weights
@@ -1434,9 +1327,8 @@ class ImputeNLPCA(BaseNNImputer):
             alpha=cw, gamma=gamma_target, reduction="mean", ignore_index=-1
         )
 
-        # ---- Run the joint loop (UBP Phase 3 semantics) but with input refinement injected ----
-        # We reuse the core mechanics from _run_phase_loop, but we need a hook per-epoch.
-        # The easiest reliable way is to implement a small wrapper loop here, keeping the
+        # ---- Run the joint loop (UBP Phase 3 semantics) ----
+        # Mirrors the core mechanics of _run_phase_loop, keeping the
         # freeze/unfreeze + scheduler logic identical to UBP.
 
         eta0 = float(lr)
@@ -1487,8 +1379,8 @@ class ImputeNLPCA(BaseNNImputer):
                 ce_criterion.gamma = gamma_current  # type: ignore[attr-defined]
 
             # ---- Train epoch ----
-            # Reuse UBP _train_epoch mechanics, but note NLPCA train_loader_ yields (idx, y, m)
-            # with y being X_train_work_ (targets) and mask = observed-only.
+            # Reuse UBP _train_epoch mechanics; NLPCA train_loader_ yields (idx, y, m)
+            # with y being the corrupted training matrix and mask = observed-only.
             train_loss = self._train_epoch(
                 model=model,
                 temp_layer=None,
@@ -1498,25 +1390,6 @@ class ImputeNLPCA(BaseNNImputer):
                 phase=3,
                 trial=trial,
             )
-
-            # ---- Input refinement hook (EM-like) ----
-            # Update only originally-missing entries in X_train_work_ from model predictions.
-            # Because the loader snapshots y at creation time, we MUST rebuild the loader.
-            if self.input_refine_every > 0 and (
-                (epoch + 1) % int(self.input_refine_every) == 0
-            ):
-                if self.X_train_work_ is None:
-                    self._maybe_prune_or_raise(
-                        trial,
-                        f"[{self.model_name}] X_train_work_ is None during input refinement.",
-                    )
-                self._update_orig_missing_from_model(
-                    model=model,
-                    X_work=self.X_train_work_,
-                    orig_mask=self.orig_mask_train_,
-                    indices=self.train_idx_,
-                )
-                self._rebuild_train_loader_from_work()
 
             # ---- Validation (projection-based), same as UBP ----
             try:
@@ -1724,7 +1597,7 @@ class ImputeNLPCA(BaseNNImputer):
         params: dict[str, Any] | None = None,
         gamma_schedule: bool = False,
     ) -> tuple[float, dict[str, list[float]]]:
-        """Run joint (phase-3-like) training with ReduceLROnPlateau + input refinement."""
+        """Run joint (phase-3-like) training with ReduceLROnPlateau."""
         eta0 = float(lr)
         s_best = float("inf")
 
@@ -1789,49 +1662,6 @@ class ImputeNLPCA(BaseNNImputer):
                 trial=trial,
             )
 
-            # Input refinement (only on schedule)
-            did_refine = False
-            if (
-                getattr(self, "input_refine_every", 0) > 0
-                and (epoch % int(self.input_refine_every)) == 0
-                and getattr(self, "X_train_work_", None) is not None
-            ):
-                did_refine = True
-                refine_steps = max(1, int(getattr(self, "input_refine_steps", 1)))
-                orig_mask = getattr(self, "orig_mask_train_", None)
-
-                if self.debug and orig_mask is not None:
-                    before_vals = self.X_train_work_[orig_mask].copy()  # type: ignore[index]
-                else:
-                    before_vals = None
-
-                for _ in range(refine_steps):
-                    self._update_orig_missing_from_model(
-                        model=model,
-                        X_work=self.X_train_work_,  # type: ignore[arg-type]
-                        orig_mask=self.orig_mask_train_,
-                        indices=self.train_idx_,
-                    )
-
-                self._rebuild_train_loader_from_work()
-
-                if self.debug:
-                    n_obs = int((self.X_train_work_ >= 0).sum())  # type: ignore[operator]
-                    n_total = int(self.X_train_work_.size)  # type: ignore[union-attr]
-                    updated = None
-                    total_targets = None
-                    if before_vals is not None and orig_mask is not None:
-                        after_vals = self.X_train_work_[orig_mask]  # type: ignore[index]
-                        updated = int(np.count_nonzero(before_vals != after_vals))
-                        total_targets = int(orig_mask.sum())
-                    update_msg = ""
-                    if updated is not None and total_targets is not None:
-                        update_msg = f", updated={updated}/{total_targets}"
-                    self.logger.debug(
-                        f"[{self.model_name}] Input refine epoch {epoch}: steps={refine_steps}{update_msg}, "
-                        f"observed={n_obs}/{n_total} ({(100.0 * n_obs / float(n_total)):.2f}%)."
-                    )
-
             # Always compute validation signal (scheduler needs it)
             try:
                 s = self._val_step_with_projection(
@@ -1876,7 +1706,7 @@ class ImputeNLPCA(BaseNNImputer):
             if lr_after < lr_before:
                 self.logger.debug(
                     f"NLPCA: ReduceLROnPlateau LR {lr_before:.2e} -> {lr_after:.2e} "
-                    f"(train={train_loss:.4f}, val={float(s):.4f}, gamma={float(getattr(criterion, 'gamma', 0.0)):.3f}, refine={did_refine})"
+                    f"(train={train_loss:.4f}, val={float(s):.4f}, gamma={float(getattr(criterion, 'gamma', 0.0)):.3f})"
                 )
 
             at_floor = lr_after <= (float(self.eta_min) * (1.0 + 1e-12))
@@ -2057,7 +1887,7 @@ class ImputeNLPCA(BaseNNImputer):
             params = self._sample_hyperparameters(trial)
 
             params["model_params"]["embedding_init"] = self._get_pca_embedding_init(
-                self.ground_truth_, self.train_idx_, int(params["latent_dim"])
+                self.X_corrupted_full_, self.train_idx_, int(params["latent_dim"])
             )
 
             model = self.build_model(self.Model, params["model_params"])
@@ -2091,42 +1921,29 @@ class ImputeNLPCA(BaseNNImputer):
                     )
                     class_weights_ = torch.ones(self.num_classes_, device=self.device)
 
-            if self._X_train_work_init_ is None:
-                raise RuntimeError("Internal error: _X_train_work_init_ is not set.")
+            _ = self._execute_nlpca_training(
+                model=model,
+                lr=float(params["learning_rate"]),
+                l1_penalty=float(params["l1_penalty"]),
+                params=params,
+                trial=trial,
+                class_weights=class_weights_,
+                gamma_schedule=bool(params["gamma_schedule"]),
+            )
 
-            saved_work = self.X_train_work_
-            saved_loader = self.train_loader_
-            try:
-                self.X_train_work_ = self._X_train_work_init_.copy()
-                self._rebuild_train_loader_from_work()
-
-                _ = self._execute_nlpca_training(
-                    model=model,
-                    lr=float(params["learning_rate"]),
-                    l1_penalty=float(params["l1_penalty"]),
-                    params=params,
-                    trial=trial,
-                    class_weights=class_weights_,
-                    gamma_schedule=bool(params["gamma_schedule"]),
-                )
-
-                metrics = self._evaluate_model(
-                    model,
-                    self.X_val_corrupted_,
-                    self.y_val_,
-                    self.eval_mask_val_,
-                    indices=self.val_idx_,
-                    gamma=float(params["gamma"]),
-                    project_embedding=True,
-                    objective_mode=True,
-                    trial=trial,
-                    class_weights=class_weights_,
-                    persist_projection=False,
-                )
-
-            finally:
-                self.X_train_work_ = saved_work
-                self.train_loader_ = saved_loader
+            metrics = self._evaluate_model(
+                model,
+                self.X_val_corrupted_,
+                self.y_val_,
+                self.eval_mask_val_,
+                indices=self.val_idx_,
+                gamma=float(params["gamma"]),
+                project_embedding=True,
+                objective_mode=True,
+                trial=trial,
+                class_weights=class_weights_,
+                persist_projection=False,
+            )
 
             if isinstance(self.tune_metric, (list, tuple)):
                 return tuple(metrics[m] for m in self.tune_metric)

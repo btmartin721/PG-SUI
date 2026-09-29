@@ -151,7 +151,7 @@ The VAE loss consists of two components:
 
     .. math::
 
-        \mathcal{L}_{\text{recon}} = \frac{1}{|M|} \sum_{(i,j) \in M} \alpha_t (1 - p_t)^{\gamma} \log(p_t)
+        \mathcal{L}_{\text{recon}} = -\frac{1}{|M|} \sum_{(i,j) \in M} \alpha_t (1 - p_t)^{\gamma} \log(p_t)
 
 2. **KL Divergence:** Regularizes the learned latent distribution to be close to the prior distribution (a standard normal distribution):
 
@@ -198,8 +198,8 @@ observed entries, with optional class weights and L1 regularization:
 
     \mathcal{L} =
     \frac{1}{|M|} \sum_{(i,j) \in M}
-    w_{y_{ij}} (1 - p_{ij})^{\gamma} \log(p_{ij})
-    + \lambda \lVert W \rVert_1
+    -w_{y_{ij}} (1 - p_{ij})^{\gamma} \log(p_{ij})
+    + \lambda (\lVert V \rVert_1 + \lVert W \rVert_1)
 
 where :math:`M` indexes non-missing entries, :math:`p_{ij}` is the probability
 assigned to the true genotype class, and :math:`\gamma` is the focal-loss
@@ -208,16 +208,12 @@ parameter.
 Training Procedure
 ~~~~~~~~~~~~~~~~~~
 
-1. **PCA initialization:** latent vectors are initialized with PCA on observed
-   training data.
-2. **Working-matrix initialization:** originally missing entries are filled
-   with per-locus mode values; simulated-missing entries remain masked.
-3. **Joint optimization:** embeddings and decoder weights are optimized
-   together via backpropagation.
-4. **Input refinement:** after selected epochs, originally missing entries are
-   replaced with current reconstructions while simulated-missing entries remain
-   masked.
-5. **Projection evaluation:** validation/inference refines latent vectors with
+1. **PCA initialization:** fit PCA on observed training genotypes and initialize
+   embeddings from the corrupted matrix with missing cells filled by training
+   locus means.
+2. **Joint optimization:** optimize embeddings and decoder weights together
+   using only observed genotypes as targets.
+3. **Projection evaluation:** validation/inference refines latent vectors with
    the decoder fixed, improving reconstruction before scoring.
 
 Unsupervised Backpropagation (UBP) Model for Genotype Data Imputation
@@ -244,7 +240,7 @@ on decoder weights:
 
     \mathcal{L} =
     \frac{1}{|M|} \sum_{(i,j) \in M}
-    w_{y_{ij}} (1 - p_{ij})^{\gamma} \log(p_{ij})
+    -w_{y_{ij}} (1 - p_{ij})^{\gamma} \log(p_{ij})
     + \lambda \lVert W \rVert_1
 
 Training Phases

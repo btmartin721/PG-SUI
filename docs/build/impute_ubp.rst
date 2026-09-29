@@ -44,7 +44,7 @@ weights and L1 regularization on decoder weights:
 
    \mathcal{L} =
    \frac{1}{|M|} \sum_{(i, j) \in M}
-   w_{y_{ij}} (1 - p_{ij})^{\gamma} \log(p_{ij})
+   -w_{y_{ij}} (1 - p_{ij})^{\gamma} \log(p_{ij})
    + \lambda \lVert W \rVert_1
 
 where :math:`M` indexes observed entries, :math:`p_{ij}` is the probability

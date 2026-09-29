@@ -397,6 +397,12 @@ class ImputeUBP(BaseNNImputer):
             self.logger.debug("Performing haploid conversion on full inputs...")
             X_for_model_full = self._haploidize_012(X_for_model_full)
 
+        # Full corrupted matrix (simulated + original missing = -1). PCA
+        # embedding initialization must use this, not ground_truth_, so that
+        # held-out samples' starting embeddings never see simulated-missing
+        # genotypes that are later scored.
+        self.X_corrupted_full_ = X_for_model_full
+
         # Validate sim and orig masks; there should not be any overlap.
         # Also checks if there are enough sites to evaluate.
         self._validate_sim_and_orig_masks(
@@ -565,7 +571,9 @@ class ImputeUBP(BaseNNImputer):
         )
 
         self.v_init_ = self._get_pca_embedding_init(
-            self.ground_truth_, self.train_idx_, int(self.best_params_["latent_dim"])
+            self.X_corrupted_full_,
+            self.train_idx_,
+            int(self.best_params_["latent_dim"]),
         )
 
         self.logger.debug(f"PCA Embedding Initialization: {self.v_init_}")
@@ -1991,9 +1999,10 @@ class ImputeUBP(BaseNNImputer):
         # (Or slice a larger pre-computed PCA, but re-calc is safer/easier)
         trial_latent_dim = int(params["latent_dim"])
 
-        # Optimization: set embedding_init to PCA of ground truth
+        # Set embedding_init to PCA of the corrupted matrix (no sim-missing
+        # values), matching the final-fit initialization.
         params["model_params"]["embedding_init"] = self._get_pca_embedding_init(
-            self.ground_truth_, self.train_idx_, trial_latent_dim
+            self.X_corrupted_full_, self.train_idx_, trial_latent_dim
         )
 
         model = self.build_model(self.Model, params["model_params"])
